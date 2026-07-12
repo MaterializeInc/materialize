@@ -1,12 +1,12 @@
 ---
 source: src/compute-types/src/plan/lowering.rs
-revision: e926ec3a86
+revision: 43a933b189
 ---
 
 # compute-types::plan::lowering
 
 Implements lowering from `DataflowDescription<OptimizedMirRelationExpr>` (MIR) to `DataflowDescription<LirRelationExpr>` (LIR) via `Context::lower`.
-A `Context` tracks known arrangements keyed by `Id`, tracks which IDs may produce future-stamped updates (from temporal MFPs using `mz_now()`), assigns monotonically increasing `LirId`s to each node, and carries a `LirDebugInfo` for error messages.
+A `Context` tracks known arrangements keyed by `Id`, tracks which IDs may produce future-stamped updates (from temporal MFPs using `mz_now()`), assigns monotonically increasing `LirId`s to each node, carries a `LirDebugInfo` for error messages, and optionally holds a `LoweringMetrics` for recording instrumentation during lowering. `Context::new` accepts an `Option<&LoweringMetrics>` and clones it if present. When metrics are present, each successful `MapFilterProject::literal_constraints` call increments a counter labeled by call site (`"get"` or `"mfp"`).
 `MirRelationExpr` variants (Constant, Get, Let, LetRec, FlatMap, Join, Reduce, TopK, Negate, Threshold, Union, ArrangeBy) are recursively translated to corresponding `LirRelationNode` variants; join implementation selection consults the `JoinImplementation` annotation (Differential, DeltaQuery, IndexedFilter, or Unimplemented) already placed by the optimizer. MIR scalar expressions and MFPs are converted to LIR equivalents (`LirScalarExpr`, `MfpPlan<LirScalarExpr>`, `SafeMfpPlan<LirScalarExpr>`) via helpers from the `scalar` sub-module during this translation.
 `FlatMap` lowering prefers the unarranged collection when available (columns are already in logical order); when reading from an arrangement, both the table-function argument expressions and the `mfp_after` MFP are permuted to match the arrangement's column order using `permute` on individual expressions and `permute_fn` on the MFP.
 A `FlatMap(UnnestList)` atop a `Reduce` for window functions can be fused into the `Reduce` plan directly during lowering, avoiding the need for a separate `FlatMap` stage.

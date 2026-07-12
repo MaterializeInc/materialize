@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-revision: 2a36076f3c
+revision: f147b1341a
 ---
 
 # mz-expr::scalar::func
@@ -22,3 +22,4 @@ Several timestamp/date/interval arithmetic functions have corrected `is_monotone
 `age_timestamp` and `age_timestamp_tz` carry no `is_monotone` annotation (non-monotone in both arguments): as `a` increases past a month boundary, `months` increments while `days` drops, producing a lex-smaller `Interval`; holding `a` fixed and varying `b` produces a V-shape at `a == b`.
 `date_bin` computes `origin + floor((source - origin) / stride) * stride`. When `source < origin` and `(source - origin)` is an exact multiple of `stride` (i.e., the source lands exactly on a bin boundary before the origin), the remainder is 0 and no extra stride subtraction is applied, so the result is exactly `source` (the correct bin start). Overflow at the `i64` nanosecond boundary surfaces as `EvalError::DateBinOutOfRange` via `checked_sub`.
 `array_lower` returns the lower bound of the requested dimension (which may differ from 1 for arrays with custom lower bounds); `array_upper` returns the upper bound (`lower_bound + length - 1`), not the raw length.
+`convert_from` rejects NUL bytes in the decoded string: after a successful UTF-8 decode, if the result contains `'\0'`, it returns `EvalError::InvalidByteSequence` with `byte_sequence: "0x00"`, matching PostgreSQL behavior.

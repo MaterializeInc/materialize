@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/session/vars/definitions.rs
-revision: a8f4526d28
+revision: 3d7eb1c1da
 ---
 
 # mz-sql::session::vars::definitions
@@ -11,5 +11,5 @@ The `feature_flags!` macro accepts an optional `scope: <expr>,` field per flag e
 The `lazy_value!` and `value!` macros (from `polyfill`) are used extensively to express default values that cannot be computed at compile time.
 This file is the authoritative source of truth for which variables exist and their defaults.
 `RESTRICT_TO_USER_OBJECTS` is a read-only `bool` session variable (default `false`) that restricts queries from accessing system catalog objects; it is designed to be set only via `ALTER ROLE ... SET` by superusers.
-Feature flags include `enable_repeat_row_non_negative` (guards the `repeat_row_non_negative` table function), `enable_storage_introspection_logs` (guards forwarding storage timely logging events into the compute introspection dataflow), `enable_kafka_broker_matching_rules` (guards `MATCHING` broker rules in `BROKERS` for Kafka PrivateLink connections), `enable_glue_schema_registry` (guards `CREATE CONNECTION ... TO AWS GLUE SCHEMA REGISTRY`), and `enable_bounded_staleness_isolation` (guards the `bounded staleness <duration>` transaction isolation level; defaults to `true`).
-`DEFAULT_TIMESTAMP_INTERVAL` and `CLUSTER_CHECK_SCHEDULING_POLICIES_INTERVAL` each carry a `NON_ZERO_DURATION` constraint, so setting either to zero raises an `InvalidParameterValue` error.
+Feature flags include `enable_repeat_row_non_negative` (guards the `repeat_row_non_negative` table function), `enable_storage_introspection_logs` (guards forwarding storage timely logging events into the compute introspection dataflow), `enable_kafka_broker_matching_rules` (guards `MATCHING` broker rules in `BROKERS` for Kafka PrivateLink connections), `enable_glue_schema_registry` (guards `CREATE CONNECTION ... TO AWS GLUE SCHEMA REGISTRY`), `enable_bounded_staleness_isolation` (guards the `bounded staleness <duration>` transaction isolation level; defaults to `true`), and `enable_fixed_correlated_cte_lowering` (gates the corrected HIR-to-MIR lowering path that uses CTE-aware branch keys when decorrelating CTEs referenced from nested correlated scopes; defaults to `true`).
+`DEFAULT_TIMESTAMP_INTERVAL`, `CLUSTER_CHECK_SCHEDULING_POLICIES_INTERVAL`, `SSH_CHECK_INTERVAL`, and `STORAGE_STATISTICS_INTERVAL` each carry a `NON_ZERO_DURATION` constraint, so setting any of them to zero raises an `InvalidParameterValue` error.

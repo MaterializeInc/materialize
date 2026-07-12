@@ -1,12 +1,12 @@
 ---
 source: src/environmentd/src/http/mcp.rs
-revision: 74ec6d258e
+revision: a0599e5620
 ---
 
 # environmentd::http::mcp
 
 Implements Model Context Protocol (MCP) HTTP handlers that expose Materialize data products to AI agents via JSON-RPC 2.0.
-Provides two endpoints: `/api/mcp/agent` (tools: `get_data_products`, `get_data_product_details`, `read_data_product`, `query`) for user data products discovered via `mz_internal.mz_mcp_data_products`, and `/api/mcp/developer` (tools: `query_system_catalog`, `query`) for read-only access to system catalog tables in schemas from `SYSTEM_SCHEMAS` (excluding `mz_unsafe`).
+Provides two endpoints: `/api/mcp/agent` (tools: `get_data_products`, `get_data_product_details`, `read_data_product`, `query`) for user data products discovered via `mz_internal.mz_mcp_data_products`, and `/api/mcp/developer` (tools: `query_system_catalog`, `query`) for read-only access to system catalog tables in schemas from `SYSTEM_SCHEMAS` (excluding `mz_unsafe`). The developer endpoint's `query` tool accepts an optional `cluster_replica` parameter to pin execution to a named replica (e.g. for `EXPLAIN ANALYZE` on a cluster with multiple replicas); the agent endpoint's `query` tool does not expose this parameter.
 Each endpoint is gated by a dynamic feature flag (`ENABLE_MCP_AGENT`, `ENABLE_MCP_DEVELOPER`, `ENABLE_MCP_AGENT_QUERY_TOOL`, `ENABLE_MCP_DEVELOPER_QUERY_TOOL`, `ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL`); `ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL` gates the `read_data_product` tool independently of the per-endpoint query tool flag. Response size is bounded by `MCP_MAX_RESPONSE_SIZE`.
 Each request tags the session's `application_name` with `mz_mcp_agents` or `mz_mcp_developer` (via `set_default`, so a caller-supplied value still takes precedence) to make MCP-originated sessions visible in `mz_session_history` and `mz_statement_execution_history`.
 Implements MCP protocol version `2025-11-25`: the `initialize` response includes a `protocolVersion` field set to `MCP_PROTOCOL_VERSION`, tool definitions carry `title`, `annotations` (`ToolAnnotations` with `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`), and `ToolContentResult` includes an `isError` field.
@@ -15,5 +15,7 @@ Both endpoints accept GET requests with a 405 Method Not Allowed response (via `
 SQL parsing in MCP uses `parse_with_limit` for statements and `parse_item_name_with_limit` for item names; both enforce the 1 MB `MAX_STATEMENT_BATCH_SIZE` size check before allocating, preventing oversized inputs from being parsed.
 Enforces read-only SQL validation and AST-based system-table access control before executing queries; the developer endpoint allows SHOW and EXPLAIN statements without table references but rejects constant SELECT queries (e.g., `SELECT 1`) to prevent misuse for arbitrary computation.
 `read_data_product` uses `mz_internal.mz_show_my_cluster_privileges` (rather than `has_cluster_privilege`) to check cluster USAGE before routing the read; this avoids triggering `restrict_to_user_objects` since `mz_show_my_cluster_privileges` only exposes the session role's own privileges.
+`execute_sql` delegates to the private `select_single_rows(results: Vec<SqlResult>)` function, which returns the rows of the single row-returning statement in the response. `select_single_rows` surfaces the first error encountered; a second row-returning statement is an `Internal` error rather than a silently dropped result. The framing statements around a user query (`BEGIN`, `SET`, `COMMIT`) report `Ok` with no rows, so only the user's statement contributes rows.
+`McpResponse` is the top-level JSON-RPC 2.0 response envelope; `McpResponse::success(id, result)` builds a response carrying `result` and `McpResponse::error(id, error)` builds one carrying `error`, with exactly one of the two fields set.
 `McpRequestError` maps domain errors to standard JSON-RPC error codes.
 Prometheus metrics are collected via `McpMetrics` (injected as an Axum `Extension`): request counts labeled by endpoint, JSON-RPC method, and status; tool call counts and durations labeled by endpoint and tool name. `ToolCallGuard` is an RAII guard that records tool call duration and status on drop, ensuring metrics are recorded even when a future is dropped early (e.g. by a timeout).

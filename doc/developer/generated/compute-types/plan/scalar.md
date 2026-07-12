@@ -1,6 +1,6 @@
 ---
 source: src/compute-types/src/plan/scalar.rs
-revision: e926ec3a86
+revision: 822256a77d
 ---
 
 # compute-types::plan::scalar
@@ -11,7 +11,7 @@ Scalar expressions in a stable, serializable format for the LIR (Low-level IR) l
 
 Key types:
 
-* `LirScalarExpr` — enum with six variants: `Column(usize, TreatAsEqual<Option<Arc<str>>>)`, `Literal(Result<Row, EvalError>, ReprColumnType)`, `CallUnary`, `CallBinary`, `CallVariadic`, `If`. Implements `Eval`, `Columns`, `OptimizableExpr`, `VisitChildren`, `HumanizeDisplay`, and `ScalarOps`.
+* `LirScalarExpr` — enum with six variants: `Column(usize, TreatAsEqual<Option<Arc<str>>>)`, `Literal(Result<Row, EvalError>, ReprColumnType)`, `CallUnary`, `CallBinary`, `CallVariadic`, `If`. Implements `Eval`, `Columns`, `OptimizableExpr`, `VisitChildren`, `HumanizeDisplay`, and `ScalarOps`. Notable helpers: `is_literal_true()` returns true when the expression is a literal `true` datum (used by `LirAggregateExpr::is_count_asterisk`).
 
 Key conversion functions:
 

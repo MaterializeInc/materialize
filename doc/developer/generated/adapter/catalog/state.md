@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/catalog/state.rs
-revision: ee9c5abad9
+revision: 37a6a50fa7
 ---
 
 # adapter::catalog::state
@@ -12,4 +12,5 @@ The file also defines `LocalExpressionCache`, a helper used during catalog open 
 When `deserialize_item` re-parses an existing item (e.g. during a RENAME), it preserves the `optimized_plan`, `physical_plan`, and `dataflow_metainfo` fields from the previous `CatalogItem` incarnation via `plan_fields_mut`; these fields are not reconstructable from `create_sql` alone and must be carried over to avoid silently dropping plans for materialized views and indexes.
 `concretize_replica_location` and `ensure_valid_replica_size` accept an `allow_disabled` boolean; when `true`, disabled sizes in the size map are permitted (used during catalog apply so existing replicas with disabled sizes remain registered without error). `concretize_replica_location` resolves the `availability_zones` field of a managed replica location: when `allowed_availability_zones` is `Some`, that list is used (provisioning paths stamp the cluster's current AZ pool); when `None`, the list already present in the durable replica record is kept (catalog-apply rebuilds). The `cluster_replica_size_has_disk` helper has been removed; the `disk` column is resolved in the `mz_cluster_replicas` materialized view via a LEFT JOIN against `mz_cluster_replica_size_internal`.
 Connection inlining (used when resolving connection references for storage and compute) handles the `GlueSchemaRegistry` and `Gcp` connection types alongside `Kafka`, `Postgres`, and `Csr`.
+`introspection_dependencies` and `item_dependents` use iterative worklist and stack-based traversals rather than recursion; dependency chains are user-controlled and can be arbitrarily deep (e.g. long chains of stacked views), so recursion risks a stack overflow.
 This is the authoritative read-side view of the catalog; mutations go through `catalog::transact` and are applied by `catalog::apply`.

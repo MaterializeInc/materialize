@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/optimize/copy_to.rs
-revision: e926ec3a86
+revision: 43a933b189
 ---
 
 # adapter::optimize::copy_to

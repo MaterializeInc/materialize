@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/info_metrics.rs
-revision: 03de4421ba
+revision: dbd2c3fc06
 ---
 
 # adapter::coord::info_metrics

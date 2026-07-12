@@ -1,6 +1,6 @@
 ---
 source: src/sql-parser/src/parser.rs
-revision: 4fd96c4a39
+revision: 7441a9ee34
 ---
 
 # mz-sql-parser::parser
@@ -18,7 +18,7 @@ Iceberg sink mode parsing accepts `UPSERT` or `APPEND` as valid values.
 `EXECUTE UNIT TEST <name> FOR <target> [AT TIME <expr>] [MOCK <view_def>, ...] EXPECTED <result_def>` is parsed by `parse_execute_unit_test`; individual mock clauses are parsed by `parse_mock_view_def`. Both methods are called from `parse_execute` after the leading `EXECUTE UNIT TEST` tokens are consumed.
 The private method `parse_list_value<T, F>` optionally consumes `=`, then parses a comma-separated list enclosed in parentheses or brackets using a provided closure, returning `Vec<T>`.
 `CREATE CONNECTION ... TO AWS` dispatches on the next keyword: `PRIVATELINK` yields `CreateConnectionType::AwsPrivatelink`, `GLUE` (followed by `SCHEMA REGISTRY`) yields `CreateConnectionType::GlueSchemaRegistry`, and no keyword yields `CreateConnectionType::Aws`. `CREATE CONNECTION ... TO GCP` yields `CreateConnectionType::Gcp`.
-In connection option parsing, `GCP CONNECTION` is parsed as `ConnectionOptionName::GcpConnection` (with `parse_object_option_value`), and `SERVICE ACCOUNT KEY` is parsed as `ConnectionOptionName::ServiceAccountKey`.
+In connection option parsing, `GCP CONNECTION` is parsed as `ConnectionOptionName::GcpConnection` (with `parse_object_option_value`), and `SERVICE ACCOUNT KEY` is parsed as `ConnectionOptionName::ServiceAccountKey`. Options where `ConnectionOptionName::value_contains_sensitive_data()` returns `true` are routed through `parse_optional_connection_credential_option_value()`, which calls `parse_connection_credential_option_value()`. This method accepts either `SECRET <name>` (producing `WithOptionValue::Secret`) or a bare value, rather than the generic `parse_optional_option_value`.
 Iceberg sink parsing reads the catalog connection name, then optionally parses `USING AWS CONNECTION <name>` — if the keywords are absent, `aws_connection` is `None`.
 When parsing `FORMAT AVRO USING`, if the next tokens are `AWS GLUE SCHEMA REGISTRY`, the parser expects `CONNECTION <name>` followed by an optional parenthesized list of `GlueAvroOption`s parsed by `parse_glue_avro_option`. `parse_glue_avro_option` expects the `SCHEMA NAME` keyword sequence and then an optional value. After the option list, if the keyword `SEED` is present the parser expects `VALUE SCHEMA '<string>'` and populates `GlueAvroSeed { value_schema }`; otherwise `seed` is `None`.
 The `Precedence` enum is `pub(crate)` and serves as the single source of truth for both parser precedence and output parenthesization; the `prec` module in `ast::defs::expr` derives its constants from it via `as u8`.

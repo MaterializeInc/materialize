@@ -1,6 +1,6 @@
 ---
 source: src/interchange/src/glue.rs
-revision: f7441414ff
+revision: 57cbba8867
 ---
 
 # interchange::glue
@@ -11,7 +11,7 @@ Glue prepends an 18-byte header to each Kafka record payload: one header-version
 
 `extract_avro_header` parses this header from the front of a byte slice, returning the schema-version `Uuid` and a subslice covering the record payload. It rejects buffers shorter than 18 bytes, wrong header-version values, and any compression byte other than `0x00` (compressed records are unsupported).
 
-`prepend_avro_header` frames a payload with the uncompressed Glue header, producing a buffer ready to publish to Kafka.
+`write_avro_header` writes the uncompressed Glue header into a caller-supplied `Vec<u8>`, so callers can append the serialized record payload directly and produce a framed record with a single allocation.
 
 `HEADER_LEN` (18) is exported for callers that need to size buffers or skip past the header independently.
 

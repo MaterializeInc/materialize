@@ -1,6 +1,6 @@
 ---
 source: src/persist-client/src/internal/machine.rs
-revision: db1a5ce170
+revision: b8c325f035
 ---
 
 # persist-client::internal::machine
@@ -10,3 +10,4 @@ Each operation is a pure state transition function applied to a `State` snapshot
 Also provides the `retry_external` and `retry_determinate` helpers that standardize backoff behavior for transient storage errors.
 `retry_external` logs at INFO after `INFO_MIN_ATTEMPTS` (3) failures and escalates to WARN after `WARN_MIN_ATTEMPTS` (30) failures; at roughly five minutes of continuous failure using the persist backoff (clamped at 16 s), a WARN log signals that the operation is likely wedged rather than experiencing a transient error.
 Includes configurable compaction claiming via `CLAIM_UNCLAIMED_COMPACTIONS`, `CLAIM_COMPACTION_PERCENT`, and `CLAIM_COMPACTION_MIN_VERSION` dynamic configs.
+`wait_for_upper_past` uses `StateWatch::wait_for_upper_past` so that snapshot and listen waiters wake only on shard upper advances, not on seqno bumps from GC, rollups, or since-downgrades.

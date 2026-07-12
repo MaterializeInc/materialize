@@ -1,6 +1,6 @@
 ---
 source: src/pgwire/src/lib.rs
-revision: 64377faf17
+revision: 063148ba5e
 ---
 
 # pgwire

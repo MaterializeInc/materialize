@@ -1,6 +1,6 @@
 ---
 source: src/sql-parser/src/ast/defs/ddl.rs
-revision: bb08b11a38
+revision: 7441a9ee34
 ---
 
 # mz-sql-parser::ast::defs::ddl
@@ -9,6 +9,7 @@ Defines AST types specific to DDL statements: option name/value enums for CREATE
 These types are used as fields within the statement structs defined in `statement.rs`.
 `IcebergSinkMode` has two variants: `Upsert` and `Append`.
 `ConnectionOptionName` includes `GcpConnection` (prints `"GCP CONNECTION"`) and `ServiceAccountKey` (prints `"SERVICE ACCOUNT KEY"`).
+`ConnectionOptionName::value_contains_sensitive_data()` returns `true` for credential options (`AccessKeyId`, `Credential`, `Password`, `SaslPassword`, `SaslUsername`, `SecretAccessKey`, `ServiceAccountKey`, `SessionToken`, `SslCertificate`, `SslCertificateAuthority`, `SslKey`, `User`) and `false` for all other options. `ConnectionOptionName::redact_value()` delegates to `value_contains_sensitive_data()`: credential-bearing options cause inline credential literals to render as `'<REDACTED>'` in redacted output, while `SECRET` references are unaffected (they render as the catalog item name via `WithOptionValue::Secret`).
 `CreateConnectionType` includes a `Gcp` variant whose `as_str()` returns `"gcp"` and whose `AstDisplay` prints `GCP`, and a `GlueSchemaRegistry` variant whose `as_str()` returns `"glue-schema-registry"` and whose `AstDisplay` prints `AWS GLUE SCHEMA REGISTRY`. The full set of `as_str()` identifiers: `"kafka"`, `"confluent-schema-registry"`, `"postgres"`, `"aws"`, `"aws-privatelink"`, `"glue-schema-registry"`, `"gcp"`, `"ssh-tunnel"`, `"mysql"`, `"sql-server"`, `"iceberg-catalog"`.
 `CreateSinkConnection::Iceberg` uses field `catalog_connection: T::ItemName` for the catalog connection, and `aws_connection: Option<T::ItemName>` for the optional AWS storage credentials; the `AstDisplay` implementation omits the `USING AWS CONNECTION` clause when `aws_connection` is `None`.
 `MaterializedViewOptionName::PartitionBy` returns `true` from `redact_value()`, so scalar literals in a materialized view's `PARTITION BY` option value are redacted. Column-list identifiers remain verbatim.
