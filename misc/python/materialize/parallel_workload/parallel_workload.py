@@ -527,7 +527,11 @@ def print_stats(
     # (ReplaceMaterializedView, whose replacements pile up unfinalized in the
     # workload). "unknown cluster 'dont_exist'" comes from FlipFlags setting the
     # default cluster to a nonexistent one to hunt for panics, so any action
-    # needing a cluster fails with it while that flag is live. Tracked
+    # needing a cluster fails with it while that flag is live. "cannot be
+    # dropped because some objects depend on it" is the same rejection for
+    # DROP ROLE: AlterOwnerAction reassigns object ownership to random roles,
+    # so a role usually owns something and a short run can see DropRoleAction
+    # never land a dependency-free role. Tracked
     # separately so such actions don't trip the broken-action assertion below.
     noise = {
         "must be owner of",
@@ -537,6 +541,7 @@ def print_stats(
         "because it already has a replacement",
         "is sealed and thus cannot be replaced",
         "unknown cluster 'dont_exist'",
+        "cannot be dropped because some objects depend on it",
     }
     if scenario == Scenario.Rename:
         # Concurrent renames invalidate the qualified names an action captured
