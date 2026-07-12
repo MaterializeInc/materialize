@@ -5115,6 +5115,9 @@ class ExplainAnalyzeAction(Action):
             "does not exist",
             "not been hydrated",
             "not been materialized",
+            # A concurrent DROP/reconfigure of the targeted replica retires the
+            # introspection query. No panic in services.log, just a race.
+            "target replica failed or was dropped",
             # Introspection over a large dataflow can outrun statement_timeout.
             "canceling statement due to statement timeout",
             # The generated introspection queries can cross timedomains or be
