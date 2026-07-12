@@ -9,18 +9,23 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# clear-corrupted-cargo-target-dir - Remove cargo target dir if internal
-# compiler error is detected, necessary in CI as a workaround until
-# https://github.com/rust-lang/rust/issues/148581 is solved.
+# clear-corrupted-cargo-target-dir - Remove Cargo target directories when a
+# failure caused by corrupted incremental build artifacts is detected.
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-if ! grep -qE "panicked at compiler/rustc_metadata/src/rmeta/def_path_hash_map.rs|Found unstable fingerprints for" "$1"; then
+# Keep these signatures in sync with
+# run_and_detect_rust_incremental_build_failure in materialize.mzbuild.
+incremental_build_failure_pattern="panicked at compiler/rustc_metadata/src/rmeta/def_path_hash_map.rs"
+incremental_build_failure_pattern+="|Found unstable fingerprints for"
+incremental_build_failure_pattern+="|ld\.lld: error: undefined symbol"
+incremental_build_failure_pattern+="|signal: 11, SIGSEGV"
+if ! grep -qE "$incremental_build_failure_pattern" "$1"; then
   exit
 fi
 
-echo "--- Detected Rust ICE (https://github.com/rust-lang/rust/issues/148581), clearing cargo target directories"
+echo "--- Detected incremental build failure, clearing cargo target directories"
 rm -rf target target-xcompile || true
 exit 199
