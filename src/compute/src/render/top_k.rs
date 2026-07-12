@@ -169,15 +169,6 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                     );
                     err_collection = err_collection.concat(errs);
 
-                    // The arrangement is keyed by the arbitrary column set `group_key` (not a
-                    // `0..k` prefix), with the value thinned to `thinning`; `permutation` maps
-                    // the concatenation of key and value back to the original column order.
-                    let key: Vec<LirScalarExpr> = group_key
-                        .iter()
-                        .map(|c| LirScalarExpr::column(*c))
-                        .collect();
-                    let (permutation, _thinning) = permutation_for_arrangement(&key, arity);
-
                     if arranged {
                         // Lowering advertised this arrangement (see the `MirRelationExpr::TopK`
                         // arm in `lowering.rs`), so a downstream consumer keyed on `group_key`
@@ -200,8 +191,16 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                         // after lowering computed `AvailableCollections`, so the advertisement
                         // was never updated and consumers still expect `bundle.collection` to
                         // be populated directly. Reconstruct the raw collection from the
-                        // arrangement, applying `permutation` to recover the original column
-                        // order, and deliver it without an arrangement.
+                        // arrangement, which is keyed by the arbitrary column set `group_key`
+                        // (not a `0..k` prefix) with the value thinned to `thinning`.
+                        // `permutation` maps the concatenation of key and value back to the
+                        // original column order.
+                        let key: Vec<LirScalarExpr> = group_key
+                            .iter()
+                            .map(|c| LirScalarExpr::column(*c))
+                            .collect();
+                        let (permutation, _thinning) = permutation_for_arrangement(&key, arity);
+
                         let mut datums = mz_repr::DatumVec::new();
                         let oks = arrangement.as_collection(move |k: DatumSeq, v: DatumSeq| {
                             let temp_storage = mz_repr::RowArena::new();
