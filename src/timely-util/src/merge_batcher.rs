@@ -963,10 +963,13 @@ mod tests {
     use crate::column_pager::{ColumnPager, PageDecision, PageEvent, PageHint, PagingPolicy};
     use crate::columnar::Column;
     use crate::columnar::merge_batcher::PagedColumnMerger;
+    use crate::columnation::{ColTemporalMerger, ColumnationStack};
 
     use super::*;
 
     type TestUpdate = (u64, u64, i64);
+    type TestMerger = ColTemporalMerger<u64, u64, i64>;
+    type TestBatcher = TemporalBucketingMergeBatcher<TestMerger>;
     type PagedTestMerger = PagedColumnMerger<u64, u64, i64>;
     type PagedTestBatcher = TemporalBucketingMergeBatcher<PagedTestMerger>;
 
@@ -974,6 +977,24 @@ mod tests {
     trait TestChunks: TemporalMerger<Time = u64> {
         fn chunk(updates: Vec<TestUpdate>) -> Self::Output;
         fn unchunk(chunks: Vec<Self::Output>) -> Vec<TestUpdate>;
+    }
+
+    impl TestChunks for TestMerger {
+        fn chunk(updates: Vec<TestUpdate>) -> ColumnationStack<TestUpdate> {
+            let mut chunk = ColumnationStack::default();
+            for update in updates {
+                chunk.push_into(update);
+            }
+            chunk
+        }
+
+        fn unchunk(chunks: Vec<ColumnationStack<TestUpdate>>) -> Vec<TestUpdate> {
+            let mut out = Vec::new();
+            for chunk in chunks {
+                out.extend_from_slice(&chunk[..]);
+            }
+            out
+        }
     }
 
     impl TestChunks for PagedTestMerger {
@@ -1000,6 +1021,12 @@ mod tests {
             }
             out
         }
+    }
+
+    fn batcher(threshold: u64) -> TestBatcher {
+        let mut batcher = TestBatcher::new(None, 0);
+        batcher.set_threshold(threshold);
+        batcher
     }
 
     /// Policy that pages every chunk out (swap-backed, uncompressed), so the
@@ -1056,6 +1083,132 @@ mod tests {
         updates
     }
 
+    #[mz_ore::test]
+    fn all_past_takes_fast_path() {
+        let mut b = batcher(2_000);
+        push(&mut b, vec![(1, 10, 1), (2, 20, 1), (1, 30, -1)]);
+        let out = seal(&mut b, Some(100));
+        assert_eq!(
+            consolidated(out),
+            consolidated(vec![(1, 10, 1), (2, 20, 1), (1, 30, -1)])
+        );
+        assert_eq!(b.temporal_stats(), TemporalBatcherStats::default());
+        assert!(b.frontier().is_empty());
+    }
+
+    #[mz_ore::test]
+    fn near_future_stays_flat() {
+        let mut b = batcher(2_000);
+        // Data one "tick" ahead of the upper: within the threshold.
+        push(&mut b, vec![(1, 150, 1), (2, 1_050, 1)]);
+        let out = seal(&mut b, Some(100));
+        assert_eq!(out, vec![]);
+        // Never entered the bucket chain.
+        assert_eq!(b.temporal_stats().touched, 0);
+        assert_eq!(b.frontier().to_owned(), Antichain::from_elem(150));
+        let out = seal(&mut b, Some(200));
+        assert_eq!(out, vec![(1, 150, 1)]);
+        assert_eq!(b.frontier().to_owned(), Antichain::from_elem(1_050));
+        let out = seal(&mut b, Some(2_000));
+        assert_eq!(out, vec![(2, 1_050, 1)]);
+        assert_eq!(b.temporal_stats().touched, 0);
+        assert!(b.frontier().is_empty());
+    }
+
+    #[mz_ore::test]
+    fn far_future_bucketed_and_released() {
+        let mut b = batcher(1_000);
+        push(&mut b, vec![(1, 50, 1), (2, 5_000, 1), (3, 100_000, 1)]);
+        let out = seal(&mut b, Some(100));
+        assert_eq!(out, vec![(1, 50, 1)]);
+        // Both future updates are beyond upper + threshold: bucketed.
+        assert!(b.temporal_stats().touched > 0);
+        assert_eq!(b.frontier().to_owned(), Antichain::from_elem(5_000));
+        b.validate_bounds_invariant().unwrap();
+
+        let out = seal(&mut b, Some(6_000));
+        assert_eq!(out, vec![(2, 5_000, 1)]);
+        assert_eq!(b.frontier().to_owned(), Antichain::from_elem(100_000));
+        b.validate_bounds_invariant().unwrap();
+
+        let out = seal(&mut b, Some(200_000));
+        assert_eq!(out, vec![(3, 100_000, 1)]);
+        assert!(b.frontier().is_empty());
+        b.validate_bounds_invariant().unwrap();
+    }
+
+    #[mz_ore::test]
+    fn retraction_consolidates_across_seals() {
+        let mut b = batcher(0);
+        push(&mut b, vec![(7, 10_000, 1)]);
+        let out = seal(&mut b, Some(100));
+        assert_eq!(out, vec![]);
+        push(&mut b, vec![(7, 10_000, -1)]);
+        let out = seal(&mut b, Some(200));
+        assert_eq!(out, vec![]);
+        b.validate_bounds_invariant().unwrap();
+        // The insert and its retraction met in the bucket chain; nothing
+        // remains to emit.
+        let out = seal(&mut b, None);
+        assert_eq!(consolidated(out), vec![]);
+    }
+
+    #[mz_ore::test]
+    fn final_seal_flushes_everything() {
+        let mut b = batcher(1_000);
+        push(&mut b, vec![(1, 50, 1), (2, 1_500, 1), (3, 1 << 40, 1)]);
+        let out = seal(&mut b, Some(100));
+        assert_eq!(out, vec![(1, 50, 1)]);
+        let out = seal(&mut b, None);
+        assert_eq!(consolidated(out), vec![(2, 1_500, 1), (3, 1 << 40, 1)]);
+        assert!(b.frontier().is_empty());
+        assert_eq!(b.held_records(), 0);
+    }
+
+    #[mz_ore::test]
+    fn hydration_touched_within_bound() {
+        // Snapshot below the upper plus a uniform 45-day tail above it,
+        // sealed once: the simulation-backed contract is that bucket work
+        // stays within a small multiple of the tail.
+        let now = 1_752_192_000_000_u64;
+        let window = 45 * 86_400_000_u64;
+        let tail = 10_000_u64;
+        let mut b = batcher(2_000);
+        let mut updates = Vec::new();
+        for i in 0..tail {
+            updates.push((i, now - 1_000 - (i % 1_000), 1));
+            updates.push((i, now + 1 + (i * (window / tail)), -1));
+        }
+        push(&mut b, updates);
+        let out = seal(&mut b, Some(now));
+        assert_eq!(out.len(), usize::try_from(tail).unwrap());
+        b.validate_bounds_invariant().unwrap();
+        let stats = b.temporal_stats();
+        assert!(
+            stats.touched <= 5 * tail,
+            "hydration touched {} > 5x tail {tail}",
+            stats.touched
+        );
+        // The single hydration seal did all the bucket work so far, so it is
+        // the high-water seal, with all far retractions held at its start.
+        // The i == 0 retraction lands within the threshold and stays in the
+        // flat chains.
+        assert_eq!(stats.high_water_touched, stats.touched);
+        assert_eq!(stats.high_water_held, tail - 1);
+        // Tick forward; steady-state work must stay negligible.
+        let before = b.temporal_stats().touched;
+        let mut released = 0;
+        for tick in 1..=60 {
+            released += seal(&mut b, Some(now + tick * 1_000)).len();
+            b.validate_bounds_invariant().unwrap();
+        }
+        let per_tick = (b.temporal_stats().touched - before) / 60;
+        assert!(
+            per_tick <= 4 * (u64::try_from(released).unwrap() / 60 + 1),
+            "steady-state per-tick touched {per_tick} too high"
+        );
+    }
+
     /// Model-based test: the batcher must emit, at each seal, exactly the
     /// not-yet-emitted updates below the upper, consolidated, and report the
     /// exact minimum of what it retains.
@@ -1108,6 +1261,18 @@ mod tests {
             ),
             1..20,
         )
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // slow
+        fn batcher_matches_model(
+            threshold in proptest::sample::select(vec![0_u64, 1, 10, 1_000]),
+            ops in model_ops(),
+        ) {
+            run_model(batcher(threshold), ops);
+        }
     }
 
     proptest! {
@@ -1222,6 +1387,18 @@ mod tests {
             ),
             1..40,
         )
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(1024))]
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // slow
+        fn arrange_protocol_mints_capabilities(
+            threshold in proptest::sample::select(vec![0_u64, 1, 2, 4]),
+            steps in protocol_steps(),
+        ) {
+            run_arrange_protocol(batcher(threshold), steps);
+        }
     }
 
     proptest! {

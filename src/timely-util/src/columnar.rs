@@ -37,7 +37,7 @@ use timely::bytes::arc::Bytes;
 use timely::container::{DrainContainer, PushInto, SizableContainer};
 use timely::dataflow::channels::ContainerBytes;
 
-use crate::columnation::ColInternalMerger;
+use crate::columnation::{ColInternalMerger, ColTemporalMerger};
 
 /// A batcher for columnar storage.
 ///
@@ -48,6 +48,12 @@ use crate::columnation::ColInternalMerger;
 pub type Col2ValBatcher<K, V, T, R> = MergeBatcher<ColInternalMerger<(K, V), T, R>>;
 /// A batcher for columnar storage with unit values.
 pub type Col2KeyBatcher<K, T, R> = Col2ValBatcher<K, (), T, R>;
+
+/// Temporal-bucketing counterpart of [`Col2ValBatcher`]: same chunks and
+/// merger, but far-future updates are held in a bucket chain instead of
+/// being re-merged at every seal.
+pub type Col2ValTemporalBatcher<K, V, T, R> =
+    crate::merge_batcher::TemporalBucketingMergeBatcher<ColTemporalMerger<(K, V), T, R>>;
 
 /// Pageable counterpart to [`Col2ValBatcher`]. Routes every chunk produced
 /// by chunking, merging, or extract through a [`crate::column_pager::ColumnPager`],

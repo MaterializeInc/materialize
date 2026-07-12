@@ -785,3 +785,168 @@ where
         (chunk[..].len(), size, capacity, allocations)
     }
 }
+
+use crate::merge_batcher::{TemporalMerger, TimePartitioned, update_bounds};
+
+/// The columnation-based [`TemporalMerger`]: [`ColInternalMerger`] plus the
+/// recycled-chunk stash that differential's merge batcher would otherwise
+/// carry. Chunks pass through unchanged, there is no offloaded
+/// representation.
+pub struct ColTemporalMerger<D, T, R>
+where
+    D: Columnation,
+    T: Columnation,
+    R: Columnation,
+{
+    inner: ColInternalMerger<D, T, R>,
+    stash: Vec<ColumnationStack<(D, T, R)>>,
+}
+
+impl<D, T, R> Default for ColTemporalMerger<D, T, R>
+where
+    D: Columnation,
+    T: Columnation,
+    R: Columnation,
+{
+    fn default() -> Self {
+        Self {
+            inner: ColInternalMerger::default(),
+            stash: Vec::new(),
+        }
+    }
+}
+
+impl<D, T, R> TemporalMerger for ColTemporalMerger<D, T, R>
+where
+    D: Ord + Columnation + Clone + 'static,
+    T: Ord + Columnation + Clone + PartialOrder + 'static,
+    R: Default + Semigroup + Columnation + Clone + 'static,
+{
+    type Time = T;
+    type Chunk = ColumnationStack<(D, T, R)>;
+    type Output = ColumnationStack<(D, T, R)>;
+
+    fn absorb(&mut self, input: Self::Output) -> Self::Chunk {
+        input
+    }
+
+    fn materialize(&mut self, chunk: Self::Chunk) -> Self::Output {
+        chunk
+    }
+
+    fn merge(
+        &mut self,
+        list1: Vec<Self::Chunk>,
+        list2: Vec<Self::Chunk>,
+        output: &mut Vec<Self::Chunk>,
+    ) {
+        Merger::merge(&mut self.inner, list1, list2, output, &mut self.stash);
+    }
+
+    fn chunk_len(chunk: &Self::Chunk) -> usize {
+        chunk[..].len()
+    }
+
+    fn chunk_time_bounds(chunk: &Self::Chunk) -> Option<(T, T)> {
+        let mut bounds = None;
+        for (_, time, _) in &chunk[..] {
+            update_bounds(&mut bounds, time);
+        }
+        bounds
+    }
+
+    fn account(chunk: &Self::Chunk) -> (usize, usize, usize, usize) {
+        <ColInternalMerger<D, T, R> as Merger>::account(chunk)
+    }
+
+    fn seal_done(&mut self) {
+        self.stash.clear();
+    }
+
+    fn extract_time_partitioned(
+        &mut self,
+        merged: Vec<Self::Chunk>,
+        split_lo: AntichainRef<'_, T>,
+        split_hi: AntichainRef<'_, T>,
+        track_before: bool,
+    ) -> TimePartitioned<Self::Chunk, T> {
+        let stash = &mut self.stash;
+        let mut result = TimePartitioned {
+            before: Vec::new(),
+            before_bounds: None,
+            within: Vec::new(),
+            within_bounds: None,
+            beyond: Vec::new(),
+            beyond_bounds: None,
+            records: 0,
+        };
+        let mut before = ColInternalMerger::<D, T, R>::empty(stash);
+        // The `within` and `beyond` parts are often empty (any seal without
+        // future updates); allocate their builders lazily so such extracts
+        // pay exactly the plain extract's allocations.
+        let mut within: Option<Self::Chunk> = None;
+        let mut beyond: Option<Self::Chunk> = None;
+
+        for chunk in merged {
+            let len = chunk[..].len();
+            for i in 0..len {
+                let (data, time, diff) = &chunk[i];
+                result.records += 1;
+                // NOTE: chunks are sorted data-major, so times arrive in no
+                // particular order and every record updates the bounds.
+                // Testing `before` first keeps the dominant case (ready
+                // data) at the plain extract's single comparison.
+                if !split_lo.less_equal(time) {
+                    if track_before {
+                        update_bounds(&mut result.before_bounds, time);
+                    }
+                    before.copy_destructured(data, time, diff);
+                    if before.at_capacity() {
+                        result.before.push(std::mem::replace(
+                            &mut before,
+                            ColInternalMerger::<D, T, R>::empty(stash),
+                        ));
+                    }
+                } else if split_hi.less_equal(time) {
+                    update_bounds(&mut result.beyond_bounds, time);
+                    let builder =
+                        beyond.get_or_insert_with(|| ColInternalMerger::<D, T, R>::empty(stash));
+                    builder.copy_destructured(data, time, diff);
+                    if builder.at_capacity() {
+                        result.beyond.push(std::mem::replace(
+                            builder,
+                            ColInternalMerger::<D, T, R>::empty(stash),
+                        ));
+                    }
+                } else {
+                    update_bounds(&mut result.within_bounds, time);
+                    let builder =
+                        within.get_or_insert_with(|| ColInternalMerger::<D, T, R>::empty(stash));
+                    builder.copy_destructured(data, time, diff);
+                    if builder.at_capacity() {
+                        result.within.push(std::mem::replace(
+                            builder,
+                            ColInternalMerger::<D, T, R>::empty(stash),
+                        ));
+                    }
+                }
+            }
+            ColInternalMerger::<D, T, R>::recycle(chunk, stash);
+        }
+
+        for (builder, out) in [
+            (Some(before), &mut result.before),
+            (within, &mut result.within),
+            (beyond, &mut result.beyond),
+        ] {
+            if let Some(builder) = builder {
+                if builder[..].is_empty() {
+                    ColInternalMerger::<D, T, R>::recycle(builder, stash);
+                } else {
+                    out.push(builder);
+                }
+            }
+        }
+        result
+    }
+}
