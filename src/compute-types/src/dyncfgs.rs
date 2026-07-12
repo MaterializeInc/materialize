@@ -155,6 +155,18 @@ pub const CORRECTION_V2_CHUNK_SIZE: Config<usize> = Config::new(
 );
 
 /// Whether to enable temporal bucketing in compute.
+///
+/// NOTE: When removing this flag, remove the operator-mode section of
+/// test/sqllogictest/temporal_bucketing_legacy.slt, which exercises it
+/// (the file as a whole is deleted only together with
+/// `enable_compute_temporal_bucketing_batcher`, since its plain-mode
+/// section outlives this flag), and revisit
+/// test/sqllogictest/temporal_bucketing.slt: it tests details of the
+/// lowering machinery the operator needs (`temporal_bucketing_strategy`
+/// EXPLAIN annotations, `input_bucketing_strategy` plumbing). The EXPLAIN
+/// tests asserting on the strategy annotations can go with the plumbing,
+/// and the remaining tests' comments must stop referring to the deleted
+/// code.
 pub const ENABLE_COMPUTE_TEMPORAL_BUCKETING: Config<bool> = Config::new(
     "enable_compute_temporal_bucketing",
     false,
@@ -179,6 +191,10 @@ pub const TEMPORAL_BUCKETING_SUMMARY: Config<Duration> = Config::new(
 /// Composes with `enable_column_paged_batcher`: with both set, the affected
 /// arrangements use the temporal-bucketing batcher over paged chains.
 /// Read at dataflow construction time.
+///
+/// NOTE: CI runs with this flag on. The flag-off production configurations
+/// are covered by test/sqllogictest/temporal_bucketing_legacy.slt, which
+/// should be deleted when the flag is removed.
 pub const ENABLE_COMPUTE_TEMPORAL_BUCKETING_BATCHER: Config<bool> = Config::new(
     "enable_compute_temporal_bucketing_batcher",
     false,
