@@ -157,6 +157,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                     group_key,
                     order_key,
                     must_consolidate,
+                    ..
                 }) => {
                     let (oks, errs) = self.render_top1_monotonic(
                         ok_input,

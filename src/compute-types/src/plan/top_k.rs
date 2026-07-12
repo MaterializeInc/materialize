@@ -61,6 +61,7 @@ impl TopKPlan {
             TopKPlan::MonotonicTop1(MonotonicTop1Plan {
                 group_key,
                 order_key,
+                arity,
                 must_consolidate: false,
             })
         } else if monotonic && offset == 0 {
@@ -102,6 +103,7 @@ impl TopKPlan {
                         TopKPlan::MonotonicTop1(MonotonicTop1Plan {
                             group_key: plan.group_key.clone(),
                             order_key: plan.order_key.clone(),
+                            arity: plan.arity,
                             must_consolidate,
                         })
                     } else {
@@ -130,6 +132,7 @@ impl TopKPlan {
             TopKPlan::MonotonicTop1(MonotonicTop1Plan {
                 group_key: _,
                 order_key: _,
+                arity: _,
                 must_consolidate: _,
             }) => None,
             TopKPlan::MonotonicTopK(MonotonicTopKPlan {
@@ -172,6 +175,8 @@ pub struct MonotonicTop1Plan {
     pub group_key: Vec<usize>,
     /// Ordering that is used within each group.
     pub order_key: Vec<mz_expr::ColumnOrder>,
+    /// The number of columns in the input (equal to the output arity).
+    pub arity: usize,
     /// True if the input is not physically monotonic, and the operator must perform
     /// consolidation to remove potential negations. The operator implementation is
     /// free to consolidate as late as possible while ensuring correctness, so it is
