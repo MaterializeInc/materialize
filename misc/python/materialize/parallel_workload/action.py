@@ -300,6 +300,11 @@ class Action:
                     # removed a non-empty database, so this could not arise.
                     "unknown database",
                     "invalid database",  # CREATE SCHEMA wording for a vanished database
+                    # The Pg/MySql/SqlServer source executor connects to the
+                    # source's target database. A concurrent DropDatabaseCascade
+                    # leaves that session with no schema, so the unqualified
+                    # CREATE SECRET/CONNECTION it runs fails to resolve one.
+                    "no valid schema selected",
                     "the transaction's active cluster has been dropped",  # cluster was dropped
                     "was removed",  # dependency was removed, started with moving optimization off main thread, see database-issues#7285
                     "real-time source dropped before ingesting the upstream system's visible frontier",  # Expected, see https://buildkite.com/materialize/nightly/builds/9399#0191be17-1f4c-4321-9b51-edc4b08b71c5
