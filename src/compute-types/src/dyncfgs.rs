@@ -162,10 +162,28 @@ pub const ENABLE_COMPUTE_TEMPORAL_BUCKETING: Config<bool> = Config::new(
 );
 
 /// The summary to apply to the frontier in temporal bucketing in compute.
+/// Also the near/far threshold of the temporal-bucketing merge batcher (see
+/// [`ENABLE_COMPUTE_TEMPORAL_BUCKETING_BATCHER`]): data within this distance
+/// of a seal's upper stays in the batcher's flat chains.
 pub const TEMPORAL_BUCKETING_SUMMARY: Config<Duration> = Config::new(
     "compute_temporal_bucketing_summary",
     Duration::from_secs(2),
     "The summary to apply to frontiers in temporal bucketing in compute.",
+);
+
+/// Perform temporal bucketing inside arrangement merge batchers instead of
+/// via the standalone bucketing operator. When `true`, takes precedence over
+/// [`ENABLE_COMPUTE_TEMPORAL_BUCKETING`]: the operator is not inserted and
+/// batchers park far-future updates in a bucket chain based on the data they
+/// actually observe, regardless of the lowering's `ArrangementStrategy`.
+/// Composes with `enable_column_paged_batcher`: with both set, the affected
+/// arrangements use the temporal-bucketing batcher over paged chains.
+/// Read at dataflow construction time.
+pub const ENABLE_COMPUTE_TEMPORAL_BUCKETING_BATCHER: Config<bool> = Config::new(
+    "enable_compute_temporal_bucketing_batcher",
+    false,
+    "Perform temporal bucketing inside arrangement merge batchers instead of via the \
+     standalone bucketing operator.",
 );
 
 /// The yielding behavior with which linear joins should be rendered.
@@ -496,6 +514,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&CORRECTION_V2_CHAIN_PROPORTIONALITY)
         .add(&CORRECTION_V2_CHUNK_SIZE)
         .add(&ENABLE_COMPUTE_TEMPORAL_BUCKETING)
+        .add(&ENABLE_COMPUTE_TEMPORAL_BUCKETING_BATCHER)
         .add(&TEMPORAL_BUCKETING_SUMMARY)
         .add(&LINEAR_JOIN_YIELDING)
         .add(&ENABLE_LGALLOC)

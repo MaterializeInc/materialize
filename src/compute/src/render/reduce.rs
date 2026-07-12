@@ -25,7 +25,6 @@ use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Builder, Trace};
 use differential_dataflow::{Data, VecCollection};
 use itertools::Itertools;
-use mz_compute_types::dyncfgs::{ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY};
 use mz_compute_types::plan::ArrangementStrategy;
 use mz_compute_types::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, LirAggregateExpr,
@@ -37,7 +36,7 @@ use mz_ore::cast::CastLossy;
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{Datum, DatumVec, Diff, Row, RowArena, SharedRow};
-use mz_timely_util::columnation::ColumnationChunker;
+use mz_row_spine::{DatumSeq, RowBuilder, RowRowBuilder, RowValBuilder};
 use mz_timely_util::operator::CollectionExt;
 use num_traits::Float;
 use serde::{Deserialize, Serialize};
@@ -45,7 +44,7 @@ use timely::Container;
 use timely::container::{CapacityContainerBuilder, PushInto};
 use tracing::warn;
 
-use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
+use crate::extensions::arrange::{ArrangementSize, MaybeTemporalArrange};
 use crate::extensions::reduce::{ClearContainer, MzReduce};
 use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
@@ -53,14 +52,11 @@ use crate::render::errors::MaybeValidatingRow;
 use crate::render::reduce::monoids::{ReductionMonoid, get_monoid};
 use crate::render::{ArrangementFlavor, Pairer, RenderTimestamp};
 use crate::typedefs::{
-    ErrBatcher, ErrBuilder, KeyBatcher, RowErrBuilder, RowErrSpine, RowRowAgent, RowRowArrangement,
-    RowRowSpine, RowSpine, RowValSpine,
-};
-use mz_row_spine::{
-    DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBatcher, RowValBuilder,
+    ErrBuilder, ErrSpine, RowErrBuilder, RowErrSpine, RowRowAgent, RowRowArrangement, RowRowSpine,
+    RowSpine, RowValSpine,
 };
 
-impl<'scope, T: RenderTimestamp> Context<'scope, T> {
+impl<'scope, T: RenderTimestamp + MaybeTemporalArrange> Context<'scope, T> {
     /// Renders a `MirRelationExpr::Reduce` using various non-obvious techniques to
     /// minimize worst-case incremental update times and memory footprint.
     pub fn render_reduce(
@@ -159,15 +155,11 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             // `ensure_collections`, so the strategy is plumbed through `PlanNode::Reduce`
             // rather than inferred at the arrangement site. No-op for `Direct`.
             let key_val_collection = key_val_input.as_collection();
-            let key_val_collection = if matches!(
-                temporal_bucketing_strategy,
-                ArrangementStrategy::TemporalBucketing
-            ) && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(&self.config_set)
-            {
-                let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
-                    .get(&self.config_set)
-                    .try_into()
-                    .expect("must fit");
+            let key_val_collection = if let Some(summary) =
+                crate::render::operator_bucketing_summary(
+                    &self.config_set,
+                    temporal_bucketing_strategy,
+                ) {
                 T::maybe_apply_temporal_bucketing(
                     key_val_collection.inner,
                     self.as_of_frontier.clone(),
@@ -199,12 +191,13 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         let mut errors = Default::default();
         let arrangement =
             self.render_reduce_plan_inner(plan, collection, &mut errors, key_arity, mfp_after);
-        let errs: KeyCollection<_, _, _> = err_input.concatenate(errors).into();
+        let errs = err_input.concatenate(errors);
         CollectionBundle::from_columns(
             0..key_arity,
             ArrangementFlavor::Local(
                 arrangement,
-                errs.mz_arrange::<ColumnationChunker<_>, ErrBatcher<_, _>, ErrBuilder<_, _>, _>(
+                self.arrange_key::<_, _, ErrBuilder<_, _>, ErrSpine<_, _>>(
+                    errs,
                     "Arrange bundle err",
                 ),
             ),
@@ -294,15 +287,10 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         let mfp_after1 = mfp_after.clone();
         let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
 
-        let arranged = collection
-            .mz_arrange::<
-                ColumnationChunker<_>,
-                RowRowBatcher<_, _>,
-                RowRowBuilder<_, _>,
-                RowRowSpine<_, _>,
-            >(
-                "Arranged DistinctBy",
-            );
+        let arranged = self.arrange::<_, _, _, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+            collection,
+            "Arranged DistinctBy",
+        );
         let output = arranged
             .clone()
             .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
@@ -404,13 +392,8 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         let mfp_after1 = mfp_after.clone();
         let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
 
-        let arranged = differential_dataflow::collection::concatenate(input.scope(), to_collect)
-            .mz_arrange::<
-                ColumnationChunker<_>,
-                RowValBatcher<_, _, _>,
-                RowValBuilder<_, _, _>,
-                RowValSpine<_, _, _>,
-            >(
+        let arranged = self.arrange::<_, _, _, RowValBuilder<_, _, _>, RowValSpine<_, _, _>>(
+            differential_dataflow::collection::concatenate(input.scope(), to_collect),
             "Arranged ReduceFuseBasic input",
         );
 
@@ -564,15 +547,10 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         } else {
             "FusedReduceUnnestList"
         };
-        let arranged = partial
-            .mz_arrange::<
-                ColumnationChunker<_>,
-                RowRowBatcher<_, _>,
-                RowRowBuilder<_, _>,
-                RowRowSpine<_, _>,
-            >(&format!(
-                "Arranged {name}"
-            ));
+        let arranged = self.arrange::<_, _, _, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+            partial,
+            &format!("Arranged {name}"),
+        );
         let oks = if !fused_unnest_list {
             arranged
                 .clone()
@@ -792,31 +770,25 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             name_tag.unwrap_or_default()
         );
 
-        let input: KeyCollection<_, _, _> = input.into();
-        input
-            .mz_arrange::<
-                ColumnationChunker<_>,
-                RowBatcher<_, _>,
-                RowBuilder<_, _>,
-                RowSpine<_, _>,
-            >(
-                "Arranged ReduceInaccumulable Distinct [val: empty]",
-            )
-            .mz_reduce_abelian::<_, Bu, Tr>(&output_name, move |_, source, t| {
-                if let Some(err) = Tr::ValOwn::into_error() {
-                    for (value, count) in source.iter() {
-                        if count.is_positive() {
-                            continue;
-                        }
-
-                        let message = "Non-positive accumulation in ReduceInaccumulable DISTINCT";
-                        error_logger.log(message, &format!("value={value:?}, count={count}"));
-                        t.push((err(message.to_string()), Diff::ONE));
-                        return;
+        self.arrange_key::<_, _, RowBuilder<_, _>, RowSpine<_, _>>(
+            input,
+            "Arranged ReduceInaccumulable Distinct [val: empty]",
+        )
+        .mz_reduce_abelian::<_, Bu, Tr>(&output_name, move |_, source, t| {
+            if let Some(err) = Tr::ValOwn::into_error() {
+                for (value, count) in source.iter() {
+                    if count.is_positive() {
+                        continue;
                     }
+
+                    let message = "Non-positive accumulation in ReduceInaccumulable DISTINCT";
+                    error_logger.log(message, &format!("value={value:?}, count={count}"));
+                    t.push((err(message.to_string()), Diff::ONE));
+                    return;
                 }
-                t.push((Tr::ValOwn::ok(()), Diff::ONE))
-            })
+            }
+            t.push((Tr::ValOwn::ok(()), Diff::ONE))
+        })
     }
 
     /// Build the dataflow to compute and arrange multiple hierarchical aggregations
@@ -928,15 +900,10 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 let error_logger = self.error_logger();
                 // NOTE(vmarcos): The input operator name below is used in the tuning advice built-in
                 // view mz_introspection.mz_expected_group_size_advice.
-                let arranged = partial
-                    .mz_arrange::<
-                        ColumnationChunker<_>,
-                        RowRowBatcher<_, _>,
-                        RowRowBuilder<_, _>,
-                        RowRowSpine<_, _>,
-                    >(
-                        "Arrange ReduceMinsMaxes",
-                    );
+                let arranged = self.arrange::<_, _, _, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                    partial,
+                    "Arrange ReduceMinsMaxes",
+                );
                 // Note that we would prefer to use `mz_timely_util::reduce::ReduceExt::reduce_pair` here,
                 // but we then wouldn't be able to do this error check conditionally.  See its documentation
                 // for the rationale around using a second reduction here.
@@ -1138,15 +1105,10 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         let error_logger = self.error_logger();
         // NOTE(vmarcos): The input operator name below is used in the tuning advice built-in
         // view mz_introspection.mz_expected_group_size_advice.
-        let arranged_input = input
-            .mz_arrange::<
-                ColumnationChunker<_>,
-                RowRowBatcher<_, _>,
-                RowRowBuilder<_, _>,
-                RowRowSpine<_, _>,
-            >(
-                "Arranged MinsMaxesHierarchical input",
-            );
+        let arranged_input = self.arrange::<_, _, _, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+            input,
+            "Arranged MinsMaxesHierarchical input",
+        );
 
         // Scratch buffer for decoding the input values (one column per aggregate) into the
         // arena, so the aggregates iterate arena-resident datums rather than the packed bytes.
@@ -1226,22 +1188,22 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
     ) {
         let aggregations = aggr_funcs.len();
         // Gather the relevant values into a vec of rows ordered by aggregation_index
-        let collection = collection
-            .map(move |(key, row)| {
-                let mut row_builder = SharedRow::get();
-                let mut values = Vec::with_capacity(aggregations);
-                values.extend(
-                    row.iter()
-                        .take(aggregations)
-                        .map(|v| row_builder.pack_using(std::iter::once(v))),
-                );
-
-                (key, values)
-            })
-            .consolidate_named_if::<KeyBatcher<_, _, _>>(
-                must_consolidate,
-                "Consolidated ReduceMonotonic input",
+        let collection = collection.map(move |(key, row)| {
+            let mut row_builder = SharedRow::get();
+            let mut values = Vec::with_capacity(aggregations);
+            values.extend(
+                row.iter()
+                    .take(aggregations)
+                    .map(|v| row_builder.pack_using(std::iter::once(v))),
             );
+
+            (key, values)
+        });
+        let collection = self.consolidate(
+            collection,
+            must_consolidate,
+            "Consolidated ReduceMonotonic input",
+        );
 
         // It should be now possible to ensure that we have a monotonic collection.
         let error_logger = self.error_logger();
@@ -1272,16 +1234,11 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         let mfp_after1 = mfp_after.clone();
         let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
 
-        let partial: KeyCollection<_, _, _> = partial.into();
-        let arranged = partial
-            .mz_arrange::<
-                ColumnationChunker<_>,
-                RowBatcher<_, _>,
-                RowBuilder<_, _>,
-                RowSpine<_, Vec<ReductionMonoid>>,
-            >(
-                "ArrangeMonotonic [val: empty]",
-            );
+        type MonotonicSpine<T> = RowSpine<T, Vec<ReductionMonoid>>;
+        let arranged = self.arrange_key::<_, _, RowBuilder<_, _>, MonotonicSpine<T>>(
+            partial,
+            "ArrangeMonotonic [val: empty]",
+        );
         let output = arranged
             .clone()
             .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>("ReduceMonotonic", {
@@ -1418,18 +1375,13 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         // Next, collect all aggregations that require distinctness.
         for (datum_index, aggr) in distinct_aggrs.into_iter() {
             let pairer = Pairer::new(key_arity);
-            let collection = collection
-                .clone()
-                .map(move |(key, row)| {
-                    let value = row.iter().nth(datum_index).unwrap();
-                    (pairer.merge(&key, std::iter::once(value)), ())
-                })
-                .mz_arrange::<
-                    ColumnationChunker<_>,
-                    RowBatcher<_, _>,
-                    RowBuilder<_, _>,
-                    RowSpine<_, _>,
-                >(
+            let keyed = collection.clone().map(move |(key, row)| {
+                let value = row.iter().nth(datum_index).unwrap();
+                (pairer.merge(&key, std::iter::once(value)), ())
+            });
+            let collection = self
+                .arrange::<_, _, _, RowBuilder<_, _>, RowSpine<_, _>>(
+                    keyed,
                     "Arranged Accumulable Distinct [val: empty]",
                 )
                 .mz_reduce_abelian::<_, RowBuilder<_, _>, RowSpine<_, _>>(
@@ -1466,15 +1418,10 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 
         let error_logger = self.error_logger();
         let err_full_aggrs = full_aggrs.clone();
-        let arranged = collection
-            .mz_arrange::<
-                ColumnationChunker<_>,
-                RowBatcher<_, _>,
-                RowBuilder<_, _>,
-                RowSpine<_, (Vec<Accum>, Diff)>,
-            >(
-                "ArrangeAccumulable [val: empty]",
-            );
+        let arranged = self.arrange::<_, _, _, RowBuilder<_, _>, RowSpine<_, (Vec<Accum>, Diff)>>(
+            collection,
+            "ArrangeAccumulable [val: empty]",
+        );
         let arranged_output = arranged
             .clone()
             .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>("ReduceAccumulable", {

@@ -101,6 +101,9 @@ def get_minimal_system_parameters(
         "enable_statement_lifecycle_logging": "true",
         "enable_storage_introspection_logs": "true",
         "enable_compute_temporal_bucketing": "true",
+        "enable_compute_temporal_bucketing_batcher": (
+            "true" if version >= MzVersion.parse_mz("v26.34.0-dev") else "false"
+        ),
         "enable_variadic_left_join_lowering": "true",
         "enable_worker_core_affinity": "true",
         "grpc_client_http2_keep_alive_timeout": "5s",
@@ -371,6 +374,15 @@ def get_variable_system_parameters(
             (
                 ["true", "false"]
                 if version > MzVersion.parse_mz("v0.127.0-dev")
+                else ["false"]
+            ),
+        ),
+        VariableSystemParameter(
+            "enable_compute_temporal_bucketing_batcher",
+            ("true" if version >= MzVersion.parse_mz("v26.34.0-dev") else "false"),
+            (
+                ["true", "false"]
+                if version >= MzVersion.parse_mz("v26.34.0-dev")
                 else ["false"]
             ),
         ),

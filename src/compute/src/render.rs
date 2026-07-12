@@ -124,7 +124,8 @@ use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
 use mz_compute_types::dyncfgs::{
     COMPUTE_APPLY_COLUMN_DEMANDS, COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK,
     COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES, ENABLE_COMPUTE_LOGICAL_BACKPRESSURE,
-    ENABLE_COMPUTE_TEMPORAL_BUCKETING, SUBSCRIBE_SNAPSHOT_OPTIMIZATION, TEMPORAL_BUCKETING_SUMMARY,
+    ENABLE_COMPUTE_TEMPORAL_BUCKETING, ENABLE_COMPUTE_TEMPORAL_BUCKETING_BATCHER,
+    SUBSCRIBE_SNAPSHOT_OPTIMIZATION, TEMPORAL_BUCKETING_SUMMARY,
 };
 use mz_compute_types::plan::render_plan::{
     self, BindStage, LetBind, LetFreePlan, RecBind, RenderPlan,
@@ -138,8 +139,7 @@ use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, ReprRelationType, Row, RowArena, SharedRow};
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
-use mz_timely_util::columnation::ColumnationChunker;
-use mz_timely_util::operator::{CollectionExt, StreamExt};
+use mz_timely_util::operator::StreamExt;
 use mz_timely_util::probe::{Handle as MzProbeHandle, ProbeNotify};
 use mz_timely_util::scope_label::ScopeExt;
 use timely::PartialOrder;
@@ -157,7 +157,7 @@ use timely::worker::Worker as TimelyWorker;
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
-use crate::extensions::arrange::{KeyCollection, MzArrange};
+use crate::extensions::arrange::MaybeTemporalArrange;
 use crate::extensions::reduce::MzReduce;
 use crate::extensions::temporal_bucket::TemporalBucketing;
 use crate::logging::compute::{
@@ -165,8 +165,8 @@ use crate::logging::compute::{
 };
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::errors::DataflowErrorSer;
-use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
-use mz_row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
+use crate::typedefs::{ErrBuilder, ErrSpine, MzTimestamp, RowRowSpine};
+use mz_row_spine::{DatumSeq, RowRowBuilder};
 
 pub mod context;
 pub(crate) mod errors;
@@ -790,24 +790,32 @@ where
                 // TODO: The following as_collection/leave/arrange sequence could be optimized.
                 //   * Combine as_collection and leave into a single function.
                 //   * Use columnar to extract columns from the batches to implement leave.
-                let mut oks = oks
-                    .as_collection(|k, v| (k.to_row(), v.to_row()))
-                    .leave(outer)
-                    .mz_arrange::<
-                        ColumnationChunker<_>,
-                        RowRowBatcher<_, _>,
-                        RowRowBuilder<_, _>,
-                        _,
-                    >(
-                        "Arrange export iterative",
-                    );
+                let use_temporal = self.temporal_batcher;
+                let mut oks = mz_repr::Timestamp::mz_arrange_maybe_temporal::<
+                    _,
+                    _,
+                    _,
+                    RowRowBuilder<_, _>,
+                    RowRowSpine<_, _>,
+                >(
+                    oks.as_collection(|k, v| (k.to_row(), v.to_row()))
+                        .leave(outer),
+                    "Arrange export iterative",
+                    use_temporal,
+                );
 
-                let mut errs = errs
-                    .as_collection(|k, v| (k.clone(), v.clone()))
-                    .leave(outer)
-                    .mz_arrange::<ColumnationChunker<_>, ErrBatcher<_, _>, ErrBuilder<_, _>, _>(
-                        "Arrange export iterative err",
-                    );
+                let mut errs = mz_repr::Timestamp::mz_arrange_maybe_temporal::<
+                    _,
+                    _,
+                    _,
+                    ErrBuilder<_, _>,
+                    ErrSpine<_, _>,
+                >(
+                    errs.as_collection(|k, v| (k.clone(), v.clone()))
+                        .leave(outer),
+                    "Arrange export iterative err",
+                    use_temporal,
+                );
 
                 // Ensure that the frontier does not advance past the expiration time, if set.
                 // Otherwise, we might write down incorrect data.
@@ -938,10 +946,7 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                 let (oks_v, err_v) = variables.remove(&Id::Local(id)).unwrap();
 
                 // Set oks variable to `oks` but consolidated to ensure iteration ceases at fixed point.
-                let mut oks = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
-                    oks,
-                    "LetRecConsolidation",
-                );
+                let mut oks = self.consolidate(oks, true, "LetRecConsolidation");
 
                 if let Some(limit) = limit {
                     // We swallow the results of the `max_iter`th iteration, because
@@ -968,14 +973,9 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                 // say if the limit of `oks` has an error. This would result in non-terminating rather
                 // than a clean report of the error. The trade-off is that we lose information about
                 // multiplicities of errors, but .. this seems to be the better call.
-                let err: KeyCollection<_, _, _> = err.into();
-                let errs = err
-                    .mz_arrange::<
-                        ColumnationChunker<_>,
-                        ErrBatcher<_, _>,
-                        ErrBuilder<_, _>,
-                        ErrSpine<_, _>,
-                    >(
+                let errs = self
+                    .arrange_key::<_, _, ErrBuilder<_, _>, ErrSpine<_, _>>(
+                        err,
                         "Arrange recursive err",
                     )
                     .mz_reduce_abelian::<_, ErrBuilder<_, _>, ErrSpine<_, _>>(
@@ -1005,7 +1005,7 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
     }
 }
 
-impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
+impl<'scope, T: RenderTimestamp + MaybeBucketByTime + MaybeTemporalArrange> Context<'scope, T> {
     /// Renders a non-recursive plan to a differential dataflow, producing the collection of
     /// results.
     ///
@@ -1339,13 +1339,9 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                     // Apply per-input temporal bucketing. No-op for `Direct`.
                     // Only consolidating Unions carry non-`Direct` strategies;
                     // see the `Union` arm of `lower_mir_expr_stack_safe`.
-                    let os = if matches!(strategy, ArrangementStrategy::TemporalBucketing)
-                        && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(&self.config_set)
+                    let os = if let Some(summary) =
+                        operator_bucketing_summary(&self.config_set, strategy)
                     {
-                        let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
-                            .get(&self.config_set)
-                            .try_into()
-                            .expect("must fit");
                         T::maybe_apply_temporal_bucketing(
                             os.inner,
                             self.as_of_frontier.clone(),
@@ -1359,10 +1355,7 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                 }
                 let mut oks = differential_dataflow::collection::concatenate(self.scope, oks);
                 if consolidate_output {
-                    oks = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
-                        oks,
-                        "UnionConsolidation",
-                    )
+                    oks = self.consolidate(oks, true, "UnionConsolidation")
                 }
                 let errs = differential_dataflow::collection::concatenate(self.scope, errs);
                 CollectionBundle::from_collections(oks, errs)
@@ -1532,6 +1525,26 @@ pub trait RenderTimestamp: MzTimestamp + Default + Refines<mz_repr::Timestamp> {
     /// Steps the timestamp back so that logical compaction to the output will
     /// not conflate `self` with any historical times.
     fn step_back(&self) -> Self;
+}
+
+/// The summary for the standalone temporal bucketing operator, or `None`
+/// when the operator must not be inserted: the lowering did not select
+/// bucketing for this site, the operator flag is off, or batcher-mode
+/// bucketing (`enable_compute_temporal_bucketing_batcher`, which performs
+/// the same work inside every merge batcher) supersedes it.
+pub(crate) fn operator_bucketing_summary(
+    config_set: &mz_dyncfg::ConfigSet,
+    strategy: ArrangementStrategy,
+) -> Option<mz_repr::Timestamp> {
+    let apply = matches!(strategy, ArrangementStrategy::TemporalBucketing)
+        && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(config_set)
+        && !ENABLE_COMPUTE_TEMPORAL_BUCKETING_BATCHER.get(config_set);
+    apply.then(|| {
+        TEMPORAL_BUCKETING_SUMMARY
+            .get(config_set)
+            .try_into()
+            .expect("must fit")
+    })
 }
 
 /// Apply temporal bucketing to a stream when the timestamp type supports it.

@@ -13,15 +13,17 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
+use columnation::Columnation;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
-use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::difference::Semigroup;
+use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::implementations::BatchContainer;
-use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
-use differential_dataflow::{AsCollection, Data, VecCollection};
+use differential_dataflow::trace::{Batch, BatchReader, Builder, Cursor, Trace, TraceReader};
+use differential_dataflow::{AsCollection, Data, ExchangeData, Hashable, VecCollection};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::{
     ENABLE_COLUMN_PAGED_BATCHER, ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION,
-    ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY,
+    ENABLE_COMPUTE_TEMPORAL_BUCKETING_BATCHER,
 };
 use mz_compute_types::plan::scalar::{LirScalarExpr, mfp_mir_to_lir_plan, mfp_plan_lir_to_mir};
 use mz_compute_types::plan::{ArrangementStrategy, AvailableCollections};
@@ -30,14 +32,13 @@ use mz_expr::{Eval, Id, MfpPlan};
 use mz_ore::soft_assert_or_log;
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
+use mz_row_spine::DatumSeq;
 use mz_storage_types::controller::CollectionMetadata;
-use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::{Col2ValBatcher, Col2ValPagedBatcher, columnar_exchange};
-use mz_timely_util::columnation::ColumnationChunker;
+use mz_timely_util::columnation::ColumnationStack;
 use timely::ContainerBuilder;
 use timely::container::{CapacityContainerBuilder, PushInto};
-use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
+use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{OutputBuilder, OutputBuilderSession};
@@ -46,13 +47,10 @@ use timely::progress::operate::FrontierInterest;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::compute_state::ComputeState;
-use crate::extensions::arrange::{KeyCollection, MzArrange, MzArrangeCore};
+use crate::extensions::arrange::{ArrangementSize, MaybeTemporalArrange};
 use crate::render::errors::{DataflowErrorSer, ErrorLogger};
 use crate::render::{LinearJoinSpec, MaybeBucketByTime, RenderTimestamp};
-use crate::typedefs::{
-    ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, RowRowAgent, RowRowEnter, RowRowSpine,
-};
-use mz_row_spine::{DatumSeq, RowRowBuilder, RowRowColPagedBuilder};
+use crate::typedefs::{ErrAgent, ErrBuilder, ErrEnter, ErrSpine, RowRowAgent, RowRowEnter};
 
 /// Dataflow-local collections and arrangements.
 ///
@@ -91,6 +89,9 @@ pub struct Context<'scope, T: RenderTimestamp> {
     pub dataflow_expiration: Antichain<mz_repr::Timestamp>,
     /// The config set for this context.
     pub config_set: Rc<ConfigSet>,
+    /// Whether merge batchers should perform temporal bucketing
+    /// (`enable_compute_temporal_bucketing_batcher`).
+    pub(super) temporal_batcher: bool,
 }
 
 impl<'scope, T: RenderTimestamp> Context<'scope, T> {
@@ -131,12 +132,70 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             compute_logger,
             linear_join_spec: compute_state.linear_join_spec,
             dataflow_expiration,
+            temporal_batcher: ENABLE_COMPUTE_TEMPORAL_BUCKETING_BATCHER
+                .get(&compute_state.worker_config),
             config_set: Rc::clone(&compute_state.worker_config),
         }
     }
 }
 
 impl<'scope, T: RenderTimestamp> Context<'scope, T> {
+    /// `mz_arrange` a `(key, val)` collection, using the temporal-bucketing
+    /// batcher when `enable_compute_temporal_bucketing_batcher` is set and
+    /// the timestamp allows it.
+    pub(crate) fn arrange<'s, K, V, R, Bu, Tr>(
+        &self,
+        collection: VecCollection<'s, T, (K, V), R>,
+        name: &str,
+    ) -> Arranged<'s, TraceAgent<Tr>>
+    where
+        T: MaybeTemporalArrange,
+        K: ExchangeData + Hashable + Columnation + Ord,
+        V: ExchangeData + Columnation + Ord,
+        R: ExchangeData + Semigroup + Default + Columnation,
+        Bu: Builder<Time = T, Input = ColumnationStack<((K, V), T, R)>, Output = Tr::Batch>,
+        Tr: Trace + TraceReader<Time = T> + 'static,
+        Tr::Batch: Batch,
+        Arranged<'s, TraceAgent<Tr>>: ArrangementSize,
+    {
+        T::mz_arrange_maybe_temporal::<K, V, R, Bu, Tr>(collection, name, self.temporal_batcher)
+    }
+
+    /// [`Self::arrange`] for key-only collections.
+    pub(crate) fn arrange_key<'s, K, R, Bu, Tr>(
+        &self,
+        collection: VecCollection<'s, T, K, R>,
+        name: &str,
+    ) -> Arranged<'s, TraceAgent<Tr>>
+    where
+        T: MaybeTemporalArrange,
+        K: ExchangeData + Hashable + Columnation + Ord,
+        R: ExchangeData + Semigroup + Default + Columnation,
+        Bu: Builder<Time = T, Input = ColumnationStack<((K, ()), T, R)>, Output = Tr::Batch>,
+        Tr: Trace + TraceReader<Time = T> + 'static,
+        Tr::Batch: Batch,
+        Arranged<'s, TraceAgent<Tr>>: ArrangementSize,
+    {
+        self.arrange::<K, (), R, Bu, Tr>(collection.map(|k| (k, ())), name)
+    }
+
+    /// `consolidate_named_if`, using the temporal-bucketing batcher when
+    /// `enable_compute_temporal_bucketing_batcher` is set and the timestamp
+    /// allows it.
+    pub(crate) fn consolidate<'s, D, R>(
+        &self,
+        collection: VecCollection<'s, T, D, R>,
+        must_consolidate: bool,
+        name: &str,
+    ) -> VecCollection<'s, T, D, R>
+    where
+        T: MaybeTemporalArrange,
+        D: ExchangeData + std::hash::Hash + Columnation + Ord,
+        R: ExchangeData + Semigroup + Default + Columnation,
+    {
+        T::consolidate_maybe_temporal(collection, must_consolidate, name, self.temporal_batcher)
+    }
+
     /// Insert a collection bundle by an identifier.
     ///
     /// This is expected to be used to install external collections (sources, indexes, other views),
@@ -206,6 +265,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             linear_join_spec: self.linear_join_spec.clone(),
             bindings,
             dataflow_expiration: self.dataflow_expiration.clone(),
+            temporal_batcher: self.temporal_batcher,
             config_set: Rc::clone(&self.config_set),
         }
     }
@@ -1025,11 +1085,15 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         strategy: ArrangementStrategy,
     ) -> Self
     where
-        T: MaybeBucketByTime,
+        T: MaybeBucketByTime + MaybeTemporalArrange,
     {
         if collections == Default::default() {
             return self;
         }
+        // In batcher mode, temporal bucketing happens inside the arrangement
+        // merge batchers based on the data they observe, and the standalone
+        // bucketing operator is suppressed regardless of `strategy`.
+        let use_temporal_batcher = ENABLE_COMPUTE_TEMPORAL_BUCKETING_BATCHER.get(config_set);
         // Cache collection to avoid reforming it each time.
         //
         // TODO(mcsherry): In theory this could be faster run out of another arrangement,
@@ -1070,13 +1134,9 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             } else {
                 ArrangementStrategy::Direct
             };
-            let oks = if matches!(effective_strategy, ArrangementStrategy::TemporalBucketing)
-                && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(config_set)
+            let oks = if let Some(summary) =
+                crate::render::operator_bucketing_summary(config_set, effective_strategy)
             {
-                let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
-                    .get(config_set)
-                    .try_into()
-                    .expect("must fit");
                 bucketed = true;
                 T::maybe_apply_temporal_bucketing(oks.inner, as_of.clone(), summary)
             } else {
@@ -1102,13 +1162,9 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 } else {
                     strategy
                 };
-                let oks = if matches!(effective_strategy, ArrangementStrategy::TemporalBucketing)
-                    && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(config_set)
+                let oks = if let Some(summary) =
+                    crate::render::operator_bucketing_summary(config_set, effective_strategy)
                 {
-                    let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
-                        .get(config_set)
-                        .try_into()
-                        .expect("must fit");
                     bucketed = true;
                     T::maybe_apply_temporal_bucketing(oks.inner, as_of.clone(), summary)
                 } else {
@@ -1121,18 +1177,21 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     key.clone(),
                     thinning.clone(),
                     use_paged_path,
+                    use_temporal_batcher,
                 );
-                let errs_concat: KeyCollection<_, _, _> = errs.clone().concat(errs_keyed).into();
+                let errs_concat = errs.clone().concat(errs_keyed).map(|e| (e, ()));
                 self.collection = Some((passthrough, errs));
-                let errs =
-                    errs_concat.mz_arrange::<
-                        ColumnationChunker<_>,
-                        ErrBatcher<_, _>,
-                        ErrBuilder<_, _>,
-                        ErrSpine<_, _>,
-                    >(
-                        &format!("{}-errors", name),
-                    );
+                let errs = T::mz_arrange_maybe_temporal::<
+                    _,
+                    _,
+                    _,
+                    ErrBuilder<T, Diff>,
+                    ErrSpine<T, Diff>,
+                >(
+                    errs_concat,
+                    &format!("{}-errors", name),
+                    use_temporal_batcher,
+                );
                 self.arranged
                     .insert(key, ArrangementFlavor::Local(oks, errs));
             }
@@ -1156,11 +1215,15 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         key: Vec<LirScalarExpr>,
         thinning: Vec<usize>,
         use_paged_path: bool,
+        use_temporal_batcher: bool,
     ) -> (
         Arranged<'scope, RowRowAgent<T, Diff>>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
         VecCollection<'scope, T, Row, Diff>,
-    ) {
+    )
+    where
+        T: MaybeTemporalArrange,
+    {
         // This operator implements a `map_fallible`, but produces columnar updates for the ok
         // stream. The `map_fallible` cannot be used here because the closure cannot return
         // references, which is what we need to push into columnar streams. Instead, we use a
@@ -1209,25 +1272,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             }
         });
 
-        let exchange =
-            ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, T, Diff>);
-        let oks = if use_paged_path {
-            ok_stream.mz_arrange_core::<
-                _,
-                batcher::ColumnChunker<_>,
-                Col2ValPagedBatcher<_, _, _, _>,
-                RowRowColPagedBuilder<_, _>,
-                RowRowSpine<_, _>,
-            >(exchange, name)
-        } else {
-            ok_stream.mz_arrange_core::<
-                _,
-                batcher::Chunker<_>,
-                Col2ValBatcher<_, _, _, _>,
-                RowRowBuilder<_, _>,
-                RowRowSpine<_, _>,
-            >(exchange, name)
-        };
+        let oks = T::arrange_row_row(ok_stream, name, use_paged_path, use_temporal_batcher);
         (
             oks,
             err_stream.as_collection(),
