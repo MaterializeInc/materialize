@@ -5044,6 +5044,11 @@ class DropNetworkPolicyAction(Action):
             # The policy is installed as a default somewhere (should not happen,
             # we never install ours, but be safe).
             "cannot be dropped",
+            # Another worker dropped the same policy first. The error carries
+            # the raw name ('netpol-N', not the quoted form), so DROP resolves
+            # the name correctly; this is a concurrency race, not the ALTER
+            # NETWORK POLICY quoted-name bug.
+            "unknown network policy",
         ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> bool:
