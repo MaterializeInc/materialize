@@ -509,12 +509,16 @@ def print_stats(
     # dependents, which proves the SQL and catalog path work. Under an
     # unlucky worker-to-action-list assignment (many DDL workers churning
     # out views, sinks, and indexes) a Drop* action can hit it on every
-    # attempt of a run. Tracked separately so such actions don't trip the
-    # broken-action assertion below.
+    # attempt of a run. "cannot be dropped because some objects depend on it"
+    # is the same rejection for DROP ROLE: AlterOwnerAction reassigns object
+    # ownership to random roles, so a role usually owns something and a short
+    # run can see DropRoleAction never land a dependency-free role. Tracked
+    # separately so such actions don't trip the broken-action assertion below.
     noise = {
         "must be owner of",
         "permission denied for",
         "still depended upon by",
+        "cannot be dropped because some objects depend on it",
     }
     num_errored_real: Counter[type[Action]] = Counter()
     for worker in workers:
