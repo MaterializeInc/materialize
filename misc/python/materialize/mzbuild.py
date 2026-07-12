@@ -124,6 +124,7 @@ def run_and_detect_rust_incremental_build_failure(
     stderr_contents = stderr_result.getvalue()
     stderr_result.close()
     if retcode:
+        # Keep these signatures in sync with bin/clear-corrupted-cargo-target-dir.
         incremental_build_failure_msgs = [
             "panicked at compiler/rustc_metadata/src/rmeta/def_path_hash_map.rs",
             "Found unstable fingerprints for",
