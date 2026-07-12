@@ -63,7 +63,6 @@ impl TopKPlan {
                 order_key,
                 arity,
                 must_consolidate: false,
-                arranged: true,
             })
         } else if monotonic && offset == 0 {
             // For monotonic inputs, we are able to retract inputs that can no longer be produced
@@ -106,10 +105,6 @@ impl TopKPlan {
                             order_key: plan.order_key.clone(),
                             arity: plan.arity,
                             must_consolidate,
-                            // Lowering already computed `AvailableCollections` for the
-                            // `Basic` plan being upgraded here, so it never advertised
-                            // this arrangement.
-                            arranged: false,
                         })
                     } else {
                         TopKPlan::MonotonicTopK(MonotonicTopKPlan {
@@ -139,7 +134,6 @@ impl TopKPlan {
                 order_key: _,
                 arity: _,
                 must_consolidate: _,
-                arranged: _,
             }) => None,
             TopKPlan::MonotonicTopK(MonotonicTopKPlan {
                 limit,
@@ -191,14 +185,6 @@ pub struct MonotonicTop1Plan {
     ///
     /// [^1]: <https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20230421_stabilize_monotonic_select.md>
     pub must_consolidate: bool,
-    /// Whether lowering advertised this plan's output as the group-key arrangement it
-    /// builds. `true` when this plan was chosen by `create_from` before lowering computed
-    /// `AvailableCollections` (the only case lowering advertises). `false` when
-    /// `TopKPlan::as_monotonic` upgraded a `Basic` plan to `MonotonicTop1` after lowering,
-    /// since the advertisement is not recomputed on upgrade. Render uses this to decide
-    /// whether to deliver the arrangement alone or reconstruct and deliver the raw
-    /// collection instead.
-    pub arranged: bool,
 }
 
 /// A plan for monotonic TopKs with an offset of 0 and an arbitrary limit.
