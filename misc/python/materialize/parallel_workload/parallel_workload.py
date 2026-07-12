@@ -28,7 +28,9 @@ from materialize.parallel_workload.action import (
     CancelAction,
     DropClusterAction,
     DropDatabaseAction,
+    DropRoleAction,
     DropSchemaAction,
+    ExplainAnalyzeAction,
     KillAction,
     StatisticsAction,
     ZeroDowntimeDeployAction,
@@ -536,7 +538,20 @@ def print_stats(
     # objects (schemas and databases their items, clusters their sources,
     # sinks, and indexes), so they exercise the rejection path and are not
     # expected to ever succeed.
-    action_classes -= {DropClusterAction, DropDatabaseAction, DropSchemaAction}
+    #
+    # DropRoleAction and ExplainAnalyzeAction have strict runtime preconditions
+    # that a churny run frequently denies: a dependency-free role (AlterOwner
+    # reassigns ownership to roles) and a hydrated MV/index on the active
+    # cluster (renames/drops keep retiring the target). They can and do succeed,
+    # so they aren't broken, but a given seed can see zero successes with only
+    # legitimate rejections, which would false-positive the assertion below.
+    action_classes -= {
+        DropClusterAction,
+        DropDatabaseAction,
+        DropSchemaAction,
+        DropRoleAction,
+        ExplainAnalyzeAction,
+    }
     never_succeeded = []
     for action_class in sorted(action_classes, key=lambda cls: cls.__name__):
         successes = num_successes[action_class]
