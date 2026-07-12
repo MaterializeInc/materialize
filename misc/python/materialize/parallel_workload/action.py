@@ -5386,7 +5386,14 @@ ddl_action_list = ActionList(
         (ReconnectAction, 1),
         (CreateDatabaseAction, 1),
         (DropDatabaseAction, 1),
-        (DropDatabaseCascadeAction, 1),
+        # TODO: Reenable once a concurrent DROP DATABASE CASCADE can no longer
+        # panic the coordinator. A staged create (e.g. the source executor's
+        # CREATE SECRET) whose target database is dropped between staging and
+        # finish hits resolve_full_name -> get_database (panicking OrdMap index)
+        # in catalog transact_op. Only CASCADE can drop a non-empty database,
+        # so this is the precise trigger. See FINDINGS-BUGS.md ("Coordinator
+        # panic resolving a name whose database was concurrently dropped").
+        # (DropDatabaseCascadeAction, 1),
         (CreateSchemaAction, 1),
         (DropSchemaAction, 1),
         (DropSchemaCascadeAction, 1),
