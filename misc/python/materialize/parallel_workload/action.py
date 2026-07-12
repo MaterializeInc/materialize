@@ -2486,10 +2486,9 @@ class FlipFlagsAction(Action):
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["cluster"] = ["quickstart", "dont_exist"]
-        self.flags_with_values["enable_frontend_peek_sequencing"] = [
-            "true",
-            "false",
-        ]
+        # NOTE: enable_frontend_peek_sequencing is pinned off in
+        # ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS (frontend-peek read-hold vs
+        # compaction race, see FINDINGS-BUGS.md), so it is not flipped here.
         self.flags_with_values["enable_frontend_subscribes"] = [
             "true",
             "false",
