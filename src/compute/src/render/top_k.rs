@@ -158,7 +158,6 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                     order_key,
                     arity,
                     must_consolidate,
-                    arranged,
                 }) => {
                     let (arrangement, errs) = self.render_top1_monotonic(
                         ok_input,
@@ -169,48 +168,20 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                     );
                     err_collection = err_collection.concat(errs);
 
-                    if arranged {
-                        // Lowering advertised this arrangement (see the `MirRelationExpr::TopK`
-                        // arm in `lowering.rs`), so a downstream consumer keyed on `group_key`
-                        // may rely on it existing without a `collection` fallback. Deliver the
-                        // arrangement alone, mirroring `render_reduce_plan`'s
-                        // `ArrangementFlavor::Local`.
-                        let errs: KeyCollection<_, _, _> = err_collection.clone().into();
-                        let err_arrangement = errs.mz_arrange::<
-                            ColumnationChunker<_>,
-                            ErrBatcher<_, _>,
-                            ErrBuilder<_, _>,
-                            _,
-                        >("Arrange bundle err");
-                        CollectionBundle::from_columns(
-                            group_key.iter().copied(),
-                            ArrangementFlavor::Local(arrangement, err_arrangement),
-                        )
-                    } else {
-                        // `TopKPlan::as_monotonic` upgraded a `Basic` plan to `MonotonicTop1`
-                        // after lowering computed `AvailableCollections`, so the advertisement
-                        // was never updated and consumers still expect `bundle.collection` to
-                        // be populated directly. Reconstruct the raw collection from the
-                        // arrangement, which is keyed by the arbitrary column set `group_key`
-                        // (not a `0..k` prefix) with the value thinned to `thinning`.
-                        // `permutation` maps the concatenation of key and value back to the
-                        // original column order.
-                        let key: Vec<LirScalarExpr> = group_key
-                            .iter()
-                            .map(|c| LirScalarExpr::column(*c))
-                            .collect();
-                        let (permutation, _thinning) = permutation_for_arrangement(&key, arity);
-
-                        let mut datums = mz_repr::DatumVec::new();
-                        let oks = arrangement.as_collection(move |k: DatumSeq, v: DatumSeq| {
-                            let temp_storage = mz_repr::RowArena::new();
-                            let mut datums_borrow = datums.borrow();
-                            k.extend_datums(&temp_storage, &mut datums_borrow, None);
-                            v.extend_datums(&temp_storage, &mut datums_borrow, None);
-                            SharedRow::pack(permutation.iter().map(|i| datums_borrow[*i]))
-                        });
-                        CollectionBundle::from_collections(oks, err_collection)
-                    }
+                    // Lowering advertises this group-key arrangement (see the
+                    // `MirRelationExpr::TopK` arm in `lowering.rs`), so deliver it alone,
+                    // mirroring `render_reduce_plan`'s `ArrangementFlavor::Local`. A consumer
+                    // that needs the raw collection reconstructs it from the arrangement via
+                    // the advertised permutation, exactly as for an index arrangement.
+                    let errs: KeyCollection<_, _, _> = err_collection.clone().into();
+                    let err_arrangement = errs
+                        .mz_arrange::<ColumnationChunker<_>, ErrBatcher<_, _>, ErrBuilder<_, _>, _>(
+                            "Arrange bundle err",
+                        );
+                    CollectionBundle::from_columns(
+                        group_key.iter().copied(),
+                        ArrangementFlavor::Local(arrangement, err_arrangement),
+                    )
                 }
                 TopKPlan::MonotonicTopK(MonotonicTopKPlan {
                     order_key,
