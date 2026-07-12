@@ -232,3 +232,105 @@ Source materialize.public.counter
 Target cluster: quickstart
 
 EOF
+
+# Regression test: MonotonicTop1's arrangement-only render path must reconstruct
+# rows in the correct column order when a downstream consumer (here, this view's
+# own persist sink) needs the raw collection, not just when it can consume the
+# arrangement directly. The group key (`counter % 3`) is placed after the value
+# columns in the projected row, so an identity permutation would silently
+# produce the wrong column order if the reconstruction were broken. `Reduce`
+# never exercises this because its key is always a `0..k` prefix.
+
+statement ok
+CREATE SOURCE top1_perm_counter
+  FROM LOAD GENERATOR COUNTER (UP TO 9, TICK INTERVAL '0.001s');
+
+statement ok
+CREATE TABLE top1_perm_counter_tbl FROM SOURCE top1_perm_counter;
+
+statement ok
+SELECT mz_unsafe.mz_sleep(1);
+
+query I
+SELECT count(*) FROM top1_perm_counter_tbl;
+----
+9
+
+query T multiline
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
+  CREATE MATERIALIZED VIEW top1_perm_direct AS
+  SELECT DISTINCT ON (counter % 3) counter * 10 AS v, counter, counter % 3 AS k
+  FROM top1_perm_counter_tbl
+  ORDER BY counter % 3, counter DESC
+----
+materialize.public.top1_perm_direct:
+  TopK::MonotonicTop1 group_by=[#2] order_by=[#1 desc nulls_first]
+    Get::Collection materialize.public.top1_perm_counter_tbl
+      raw=true
+
+Source materialize.public.top1_perm_counter_tbl
+  project=(#1, #0, #2)
+  map=((#0{counter} * 10), (#0{counter} % 3))
+
+Target cluster: quickstart
+
+EOF
+
+statement ok
+CREATE MATERIALIZED VIEW top1_perm_direct AS
+  SELECT DISTINCT ON (counter % 3) counter * 10 AS v, counter, counter % 3 AS k
+  FROM top1_perm_counter_tbl
+  ORDER BY counter % 3, counter DESC;
+
+query III rowsort
+SELECT * FROM top1_perm_direct;
+----
+70
+7
+1
+80
+8
+2
+90
+9
+0
+
+# Regression test: a one-shot `SELECT DISTINCT ON` over a non-monotonic table
+# exercises `TopKPlan::as_monotonic`'s `Basic`->`MonotonicTop1` upgrade
+# (`arranged = false`), which must reconstruct the raw collection instead of
+# delivering the arrangement alone, since lowering never advertised one (the
+# `AvailableCollections` were computed before the single-time refinement ran).
+
+statement ok
+CREATE TABLE top1_perm_plain (v int, counter int, k int);
+
+statement ok
+INSERT INTO top1_perm_plain VALUES (10, 1, 0), (20, 2, 0), (30, 3, 1), (40, 4, 1);
+
+query T multiline
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
+  SELECT DISTINCT ON (k) v, counter, k
+  FROM top1_perm_plain
+  ORDER BY k, counter DESC
+----
+Explained Query:
+  Finish order_by=[#2 asc nulls_last, #1 desc nulls_first] output=[#0..=#2]
+    TopK::MonotonicTop1 group_by=[#2] order_by=[#1 desc nulls_first] must_consolidate
+      Get::PassArrangements materialize.public.top1_perm_plain
+        raw=true
+
+Source materialize.public.top1_perm_plain
+
+Target cluster: quickstart
+
+EOF
+
+query III rowsort
+SELECT * FROM (SELECT DISTINCT ON (k) v, counter, k FROM top1_perm_plain ORDER BY k, counter DESC);
+----
+20
+2
+0
+40
+4
+1
