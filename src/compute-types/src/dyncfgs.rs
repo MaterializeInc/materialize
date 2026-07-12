@@ -262,6 +262,16 @@ pub const ENABLE_SYNC_MV_SINK: Config<bool> = Config::new(
     ParameterScope::Environment,
 );
 
+/// Coalesce the parts written by the workers in one process into a single shared batch per batch
+/// interval, instead of each worker writing its own batch.
+pub const ENABLE_SYNC_MV_SINK_SHARED_BATCHES: Config<bool> = Config::new(
+    "enable_compute_sync_mv_sink_shared_batches",
+    false,
+    "Coalesce the parts written by the workers in one process into a single shared batch per \
+     batch interval in the MV sink.",
+    ParameterScope::Environment,
+);
+
 /// Whether rendering should use the new MV sink correction buffer implementation.
 pub const ENABLE_CORRECTION_V2: Config<bool> = Config::new(
     "enable_compute_correction_v2",
@@ -688,6 +698,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_ERROR_DISTINCT)
         .add(&ENABLE_MZ_JOIN_CORE)
         .add(&ENABLE_SYNC_MV_SINK)
+        .add(&ENABLE_SYNC_MV_SINK_SHARED_BATCHES)
         .add(&ENABLE_CORRECTION_V2)
         .add(&CORRECTION_V2_CHAIN_PROPORTIONALITY)
         .add(&CORRECTION_V2_CHUNK_SIZE)

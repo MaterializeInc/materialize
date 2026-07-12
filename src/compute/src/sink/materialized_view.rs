@@ -134,6 +134,7 @@ use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_storage_operators::persist::{SharedBatchId, SharedBatches};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sources::SourceData;
@@ -267,6 +268,7 @@ where
 
     let persist_api = PersistApi {
         persist_clients: Arc::clone(&compute_state.persist_clients),
+        persist_batches: compute_state.persist_batches.clone(),
         collection: target.clone(),
         shard_name: sink_id.to_string(),
         purpose: format!("MV sink {sink_id}"),
@@ -351,6 +353,7 @@ pub(super) fn advance(
 #[derive(Clone)]
 pub(super) struct PersistApi {
     pub(super) persist_clients: Arc<PersistClientCache>,
+    pub(super) persist_batches: SharedBatches,
     pub(super) collection: CollectionMetadata,
     pub(super) shard_name: String,
     pub(super) purpose: String,
@@ -442,6 +445,8 @@ pub(super) struct BatchDescription {
     pub(super) lower: Antichain<Timestamp>,
     pub(super) upper: Antichain<Timestamp>,
     pub(super) append_worker: usize,
+    /// Identifies the shared batch all workers building this description contribute to.
+    pub(super) shared_id: SharedBatchId,
 }
 
 impl BatchDescription {
@@ -455,6 +460,7 @@ impl BatchDescription {
             lower,
             upper,
             append_worker,
+            shared_id: SharedBatchId::new(),
         }
     }
 }
