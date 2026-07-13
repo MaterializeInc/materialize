@@ -92,7 +92,7 @@ def test_crash_storage(mz: MaterializeApplication) -> None:
 
     wait(condition="jsonpath={.status.phase}=Running", resource=pod_name)
     try:
-        mz.kubectl("exec", pod_name, "--", "bash", "-c", "kill -9 `pidof clusterd`")
+        mz.kubectl("exec", pod_name, "--", "sh", "-c", "kill -9 `pidof clusterd`")
     except subprocess.CalledProcessError as e:
         # Killing the entrypoint via kubectl may result in kubectl exiting with code 137
         assert e.returncode == 137
