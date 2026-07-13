@@ -441,6 +441,28 @@ ALTER CLUSTER foo SET (REPLICAS ()) WITH (WAIT UNTIL READY (TIMEOUT '0s', ON TIM
 statement ok
 DROP CLUSTER foo
 
+# Regression: a `WAIT` clause on an `ALTER` that touches no replica config
+# shape dimension (`SIZE`, `AVAILABILITY ZONES`, either `INTROSPECTION`
+# option) has nothing to hydrate-overlap on, so it is rejected outright
+# rather than silently accepted as a no-op wait.
+
+statement ok
+CREATE CLUSTER foo (SIZE 'scale=1,workers=1')
+
+statement error WAIT can only be used together with a SIZE, AVAILABILITY ZONES, or INTROSPECTION change
+ALTER CLUSTER foo SET (SCHEDULE MANUAL) WITH (WAIT FOR '0s')
+
+statement error WAIT can only be used together with a SIZE, AVAILABILITY ZONES, or INTROSPECTION change
+ALTER CLUSTER foo SET (REPLICATION FACTOR 2) WITH (WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT 'COMMIT'))
+
+# A `WAIT` clause paired with a real shape change is still accepted, including
+# alongside a non-shape option in the same statement.
+statement ok
+ALTER CLUSTER foo SET (SIZE 'scale=1,workers=2', REPLICATION FACTOR 2) WITH (WAIT FOR '0s')
+
+statement ok
+DROP CLUSTER foo
+
 statement ok
 CREATE CLUSTER foo (SIZE 'scale=1,workers=1')
 

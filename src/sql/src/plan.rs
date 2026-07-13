@@ -2105,7 +2105,9 @@ pub enum AlterClusterPlanStrategy {
     None,
     For(Duration),
     UntilReady {
-        on_timeout: OnTimeoutAction,
+        /// `None` when the `ALTER` omits `ON TIMEOUT`. The executing path
+        /// supplies the implicit action.
+        on_timeout: Option<OnTimeoutAction>,
         timeout: Duration,
     },
 }
@@ -2126,12 +2128,6 @@ pub enum OnTimeoutAction {
     Commit,
     /// Drop the target replicas and keep the pre-reconfiguration set.
     Rollback,
-}
-
-impl Default for OnTimeoutAction {
-    fn default() -> Self {
-        Self::Commit
-    }
 }
 
 impl TryFrom<&str> for OnTimeoutAction {
@@ -2170,13 +2166,13 @@ impl TryFrom<ClusterAlterOptionExtracted> for AlterClusterPlanStrategy {
                         None => Err(PlanError::UntilReadyTimeoutRequired)?,
                     },
                     on_timeout: match extracted.on_timeout {
-                        Some(v) => OnTimeoutAction::try_from(v.as_str()).map_err(|e| {
+                        Some(v) => Some(OnTimeoutAction::try_from(v.as_str()).map_err(|e| {
                             PlanError::InvalidOptionValue {
                                 option_name: "ON TIMEOUT".into(),
                                 err: Box::new(e),
                             }
-                        })?,
-                        None => OnTimeoutAction::default(),
+                        })?),
+                        None => None,
                     },
                 }
             }

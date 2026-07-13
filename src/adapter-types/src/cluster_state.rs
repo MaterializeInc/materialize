@@ -90,11 +90,93 @@ pub struct ExpectedClusterState {
     pub burst: Option<BurstRecord>,
 }
 
-/// An in-flight graceful reconfiguration record, mirrored from durable state.
+/// The status of the latest graceful reconfiguration record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReconfigurationStatus {
+    /// The controller is converging the cluster onto the target shape.
+    InProgress,
+    /// The realized config reached the target shape.
+    Finalized,
+    /// The deadline fired under rollback and the realized config stayed put.
+    TimedOut,
+    /// The user retargeted the reconfiguration back to the realized shape.
+    Cancelled,
+    /// The controller could not create the target replicas within the budget.
+    ResourceExhausted,
+}
+
+/// The latest graceful reconfiguration record, mirrored from durable state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReconfigurationRecord {
     pub target: ReconfigurationTarget,
     pub deadline: Timestamp,
+    /// What to do once the deadline passes with the target not yet hydrated.
+    pub on_timeout: OnTimeout,
+    pub status: ReconfigurationStatus,
+}
+
+impl ReconfigurationRecord {
+    /// Whether this record should still drive target-replica convergence.
+    pub fn is_in_progress(&self) -> bool {
+        matches!(self.status, ReconfigurationStatus::InProgress)
+    }
+}
+
+/// The lifecycle transition a write to the `reconfiguration` record represents,
+/// declared by the writer at the decision point and carried alongside the state
+/// so the audit event is emitted in the same catalog transaction as the write.
+/// A plain-data mirror of the audit-log lifecycle vocabulary, free of a
+/// dependency on `mz-audit-log`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReconfigurationAudit {
+    /// A record was written or re-targeted: converging onto a new target.
+    Started,
+    /// The user re-targeted back to the still-realized shape.
+    Cancelled,
+    /// The realized config cut over to the target. `forced` records whether
+    /// the cut-over was forced by `ON TIMEOUT COMMIT` at the deadline rather
+    /// than reached by hydration, information only the writer has.
+    Finalized { forced: bool },
+    /// The deadline fired under rollback and the realized config stayed put.
+    TimedOut,
+    /// The controller could not create the target replicas within the budget.
+    ResourceExhausted,
+}
+
+/// The lifecycle transition a write to the `burst` record represents, declared
+/// by the writer like [`ReconfigurationAudit`]. A burst record is also
+/// rewritten in place for bookkeeping (stamping or resetting the linger
+/// clock), which is not a lifecycle transition and declares no audit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BurstAudit {
+    /// A burst record was written: a burst replica is being provisioned.
+    Started,
+    /// The burst record was cleared and the burst replica torn down.
+    Finished { cause: BurstFinishCause },
+}
+
+/// Why a hydration burst finished, known only to the strategy arm that
+/// decided the teardown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BurstFinishCause {
+    /// The steady replica set hydrated and the linger duration elapsed.
+    LingerElapsed,
+    /// The burst is no longer warranted by current config: the auto-scaling
+    /// policy was removed or its hydration size changed, the cluster was
+    /// turned off, or burst was disabled environment-wide.
+    NoLongerWarranted,
+}
+
+/// The action a graceful reconfiguration applies once its `deadline` passes with
+/// the target replicas not yet hydrated. Success always takes precedence: a
+/// hydrated target cuts over regardless of this. A plain-data mirror of
+/// `mz_sql::plan::OnTimeoutAction`, free of a dependency on the SQL layer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OnTimeout {
+    /// Cut over to the (not-yet-hydrated) target anyway.
+    Commit,
+    /// Drop the target replica set, reverting to the pre-reconfiguration shape.
+    Rollback,
 }
 
 /// The full config shape a reconfiguration is moving the cluster to. Distinct
@@ -106,6 +188,17 @@ pub struct ReconfigurationTarget {
     pub replication_factor: u32,
     pub availability_zones: AvailabilityZones,
     pub logging: ComputeReplicaLogging,
+}
+
+impl ReconfigurationTarget {
+    /// The per-replica shape of the target: everything but `replication_factor`.
+    pub fn shape(&self) -> ReplicaShape {
+        ReplicaShape {
+            size: self.size.clone(),
+            availability_zones: self.availability_zones.clone(),
+            logging: self.logging.clone(),
+        }
+    }
 }
 
 /// An active hydration-burst record, mirrored from durable state.

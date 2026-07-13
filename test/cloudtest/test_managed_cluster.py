@@ -41,12 +41,28 @@ def test_managed_cluster_sizing(mz: MaterializeApplication) -> None:
     assert check is not None
     assert check == True
 
-    mz.environmentd.sql("ALTER CLUSTER sized1 SET (AVAILABILITY ZONES ('1', '2', '3'))")
-    check = mz.environmentd.sql_query(
-        "SELECT list_length(availability_zones) = 3 FROM mz_clusters WHERE name = 'sized1'"
-    )[0][0]
-    assert check is not None
-    assert check == True
+    # Setting the availability-zone pool is a config-shape change. With the
+    # cluster controller on it is realized as a graceful reconfiguration. The new
+    # pool takes effect only once replacement replicas have hydrated and the
+    # controller cuts over, so the realized `availability_zones` and the steady
+    # replica set settle asynchronously. With the controller off the change is
+    # applied synchronously in place. Poll (testdrive retries each query) for the
+    # settled state so this passes either way. The cut-over does not preserve
+    # replica names, so assert on replica *count* rather than specific names.
+    mz.testdrive.run(
+        input=dedent("""
+            > ALTER CLUSTER sized1 SET (AVAILABILITY ZONES ('1', '2', '3'))
+
+            > SELECT list_length(availability_zones) FROM mz_clusters WHERE name = 'sized1'
+            3
+
+            > SELECT count(*)
+              FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id
+              WHERE c.name = 'sized1'
+            2
+            """),
+        no_reset=True,
+    )
 
     mz.testdrive.run(
         input=dedent("""
@@ -59,19 +75,32 @@ def test_managed_cluster_sizing(mz: MaterializeApplication) -> None:
     replicas = mz.environmentd.sql_query(
         "SELECT mz_cluster_replicas.name, mz_cluster_replicas.id FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name = 'sized1' ORDER BY 1"
     )
-    assert [replica[0] for replica in replicas] == ["r1", "r2"]
+    assert len(replicas) == SIZE
 
     for compute_id in range(0, SIZE):
         for replica in replicas:
             compute_pod = cluster_pod_name(cluster_id, replica[1], compute_id)
             wait(condition="condition=Ready", resource=compute_pod)
 
-    mz.environmentd.sql("ALTER CLUSTER sized1 SET (REPLICATION FACTOR 1)")
+    # Reducing the replication factor drops a replica: the controller does this on
+    # its next reconcile tick (asynchronously), the legacy path synchronously.
+    # Poll for the settled count.
+    mz.testdrive.run(
+        input=dedent("""
+            > ALTER CLUSTER sized1 SET (REPLICATION FACTOR 1)
+
+            > SELECT count(*)
+              FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id
+              WHERE c.name = 'sized1'
+            1
+            """),
+        no_reset=True,
+    )
 
     replicas = mz.environmentd.sql_query(
         "SELECT mz_cluster_replicas.name, mz_cluster_replicas.id FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name = 'sized1' ORDER BY 1"
     )
-    assert [replica[0] for replica in replicas] == ["r1"]
+    assert len(replicas) == 1
 
     for compute_id in range(0, SIZE):
         for replica in replicas:
@@ -378,7 +407,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
 
     mz.testdrive.run(
         input=dedent("""
-            ! ALTER CLUSTER cluster_with_source set (replication factor 2000) WITH (WAIT UNTIL READY (TIMEOUT='10s', ON TIMEOUT ROLLBACK))
+            ! ALTER CLUSTER cluster_with_source set (replication factor 2000)
             contains: creating cluster replica would violate max_replicas_per_cluster limit
             """),
         no_reset=True,

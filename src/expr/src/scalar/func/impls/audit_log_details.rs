@@ -182,6 +182,7 @@ fn parse_catalog_audit_log_details<'a>(a: JsonbRef<'a>) -> Result<Jsonb, EvalErr
                 ("Finalized", "finalized"),
                 ("TimedOut", "timed-out"),
                 ("Cancelled", "cancelled"),
+                ("ResourceExhausted", "resource-exhausted"),
             ],
         ),
         (
@@ -190,6 +191,16 @@ fn parse_catalog_audit_log_details<'a>(a: JsonbRef<'a>) -> Result<Jsonb, EvalErr
             "transition",
             WrapKind::Double,
             &[("Started", "started"), ("Finished", "finished")],
+        ),
+        (
+            "ClusterHydrationBurstV1",
+            "",
+            "finish_cause",
+            WrapKind::Double,
+            &[
+                ("LingerElapsed", "linger-elapsed"),
+                ("NoLongerWarranted", "no-longer-warranted"),
+            ],
         ),
     ];
 
@@ -425,8 +436,16 @@ fn parse_catalog_audit_log_details<'a>(a: JsonbRef<'a>) -> Result<Jsonb, EvalErr
 
             let out_key = lookup_rename(variant, path, k).unwrap_or(k).to_string();
 
-            // Enum collapse produces a computed string.
+            // Enum collapse produces a computed string. An optional enum
+            // field (e.g. `finish_cause`) serializes as JSON null on both the
+            // proto and the audit-log side, so null passes through unchanged.
             if let Some((wrap, map)) = lookup_enum_collapse(variant, path, k) {
+                if matches!(v, Datum::JsonNull) {
+                    let mut temp = Row::default();
+                    temp.packer().push(Datum::JsonNull);
+                    entries.push((out_key, temp));
+                    continue;
+                }
                 let kebab = collapse_enum(v, wrap, map, &format!("{variant}.{k}"))?;
                 let mut temp = Row::default();
                 temp.packer().push(Datum::String(kebab));
@@ -864,7 +883,9 @@ mod tests {
     /// `ClusterHydrationBurstV1.transition` uses a two-value map
     /// (`Started`/`Finished`), separate from the reconfiguration lifecycle
     /// map. Same field name (`transition`), different rule, different map —
-    /// dispatched by variant context.
+    /// dispatched by variant context. `finish_cause` is an *optional* enum:
+    /// its `Some` collapses like any other double-wrap enum, while `None`
+    /// serializes as JSON null on both sides and passes through.
     #[mz_ore::test]
     fn enum_double_wrap_hydration_burst_finished() {
         check(
@@ -872,12 +893,30 @@ mod tests {
                 "cluster_id": "u1",
                 "cluster_name": "c",
                 "transition": {"transition": {"Finished": {}}},
+                "finish_cause": {"cause": {"LingerElapsed": {}}},
                 "burst_size": "small"
             }}"#,
             r#"{
                 "cluster_id": "u1",
                 "cluster_name": "c",
                 "transition": "finished",
+                "finish_cause": "linger-elapsed",
+                "burst_size": "small"
+            }"#,
+        );
+        check(
+            r#"{"ClusterHydrationBurstV1": {
+                "cluster_id": "u1",
+                "cluster_name": "c",
+                "transition": {"transition": {"Started": {}}},
+                "finish_cause": null,
+                "burst_size": "small"
+            }}"#,
+            r#"{
+                "cluster_id": "u1",
+                "cluster_name": "c",
+                "transition": "started",
+                "finish_cause": null,
                 "burst_size": "small"
             }"#,
         );

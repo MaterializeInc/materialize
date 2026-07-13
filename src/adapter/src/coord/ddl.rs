@@ -1467,7 +1467,7 @@ impl Coordinator {
             )?;
         }
         self.validate_resource_limit_numeric(
-            self.current_credit_consumption_rate(),
+            self.current_credit_consumption_rate(None),
             new_credit_consumption_rate,
             |system_vars| {
                 self.license_key

@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use itertools::Itertools;
+use mz_adapter_types::dyncfgs::ENABLE_CLUSTER_CONTROLLER;
 use mz_audit_log::SchedulingDecisionsWithReasonsV2;
 use mz_catalog::memory::objects::{CatalogItem, ClusterVariant, ClusterVariantManaged};
 use mz_controller_types::ClusterId;
@@ -337,6 +338,32 @@ impl Coordinator {
             // before we turn off a cluster, to avoid spuriously turning off a cluster and possibly
             // losing a hydrated state.
             if POLICIES.iter().all(|policy| decisions.contains_key(policy)) {
+                // A reconfiguration in flight owns the replication-factor
+                // transition, and this path bypasses the sequencer's guard
+                // against racing it, so it defers itself: the decision
+                // reapplies once the record settles. Only while the controller
+                // owns the cluster, though. With the gate off nothing settles
+                // the record, and the legacy write below retains it as
+                // cancelled instead of deferring forever behind an orphan.
+                let controller_owns = ENABLE_CLUSTER_CONTROLLER
+                    .get(self.catalog().system_config().dyncfgs())
+                    && cluster_id.is_user();
+                let reconfiguration_in_flight = self
+                    .get_managed_cluster_config(cluster_id)
+                    .is_some_and(|managed| {
+                        managed
+                            .reconfiguration
+                            .as_ref()
+                            .is_some_and(|record| record.is_in_progress())
+                    });
+                if controller_owns && reconfiguration_in_flight {
+                    debug!(
+                        "handle_scheduling_decisions: deferring cluster {}, \
+                        a graceful reconfiguration is in flight",
+                        cluster_id
+                    );
+                    continue;
+                }
                 // Check whether the cluster's state matches the needed state.
                 // If any policy says On, then we need a replica.
                 let needs_replica = decisions

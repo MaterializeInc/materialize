@@ -6501,6 +6501,30 @@ def workflow_test_paused_cluster_readhold_downgrade(c: Composition):
 
     c.up("materialized")
 
+    # The controller reconciles the replica set asynchronously; drive the tick
+    # down so pause/unpause converge quickly.
+    c.sql(
+        "ALTER SYSTEM SET cluster_controller_tick_interval = '5ms'",
+        port=6877,
+        user="mz_system",
+    )
+
+    def wait_for_replica_count(expected: int) -> None:
+        for _ in range(120):
+            count = int(
+                c.sql_query(
+                    "SELECT count(*) FROM mz_cluster_replicas cr "
+                    "JOIN mz_clusters c ON c.id = cr.cluster_id "
+                    "WHERE c.name = 'test'"
+                )[0][0]
+            )
+            if count == expected:
+                return
+            time.sleep(0.5)
+        raise AssertionError(
+            f"cluster 'test' did not converge to {expected} replica(s)"
+        )
+
     # Create a pause-able cluster, with indexes with different kinds of inputs.
     c.sql("""
         CREATE CLUSTER test SIZE 'scale=1,workers=1';
@@ -6525,13 +6549,18 @@ def workflow_test_paused_cluster_readhold_downgrade(c: Composition):
     # Sanity check.
     check_read_frontiers_not_stuck(c, ["idx1", "idx2", "idx3"])
 
-    # Pause the cluster; read frontiers should still advance.
+    # Pause the cluster; read frontiers should still advance. The controller drops
+    # the replica asynchronously, so wait for the pause to take effect first.
     c.sql("ALTER CLUSTER test SET (REPLICATION FACTOR 0)")
+    wait_for_replica_count(0)
     check_read_frontiers_not_stuck(c, ["idx1", "idx2", "idx3"])
 
-    # Unpause the cluster; indexes should still be queryable.
+    # Unpause the cluster; indexes should still be queryable. The controller
+    # recreates the replica asynchronously, so wait for it before issuing index
+    # peeks, which require a replica.
+    c.sql("ALTER CLUSTER test SET (REPLICATION FACTOR 1)")
+    wait_for_replica_count(1)
     c.sql("""
-        ALTER CLUSTER test SET (REPLICATION FACTOR 1);
         SET cluster = test;
 
         SELECT a FROM t;

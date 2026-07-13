@@ -10,6 +10,9 @@
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET storage_statistics_collection_interval = 1000
 ALTER SYSTEM SET storage_statistics_interval = 2000
+# The controller drops the paused replica asynchronously; drive the tick down so
+# the drop wait below converges quickly.
+ALTER SYSTEM SET cluster_controller_tick_interval = '5ms'
 
 > DROP CLUSTER IF EXISTS test_cluster CASCADE;
 > CREATE CLUSTER test_cluster (SIZE 'scale=1,workers=1');
@@ -26,3 +29,13 @@ ALTER SYSTEM SET storage_statistics_interval = 2000
 true
 
 > ALTER CLUSTER test_cluster SET (REPLICATION FACTOR = 0)
+
+# The controller drops the replica asynchronously. Wait for it to be gone before
+# the workflow captures rehydration_latency and restarts environmentd: a replica
+# still present at restart would boot and re-rehydrate, reporting a fresh latency
+# that diverges from the captured value. The dropped replica's statistic persists.
+> SELECT count(*)
+  FROM mz_cluster_replicas cr
+  JOIN mz_clusters c ON c.id = cr.cluster_id
+  WHERE c.name = 'test_cluster'
+0

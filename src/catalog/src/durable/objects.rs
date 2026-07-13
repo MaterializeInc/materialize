@@ -355,18 +355,20 @@ pub struct ClusterVariantManaged {
     /// User-configured autoscaling policy, distinct from the in-flight runtime
     /// records below.
     pub auto_scaling_strategy: Option<AutoScalingStrategy>,
-    /// In-flight graceful reconfiguration the controller is converging on.
+    /// Latest graceful reconfiguration record, if one has been written.
     pub reconfiguration: Option<ReconfigurationState>,
     /// In-flight hydration burst the controller is running.
     pub burst: Option<BurstState>,
 }
 
-/// An in-flight graceful reconfiguration: the config shape the cluster is
-/// moving to plus the deadline by which it must complete.
+/// The latest graceful reconfiguration: the config shape the cluster is moving
+/// to or most recently moved toward, plus its deadline and terminal state.
 ///
-/// `ALTER` writes this record and returns; the realized config (`cluster.size`,
-/// ...) is advanced by the controller only at cut-over. A past `deadline` with
-/// the record still present is a timeout tombstone.
+/// `ALTER` writes this record with [`ReconfigurationStatus::InProgress`] and
+/// returns. The realized config (`cluster.size`, ...) is advanced by the
+/// controller only at cut-over. When the reconfiguration settles, the controller
+/// retains the record with a terminal status so readers can inspect the latest
+/// outcome without reconstructing it from the audit log.
 #[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ReconfigurationState {
     pub target: ReconfigurationTarget,
@@ -375,6 +377,29 @@ pub struct ReconfigurationState {
     /// target hydrates. Success takes precedence: a hydrated target cuts over
     /// regardless of this field.
     pub on_timeout: OnTimeoutAction,
+    pub status: ReconfigurationStatus,
+}
+
+/// The lifecycle status of the latest graceful reconfiguration.
+#[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord)]
+pub enum ReconfigurationStatus {
+    /// The controller is converging the cluster onto the target shape.
+    InProgress,
+    /// The realized config reached the target shape.
+    Finalized,
+    /// The deadline fired under rollback and the realized config stayed put.
+    TimedOut,
+    /// The user retargeted the reconfiguration back to the realized shape.
+    Cancelled,
+    /// The controller could not create the target replicas within the budget.
+    ResourceExhausted,
+}
+
+impl ReconfigurationState {
+    /// Whether this record should still drive target-replica convergence.
+    pub fn is_in_progress(&self) -> bool {
+        matches!(self.status, ReconfigurationStatus::InProgress)
+    }
 }
 
 /// The full config shape a reconfiguration is moving the cluster to, so a
