@@ -1362,8 +1362,6 @@ def workflow_main(c: Composition, parser: WorkflowArgumentParser) -> None:
         # scenario does not abort the remaining scenarios. The recorded
         # failures still fail the overall run.
         with c.test_case(f"Scenario '{scenario.name}'"):
-            c.override_current_testcase_name(f"Scenario '{scenario.name}'")
-
             print(
                 f"+++ Running scenario {scenario.name} with materialized_memory={scenario.materialized_memory} and clusterd_memory={scenario.clusterd_memory} ..."
             )
@@ -1449,10 +1447,13 @@ def workflow_minimization_search(
 
 def check_scenario_names(scenario_names: list[str] | None) -> None:
     """Reject unknown scenario names, a typo would otherwise silently skip everything."""
-    known_names = {scenario.name for scenario in SCENARIOS}
+    known_names = [scenario.name for scenario in SCENARIOS]
     unknown_names = [name for name in scenario_names or [] if name not in known_names]
     if unknown_names:
-        raise UIError(f"unknown scenarios: {', '.join(unknown_names)}")
+        raise UIError(
+            f"unknown scenarios: {', '.join(unknown_names)}. "
+            f"Known scenarios: {', '.join(known_names)}"
+        )
 
 
 def shall_skip_scenario(scenario: Scenario, args: argparse.Namespace) -> bool:
