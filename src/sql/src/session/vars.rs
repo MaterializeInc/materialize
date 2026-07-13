@@ -1249,6 +1249,7 @@ impl SystemVars {
             &ENABLE_LAUNCHDARKLY,
             &MAX_CONNECTIONS,
             &NETWORK_POLICY,
+            &HTTP_ADDITIONAL_CORS_ALLOWED_ORIGINS,
             &SUPERUSER_RESERVED_CONNECTIONS,
             &KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES,
             &KEEP_N_SINK_STATUS_HISTORY_ENTRIES,
@@ -1439,6 +1440,7 @@ impl SystemVars {
         SESSION_SYSTEM_VARS.contains_key(UncasedStr::new(name))
             || name == ENABLE_RBAC_CHECKS.name()
             || name == NETWORK_POLICY.name()
+            || name == HTTP_ADDITIONAL_CORS_ALLOWED_ORIGINS.name()
     }
 
     /// Returns a [`Var`] representing the configuration parameter with the
@@ -2071,6 +2073,13 @@ impl SystemVars {
 
     pub fn default_network_policy_name(&self) -> String {
         self.expect_value::<String>(&NETWORK_POLICY).clone()
+    }
+
+    /// Returns the `http_additional_cors_allowed_origins` configuration
+    /// parameter.
+    pub fn http_additional_cors_allowed_origins(&self) -> String {
+        self.expect_value::<String>(&HTTP_ADDITIONAL_CORS_ALLOWED_ORIGINS)
+            .clone()
     }
 
     /// Returns the `superuser_reserved_connections` configuration parameter.

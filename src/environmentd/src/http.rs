@@ -58,7 +58,7 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
 
 use anyhow::Context;
@@ -158,10 +158,14 @@ pub struct HttpConfig {
     pub frontegg: Option<mz_frontegg_auth::Authenticator>,
     pub oidc_rx: Delayed<mz_authenticator::GenericOidcAuthenticator>,
     pub adapter_client_rx: Shared<Receiver<Client>>,
-    pub allowed_origin: AllowOrigin,
-    /// Raw list of allowed CORS origins, used by the MCP endpoints for
-    /// server-side Origin validation to defend against DNS rebinding.
+    /// Base allowlist of CORS origins, fixed at startup. The
+    /// `http_additional_cors_allowed_origins` system variable can widen the
+    /// allowlist at runtime, but entries in this list can never be removed
+    /// through it.
     pub allowed_origin_list: Vec<HeaderValue>,
+    /// Origins from the `http_additional_cors_allowed_origins` system
+    /// variable. Updated by the coordinator whenever the variable changes.
+    pub additional_allowed_origins: Arc<RwLock<Vec<HeaderValue>>>,
     pub active_connection_counter: ConnectionCounter,
     pub helm_chart_version: Option<String>,
     /// Externally-visible host name for this environment (without scheme).
@@ -214,6 +218,34 @@ pub struct WebhookState {
     dyncfgs: Arc<ConfigSet>,
 }
 
+/// The CORS origin allowlist: a base list fixed at startup, plus any origins
+/// from the `http_additional_cors_allowed_origins` system variable, which is
+/// read dynamically on every check. The system variable only widens the
+/// allowlist, base entries can never be removed through it.
+#[derive(Clone, Debug)]
+pub struct AllowedOrigins {
+    base: Arc<Vec<HeaderValue>>,
+    additional: Arc<RwLock<Vec<HeaderValue>>>,
+}
+
+impl AllowedOrigins {
+    fn is_allowed(&self, origin: &HeaderValue) -> bool {
+        if mz_http_util::origin_is_allowed(origin, &self.base) {
+            return true;
+        }
+        let additional = self
+            .additional
+            .read()
+            .expect("additional CORS origins lock poisoned");
+        mz_http_util::origin_is_allowed(origin, &additional)
+    }
+
+    fn to_allow_origin(&self) -> AllowOrigin {
+        let this = self.clone();
+        AllowOrigin::predicate(move |origin, _| this.is_allowed(origin))
+    }
+}
+
 #[derive(Clone, Debug)]
 struct HelmChartVersion(Option<String>);
 
@@ -232,8 +264,8 @@ impl HttpServer {
             frontegg,
             oidc_rx,
             adapter_client_rx,
-            allowed_origin,
             allowed_origin_list,
+            additional_allowed_origins,
             active_connection_counter,
             helm_chart_version,
             http_host_name,
@@ -251,6 +283,11 @@ impl HttpServer {
     ) -> HttpServer {
         let tls_enabled = tls.is_some();
         let webhook_cache = WebhookAppenderCache::new();
+
+        let allowed_origins = AllowedOrigins {
+            base: Arc::new(allowed_origin_list),
+            additional: additional_allowed_origins,
+        };
 
         // Compute OAuth discovery once per listener so the Bearer challenge
         // and the discovery handler always agree, and the middleware doesn't
@@ -612,7 +649,6 @@ impl HttpServer {
             // DNS rebinding attack the browser considers the request
             // same-origin, so no preflight fires and CORS enforcement is
             // bypassed.
-            let mcp_allowed_origins = Arc::new(allowed_origin_list.clone());
             mcp_router = mcp_router
                 .layer(auth_middleware.clone())
                 .layer(Extension(oauth_metadata::McpOAuthConfig {
@@ -622,12 +658,12 @@ impl HttpServer {
                 .layer(Extension(adapter_client_rx.clone()))
                 .layer(Extension(active_connection_counter.clone()))
                 .layer(Extension(HelmChartVersion(helm_chart_version.clone())))
-                .layer(Extension(mcp_allowed_origins))
+                .layer(Extension(allowed_origins.clone()))
                 .layer(Extension(mcp_metrics))
                 .layer(
                     CorsLayer::new()
                         .allow_methods(Method::POST)
-                        .allow_origin(allowed_origin.clone())
+                        .allow_origin(allowed_origins.to_allow_origin())
                         .allow_headers([AUTHORIZATION, CONTENT_TYPE]),
                 );
             router = router.merge(mcp_router);
@@ -647,7 +683,7 @@ impl HttpServer {
                         HeaderName::from_static("x-materialize-version"),
                     ])
                     .allow_methods(Any)
-                    .allow_origin(allowed_origin)
+                    .allow_origin(allowed_origins.to_allow_origin())
                     .expose_headers(Any)
                     .max_age(Duration::from_secs(60) * 60),
             );

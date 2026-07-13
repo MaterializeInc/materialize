@@ -104,7 +104,6 @@ use tokio::sync::oneshot;
 use tokio_postgres::types::{FromSql, Kind as PgKind, Type as PgType};
 use tokio_postgres::{NoTls, Row, SimpleQueryMessage};
 use tokio_stream::wrappers::TcpListenerStream;
-use tower_http::cors::AllowOrigin;
 use tracing::{error, info};
 use uuid::Uuid;
 use uuid::fmt::Simple;
@@ -1227,7 +1226,6 @@ impl<'a> RunnerInner<'a> {
             tls: None,
             frontegg: None,
             frontegg_oauth_issuer_url: None,
-            cors_allowed_origin: AllowOrigin::list([]),
             cors_allowed_origin_list: Vec::new(),
             unsafe_mode: true,
             all_features: false,

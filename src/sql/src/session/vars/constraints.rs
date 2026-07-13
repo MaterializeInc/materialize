@@ -28,6 +28,8 @@ pub static NUMERIC_BOUNDED_0_1_INCLUSIVE: NumericInRange<RangeInclusive<f64>> =
 pub static BYTESIZE_AT_LEAST_1MB: ByteSizeInRange<RangeFrom<ByteSize>> =
     ByteSizeInRange(ByteSize::mb(1)..);
 
+pub static CORS_ORIGIN_LIST: CorsOriginList = CorsOriginList;
+
 #[derive(Debug)]
 pub enum ValueConstraint {
     /// Variable is read-only and cannot be updated.
@@ -132,6 +134,35 @@ impl DomainConstraint for NonZeroDuration {
             })
         } else {
             Ok(())
+        }
+    }
+}
+
+/// Validates a comma-separated list of CORS origins: every non-empty entry
+/// must be a valid HTTP header value. Empty entries are permitted so that ""
+/// (no additional origins) and trailing commas are accepted.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct CorsOriginList;
+
+impl DomainConstraint for CorsOriginList {
+    type Value = String;
+
+    fn check(&self, var: &dyn Var, origins: &String) -> Result<(), VarError> {
+        let invalid_values: Vec<String> = origins
+            .split(',')
+            .map(|entry| entry.trim())
+            .filter(|entry| !entry.is_empty())
+            .filter(|entry| http::HeaderValue::from_str(entry).is_err())
+            .map(|entry| entry.to_string())
+            .collect();
+        if invalid_values.is_empty() {
+            Ok(())
+        } else {
+            Err(VarError::InvalidParameterValue {
+                name: var.name(),
+                invalid_values,
+                reason: "origins must be valid HTTP header values".to_string(),
+            })
         }
     }
 }

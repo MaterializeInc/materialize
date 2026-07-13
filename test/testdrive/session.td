@@ -35,6 +35,7 @@ enable_rbac_checks                       on                      "User facing gl
 enable_session_rbac_checks               off                     "User facing session boolean flag indicating whether to apply RBAC checks before executing statements (Materialize)."
 extra_float_digits                       3                       "Adjusts the number of digits displayed for floating-point values (PostgreSQL)."
 failpoints                               <omitted>               "Allows failpoints to be dynamically activated."
+http_additional_cors_allowed_origins    ""                      "Comma-separated list of additional origins for which cross-origin resource sharing (CORS) is allowed on the HTTP API, in addition to the origins provided at startup."
 idle_in_transaction_session_timeout      "2 min"                 "Sets the maximum allowed duration that a session can sit idle in a transaction before being terminated. If this value is specified without units, it is taken as milliseconds. A value of zero disables the timeout (PostgreSQL)."
 integer_datetimes                        on                      "Reports whether the server uses 64-bit-integer dates and times (PostgreSQL)."
 IntervalStyle                            postgres                "Sets the display format for interval values (PostgreSQL)."

@@ -194,6 +194,18 @@ pub async fn handle_tracing() -> impl IntoResponse {
     )
 }
 
+/// Parses a comma-separated list of origins into header values, for use with
+/// [`origin_is_allowed`]. Entries are trimmed. Empty entries and entries that
+/// are not valid header values are skipped.
+pub fn parse_origin_list(origins: &str) -> Vec<HeaderValue> {
+    origins
+        .split(',')
+        .map(|entry| entry.trim())
+        .filter(|entry| !entry.is_empty())
+        .filter_map(|entry| HeaderValue::from_str(entry).ok())
+        .collect()
+}
+
 /// Returns true if `origin` matches any entry in `allowed`. Supports bare `*`
 /// (any origin), exact match, and wildcard subdomains (`*.example.com`).
 pub fn origin_is_allowed(origin: &HeaderValue, allowed: &[HeaderValue]) -> bool {
@@ -271,6 +283,22 @@ mod tests {
     use http::{HeaderValue, Method, Request, Response};
     use tower::{Service, ServiceBuilder, ServiceExt};
     use tower_http::cors::CorsLayer;
+
+    #[mz_ore::test]
+    fn test_parse_origin_list() {
+        let parsed = super::parse_origin_list(
+            " https://a.example ,, *.example.com , https://bad\u{7f}value , * ",
+        );
+        assert_eq!(
+            parsed,
+            vec![
+                HeaderValue::from_static("https://a.example"),
+                HeaderValue::from_static("*.example.com"),
+                HeaderValue::from_static("*"),
+            ]
+        );
+        assert!(super::parse_origin_list("").is_empty());
+    }
 
     #[mz_ore::test(tokio::test)]
     async fn test_cors() {

@@ -23,13 +23,11 @@
 //!
 //! Data products are discovered via `mz_internal.mz_mcp_data_products` system view.
 
-use std::sync::Arc;
-
 use anyhow::anyhow;
 use axum::Extension;
 use axum::Json;
 use axum::response::IntoResponse;
-use http::{HeaderMap, HeaderValue, StatusCode};
+use http::{HeaderMap, StatusCode};
 use mz_adapter_types::dyncfgs::{
     ENABLE_MCP_AGENT, ENABLE_MCP_AGENT_QUERY_TOOL, ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL,
     ENABLE_MCP_DEVELOPER, ENABLE_MCP_DEVELOPER_QUERY_TOOL, MCP_MAX_RESPONSE_SIZE,
@@ -48,9 +46,9 @@ use serde_json::json;
 use thiserror::Error;
 use tracing::{debug, warn};
 
-use crate::http::AuthedClient;
 use crate::http::mcp_metrics::{McpMetrics, ToolCallGuard};
 use crate::http::sql::{SqlRequest, SqlResponse, SqlResult, execute_request};
+use crate::http::{AllowedOrigins, AuthedClient};
 
 // To add a new tool: add entry to tools/list, add handler function, add dispatch case.
 
@@ -413,7 +411,7 @@ pub async fn handle_mcp_method_not_allowed() -> impl IntoResponse {
 /// Agent endpoint: exposes user data products.
 pub async fn handle_mcp_agent(
     headers: HeaderMap,
-    Extension(allowed_origins): Extension<Arc<Vec<HeaderValue>>>,
+    Extension(allowed_origins): Extension<AllowedOrigins>,
     Extension(metrics): Extension<McpMetrics>,
     client: AuthedClient,
     Json(body): Json<McpRequest>,
@@ -429,7 +427,7 @@ pub async fn handle_mcp_agent(
 /// Developer endpoint: exposes system catalog (mz_*) only.
 pub async fn handle_mcp_developer(
     headers: HeaderMap,
-    Extension(allowed_origins): Extension<Arc<Vec<HeaderValue>>>,
+    Extension(allowed_origins): Extension<AllowedOrigins>,
     Extension(metrics): Extension<McpMetrics>,
     client: AuthedClient,
     Json(body): Json<McpRequest>,
@@ -452,10 +450,10 @@ pub async fn handle_mcp_developer(
 /// attacker arranges same-origin DNS rebinding (no preflight fires).
 fn validate_origin(
     headers: &HeaderMap,
-    allowed: &[HeaderValue],
+    allowed: &AllowedOrigins,
 ) -> Option<axum::response::Response> {
     let origin = headers.get(http::header::ORIGIN)?;
-    if mz_http_util::origin_is_allowed(origin, allowed) {
+    if allowed.is_allowed(origin) {
         return None;
     }
     warn!(
@@ -1539,6 +1537,10 @@ fn validate_system_catalog_query(sql: &str) -> Result<(), McpRequestError> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use http::HeaderValue;
+
     use super::*;
     use crate::http::sql::{Description, SqlError};
 
@@ -1617,28 +1619,43 @@ mod tests {
 
     /// The DNS-rebinding defense: a disallowed `Origin` is rejected with 403,
     /// an allowed one passes, and a missing one passes (non-browser clients).
+    /// Origins added via the `http_additional_cors_allowed_origins` system
+    /// variable are picked up without rebuilding the allowlist.
     #[mz_ore::test]
     fn test_validate_origin() {
-        let allowed = [HeaderValue::from_static("https://good.example")];
+        use std::sync::RwLock;
+
+        let additional: Arc<RwLock<Vec<HeaderValue>>> = Default::default();
+        let good = HeaderValue::from_static("https://good.example");
+        let allowed = AllowedOrigins {
+            base: Arc::new(vec![good.clone()]),
+            additional: Arc::clone(&additional),
+        };
 
         assert!(validate_origin(&HeaderMap::new(), &allowed).is_none());
 
         let mut ok = HeaderMap::new();
-        ok.insert(http::header::ORIGIN, allowed[0].clone());
+        ok.insert(http::header::ORIGIN, good);
         assert!(validate_origin(&ok, &allowed).is_none());
 
-        let mut bad = HeaderMap::new();
-        bad.insert(
+        let mut extra = HeaderMap::new();
+        extra.insert(
             http::header::ORIGIN,
             HeaderValue::from_static("https://evil.example"),
         );
-        let rejected = validate_origin(&bad, &allowed);
+        let rejected = validate_origin(&extra, &allowed);
         assert_eq!(
             rejected
                 .expect("disallowed origin must be rejected")
                 .status(),
             StatusCode::FORBIDDEN,
         );
+
+        // Adding the origin via the shared handle (as the coordinator does
+        // when the system variable changes) allows it dynamically.
+        *additional.write().expect("lock poisoned") =
+            vec![HeaderValue::from_static("https://evil.example")];
+        assert!(validate_origin(&extra, &allowed).is_none());
     }
 
     /// The two constructors set the JSON-RPC version and put the payload in

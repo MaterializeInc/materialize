@@ -40,8 +40,8 @@ use uncased::UncasedStr;
 
 use crate::session::user::{SUPPORT_USER, SYSTEM_USER, User};
 use crate::session::vars::constraints::{
-    BYTESIZE_AT_LEAST_1MB, DomainConstraint, NON_ZERO_DURATION, NUMERIC_BOUNDED_0_1_INCLUSIVE,
-    NUMERIC_NON_NEGATIVE, ValueConstraint,
+    BYTESIZE_AT_LEAST_1MB, CORS_ORIGIN_LIST, DomainConstraint, NON_ZERO_DURATION,
+    NUMERIC_BOUNDED_0_1_INCLUSIVE, NUMERIC_NON_NEGATIVE, ValueConstraint,
 };
 use crate::session::vars::errors::VarError;
 use crate::session::vars::polyfill::{LazyValueFn, lazy_value, value};
@@ -1524,6 +1524,21 @@ pub static NETWORK_POLICY: VarDefinition = VarDefinition::new_lazy(
     true,
 );
 
+/// Additional origins for which cross-origin resource sharing (CORS) is
+/// allowed on the HTTP API, as a comma-separated list. These origins are
+/// added to the allowlist provided at startup via `--cors-allowed-origin`.
+/// Startup origins can never be removed through this variable, it only
+/// widens the allowlist. Entries use the same syntax as the CLI flag: an
+/// exact origin (`https://console.example.com`), a wildcard subdomain
+/// (`*.example.com`), or a bare `*` allowing all origins.
+pub static HTTP_ADDITIONAL_CORS_ALLOWED_ORIGINS: VarDefinition = VarDefinition::new_lazy(
+    "http_additional_cors_allowed_origins",
+    lazy_value!(String; || "".to_string()),
+    "Comma-separated list of additional origins for which cross-origin resource sharing (CORS) is allowed on the HTTP API, in addition to the origins provided at startup.",
+    true,
+)
+.with_constraint(&CORS_ORIGIN_LIST);
+
 pub static FORCE_SOURCE_TABLE_SYNTAX: VarDefinition = VarDefinition::new(
     "force_source_table_syntax",
     value!(bool; false),
@@ -2435,5 +2450,43 @@ mod tests {
         vars.enable_for_item_parsing();
         let features_for_item_parsing = OptimizerFeatures::from(&vars);
         assert_eq!(features_for_item_parsing, false_features);
+    }
+
+    /// `http_additional_cors_allowed_origins` is modifiable and visible to
+    /// external superusers, while dyncfg-backed variables stay internal-only.
+    #[mz_ore::test]
+    fn cors_origins_var_user_settable() {
+        use mz_repr::user::ExternalUserMetadata;
+
+        use crate::session::user::User;
+
+        let vars = SystemVars::new();
+
+        let name = HTTP_ADDITIONAL_CORS_ALLOWED_ORIGINS.name();
+        assert!(vars.user_modifiable(name));
+        assert!(!vars.user_modifiable("webhook_max_request_size_bytes"));
+
+        let external_user = User {
+            name: "user".into(),
+            external_metadata: Some(ExternalUserMetadata {
+                user_id: uuid::Uuid::nil(),
+                admin: true,
+            }),
+            internal_metadata: None,
+            authenticator_kind: None,
+            groups: None,
+        };
+        assert!(
+            vars.get(name)
+                .expect("var exists")
+                .visible(&external_user, &vars)
+                .is_ok()
+        );
+        assert!(
+            vars.get("webhook_max_request_size_bytes")
+                .expect("var exists")
+                .visible(&external_user, &vars)
+                .is_err()
+        );
     }
 }

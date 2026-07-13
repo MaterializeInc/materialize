@@ -69,7 +69,6 @@ use mz_server_core::{
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::{Value, VarInput};
 use tokio::sync::oneshot;
-use tower_http::cors::AllowOrigin;
 use tracing::{Instrument, info, info_span};
 
 use crate::deployment::preflight::{PreflightInput, PreflightOutput};
@@ -111,13 +110,11 @@ pub struct Config {
     pub frontegg: Option<FronteggAuthenticator>,
     /// Frontegg workspace URL advertised in MCP OAuth discovery.
     pub frontegg_oauth_issuer_url: Option<String>,
-    /// Origins for which cross-origin resource sharing (CORS) for HTTP requests
-    /// is permitted.
-    pub cors_allowed_origin: AllowOrigin,
-    /// Raw list of allowed CORS origins. Retained alongside `cors_allowed_origin`
-    /// (which is the computed predicate) so that endpoints like MCP can perform
-    /// server-side Origin validation to defend against DNS rebinding attacks
-    /// (where same-origin requests bypass CORS enforcement).
+    /// Base allowlist of origins for which cross-origin resource sharing
+    /// (CORS) for HTTP requests is permitted. The
+    /// `http_additional_cors_allowed_origins` system variable can widen the
+    /// allowlist at runtime, but entries in this list can never be removed
+    /// through it.
     pub cors_allowed_origin_list: Vec<HeaderValue>,
     /// Public IP addresses which the cloud environment has configured for
     /// egress.
@@ -396,6 +393,12 @@ impl Listeners {
         let mcp_metrics = http::mcp_metrics::McpMetrics::register_into(&metrics_registry);
         let oauth_metadata_metrics =
             http::oauth_metadata::OauthMetadataMetrics::register_into(&metrics_registry);
+        // Shared handle for origins from the
+        // `http_additional_cors_allowed_origins` system variable. The HTTP
+        // servers read it on every origin check, the coordinator updates it
+        // via `additional_cors_origins_callback` whenever the variable
+        // changes.
+        let additional_cors_origins: Arc<std::sync::RwLock<Vec<HeaderValue>>> = Default::default();
         let mut http_listener_handles = BTreeMap::new();
         for (name, listener) in self.http {
             let authenticator_kind = listener.config.authenticator_kind();
@@ -416,8 +419,8 @@ impl Listeners {
                 authenticator_kind,
                 frontegg: config.frontegg.clone(),
                 oidc_rx: authenticator_oidc_rx.clone(),
-                allowed_origin: config.cors_allowed_origin.clone(),
                 allowed_origin_list: config.cors_allowed_origin_list.clone(),
+                additional_allowed_origins: Arc::clone(&additional_cors_origins),
                 concurrent_webhook_req: webhook_concurrency_limit.semaphore(),
                 dyncfgs: Arc::clone(&config.system_dyncfgs),
                 metrics: metrics.clone(),
@@ -749,10 +752,17 @@ impl Listeners {
             connection_limiter.update_limit(limit);
             connection_limiter.update_superuser_reserved(superuser_reserved);
         });
+        let additional_cors_origins_callback = Box::new(move |origins: String| {
+            let parsed = mz_http_util::parse_origin_list(&origins);
+            *additional_cors_origins
+                .write()
+                .expect("additional CORS origins lock poisoned") = parsed;
+        });
 
         let (adapter_handle, adapter_client) = mz_adapter::serve(mz_adapter::Config {
             connection_context: config.controller.connection_context.clone(),
             connection_limit_callback,
+            additional_cors_origins_callback,
             controller_config: config.controller,
             controller_envd_epoch: envd_epoch,
             storage: adapter_storage,
