@@ -3201,9 +3201,7 @@ class CreateClusterAction(Action):
         cluster = Cluster(
             cluster_id,
             managed=self.rng.choice([True, False]),
-            size=self.rng.choice(
-                ["scale=1,workers=1", "scale=1,workers=4", "scale=2,workers=2"]
-            ),
+            size=self.rng.choice(["scale=1,workers=1", "scale=1,workers=2"]),
             replication_factor=self.rng.choice([1, 2]),
             introspection_interval="1s",
         )
@@ -3355,9 +3353,7 @@ class CreateClusterReplicaAction(Action):
 
             replica = ClusterReplica(
                 replica_id,
-                size=self.rng.choice(
-                    ["scale=1,workers=1", "scale=1,workers=4", "scale=2,workers=2"]
-                ),
+                size=self.rng.choice(["scale=1,workers=1", "scale=1,workers=2"]),
                 cluster=cluster,
             )
             replica.create(exe)
@@ -5187,9 +5183,7 @@ class AlterClusterSetAction(Action):
                 return False
             choice = self.rng.choice(["size", "replication_factor", "reset_rf"])
             if choice == "size":
-                new_size = self.rng.choice(
-                    ["scale=1,workers=1", "scale=1,workers=4", "scale=2,workers=2"]
-                )
+                new_size = self.rng.choice(["scale=1,workers=1", "scale=1,workers=2"])
                 exe.execute(
                     f"ALTER CLUSTER {cluster} SET (SIZE = '{new_size}')",
                     http=Http.RANDOM,
