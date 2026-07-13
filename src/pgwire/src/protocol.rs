@@ -20,7 +20,7 @@ use byteorder::{ByteOrder, NetworkEndian};
 use csv_core::ReadRecordResult;
 use futures::future::{BoxFuture, FutureExt, pending};
 use itertools::Itertools;
-use mz_adapter::client::RecordFirstRowStream;
+use mz_adapter::client::{RecordFirstRowStream, redact_sql_for_logging};
 use mz_adapter::session::{
     EndTransactionAction, InProgressRows, LifecycleTimestamps, PortalRefMut, PortalState, Session,
     SessionConfig, TransactionStatus,
@@ -67,7 +67,7 @@ use tokio::select;
 use tokio::time::{self};
 use tokio_metrics::TaskMetrics;
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tracing::{Instrument, debug, debug_span, warn};
+use tracing::{Instrument, debug, debug_span, info, warn};
 use uuid::Uuid;
 
 use crate::codec::{
@@ -947,6 +947,10 @@ where
         // only a few message types seem useful.
         let message_name = message.as_ref().map(|m| m.name()).unwrap_or_default();
 
+        if let Some(message) = &message {
+            self.maybe_log_message_arrival(message).await;
+        }
+
         let start = message.as_ref().map(|_| Instant::now());
         let next_state = match message {
             Some(FrontendMessage::Query { sql }) => {
@@ -1181,6 +1185,98 @@ where
             .with_label_values(&[message_type])
             .observe(start.elapsed().as_secs_f64());
         Ok(())
+    }
+
+    /// Logs an arriving frontend message at info level, when
+    /// `enable_statement_arrival_logging` is on. Runs before the message is
+    /// processed, so a message whose processing crashes the process still
+    /// appears in the log. The `kind` field says which message it is, and
+    /// thereby also whether the statement came in through the simple protocol
+    /// (`query`) or the extended protocol (`parse`, `bind`, `execute`, ...).
+    /// The prepared statement and portal names, together with the connection
+    /// id, allow connecting a `bind` or `execute` back to the `parse` that
+    /// carried the SQL text.
+    ///
+    /// SQL text is parsed and logged with its literals redacted, the same
+    /// redaction the statement log applies. This means a statement that
+    /// crashes the parser is not captured, an accepted limitation. Bind
+    /// parameter values are data that redaction cannot reach, so only their
+    /// count is logged. Authentication payloads are never logged. COPY data
+    /// is logged as its length only, and only when it arrives as a stray
+    /// message in the ready state: messages consumed by the COPY subprotocol
+    /// or the post-error drain loop don't pass through here at all.
+    async fn maybe_log_message_arrival(&mut self, message: &FrontendMessage) {
+        if !self
+            .adapter_client
+            .statement_arrival_logging_enabled()
+            .await
+        {
+            return;
+        }
+        let session = self.adapter_client.session();
+        let conn_id = session.conn_id();
+        let session_uuid = session.uuid();
+        let kind = message.name();
+        match message {
+            FrontendMessage::Query { sql } => {
+                info!(
+                    %conn_id, %session_uuid, kind, sql = %redact_sql_for_logging(sql),
+                    "statement arrival"
+                );
+            }
+            FrontendMessage::Parse { name, sql, .. } => {
+                info!(
+                    %conn_id, %session_uuid, kind, name, sql = %redact_sql_for_logging(sql),
+                    "statement arrival"
+                );
+            }
+            FrontendMessage::Bind {
+                portal_name,
+                statement_name,
+                raw_params,
+                ..
+            } => {
+                info!(
+                    %conn_id, %session_uuid, kind, portal_name, statement_name,
+                    num_params = raw_params.len(),
+                    "statement arrival"
+                );
+            }
+            // COPY payloads would flood the log. Log only their length.
+            FrontendMessage::CopyData(data) => {
+                info!(%conn_id, %session_uuid, kind, len = data.len(), "statement arrival");
+            }
+            // Authentication payloads must never be logged.
+            FrontendMessage::Password { .. }
+            | FrontendMessage::RawAuthentication(_)
+            | FrontendMessage::SASLInitialResponse { .. }
+            | FrontendMessage::SASLResponse(_) => {
+                info!(%conn_id, %session_uuid, kind, "statement arrival");
+            }
+            // CopyFail carries a client-supplied free-text error message,
+            // which we don't log.
+            FrontendMessage::CopyFail(_) => {
+                info!(%conn_id, %session_uuid, kind, "statement arrival");
+            }
+            // Log the full Debug representation for all other variants, which
+            // carry only object names or no payload.
+            FrontendMessage::DescribeStatement { .. }
+            | FrontendMessage::DescribePortal { .. }
+            | FrontendMessage::Execute { .. }
+            | FrontendMessage::Flush
+            | FrontendMessage::Sync
+            | FrontendMessage::CloseStatement { .. }
+            | FrontendMessage::ClosePortal { .. }
+            | FrontendMessage::Terminate
+            | FrontendMessage::CopyDone => {
+                // WARNING: When adding a variant here, consider whether its payload is sensitive or
+                // bulky!
+                //
+                // (The field must not be named `message`, that name is
+                // reserved for the event text in tracing.)
+                info!(%conn_id, %session_uuid, kind, contents = ?message, "statement arrival");
+            }
+        }
     }
 
     fn parse_sql<'b>(&self, sql: &'b str) -> Result<Vec<StatementParseResult<'b>>, ErrorResponse> {
