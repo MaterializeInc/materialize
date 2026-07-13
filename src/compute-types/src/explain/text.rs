@@ -530,6 +530,21 @@ impl LirRelationExpr {
 
                 ctx.indented(|ctx| input.fmt_text(f, ctx))?;
             }
+            SetDifference {
+                base,
+                subtract,
+                ensure_arrangement,
+            } => {
+                write!(f, "{}→Set Difference ", ctx.indent)?;
+                let ensure_arrangement = Arrangement::from(ensure_arrangement);
+                ensure_arrangement.fmt_text(f, ctx)?;
+                writeln!(f, "{annotations}")?;
+
+                ctx.indented(|ctx| {
+                    base.fmt_text(f, ctx)?;
+                    subtract.fmt_text(f, ctx)
+                })?;
+            }
             Union {
                 inputs,
                 consolidate_output,
@@ -964,6 +979,20 @@ impl LirRelationExpr {
                     }
                 };
                 ctx.indented(|ctx| input.fmt_text(f, ctx))?;
+            }
+            SetDifference {
+                base,
+                subtract,
+                ensure_arrangement,
+            } => {
+                let ensure_arrangement = Arrangement::from(ensure_arrangement);
+                write!(f, "{}SetDifference ensure_arrangement=", ctx.indent)?;
+                ensure_arrangement.fmt_text(f, ctx)?;
+                writeln!(f, "{}", annotations)?;
+                ctx.indented(|ctx| {
+                    base.fmt_text(f, ctx)?;
+                    subtract.fmt_text(f, ctx)
+                })?;
             }
             Union {
                 inputs,
