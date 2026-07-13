@@ -3700,7 +3700,8 @@ class ValidateConnectionAction(Action):
             # A concurrent ALTER SECRET rotation (the workload only rotates a
             # secret to its own value) can transiently expose an empty secret,
             # so VALIDATE CONNECTION sends an empty password and Postgres
-            # rejects it. See FINDINGS-BUGS.md (secret-rotation atomicity).
+            # rejects it (secret-rotation atomicity). See FINDINGS-BUGS.md.
+            # TODO: Remove when SS-347 is fixed.
             "empty password returned by client",
         ] + super().errors_to_ignore(exe)
 
