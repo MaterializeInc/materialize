@@ -5325,6 +5325,85 @@ class StatisticsAction(Action):
         return True
 
 
+class DependencyConsistencyAction(Action):
+    """Client-side catalog dependency oracle: flag any dependency edge whose
+    endpoints are not both live objects (a dangling uses/used_by edge).
+
+    PREPARED BUT DISABLED (commented out of read_action_list). This targets the
+    SQL-521 class: a sink left pointing at a materialized view that was dropped
+    under cancel, i.e. the same MissingUses inconsistency the coordinator's own
+    check_consistency asserts on. While SQL-521 is open the workload
+    legitimately produces such danglers, so enabling this now would re-detect
+    the known corruption rather than find new bugs.
+    TODO: enable in read_action_list once SQL-521 is fixed. Verify the
+    mz_internal.mz_object_dependencies column names (object_id,
+    referenced_object_id) still hold when enabling."""
+
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            # Reading a catalog relation inside a read txn that already touched
+            # user objects crosses timedomains.
+            "in the same timedomain",
+        ] + super().errors_to_ignore(exe)
+
+    def run(self, exe: Executor) -> bool:
+        exe.execute(
+            "SELECT d.object_id, d.referenced_object_id "
+            "FROM mz_internal.mz_object_dependencies d "
+            "LEFT JOIN mz_objects o1 ON d.object_id = o1.id "
+            "LEFT JOIN mz_objects o2 ON d.referenced_object_id = o2.id "
+            "WHERE o1.id IS NULL OR o2.id IS NULL",
+            http=Http.NO,
+        )
+        dangling = exe.cur.fetchall()
+        if dangling:
+            raise ValueError(
+                f"dangling catalog dependency edges (SQL-521 class): {dangling[:5]}"
+            )
+        return True
+
+
+class SourceReadHoldSweepAction(Action):
+    """Read a source-backed relation to force read-hold acquisition on the
+    source's remap shard.
+
+    PREPARED BUT DISABLED (commented out of read_action_list). Intended for the
+    kill scenario, where racing envd/clusterd restarts stresses read-hold
+    reinstatement: the SS-346 class (a dependent's read hold on a source's remap
+    shard not upheld across a restart, so its since advances past the
+    dependent's upper) and PER-49 (a compute import as_of behind the compacted
+    since after ALTER TABLE ADD COLUMN + kill). Enabling it now just re-triggers
+    those known coordinator/compute panics.
+    TODO: enable in read_action_list once SS-346 and PER-49 are fixed."""
+
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            "in the same timedomain",
+        ] + super().errors_to_ignore(exe)
+
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            sources = [
+                o
+                for o in exe.db.db_objects()
+                if isinstance(
+                    o,
+                    LoadGeneratorSource
+                    | KafkaSource
+                    | PostgresSource
+                    | MySqlSource
+                    | SqlServerSource
+                    | WebhookSource,
+                )
+            ]
+            if not sources:
+                return False
+            obj = self.rng.choice(sources)
+        exe.execute(f"SELECT count(*) FROM {obj}", http=Http.RANDOM)
+        exe.cur.fetchall()
+        return True
+
+
 class ActionList:
     action_classes: list[type[Action]]
     weights: list[float]
@@ -5358,6 +5437,10 @@ read_action_list = ActionList(
         # EXPLAIN ANALYZE handle the drop gracefully). See SQL-519 /
         # FINDINGS-BUGS.md.
         # (ExplainFilterPushdownAction, 5),
+        # PREPARED BUT DISABLED (see class docstrings): enabling these now just
+        # re-detects known-unfixed coordinator bugs rather than finding new ones.
+        # (DependencyConsistencyAction, 5),  # TODO: enable once SQL-521 fixed
+        # (SourceReadHoldSweepAction, 5),  # TODO: enable once SS-346 & PER-49 fixed
         (SetClusterAction, 1),
         (CommitRollbackAction, 30),
         (ReconnectAction, 1),
