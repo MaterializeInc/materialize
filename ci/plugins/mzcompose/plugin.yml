@@ -15,9 +15,13 @@ configuration:
   properties:
     args:
       type: array
+    ci-builder:
+      type: string
     env:
       type: object
     run:
+      type: string
+    run-timeout:
       type: string
     composition:
       type: string

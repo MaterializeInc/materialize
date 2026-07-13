@@ -74,9 +74,8 @@ class FailedTestExecutionError(UIError):
 def try_determine_errors_from_cmd_execution(
     e: CommandFailureCausedUIError, test_context: str | None
 ) -> list[TestFailureDetails]:
-    # Combine both streams: testdrive prints the actual error text to stdout
-    # while the "^^^ +++" markers and the error report go to stderr, so
-    # either stream alone is missing half the picture.
+    # Combine both streams: testdrive prints each marked error to stdout and
+    # the final error report to stderr, so either stream alone is incomplete.
     output_parts = [s for s in [e.stdout, e.stderr] if s]
     output = "\n".join(output_parts) if output_parts else None
 

@@ -23,6 +23,15 @@ mzcompose() {
     stdbuf --output=L --error=L bin/ci-builder run "$builder" bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
 }
 
+run_mzcompose() {
+    if [ -n "${BUILDKITE_PLUGIN_MZCOMPOSE_RUN_TIMEOUT:-}" ]; then
+        timeout --signal=TERM --kill-after=30s "$BUILDKITE_PLUGIN_MZCOMPOSE_RUN_TIMEOUT" \
+            stdbuf --output=L --error=L bin/ci-builder run "$builder" bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
+    else
+        mzcompose "$@"
+    fi
+}
+
 kubectl() {
     bin/ci-builder run stable kubectl --context="$K8S_CONTEXT" "$@"
 }
@@ -383,7 +392,7 @@ TEST_RESULT=1
 # sed command to filter out ANSI command codes in run.log, while keeping them in Buildkite's view
 {
   set -o pipefail
-  mzcompose run "${run_args[@]}" \
+  run_mzcompose run "${run_args[@]}" \
     |& tee >(sed -r 's/\x1B\[[0-9;]*[A-Za-z]//g' > run.log)
 } &
 pid=$!
