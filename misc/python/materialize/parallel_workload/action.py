@@ -1758,6 +1758,7 @@ class FlipFlagsAction(Action):
             "compute_logical_backpressure_inflight_slack",
             "persist_fetch_semaphore_cost_adjustment",
             "persist_fetch_semaphore_permit_adjustment",
+            "persist_pg_consensus_read_committed",  # Doesn't work against CRDB
             "persist_pubsub_client_enabled",
             "persist_pubsub_push_diff_enabled",
             "persist_pubsub_same_process_delegate_enabled",
