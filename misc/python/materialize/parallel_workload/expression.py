@@ -323,6 +323,35 @@ for rt in RANGE_TYPES:
 # ]
 
 
+# Boundary / edge-case literals, injected at low probability as leaves of
+# read/filter expressions (ExprKind.ALL only). They feed arithmetic and filters
+# to stress overflow/eval paths (the class behind the filter-pushdown
+# float-overflow finding). The errors they can produce (overflow, out of range,
+# division by zero) are already tolerated by the read actions.
+#
+# NOTE: deliberately no extreme-year date/timestamp literals. A 6-digit year
+# deterministically trips the known SS-345 date-parser bug in every context,
+# which would just spam a known-unfixed issue rather than find new ones. Restore
+# them once SS-345 is fixed.
+EDGE_VALUES: dict[type, list[str]] = {
+    Float: [
+        "'NaN'::float8",
+        "'Infinity'::float8",
+        "'-Infinity'::float8",
+        "1e38::float4",
+        "(-1e38)::float4",
+        "1e308::float8",
+    ],
+    Numeric: ["0::numeric", "9.9e38::numeric", "(-9.9e38)::numeric"],
+    Int: [
+        "2147483647::int4",
+        "(-2147483648)::int4",
+        "9223372036854775807::int8",
+        "(-9223372036854775808)::int8",
+    ],
+}
+
+
 def expression(
     data_type: type[DataType],
     columns: list[Column] | (
@@ -356,6 +385,12 @@ def expression(
             for col in rng.sample(columns, len(columns)):
                 if col.data_type == data_type:
                     return str(col)
+
+    # Only in read/filter contexts: overflow/eval errors are tolerated there,
+    # but not in write (INSERT value) or materialized-view-body contexts.
+    edges = EDGE_VALUES.get(data_type)
+    if edges and kind == ExprKind.ALL and rng.random() < 0.2:
+        return rng.choice(edges)
 
     record_size = rng.choice(
         [RecordSize.TINY, RecordSize.SMALL, RecordSize.MEDIUM, RecordSize.LARGE]
