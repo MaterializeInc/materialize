@@ -59,3 +59,19 @@ contains:imestamp
 
 # No rows expected
 > FETCH 1 c WITH (timeout = '1s');
+
+> COMMIT
+
+# Regression test for CLU-169. `AS OF MAX UP TO MAX` describes an empty range
+# (`as_of` equals the exclusive `up_to`), so the subscribe is guaranteed empty.
+# Optimization used to trip the `is_single_time` invariant assertion, which
+# expected an empty `until` whenever `as_of` was `MAX`, and surfaced as an
+# internal optimizer error.
+> BEGIN
+
+> DECLARE c CURSOR FOR SUBSCRIBE t1 AS OF 18446744073709551615 UP TO 18446744073709551615;
+
+# No rows expected.
+> FETCH ALL c WITH (timeout = '5s');
+
+> COMMIT
