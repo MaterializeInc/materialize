@@ -1554,7 +1554,8 @@ steps:
       label: "Terraform + Helm Chart E2E on AWS"
       artifact_paths: [test/terraform/aws-temporary/terraform.tfstate, "mz_debug_*.zip"]
       depends_on: devel-docker-tags
-      timeout_in_minutes: 60
+      # Setup and tests get 60 minutes. Cleanup gets the remaining 30 minutes.
+      timeout_in_minutes: 90
       concurrency: 1
       concurrency_group: 'terraform-aws'
       agents:
@@ -1567,14 +1568,14 @@ steps:
             # Cleanup runs in pre-exit hook
             args: [--no-cleanup]
             ci-builder: stable
+            run-timeout: 60m
       branches: "main v*.* *aws* *tf* *terraform* *helm* *self-managed* *orchestratord*"
 
     - id: terraform-aws-upgrade
       label: "Terraform + Helm Chart Upgrade on AWS"
       artifact_paths: [test/terraform/aws-upgrade/terraform.tfstate, "mz_debug_*.zip"]
       depends_on: devel-docker-tags
-      # ~26 min EKS setup + ~5 min per upgrade step + tests + ~18 min destroy
-      # (cleanup runs in the pre-exit hook, inside the job timeout)
+      # Setup and tests get 60 minutes. Cleanup gets the remaining 30 minutes.
       timeout_in_minutes: 90
       concurrency: 1
       concurrency_group: 'terraform-upgrade-aws'
@@ -1593,13 +1594,15 @@ steps:
             # Cleanup runs in pre-exit hook
             args: [--no-cleanup]
             ci-builder: stable
+            run-timeout: 60m
       branches: "main v*.* *aws* *tf* *terraform* *helm* *self-managed* *orchestratord*"
 
     - id: terraform-gcp
       label: "Terraform + Helm Chart E2E on GCP"
       artifact_paths: [test/terraform/gcp-temporary/terraform.tfstate, "mz_debug_*.zip"]
       depends_on: devel-docker-tags
-      timeout_in_minutes: 60
+      # Setup and tests get 60 minutes. Cleanup gets the remaining 30 minutes.
+      timeout_in_minutes: 90
       concurrency: 1
       concurrency_group: 'terraform-gcp'
       agents:
@@ -1611,6 +1614,7 @@ steps:
             # Cleanup runs in pre-exit hook
             args: [--no-cleanup]
             ci-builder: stable
+            run-timeout: 60m
       branches: "main v*.* *gcp* *tf* *terraform* *helm* *self-managed* *orchestratord*"
       skip: "materialize-terraform-self-managed#157"
 
@@ -1618,7 +1622,8 @@ steps:
       label: "Terraform + Helm Chart E2E on Azure"
       artifact_paths: [test/terraform/azure-temporary/terraform.tfstate, "mz_debug_*.zip"]
       depends_on: devel-docker-tags
-      timeout_in_minutes: 60
+      # Setup and tests get 60 minutes. Cleanup gets the remaining 30 minutes.
+      timeout_in_minutes: 90
       concurrency: 1
       concurrency_group: 'terraform-azure'
       agents:
@@ -1630,6 +1635,7 @@ steps:
             # Cleanup runs in pre-exit hook
             args: [--no-cleanup]
             ci-builder: stable
+            run-timeout: 60m
       branches: "main v*.* *azure* *tf* *terraform* *helm* *self-managed* *orchestratord*"
       skip: "Not enough capacity on Azure currently, see #operations"
       # Unreliable port-forward to Azure
