@@ -1072,6 +1072,14 @@ pub mod tests {
         );
         assert_ok!(consensus.truncate(&key, SeqNo(3)).await);
 
+        // The shard now has head seqno 3 with seqnos 0..=2 truncated away. A re-initialization
+        // (compare_and_set with an initial seqno, i.e. expected=None) must be rejected rather than
+        // resurrecting seqno 0 in the gap below the live head.
+        assert_eq!(
+            consensus.compare_and_set(&key, state_at(0)).await,
+            Ok(CaSResult::ExpectationMismatch),
+        );
+
         Ok(())
     }
 
