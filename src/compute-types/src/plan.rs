@@ -604,6 +604,12 @@ impl LirRelationExpr {
         // Subsequently, we perform plan refinements for the dataflow.
         Self::refine_source_mfps(&mut dataflow);
 
+        // Recognize the co-arranged anti-side shape and fuse it into a single
+        // `SetDifference` node. Gated behind a feature flag, dormant otherwise.
+        if features.enable_fused_set_difference {
+            Self::refine_set_difference(&mut dataflow);
+        }
+
         // Note: `consolidate_output` for `Union` and per-input
         // `temporal_bucketing_strategies` are decided at lowering time (see the
         // `Union` arm of `lower_mir_expr_stack_safe`). The pre-existing
@@ -787,6 +793,38 @@ impl LirRelationExpr {
         mz_repr::explain::trace_plan(dataflow);
     }
 
+    /// Recognizes the co-arranged anti-side shape
+    /// `Threshold::Basic(ArrangeBy(Union(base, Negate(subtract))))` and rewrites it in place
+    /// to a single [`LirRelationNode::SetDifference`] node.
+    ///
+    /// The rewrite fires only when both difference inputs are genuinely arranged on the
+    /// threshold key and neither carries temporal bucketing. See [`match_anti_side`] for the
+    /// full set of decline conditions.
+    #[mz_ore::instrument(
+        target = "optimizer",
+        level = "debug",
+        fields(path.segment = "refine_set_difference")
+    )]
+    fn refine_set_difference(dataflow: &mut DataflowDescription<Self>) {
+        for build_desc in dataflow.objects_to_build.iter_mut() {
+            let mut todo = vec![&mut build_desc.plan];
+            while let Some(expression) = todo.pop() {
+                if let Some((base, subtract, ensure_arrangement)) =
+                    match_anti_side(&expression.node)
+                {
+                    *expression = LirRelationNode::SetDifference {
+                        base,
+                        subtract,
+                        ensure_arrangement,
+                    }
+                    .as_plan(expression.lir_id);
+                }
+                todo.extend(expression.node.children_mut());
+            }
+        }
+        mz_repr::explain::trace_plan(dataflow);
+    }
+
     /// Refines the plans of objects to be built as part of a single-time `dataflow` to relax
     /// the setting of the `must_consolidate` attribute of monotonic operators, if necessary,
     /// whenever the input is deemed to be physically monotonic.
@@ -812,6 +850,164 @@ impl LirRelationExpr {
         mz_repr::explain::trace_plan(dataflow);
         Ok(())
     }
+}
+
+/// Matches the co-arranged anti-side shape
+/// `Threshold::Basic(ArrangeBy(raw=false)(Union([base, Negate(subtract)])))` and, when every
+/// decline condition holds, returns the `(base, subtract, ensure_arrangement)` components of a
+/// [`LirRelationNode::SetDifference`] rewrite.
+///
+/// `base` is the positive `Union` arm taken as-is; `subtract` is the child of the `Negate` arm
+/// (the render reintroduces the negation internally). `ensure_arrangement` is copied from the
+/// matched `Threshold` so the fused node advertises the same output arrangement.
+///
+/// Returns `None` (decline, leaving the plan unchanged) unless all of the following hold:
+/// * the node is a `Threshold::Basic`,
+/// * its input is an `ArrangeBy` whose `forms` are arranged (not raw),
+/// * that `ArrangeBy`'s input is a `Union` with exactly two inputs, exactly one a `Negate`,
+/// * neither `Union` arm carries a non-`Direct` temporal bucketing strategy, and
+/// * both arms are arranged on the threshold key columns (see [`arm_arrangement_matches`]).
+///
+/// `consolidate_output` need not be checked: lowering sets it precisely when a `Union` arm is a
+/// `Negate`, so the two-input-one-`Negate` match already implies it.
+fn match_anti_side(
+    node: &LirRelationNode,
+) -> Option<(
+    Box<LirRelationExpr>,
+    Box<LirRelationExpr>,
+    (Vec<LirScalarExpr>, Vec<usize>, Vec<usize>),
+)> {
+    let LirRelationNode::Threshold {
+        input,
+        threshold_plan: ThresholdPlan::Basic(basic),
+    } = node
+    else {
+        return None;
+    };
+    let ensure_arrangement = basic.ensure_arrangement.clone();
+    let threshold_key = &ensure_arrangement.0;
+
+    let LirRelationNode::ArrangeBy {
+        input: union_expr,
+        forms,
+        ..
+    } = &input.node
+    else {
+        return None;
+    };
+    if forms.raw {
+        return None;
+    }
+
+    let LirRelationNode::Union {
+        inputs,
+        temporal_bucketing_strategies,
+        ..
+    } = &union_expr.node
+    else {
+        return None;
+    };
+    if inputs.len() != 2 {
+        return None;
+    }
+    // The `SetDifference` node has no slot for a temporal bucketing strategy and the phase-1
+    // render reconstructs a plain consolidating concat that does not reproduce per-input
+    // bucketing. Fusing a bucketable arm would silently drop the bucketing and regress, so
+    // decline whenever any arm requests a non-`Direct` (the no-op default) strategy.
+    if temporal_bucketing_strategies
+        .iter()
+        .any(|strategy| !matches!(strategy, ArrangementStrategy::Direct))
+    {
+        return None;
+    }
+
+    // Exactly one arm must be a `Negate`.
+    let mut negate_arms = inputs
+        .iter()
+        .enumerate()
+        .filter(|(_, arm)| matches!(arm.node, LirRelationNode::Negate { .. }));
+    let (negate_idx, negate_arm) = negate_arms.next()?;
+    if negate_arms.next().is_some() {
+        return None;
+    }
+    let LirRelationNode::Negate { input: subtract } = &negate_arm.node else {
+        return None;
+    };
+    let base_arm = &inputs[1 - negate_idx];
+
+    if !arm_arrangement_matches(base_arm, threshold_key)
+        || !arm_arrangement_matches(subtract, threshold_key)
+    {
+        return None;
+    }
+
+    Some((
+        Box::new(base_arm.clone()),
+        subtract.clone(),
+        ensure_arrangement,
+    ))
+}
+
+/// Reports whether a `Union` arm is available arranged on the `key` columns, permitting an
+/// optional leading projection-to-key MFP.
+///
+/// The arm may be wrapped in a single `Mfp` node whose plan only projects (no map, filter, or
+/// temporal bound); such a projection is stripped before inspecting the underlying node. A
+/// non-projection `Mfp` is not stripped, leaving `Mfp` as the node type, which is rejected.
+///
+/// The underlying node must be a `Get` or `ArrangeBy`, the only nodes that advertise their
+/// arrangements at the node level. Any read MFP the node applies (a `GetPlan` MFP or an
+/// `ArrangeBy`'s `input_mfp`) must itself be projection-only, since a filter or map between the
+/// arm and its arrangement changes the collection the operator would consume. Only the key
+/// columns must match `key`; permutation and thinning may differ between arms, because the
+/// operator sums diffs per key and ignores value contents.
+fn arm_arrangement_matches(arm: &LirRelationExpr, key: &[LirScalarExpr]) -> bool {
+    let node = match &arm.node {
+        LirRelationNode::Mfp { input, mfp, .. } if is_projection_only(mfp) => &input.node,
+        node => node,
+    };
+
+    let advertises_key = |arranged: &[(Vec<LirScalarExpr>, Vec<usize>, Vec<usize>)]| -> bool {
+        arranged.iter().any(|(k, _, _)| k.as_slice() == key)
+    };
+
+    match node {
+        LirRelationNode::Get { keys, plan, .. } => {
+            get_plan_projection_only(plan) && advertises_key(&keys.arranged)
+        }
+        LirRelationNode::ArrangeBy {
+            input_key,
+            input_mfp,
+            forms,
+            ..
+        } => {
+            // The arrangement on `key` is either built by this node (its `forms`) or the input
+            // arrangement it reads through (`input_key`).
+            is_projection_only(input_mfp)
+                && (advertises_key(&forms.arranged)
+                    || input_key
+                        .as_deref()
+                        .is_some_and(|input_key| input_key == key))
+        }
+        _ => false,
+    }
+}
+
+/// Reports whether a `GetPlan` reads its collection with at most a projection: no seek, no
+/// filter, no map.
+fn get_plan_projection_only(plan: &GetPlan) -> bool {
+    match plan {
+        GetPlan::PassArrangements => true,
+        // A seek is a literal equality constraint, so it disqualifies the plan.
+        GetPlan::Arrangement(_key, seek_row, mfp) => seek_row.is_none() && is_projection_only(mfp),
+        GetPlan::Collection(mfp) => is_projection_only(mfp),
+    }
+}
+
+/// Reports whether an `MfpPlan` only projects columns: no map, no filter, no temporal bound.
+fn is_projection_only(mfp: &MfpPlan<LirScalarExpr>) -> bool {
+    let safe_mfp = mfp.safe_mfp();
+    safe_mfp.expressions.is_empty() && safe_mfp.predicates.is_empty() && !mfp.has_temporal_bounds()
 }
 
 impl CollectionPlan for LirRelationNode {
