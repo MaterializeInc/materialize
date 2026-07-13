@@ -121,6 +121,12 @@ pub struct Scope {
     pub items: Vec<ScopeItem>,
     /// The ungrouped columns in the scope.
     pub ungrouped_columns: Vec<ScopeUngroupedColumn>,
+    /// The names of relations in this scope that expose no columns, e.g.
+    /// `(SELECT) AS t`. Such relations leave no trace in `items`, so without
+    /// this they would be invisible to name resolution. They must still
+    /// shadow same-named relations in outer scopes and participate in
+    /// duplicate table name detection.
+    pub zero_arity_table_names: Vec<PartialItemName>,
     // Whether this scope starts a new chain of lateral outer scopes.
     //
     // It's easiest to understand with an example. Consider this query:
@@ -198,6 +204,7 @@ impl Scope {
         Scope {
             items: vec![],
             ungrouped_columns: vec![],
+            zero_arity_table_names: vec![],
             lateral_barrier: false,
         }
     }
@@ -212,6 +219,9 @@ impl Scope {
             .into_iter()
             .map(|column_name| ScopeItem::from_name(table_name.clone(), column_name.into()))
             .collect();
+        if scope.items.is_empty() {
+            scope.zero_arity_table_names.extend(table_name);
+        }
         scope
     }
 
@@ -279,10 +289,10 @@ impl Scope {
     /// If no tables with the given name are in scope, returns an empty
     /// iterator.
     ///
-    /// NOTE(benesch): This is wrong for zero-arity relations, because we can't
-    /// distinguish between "no such table" and a table that exists but has no
-    /// columns. The current design of scope makes this difficult to fix,
-    /// unfortunately.
+    /// NOTE(benesch): The return value conflates "no such table" and a table
+    /// that exists but has no columns, as both produce an empty vector.
+    /// Callers that care can check `zero_arity_table_names` to distinguish
+    /// the two.
     pub fn items_from_table<'a>(
         &'a self,
         outer_scopes: &'a [Scope],
@@ -438,9 +448,19 @@ impl Scope {
         name_manager: &mut NameManager,
     ) -> Result<(ColumnRef, Arc<str>), PlanError> {
         let mut seen_at_level = None;
+        // A zero-arity relation contributes no items, so the item scan below
+        // cannot find it. It must still shadow same-named relations at
+        // farther lateral levels, so refuse to match items beyond the
+        // closest zero-arity relation with this name.
+        let zero_arity_level = self.innermost_zero_arity_table_level(outer_scopes, table_name);
         self.resolve_internal(
             outer_scopes,
             |c| {
+                if let Some(zero_arity_level) = zero_arity_level {
+                    if c.lat_level > zero_arity_level {
+                        return false;
+                    }
+                }
                 // Once we've matched a table name at a lateral level, even if
                 // the column name did not match, we can never match an item
                 // from another lateral level.
@@ -460,6 +480,30 @@ impl Scope {
             column_name,
             name_manager,
         )
+    }
+
+    /// Returns the closest lateral level at which `table` matches the name of
+    /// a zero-arity relation, if any. Lateral levels are counted as in
+    /// `all_items`.
+    fn innermost_zero_arity_table_level(
+        &self,
+        outer_scopes: &[Scope],
+        table: &PartialItemName,
+    ) -> Option<usize> {
+        let mut lat_level = 0;
+        for scope in iter::once(self).chain(outer_scopes) {
+            if scope.lateral_barrier {
+                lat_level += 1;
+            }
+            if scope
+                .zero_arity_table_names
+                .iter()
+                .any(|n| n.matches(table))
+            {
+                return Some(lat_level);
+            }
+        }
+        None
     }
 
     /// Look to see if there is an already-calculated instance of this expr.
@@ -509,6 +553,11 @@ impl Scope {
         Ok(Scope {
             items: self.items.into_iter().chain(right.items).collect(),
             ungrouped_columns: vec![],
+            zero_arity_table_names: self
+                .zero_arity_table_names
+                .into_iter()
+                .chain(right.zero_arity_table_names)
+                .collect(),
             lateral_barrier: false,
         })
     }
@@ -517,14 +566,18 @@ impl Scope {
         Scope {
             items: columns.iter().map(|&i| self.items[i].clone()).collect(),
             ungrouped_columns: vec![],
+            zero_arity_table_names: self.zero_arity_table_names.clone(),
             lateral_barrier: false,
         }
     }
 
+    /// Returns the names of all relations in this scope, including those that
+    /// expose no columns.
     pub fn table_names(&self) -> BTreeSet<&PartialItemName> {
         self.items
             .iter()
             .filter_map(|name| name.table_name.as_ref())
+            .chain(self.zero_arity_table_names.iter())
             .collect::<BTreeSet<&PartialItemName>>()
     }
 }

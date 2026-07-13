@@ -2387,6 +2387,10 @@ fn plan_select_from_where(
         let mut group_exprs: BTreeMap<HirScalarExpr, ScopeItem> = BTreeMap::new();
         let mut group_hir_exprs = vec![];
         let mut group_scope = Scope::empty();
+        // Zero-arity relations contribute no items that could be carried into
+        // the group scope, so carry over their names explicitly to keep them
+        // visible to name resolution after grouping.
+        group_scope.zero_arity_table_names = from_scope.zero_arity_table_names.clone();
         let mut select_all_mapping = BTreeMap::new();
 
         for group_expr in &s.group_by {
@@ -3033,6 +3037,7 @@ fn plan_table_factor(
                         break;
                     }
                     scope.items.clear();
+                    scope.zero_arity_table_names.clear();
                 }
             }
             qcx.outer_scopes[0].lateral_barrier = true;
@@ -3513,6 +3518,20 @@ fn plan_table_alias(mut scope: Scope, alias: Option<&TableAlias>) -> Result<Scop
                 .map(|a| normalize::column_name(a.clone()))
                 .unwrap_or_else(|| item.column_name.clone());
         }
+
+        // The alias replaces all table names of the underlying relation,
+        // including the names of relations that expose no columns. If no item
+        // ends up carrying the alias (because the scope has no items, or all
+        // of its items prohibit unqualified references), record the alias
+        // separately so that it stays visible to name resolution.
+        scope.zero_arity_table_names.clear();
+        if scope.items.iter().all(|item| item.table_name.is_none()) {
+            scope.zero_arity_table_names.push(PartialItemName {
+                database: None,
+                schema: None,
+                item: table_name,
+            });
+        }
     }
     Ok(scope)
 }
@@ -3677,7 +3696,13 @@ fn expand_select_item<'a>(
                     (ExpandedSelectItem::InputOrdinal(i), name)
                 })
                 .collect();
-            if out.is_empty() {
+            if out.is_empty()
+                && !ecx
+                    .scope
+                    .zero_arity_table_names
+                    .iter()
+                    .any(|n| n.matches(&table_name))
+            {
                 sql_bail!("no table named '{}' in scope", table_name);
             }
             Ok(out)
