@@ -14,8 +14,8 @@ MZFROM console AS console
 # Statically-linked `ssh` client, used by the SSH tunnel feature.
 MZFROM openssh-static AS openssh-static
 
-# Debian 13, matching the distroless base env/clusterd use so every Materialize
-# binary runs on the same glibc and system libraries.
+# In production, we use distroless images based on Debian 13.
+# We retain apt and install more packages in this image for development.
 FROM debian:13-slim
 
 ARG CI_SANITIZER=none
