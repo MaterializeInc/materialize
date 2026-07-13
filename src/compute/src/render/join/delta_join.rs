@@ -19,8 +19,9 @@ use std::rc::Rc;
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::trace::cursor::BatchCursor;
 use differential_dataflow::trace::implementations::BatchContainer;
-use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
+use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 use differential_dataflow::{AsCollection, VecCollection};
 use mz_compute_types::dyncfgs::ENABLE_HALF_JOIN2;
 use mz_compute_types::plan::join::JoinClosure;
@@ -336,11 +337,14 @@ fn build_halfjoin<'scope, T, Tr, CF>(
 )
 where
     T: RenderTimestamp,
-    Tr: TraceReader<KeyContainer: BatchContainer<Owned = Row>, Time = T, Diff = Diff>
-        + Clone
-        + 'static,
-    for<'a> Tr::Val<'a>: ExtendDatums,
-    CF: Fn(Tr::TimeGat<'_>, &T) -> bool + 'static,
+    Tr: TraceReader<Batch: Navigable, Time = T> + Clone + 'static,
+    for<'a> BatchCursor<Tr>: Cursor<
+            Val<'a>: ExtendDatums,
+            KeyContainer: BatchContainer<Owned = Row>,
+            Time = T,
+            Diff = Diff,
+        >,
+    CF: Fn(<BatchCursor<Tr> as Cursor>::TimeGat<'_>, &T) -> bool + 'static,
 {
     let use_half_join2 = ENABLE_HALF_JOIN2.get(&config_set);
 
@@ -390,11 +394,14 @@ fn build_halfjoin2<'scope, T, Tr, CF>(
 )
 where
     T: RenderTimestamp,
-    Tr: TraceReader<KeyContainer: BatchContainer<Owned = Row>, Time = T, Diff = Diff>
-        + Clone
-        + 'static,
-    for<'a> Tr::Val<'a>: ExtendDatums,
-    CF: Fn(Tr::TimeGat<'_>, &T) -> bool + 'static,
+    Tr: TraceReader<Batch: Navigable, Time = T> + Clone + 'static,
+    for<'a> BatchCursor<Tr>: Cursor<
+            Val<'a>: ExtendDatums,
+            KeyContainer: BatchContainer<Owned = Row>,
+            Time = T,
+            Diff = Diff,
+        >,
+    CF: Fn(<BatchCursor<Tr> as Cursor>::TimeGat<'_>, &T) -> bool + 'static,
 {
     type CB<C> = CapacityContainerBuilder<C>;
 
@@ -498,11 +505,14 @@ fn build_halfjoin1<'scope, T, Tr, CF>(
 )
 where
     T: RenderTimestamp,
-    Tr: TraceReader<KeyContainer: BatchContainer<Owned = Row>, Time = T, Diff = Diff>
-        + Clone
-        + 'static,
-    for<'a> Tr::Val<'a>: ExtendDatums,
-    CF: Fn(Tr::TimeGat<'_>, &T) -> bool + 'static,
+    Tr: TraceReader<Batch: Navigable, Time = T> + Clone + 'static,
+    for<'a> BatchCursor<Tr>: Cursor<
+            Val<'a>: ExtendDatums,
+            KeyContainer: BatchContainer<Owned = Row>,
+            Time = T,
+            Diff = Diff,
+        >,
+    CF: Fn(<BatchCursor<Tr> as Cursor>::TimeGat<'_>, &T) -> bool + 'static,
 {
     type CB<C> = CapacityContainerBuilder<C>;
 
@@ -609,10 +619,10 @@ fn build_update_stream<'scope, T, Tr>(
 )
 where
     T: RenderTimestamp,
-    for<'a, 'b> &'a T: PartialEq<Tr::TimeGat<'b>>,
-    Tr: for<'a> TraceReader<Time = T, Diff = Diff> + Clone + 'static,
-    for<'a> Tr::Key<'a>: ExtendDatums,
-    for<'a> Tr::Val<'a>: ExtendDatums,
+    for<'a, 'b> &'a T: PartialEq<<BatchCursor<Tr> as Cursor>::TimeGat<'b>>,
+    Tr: TraceReader<Batch: Navigable, Time = T> + Clone + 'static,
+    for<'a> BatchCursor<Tr>:
+        Cursor<Key<'a>: ExtendDatums, Val<'a>: ExtendDatums, Time = T, Diff = Diff>,
 {
     let mut inner_as_of = Antichain::new();
     for event_time in as_of.elements().iter() {
@@ -643,8 +653,10 @@ where
                                             || inner_as_of.elements().iter().all(|e| e != time)
                                         {
                                             // TODO: Consolidate as we push, defensively.
-                                            times_diffs
-                                                .push((Tr::owned_time(time), Tr::owned_diff(diff)));
+                                            times_diffs.push((
+                                                <BatchCursor<Tr> as Cursor>::owned_time(time),
+                                                <BatchCursor<Tr> as Cursor>::owned_diff(diff),
+                                            ));
                                         }
                                     });
                                     differential_dataflow::consolidation::consolidate(

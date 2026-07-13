@@ -15,18 +15,29 @@
 
 use columnation::Columnation;
 use differential_dataflow::Data;
-use differential_dataflow::difference::Abelian;
-use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
-use differential_dataflow::trace::implementations::{BatchContainer, LayoutExt};
-use differential_dataflow::trace::{Builder, Trace, TraceReader};
-use mz_timely_util::columnation::ColumnationStack;
-use timely::Container;
+use differential_dataflow::difference::Semigroup;
+use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::trace::cursor::BatchCursor;
+use differential_dataflow::trace::implementations::BatchContainer;
+use differential_dataflow::trace::{Builder, Cursor};
+use mz_repr::{Diff, Row};
+use mz_row_spine::{DatumSeq, RowBuilder, RowRowBuilder, RowSpine};
 use timely::container::PushInto;
 
+use mz_timely_util::columnation::ColumnationStack;
+
 use crate::extensions::arrange::ArrangementSize;
+use crate::render::errors::DataflowErrorSer;
+use crate::typedefs::{
+    ErrAgent, ErrBuilder, ErrSpine, MzTimestamp, RowAgent, RowErrBuilder, RowErrSpine, RowRowAgent,
+    RowRowSpine, RowValAgent,
+};
 
-type KeyOwn<Tr> = <<Tr as LayoutExt>::KeyContainer as BatchContainer>::Owned;
-
+/// Clears a builder input container between keys in the reduce push closure.
+///
+/// The reduce operator has no way to reset the caller's input container itself, so the push
+/// closure clears it before staging each key's updates. Failing to clear leaks one key's rows
+/// into the next.
 pub trait ClearContainer {
     fn clear(&mut self);
 }
@@ -48,60 +59,211 @@ where
     }
 }
 
-/// Extension trait for the `reduce_abelian` differential dataflow method.
-pub(crate) trait MzReduce<'scope, T1: TraceReader> {
-    /// Applies `reduce` to arranged data, and returns an arrangement of output data.
-    fn mz_reduce_abelian<L, Bu, T2>(self, name: &str, logic: L) -> Arranged<'scope, TraceAgent<T2>>
-    where
-        T2: for<'a> Trace<Key<'a> = T1::Key<'a>, ValOwn: Data, Time = T1::Time, Diff: Abelian>
-            + 'static,
-        Bu: Builder<Time = T1::Time, Output = T2::Batch>,
-        Bu::Input: Container
-            + Default
-            + ClearContainer
-            + PushInto<((KeyOwn<T1>, T2::ValOwn), T2::Time, T2::Diff)>,
-        L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(T2::ValOwn, T2::Diff)>)
-            + 'static,
-        Arranged<'scope, TraceAgent<T2>>: ArrangementSize;
+/// Drains `updates` into the builder input `buf`, prepending `key_owned` to each value.
+///
+/// Clears `buf` first because the reduce operator cannot reset it between keys, and failing to
+/// clear leaks one key's rows into the next.
+pub(crate) fn push_reduced<C, K, V, T>(buf: &mut C, key_owned: &K, updates: &mut Vec<(V, T, Diff)>)
+where
+    C: ClearContainer + PushInto<((K, V), T, Diff)>,
+    K: Clone,
+{
+    ClearContainer::clear(buf);
+    for (val, time, diff) in updates.drain(..) {
+        PushInto::push_into(buf, ((key_owned.clone(), val), time, diff));
+    }
 }
 
-impl<'scope, T1> MzReduce<'scope, T1> for Arranged<'scope, T1>
-where
-    T1: TraceReader + Clone + 'static,
-{
-    /// Applies `reduce` to arranged data, and returns an arrangement of output data.
-    fn mz_reduce_abelian<L, Bu, T2>(self, name: &str, logic: L) -> Arranged<'scope, TraceAgent<T2>>
-    where
-        T2: for<'a> Trace<Key<'a> = T1::Key<'a>, ValOwn: Data, Time = T1::Time, Diff: Abelian>
-            + 'static,
-        Bu: Builder<
-                Time = T1::Time,
-                Input: Container
-                           + Default
-                           + ClearContainer
-                           + PushInto<((KeyOwn<T1>, T2::ValOwn), T2::Time, T2::Diff)>,
-                Output = T2::Batch,
-            >,
-        L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(T2::ValOwn, T2::Diff)>)
-            + 'static,
-        Arranged<'scope, TraceAgent<T2>>: ArrangementSize,
-    {
-        // Construct a push closure for `reduce_abelian`.
-        use differential_dataflow::trace::implementations::BatchContainer;
-        let push_closure =
-            |buf: &mut Bu::Input,
-             key: T1::Key<'_>,
-             updates: &mut Vec<(T2::ValOwn, T2::Time, T2::Diff)>| {
-                buf.clear();
-                let key_owned = <T1::KeyContainer as BatchContainer>::into_owned(key);
-                for (val, time, diff) in updates.drain(..) {
-                    buf.push_into(((key_owned.clone(), val), time, diff));
-                }
-            };
+// `differential`'s `reduce_abelian` carries a higher-ranked output-key bound
+// (`for<'a> Key<'a> = BatchKey<'a, Tr1>`) that the compiler only normalizes when the input and
+// output trace types are concrete through a function signature. Inline calls (e.g. through a
+// macro) leave `Tr1`/`Tr2` as inference variables and fail the projection. The helpers below fix
+// the concrete spine structures in their signatures, generic only over lifetime, timestamp, input
+// diff, and logic, which keeps the projection normalizable. Each covers one distinct
+// (input-spine-structure, output-spine-structure) combination and is reused across call sites.
 
-        // Allow access to `reduce_abelian` since we're within Mz's wrapper and force arrangement size logging.
-        #[allow(clippy::disallowed_methods)]
-        Arranged::<_>::reduce_abelian::<_, Bu, T2, _>(self, name, logic, push_closure)
-            .log_arrangement_size()
-    }
+/// `reduce_abelian` from a `RowRow` input arrangement into a `RowRow` output arrangement.
+pub(crate) fn reduce_row_row_to_row_row<'s, T, L>(
+    arr: Arranged<'s, RowRowAgent<T, Diff>>,
+    name: &str,
+    logic: L,
+) -> Arranged<'s, RowRowAgent<T, Diff>>
+where
+    T: MzTimestamp,
+    L: FnMut(DatumSeq<'_>, &[(DatumSeq<'_>, Diff)], &mut Vec<(Row, Diff)>) + 'static,
+{
+    let push = |buf: &mut <RowRowBuilder<T, Diff> as Builder>::Input,
+                key: DatumSeq<'_>,
+                updates: &mut Vec<(Row, T, Diff)>| {
+        let key_owned: Row = <<BatchCursor<RowRowAgent<T, Diff>> as Cursor>::KeyContainer as BatchContainer>::into_owned(key);
+        push_reduced(buf, &key_owned, updates);
+    };
+    #[allow(clippy::disallowed_methods)]
+    arr.reduce_abelian::<_, RowRowBuilder<T, Diff>, RowRowSpine<T, Diff>, _>(name, logic, push)
+        .log_arrangement_size()
+}
+
+/// `reduce_abelian` from a `RowRow` input arrangement into a `RowErr` output arrangement.
+pub(crate) fn reduce_row_row_to_row_err<'s, T, L>(
+    arr: Arranged<'s, RowRowAgent<T, Diff>>,
+    name: &str,
+    logic: L,
+) -> Arranged<'s, RowValAgent<DataflowErrorSer, T, Diff>>
+where
+    T: MzTimestamp,
+    L: FnMut(DatumSeq<'_>, &[(DatumSeq<'_>, Diff)], &mut Vec<(DataflowErrorSer, Diff)>) + 'static,
+{
+    let push = |buf: &mut <RowErrBuilder<T, Diff> as Builder>::Input,
+                key: DatumSeq<'_>,
+                updates: &mut Vec<(DataflowErrorSer, T, Diff)>| {
+        let key_owned: Row = <<BatchCursor<RowRowAgent<T, Diff>> as Cursor>::KeyContainer as BatchContainer>::into_owned(key);
+        push_reduced(buf, &key_owned, updates);
+    };
+    #[allow(clippy::disallowed_methods)]
+    arr.reduce_abelian::<_, RowErrBuilder<T, Diff>, RowErrSpine<T, Diff>, _>(name, logic, push)
+        .log_arrangement_size()
+}
+
+/// `reduce_abelian` from a `RowVal` input arrangement into a `RowRow` output arrangement.
+pub(crate) fn reduce_row_val_to_row_row<'s, T, V, L>(
+    arr: Arranged<'s, RowValAgent<V, T, Diff>>,
+    name: &str,
+    logic: L,
+) -> Arranged<'s, RowRowAgent<T, Diff>>
+where
+    T: MzTimestamp,
+    V: Data + Columnation,
+    L: FnMut(DatumSeq<'_>, &[(&V, Diff)], &mut Vec<(Row, Diff)>) + 'static,
+{
+    let push = |buf: &mut <RowRowBuilder<T, Diff> as Builder>::Input,
+                key: DatumSeq<'_>,
+                updates: &mut Vec<(Row, T, Diff)>| {
+        let key_owned: Row = <<BatchCursor<RowValAgent<V, T, Diff>> as Cursor>::KeyContainer as BatchContainer>::into_owned(key);
+        push_reduced(buf, &key_owned, updates);
+    };
+    #[allow(clippy::disallowed_methods)]
+    arr.reduce_abelian::<_, RowRowBuilder<T, Diff>, RowRowSpine<T, Diff>, _>(name, logic, push)
+        .log_arrangement_size()
+}
+
+/// `reduce_abelian` from a `RowVal` input arrangement into a `RowErr` output arrangement.
+pub(crate) fn reduce_row_val_to_row_err<'s, T, V, L>(
+    arr: Arranged<'s, RowValAgent<V, T, Diff>>,
+    name: &str,
+    logic: L,
+) -> Arranged<'s, RowValAgent<DataflowErrorSer, T, Diff>>
+where
+    T: MzTimestamp,
+    V: Data + Columnation,
+    L: FnMut(DatumSeq<'_>, &[(&V, Diff)], &mut Vec<(DataflowErrorSer, Diff)>) + 'static,
+{
+    let push = |buf: &mut <RowErrBuilder<T, Diff> as Builder>::Input,
+                key: DatumSeq<'_>,
+                updates: &mut Vec<(DataflowErrorSer, T, Diff)>| {
+        let key_owned: Row = <<BatchCursor<RowValAgent<V, T, Diff>> as Cursor>::KeyContainer as BatchContainer>::into_owned(key);
+        push_reduced(buf, &key_owned, updates);
+    };
+    #[allow(clippy::disallowed_methods)]
+    arr.reduce_abelian::<_, RowErrBuilder<T, Diff>, RowErrSpine<T, Diff>, _>(name, logic, push)
+        .log_arrangement_size()
+}
+
+/// `reduce_abelian` from a `Row` (unit-valued) input arrangement into a `RowRow` output
+/// arrangement. Generic over the input diff `R`.
+pub(crate) fn reduce_row_to_row_row<'s, T, R, L>(
+    arr: Arranged<'s, RowAgent<T, R>>,
+    name: &str,
+    logic: L,
+) -> Arranged<'s, RowRowAgent<T, Diff>>
+where
+    T: MzTimestamp,
+    R: Semigroup + Data + Columnation,
+    L: FnMut(DatumSeq<'_>, &[(&(), R)], &mut Vec<(Row, Diff)>) + 'static,
+{
+    let push = |buf: &mut <RowRowBuilder<T, Diff> as Builder>::Input,
+                key: DatumSeq<'_>,
+                updates: &mut Vec<(Row, T, Diff)>| {
+        let key_owned: Row =
+            <<BatchCursor<RowAgent<T, R>> as Cursor>::KeyContainer as BatchContainer>::into_owned(
+                key,
+            );
+        push_reduced(buf, &key_owned, updates);
+    };
+    #[allow(clippy::disallowed_methods)]
+    arr.reduce_abelian::<_, RowRowBuilder<T, Diff>, RowRowSpine<T, Diff>, _>(name, logic, push)
+        .log_arrangement_size()
+}
+
+/// `reduce_abelian` from a `Row` (unit-valued) input arrangement into a `RowErr` output
+/// arrangement. Generic over the input diff `R`.
+pub(crate) fn reduce_row_to_row_err<'s, T, R, L>(
+    arr: Arranged<'s, RowAgent<T, R>>,
+    name: &str,
+    logic: L,
+) -> Arranged<'s, RowValAgent<DataflowErrorSer, T, Diff>>
+where
+    T: MzTimestamp,
+    R: Semigroup + Data + Columnation,
+    L: FnMut(DatumSeq<'_>, &[(&(), R)], &mut Vec<(DataflowErrorSer, Diff)>) + 'static,
+{
+    let push = |buf: &mut <RowErrBuilder<T, Diff> as Builder>::Input,
+                key: DatumSeq<'_>,
+                updates: &mut Vec<(DataflowErrorSer, T, Diff)>| {
+        let key_owned: Row =
+            <<BatchCursor<RowAgent<T, R>> as Cursor>::KeyContainer as BatchContainer>::into_owned(
+                key,
+            );
+        push_reduced(buf, &key_owned, updates);
+    };
+    #[allow(clippy::disallowed_methods)]
+    arr.reduce_abelian::<_, RowErrBuilder<T, Diff>, RowErrSpine<T, Diff>, _>(name, logic, push)
+        .log_arrangement_size()
+}
+
+/// `reduce_abelian` from a `Row` (unit-valued) input arrangement into a `Row` (unit-valued) output
+/// arrangement. Generic over the input diff `R`.
+pub(crate) fn reduce_row_to_row<'s, T, R, L>(
+    arr: Arranged<'s, RowAgent<T, R>>,
+    name: &str,
+    logic: L,
+) -> Arranged<'s, RowAgent<T, Diff>>
+where
+    T: MzTimestamp,
+    R: Semigroup + Data + Columnation,
+    L: FnMut(DatumSeq<'_>, &[(&(), R)], &mut Vec<((), Diff)>) + 'static,
+{
+    let push = |buf: &mut <RowBuilder<T, Diff> as Builder>::Input,
+                key: DatumSeq<'_>,
+                updates: &mut Vec<((), T, Diff)>| {
+        let key_owned: Row =
+            <<BatchCursor<RowAgent<T, R>> as Cursor>::KeyContainer as BatchContainer>::into_owned(
+                key,
+            );
+        push_reduced(buf, &key_owned, updates);
+    };
+    #[allow(clippy::disallowed_methods)]
+    arr.reduce_abelian::<_, RowBuilder<T, Diff>, RowSpine<T, Diff>, _>(name, logic, push)
+        .log_arrangement_size()
+}
+
+/// `reduce_abelian` from an `Err` (error-keyed, unit-valued) input arrangement into an `Err`
+/// output arrangement.
+pub(crate) fn reduce_err_to_err<'s, T, L>(
+    arr: Arranged<'s, ErrAgent<T, Diff>>,
+    name: &str,
+    logic: L,
+) -> Arranged<'s, ErrAgent<T, Diff>>
+where
+    T: MzTimestamp,
+    L: FnMut(&DataflowErrorSer, &[(&(), Diff)], &mut Vec<((), Diff)>) + 'static,
+{
+    let push = |buf: &mut <ErrBuilder<T, Diff> as Builder>::Input,
+                key: &DataflowErrorSer,
+                updates: &mut Vec<((), T, Diff)>| {
+        let key_owned: DataflowErrorSer = <<BatchCursor<ErrAgent<T, Diff>> as Cursor>::KeyContainer as BatchContainer>::into_owned(key);
+        push_reduced(buf, &key_owned, updates);
+    };
+    #[allow(clippy::disallowed_methods)]
+    arr.reduce_abelian::<_, ErrBuilder<T, Diff>, ErrSpine<T, Diff>, _>(name, logic, push)
+        .log_arrangement_size()
 }

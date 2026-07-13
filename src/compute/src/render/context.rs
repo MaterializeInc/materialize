@@ -15,8 +15,9 @@ use std::rc::Rc;
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::trace::cursor::{BatchCursor, BatchKey, BatchVal};
 use differential_dataflow::trace::implementations::BatchContainer;
-use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
+use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 use differential_dataflow::{AsCollection, Data, VecCollection};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::{
@@ -687,7 +688,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// rationale.
     fn flat_map_core_fallible<Tr, D, DCB, L>(
         trace: Arranged<'scope, Tr>,
-        key: Option<&<Tr::KeyContainer as BatchContainer>::Owned>,
+        key: Option<&<<BatchCursor<Tr> as Cursor>::KeyContainer as BatchContainer>::Owned>,
         max_demand: usize,
         mut logic: L,
         refuel: usize,
@@ -696,14 +697,13 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         Stream<'scope, T, Vec<(DataflowErrorSer, T, Diff)>>,
     )
     where
-        Tr: for<'a> TraceReader<
-                Key<'a>: ExtendDatums,
-                Val<'a>: ExtendDatums,
-                Time = T,
-                Diff = mz_repr::Diff,
-            > + Clone
-            + 'static,
-        <Tr::KeyContainer as BatchContainer>::Owned: PartialEq,
+        // `master-next` moved the key/val/diff opinions off `TraceReader` onto the batch
+        // cursor, so the navigation bounds live on `BatchCursor<Tr>` and the batch must be
+        // `Navigable` to hand out a cursor.
+        Tr: TraceReader<Batch: Navigable, Time = T> + Clone + 'static,
+        for<'a> BatchCursor<Tr>:
+            Cursor<Key<'a>: ExtendDatums, Val<'a>: ExtendDatums, Time = T, Diff = mz_repr::Diff>,
+        <<BatchCursor<Tr> as Cursor>::KeyContainer as BatchContainer>::Owned: PartialEq,
         D: Data,
         DCB: ContainerBuilder + PushInto<(D, T, Diff)>,
         // `logic` receives the key and value already decoded into a `DatumVecBorrow`. The decode
@@ -720,7 +720,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     {
         let scope = trace.stream.scope();
 
-        let mut key_con = Tr::KeyContainer::with_capacity(1);
+        let mut key_con = <BatchCursor<Tr> as Cursor>::KeyContainer::with_capacity(1);
         if let Some(key) = &key {
             key_con.push_own(key);
         }
@@ -768,8 +768,8 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 let mut temp_storage = RowArena::new();
                 let mut datums = DatumVec::new();
                 let mut decode_logic =
-                    |k: Tr::Key<'_>,
-                     v: Tr::Val<'_>,
+                    |k: BatchKey<'_, Tr>,
+                     v: BatchVal<'_, Tr>,
                      t: T,
                      d: mz_repr::Diff,
                      ok_session: &mut Session<T, DCB>,
@@ -813,20 +813,17 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// and the empty err stream that would follow it.
     fn flat_map_core_ok<Tr, D, DCB, L>(
         trace: Arranged<'scope, Tr>,
-        key: Option<&<Tr::KeyContainer as BatchContainer>::Owned>,
+        key: Option<&<<BatchCursor<Tr> as Cursor>::KeyContainer as BatchContainer>::Owned>,
         max_demand: usize,
         mut logic: L,
         refuel: usize,
     ) -> Stream<'scope, T, DCB::Container>
     where
-        Tr: for<'a> TraceReader<
-                Key<'a>: ExtendDatums,
-                Val<'a>: ExtendDatums,
-                Time = T,
-                Diff = mz_repr::Diff,
-            > + Clone
-            + 'static,
-        <Tr::KeyContainer as BatchContainer>::Owned: PartialEq,
+        // See `flat_map_core_fallible` for the `master-next` cursor-bound migration.
+        Tr: TraceReader<Batch: Navigable, Time = T> + Clone + 'static,
+        for<'a> BatchCursor<Tr>:
+            Cursor<Key<'a>: ExtendDatums, Val<'a>: ExtendDatums, Time = T, Diff = mz_repr::Diff>,
+        <<BatchCursor<Tr> as Cursor>::KeyContainer as BatchContainer>::Owned: PartialEq,
         D: Data,
         DCB: ContainerBuilder + PushInto<(D, T, Diff)>,
         // See `flat_map_core_fallible`: `logic` takes already-decoded datums; the decode lives in
@@ -841,7 +838,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     {
         let scope = trace.stream.scope();
 
-        let mut key_con = Tr::KeyContainer::with_capacity(1);
+        let mut key_con = <BatchCursor<Tr> as Cursor>::KeyContainer::with_capacity(1);
         if let Some(key) = &key {
             key_con.push_own(key);
         }
@@ -876,8 +873,8 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 let mut temp_storage = RowArena::new();
                 let mut datums = DatumVec::new();
                 let mut decode_logic =
-                    |k: Tr::Key<'_>,
-                     v: Tr::Val<'_>,
+                    |k: BatchKey<'_, Tr>,
+                     v: BatchVal<'_, Tr>,
                      t: T,
                      d: mz_repr::Diff,
                      ok_session: &mut Session<T, DCB>| {

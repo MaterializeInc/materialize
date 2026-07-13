@@ -115,7 +115,8 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::arrange::ShutdownButton;
 use differential_dataflow::operators::iterate::Variable;
-use differential_dataflow::trace::{BatchReader, TraceReader};
+use differential_dataflow::trace::cursor::{BatchCursor, BatchDiff, BatchKey, BatchVal};
+use differential_dataflow::trace::{BatchReader, Cursor, Navigable, TraceReader};
 use differential_dataflow::{AsCollection, Data, VecCollection};
 use futures::FutureExt;
 use futures::channel::oneshot;
@@ -158,7 +159,7 @@ use timely::worker::Worker as TimelyWorker;
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
-use crate::extensions::reduce::MzReduce;
+use crate::extensions::reduce::reduce_err_to_err;
 use crate::extensions::temporal_bucket::TemporalBucketing;
 use crate::logging::compute::{
     ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors, OperatorHydration,
@@ -564,18 +565,19 @@ where
     /// that we'll filter those out later if necessary.)
     fn import_filtered_index_collection<
         'outer,
-        Tr: TraceReader<Time = mz_repr::Timestamp> + Clone,
+        Tr: TraceReader<Time = mz_repr::Timestamp, Batch: Navigable> + Clone,
         V: Data,
     >(
         &self,
         arranged: Arranged<'outer, Tr>,
         start_signal: StartSignal,
-        mut logic: impl FnMut(Tr::Key<'_>, Tr::Val<'_>) -> V + 'static,
-    ) -> VecCollection<'g, T, V, Tr::Diff>
+        mut logic: impl FnMut(BatchKey<'_, Tr>, BatchVal<'_, Tr>) -> V + 'static,
+    ) -> VecCollection<'g, T, V, BatchDiff<Tr>>
     where
         // This is implied by the fact that the outer timestamp = mz_repr::Timestamp, but it's essential
         // for our batch-level filtering to be safe, so we document it here regardless.
         mz_repr::Timestamp: TotalOrder,
+        BatchCursor<Tr>: Cursor<Time = mz_repr::Timestamp>,
     {
         let oks = arranged.stream.with_start_signal(start_signal).filter({
             let as_of = self.as_of_frontier.clone();
@@ -969,20 +971,17 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                 // than a clean report of the error. The trade-off is that we lose information about
                 // multiplicities of errors, but .. this seems to be the better call.
                 let err: KeyCollection<_, _, _> = err.into();
-                let errs = err
-                    .mz_arrange::<
+                let errs = reduce_err_to_err(
+                    err.mz_arrange::<
                         ColumnationChunker<_>,
                         ErrBatcher<_, _>,
                         ErrBuilder<_, _>,
                         ErrSpine<_, _>,
-                    >(
-                        "Arrange recursive err",
-                    )
-                    .mz_reduce_abelian::<_, ErrBuilder<_, _>, ErrSpine<_, _>>(
-                        "Distinct recursive err",
-                        move |_k, _s, t| t.push(((), Diff::ONE)),
-                    )
-                    .as_collection(|k, _| k.clone());
+                    >("Arrange recursive err"),
+                    "Distinct recursive err",
+                    move |_k, _s, t| t.push(((), Diff::ONE)),
+                )
+                .as_collection(|k, _| k.clone());
 
                 oks_v.set(oks);
                 err_v.set(errs);
