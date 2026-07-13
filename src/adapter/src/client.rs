@@ -1505,13 +1505,16 @@ pub const REDACTED_STATEMENT_TEXT: &str = "<redacted>";
 ///
 /// Arrival logging runs before parsing (so that it catches statements that
 /// crash the parser), which rules out precise AST-based redaction. Instead we
-/// sniff for keywords. Statements that carry inline sensitive values
-/// (`CREATE SECRET`, `ALTER ROLE ... PASSWORD`, inline connection
-/// credentials) always contain one of the keywords. A false positive merely
-/// withholds one log line's text.
+/// sniff for keywords. Statements that carry inline sensitive values always
+/// contain one of the keywords: `CREATE SECRET`, `ALTER ROLE ... PASSWORD`,
+/// and the `CREATE CONNECTION` options that accept inline values (`PASSWORD`,
+/// `SASL PASSWORD`, `SECRET ACCESS KEY`, `CREDENTIAL`, `SESSION TOKEN`). A
+/// false positive merely withholds one log line's text.
 pub fn statement_might_contain_secret(text: &str) -> bool {
     let text = text.to_lowercase();
-    text.contains("secret") || text.contains("password")
+    ["secret", "password", "credential", "token"]
+        .iter()
+        .any(|keyword| text.contains(keyword))
 }
 
 #[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Debug)]

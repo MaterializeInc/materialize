@@ -1397,17 +1397,20 @@ pub static ENABLE_INTERNAL_STATEMENT_LOGGING: VarDefinition = VarDefinition::new
 
 /// When on, the SQL frontends log incoming statements and other frontend
 /// messages at info level as soon as they arrive, before processing them.
+///
 /// This is an emergency diagnostic for statements that crash the process
 /// before they reach the statement log (or before its contents are written
-/// out to persist).
+/// out to persist). It adds a lot of log volume, so use it only in emergencies,
+/// i.e. to debug active incidents.
+///
+/// Redaction is best-effort, based on just string matching, see
+/// `statement_might_contain_secret`.
 pub static ENABLE_STATEMENT_ARRIVAL_LOGGING: VarDefinition = VarDefinition::new(
     "enable_statement_arrival_logging",
-    // Default to off, because:
-    // - the logged text is not redacted;
-    // - adds a lot of log-volume.
     value!(bool; false),
     "Whether to log every incoming statement and other frontend message at info \
-    level as it arrives at the SQL frontends, before processing.",
+    level as it arrives at the SQL frontends, before processing. Use it only in emergencies, i.e. \
+    debugging active incidents.",
     false,
 );
 
