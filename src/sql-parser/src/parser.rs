@@ -1556,7 +1556,10 @@ impl<'a> Parser<'a> {
                 Some(Token::Keyword(kw)) => namespace.push(kw.into()),
                 Some(Token::Ident(id)) => namespace.push(self.new_identifier(id)?),
                 Some(Token::Op(op)) => break op,
+                // The lexer emits `*` and `=` as dedicated tokens rather than
+                // `Token::Op`, but both are valid operator names here.
                 Some(Token::Star) => break "*".to_string(),
+                Some(Token::Eq) => break "=".to_string(),
                 tok => self.expected(self.peek_prev_pos(), "operator", tok)?,
             }
             self.expect_token(&Token::Dot)?;
