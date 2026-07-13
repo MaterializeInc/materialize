@@ -1212,7 +1212,7 @@ def remove_dependencies_on_prs(
     pipeline_name: str,
     hash_check: dict[Arch, tuple[str, bool]],
 ) -> None:
-    """On PRs in test pipeline remove dependencies on the build, start up tests immediately, they keep retrying for the Docker image"""
+    """On test-pipeline PRs, let single-architecture consumers retry for their image instead of waiting for its build."""
     if pipeline_name != "test":
         return
     if (
@@ -1236,17 +1236,19 @@ def remove_dependencies_on_prs(
         if d is None:
             continue
         deps = [d] if isinstance(d, str) else list(d)
-        # Drop dependencies on builds whose image isn't published yet, so the
-        # test starts immediately and keeps retrying for the Docker image.
-        to_remove = [
-            dep
-            for dep in deps
-            if dep in build_image_exists and not build_image_exists[dep]
-        ]
-        if not to_remove:
+        build_deps = [dep for dep in deps if dep in build_image_exists]
+        # CI_WAITING_FOR_BUILD tracks one build's status. A multi-architecture
+        # consumer needs every build, so it cannot safely use that contract.
+        if len(build_deps) > 1:
             continue
-        step.setdefault("env", {})["CI_WAITING_FOR_BUILD"] = to_remove[-1]
-        remaining = [dep for dep in deps if dep not in to_remove]
+        # Drop the build dependency whose image isn't published yet, so the
+        # consumer starts immediately and keeps retrying for the Docker image.
+        missing_build_deps = [dep for dep in build_deps if not build_image_exists[dep]]
+        if not missing_build_deps:
+            continue
+        waiting_for_build = missing_build_deps[0]
+        step.setdefault("env", {})["CI_WAITING_FOR_BUILD"] = waiting_for_build
+        remaining = [dep for dep in deps if dep != waiting_for_build]
         if remaining:
             step["depends_on"] = remaining
         else:
