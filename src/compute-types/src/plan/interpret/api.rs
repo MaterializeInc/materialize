@@ -134,6 +134,15 @@ pub trait Interpreter {
     ) -> Self::Domain;
 
     /// TODO(database-issues#7533): Add documentation.
+    fn set_difference(
+        &self,
+        ctx: &Context<Self::Domain>,
+        base: Self::Domain,
+        subtract: Self::Domain,
+        ensure_arrangement: &(Vec<LirScalarExpr>, Vec<usize>, Vec<usize>),
+    ) -> Self::Domain;
+
+    /// TODO(database-issues#7533): Add documentation.
     fn arrange_by(
         &self,
         ctx: &Context<Self::Domain>,
@@ -445,6 +454,19 @@ where
                     // Interpret the current node.
                     Ok(self.interpret.union(&self.ctx, inputs, *consolidate_output))
                 }
+                SetDifference {
+                    base,
+                    subtract,
+                    ensure_arrangement,
+                } => {
+                    // Descend recursively into all children.
+                    let base = self.apply_rec(base, rg)?;
+                    let subtract = self.apply_rec(subtract, rg)?;
+                    // Interpret the current node.
+                    Ok(self
+                        .interpret
+                        .set_difference(&self.ctx, base, subtract, ensure_arrangement))
+                }
                 ArrangeBy {
                     input_key,
                     input,
@@ -755,6 +777,26 @@ where
                             .union(&self.ctx, inputs.clone(), *consolidate_output);
                     // Mutate the current node using the given `action`.
                     (self.action)(expr, &result, &inputs);
+                    // Pass the interpretation result up.
+                    Ok(result)
+                }
+                SetDifference {
+                    base,
+                    subtract,
+                    ensure_arrangement,
+                } => {
+                    // Descend recursively into all children.
+                    let base = self.apply_rec(base, rg)?;
+                    let subtract = self.apply_rec(subtract, rg)?;
+                    // Interpret the current node.
+                    let result = self.interpret.set_difference(
+                        &self.ctx,
+                        base.clone(),
+                        subtract.clone(),
+                        ensure_arrangement,
+                    );
+                    // Mutate the current node using the given `action`.
+                    (self.action)(expr, &result, &[base, subtract]);
                     // Pass the interpretation result up.
                     Ok(result)
                 }

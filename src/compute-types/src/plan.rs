@@ -421,6 +421,18 @@ pub enum LirRelationNode {
         /// for the underlying convention.
         temporal_bucketing_strategies: Vec<ArrangementStrategy>,
     },
+    /// Computes `Threshold(base - subtract)` reading two inputs co-arranged on
+    /// the difference key. Both inputs must be available arranged by the key
+    /// columns of `ensure_arrangement`. Produces one output arrangement keyed
+    /// by those columns with empty value, matching the `Threshold` it replaces.
+    SetDifference {
+        /// The positive input (minuend), arranged by the difference key.
+        base: Box<LirRelationExpr>,
+        /// The negated input (subtrahend), arranged by the difference key.
+        subtract: Box<LirRelationExpr>,
+        /// Key/permutation/thinning of the output arrangement (thinning is empty).
+        ensure_arrangement: (Vec<LirScalarExpr>, Vec<usize>, Vec<usize>),
+    },
     /// The `input` plan, but with additional arrangements.
     ///
     /// This operator does not change the logical contents of `input`, but ensures
@@ -471,6 +483,10 @@ impl LirRelationNode {
             | ArrangeBy { input, .. } => {
                 first = Some(&**input);
             }
+            SetDifference { base, subtract, .. } => {
+                first = Some(&**base);
+                second = Some(&**subtract);
+            }
             Join { inputs, .. } | Union { inputs, .. } => {
                 rest = Some(inputs);
             }
@@ -509,6 +525,10 @@ impl LirRelationNode {
             | Threshold { input, .. }
             | ArrangeBy { input, .. } => {
                 first = Some(&mut **input);
+            }
+            SetDifference { base, subtract, .. } => {
+                first = Some(&mut **base);
+                second = Some(&mut **subtract);
             }
             Join { inputs, .. } | Union { inputs, .. } => {
                 rest = Some(inputs);
@@ -836,6 +856,14 @@ impl CollectionPlan for LirRelationNode {
                 for input in inputs {
                     input.depends_on_into(out);
                 }
+            }
+            LirRelationNode::SetDifference {
+                base,
+                subtract,
+                ensure_arrangement: _,
+            } => {
+                base.depends_on_into(out);
+                subtract.depends_on_into(out);
             }
             LirRelationNode::Mfp {
                 input,

@@ -238,6 +238,19 @@ impl Interpreter for SingleTimeMonotonic<'_> {
         PhysicallyMonotonic(inputs.iter().all(|monotonic| monotonic.0))
     }
 
+    fn set_difference(
+        &self,
+        ctx: &Context<Self::Domain>,
+        _base: Self::Domain,
+        _subtract: Self::Domain,
+        _ensure_arrangement: &(Vec<LirScalarExpr>, Vec<usize>, Vec<usize>),
+    ) -> Self::Domain {
+        // `SetDifference` is a thresholded difference, so it consolidates like a
+        // reduction. The judgment matches `threshold`: physically monotonic when
+        // exposed to a single time (i.e., in a non-recursive context).
+        PhysicallyMonotonic(!ctx.is_rec)
+    }
+
     fn arrange_by(
         &self,
         _ctx: &Context<Self::Domain>,
