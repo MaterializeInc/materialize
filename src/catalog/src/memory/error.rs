@@ -128,7 +128,7 @@ impl Error {
                 Some("The prefixes \"mz_\" and \"pg_\" are reserved for system schemas.".into())
             }
             ErrorKind::ReservedRoleName(_) => {
-                Some("The role \"public\" and the prefixes \"mz_\" and \"pg_\" are reserved for system roles.".into())
+                Some("The role \"public\" and the prefixes \"mz_\" and \"pg_\" are reserved for system roles. The role specification names \"current_user\", \"current_role\", \"session_user\", \"user\", and \"none\" are also reserved.".into())
             }
             ErrorKind::ReservedSystemRoleName(_) => {
                 Some("The role prefixes \"mz_\" and \"pg_\" are reserved for system roles.".into())

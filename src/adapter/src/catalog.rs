@@ -1509,8 +1509,27 @@ pub fn is_reserved_name(name: &str) -> bool {
         .any(|prefix| name.starts_with(prefix))
 }
 
+/// Role names that PostgreSQL reserves for role specifications in statements
+/// like `GRANT ... TO CURRENT_USER` and `SET ROLE NONE`. A role with such a
+/// name would be ambiguous there, so creating one is not allowed.
+///
+/// PostgreSQL rejects most of these at parse time, only when they appear as
+/// unquoted keywords. Our parser does not track whether an identifier was
+/// quoted, so we instead reject the names themselves. Only the lowercase
+/// spellings are reserved, which is what the unquoted forms normalize to, so
+/// quoted names like `"CURRENT_USER"` remain valid, as in PostgreSQL.
+const RESERVED_ROLE_SPECIFICATION_NAMES: [&str; 5] = [
+    "current_user",
+    "current_role",
+    "session_user",
+    "user",
+    "none",
+];
+
 pub fn is_reserved_role_name(name: &str) -> bool {
-    is_reserved_name(name) || is_public_role(name)
+    is_reserved_name(name)
+        || is_public_role(name)
+        || RESERVED_ROLE_SPECIFICATION_NAMES.contains(&name)
 }
 
 pub fn is_public_role(name: &str) -> bool {
