@@ -4939,6 +4939,7 @@ pub fn unplan_create_cluster(
             let schedule = unplan_cluster_schedule(schedule);
             let OptimizerFeatureOverrides {
                 enable_reduce_mfp_fusion: _,
+                enable_fused_set_difference: _,
                 enable_cardinality_estimates: _,
                 persist_fast_path_limit: _,
                 reoptimize_imported_views,
