@@ -3107,6 +3107,11 @@ def apply_materialize(definition: dict[str, Any]) -> None:
         defs.append(definition["system_params_configmap"])
     yaml_str = yaml.dump_all(defs)
     print(f"Attempting to apply:\n{yaml_str}")
+    transient_webhook_errors = (
+        "connection refused",
+        "deadline exceeded",
+        "i/o timeout",
+    )
     max_attempts = 120
     for attempt in range(max_attempts):
         result = subprocess.run(
@@ -3117,8 +3122,10 @@ def apply_materialize(definition: dict[str, Any]) -> None:
         if result.returncode == 0:
             break
         stderr_str = result.stderr.decode(errors="replace")
-        if attempt < max_attempts - 1 and "connection refused" in stderr_str:
-            print(f"Webhook not yet reachable (attempt {attempt + 1}), retrying...")
+        if attempt < max_attempts - 1 and any(
+            err in stderr_str for err in transient_webhook_errors
+        ):
+            print(f"Webhook not yet ready (attempt {attempt + 1}), retrying...")
             time.sleep(2)
             continue
         print(f"Failed to apply: {result.stdout}\nSTDERR:{result.stderr}")
