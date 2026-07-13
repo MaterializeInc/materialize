@@ -22,16 +22,20 @@ pub mod error;
 pub mod metrics;
 
 use std::fmt::Write;
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use deadpool_postgres::tokio_postgres::Config;
+use async_trait::async_trait;
+use deadpool::managed::{self, Hook, HookError, HookErrorCause, Object, Pool, RecycleResult};
+use deadpool_postgres::tokio_postgres::{self, Config};
 use deadpool_postgres::{
-    Hook, HookError, HookErrorCause, Manager, ManagerConfig, Object, Pool, PoolError,
+    ClientWrapper as DeadpoolClient, Manager as PgManager, ManagerConfig, PoolError,
     RecyclingMethod, Runtime, Status,
 };
 use mz_ore::cast::{CastFrom, CastLossy};
+use mz_ore::metrics::Counter;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::url::SensitiveUrl;
 use tracing::debug;
@@ -94,6 +98,103 @@ impl IsolationLevel {
 /// creation, so a dyncfg-backed resolver lets a change take effect as the pool cycles connections.
 pub type IsolationLevelFn = Arc<dyn Fn() -> IsolationLevel + Send + Sync>;
 
+/// A connection handed out by [`PostgresClient::get_connection`]. Dereferences to a [`Client`],
+/// which additionally records the [`IsolationLevel`] the connection was created under.
+pub type Connection = Object<Manager>;
+
+/// A pooled Postgres connection tagged with the [`IsolationLevel`] it was created under.
+///
+/// The isolation level is applied once at creation and is fixed for the life of the connection.
+#[derive(Debug)]
+pub struct Client {
+    inner: DeadpoolClient,
+    isolation: IsolationLevel,
+}
+
+impl Client {
+    /// The [`IsolationLevel`] this connection was configured with when it was created.
+    pub fn isolation_level(&self) -> IsolationLevel {
+        self.isolation
+    }
+}
+
+impl Deref for Client {
+    type Target = DeadpoolClient;
+
+    fn deref(&self) -> &DeadpoolClient {
+        &self.inner
+    }
+}
+
+impl DerefMut for Client {
+    fn deref_mut(&mut self) -> &mut DeadpoolClient {
+        &mut self.inner
+    }
+}
+
+/// A deadpool [`managed::Manager`] wrapping [`deadpool_postgres::Manager`]. It applies a
+/// per-connection isolation level at creation and records that level on every [`Client`] it hands
+/// out.
+pub struct Manager {
+    inner: PgManager,
+    /// Resolves the isolation level to apply. Invoked once per connection so a dyncfg-backed
+    /// resolver takes effect as the pool cycles connections.
+    isolation: IsolationLevelFn,
+    knobs: Arc<dyn PostgresClientKnobs>,
+    connections_created: Counter,
+}
+
+impl std::fmt::Debug for Manager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Manager")
+            .field("inner", &self.inner)
+            .finish_non_exhaustive()
+    }
+}
+
+#[async_trait]
+impl managed::Manager for Manager {
+    type Type = Client;
+    type Error = tokio_postgres::Error;
+
+    async fn create(&self) -> Result<Client, tokio_postgres::Error> {
+        let inner = self.inner.create().await?;
+        self.connections_created.inc();
+
+        // Resolved per connection so a dyncfg-backed isolation level takes effect as the pool
+        // cycles connections. Defaults to SERIALIZABLE (see `PostgresClientConfig::new`).
+        let isolation = (self.isolation)();
+        let mut setup = isolation.set_characteristics_sql().to_owned();
+        // A zero `statement_timeout` is our sentinel for "leave it unset". We only emit the `SET`
+        // when non-zero so we don't override a timeout configured out of band.
+        let statement_timeout = self.knobs.statement_timeout();
+        if !statement_timeout.is_zero() {
+            // A bare integer value for `statement_timeout` is interpreted as milliseconds.
+            write!(
+                setup,
+                "; SET statement_timeout = {}",
+                statement_timeout.as_millis()
+            )
+            .expect("writing to a String never fails");
+        }
+        debug!("opened new postgres connection");
+        // This must surface as `tokio_postgres::Error` (the pool's error type); using
+        // `mz_postgres_util` wrappers would change the error type.
+        #[allow(clippy::disallowed_methods)]
+        inner.batch_execute(&setup).await?;
+
+        Ok(Client { inner, isolation })
+    }
+
+    async fn recycle(&self, client: &mut Client) -> RecycleResult<tokio_postgres::Error> {
+        self.inner.recycle(&mut client.inner).await
+    }
+
+    fn detach(&self, client: &mut Client) {
+        self.inner.detach(&mut client.inner)
+    }
+}
+
 /// Configuration for creating a [PostgresClient].
 #[derive(Clone)]
 pub struct PostgresClientConfig {
@@ -136,7 +237,7 @@ impl PostgresClientConfig {
 
 /// A Postgres client wrapper that uses deadpool as a connection pool.
 pub struct PostgresClient {
-    pool: Pool,
+    pool: Pool<Manager>,
     metrics: PostgresClientMetrics,
 }
 
@@ -166,19 +267,24 @@ impl PostgresClient {
             mz_tls_util::TlsError::OpenSsl(e) => PostgresError::Indeterminate(anyhow::anyhow!(e)),
         })?;
 
-        let manager = Manager::from_config(
+        let pg_manager = PgManager::from_config(
             pg_config,
             tls,
             ManagerConfig {
                 recycling_method: RecyclingMethod::Fast,
             },
         );
+        // The isolation level and `statement_timeout` are applied inside `Manager::create` so the
+        // resolved level can be recorded on each connection it hands out.
+        let manager = Manager {
+            inner: pg_manager,
+            isolation: Arc::clone(&config.isolation),
+            knobs: Arc::clone(&config.knobs),
+            connections_created: config.metrics.connpool_connections_created.clone(),
+        };
 
         let last_ttl_connection = AtomicU64::new(0);
-        let connections_created = config.metrics.connpool_connections_created.clone();
         let ttl_reconnections = config.metrics.connpool_ttl_reconnections.clone();
-        let knobs = Arc::clone(&config.knobs);
-        let isolation = Arc::clone(&config.isolation);
         let builder = Pool::builder(manager);
         let builder = match config.knobs.connection_pool_max_wait() {
             None => builder,
@@ -186,38 +292,6 @@ impl PostgresClient {
         };
         let pool = builder
             .max_size(config.knobs.connection_pool_max_size())
-            .post_create(Hook::async_fn(move |client, _| {
-                connections_created.inc();
-                let knobs = Arc::clone(&knobs);
-                // Resolved per connection so a dyncfg-backed isolation level takes effect as the
-                // pool cycles connections. Defaults to SERIALIZABLE (see `new`).
-                let isolation = Arc::clone(&isolation);
-                Box::pin(async move {
-                    debug!("opened new consensus postgres connection");
-                    let mut setup = isolation().set_characteristics_sql().to_owned();
-                    // A zero `statement_timeout` is our sentinel for "leave it
-                    // unset". We only emit the `SET` when non-zero so we don't
-                    // override a timeout configured out of band.
-                    let statement_timeout = knobs.statement_timeout();
-                    if !statement_timeout.is_zero() {
-                        // A bare integer value for `statement_timeout` is
-                        // interpreted as milliseconds.
-                        write!(
-                            setup,
-                            "; SET statement_timeout = {}",
-                            statement_timeout.as_millis()
-                        )
-                        .expect("writing to a String never fails");
-                    }
-                    // This hook must return `tokio_postgres::Error`; using
-                    // `mz_postgres_util` wrappers would change the error type.
-                    #[allow(clippy::disallowed_methods)]
-                    client
-                        .batch_execute(&setup)
-                        .await
-                        .map_err(|e| HookError::Abort(HookErrorCause::Backend(e)))
-                })
-            }))
             .pre_recycle(Hook::sync_fn(move |_client, conn_metrics| {
                 // proactively TTL connections to rebalance load to Postgres/CRDB. this helps
                 // fix skew when downstream DB operations (e.g. CRDB rolling restart) result
@@ -265,7 +339,7 @@ impl PostgresClient {
     }
 
     /// Gets connection from the pool or waits for one to become available.
-    pub async fn get_connection(&self) -> Result<Object, PoolError> {
+    pub async fn get_connection(&self) -> Result<Connection, PoolError> {
         let start = Instant::now();
         // note that getting the pool size here requires briefly locking the pool
         self.status_metrics(self.pool.status());
