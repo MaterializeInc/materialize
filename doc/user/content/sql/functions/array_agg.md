@@ -23,10 +23,7 @@ _value_ | [any](../../types) | The values you want aggregated.
 
 `array_agg` returns the aggregated values as an [array](../../types/array/).
 
-Any `ORDER BY` applied to the input rows, for example in a feeding subquery, is
-ignored. The order in which values are aggregated is otherwise unspecified. To
-aggregate in a specific order, specify `ORDER BY` within the aggregate function
-call itself.
+{{% include-headless "/headless/aggregate-input-order-ignored" %}}
 
 ## Details
 

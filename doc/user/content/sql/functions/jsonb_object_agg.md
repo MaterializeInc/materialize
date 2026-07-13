@@ -31,10 +31,7 @@ pair is retained in the output.
 
 If `keys` is null for any input row, that entry pair will be dropped.
 
-Any `ORDER BY` applied to the input rows, for example in a feeding subquery, is
-ignored. The order in which values are aggregated is otherwise unspecified. To
-aggregate in a specific order, specify `ORDER BY` within the aggregate function
-call itself.
+{{% include-headless "/headless/aggregate-input-order-ignored" %}}
 
 ### Usage in dataflows
 
