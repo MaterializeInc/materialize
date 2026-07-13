@@ -323,32 +323,22 @@ for rt in RANGE_TYPES:
 # ]
 
 
-# Boundary / edge-case literals, injected at low probability as leaves of
-# read/filter expressions (ExprKind.ALL only). They feed arithmetic and filters
-# to stress overflow/eval paths (the class behind the filter-pushdown
-# float-overflow finding). The errors they can produce (overflow, out of range,
-# division by zero) are already tolerated by the read actions.
+# Edge-case literals injected at low probability as leaves of read/filter
+# expressions (ExprKind.ALL only), to surface NaN/Infinity handling in
+# arithmetic, comparisons, and aggregation. The generator's `Float` is float4,
+# so these MUST be float4: a wider literal (float8/int8) injected where a float4
+# is expected breaks function overload resolution (e.g. round(numeric, bigint)),
+# producing spurious failures rather than findings.
 #
-# NOTE: deliberately no extreme-year date/timestamp literals. A 6-digit year
-# deterministically trips the known SS-345 date-parser bug in every context,
-# which would just spam a known-unfixed issue rather than find new ones. Restore
-# them once SS-345 is fixed.
+# Scope is deliberately narrow: NaN/Infinity are the genuinely-new coverage
+# (random_value never produces them). Numeric/int boundary and overflow values
+# are NOT injected here, because the existing LARGE record size already
+# generates overflow-inducing magnitudes and mis-widthed literals only break
+# overload resolution. Extreme-year date/timestamp literals are also omitted:
+# a 6-digit year deterministically trips the known SS-345 date-parser bug in
+# every context, spamming a known-unfixed issue rather than finding new ones.
 EDGE_VALUES: dict[type, list[str]] = {
-    Float: [
-        "'NaN'::float8",
-        "'Infinity'::float8",
-        "'-Infinity'::float8",
-        "1e38::float4",
-        "(-1e38)::float4",
-        "1e308::float8",
-    ],
-    Numeric: ["0::numeric", "9.9e38::numeric", "(-9.9e38)::numeric"],
-    Int: [
-        "2147483647::int4",
-        "(-2147483648)::int4",
-        "9223372036854775807::int8",
-        "(-9223372036854775808)::int8",
-    ],
+    Float: ["'NaN'::float4", "'Infinity'::float4", "'-Infinity'::float4"],
 }
 
 
