@@ -13,20 +13,19 @@ below.
 
 ## License Key with the `ory` Entitlement
 
-{{< yaml-table data="self_managed/license_key" >}}
+The enterprise SSO stack requires a Materialize enterprise license whose JWT
+carries the `ory` entitlement. Community licenses don't include this
+entitlement, and licenses issued before the entitlement existed will keep
+working for Materialize itself but will be rejected by the Ory registry
+proxy. Contact
+[Materialize support](https://materialize.com/docs/support/) to have an
+ory-enabled key issued.
 
 The Ory components ship as private OEL (Ory Enterprise License) images.
 Materialize hosts a registry proxy at `ory.registry.cloud.materialize.com`
 that pulls these images on behalf of customers. Authentication to the proxy
 uses your Materialize license key JWT (passed as the password in a Kubernetes
 `imagePullSecret`), so there is no separate Ory credential to manage.
-
-The enterprise SSO stack requires a Materialize **enterprise** license whose
-JWT carries the `ory` entitlement. Community licenses do not include this
-entitlement and cannot pull the OEL images. If your existing license was
-issued before the `ory` entitlement existed, contact Materialize sales or
-support to have a replacement key issued; the old key will continue to work
-for Materialize itself but the Ory registry proxy will reject it.
 
 {{< note >}}
 The license key is also used by Materialize itself; the same JWT covers both.
