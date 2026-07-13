@@ -562,3 +562,79 @@ simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_fused_set_difference = off
 ----
 COMPLETE 0
+
+# Result equivalence for the fused SetDifference recognizer (CLU-168, Task 5).
+#
+# The EXPLAIN goldens above prove the recognizer fires on these two shapes
+# when `enable_fused_set_difference` is on. This section proves the rewrite
+# is behavior-preserving: the same queries return the same rows whether the
+# flag is on or off.
+
+# EXCEPT case. sd_base gets {1, 1, 2, 3} (a duplicate to exercise dedup),
+# sd_sub gets {2, 3, 4}. sd_base minus sd_sub, deduplicated, is {1}.
+statement ok
+INSERT INTO sd_base VALUES (1), (1), (2), (3)
+
+statement ok
+INSERT INTO sd_sub VALUES (2), (3), (4)
+
+# Flag OFF (the default): baseline result.
+query I
+SELECT k FROM sd_base EXCEPT SELECT k FROM sd_sub;
+----
+1
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_fused_set_difference = on
+----
+COMPLETE 0
+
+# Flag ON: same result. The physical plan for this exact query now uses
+# `SetDifference` (see the EXPLAIN golden earlier in this file).
+query I
+SELECT k FROM sd_base EXCEPT SELECT k FROM sd_sub;
+----
+1
+
+# LEFT JOIN anti-side case. Extend the `left`/`right1`/`right2` fixture with
+# rows that exercise both a match and a miss on each anti-branch:
+#   x=0: no right1 row (anti-side NULL fill), matches right2.
+#   x=1: matches right1 (via right1_keyed), no right2 row (anti-side NULL fill).
+#   x=2: no right1 row (anti-side NULL fill), matches right2's new row.
+statement ok
+INSERT INTO left VALUES (1, 10), (2, 20)
+
+statement ok
+INSERT INTO right1 VALUES (1, 100)
+
+statement ok
+INSERT INTO right2 VALUES (2, 200)
+
+# Flag is still ON from above. Hand-verified per the join semantics noted above.
+query IIIIII rowsort
+select *
+from
+  left
+  LEFT JOIN right1_keyed ON left.x = right1_keyed.x
+  LEFT JOIN right2 ON left.x = right2.x;
+----
+0  0   NULL  NULL  0  0
+1  10  1     100   NULL  NULL
+2  20  NULL  NULL  2  200
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_fused_set_difference = off
+----
+COMPLETE 0
+
+# Flag OFF mirror: same rows, recognizer dormant.
+query IIIIII rowsort
+select *
+from
+  left
+  LEFT JOIN right1_keyed ON left.x = right1_keyed.x
+  LEFT JOIN right2 ON left.x = right2.x;
+----
+0  0   NULL  NULL  0  0
+1  10  1     100   NULL  NULL
+2  20  NULL  NULL  2  200
