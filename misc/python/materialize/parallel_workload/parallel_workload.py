@@ -619,7 +619,13 @@ def parse_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--azurite", action="store_true", help="Use Azurite as blob store instead of S3"
     )
-    parser.add_argument("--replicas", type=int, default=2, help="use multiple replicas")
+    # Default 1: a multi-replica quickstart is the workload's peek/index target,
+    # and every replica independently maintains the same (possibly join-heavy)
+    # dataflows, so N replicas multiply clusterd memory N-fold. On the 24 GiB CI
+    # agent 2 replicas were the confirmed cause of the recurring clusterd OOM
+    # (both quickstart replicas SIGKILL'd). Multi-replica behavior is still
+    # exercised via the workload's user clusters (MAX_CLUSTER_REPLICAS).
+    parser.add_argument("--replicas", type=int, default=1, help="use multiple replicas")
 
 
 def main() -> int:
