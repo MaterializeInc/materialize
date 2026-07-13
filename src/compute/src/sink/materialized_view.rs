@@ -1180,6 +1180,8 @@ mod write {
                 self.schemas.clone(),
                 desc.lower.clone(),
                 desc.upper.clone(),
+                // The barrier discipline is only wired up in the sync (v2) sink.
+                None,
             );
             self.batch_description = Some((desc, cap, shared_writer));
             self.trace("set batch description");

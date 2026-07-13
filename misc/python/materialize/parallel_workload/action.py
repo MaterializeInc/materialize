@@ -1556,6 +1556,9 @@ class FlipFlagsAction(Action):
         self.flags_with_values["enable_compute_sync_mv_sink_shared_batches"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values["enable_compute_sync_mv_sink_shared_batches_barrier"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["enable_public_metrics_endpoint"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_scoped_system_parameters"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["persist_batch_structured_key_lower_len"] = [
