@@ -376,12 +376,20 @@ class Action:
             )
         if exe.db.scenario == Scenario.Rename:
             result.extend(["unknown schema", "ambiguous reference to schema name"])
-        if exe.db.scenario == Scenario.RepeatRow:
-            # Views that use `repeat_row` with a negative count can surface
-            # negative-accumulation errors both at DDL time (constant folding)
-            # and at read time (various operators checking multiplicities).
-            # The central list lives in `negative_accumulation_errors.py` so
-            # we can update it in one place when the error messages change.
+        # Negative multiplicities arise two ways: `repeat_row` with a negative
+        # count (RepeatRow scenario), and `DELETE .. USING`, which lowers to a
+        # semijoin whose DistinctBy can leave a table with a net-negative row
+        # (database-issues#9308). DELETE .. USING runs in the DML and DDL
+        # complexities, and the corruption it leaves is then observed by any
+        # later reader of that table (e.g. a COPY of a SELECT over it), not just
+        # by the DELETE itself. So tolerate the whole class wherever either
+        # source is active. Read and DDLOnly run neither, so a negative-
+        # accumulation error there is still a genuine finding. The central list
+        # lives in `negative_accumulation_errors.py`.
+        if exe.db.scenario == Scenario.RepeatRow or exe.db.complexity in (
+            Complexity.DML,
+            Complexity.DDL,
+        ):
             result.extend(NEGATIVE_ACCUMULATION_ERRORS)
         if materialize.parallel_workload.column.NAUGHTY_IDENTIFIERS:
             result.extend(["identifier length exceeds 255 bytes"])
