@@ -64,7 +64,7 @@ SERVICES = [
 
 def workflow_retain_history(c: Composition) -> None:
     def check_retain_history(name: str):
-        start = time.time()
+        start = time.monotonic()
         while True:
             ts = c.sql_query(
                 f"EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM retain_{name}"
@@ -74,13 +74,16 @@ def workflow_retain_history(c: Composition) -> None:
             source = ts["sources"][0]
             since = source["read_frontier"][0]
             upper = source["write_frontier"][0]
-            if upper - since > 2000:
+            # The write frontier is exclusive, so an exact 2,000 ms gap retains
+            # the requested two seconds of history.
+            if upper - since >= 2000:
                 break
-            end = time.time()
-            # seconds since start
-            elapsed = end - start
+            elapsed = time.monotonic() - start
             if elapsed > 10:
-                raise UIError("timeout hit while waiting for retain history")
+                raise UIError(
+                    f"timeout hit while waiting for retain history for retain_{name}: "
+                    f"read frontier {since}, write frontier {upper}"
+                )
             time.sleep(0.5)
 
     def check_retain_history_for(names: list[str]):
