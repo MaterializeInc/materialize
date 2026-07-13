@@ -1202,7 +1202,9 @@ where
     /// crashes the parser is not captured, an accepted limitation. Bind
     /// parameter values are data that redaction cannot reach, so only their
     /// count is logged. Authentication payloads are never logged. COPY data
-    /// is logged as its length only.
+    /// is logged as its length only, and only when it arrives as a stray
+    /// message in the ready state: messages consumed by the COPY subprotocol
+    /// or the post-error drain loop don't pass through here at all.
     async fn maybe_log_message_arrival(&mut self, message: &FrontendMessage) {
         if !self
             .adapter_client
@@ -1251,8 +1253,13 @@ where
             | FrontendMessage::SASLResponse(_) => {
                 info!(%conn_id, %session_uuid, kind, "statement arrival");
             }
+            // CopyFail carries a client-supplied free-text error message,
+            // which we don't log.
+            FrontendMessage::CopyFail(_) => {
+                info!(%conn_id, %session_uuid, kind, "statement arrival");
+            }
             // Log the full Debug representation for all other variants, which
-            // carry only object names.
+            // carry only object names or no payload.
             FrontendMessage::DescribeStatement { .. }
             | FrontendMessage::DescribePortal { .. }
             | FrontendMessage::Execute { .. }
@@ -1261,8 +1268,7 @@ where
             | FrontendMessage::CloseStatement { .. }
             | FrontendMessage::ClosePortal { .. }
             | FrontendMessage::Terminate
-            | FrontendMessage::CopyDone
-            | FrontendMessage::CopyFail(_) => {
+            | FrontendMessage::CopyDone => {
                 // WARNING: When adding a variant here, consider whether its payload is sensitive or
                 // bulky!
                 //

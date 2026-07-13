@@ -1498,16 +1498,18 @@ impl Drop for SessionClient {
 
 /// Renders SQL for statement arrival logging: parsed and displayed with its
 /// literals redacted, which is the same redaction the statement log applies.
-/// When the text does not parse, a placeholder with the byte length is
-/// returned. Raw text is never returned, so a statement that crashes the
-/// parser is not captured, an accepted limitation.
+/// When the text does not parse or exceeds the statement batch size limit, a
+/// placeholder with the byte length is returned. Raw text is never returned,
+/// so a statement that crashes the parser is not captured, an accepted
+/// limitation.
 pub fn redact_sql_for_logging(sql: &str) -> String {
     match mz_sql_parser::parser::parse_statements_with_limit(sql) {
         Ok(Ok(stmts)) => stmts
             .into_iter()
             .map(|stmt| stmt.ast.to_ast_string_redacted())
             .join("; "),
-        Ok(Err(_)) | Err(_) => format!("<unparseable ({} bytes)>", sql.len()),
+        Ok(Err(_)) => format!("<unparseable ({} bytes)>", sql.len()),
+        Err(_) => format!("<too large ({} bytes)>", sql.len()),
     }
 }
 
