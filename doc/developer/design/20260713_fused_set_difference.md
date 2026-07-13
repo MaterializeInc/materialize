@@ -38,6 +38,7 @@ CPU attributable to the eliminable operators (`mz_scheduling_elapsed`): intermed
 - The redundant `consolidate_output=true` on the anti-side `Union` (set only because of the `Negate` child, but the downstream reduce re-consolidates by key). Dropping it is a separate CPU-only change that captures no memory.
 - Unions with more than one negated arm or more than two inputs.
 - Non-anti-side `Union` shapes.
+- Self-difference, where `base` and `subtract` resolve to the same collection. Benign (the result is always empty, and traces support concurrent read cursors), so the recognizer need not special-case it, but the operator must not assume the two input handles are distinct.
 - Changing when the two inputs become co-arranged. This design consumes co-arrangement where it already exists (`Reduce::Distinct` always advertises it; PR #37592 adds it for `MonotonicTop1`), it does not create it.
 
 ## Solution Proposal
@@ -53,23 +54,54 @@ New `LirRelationNode::SetDifference { base, subtract, key }`:
 - `subtract`: the negated input (A), required available arranged by `key`.
 - `key`: the difference key, also the output arrangement key.
 
-Semantics: for each key, emit the records whose net multiplicity `count(base) - count(subtract)` is positive, with that multiplicity.
-This is exactly `Threshold(Union(Negate(subtract), base))`.
+Semantics: group both inputs by the `key` columns.
+For each key, sum the diffs over all values within that key for each input separately, then emit the `key` row with net multiplicity `count(base) - count(subtract)` when that net is positive.
+The output row is the `key` columns with empty value (`thinning=()`), matching the current `Threshold` output.
+
+This is exactly `Threshold(Union(Negate(subtract), base))` because the anti-side `Threshold` arranges by the entire row (`ThresholdPlan::create_from` keys on `0..arity`), so `key` spans the whole difference row and per-key accounting equals per-row accounting.
+Crucially, the operator sums diffs over each input's values per key and never inspects value contents, so the two input arrangements may carry different `thinning` (e.g. in the LEFT JOIN anti-branch of `outer_join.slt`, `l0` is arranged `thinning=(#1)` while `l1` is `thinning=()`).
+The current `Threshold` render already treats arrangement values as opaque and looks only at counts, so this matches existing behavior.
 Wire the node into `children` / `children_mut`, into EXPLAIN rendering, and into `keys()` so it advertises its output arrangement on `key` (mirroring `ThresholdPlan::keys()`).
+
+`EXPLAIN PHYSICAL PLAN` must render `SetDifference` as a first-class node with its `base`, `subtract`, and `key`.
+Because EXPLAIN shows the LIR plan and not the rendered dataflow, the new operator surfaces as soon as the recognizer inserts it, in both phases.
+This also means EXPLAIN output is identical across Phase 1 and Phase 2: the phase-1 render internals (reconstructed `Union` / `Negate` / `Threshold`) never appear in EXPLAIN, only the dataflow changes between phases.
 
 ### Recognizer
 
-A new LIR-layer refinement pass, run under a feature flag alongside the existing single-time refinements in `plan.rs` (it needs physical arrangement availability, which only exists after lowering).
+A new LIR-layer refinement pass (it needs physical arrangement availability, which only exists after lowering).
+Wiring a feature-flag-gated refine pass is itself new plumbing: the existing refine passes in `plan.rs` are either unconditional or gated on `dataflow.is_single_time()`, none on an `OptimizerFeatures` flag, so threading the flag into the refine call site is its own subtask, not a drop-in alongside the existing passes.
 
-Match: a `Threshold::Basic` on `key`, whose input is an `ArrangeBy(key, raw=false)` over a `Union` with `consolidate_output=true` and exactly two inputs, one of which is a `Negate`, where both the negated input and the positive input expose an arrangement on `key`.
-Rewrite to `SetDifference { base: <positive arm>, subtract: <negated arm>, key }`.
+Match: a `Threshold::Basic` on `key`, whose input is an `ArrangeBy(key, raw=false)` over a `Union` with exactly two inputs, one of which is a `Negate`.
+The `consolidate_output=true` flag need not be checked separately, it is implied: lowering sets it whenever a `Union` arm is a `Negate`.
+Both arms must satisfy: after stripping an optional pure projection-to-`key` MFP (projection only, no filter or map), the underlying node advertises an arrangement whose key columns equal `key`.
+The check is against the full `(key columns, permutation, thinning)` triple of the advertised arrangement, but only the key columns must match `key`; `permutation` and `thinning` may differ between arms because the operator ignores values (see the node semantics).
+
+Rewrite to `SetDifference { base: <positive arm>, subtract: <negated arm>, key }`, where each arm is the node under its (stripped) projection MFP.
 The match is insensitive to which arm is negated.
-If either input is not arranged on `key`, leave the plan unchanged.
+
+Decline (leave the plan unchanged) when:
+- either arm is not arranged on `key` columns,
+- the MFP between an arm and its arrangement does anything beyond projecting to the `key` columns,
+- either `Union` arm carries a non-default `temporal_bucketing_strategy` (the `SetDifference` node has no slot for it, so a matched non-default strategy would be silently dropped),
+- an arm is a node type whose arrangement advertisement is not directly queryable. Only `Get` (via `keys`) and `ArrangeBy` (via `forms`) advertise `AvailableCollections` at the node level; `Reduce` / `TopK` / `Threshold` keep arrangement info in their own plan types and are reached here only wrapped in a `Get` or `ArrangeBy`, so the recognizer inspects `Get` and `ArrangeBy` arms only.
 
 ### Render
 
 - Phase 1 (PR1): render `SetDifference` by reconstructing the equivalent `Union` / `Negate` / `ArrangeBy` / `Threshold` dataflow. Semantically identical, no performance change. This lands the node, recognizer, EXPLAIN output, goldens, and the flag end to end, and lets result-equivalence tests run against the recognizer before any operator risk.
 - Phase 2 (PR2): replace the render body with a fused binary operator. It consumes the two input `oks` arrangements via `binary_frontier` (modeled on `mz_join_core`: dual `cursor_through`, per-input acknowledged frontiers, matched-key `seek_key` / `step_key` co-iteration) and emits per key the thresholded net diff into an output `RowRowSpine` (modeled on the output-spine construction in DD's `reduce_trace` and `mz_reduce_abelian`). Errors from both inputs are converted to collections, concatenated, and arranged once (the reduce error pattern). Output is returned as `CollectionBundle::from_expressions(key, ArrangementFlavor::Local(oks, errs))`. This removes trace T, the memory win, as a render-internal change.
+
+### Central technical risk (Phase 2)
+
+The fused operator is genuinely new machinery, not a thin composition, and the two cited references each solve only half of it.
+`mz_join_core` consumes two arrangements but emits an unarranged stream, so it never had to define an output trace's compaction.
+`reduce_trace` / `mz_reduce_abelian` build one output trace but react to a single input frontier via `unary_frontier`.
+Two hazards live in the gap:
+
+- Output-trace compaction against two upstream frontiers. The operator sits between two input traces that each compact by the other input's frontier (`mz_join_core` maintains `physical_compaction <= acknowledged` per input). The fused operator must define what its output trace's `since` means relative to both input acknowledged frontiers. Advancing it wrong lets a downstream reader request a `cursor_through` the operator can no longer answer.
+- Per-key time-revisit. "Net positive" is evaluated as of specific timestamps, so the operator needs a reduce-style per-key interesting-times revisit list. A pure per-batch stream diff, which is all the join co-iteration gives, is not sufficient.
+
+The implementation plan must treat this subsection as the core of Phase 2. Getting the input co-iteration and output-batch building right is mechanical given the templates; getting the two-frontier compaction and time-revisit right is the novel work and the likeliest source of a correctness bug.
 
 ### Gating
 
@@ -81,6 +113,16 @@ The recognizer runs only when the flag is set.
 The measurement in "The Problem" is the prototype: it quantifies the win on a real maintained dataflow via `mz_arrangement_sizes` and `mz_scheduling_elapsed`, and PR #37595 adds a Feature Benchmark scenario (`SetDifferenceCoArranged`) that will measure the win as an A/B once Phase 2 lands.
 Phase 1 itself is a plan-only prototype: it validates that the recognizer fires on the intended shapes (`EXPLAIN PHYSICAL PLAN`) and preserves results, with zero runtime risk.
 
+Required test cases, chosen to hit the risky shapes surfaced in review:
+
+- The LEFT JOIN anti-branch in `outer_join.slt`, where the two arms have heterogeneous `thinning` (`l0` `thinning=(#1)`, `l1` `thinning=()`) and a projection MFP sits between `l0` and its arrangement. This is the case most likely to expose a recognizer or value-handling bug and it already exists in-tree.
+- `EXCEPT` over two arms arranged on the key.
+- A negative case: an arm whose MFP does more than project to `key` (a filter or map), which the recognizer must decline to match.
+- Result-equivalence for all of the above with the flag on vs off (Phase 1 already exercises this before the operator exists).
+
+The 40% / 51% memory figures are a pre-implementation estimate from the single measured workload.
+The fused operator carries its own per-key interesting-times state (see the Phase 2 risk), so Phase 2 must re-measure via the Feature Benchmark scenario rather than assume the estimate is a floor.
+
 ## Alternatives
 
 - Emit an unarranged stream from the co-iteration and re-arrange it with `mz_arrange`. Rejected: the re-arrange is trace T, so this captures no memory.
@@ -91,5 +133,10 @@ Phase 1 itself is a plan-only prototype: it validates that the recognizer fires 
 ## Open questions
 
 - Exact flag name and where its default is registered.
-- Whether the output arrangement's `thinning` should match the current `Threshold` output exactly (key-only value) so downstream consumers see an identical arrangement, which they must for the rewrite to be transparent.
-- Whether Phase 1 should reconstruct the dataflow via the existing `Threshold` render path or inline the equivalent operators, whichever keeps EXPLAIN output stable across the two phases.
+- The precise definition of the output trace's `since` relative to the two input acknowledged frontiers (the core Phase 2 risk). This must be resolved during Phase 2 design, before implementation, not left to the implementer.
+
+Resolved during review:
+
+- Output `thinning` is `()` (key-only value), matching the current `Threshold` output. Hard requirement for a transparent rewrite, not an option.
+- Input arrangements may have any `thinning`; the operator sums over values per key and ignores value contents, so heterogeneous input thinning is fine.
+- Phase 1's render internals (reuse the `Threshold` render path vs. inline the equivalent operators) are invisible to EXPLAIN and to consumers, so it is a free choice. Leaning toward reusing the `Threshold` render path to minimize new code.
