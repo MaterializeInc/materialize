@@ -1395,6 +1395,28 @@ pub static ENABLE_INTERNAL_STATEMENT_LOGGING: VarDefinition = VarDefinition::new
     false,
 );
 
+/// When on, the SQL frontends log incoming statements and other frontend
+/// messages at info level as soon as they arrive, before processing them
+/// (except that SQL text is parsed, for redaction). Messages consumed by
+/// pgwire's COPY subprotocol or its post-error drain loop are not logged.
+///
+/// This is an emergency diagnostic for statements that crash the process
+/// before they reach the statement log (or before its contents are written
+/// out to persist). It adds a lot of log volume, so use it only in emergencies,
+/// i.e. to debug active incidents.
+///
+/// SQL text is logged with its literals redacted, which is the same redaction
+/// the statement log applies, see `redact_sql_for_logging`.
+pub static ENABLE_STATEMENT_ARRIVAL_LOGGING: VarDefinition = VarDefinition::new(
+    "enable_statement_arrival_logging",
+    value!(bool; false),
+    "Whether to log incoming statements and other frontend messages at info \
+    level as they arrive at the SQL frontends, before processing. SQL text is \
+    logged with its literals redacted, as in the statement log. Use it only in \
+    emergencies, i.e. debugging active incidents.",
+    false,
+);
+
 pub static AUTO_ROUTE_CATALOG_QUERIES: VarDefinition = VarDefinition::new(
     "auto_route_catalog_queries",
     value!(bool; true),

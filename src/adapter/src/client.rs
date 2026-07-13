@@ -44,6 +44,7 @@ use mz_sql::session::user::SUPPORT_USER;
 use mz_sql::session::vars::{
     CLUSTER, ENABLE_FRONTEND_PEEK_SEQUENCING, OwnedVarInput, SystemVars, Var,
 };
+use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
 use prometheus::Histogram;
 use serde_json::json;
@@ -1121,6 +1122,12 @@ impl SessionClient {
         self.peek_client.catalog_snapshot(context).await
     }
 
+    /// Reports whether `enable_statement_arrival_logging` is on.
+    pub async fn statement_arrival_logging_enabled(&mut self) -> bool {
+        let catalog = self.catalog_snapshot("statement_arrival_logging").await;
+        catalog.system_config().enable_statement_arrival_logging()
+    }
+
     /// Dumps the catalog to a JSON string.
     ///
     /// No authorization is performed, so access to this function must be limited to internal
@@ -1486,6 +1493,23 @@ impl Drop for SessionClient {
                 })
             }
         }
+    }
+}
+
+/// Renders SQL for statement arrival logging: parsed and displayed with its
+/// literals redacted, which is the same redaction the statement log applies.
+/// When the text does not parse or exceeds the statement batch size limit, a
+/// placeholder with the byte length is returned. Raw text is never returned,
+/// so a statement that crashes the parser is not captured, an accepted
+/// limitation.
+pub fn redact_sql_for_logging(sql: &str) -> String {
+    match mz_sql_parser::parser::parse_statements_with_limit(sql) {
+        Ok(Ok(stmts)) => stmts
+            .into_iter()
+            .map(|stmt| stmt.ast.to_ast_string_redacted())
+            .join("; "),
+        Ok(Err(_)) => format!("<unparseable ({} bytes)>", sql.len()),
+        Err(_) => format!("<too large ({} bytes)>", sql.len()),
     }
 }
 
