@@ -46,6 +46,9 @@ NEGATIVE_ACCUMULATION_ERRORS: list[str] = [
     "S3 oneshot sink encountered negative multiplicities",
     # Constant folding
     "Negative multiplicity in constant result",
+    # Constant folding a DISTINCT/INTERSECT/reduce over a repeat_row collection
+    # with negative diffs. Seen in repeat_row (builds 17205, 17214).
+    "constant folding encountered reduce on collection with non-positive multiplicities",
     # Scalar subquery guard
     "negative number of rows produced in subquery",
 ]
