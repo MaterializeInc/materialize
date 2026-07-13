@@ -582,6 +582,19 @@ impl Coordinator {
                     replica_id,
                     ..
                 } => {
+                    // The replica may have vanished since the decisions were
+                    // derived (a user DDL landed between the tick's read and
+                    // this apply). The in-transaction witness check would
+                    // reject such a stale batch, but resource-limit validation
+                    // runs before the transaction and panics on a missing
+                    // replica, so reject the batch here instead.
+                    if self
+                        .catalog()
+                        .try_get_cluster_replica(cluster_id, replica_id)
+                        .is_none()
+                    {
+                        return None;
+                    }
                     drops.push(DropObjectInfo::ClusterReplica((
                         cluster_id,
                         replica_id,
