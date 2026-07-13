@@ -24,6 +24,7 @@ pub mod columnar;
 pub mod columnation;
 pub mod containers;
 pub mod hash;
+pub mod merge_batcher;
 pub mod operator;
 pub mod order;
 pub mod pact;

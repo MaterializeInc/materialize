@@ -308,6 +308,18 @@ impl ComputeState {
             std::sync::atomic::Ordering::Relaxed,
         );
 
+        // The temporal-bucketing merge batcher reads its near/far threshold
+        // from a process-global at construction time; keep that global in
+        // sync with the dyncfg.
+        mz_timely_util::merge_batcher::TEMPORAL_THRESHOLD_MS.store(
+            TEMPORAL_BUCKETING_SUMMARY
+                .get(config)
+                .as_millis()
+                .try_into()
+                .unwrap_or(u64::MAX),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+
         // NB: arrangement dictionary compression is deliberately NOT applied here. Unlike the
         // settings above, it is captured once at replica creation (see `handle_create_instance`
         // and `InstanceConfig::arrangement_dictionary_compression`) and held fixed, so that

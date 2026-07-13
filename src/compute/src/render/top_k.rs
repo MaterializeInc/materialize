@@ -23,7 +23,6 @@ use differential_dataflow::operators::iterate::Variable as SemigroupVariable;
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Builder, Trace};
 use differential_dataflow::{Data, VecCollection};
-use mz_compute_types::dyncfgs::{ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY};
 use mz_compute_types::plan::ArrangementStrategy;
 use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_compute_types::plan::top_k::{
@@ -35,27 +34,27 @@ use mz_ore::cast::CastFrom;
 use mz_ore::soft_assert_or_log;
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{Datum, DatumVec, Diff, ReprScalarType, Row, SharedRow};
-use mz_timely_util::columnation::ColumnationChunker;
+use mz_row_spine::{DatumSeq, RowBuilder, RowRowBuilder, RowValBuilder, RowValSpine};
 use mz_timely_util::operator::CollectionExt;
 use timely::Container;
 use timely::container::{CapacityContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 
-use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
+use crate::extensions::arrange::ArrangementSize;
 use crate::extensions::reduce::{ClearContainer, MzReduce};
 use crate::render::Pairer;
 use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::errors::MaybeValidatingRow;
-use crate::typedefs::{KeyBatcher, MzTimestamp, RowRowSpine, RowSpine};
-use mz_row_spine::{
-    DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBuilder, RowValSpine,
-};
+use crate::typedefs::{MzTimestamp, RowRowSpine, RowSpine};
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
-impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTime>
-    Context<'scope, T>
+impl<'scope, T> Context<'scope, T>
+where
+    T: crate::render::RenderTimestamp
+        + crate::render::MaybeBucketByTime
+        + crate::extensions::arrange::MaybeTemporalArrange,
 {
     pub(crate) fn render_topk(
         &self,
@@ -98,15 +97,9 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                  `mz_now()` has been const-folded and no temporal bucketing is set",
             );
         }
-        let ok_input = if matches!(
-            temporal_bucketing_strategy,
-            ArrangementStrategy::TemporalBucketing
-        ) && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(&self.config_set)
+        let ok_input = if let Some(summary) =
+            crate::render::operator_bucketing_summary(&self.config_set, temporal_bucketing_strategy)
         {
-            let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
-                .get(&self.config_set)
-                .try_into()
-                .expect("must fit");
             T::maybe_apply_temporal_bucketing(ok_input.inner, self.as_of_frontier.clone(), summary)
         } else {
             ok_input
@@ -186,18 +179,18 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                     // Map the group key along with the row and consolidate if required to do so.
                     let mut datum_vec = mz_repr::DatumVec::new();
                     let ok_scope = ok_input.scope();
-                    let collection = ok_input
-                        .map(move |row| {
-                            let group_row = {
-                                let datums = datum_vec.borrow_with(&row);
-                                SharedRow::pack(group_key.iter().map(|i| datums[*i]))
-                            };
-                            (group_row, row)
-                        })
-                        .consolidate_named_if::<KeyBatcher<_, _, _>>(
-                            must_consolidate,
-                            "Consolidated MonotonicTopK input",
-                        );
+                    let collection = ok_input.map(move |row| {
+                        let group_row = {
+                            let datums = datum_vec.borrow_with(&row);
+                            SharedRow::pack(group_key.iter().map(|i| datums[*i]))
+                        };
+                        (group_row, row)
+                    });
+                    let collection = self.consolidate(
+                        collection,
+                        must_consolidate,
+                        "Consolidated MonotonicTopK input",
+                    );
 
                     // It should be now possible to ensure that we have a monotonic collection.
                     let error_logger = self.error_logger();
@@ -254,10 +247,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                     let (result, errs) =
                         self.build_topk_stage(thinned, order_key, 1u64, 0, limit, arity, false);
                     // Consolidate the output of `build_topk_stage` because it's not guaranteed to be.
-                    let result = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
-                        result,
-                        "Monotonic TopK final consolidate",
-                    );
+                    let result = self.consolidate(result, true, "Monotonic TopK final consolidate");
                     retractions_var.set(collection.concat(result.clone().negate()));
                     soft_assert_or_log!(
                         errs.is_none(),
@@ -388,8 +378,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
             collection, order_key, 1u64, offset, limit, arity, validating,
         );
         // Consolidate the output of `build_topk_stage` because it's not guaranteed to be.
-        let oks =
-            CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(oks, "TopK final consolidate");
+        let oks = self.consolidate(oks, true, "TopK final consolidate");
         collection = oks;
         if validating {
             err_collection = errs;
@@ -461,7 +450,14 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                 T,
                 RowValBuilder<_, _, _>,
                 RowValSpine<Result<Row, Row>, _, _>,
-            >(&input, order_key, offset, limit, arity);
+            >(
+                &input,
+                order_key,
+                offset,
+                limit,
+                arity,
+                self.temporal_batcher,
+            );
             let stage = stage.as_collection(|k, v| (k.to_row(), v.clone()));
 
             // Demux oks and errors.
@@ -486,7 +482,12 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
             // Build non-validating topk stage.
             let (input, stage) =
                 build_topk_negated_stage::<T, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
-                    &input, order_key, offset, limit, arity,
+                    &input,
+                    order_key,
+                    offset,
+                    limit,
+                    arity,
+                    self.temporal_batcher,
                 );
             // Turn arrangement into collection.
             let stage = stage.as_collection(|k, v| (k.to_row(), v.to_row()));
@@ -511,22 +512,22 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
         // corresponding to evaluating our aggregate, instead of having to do a hierarchical
         // reduction. We start by mapping the group key along with the row and consolidating
         // if required to do so.
-        let collection = collection
-            .map({
-                let mut datum_vec = mz_repr::DatumVec::new();
-                move |row| {
-                    // Scoped to allow borrow of `row` to drop.
-                    let group_key = {
-                        let datums = datum_vec.borrow_with(&row);
-                        SharedRow::pack(group_key.iter().map(|i| datums[*i]))
-                    };
-                    (group_key, row)
-                }
-            })
-            .consolidate_named_if::<KeyBatcher<_, _, _>>(
-                must_consolidate,
-                "Consolidated MonotonicTop1 input",
-            );
+        let collection = collection.map({
+            let mut datum_vec = mz_repr::DatumVec::new();
+            move |row| {
+                // Scoped to allow borrow of `row` to drop.
+                let group_key = {
+                    let datums = datum_vec.borrow_with(&row);
+                    SharedRow::pack(group_key.iter().map(|i| datums[*i]))
+                };
+                (group_key, row)
+            }
+        });
+        let collection = self.consolidate(
+            collection,
+            must_consolidate,
+            "Consolidated MonotonicTop1 input",
+        );
 
         // It should be now possible to ensure that we have a monotonic collection and process it.
         let error_logger = self.error_logger();
@@ -538,24 +539,18 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
             let m = "tried to build monotonic top-1 on non-monotonic input".into();
             (EvalError::Internal(m).into(), Diff::ONE)
         });
-        let partial: KeyCollection<_, _, _> = partial
-            .explode_one(move |(group_key, row)| {
-                (
-                    group_key,
-                    monoids::Top1Monoid {
-                        row,
-                        order_key: order_key.clone(),
-                    },
-                )
-            })
-            .into();
-        let result = partial
-            .mz_arrange::<
-                ColumnationChunker<_>,
-                RowBatcher<_, _>,
-                RowBuilder<_, _>,
-                RowSpine<_, _>,
-            >(
+        let partial = partial.explode_one(move |(group_key, row)| {
+            (
+                group_key,
+                monoids::Top1Monoid {
+                    row,
+                    order_key: order_key.clone(),
+                },
+            )
+        });
+        let result = self
+            .arrange_key::<_, _, RowBuilder<_, _>, RowSpine<_, _>>(
+                partial,
                 "Arranged MonotonicTop1 partial [val: empty]",
             )
             .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
@@ -583,12 +578,13 @@ fn build_topk_negated_stage<'s, T, Bu, Tr>(
     offset: usize,
     limit: Option<LirScalarExpr>,
     arity: usize,
+    use_temporal: bool,
 ) -> (
     Arranged<'s, TraceAgent<RowRowSpine<T, Diff>>>,
     Arranged<'s, TraceAgent<Tr>>,
 )
 where
-    T: MzTimestamp,
+    T: MzTimestamp + crate::extensions::arrange::MaybeTemporalArrange,
     Bu: Builder<
             Time = T,
             Input: Container + ClearContainer + PushInto<((Row, Tr::ValOwn), T, Diff)>,
@@ -609,16 +605,11 @@ where
     // such that `input.concat(&negated_output)` yields the correct TopK
     // NOTE(vmarcos): The arranged input operator name below is used in the tuning advice
     // built-in view mz_introspection.mz_expected_group_size_advice.
-    let arranged = input
-        .clone()
-        .mz_arrange::<
-            ColumnationChunker<_>,
-            RowRowBatcher<_, _>,
-            RowRowBuilder<_, _>,
-            RowRowSpine<_, _>,
-        >(
-            "Arranged TopK input",
-        );
+    let arranged = T::mz_arrange_maybe_temporal::<_, _, _, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+        input.clone(),
+        "Arranged TopK input",
+        use_temporal,
+    );
 
     // Eagerly evaluate literal limits.
     let limit = limit.map(|l| match l.as_literal() {

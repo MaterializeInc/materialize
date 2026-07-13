@@ -32,6 +32,12 @@ pub trait BucketTimestamp: Timestamp {
     fn advance_by_power_of_two(&self, exponent: u32) -> Option<Self>;
 }
 
+impl BucketTimestamp for u64 {
+    fn advance_by_power_of_two(&self, bits: u32) -> Option<Self> {
+        self.checked_add(1_u64.checked_shl(bits)?)
+    }
+}
+
 /// A type that can be split into two parts based on a timestamp.
 pub trait Bucket: Sized {
     /// The timestamp type associated with this storage.
@@ -47,6 +53,13 @@ pub struct BucketRange<T> {
     /// The lower bound (inclusive).
     pub start: T,
     end: Option<T>,
+}
+
+impl<T> BucketRange<T> {
+    /// The exclusive upper bound, or `None` when the bucket covers the rest of the domain.
+    pub fn end(&self) -> Option<&T> {
+        self.end.as_ref()
+    }
 }
 
 impl<T: PartialOrd> BucketRange<T> {
@@ -219,6 +232,20 @@ impl<S: Bucket> BucketChain<S> {
         self.content.values_mut().map(|(_, storage)| storage)
     }
 
+    /// An iterator over the buckets and their time ranges, in time order.
+    ///
+    /// The ranges are only valid until the next call to `peel` or `restore`.
+    #[inline]
+    pub fn ranges(&self) -> impl Iterator<Item = (BucketRange<S::Timestamp>, &S)> {
+        self.content.iter().map(|(time, (bits, storage))| {
+            let range = BucketRange {
+                start: time.clone(),
+                end: time.advance_by_power_of_two(*bits),
+            };
+            (range, storage)
+        })
+    }
+
     /// Split the bucket specified by `(bits, offset, storage)` and insert the new buckets.
     /// Updates `fuel`.
     ///
@@ -240,12 +267,6 @@ mod tests {
     impl BucketTimestamp for u8 {
         fn advance_by_power_of_two(&self, bits: u32) -> Option<Self> {
             self.checked_add(1_u8.checked_shl(bits)?)
-        }
-    }
-
-    impl BucketTimestamp for u64 {
-        fn advance_by_power_of_two(&self, bits: u32) -> Option<Self> {
-            self.checked_add(1_u64.checked_shl(bits)?)
         }
     }
 

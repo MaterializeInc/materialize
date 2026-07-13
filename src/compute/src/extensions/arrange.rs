@@ -8,20 +8,33 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
+use std::hash::Hash;
 use std::rc::{Rc, Weak};
 
+use columnation::Columnation;
 use differential_dataflow::difference::Semigroup;
+use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::implementations::spine_fueled::Spine;
 use differential_dataflow::trace::{Batch, Batcher, Builder, Trace, TraceReader};
 use differential_dataflow::{Collection, Data, ExchangeData, Hashable, VecCollection};
+use mz_repr::{Diff, Row};
+use mz_row_spine::{RowRowBuilder, RowRowColPagedBuilder};
+use mz_timely_util::columnar::builder::ColumnBuilder;
+use mz_timely_util::columnar::{
+    Col2ValBatcher, Col2ValPagedBatcher, Col2ValPagedTemporalBatcher, Col2ValTemporalBatcher,
+    Column, batcher, columnar_exchange,
+};
+use mz_timely_util::columnation::{ColumnationChunker, ColumnationStack};
+use mz_timely_util::operator::CollectionExt;
 use timely::Container;
 use timely::container::{ContainerBuilder, PushInto};
 use timely::dataflow::Stream;
-use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
+use timely::dataflow::channels::pact::{Exchange, ExchangeCore, ParallelizationContract, Pipeline};
 use timely::dataflow::operators::Operator;
+use timely::order::Product;
 use timely::progress::Timestamp;
 
 use crate::logging::compute::{
@@ -29,7 +42,8 @@ use crate::logging::compute::{
     ArrangementHeapSizeOperator, ComputeEvent, ComputeEventBuilder,
 };
 use crate::typedefs::{
-    KeyAgent, KeyValAgent, MzArrangeData, MzData, MzTimestamp, RowAgent, RowRowAgent, RowValAgent,
+    KeyAgent, KeyBatcher, KeyValAgent, KeyValBatcher, MzArrangeData, MzData, MzTimestamp, RowAgent,
+    RowRowAgent, RowRowSpine, RowValAgent,
 };
 
 /// Extension trait to arrange data.
@@ -465,4 +479,183 @@ where
             (size, capacity, allocations)
         })
     }
+}
+
+/// Arrangement and consolidation construction with a per-timestamp batcher
+/// choice.
+///
+/// The temporal-bucketing batcher requires a totally ordered timestamp, which
+/// is not a general property of a render timestamp, so the dispatch lives in
+/// its own trait (mirroring `MaybeBucketByTime`): `mz_repr::Timestamp` honors
+/// `use_temporal`, the iterative-scope `Product` timestamp ignores it.
+pub trait MaybeTemporalArrange: MzTimestamp + Default {
+    /// Arrange a row-row stream into a [`RowRowAgent`], choosing the batcher
+    /// by the given flags. The flags compose: with both set, the batcher is
+    /// temporal-bucketing over paged chains.
+    ///
+    /// Warning: The default body ignores `use_temporal`, appropriate for
+    /// partially ordered timestamps, which are not bucketable.
+    fn arrange_row_row<'scope>(
+        stream: Stream<'scope, Self, Column<((Row, Row), Self, Diff)>>,
+        name: &str,
+        use_paged: bool,
+        _use_temporal: bool,
+    ) -> Arranged<'scope, RowRowAgent<Self, Diff>> {
+        let exchange = ExchangeCore::<ColumnBuilder<_>, _>::new_core(
+            columnar_exchange::<Row, Row, Self, Diff>,
+        );
+        if use_paged {
+            stream.mz_arrange_core::<
+                _,
+                batcher::ColumnChunker<_>,
+                Col2ValPagedBatcher<_, _, _, _>,
+                RowRowColPagedBuilder<_, _>,
+                RowRowSpine<_, _>,
+            >(exchange, name)
+        } else {
+            stream.mz_arrange_core::<
+                _,
+                batcher::Chunker<_>,
+                Col2ValBatcher<_, _, _, _>,
+                RowRowBuilder<_, _>,
+                RowRowSpine<_, _>,
+            >(exchange, name)
+        }
+    }
+
+    /// `mz_arrange` a `(key, val)` collection into `Tr` with the
+    /// [`KeyValBatcher`] family, using the temporal-bucketing
+    /// batcher when both `use_temporal` and the timestamp allow it.
+    ///
+    /// Warning: The default body ignores `use_temporal`.
+    fn mz_arrange_maybe_temporal<'scope, K, V, R, Bu, Tr>(
+        collection: VecCollection<'scope, Self, (K, V), R>,
+        name: &str,
+        _use_temporal: bool,
+    ) -> Arranged<'scope, TraceAgent<Tr>>
+    where
+        K: ExchangeData + Hashable + Columnation + Ord,
+        V: ExchangeData + Columnation + Ord,
+        R: ExchangeData + Semigroup + Default + Columnation,
+        Bu: Builder<Time = Self, Input = ColumnationStack<((K, V), Self, R)>, Output = Tr::Batch>,
+        Tr: Trace + TraceReader<Time = Self> + 'static,
+        Tr::Batch: Batch,
+        Arranged<'scope, TraceAgent<Tr>>: ArrangementSize,
+    {
+        collection.mz_arrange::<ColumnationChunker<_>, KeyValBatcher<K, V, Self, R>, Bu, Tr>(name)
+    }
+
+    /// `consolidate_named_if` with the [`KeyBatcher`]
+    /// family, using the temporal-bucketing batcher when both `use_temporal`
+    /// and the timestamp allow it.
+    ///
+    /// Warning: The default body ignores `use_temporal`.
+    fn consolidate_maybe_temporal<'scope, D, R>(
+        collection: VecCollection<'scope, Self, D, R>,
+        must_consolidate: bool,
+        name: &str,
+        _use_temporal: bool,
+    ) -> VecCollection<'scope, Self, D, R>
+    where
+        D: ExchangeData + Hash + Columnation + Ord,
+        R: ExchangeData + Semigroup + Default + Columnation,
+    {
+        collection.consolidate_named_if::<KeyBatcher<D, Self, R>>(must_consolidate, name)
+    }
+}
+
+impl MaybeTemporalArrange for mz_repr::Timestamp {
+    fn arrange_row_row<'scope>(
+        stream: Stream<'scope, Self, Column<((Row, Row), Self, Diff)>>,
+        name: &str,
+        use_paged: bool,
+        use_temporal: bool,
+    ) -> Arranged<'scope, RowRowAgent<Self, Diff>> {
+        let exchange = ExchangeCore::<ColumnBuilder<_>, _>::new_core(
+            columnar_exchange::<Row, Row, Self, Diff>,
+        );
+        if use_temporal && use_paged {
+            stream.mz_arrange_core::<
+                _,
+                batcher::ColumnChunker<_>,
+                Col2ValPagedTemporalBatcher<_, _, _, _>,
+                RowRowColPagedBuilder<_, _>,
+                RowRowSpine<_, _>,
+            >(exchange, name)
+        } else if use_temporal {
+            stream.mz_arrange_core::<
+                _,
+                batcher::Chunker<_>,
+                Col2ValTemporalBatcher<_, _, _, _>,
+                RowRowBuilder<_, _>,
+                RowRowSpine<_, _>,
+            >(exchange, name)
+        } else if use_paged {
+            stream.mz_arrange_core::<
+                _,
+                batcher::ColumnChunker<_>,
+                Col2ValPagedBatcher<_, _, _, _>,
+                RowRowColPagedBuilder<_, _>,
+                RowRowSpine<_, _>,
+            >(exchange, name)
+        } else {
+            stream.mz_arrange_core::<
+                _,
+                batcher::Chunker<_>,
+                Col2ValBatcher<_, _, _, _>,
+                RowRowBuilder<_, _>,
+                RowRowSpine<_, _>,
+            >(exchange, name)
+        }
+    }
+
+    fn mz_arrange_maybe_temporal<'scope, K, V, R, Bu, Tr>(
+        collection: VecCollection<'scope, Self, (K, V), R>,
+        name: &str,
+        use_temporal: bool,
+    ) -> Arranged<'scope, TraceAgent<Tr>>
+    where
+        K: ExchangeData + Hashable + Columnation + Ord,
+        V: ExchangeData + Columnation + Ord,
+        R: ExchangeData + Semigroup + Default + Columnation,
+        Bu: Builder<Time = Self, Input = ColumnationStack<((K, V), Self, R)>, Output = Tr::Batch>,
+        Tr: Trace + TraceReader<Time = Self> + 'static,
+        Tr::Batch: Batch,
+        Arranged<'scope, TraceAgent<Tr>>: ArrangementSize,
+    {
+        if use_temporal {
+            collection
+                .mz_arrange::<ColumnationChunker<_>, Col2ValTemporalBatcher<K, V, Self, R>, Bu, Tr>(
+                    name,
+                )
+        } else {
+            collection
+                .mz_arrange::<ColumnationChunker<_>, KeyValBatcher<K, V, Self, R>, Bu, Tr>(name)
+        }
+    }
+
+    fn consolidate_maybe_temporal<'scope, D, R>(
+        collection: VecCollection<'scope, Self, D, R>,
+        must_consolidate: bool,
+        name: &str,
+        use_temporal: bool,
+    ) -> VecCollection<'scope, Self, D, R>
+    where
+        D: ExchangeData + Hash + Columnation + Ord,
+        R: ExchangeData + Semigroup + Default + Columnation,
+    {
+        if use_temporal {
+            collection.consolidate_named_if::<Col2ValTemporalBatcher<D, (), Self, R>>(
+                must_consolidate,
+                name,
+            )
+        } else {
+            collection.consolidate_named_if::<KeyBatcher<D, Self, R>>(must_consolidate, name)
+        }
+    }
+}
+
+impl MaybeTemporalArrange for Product<mz_repr::Timestamp, PointStamp<u64>> {
+    // Iterative scope: the timestamp is partially ordered and not bucketable,
+    // so the defaults, which ignore `use_temporal`, apply.
 }

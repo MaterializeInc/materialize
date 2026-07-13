@@ -30,9 +30,9 @@
 
 use std::collections::VecDeque;
 
-use columnar::{Columnar, Index, Len};
+use columnar::{Borrow, Columnar, Container, Index, Len};
 use differential_dataflow::difference::Semigroup;
-use differential_dataflow::logging::{BatcherEvent, Logger};
+use differential_dataflow::logging::Logger;
 use differential_dataflow::trace::{Batcher, Description};
 use timely::Accountable;
 use timely::PartialOrder;
@@ -165,25 +165,12 @@ where
     /// Emit a single `BatcherEvent` summing resident accounting across
     /// `chain` with the given sign. No-op when no logger is attached.
     fn emit_account(&self, chain: &VecDeque<PagedColumn<(D, T, R)>>, diff: isize) {
-        let Some(logger) = &self.logger else {
-            return;
-        };
-        let (mut records, mut size, mut capacity, mut allocations) =
-            (0isize, 0isize, 0isize, 0isize);
-        for entry in chain {
-            let (r, s, c, a) = account_chunk(entry);
-            records = records.saturating_add_unsigned(r);
-            size = size.saturating_add_unsigned(s);
-            capacity = capacity.saturating_add_unsigned(c);
-            allocations = allocations.saturating_add_unsigned(a);
-        }
-        logger.log(BatcherEvent {
-            operator: self.operator_id,
-            records_diff: records.saturating_mul(diff),
-            size_diff: size.saturating_mul(diff),
-            capacity_diff: capacity.saturating_mul(diff),
-            allocations_diff: allocations.saturating_mul(diff),
-        });
+        crate::merge_batcher::log_batcher_event(
+            &self.logger,
+            self.operator_id,
+            chain.iter().map(account_chunk),
+            diff,
+        );
     }
 }
 
@@ -667,6 +654,213 @@ pub fn extract_chain<D, T, R, SinkShip, SinkKeep>(
         ship(pager.page(&mut ship_buf));
     } else {
         recycle_capped(ship_buf, stash);
+    }
+}
+
+use crate::merge_batcher::{TemporalMerger, TimePartitioned, update_bounds};
+
+/// [`TemporalMerger`] over paged column chains: the temporal-bucketing
+/// counterpart of [`ColumnMergeBatcher`]'s engine. Chain entries are
+/// [`PagedColumn`]s, so both the flat chains and the far-future bucket chain
+/// can spill under memory pressure. The far tail is the natural spill
+/// candidate: it is touched again only when buckets split or mature.
+///
+/// Resolves its pager lazily per call via [`column_pager::global_pager`],
+/// like [`ColumnMergeBatcher`]. Tests may pin one via [`Self::set_pager`].
+pub struct PagedColumnMerger<D, T, R>
+where
+    (D, T, R): Columnar,
+{
+    /// Recycled empty `Column::Typed` chunks, kept across calls within one
+    /// seal cycle and dropped in `seal_done`.
+    stash: Vec<Column<(D, T, R)>>,
+    /// Optional override; `None` reads the process-global pager per use.
+    pager_override: Option<ColumnPager>,
+}
+
+impl<D, T, R> Default for PagedColumnMerger<D, T, R>
+where
+    (D, T, R): Columnar,
+{
+    fn default() -> Self {
+        Self {
+            stash: Vec::new(),
+            pager_override: None,
+        }
+    }
+}
+
+impl<D, T, R> PagedColumnMerger<D, T, R>
+where
+    (D, T, R): Columnar,
+{
+    /// Pin the pager this merger uses, overriding the process-global lookup.
+    /// Mainly for tests.
+    pub fn set_pager(&mut self, pager: ColumnPager) {
+        self.pager_override = Some(pager);
+    }
+
+    fn pager(&self) -> ColumnPager {
+        self.pager_override
+            .clone()
+            .unwrap_or_else(column_pager::global_pager)
+    }
+}
+
+impl<D, T, R> TemporalMerger for PagedColumnMerger<D, T, R>
+where
+    D: Columnar,
+    for<'a> columnar::Ref<'a, D>: Copy + Ord,
+    T: Columnar + Default + Clone + Ord + PartialOrder,
+    for<'a> columnar::Ref<'a, T>: Copy + Ord,
+    R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
+{
+    type Time = T;
+    type Chunk = PagedColumn<(D, T, R)>;
+    type Output = Column<(D, T, R)>;
+
+    fn absorb(&mut self, mut input: Self::Output) -> Self::Chunk {
+        self.pager().page(&mut input)
+    }
+
+    fn materialize(&mut self, chunk: Self::Chunk) -> Self::Output {
+        self.pager().take(chunk)
+    }
+
+    fn merge(
+        &mut self,
+        list1: Vec<Self::Chunk>,
+        list2: Vec<Self::Chunk>,
+        output: &mut Vec<Self::Chunk>,
+    ) {
+        let pager = self.pager();
+        merge_chains(
+            FetchIter::new(VecDeque::from(list1), &pager),
+            FetchIter::new(VecDeque::from(list2), &pager),
+            |paged| output.push(paged),
+            &mut self.stash,
+        );
+    }
+
+    fn chunk_len(chunk: &Self::Chunk) -> usize {
+        chunk.record_count()
+    }
+
+    fn chunk_time_bounds(chunk: &Self::Chunk) -> Option<(T, T)> {
+        // Offloaded chunks cannot be inspected in place; validation callers
+        // pin an always-resident pager.
+        let PagedColumn::Resident(col, _) = chunk else {
+            return None;
+        };
+        let mut bounds = None;
+        let mut owned_t = T::default();
+        let view = col.borrow();
+        for i in 0..view.len() {
+            let (_, time, _) = view.get(i);
+            T::copy_from(&mut owned_t, time);
+            update_bounds(&mut bounds, &owned_t);
+        }
+        bounds
+    }
+
+    fn extract_time_partitioned(
+        &mut self,
+        merged: Vec<Self::Chunk>,
+        split_lo: AntichainRef<'_, T>,
+        split_hi: AntichainRef<'_, T>,
+        track_before: bool,
+    ) -> TimePartitioned<Self::Chunk, T> {
+        let pager = self.pager();
+        let stash = &mut self.stash;
+        let mut result = TimePartitioned {
+            before: Vec::new(),
+            before_bounds: None,
+            within: Vec::new(),
+            within_bounds: None,
+            beyond: Vec::new(),
+            beyond_bounds: None,
+            records: 0,
+        };
+        let mut before: Column<(D, T, R)> = empty_chunk(stash);
+        // The `within` and `beyond` parts are often empty (any seal without
+        // future updates); allocate their builders lazily so such extracts
+        // pay exactly the two-way extract's allocations.
+        let mut within: Option<Column<(D, T, R)>> = None;
+        let mut beyond: Option<Column<(D, T, R)>> = None;
+
+        let mut owned_t = T::default();
+        for buffer in FetchIter::new(VecDeque::from(merged), &pager) {
+            let view = buffer.borrow();
+            let len = view.len();
+            result.records += len;
+            for i in 0..len {
+                let (_, time, _) = view.get(i);
+                T::copy_from(&mut owned_t, time);
+                // NOTE: chunks are sorted data-major, so times arrive in no
+                // particular order and every record updates the bounds.
+                // Testing `before` first keeps the dominant case (ready
+                // data) at the two-way extract's single comparison.
+                let (out, chunks, bounds, tracked) = if !split_lo.less_equal(&owned_t) {
+                    (
+                        &mut before,
+                        &mut result.before,
+                        &mut result.before_bounds,
+                        track_before,
+                    )
+                } else if split_hi.less_equal(&owned_t) {
+                    (
+                        beyond.get_or_insert_with(|| empty_chunk(stash)),
+                        &mut result.beyond,
+                        &mut result.beyond_bounds,
+                        true,
+                    )
+                } else {
+                    (
+                        within.get_or_insert_with(|| empty_chunk(stash)),
+                        &mut result.within,
+                        &mut result.within_bounds,
+                        true,
+                    )
+                };
+                if tracked {
+                    update_bounds(bounds, &owned_t);
+                }
+                let Column::Typed(out_c) = out else {
+                    unreachable!("builder chunks are always Column::Typed");
+                };
+                out_c.extend_from_self(view, i..i + 1);
+                if crate::columnar::at_serialized_capacity(&out_c.borrow()) {
+                    let mut full = std::mem::replace(out, empty_chunk(stash));
+                    chunks.push(pager.page(&mut full));
+                    recycle_capped(full, stash);
+                }
+            }
+            recycle_capped(buffer, stash);
+        }
+
+        for (builder, out) in [
+            (Some(before), &mut result.before),
+            (within, &mut result.within),
+            (beyond, &mut result.beyond),
+        ] {
+            if let Some(mut builder) = builder {
+                if builder.is_empty() {
+                    recycle_capped(builder, stash);
+                } else {
+                    out.push(pager.page(&mut builder));
+                    recycle_capped(builder, stash);
+                }
+            }
+        }
+        result
+    }
+
+    fn account(chunk: &Self::Chunk) -> (usize, usize, usize, usize) {
+        account_chunk(chunk)
+    }
+
+    fn seal_done(&mut self) {
+        self.stash.clear();
     }
 }
 

@@ -198,6 +198,14 @@ impl BucketTimestamp for Timestamp {
     }
 }
 
+impl mz_timely_util::merge_batcher::TemporalThreshold for Timestamp {
+    fn temporal_threshold() -> Self {
+        mz_timely_util::merge_batcher::TEMPORAL_THRESHOLD_MS
+            .load(std::sync::atomic::Ordering::Relaxed)
+            .into()
+    }
+}
+
 pub trait TimestampManipulation:
     timely::progress::Timestamp
     + timely::order::TotalOrder

@@ -42,6 +42,7 @@ use std::sync::{Arc, LazyLock, RwLock};
 use columnar::Columnar;
 use lz4_flex::frame::{FrameDecoder, FrameEncoder};
 use mz_ore::pager::{self, Backend, Handle};
+use timely::Accountable;
 use timely::bytes::arc::BytesMut;
 use timely::dataflow::channels::ContainerBytes;
 
@@ -134,6 +135,8 @@ pub trait PagingPolicy: Send + Sync {
 pub struct Meta {
     /// Uncompressed body size in bytes.
     pub len_bytes: usize,
+    /// Number of records in the column.
+    pub records: usize,
 }
 
 /// A column whose body may be resident, paged out, or paged out and compressed.
@@ -172,6 +175,18 @@ pub enum PagedColumn<C: Columnar> {
         /// Sizing metadata.
         meta: Meta,
     },
+}
+
+impl<C: Columnar> PagedColumn<C> {
+    /// Number of records in the column, without materializing it.
+    pub fn record_count(&self) -> usize {
+        match self {
+            PagedColumn::Resident(col, _) => {
+                usize::try_from(col.record_count()).expect("non-negative")
+            }
+            PagedColumn::Paged { meta, .. } | PagedColumn::Compressed { meta, .. } => meta.records,
+        }
+    }
 }
 
 /// Drop guard that returns budget to a [`PagingPolicy`] when a
@@ -413,7 +428,10 @@ impl ColumnPager {
             }
             PageDecision::Page { backend, codec } => (backend, codec),
         };
-        let meta = Meta { len_bytes };
+        let meta = Meta {
+            len_bytes,
+            records: usize::try_from(col.record_count()).expect("non-negative"),
+        };
 
         match codec {
             None => {
@@ -759,13 +777,19 @@ mod tests {
 
     #[mz_ore::test]
     fn align_variant_fast_path() {
-        // Construct an Align column directly to exercise the move-only raw path.
+        // Construct an Align column to exercise the raw path that moves the
+        // aligned allocation into the pager without a copy. The body must be
+        // a real serialized column: `page` reads the record count from it.
         let policy = TestPolicy::new(PageDecision::Page {
             backend: Backend::Swap,
             codec: None,
         });
         let cp = ColumnPager::new(as_dyn(&policy));
-        let body: Vec<u64> = (1u64..=512).collect();
+        let body: Vec<u64> = {
+            let mut buf = Vec::new();
+            sample_typed().into_bytes(&mut buf);
+            bytemuck::allocation::pod_collect_to_vec(&buf)
+        };
         let mut col: Column<i64> = Column::Align(body.clone());
         let paged = cp.page(&mut col);
         assert!(matches!(paged, PagedColumn::Paged { .. }));

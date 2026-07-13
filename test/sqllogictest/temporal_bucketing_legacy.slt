@@ -1,0 +1,165 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# -----------------------------------------------------------------------------
+# Temporal-filter correctness with `enable_compute_temporal_bucketing_batcher`
+# OFF, covering the production configurations that exist while the flag rolls
+# out. CI otherwise runs with the flag on, which would leave these paths
+# unexercised.
+#
+# DELETE THIS FILE when batcher-mode temporal bucketing becomes unconditional
+# and the standalone temporal_bucket operator with its
+# `enable_compute_temporal_bucketing` flag is removed.
+#
+# Timestamps are far in the past/future relative to any plausible test-run
+# time, so results are deterministic.
+# -----------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# Batcher flag off, operator flag on: the standalone bucketing operator
+# handles far-future updates where the lowering selected it.
+# -----------------------------------------------------------------------------
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_compute_temporal_bucketing_batcher = false;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_compute_temporal_bucketing = true;
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE legacy_events (k INT NOT NULL, event_time TIMESTAMP NOT NULL);
+
+statement ok
+INSERT INTO legacy_events VALUES
+  (1, TIMESTAMP '2000-01-01 00:00:00'),
+  (1, TIMESTAMP '2099-01-01 00:00:00'),
+  (2, TIMESTAMP '2099-01-01 00:00:00'),
+  (2, TIMESTAMP '2099-06-01 00:00:00'),
+  (3, TIMESTAMP '2000-06-01 00:00:00');
+
+# Reduce under a temporal filter: only live (far-future-expiring) rows count.
+statement ok
+CREATE MATERIALIZED VIEW legacy_counts AS
+SELECT k, count(*) AS c
+FROM legacy_events
+WHERE event_time + INTERVAL '45 day' > mz_now()
+GROUP BY k;
+
+query II rowsort
+SELECT k, c FROM legacy_counts;
+----
+1 1
+2 2
+
+# TopK under a temporal filter.
+statement ok
+CREATE MATERIALIZED VIEW legacy_topk AS
+SELECT k FROM legacy_events
+WHERE event_time + INTERVAL '45 day' > mz_now()
+ORDER BY k LIMIT 2;
+
+query I rowsort
+SELECT k FROM legacy_topk;
+----
+1
+2
+
+# Consolidating Union + Threshold (EXCEPT ALL) under temporal filters.
+query I rowsort
+(SELECT k FROM legacy_events WHERE event_time + INTERVAL '45 day' > mz_now())
+EXCEPT ALL
+(SELECT k FROM legacy_events WHERE event_time + INTERVAL '36500 day' > mz_now() AND k = 1);
+----
+2
+2
+
+# Indexed view (ArrangeBy) under a temporal filter.
+statement ok
+CREATE VIEW legacy_live AS
+SELECT k FROM legacy_events WHERE event_time + INTERVAL '45 day' > mz_now();
+
+statement ok
+CREATE DEFAULT INDEX ON legacy_live;
+
+query I rowsort
+SELECT k FROM legacy_live;
+----
+1
+2
+2
+
+statement ok
+DROP TABLE legacy_events CASCADE;
+
+# -----------------------------------------------------------------------------
+# Both flags off: plain merge batchers hold the future updates. This is the
+# self-managed default configuration.
+# -----------------------------------------------------------------------------
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_compute_temporal_bucketing = false;
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE plain_events (k INT NOT NULL, event_time TIMESTAMP NOT NULL);
+
+statement ok
+INSERT INTO plain_events VALUES
+  (1, TIMESTAMP '2000-01-01 00:00:00'),
+  (1, TIMESTAMP '2099-01-01 00:00:00'),
+  (2, TIMESTAMP '2099-01-01 00:00:00'),
+  (2, TIMESTAMP '2099-06-01 00:00:00'),
+  (3, TIMESTAMP '2000-06-01 00:00:00');
+
+statement ok
+CREATE MATERIALIZED VIEW plain_counts AS
+SELECT k, count(*) AS c
+FROM plain_events
+WHERE event_time + INTERVAL '45 day' > mz_now()
+GROUP BY k;
+
+query II rowsort
+SELECT k, c FROM plain_counts;
+----
+1 1
+2 2
+
+statement ok
+CREATE VIEW plain_live AS
+SELECT k FROM plain_events WHERE event_time + INTERVAL '45 day' > mz_now();
+
+statement ok
+CREATE DEFAULT INDEX ON plain_live;
+
+query I rowsort
+SELECT k FROM plain_live;
+----
+1
+2
+2
+
+statement ok
+DROP TABLE plain_events CASCADE;
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_compute_temporal_bucketing;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_compute_temporal_bucketing_batcher;
+----
+COMPLETE 0

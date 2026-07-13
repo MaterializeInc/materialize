@@ -18,16 +18,15 @@ use differential_dataflow::trace::{Builder, Trace, TraceReader};
 use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_compute_types::plan::threshold::{BasicThresholdPlan, ThresholdPlan};
 use mz_repr::Diff;
-use mz_timely_util::columnation::ColumnationChunker;
+use mz_row_spine::RowRowBuilder;
 use timely::Container;
 use timely::container::PushInto;
 
-use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
+use crate::extensions::arrange::{ArrangementSize, MaybeTemporalArrange};
 use crate::extensions::reduce::{ClearContainer, MzReduce};
 use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
-use crate::typedefs::{ErrBatcher, ErrBuilder, MzData, MzTimestamp};
-use mz_row_spine::RowRowBuilder;
+use crate::typedefs::{ErrBuilder, ErrSpine, MzData, MzTimestamp};
 
 /// Shared function to compute an arrangement of values matching `logic`.
 fn threshold_arrangement<'scope, Ts, T1, Bu2, T2, L>(
@@ -79,10 +78,14 @@ where
 ///
 /// This implementation maintains rows in the output, i.e. all rows that have a count greater than
 /// zero. It returns a [CollectionBundle] populated from a local arrangement.
-pub fn build_threshold_basic<'scope, T: RenderTimestamp>(
+pub fn build_threshold_basic<'scope, T>(
     input: CollectionBundle<'scope, T>,
     key: Vec<LirScalarExpr>,
-) -> CollectionBundle<'scope, T> {
+    use_temporal: bool,
+) -> CollectionBundle<'scope, T>
+where
+    T: RenderTimestamp + MaybeTemporalArrange,
+{
     let arrangement = input
         .arrangement(&key)
         .expect("Arrangement ensured to exist");
@@ -101,17 +104,18 @@ pub fn build_threshold_basic<'scope, T: RenderTimestamp>(
                 "Threshold trace",
                 |count| count.is_positive(),
             );
-            let errs: KeyCollection<_, _, _> = errs.as_collection(|k, _| k.clone()).into();
-            let errs = errs
-                .mz_arrange::<ColumnationChunker<_>, ErrBatcher<_, _>, ErrBuilder<_, _>, _>(
-                    "Arrange threshold basic err",
-                );
+            let errs = errs.as_collection(|k, _| (k.clone(), ()));
+            let errs = T::mz_arrange_maybe_temporal::<_, _, _, ErrBuilder<_, _>, ErrSpine<_, _>>(
+                errs,
+                "Arrange threshold basic err",
+                use_temporal,
+            );
             CollectionBundle::from_expressions(key, ArrangementFlavor::Local(oks, errs))
         }
     }
 }
 
-impl<'scope, T: RenderTimestamp> Context<'scope, T> {
+impl<'scope, T: RenderTimestamp + MaybeTemporalArrange> Context<'scope, T> {
     pub(crate) fn render_threshold(
         &self,
         input: CollectionBundle<'scope, T>,
@@ -124,7 +128,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 // We do not need to apply the permutation here,
                 // since threshold doesn't inspect the values, but only
                 // their counts.
-                build_threshold_basic(input, key)
+                build_threshold_basic(input, key, self.temporal_batcher)
             }
         }
     }

@@ -276,3 +276,142 @@ materialize.public.mv_except_distinct_buckets_at_reduce:
 Target cluster: quickstart
 
 EOF
+
+# -----------------------------------------------------------------------------
+# Batcher-mode temporal bucketing: with
+# `enable_compute_temporal_bucketing_batcher` on, bucketing happens inside
+# every arrangement merge batcher (and the standalone bucketing operator is
+# suppressed), regardless of the lowering's strategy annotations. The plans
+# above are unaffected; these are end-to-end correctness checks for temporal
+# filters under batcher mode. Timestamps are far in the past/future relative
+# to any plausible test-run time, so results are deterministic.
+# -----------------------------------------------------------------------------
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_compute_temporal_bucketing_batcher = true;
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE batcher_events (k INT NOT NULL, event_time TIMESTAMP NOT NULL);
+
+statement ok
+INSERT INTO batcher_events VALUES
+  (1, TIMESTAMP '2000-01-01 00:00:00'),
+  (1, TIMESTAMP '2099-01-01 00:00:00'),
+  (2, TIMESTAMP '2099-01-01 00:00:00'),
+  (2, TIMESTAMP '2099-06-01 00:00:00'),
+  (3, TIMESTAMP '2000-06-01 00:00:00');
+
+# Reduce under a temporal filter: only live (far-future-expiring) rows count.
+statement ok
+CREATE MATERIALIZED VIEW batcher_counts AS
+SELECT k, count(*) AS c
+FROM batcher_events
+WHERE event_time + INTERVAL '45 day' > mz_now()
+GROUP BY k;
+
+query II rowsort
+SELECT k, c FROM batcher_counts;
+----
+1 1
+2 2
+
+# TopK under a temporal filter.
+statement ok
+CREATE MATERIALIZED VIEW batcher_topk AS
+SELECT k FROM batcher_events
+WHERE event_time + INTERVAL '45 day' > mz_now()
+ORDER BY k LIMIT 2;
+
+query I rowsort
+SELECT k FROM batcher_topk;
+----
+1
+2
+
+# Consolidating Union + Threshold (EXCEPT ALL) under temporal filters.
+query I rowsort
+(SELECT k FROM batcher_events WHERE event_time + INTERVAL '45 day' > mz_now())
+EXCEPT ALL
+(SELECT k FROM batcher_events WHERE event_time + INTERVAL '36500 day' > mz_now() AND k = 1);
+----
+2
+2
+
+# Indexed view (ArrangeBy) under a temporal filter.
+statement ok
+CREATE VIEW batcher_live AS
+SELECT k FROM batcher_events WHERE event_time + INTERVAL '45 day' > mz_now();
+
+statement ok
+CREATE DEFAULT INDEX ON batcher_live;
+
+query I rowsort
+SELECT k FROM batcher_live;
+----
+1
+2
+2
+
+statement ok
+DROP TABLE batcher_events CASCADE;
+
+# -----------------------------------------------------------------------------
+# Batcher mode composed with the column-paged batcher: the affected
+# arrangements use the temporal-bucketing batcher over paged chains.
+# -----------------------------------------------------------------------------
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_column_paged_batcher = true;
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE paged_events (k INT NOT NULL, event_time TIMESTAMP NOT NULL);
+
+statement ok
+INSERT INTO paged_events VALUES
+  (1, TIMESTAMP '2000-01-01 00:00:00'),
+  (1, TIMESTAMP '2099-01-01 00:00:00'),
+  (2, TIMESTAMP '2099-01-01 00:00:00'),
+  (2, TIMESTAMP '2099-06-01 00:00:00'),
+  (3, TIMESTAMP '2000-06-01 00:00:00');
+
+statement ok
+CREATE VIEW paged_live AS
+SELECT k FROM paged_events WHERE event_time + INTERVAL '45 day' > mz_now();
+
+statement ok
+CREATE DEFAULT INDEX ON paged_live;
+
+query I rowsort
+SELECT k FROM paged_live;
+----
+1
+2
+2
+
+# A join between two temporally filtered inputs exercises the paged temporal
+# batcher in the join stages as well.
+query II rowsort
+SELECT a.k, b.k FROM paged_live a, paged_live b WHERE a.k = b.k;
+----
+1 1
+2 2
+2 2
+2 2
+2 2
+
+statement ok
+DROP TABLE paged_events CASCADE;
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_column_paged_batcher;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_compute_temporal_bucketing_batcher;
+----
+COMPLETE 0
