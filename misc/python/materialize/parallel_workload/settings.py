@@ -38,6 +38,17 @@ class Scenario(Enum):
             return cls(random.choice([elem.value for elem in cls]))
 
 
+# Scenarios that need durable state across restarts/promotions and therefore run
+# against an external CockroachDB metadata and consensus backend. Every other
+# scenario uses the in-process Postgres metadata store. This drives both the
+# `external` service wiring and which scenarios must keep
+# `persist_pg_consensus_read_committed` off (the CRDB_* consensus queries are
+# only correct under SERIALIZABLE).
+COCKROACH_SCENARIOS = frozenset(
+    {Scenario.Kill, Scenario.BackupRestore, Scenario.ZeroDowntimeDeploy}
+)
+
+
 ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = {
     # Uses a lot of memory, hard to predict how much
     "memory_limiter_interval": "0",

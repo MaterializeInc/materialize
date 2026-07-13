@@ -50,7 +50,11 @@ from materialize.parallel_workload.database import (
     Database,
 )
 from materialize.parallel_workload.executor import Executor, initialize_logging
-from materialize.parallel_workload.settings import Complexity, Scenario
+from materialize.parallel_workload.settings import (
+    COCKROACH_SCENARIOS,
+    Complexity,
+    Scenario,
+)
 from materialize.parallel_workload.worker import Worker
 from materialize.parallel_workload.worker_exception import WorkerFailedException
 
@@ -535,10 +539,20 @@ def main() -> int:
         dbname="materialize",
     )
     system_conn.autocommit = True
+    # Mirror the mzcompose harness's scenario-to-backend mapping so that
+    # `persist_pg_consensus_read_committed` stays off against the CockroachDB
+    # backend the external scenarios use.
+    metadata_store = (
+        "cockroach"
+        if Scenario(args.scenario) in COCKROACH_SCENARIOS
+        else "postgres-metadata"
+    )
     with system_conn.cursor() as cur:
         # TODO: Currently the same as mzcompose default settings, add
         # more settings and shuffle them
-        for key, value in get_default_system_parameters().items():
+        for key, value in get_default_system_parameters(
+            metadata_store=metadata_store
+        ).items():
             cur.execute(f"ALTER SYSTEM SET {key} = '{value}'".encode())
     system_conn.close()
 

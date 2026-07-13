@@ -87,6 +87,7 @@ from materialize.parallel_workload.negative_accumulation_errors import (
 )
 from materialize.parallel_workload.settings import (
     ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS,
+    COCKROACH_SCENARIOS,
     Complexity,
     Scenario,
 )
@@ -1948,6 +1949,15 @@ class FlipFlagsAction(Action):
         # TODO: Remove when https://linear.app/materializeinc/issue/DB-138 is fixed
         if exe.db.scenario == Scenario.ZeroDowntimeDeploy and flag_name.startswith(
             "persist_use_critical_since_"
+        ):
+            return False
+
+        # `persist_pg_consensus_read_committed` requires a Postgres consensus
+        # backend. The external scenarios run against CockroachDB, where it
+        # panics persist, so never flip it on there.
+        if (
+            flag_name == "persist_pg_consensus_read_committed"
+            and exe.db.scenario in COCKROACH_SCENARIOS
         ):
             return False
 
