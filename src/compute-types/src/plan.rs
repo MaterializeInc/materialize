@@ -959,13 +959,31 @@ fn match_anti_side(
 /// arrangements at the node level. Any read MFP the node applies (a `GetPlan` MFP or an
 /// `ArrangeBy`'s `input_mfp`) must itself be projection-only, since a filter or map between the
 /// arm and its arrangement changes the collection the operator would consume. Only the key
-/// columns must match `key`; permutation and thinning may differ between arms, because the
+/// columns must match; permutation and thinning may differ between arms, because the
 /// operator sums diffs per key and ignores value contents.
+///
+/// A stripped projection-only `Mfp` renames the arm's output columns relative to the underlying
+/// node. `key` lives in the arm's output (post-projection) space, whereas the underlying node
+/// advertises its arrangement key in its own (pre-projection) space. The key is mapped back
+/// through the projection before comparing, so a reordering or column-dropping projection cannot
+/// produce a false `#i`-vs-`#i` match. The mapped key must match the underlying arrangement key
+/// exactly; the operator only serves the case where the input is already keyed as the output
+/// needs and does not attempt to permute.
 fn arm_arrangement_matches(arm: &LirRelationExpr, key: &[LirScalarExpr]) -> bool {
-    let node = match &arm.node {
-        LirRelationNode::Mfp { input, mfp, .. } if is_projection_only(mfp) => &input.node,
-        node => node,
+    let (node, mapped_key) = match &arm.node {
+        LirRelationNode::Mfp { input, mfp, .. } if is_projection_only(mfp) => {
+            // `is_projection_only` guarantees no expressions, predicates, or temporal bounds, so
+            // the projection alone describes the mapping: `output_col[i] = underlying_col[proj[i]]`.
+            let Some(mapped_key) = remap_key_through_projection(key, &mfp.safe_mfp().projection)
+            else {
+                return false;
+            };
+            (&input.node, mapped_key)
+        }
+        // No projection wrapper: the arm output space equals the underlying node space.
+        node => (node, key.to_vec()),
     };
+    let key = mapped_key.as_slice();
 
     let advertises_key = |arranged: &[(Vec<LirScalarExpr>, Vec<usize>, Vec<usize>)]| -> bool {
         arranged.iter().any(|(k, _, _)| k.as_slice() == key)
@@ -981,8 +999,8 @@ fn arm_arrangement_matches(arm: &LirRelationExpr, key: &[LirScalarExpr]) -> bool
             forms,
             ..
         } => {
-            // The arrangement on `key` is either built by this node (its `forms`) or the input
-            // arrangement it reads through (`input_key`).
+            // The arrangement on the mapped key is either built by this node (its `forms`) or the
+            // input arrangement it reads through (`input_key`).
             is_projection_only(input_mfp)
                 && (advertises_key(&forms.arranged)
                     || input_key
@@ -991,6 +1009,27 @@ fn arm_arrangement_matches(arm: &LirRelationExpr, key: &[LirScalarExpr]) -> bool
         }
         _ => false,
     }
+}
+
+/// Maps `key` from the arm's output (post-projection) column space into the underlying node's
+/// (pre-projection) column space through `proj`, where `output_col[i] = underlying_col[proj[i]]`.
+///
+/// Every `key` entry must be a plain column reference, since threshold keys are full-row column
+/// lists over the arm output. Returns `None` (decline) if any entry is not a plain column
+/// reference or falls outside `proj`, either of which means the key is not the shape this
+/// recognizer knows how to remap.
+fn remap_key_through_projection(
+    key: &[LirScalarExpr],
+    proj: &[usize],
+) -> Option<Vec<LirScalarExpr>> {
+    key.iter()
+        .map(|expr| {
+            let LirScalarExpr::Column(col, _) = expr else {
+                return None;
+            };
+            proj.get(*col).copied().map(LirScalarExpr::column)
+        })
+        .collect()
 }
 
 /// Reports whether a `GetPlan` reads its collection with at most a projection: no seek, no
@@ -1126,4 +1165,87 @@ fn bucketing_of_expected_group_size(expected_group_size: Option<u64>) -> Vec<u64
 
     buckets.reverse();
     buckets
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cols(indices: &[usize]) -> Vec<LirScalarExpr> {
+        indices.iter().copied().map(LirScalarExpr::column).collect()
+    }
+
+    /// Reproduces the arrangement-match decision `arm_arrangement_matches` makes after stripping a
+    /// projection-only `Mfp`: the threshold `key` remapped through `proj` must equal the
+    /// underlying arrangement key exactly.
+    fn key_serves(key: &[usize], proj: &[usize], underlying_key: &[usize]) -> bool {
+        remap_key_through_projection(&cols(key), proj).as_deref()
+            == Some(cols(underlying_key).as_slice())
+    }
+
+    #[test]
+    fn remap_identity_projection_matches() {
+        // Identity projection leaves the key unchanged, so an underlying arrangement keyed
+        // identically still matches.
+        assert_eq!(
+            remap_key_through_projection(&cols(&[0, 1]), &[0, 1]),
+            Some(cols(&[0, 1]))
+        );
+        assert!(key_serves(&[0, 1], &[0, 1], &[0, 1]));
+    }
+
+    #[test]
+    fn remap_column_drop_preserving_order_matches() {
+        // The arm drops underlying column 1 but keeps 0 and 2 in order. The output key `[#0, #1]`
+        // maps to underlying `[#0, #2]`, which an arrangement keyed on `[#0, #2]` serves.
+        assert_eq!(
+            remap_key_through_projection(&cols(&[0, 1]), &[0, 2]),
+            Some(cols(&[0, 2]))
+        );
+        assert!(key_serves(&[0, 1], &[0, 2], &[0, 2]));
+        // An arrangement keyed on the raw (unmapped) columns must NOT be accepted.
+        assert!(!key_serves(&[0, 1], &[0, 2], &[0, 1]));
+    }
+
+    #[test]
+    fn remap_reordering_projection_declines() {
+        // A reordering projection maps `[#0, #1]` to `[#1, #0]`; an arrangement keyed on the raw
+        // `[#0, #1]` no longer matches the mapped key, so the arm is declined.
+        assert_eq!(
+            remap_key_through_projection(&cols(&[0, 1]), &[1, 0]),
+            Some(cols(&[1, 0]))
+        );
+        assert!(!key_serves(&[0, 1], &[1, 0], &[0, 1]));
+        // It does serve an arrangement keyed on the actually-mapped columns.
+        assert!(key_serves(&[0, 1], &[1, 0], &[1, 0]));
+    }
+
+    #[test]
+    fn remap_shifted_projection_differs() {
+        // A projection onto entirely different underlying columns yields a mapped key that no
+        // arrangement keyed on the raw columns can serve.
+        assert_eq!(
+            remap_key_through_projection(&cols(&[0, 1]), &[2, 3]),
+            Some(cols(&[2, 3]))
+        );
+        assert!(!key_serves(&[0, 1], &[2, 3], &[0, 1]));
+    }
+
+    #[test]
+    fn remap_out_of_range_declines() {
+        // A key column with no projection entry cannot be remapped, so the helper declines rather
+        // than guess.
+        assert_eq!(remap_key_through_projection(&cols(&[0, 2]), &[0, 1]), None);
+    }
+
+    #[test]
+    fn remap_non_column_key_declines() {
+        // Threshold keys are plain column references; anything else is outside the shape the
+        // recognizer handles.
+        let key = vec![LirScalarExpr::literal_ok(
+            mz_repr::Datum::True,
+            mz_repr::ReprScalarType::Bool,
+        )];
+        assert_eq!(remap_key_through_projection(&key, &[0]), None);
+    }
 }
