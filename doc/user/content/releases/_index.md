@@ -20,6 +20,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Self-Managed: 2026-07-17* <br>
 
 ### Improvements {#v26.33-improvements}
+- **`EXPLAIN ANALYZE` on multi-replica clusters via MCP**: The Materialize MCP developer endpoint's `query` tool now accepts an optional cluster replica, so `EXPLAIN ANALYZE` can target a specific replica and run on clusters with more than one replica.
 - **Faster queries on busy environments**: Query latency on query-heavy or overloaded clusters is reduced by caching the catalog snapshot for the duration of a session.
 - **Improved responsiveness under load**: A slow timestamp oracle no longer stalls unrelated sessions that are running `EXPLAIN TIMESTAMP` or `SUBSCRIBE`.
 
