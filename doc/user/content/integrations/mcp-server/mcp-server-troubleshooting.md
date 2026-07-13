@@ -76,6 +76,8 @@ printf '<user>:<password>' | base64
 echo '<your-base64-token>' | base64 --decode
 ```
 
+Make sure the decoded output matches `user:password` exactly.
+
 ## OAuth sign-in fails (Self-Managed)
 
 **Symptom:** The browser sign-in fails at the identity provider (for example,
@@ -90,5 +92,3 @@ tokens, and the authorization server audience in `oidc_audience`.
 **Fix:** See [Connecting MCP
 clients](/security/self-managed/sso/#connecting-mcp-clients) for the
 requirements and a troubleshooting table.
-
-Make sure the decoded output matches `user:password` exactly.

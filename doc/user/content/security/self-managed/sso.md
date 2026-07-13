@@ -89,15 +89,15 @@ additional applications in the [Service accounts](#service-accounts) section.
 
    **Custom domains:** When the authorization server **Issuer** is set to **Dynamic (based on Request Domain)**, Okta issues tokens whose `iss` claim uses your custom domain (for example, `https://sso.your-org.com/oauth2/default`) instead of the default Okta URL. Configure the `oidc_issuer` system parameter in Materialize to match that issuer value exactly.
 
-   {{< warning >}}
-   Use a **custom authorization server** (e.g., `.../oauth2/default`), not the
-   Okta **org authorization server** (the bare org URL, without an
-   `/oauth2/...` path). Access tokens issued by the org authorization server
-   have a fixed `aud` claim and cannot carry custom claims or scopes, which
-   breaks the [Client Credentials flow](#client-credentials-flow) and
-   [MCP clients](#connecting-mcp-clients). Custom authorization servers,
-   including `default`, require Okta's API Access Management feature.
-   {{</ warning >}}
+   {{% warning %}}
+Use a **custom authorization server** (e.g., `.../oauth2/default`), not the
+Okta **org authorization server** (the bare org URL, without an
+`/oauth2/...` path). Access tokens issued by the org authorization server
+have a fixed `aud` claim and cannot carry custom claims or scopes, which
+breaks the [Client Credentials flow](#client-credentials-flow) and
+[MCP clients](#connecting-mcp-clients). Custom authorization servers,
+including `default`, require Okta's API Access Management feature.
+   {{% /warning %}}
 
 1. Go to the **Assignments** tab and assign the users or groups that should have
    access to Materialize.
@@ -492,7 +492,7 @@ is established, it persists until disconnected, regardless of token expiry.
 
 ## Connecting MCP clients
 
-*Available starting in v26.30*
+*OAuth sign-in for MCP clients is available starting in v26.31.*
 
 Materialize provides built-in [MCP servers](/integrations/mcp-server/) at
 `/api/mcp/agent` and `/api/mcp/developer`. When SSO is enabled, MCP clients
@@ -528,7 +528,11 @@ an OAuth **access token**. Access tokens have additional requirements:
    `api://default`:
 
    ```mzsql
-   -- Make sure to add to the array if already set
+   -- YOUR_CLIENT_ID is the console app's client ID from Step 1, which is the
+   -- `aud` value on ID tokens (browser sign-in). The `api://default` entry is
+   -- the authorization server's audience, which is the `aud` value on access
+   -- tokens (MCP OAuth sign-in). Both must be present so tokens from either
+   -- flow validate; add to the array if oidc_audience is already set.
    ALTER SYSTEM SET oidc_audience = '["YOUR_CLIENT_ID", "api://default"]';
    ```
 
