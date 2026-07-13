@@ -286,6 +286,25 @@ pub async fn publish_kafka_schema(
     Ok(schema_id)
 }
 
+/// Map a Confluent compatibility level onto its AWS Glue equivalent.
+///
+/// The sink's `COMPATIBILITY` option is represented with the Confluent type
+/// throughout planning, even for Glue. Every Confluent level has a Glue
+/// analogue (the transitive levels map to Glue's `*All` modes), so this is
+/// total. Glue's `DISABLED` has no Confluent analogue and is rejected at
+/// `CREATE SINK` time, so it never reaches here.
+pub fn glue_compatibility_from_csr(level: mz_ccsr::CompatibilityLevel) -> GlueCompatibility {
+    match level {
+        mz_ccsr::CompatibilityLevel::Backward => GlueCompatibility::Backward,
+        mz_ccsr::CompatibilityLevel::BackwardTransitive => GlueCompatibility::BackwardAll,
+        mz_ccsr::CompatibilityLevel::Forward => GlueCompatibility::Forward,
+        mz_ccsr::CompatibilityLevel::ForwardTransitive => GlueCompatibility::ForwardAll,
+        mz_ccsr::CompatibilityLevel::Full => GlueCompatibility::Full,
+        mz_ccsr::CompatibilityLevel::FullTransitive => GlueCompatibility::FullAll,
+        mz_ccsr::CompatibilityLevel::None => GlueCompatibility::None,
+    }
+}
+
 /// Register `schema` for a sink in an AWS Glue Schema Registry, returning the
 /// schema-version UUID to frame records with.
 ///
@@ -614,5 +633,24 @@ mod tests {
             .expect("failed match falls through to registration");
         assert_eq!(id.to_string(), PUBLISHED_ID);
         assert_eq!(register.num_calls(), 1);
+    }
+
+    #[mz_ore::test]
+    fn glue_compatibility_mapping_is_total() {
+        // Exhaustive: every Confluent level maps to a distinct Glue mode, and
+        // transitive levels map to Glue's `*All` variants.
+        use mz_ccsr::CompatibilityLevel::*;
+        let cases = [
+            (Backward, GlueCompatibility::Backward),
+            (BackwardTransitive, GlueCompatibility::BackwardAll),
+            (Forward, GlueCompatibility::Forward),
+            (ForwardTransitive, GlueCompatibility::ForwardAll),
+            (Full, GlueCompatibility::Full),
+            (FullTransitive, GlueCompatibility::FullAll),
+            (None, GlueCompatibility::None),
+        ];
+        for (csr, glue) in cases {
+            assert_eq!(glue_compatibility_from_csr(csr), glue);
+        }
     }
 }
