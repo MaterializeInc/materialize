@@ -93,13 +93,14 @@ impl<P, S> DataflowDescription<P, S> {
         let Some(as_of) = as_of.as_option() else {
             return false;
         };
-        // Ensure that `as_of = MAX` implies `until.is_empty()`.
-        soft_assert_or_log!(
-            as_of != &mz_repr::Timestamp::MAX || until.is_empty(),
-            "expected `until = {{}}` due to `as_of = MAX`, got `until = {until:?}`",
-        );
-        // Note that the `(as_of = MAX, until = {})` case also returns `true`
-        // here (as expected) since we are going to compare two `None` values.
+        // With `as_of = MAX` the `as_of <= until` invariant leaves only two valid
+        // frontiers, and both are handled correctly by the comparison below:
+        //   * `until = {}` (unbounded) yields `None == None`, so single time. `MAX`
+        //     is the last timestamp, so an unbounded dataflow starting there sees
+        //     exactly one time.
+        //   * `until = {MAX}` is the empty range produced by e.g.
+        //     `SUBSCRIBE ... AS OF MAX UP TO MAX`. `try_step_forward` on `MAX`
+        //     overflows to `None`, so `None == Some(MAX)` is false: not single time.
         as_of.try_step_forward().as_ref() == until.as_option()
     }
 }
@@ -628,4 +629,51 @@ pub struct BuildDesc<P> {
     pub id: GlobalId,
     /// TODO(database-issues#7533): Add documentation.
     pub plan: P,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds a minimal dataflow description carrying only the `as_of` and
+    /// `until` frontiers that `is_single_time` inspects.
+    fn desc_with_bounds(
+        as_of: Antichain<Timestamp>,
+        until: Antichain<Timestamp>,
+    ) -> DataflowDescription<OptimizedMirRelationExpr, ()> {
+        let mut desc = DataflowDescription::new("test".to_string());
+        desc.set_as_of(as_of);
+        desc.until = until;
+        desc
+    }
+
+    #[mz_ore::test]
+    fn is_single_time_classification() {
+        // Ordinary single-time dataflow: `until = as_of + 1`.
+        assert!(
+            desc_with_bounds(
+                Antichain::from_elem(5.into()),
+                Antichain::from_elem(6.into())
+            )
+            .is_single_time()
+        );
+
+        // `as_of = MAX` with an empty `until` is single time: `MAX` is the last
+        // timestamp, so an unbounded dataflow starting there sees exactly one time.
+        assert!(
+            desc_with_bounds(Antichain::from_elem(Timestamp::MAX), Antichain::new())
+                .is_single_time()
+        );
+
+        // `as_of = MAX` with `until = {MAX}` is an empty range, produced by
+        // `SUBSCRIBE ... AS OF MAX UP TO MAX`. It must not be classified as single
+        // time, and it must not trip an invariant assertion (see CLU-169).
+        assert!(
+            !desc_with_bounds(
+                Antichain::from_elem(Timestamp::MAX),
+                Antichain::from_elem(Timestamp::MAX)
+            )
+            .is_single_time()
+        );
+    }
 }
