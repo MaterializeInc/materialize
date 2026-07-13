@@ -61,7 +61,13 @@ from materialize.parallel_workload.settings import Complexity, Scenario
 
 MAX_COLUMNS = 5
 MAX_INCLUDE_HEADERS = 5
-MAX_ROWS = 50
+# Kept small on purpose. Views can nest (a view's inputs may themselves be
+# views), so a peek flattens into a deep join whose intermediate row count
+# scales as MAX_ROWS ** join_depth. On the 24 GiB CI agent this let a single
+# quickstart clusterd balloon past the cgroup and get OOM-killed (SIGKILL). A
+# stress test that hunts panics and unexpected errors cares about query shapes,
+# not data volume, so a small bound keeps coverage while capping the blow-up.
+MAX_ROWS = 10
 MAX_CLUSTERS = 4
 MAX_CLUSTER_REPLICAS = 2
 MAX_DBS = 5
