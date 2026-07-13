@@ -25,6 +25,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 - **Improved responsiveness under load**: A slow timestamp oracle no longer stalls unrelated sessions that are running `EXPLAIN TIMESTAMP` or `SUBSCRIBE`.
 
 ### Bug Fixes {#v26.33-bug-fixes}
+- Fixed server crashes triggered by stack overflows while computing object dependencies and read privileges.
 - Fixed catalog corruption and coordinator panics triggered by `ALTER SCHEMA RENAME` when the target schema contains user-defined types, functions, or temporary objects.
 - Fixed a crash that could occur when a `SUBSCRIBE` ran while an index or other dependency it read was concurrently dropped; the query now returns a clean error.
 - Fixed a crash triggered by binding a non-UTF-8 `char` parameter over the extended query protocol.
