@@ -13,10 +13,44 @@
 # composition. This is a separate script instead of a module to prevent
 # polluting namespaces and inherting a polluted namespace.
 
+import argparse
+import ast
 import os
 import sys
-import argparse
+
 from materialize import MZ_ROOT
+
+PY_ROOT = MZ_ROOT / "misc" / "python"
+
+
+def module_to_file(module: str) -> str | None:
+    """Resolve a dotted `materialize.*` module name to its source file, without
+    importing it."""
+    rel = module.replace(".", "/")
+    for candidate in (PY_ROOT / f"{rel}.py", PY_ROOT / rel / "__init__.py"):
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def imported_materialize_modules(tree: ast.AST) -> set[str]:
+    """Dotted `materialize.*` module names referenced by any import statement in
+    the file, including imports nested inside functions or conditionals (which a
+    runtime sys.modules snapshot would miss)."""
+    modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                modules.add(alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module is None:
+                continue
+            modules.add(node.module)
+            # `from pkg import name` may be importing a submodule `pkg.name`.
+            for alias in node.names:
+                modules.add(f"{node.module}.{alias.name}")
+    return {m for m in modules if m.startswith("materialize")}
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(
@@ -31,19 +65,41 @@ namespaces and inherting a polluted namespace.""",
     args = parser.parse_args()
 
     sys.path.insert(1, args.path)
-    import mzcompose
+    import mzcompose  # noqa: F401
 
+    files: set[str] = set()
+    # Runtime view: modules imported at module scope, including any resolved
+    # dynamically (e.g. via importlib) as the composition module loaded.
     for key, module in sys.modules.items():
-        if not key.startswith("materialize."):
+        if key.startswith("materialize.") and getattr(module, "__file__", None):
+            files.add(os.path.realpath(module.__file__))
+
+    # Static view: also follow imports that only execute inside functions or
+    # conditionals, which the runtime snapshot above misses. Walk the
+    # composition and every reachable materialize file via the AST.
+    visited: set[str] = set()
+    stack = [os.path.join(args.path, "mzcompose.py"), *files]
+    while stack:
+        path = os.path.realpath(stack.pop())
+        if path in visited:
             continue
-        if module.__file__ is not None:
-            print(os.path.relpath(module.__file__, MZ_ROOT))
-        # Ignore all not explicitly imported files of the module
-        # else:
-        #     for path in module.__path__:
-        #         for file in os.listdir(path):
-        #             if file.endswith(".py"):
-        #                 print(os.path.relpath(os.path.join(path, file), MZ_ROOT))
+        visited.add(path)
+        try:
+            with open(path, encoding="utf-8") as f:
+                tree = ast.parse(f.read(), filename=path)
+        except (OSError, SyntaxError):
+            continue
+        for module in imported_materialize_modules(tree):
+            file = module_to_file(module)
+            if file is not None:
+                files.add(os.path.realpath(file))
+                stack.append(file)
+
+    for file in sorted(files):
+        print(os.path.relpath(file, MZ_ROOT))
+
+    return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())

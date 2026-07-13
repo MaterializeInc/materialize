@@ -22,7 +22,10 @@ from materialize.mzcompose import (
 )
 from materialize.parallel_workload.action import FlipFlagsAction
 
-CONFIG_REGEX = re.compile(r' Config::new\(\s*"([^"]+)"', re.MULTILINE)
+# Match both the bare `Config::new(` (imported via `use mz_dyncfg::Config`) and
+# the qualified `mz_dyncfg::Config::new(`, without matching unrelated third-party
+# Config types like `tokio_postgres::Config::new(`.
+CONFIG_REGEX = re.compile(r'(?: |mz_dyncfg::)Config::new\(\s*"([^"]+)"', re.MULTILINE)
 
 
 def main() -> int:

@@ -90,6 +90,7 @@ def _search_issues_graphql(token: str, repo: str) -> list[dict[str, Any]]:
                 "Content-Type": "application/json",
             },
             json={"query": query, "variables": variables},
+            timeout=60,
         )
 
         if response.status_code != 200:
@@ -179,7 +180,7 @@ def get_known_issues_from_github(
             continue
 
         location: str | None = (
-            matches_location[0] if len(matches_location) == 1 else None
+            matches_location[0].strip() if len(matches_location) == 1 else None
         )
 
         ignore_failure = len(matches_ignore_failure) == 1 and matches_ignore_failure[
@@ -243,6 +244,7 @@ def list_release_tags(
             f"https://api.github.com/repos/{repo}/releases",
             headers=headers,
             params={"per_page": 100, "page": page},
+            timeout=60,
         )
         if response.status_code != 200:
             raise ValueError(
@@ -269,6 +271,7 @@ def create_release(
     response = requests.get(
         f"https://api.github.com/repos/{repo}/releases/tags/{tag}",
         headers=headers,
+        timeout=60,
     )
     if response.status_code == 200:
         print(f"GitHub release for {tag} already exists: {response.json()['html_url']}")
@@ -284,6 +287,7 @@ def create_release(
     response = requests.get(
         f"https://api.github.com/repos/{repo}/git/ref/tags/{tag}",
         headers=headers,
+        timeout=60,
     )
     if response.status_code != 200:
         raise ValueError(
@@ -300,6 +304,7 @@ def create_release(
             "body": body,
             "make_latest": "true" if make_latest else "false",
         },
+        timeout=60,
     )
     if response.status_code != 201:
         raise ValueError(

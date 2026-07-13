@@ -574,6 +574,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "persist_consensus_connection_pool_max_wait",
     "persist_consensus_connection_pool_ttl",
     "persist_consensus_connection_pool_ttl_stagger",
+    "persist_use_postgres_tuned_queries",
     "crdb_connect_timeout",
     "crdb_tcp_user_timeout",
     "crdb_keepalives_idle",

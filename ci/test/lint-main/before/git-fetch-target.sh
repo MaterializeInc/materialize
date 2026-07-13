@@ -16,6 +16,6 @@ cd "$(dirname "$0")/../../../.."
 . misc/shlib/shlib.bash
 . misc/buildkite/git.bash
 
-if [[ "${1:-}" != --offline ]]; then
+if [[ "${MZ_LINT_OFFLINE:-}" != 1 ]]; then
   fetch_pr_target_branch
 fi

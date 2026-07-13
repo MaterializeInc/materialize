@@ -23,7 +23,6 @@ import argparse
 import copy
 import hashlib
 import os
-import subprocess
 import sys
 import threading
 import traceback
@@ -309,6 +308,7 @@ so it is executed.""",
     if (
         (args.pipeline == "test" or trim_for_pr_nightly)
         and not os.getenv("CI_TEST_IDS")
+        and not os.getenv("CI_TEST_SELECTION")
         and fail_build_reason is None
     ):
         if "ci-no-trim" in pr_labels:
@@ -534,6 +534,16 @@ def increase_agents_timeouts(
                 step["skip"] = True
 
 
+def rewrite_step_dependency(step: dict[str, Any], old: str, new: str) -> None:
+    """Rewrite a single dependency of a step, handling both the string and
+    list forms of depends_on."""
+    d = step.get("depends_on")
+    if d == old:
+        step["depends_on"] = new
+    elif isinstance(d, list):
+        step["depends_on"] = [new if dep == old else dep for dep in d]
+
+
 def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
     """Switch jobs to AWS if Hetzner is currently overloaded"""
     # If Hetzner is entirely broken, you have to take these actions to switch everything back to AWS:
@@ -648,30 +658,26 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
         if agent == "hetzner-aarch64-2cpu-4gb":
             if "hetzner-x86-64-2cpu-4gb" not in stuck:
                 step["agents"]["queue"] = "hetzner-x86-64-2cpu-4gb"
-                if step.get("depends_on") == "build-aarch64":
-                    step["depends_on"] = "build-x86_64"
+                rewrite_step_dependency(step, "build-aarch64", "build-x86_64")
             else:
                 step["agents"]["queue"] = "linux-aarch64"
         elif agent == "hetzner-aarch64-4cpu-8gb":
             if "hetzner-x86-64-4cpu-8gb" not in stuck:
                 step["agents"]["queue"] = "hetzner-x86-64-4cpu-8gb"
-                if step.get("depends_on") == "build-aarch64":
-                    step["depends_on"] = "build-x86_64"
+                rewrite_step_dependency(step, "build-aarch64", "build-x86_64")
             else:
                 step["agents"]["queue"] = "linux-aarch64"
         elif agent == "hetzner-aarch64-8cpu-16gb":
             if "hetzner-x86-64-8cpu-16gb" not in stuck:
                 step["agents"]["queue"] = "hetzner-x86-64-8cpu-16gb"
-                if step.get("depends_on") == "build-aarch64":
-                    step["depends_on"] = "build-x86_64"
+                rewrite_step_dependency(step, "build-aarch64", "build-x86_64")
             else:
                 step["agents"]["queue"] = "linux-aarch64-medium"
 
         elif agent == "hetzner-aarch64-16cpu-32gb":
             if "hetzner-x86-64-12cpu-24gb" not in stuck:
                 step["agents"]["queue"] = "hetzner-x86-64-12cpu-24gb"
-                if step.get("depends_on") == "build-aarch64":
-                    step["depends_on"] = "build-x86_64"
+                rewrite_step_dependency(step, "build-aarch64", "build-x86_64")
             else:
                 step["agents"]["queue"] = "linux-aarch64-medium"
 
@@ -908,8 +914,10 @@ def trim_test_selection_id(pipeline: Any, step_ids_to_run: set[int]) -> None:
                 "analyze",
                 "build-x86_64",
                 "build-aarch64",
-                "build-x86_64-lto",
-                "build-aarch64-lto",
+                "build-x86_64-no-lto",
+                "build-aarch64-no-lto",
+                "build-x86_64-asan",
+                "build-aarch64-asan",
                 "devel-docker-tags",
             )
             and not step.get("async")
@@ -931,8 +939,10 @@ def trim_test_selection_name(pipeline: Any, steps_to_run: set[str]) -> None:
                 "analyze",
                 "build-x86_64",
                 "build-aarch64",
-                "build-x86_64-lto",
-                "build-aarch64-lto",
+                "build-x86_64-no-lto",
+                "build-aarch64-no-lto",
+                "build-x86_64-asan",
+                "build-aarch64-asan",
                 "devel-docker-tags",
             )
             and not step.get("async")
@@ -1202,7 +1212,7 @@ def remove_dependencies_on_prs(
     pipeline_name: str,
     hash_check: dict[Arch, tuple[str, bool]],
 ) -> None:
-    """On PRs in test pipeline remove dependencies on the build, start up tests immediately, they keep retrying for the Docker image"""
+    """On test-pipeline PRs, let single-architecture consumers retry for their image instead of waiting for its build."""
     if pipeline_name != "test":
         return
     if (
@@ -1212,18 +1222,36 @@ def remove_dependencies_on_prs(
         or os.environ["BUILDKITE_BRANCH"].startswith("dependabot/")
     ):
         return
+    build_image_exists = {
+        "build-x86_64": hash_check[Arch.X86_64][1],
+        "build-aarch64": hash_check[Arch.AARCH64][1],
+    }
     for step in steps(pipeline):
         if step.get("id") in (
             "upload-debug-symbols-x86_64",
             "upload-debug-symbols-aarch64",
         ):
             continue
-        if step.get("depends_on") in ("build-x86_64", "build-aarch64"):
-            if step["depends_on"] == "build-x86_64" and hash_check[Arch.X86_64][1]:
-                continue
-            if step["depends_on"] == "build-aarch64" and hash_check[Arch.AARCH64][1]:
-                continue
-            step.setdefault("env", {})["CI_WAITING_FOR_BUILD"] = step["depends_on"]
+        d = step.get("depends_on")
+        if d is None:
+            continue
+        deps = [d] if isinstance(d, str) else list(d)
+        build_deps = [dep for dep in deps if dep in build_image_exists]
+        # CI_WAITING_FOR_BUILD tracks one build's status. A multi-architecture
+        # consumer needs every build, so it cannot safely use that contract.
+        if len(build_deps) > 1:
+            continue
+        # Drop the build dependency whose image isn't published yet, so the
+        # consumer starts immediately and keeps retrying for the Docker image.
+        missing_build_deps = [dep for dep in build_deps if not build_image_exists[dep]]
+        if not missing_build_deps:
+            continue
+        waiting_for_build = missing_build_deps[0]
+        step.setdefault("env", {})["CI_WAITING_FOR_BUILD"] = waiting_for_build
+        remaining = [dep for dep in deps if dep != waiting_for_build]
+        if remaining:
+            step["depends_on"] = remaining
+        else:
             del step["depends_on"]
 
 
@@ -1277,51 +1305,57 @@ def trim_builds(
 _github_changed_files: set[str] | None = None
 
 
-def have_paths_changed(globs: Iterable[str]) -> bool:
-    """Reports whether the specified globs have diverged from origin/main."""
-    global _github_changed_files
+def _changed_files_from_main() -> set[str]:
+    """Files that diverged from origin/main, via the GitHub compare API with a
+    local git fallback."""
     try:
-        if not _github_changed_files:
-            head = spawn.capture(["git", "rev-parse", "HEAD"]).strip()
-            headers = {"Accept": "application/vnd.github+json"}
-            if token := os.getenv(
-                "GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN"
-            ) or os.getenv("GITHUB_TOKEN"):
-                headers["Authorization"] = f"Bearer {token}"
+        head = spawn.capture(["git", "rev-parse", "HEAD"]).strip()
+        headers = {"Accept": "application/vnd.github+json"}
+        if token := os.getenv("GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN") or os.getenv(
+            "GITHUB_TOKEN"
+        ):
+            headers["Authorization"] = f"Bearer {token}"
 
-            resp = requests.get(
-                f"https://api.github.com/repos/materializeinc/materialize/compare/main...{head}",
-                headers=headers,
-            )
-            resp.raise_for_status()
-            _github_changed_files = {
-                f["filename"] for f in resp.json().get("files", [])
-            }
-
-        for file in spawn.capture(["git", "ls-files", *globs]).splitlines():
-            if file in _github_changed_files:
-                return True
-        return False
+        resp = requests.get(
+            f"https://api.github.com/repos/materializeinc/materialize/compare/main...{head}",
+            headers=headers,
+        )
+        resp.raise_for_status()
+        files = resp.json().get("files", [])
+        # The compare API caps its file list at 300. Beyond that the list is
+        # truncated, and trusting it would silently treat changed files as
+        # unchanged and trim their tests, so fall back to a local diff.
+        if len(files) >= 300:
+            raise RuntimeError("compare API file list truncated at 300 files")
+        return {f["filename"] for f in files}
     except Exception as e:
         # Try locally if Github is down or the change has not been pushed yet when running locally
         print(f"Failed to get changed files from Github, running locally: {e}")
 
         # Make sure we have an up to date view of main.
         command = ["git", "fetch"]
-        if spawn.capture(["git", "rev-parse", "--is-shallow-repository"]) == "true":
+        if (
+            spawn.capture(["git", "rev-parse", "--is-shallow-repository"]).strip()
+            == "true"
+        ):
             command.append("--unshallow")
         spawn.runv(command + ["origin", "main"])
 
-        diff = subprocess.run(
-            ["git", "diff", "--no-patch", "--quiet", "origin/main...", "--", *globs]
+        return set(
+            spawn.capture(["git", "diff", "--name-only", "origin/main..."]).splitlines()
         )
-        if diff.returncode == 0:
-            return False
-        elif diff.returncode == 1:
+
+
+def have_paths_changed(globs: Iterable[str]) -> bool:
+    """Reports whether the specified globs have diverged from origin/main."""
+    global _github_changed_files
+    if _github_changed_files is None:
+        _github_changed_files = _changed_files_from_main()
+
+    for file in spawn.capture(["git", "ls-files", *globs]).splitlines():
+        if file in _github_changed_files:
             return True
-        else:
-            diff.check_returncode()
-            raise RuntimeError("unreachable")
+    return False
 
 
 def trim_ci_glue_exempt_steps(pipeline: Any) -> None:
