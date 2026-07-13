@@ -404,6 +404,12 @@ macro_rules! derive_binary {
                     $(Self::$name(f) => LazyBinaryFunc::is_monotone(f),)*
                 }
             }
+
+            pub fn is_infinity_monotone(&self) -> bool {
+                match self {
+                    $(Self::$name(f) => LazyBinaryFunc::is_infinity_monotone(f),)*
+                }
+            }
         }
 
         impl fmt::Display for BinaryFunc {

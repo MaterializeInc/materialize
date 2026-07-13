@@ -1494,4 +1494,224 @@ mod tests {
 
         tx
     }
+
+    /// End-to-end persist filter-pushdown soundness checks.
+    ///
+    /// These mirror the real audit contract in [`PendingWork::do_work`]: build
+    /// a part from actual rows, compute the *real* production column statistics
+    /// from it, then run [`filter_result`] and assert it never returns
+    /// [`FilterResult::Discard`] for a part whose MFP would produce output (an
+    /// `Ok` row or an error row) on some actual row. A `Discard` in that case is
+    /// exactly the wrongly-skipped part the runtime audit panics on.
+    ///
+    /// Unlike the interpreter-level proptests in `mz_expr::interpret`, this
+    /// exercises the full path stats derivation -> `col_stats` -> interpreter,
+    /// so it catches both interpreter bugs and stats-derivation bugs (e.g. a
+    /// column stat range that fails to contain a real value). See
+    /// database-issues#9656 / PER-50.
+    mod filter_pushdown_audit {
+        use mz_expr::func::{
+            AddFloat32, CastNumericToFloat32, CastNumericToMzTimestamp, Eq, Gt, Gte, Lt, Lte,
+            MulFloat32, RoundNumericBinary,
+        };
+        use mz_expr::{BinaryFunc, MapFilterProject, MirScalarExpr, UnaryFunc};
+        use mz_ore::metrics::MetricsRegistry;
+        use mz_persist_types::part::PartBuilder;
+        use mz_persist_types::stats::{PartStats, PartStatsMetrics};
+        use mz_repr::adt::numeric::Numeric;
+        use mz_repr::{Diff, ReprScalarType, SqlScalarType};
+        use proptest::prelude::*;
+        use proptest::sample::select;
+
+        use super::*;
+
+        fn f32_lit(x: f32) -> MirScalarExpr {
+            MirScalarExpr::literal_ok(Datum::from(x), ReprScalarType::Float32)
+        }
+
+        fn numeric_datum(x: f64) -> Datum<'static> {
+            Datum::from(Numeric::from(x))
+        }
+
+        fn numeric_desc() -> RelationDesc {
+            RelationDesc::builder()
+                .with_column(
+                    "c0",
+                    SqlScalarType::Numeric { max_scale: None }.nullable(false),
+                )
+                .finish()
+        }
+
+        /// Compute the real production `PartStats` from a set of rows, the same
+        /// way the storage read path does.
+        fn build_part_stats(desc: &RelationDesc, rows: &[Row]) -> PartStats {
+            let mut builder = PartBuilder::new(desc, &UnitSchema);
+            for row in rows {
+                builder.push(&SourceData(Ok(row.clone())), &(), 1u64, 1i64);
+            }
+            let part = builder.finish();
+            PartStats::new::<SourceData, RelationDesc>(&part, desc).expect("stats")
+        }
+
+        /// Ground truth: does the MFP produce any output (an `Ok` row that
+        /// passes the filter, or an error row) on at least one actual row? If
+        /// so, the part must not be discarded.
+        fn mfp_yields_output(plan: &MfpPlan, rows: &[Row]) -> bool {
+            let arena = RowArena::new();
+            let mut row_builder = Row::default();
+            for row in rows {
+                let mut datums: Vec<Datum> = row.iter().collect();
+                let mut results = plan.evaluate::<DataflowError, _>(
+                    &mut datums,
+                    &arena,
+                    Timestamp::MIN,
+                    Diff::from(1),
+                    |_| true,
+                    &mut row_builder,
+                );
+                if results.next().is_some() {
+                    return true;
+                }
+            }
+            false
+        }
+
+        fn comparison_funcs() -> impl Strategy<Value = BinaryFunc> {
+            select(vec![
+                BinaryFunc::Lte(Lte),
+                BinaryFunc::Lt(Lt),
+                BinaryFunc::Gte(Gte),
+                BinaryFunc::Gt(Gt),
+                BinaryFunc::Eq(Eq),
+            ])
+        }
+
+        fn f32_consts() -> impl Strategy<Value = f32> {
+            select(vec![
+                0.0f32,
+                1.0,
+                -1.0,
+                0.0087531805,
+                745213.56,
+                76700000000.0,
+                f32::MAX,
+                1e30,
+                -1e30,
+            ])
+        }
+
+        /// `(a::float4 + round(c0, scale)::float4) * b::float4 <cmp> c::float4`.
+        /// `round` overflows and the float arithmetic can produce an error or a
+        /// NaN on interior values of `c0` that the endpoints don't reveal.
+        fn float_arith_predicate(
+            scale: i32,
+            a: f32,
+            b: f32,
+            c: f32,
+            cmp: BinaryFunc,
+        ) -> MirScalarExpr {
+            let round = MirScalarExpr::CallBinary {
+                func: BinaryFunc::RoundNumeric(RoundNumericBinary),
+                expr1: Box::new(MirScalarExpr::column(0)),
+                expr2: Box::new(MirScalarExpr::literal_ok(
+                    Datum::from(scale),
+                    ReprScalarType::Int32,
+                )),
+            };
+            let cast = MirScalarExpr::CallUnary {
+                func: UnaryFunc::CastNumericToFloat32(CastNumericToFloat32),
+                expr: Box::new(round),
+            };
+            let add = MirScalarExpr::CallBinary {
+                func: BinaryFunc::AddFloat32(AddFloat32),
+                expr1: Box::new(f32_lit(a)),
+                expr2: Box::new(cast),
+            };
+            let mul = MirScalarExpr::CallBinary {
+                func: BinaryFunc::MulFloat32(MulFloat32),
+                expr1: Box::new(add),
+                expr2: Box::new(f32_lit(b)),
+            };
+            MirScalarExpr::CallBinary {
+                func: cmp,
+                expr1: Box::new(mul),
+                expr2: Box::new(f32_lit(c)),
+            }
+        }
+
+        /// `c0::mz_timestamp <cmp> <ts>`. The cast errors on fractional or
+        /// out-of-range `c0`, an interior-error condition the interpreter's
+        /// endpoint sampling can miss.
+        fn cast_mz_timestamp_predicate(ts: u64, cmp: BinaryFunc) -> MirScalarExpr {
+            let cast = MirScalarExpr::CallUnary {
+                func: UnaryFunc::CastNumericToMzTimestamp(CastNumericToMzTimestamp),
+                expr: Box::new(MirScalarExpr::column(0)),
+            };
+            MirScalarExpr::CallBinary {
+                func: cmp,
+                expr1: Box::new(cast),
+                expr2: Box::new(MirScalarExpr::literal_ok(
+                    Datum::MzTimestamp(Timestamp::from(ts)),
+                    ReprScalarType::MzTimestamp,
+                )),
+            }
+        }
+
+        fn arb_numeric_rows() -> impl Strategy<Value = Vec<Row>> {
+            let magnitudes = vec![
+                0.0f64, 1.0, 2.0, 1.5, 2.5, 0.25, -1.0, 10.0, 100.0, 1e10, -1e10, 3.0e38, 3.4e38,
+                3.5e38, 1e40, -1e40, 1e300,
+            ];
+            prop::collection::vec(
+                select(magnitudes).prop_map(|x| Row::pack_slice(&[numeric_datum(x)])),
+                1..8,
+            )
+        }
+
+        fn arb_predicate() -> impl Strategy<Value = MirScalarExpr> {
+            let float_arith = (
+                select(vec![0i32, 2, -5, 24699]),
+                f32_consts(),
+                f32_consts(),
+                f32_consts(),
+                comparison_funcs(),
+            )
+                .prop_map(|(scale, a, b, c, cmp)| float_arith_predicate(scale, a, b, c, cmp));
+            let cast_ts = (select(vec![0u64, 1, 2, 100, u64::MAX]), comparison_funcs())
+                .prop_map(|(ts, cmp)| cast_mz_timestamp_predicate(ts, cmp));
+            proptest::strategy::Union::new(vec![float_arith.boxed(), cast_ts.boxed()])
+        }
+
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault`
+        fn filter_result_never_discards_matching_part() {
+            fn check(rows: Vec<Row>, predicate: MirScalarExpr) -> Result<(), TestCaseError> {
+                let desc = numeric_desc();
+                let plan = MapFilterProject::new(1)
+                    .filter(std::iter::once(predicate))
+                    .into_plan()
+                    .expect("into_plan");
+
+                let part_stats = build_part_stats(&desc, &rows);
+                let metrics = PartStatsMetrics::new(&MetricsRegistry::new());
+                let stats = RelationPartStats::new("test", &metrics, &desc, &part_stats);
+
+                let decision = filter_result(&desc, ResultSpec::anything(), stats, &plan);
+
+                if mfp_yields_output(&plan, &rows) {
+                    prop_assert!(
+                        !matches!(decision, FilterResult::Discard),
+                        "filter pushdown discarded a part whose MFP yields output on a real \
+                         row (wrongly-skipped part; the runtime audit would panic).\n\
+                         rows={rows:?}\nplan={plan:?}",
+                    );
+                }
+                Ok(())
+            }
+
+            proptest!(|(rows in arb_numeric_rows(), predicate in arb_predicate())| {
+                check(rows, predicate)?;
+            });
+        }
+    }
 }
