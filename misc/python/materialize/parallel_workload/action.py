@@ -963,6 +963,9 @@ class CopyFromS3Action(Action):
                 "timeout: error trying to connect",
                 # TODO: Remove when https://linear.app/materializeinc/issue/SS-341 is fixed
                 "parquet error",
+                # Same SS-341 class via the arrow record-batch path: COPY TO
+                # writes a type (e.g. a daterange) that COPY FROM cannot decode.
+                "failed to decode Row from a record batch",
                 # COPY TO CSV writes a large-year date that COPY FROM CSV then
                 # fails to parse back (SS-345). See FINDINGS-BUGS.md ("COPY FROM CSV
                 # cannot decode a large-year date written by COPY TO").
@@ -3694,6 +3697,11 @@ class ValidateConnectionAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
             "timeout: error trying to connect",
+            # A concurrent ALTER SECRET rotation (the workload only rotates a
+            # secret to its own value) can transiently expose an empty secret,
+            # so VALIDATE CONNECTION sends an empty password and Postgres
+            # rejects it. See FINDINGS-BUGS.md (secret-rotation atomicity).
+            "empty password returned by client",
         ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> bool:
