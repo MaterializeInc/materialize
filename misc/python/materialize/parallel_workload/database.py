@@ -1405,7 +1405,7 @@ class Database:
     ]:
         """Objects usable as a sink's input (base object or ALTER SINK SET
         FROM target). Load generator source tables are excluded: an
-        ALTER SINK .. SET FROM one can trigger the SS-324 sink stall (see
+        ALTER SINK .. SET FROM one can trigger the SS-344 sink stall (see
         FINDINGS-BUGS.md), which is worse for a continuously-producing input."""
         return [
             obj

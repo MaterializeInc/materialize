@@ -63,6 +63,6 @@ ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = {
     # assert_read_holds_correct (frontend_peek.rs:1759) fires for peeks in
     # multi-statement transactions ("... read hold at .. is not enough for
     # as_of .."), panicking the coordinator. Peeks still work via the classic
-    # coordinator path with this off. See FINDINGS-BUGS.md.
+    # coordinator path with this off. See SQL-520 / FINDINGS-BUGS.md.
     "enable_frontend_peek_sequencing": "false",
 }
