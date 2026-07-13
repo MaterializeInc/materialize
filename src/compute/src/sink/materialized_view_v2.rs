@@ -53,13 +53,15 @@ use std::sync::Arc;
 
 use differential_dataflow::{Hashable, VecCollection};
 use mz_compute_types::dyncfgs::{
-    MV_SINK_ADVANCE_PERSIST_FRONTIERS, MV_SINK_SHARED_BATCH_MAX_BYTES,
+    ENABLE_SYNC_MV_SINK_SHARED_BATCHES_BARRIER, MV_SINK_ADVANCE_PERSIST_FRONTIERS,
+    MV_SINK_SHARED_BATCH_MAX_BYTES,
 };
 use mz_dyncfg::{ConfigSet, ConfigValHandle};
 use mz_ore::cast::CastFrom;
 use mz_persist_client::batch::{Batch, ProtoBatch};
 use mz_persist_client::write::WriteHandle;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_storage_operators::persist::{SharedBatchId, SharedBatches};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::sources::SourceData;
 use timely::PartialOrder;
@@ -133,6 +135,7 @@ pub(super) fn persist_sink<'s>(
         descs.clone(),
         read_only_rx,
         Rc::clone(&compute_state.worker_config),
+        compute_state.workers_per_process,
     );
 
     append::render(sink_id, persist_api, descs, batches);
@@ -582,6 +585,7 @@ mod write {
         descs: DescsStream<'s>,
         mut read_only_rx: watch::Receiver<bool>,
         worker_config: Rc<ConfigSet>,
+        workers_per_process: usize,
     ) -> BatchesStream<'s> {
         let scope = desired.ok.scope();
         let worker_id = scope.index();
@@ -660,6 +664,19 @@ mod write {
             MV_SINK_ADVANCE_PERSIST_FRONTIERS.get(&worker_config);
 
         let shared_batch_max_bytes = MV_SINK_SHARED_BATCH_MAX_BYTES.handle(&worker_config);
+        // In barrier mode the process-local workers coalesce into exactly one batch per interval.
+        //
+        // NOTE: every process-local worker must render this sink in the same mode and keep it. A
+        // barrier worker waits for a report from each of `workers_per_process` peers, which a
+        // best-effort peer never sends. Reading both settings at render time ensures this, because
+        // dataflow render and config updates arrive as one ordered command stream.
+        let barrier_enabled = ENABLE_SYNC_MV_SINK_SHARED_BATCHES_BARRIER.get(&worker_config);
+        let barrier =
+            (shared_batch_max_bytes.get() > 0 && barrier_enabled).then_some(workers_per_process);
+        // A worker that supersedes a description without writing it must release its barrier slot,
+        // so the shared batch does not wait for a batch this worker will never contribute to.
+        let skip_reporter =
+            barrier.map(|participants| (persist_api.persist_batches.clone(), participants));
 
         // Mirror the persist-frontier initialization performed by `State::new` below. With the
         // flag enabled, `State` advances its Timely-side `persist_frontiers` to `as_of`, opening
@@ -691,7 +708,8 @@ mod write {
             mz_ore::task::spawn(
                 || operator_name(sink_id, "write::batch_writer"),
                 async move {
-                    let batch_writer = BatchWriter::new(&persist_api, shared_batch_max_bytes).await;
+                    let batch_writer =
+                        BatchWriter::new(&persist_api, shared_batch_max_bytes, barrier).await;
 
                     while let Some(cmd) = cmd_rx.recv().await {
                         corrections =
@@ -734,6 +752,7 @@ mod write {
                 as_of,
                 advance_persist_frontiers_at_startup,
                 read_only,
+                skip_reporter,
             );
 
             // Whether a batch write is currently in flight in the Tokio task.
@@ -863,9 +882,11 @@ mod write {
         async fn new(
             persist_api: &PersistApi,
             shared_batch_max_bytes: ConfigValHandle<usize>,
+            barrier: Option<usize>,
         ) -> Self {
             let writer = persist_api.open_writer().await;
-            let shared = SharedBatchWriter::new(persist_api, &writer, shared_batch_max_bytes).await;
+            let shared =
+                SharedBatchWriter::new(persist_api, &writer, shared_batch_max_bytes, barrier).await;
             Self { writer, shared }
         }
     }
@@ -967,8 +988,9 @@ mod write {
     ) -> Vec<ProtoBatch> {
         // Start the write only once there are updates, since `maybe_start_batch` requests a write
         // for every ready interval, including idle ones. A worker that never joins a shared batch
-        // cannot be the last holder responsible for delivering it.
-        let mut write = None;
+        // cannot be the last holder responsible for delivering it. A barrier waits for every
+        // worker's report, so there every worker starts its write.
+        let mut write = writer.has_barrier().then(|| writer.start(desc));
         while let Some(chunk) = updates_rx.recv().await {
             let write = write.get_or_insert_with(|| writer.start(desc));
             for (kv, t, d) in &chunk {
@@ -1063,6 +1085,9 @@ mod write {
         /// batches, so the `WriteBatch` path never sweeps `consolidate_before(upper)` forward;
         /// the forced consolidation stands in for it and is re-armed as long as this holds.
         read_only: bool,
+        /// In shared-batch barrier mode, the [`SharedBatches`] handle and process-local participant
+        /// count used to release a barrier slot when a description is superseded without a write.
+        skip_reporter: Option<(SharedBatches, usize)>,
     }
 
     impl State {
@@ -1072,6 +1097,7 @@ mod write {
             as_of: Antichain<Timestamp>,
             advance_persist_frontiers_at_startup: bool,
             read_only: bool,
+            skip_reporter: Option<(SharedBatches, usize)>,
         ) -> Self {
             // Force a consolidation of corrections after the snapshot updates have been fully
             // processed, to ensure we get rid of those as quickly as possible.
@@ -1085,6 +1111,7 @@ mod write {
                 batch_description: None,
                 force_consolidation_after,
                 read_only,
+                skip_reporter,
             };
 
             // Immediately advance the persist frontier tracking to the `as_of`.
@@ -1211,12 +1238,28 @@ mod write {
             if let Some((prev, _)) = &self.batch_description {
                 if PartialOrder::less_than(&desc.lower, &prev.lower) {
                     self.trace(format!("skipping outdated batch description: {desc:?}"));
+                    // This worker will not write `desc`, so release its barrier slot.
+                    self.note_skip(desc.shared_id);
                     return;
                 }
             }
 
+            // Replacing an unwritten description means this worker will not write it (a written
+            // description is taken out of `batch_description` by `maybe_start_batch`). Release its
+            // barrier slot.
+            if let Some((prev, _)) = &self.batch_description {
+                self.note_skip(prev.shared_id);
+            }
+
             self.batch_description = Some((desc, cap));
             self.trace("set batch description");
+        }
+
+        /// In barrier mode, release the barrier slot for a description this worker will not write.
+        fn note_skip(&self, shared_id: SharedBatchId) {
+            if let Some((shared_batches, participants)) = &self.skip_reporter {
+                shared_batches.note_skip(shared_id, *participants);
+            }
         }
 
         /// Check if a batch can be written and send a write command to the Tokio task if so.

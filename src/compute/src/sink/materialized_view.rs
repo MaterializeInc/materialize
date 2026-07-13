@@ -849,6 +849,9 @@ mod write {
                 &persist_api,
                 &writer,
                 MV_SINK_SHARED_BATCH_MAX_BYTES.handle(&worker_config),
+                // Best-effort only: this sink skips empty and superseded descriptions without
+                // reporting them, which a barrier would wait on forever.
+                None,
             )
             .await;
             // The write operator needs the writer only for its schema id.

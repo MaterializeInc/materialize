@@ -295,6 +295,15 @@ pub const MV_SINK_SHARED_BATCH_MAX_BYTES: Config<usize> = Config::new(
     ParameterScope::Environment,
 );
 
+/// When `compute_mv_sink_shared_batch_max_bytes` is nonzero, make the workers in one process barrier
+/// on each batch interval so they coalesce into exactly one batch.
+pub const ENABLE_SYNC_MV_SINK_SHARED_BATCHES_BARRIER: Config<bool> = Config::new(
+    "enable_compute_sync_mv_sink_shared_batches_barrier",
+    false,
+    "Barrier the workers in one process onto a single shared batch per interval in the MV sink.",
+    ParameterScope::Environment,
+);
+
 /// Whether rendering should use the new MV sink correction buffer implementation.
 pub const ENABLE_CORRECTION_V2: Config<bool> = Config::new(
     "enable_compute_correction_v2",
@@ -831,6 +840,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_MZ_JOIN_CORE)
         .add(&ENABLE_SYNC_MV_SINK)
         .add(&MV_SINK_SHARED_BATCH_MAX_BYTES)
+        .add(&ENABLE_SYNC_MV_SINK_SHARED_BATCHES_BARRIER)
         .add(&ENABLE_CORRECTION_V2)
         .add(&CORRECTION_V2_CHAIN_PROPORTIONALITY)
         .add(&CORRECTION_V2_CHUNK_SIZE)

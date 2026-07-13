@@ -42,15 +42,24 @@ pub(super) struct SharedBatchWriter {
     schemas: Schemas<SourceData, ()>,
     shared_batches: SharedBatches,
     max_bytes: ConfigValHandle<usize>,
+    /// `Some(participants)` selects the barrier coalescing discipline (see
+    /// [`SharedBatches::builder`]).
+    barrier: Option<usize>,
 }
 
 impl SharedBatchWriter {
     /// Creates a writer for the shard `writer` writes to, which shares a worker's updates for an
     /// interval while they stay below `max_bytes`. Zero disables sharing.
+    ///
+    /// With a `barrier`, every one of the `participants` process-local workers must report each
+    /// batch id exactly once, by finishing a [`SharedBatchWrite`] or through
+    /// [`SharedBatches::note_skip`], or the shared batch never completes. The writer then always
+    /// shares, also with a zero `max_bytes`.
     pub(super) async fn new(
         persist_api: &PersistApi,
         writer: &WriteHandle<SourceData, (), Timestamp, StorageDiff>,
         max_bytes: ConfigValHandle<usize>,
+        barrier: Option<usize>,
     ) -> Self {
         Self {
             persist_client: persist_api.open_client().await,
@@ -64,7 +73,14 @@ impl SharedBatchWriter {
             },
             shared_batches: persist_api.persist_batches.clone(),
             max_bytes,
+            barrier,
         }
+    }
+
+    /// Whether this writer coalesces under a barrier, which every process-local worker must
+    /// report to for each batch id.
+    pub(super) fn has_barrier(&self) -> bool {
+        self.barrier.is_some()
     }
 
     /// Starts this worker's write for `desc`.
@@ -72,9 +88,10 @@ impl SharedBatchWriter {
         // Read per interval, so a threshold change applies without re-rendering the sink. Workers may
         // disagree on an interval: each either contributes to the shared batch or writes its own,
         // and the append operator appends all of them together. With a threshold of zero, a
-        // writer joins no shared batch at all, so it starts no shared builder task.
+        // writer joins no shared batch at all, so it starts no shared builder task. A barrier
+        // cannot tolerate that, since a worker that joins no shared batch never reports to it.
         let max_bytes = self.max_bytes.get();
-        let shared = (max_bytes > 0).then(|| {
+        let shared = (self.barrier.is_some() || max_bytes > 0).then(|| {
             self.shared_batches.builder(
                 desc.shared_id,
                 self.persist_client.clone(),
@@ -83,6 +100,7 @@ impl SharedBatchWriter {
                 self.schemas.clone(),
                 desc.lower.clone(),
                 desc.upper.clone(),
+                self.barrier,
             )
         });
         SharedBatchWrite {
@@ -153,7 +171,8 @@ impl SharedBatchWrite<'_> {
     }
 
     /// Hands over the staged updates and returns the batches this worker delivers: its own batch
-    /// if it has one, and the shared batch if it is the last worker to finish.
+    /// if it has one, and the shared batch if [`SharedBatches::builder`] picks this worker to
+    /// deliver it.
     pub(super) async fn finish(self) -> Vec<ProtoBatch> {
         let own = match self.own {
             Some(own) => Some(
@@ -209,6 +228,7 @@ mod tests {
             },
             shared_batches: shared_batches.clone(),
             max_bytes: ConfigValHandle::disconnected(max_bytes),
+            barrier: None,
         }
     }
 
