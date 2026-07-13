@@ -719,7 +719,7 @@ class FetchAction(Action):
         )
         # NOTE: A bounded SUBSCRIBE (UP TO) over an object whose as_of has
         # advanced to the end of time (e.g. a finished bounded load generator
-        # source) soft-panics the optimizer. See FINDINGS-BUGS.md. Left out
+        # source) soft-panics the optimizer (CLU-169). See FINDINGS-BUGS.md. Left out
         # until that is fixed. AS OF AT LEAST 0 below is safe (empty until).
         query = "SUBSCRIBE "
         envelope_used = False
@@ -964,7 +964,7 @@ class CopyFromS3Action(Action):
                 # TODO: Remove when https://linear.app/materializeinc/issue/SS-341 is fixed
                 "parquet error",
                 # COPY TO CSV writes a large-year date that COPY FROM CSV then
-                # fails to parse back. See FINDINGS-BUGS.md ("COPY FROM CSV
+                # fails to parse back (SS-345). See FINDINGS-BUGS.md ("COPY FROM CSV
                 # cannot decode a large-year date written by COPY TO").
                 "expected_dur_like_tokens can only be called with",
             ]
@@ -1837,7 +1837,7 @@ class AlterIcebergSinkFromAction(Action):
             # Iceberg sinks always have a key, so only allow a conservative
             # case: all names, types, and nullabilities match, which also
             # guarantees the key columns exist in the new object.
-            # TODO: Switch back when SS-324 is fixed to make sure it errors
+            # TODO: Switch back when SS-344 is fixed to make sure it errors
             # instead of causing a stall
             objs = []
             old_cols = {
@@ -2488,7 +2488,8 @@ class FlipFlagsAction(Action):
         self.flags_with_values["cluster"] = ["quickstart", "dont_exist"]
         # NOTE: enable_frontend_peek_sequencing is pinned off in
         # ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS (frontend-peek read-hold vs
-        # compaction race, see FINDINGS-BUGS.md), so it is not flipped here.
+        # compaction race, SQL-520, see FINDINGS-BUGS.md), so it is not flipped
+        # here.
         self.flags_with_values["enable_frontend_subscribes"] = [
             "true",
             "false",
@@ -3371,7 +3372,7 @@ class AlterOwnerAction(Action):
             # NOTE: No CONNECTION target. Changing a connection's owner emits a
             # Connection(Altered) implication, which re-alters every dependent
             # sink's export connection; that re-alter can fail with InvalidAlter
-            # and panic the coordinator. See FINDINGS-BUGS.md ("Coordinator
+            # and panic the coordinator (SQL-517). See FINDINGS-BUGS.md ("Coordinator
             # panic re-altering a dependent sink's export connection").
             kind, name = self.rng.choice(candidates)
         with role.lock:
@@ -3464,7 +3465,7 @@ class BroadPrivilegesAction(Action):
                 # NOTE: No CONNECTION target. GRANT/REVOKE on a connection emits
                 # a Connection(Altered) implication, which re-alters every
                 # dependent sink's export connection; that re-alter can fail
-                # with InvalidAlter and panic the coordinator. See
+                # with InvalidAlter and panic the coordinator (SQL-517). See
                 # FINDINGS-BUGS.md ("Coordinator panic re-altering a dependent
                 # sink's export connection").
             ]
@@ -5293,7 +5294,8 @@ read_action_list = ActionList(
         # coordinator when a referenced compute collection is concurrently
         # dropped. sequence_explain_pushdown -> acquire_read_holds().expect(
         # "missing compute collection") at read_policy.rs:389 (normal peeks and
-        # EXPLAIN ANALYZE handle the drop gracefully). See FINDINGS-BUGS.md.
+        # EXPLAIN ANALYZE handle the drop gracefully). See SQL-519 /
+        # FINDINGS-BUGS.md.
         # (ExplainFilterPushdownAction, 5),
         (SetClusterAction, 1),
         (CommitRollbackAction, 30),
@@ -5402,7 +5404,7 @@ ddl_action_list = ActionList(
         # TODO: Reenable once altering a connection that sinks or sources depend
         # on can no longer panic the coordinator. Re-altering a dependent sink's
         # export connection after the txn fails with InvalidAlter, which
-        # unwrap_or_terminate turns into a panic. See FINDINGS-BUGS.md
+        # unwrap_or_terminate turns into a panic (SQL-517). See FINDINGS-BUGS.md
         # ("Coordinator panic re-altering a dependent sink's export
         # connection").
         # (AlterConnectionAction, 2),
@@ -5415,7 +5417,7 @@ ddl_action_list = ActionList(
         # CREATE SECRET) whose target database is dropped between staging and
         # finish hits resolve_full_name -> get_database (panicking OrdMap index)
         # in catalog transact_op. Only CASCADE can drop a non-empty database,
-        # so this is the precise trigger. See FINDINGS-BUGS.md ("Coordinator
+        # so this is the precise trigger (SQL-518). See FINDINGS-BUGS.md ("Coordinator
         # panic resolving a name whose database was concurrently dropped").
         # (DropDatabaseCascadeAction, 1),
         (CreateSchemaAction, 1),
@@ -5427,7 +5429,7 @@ ddl_action_list = ActionList(
         # TODO: Reenable once ALTER NETWORK POLICY resolves quoted (e.g.
         # hyphenated) names. It looks the policy up by its quoted display form,
         # so it fails with "unknown network policy" for any name that requires
-        # quoting, even though CREATE and DROP work. See FINDINGS-BUGS.md
+        # quoting, even though CREATE and DROP work (CLO-143). See FINDINGS-BUGS.md
         # ("ALTER NETWORK POLICY cannot resolve a quoted (hyphenated) name").
         # (AlterNetworkPolicyAction, 1),
         (DropNetworkPolicyAction, 1),
@@ -5445,8 +5447,8 @@ ddl_action_list = ActionList(
         (SystemCatalogReadAction, 4),
         (ExplainAnalyzeAction, 4),
         # TODO: Reenable with EXPLAIN FILTER PUSHDOWN's coordinator panic on a
-        # concurrently-dropped compute collection (read_policy.rs:389). See
-        # FINDINGS-BUGS.md.
+        # concurrently-dropped compute collection (read_policy.rs:389,
+        # SQL-519). See FINDINGS-BUGS.md.
         # (ExplainFilterPushdownAction, 2),
         (FlipFlagsAction, 2),
         # TODO: Reenable when https://linear.app/materializeinc/issue/SQL-405 is fixed.
