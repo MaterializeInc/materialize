@@ -914,7 +914,11 @@ class LoadGeneratorSource(DBObject):
         self.cluster = cluster
         self.schema = schema
         self.tick_interval = rng.choice(["10ms", "100ms", "1s"])
-        self.up_to = rng.randint(1, 1000)
+        # Bounded near MAX_ROWS: this source-table is a readable relation that
+        # views/MVs join over, and unlike user tables it is not capped by
+        # MAX_ROWS. A large counter feeding a maintained join is a clusterd
+        # memory risk, so keep it in the same size class as the other data.
+        self.up_to = rng.randint(1, MAX_ROWS)
         self.columns = [LoadGeneratorColumn("counter", Long, False, self)]
 
     def name(self) -> str:
