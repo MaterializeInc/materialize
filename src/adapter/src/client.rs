@@ -1495,6 +1495,25 @@ impl Drop for SessionClient {
     }
 }
 
+/// Placeholder that statement arrival logging logs in place of text withheld
+/// by [`statement_might_contain_secret`].
+pub const REDACTED_STATEMENT_TEXT: &str = "<redacted>";
+
+/// Best-effort check whether statement text or bind parameters might contain
+/// a sensitive value, for statement arrival logging. Callers log
+/// [`REDACTED_STATEMENT_TEXT`] instead of text for which this returns true.
+///
+/// Arrival logging runs before parsing (so that it catches statements that
+/// crash the parser), which rules out precise AST-based redaction. Instead we
+/// sniff for keywords. Statements that carry inline sensitive values
+/// (`CREATE SECRET`, `ALTER ROLE ... PASSWORD`, inline connection
+/// credentials) always contain one of the keywords. A false positive merely
+/// withholds one log line's text.
+pub fn statement_might_contain_secret(text: &str) -> bool {
+    let text = text.to_lowercase();
+    text.contains("secret") || text.contains("password")
+}
+
 #[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Debug)]
 pub enum TimeoutType {
     IdleInTransactionSession(TransactionId),

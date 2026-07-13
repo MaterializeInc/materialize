@@ -20,7 +20,9 @@ use byteorder::{ByteOrder, NetworkEndian};
 use csv_core::ReadRecordResult;
 use futures::future::{BoxFuture, FutureExt, pending};
 use itertools::Itertools;
-use mz_adapter::client::RecordFirstRowStream;
+use mz_adapter::client::{
+    REDACTED_STATEMENT_TEXT, RecordFirstRowStream, statement_might_contain_secret,
+};
 use mz_adapter::session::{
     EndTransactionAction, InProgressRows, LifecycleTimestamps, PortalRefMut, PortalState, Session,
     SessionConfig, TransactionStatus,
@@ -1198,7 +1200,9 @@ where
     /// carried the SQL text.
     ///
     /// Authentication payloads are never logged. COPY data is logged as its
-    /// length only.
+    /// length only. Statement text and parameters that might contain
+    /// sensitive values are replaced by a placeholder, see
+    /// [`statement_might_contain_secret`].
     async fn maybe_log_message_arrival(&mut self, message: &FrontendMessage) {
         if !self
             .adapter_client
@@ -1224,8 +1228,23 @@ where
                     .iter()
                     .map(|p| p.as_ref().map(|p| String::from_utf8_lossy(p)))
                     .collect();
+                let params = format!("{:?}", params);
+                // Values bound to a sensitive statement are sensitive
+                // themselves, so also sniff the statement this bind refers
+                // to.
+                let stmt_sensitive = session
+                    .get_prepared_statement_unverified(statement_name)
+                    .and_then(|ps| ps.stmt())
+                    .is_some_and(|stmt| {
+                        statement_might_contain_secret(&stmt.to_ast_string_simple())
+                    });
+                let params = if stmt_sensitive || statement_might_contain_secret(&params) {
+                    REDACTED_STATEMENT_TEXT
+                } else {
+                    params.as_str()
+                };
                 info!(
-                    %conn_id, %session_uuid, kind, portal_name, statement_name, ?params,
+                    %conn_id, %session_uuid, kind, portal_name, statement_name, params,
                     "statement arrival"
                 );
             }
@@ -1255,10 +1274,15 @@ where
             | FrontendMessage::CopyFail(_) => {
                 // WARNING: When adding a variant here, consider whether its payload is sensitive or
                 // bulky!
-                //
+                let contents = format!("{:?}", message);
+                let contents = if statement_might_contain_secret(&contents) {
+                    REDACTED_STATEMENT_TEXT
+                } else {
+                    contents.as_str()
+                };
                 // (The field must not be named `message`, that name is
                 // reserved for the event text in tracing.)
-                info!(%conn_id, %session_uuid, kind, contents = ?message, "statement arrival");
+                info!(%conn_id, %session_uuid, kind, contents, "statement arrival");
             }
         }
     }
