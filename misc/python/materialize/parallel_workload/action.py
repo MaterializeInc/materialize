@@ -3022,6 +3022,48 @@ class DropRoleAction(Action):
         return True
 
 
+class AlterRoleAction(Action):
+    """ALTER ROLE ... SET / RESET a default session variable.
+
+    Exercises the per-role session-default path (applied at session init) and
+    role-name resolution on the ALTER path, neither of which CREATE/DROP ROLE
+    touch. Part of broadening ALTER coverage (the ALTER paths are where several
+    catalog bugs have hidden vs the well-worn CREATE/DROP)."""
+
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            if not exe.db.roles:
+                return False
+            role = self.rng.choice(exe.db.roles)
+        with role.lock:
+            # Was dropped while we were acquiring the lock.
+            if role not in exe.db.roles:
+                return False
+            var, value = self.rng.choice(
+                [
+                    ("cluster", "'quickstart'"),
+                    ("transaction_isolation", "'serializable'"),
+                    ("statement_timeout", "'120s'"),
+                    ("search_path", "public"),
+                ]
+            )
+            query = (
+                f"ALTER ROLE {role} RESET {var}"
+                if self.rng.choice([True, False])
+                else f"ALTER ROLE {role} SET {var} = {value}"
+            )
+            try:
+                exe.execute(query, http=Http.RANDOM)
+            except QueryError as e:
+                # Concurrent DROP ROLE, expected as with DropRoleAction.
+                if (
+                    exe.db.scenario not in (Scenario.Kill, Scenario.ZeroDowntimeDeploy)
+                    or "unknown role" not in e.msg
+                ):
+                    raise e
+        return True
+
+
 class CreateClusterAction(Action):
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
@@ -5384,6 +5426,7 @@ ddl_action_list = ActionList(
         (CreateOrReplaceViewAction, 4),
         (CreateRoleAction, 2),
         (DropRoleAction, 2),
+        (AlterRoleAction, 2),
         (CreateClusterAction, 1),
         (DropClusterAction, 1),
         (AlterClusterSetAction, 3),
