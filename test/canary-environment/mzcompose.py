@@ -458,9 +458,12 @@ def workflow_create(c: Composition, parser: WorkflowArgumentParser) -> None:
               MODE APPEND
               WITH (COMMIT INTERVAL = '60s')
 
-            # The GCS Iceberg sink (table_mv_gcs_iceberg_sink) stays disabled, as
-            # do the *_gcs_iceberg_sink.sql.disabled model sinks. Only the
-            # AWS/S3-Tables Iceberg sinks are enabled.
+            > CREATE SINK IF NOT EXISTS public_table.table_mv_gcs_iceberg_sink
+              IN CLUSTER qa_canary_environment_sinks
+              FROM public_table.table_mv
+              INTO ICEBERG CATALOG CONNECTION public.qa_canary_gcs_iceberg_catalog (NAMESPACE = 'qa_canary_environment', TABLE = 'table_mv')
+              MODE APPEND
+              WITH (COMMIT INTERVAL = '60s')
 
             # Seed data for the loadgen product/category tables (created by `apply`).
             > DELETE FROM public_loadgen_sources.product_category
@@ -877,9 +880,11 @@ def workflow_mz_deploy(c: Composition, parser: WorkflowArgumentParser) -> None:
     if not cli_args.mz_args:
         raise ValueError("usage: ./mzcompose run mz <mz-deploy command> [args...]")
     write_profiles()
+    write_project_toml()
     mz_deploy(c, *cli_args.mz_args)
 
 
 def workflow_clean(c: Composition, parser: WorkflowArgumentParser) -> None:
     write_profiles()
+    write_project_toml()
     mz_deploy(c, "clean")

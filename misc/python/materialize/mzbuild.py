@@ -71,6 +71,7 @@ def run_and_detect_rust_incremental_build_failure(
     base_env = env if env is not None else os.environ
     p = subprocess.Popen(
         cmd,
+        cwd=cwd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,

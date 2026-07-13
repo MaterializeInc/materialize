@@ -7,11 +7,10 @@
 -- the Business Source License, use of this software will be governed
 -- by the Apache License, Version 2.0.
 
--- TODO: Reenable when SS-282 is fixed
-CREATE SINK mysql_wmr_gcs_iceberg_sink
+CREATE SINK tpch_q18_gcs_iceberg_sink
     IN CLUSTER qa_canary_environment_sinks
-    FROM qa_canary_environment.public_mysql_cdc.mysql_wmr
-    INTO ICEBERG CATALOG CONNECTION qa_canary_environment.public.qa_canary_gcs_iceberg_catalog (NAMESPACE = 'qa_canary_environment', TABLE = 'mysql_wmr')
-    KEY (a_name, b_name) NOT ENFORCED
+    FROM qa_canary_environment.public_tpch.tpch_q18
+    INTO ICEBERG CATALOG CONNECTION qa_canary_environment.public.qa_canary_gcs_iceberg_catalog (NAMESPACE = 'qa_canary_environment', TABLE = 'tpch_18')
+    KEY (c_custkey) NOT ENFORCED
     MODE UPSERT
     WITH (COMMIT INTERVAL = '60s');

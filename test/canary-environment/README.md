@@ -99,13 +99,13 @@ the split clusters are new), so the `USAGE` grants are reapplied on every
   granted in the testdrive block of `workflow_create`, since mz-deploy has no
   cluster-grant modifier and doesn't manage those schemas.
 
-**Iceberg sinks: AWS/S3-Tables enabled, GCS still disabled.** The five
-S3-Tables model sinks and the `public_table.table_mv_iceberg_sink` testdrive
-sink are active. The five `*_gcs_iceberg_sink` model sinks remain
-`*.sql.disabled` (mz-deploy only reads `*.sql`, so it skips them) and the
-`table_mv_gcs_iceberg_sink` testdrive sink is left out of `mzcompose.py`. To
-re-enable a GCS sink, rename its `.sql.disabled` file back to `.sql` (and add
-the testdrive sink back to `mzcompose.py`).
+**Iceberg sinks: AWS/S3-Tables and GCS both enabled.** The five S3-Tables model
+sinks, the five `*_gcs_iceberg_sink` GCS model sinks, and both the
+`public_table.table_mv_iceberg_sink` (S3-Tables) and
+`public_table.table_mv_gcs_iceberg_sink` (GCS) testdrive sinks are active. To
+disable a GCS sink, rename its `.sql` file to `.sql.disabled` (mz-deploy only
+reads `*.sql`, so it skips them) and remove the corresponding testdrive sink
+from `mzcompose.py`.
 
 ## What `mz-deploy` does not manage
 
