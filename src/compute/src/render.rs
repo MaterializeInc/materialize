@@ -130,10 +130,9 @@ use mz_compute_types::dyncfgs::{
 use mz_compute_types::plan::render_plan::{
     self, BindStage, LetBind, LetFreePlan, RecBind, RenderPlan,
 };
-use mz_compute_types::plan::scalar::{LirScalarExpr, mfp_mir_to_lir_plan};
-use mz_compute_types::plan::threshold::{BasicThresholdPlan, ThresholdPlan};
-use mz_compute_types::plan::{ArrangementStrategy, AvailableCollections, LirId};
-use mz_expr::{EvalError, Id, LocalId, MapFilterProject, permutation_for_arrangement};
+use mz_compute_types::plan::scalar::LirScalarExpr;
+use mz_compute_types::plan::{ArrangementStrategy, LirId};
+use mz_expr::{EvalError, Id, LocalId, permutation_for_arrangement};
 use mz_persist_client::operators::shard_source::{ErrorHandler, SnapshotMode};
 use mz_repr::explain::DummyHumanizer;
 use mz_repr::fixed_length::ExtendDatums;
@@ -175,6 +174,7 @@ pub(crate) mod errors;
 mod flat_map;
 mod join;
 mod reduce;
+mod set_difference;
 pub mod sinks;
 mod threshold;
 mod top_k;
@@ -1373,46 +1373,13 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                 subtract,
                 ensure_arrangement,
             } => {
-                // Phase 1: reconstruct the dataflow this node replaces, namely
-                // `Threshold(ArrangeBy(consolidate(Union(base, Negate(subtract)))))`.
-                // The original `Union` consolidated its output, so we consolidate
-                // the concatenation here before arranging. See the `Union` arm above.
+                // Phase 2: read the two co-arranged inputs directly and produce one
+                // output arrangement via the fused operator, eliminating the
+                // intermediate `ArrangeBy` (trace T) the reconstructed
+                // `Threshold(ArrangeBy(Union(..)))` dataflow would build.
                 let base = expect_input(base);
                 let subtract = expect_input(subtract);
-                let (base_oks, base_errs) = base.as_specific_collection(None, &self.config_set);
-                let (sub_oks, sub_errs) = subtract.as_specific_collection(None, &self.config_set);
-                let oks = differential_dataflow::collection::concatenate(
-                    self.scope,
-                    [base_oks, sub_oks.negate()],
-                );
-                let oks = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
-                    oks,
-                    "SetDifferenceConsolidation",
-                );
-                let errs = differential_dataflow::collection::concatenate(
-                    self.scope,
-                    [base_errs, sub_errs],
-                );
-                let unioned = CollectionBundle::from_collections(oks, errs);
-                // Arrange by the ensure key, matching the `ArrangeBy` the lowering
-                // inserts ahead of a `Threshold`. The bundle already carries a raw
-                // collection, so `ensure_collections` only builds the arrangement and
-                // never applies `input_mfp`; the identity MFP mirrors that `ArrangeBy`.
-                let arity = ensure_arrangement.0.len();
-                let arranged = unioned.ensure_collections(
-                    AvailableCollections::new_arranged(vec![ensure_arrangement.clone()]),
-                    None,
-                    mfp_mir_to_lir_plan(MapFilterProject::new(arity)),
-                    self.as_of_frontier.clone(),
-                    self.until.clone(),
-                    &self.config_set,
-                    ArrangementStrategy::Direct,
-                );
-                // Threshold reusing the existing basic-threshold path.
-                self.render_threshold(
-                    arranged,
-                    ThresholdPlan::Basic(BasicThresholdPlan { ensure_arrangement }),
-                )
+                self.render_set_difference(base, subtract, ensure_arrangement)
             }
             ArrangeBy {
                 input_key,
