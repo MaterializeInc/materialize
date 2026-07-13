@@ -1409,8 +1409,9 @@ pub static ENABLE_STATEMENT_ARRIVAL_LOGGING: VarDefinition = VarDefinition::new(
     "enable_statement_arrival_logging",
     value!(bool; false),
     "Whether to log every incoming statement and other frontend message at info \
-    level as it arrives at the SQL frontends, before processing. Use it only in emergencies, i.e. \
-    debugging active incidents.",
+    level as it arrives at the SQL frontends, before processing. SQL text is \
+    logged with its literals redacted, as in the statement log. Use it only in \
+    emergencies, i.e. debugging active incidents.",
     false,
 );
 

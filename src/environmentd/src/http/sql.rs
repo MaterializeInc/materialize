@@ -25,9 +25,7 @@ use futures::future::BoxFuture;
 
 use http::StatusCode;
 use itertools::Itertools;
-use mz_adapter::client::{
-    REDACTED_STATEMENT_TEXT, RecordFirstRowStream, statement_might_contain_secret,
-};
+use mz_adapter::client::{RecordFirstRowStream, redact_sql_for_logging};
 use mz_adapter::session::{EndTransactionAction, TransactionStatus};
 use mz_adapter::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use mz_adapter::{
@@ -1253,28 +1251,19 @@ pub(in crate::http) async fn execute_request<S: ResultSender>(
         let session_uuid = session.uuid();
         match &request {
             SqlRequest::Simple { query } => {
-                let sql = if statement_might_contain_secret(query.as_str()) {
-                    REDACTED_STATEMENT_TEXT
-                } else {
-                    query.as_str()
-                };
-                info!(%conn_id, %session_uuid, kind = "http_simple", sql, "statement arrival");
+                info!(
+                    %conn_id, %session_uuid, kind = "http_simple",
+                    sql = %redact_sql_for_logging(query.as_str()),
+                    "statement arrival"
+                );
             }
             SqlRequest::Extended { queries } => {
                 for ExtendedRequest { query, params } in queries {
-                    let params = format!("{:?}", params);
-                    // Values bound to a sensitive statement are sensitive
-                    // themselves, so if either field trips the check, redact
-                    // both.
-                    let (sql, params) = if statement_might_contain_secret(query)
-                        || statement_might_contain_secret(&params)
-                    {
-                        (REDACTED_STATEMENT_TEXT, REDACTED_STATEMENT_TEXT)
-                    } else {
-                        (query.as_str(), params.as_str())
-                    };
+                    // Parameter values are data that redaction cannot reach,
+                    // so only their count is logged.
                     info!(
-                        %conn_id, %session_uuid, kind = "http_extended", sql, params,
+                        %conn_id, %session_uuid, kind = "http_extended",
+                        sql = %redact_sql_for_logging(query), num_params = params.len(),
                         "statement arrival"
                     );
                 }

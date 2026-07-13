@@ -44,6 +44,7 @@ use mz_sql::session::user::SUPPORT_USER;
 use mz_sql::session::vars::{
     CLUSTER, ENABLE_FRONTEND_PEEK_SEQUENCING, OwnedVarInput, SystemVars, Var,
 };
+use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
 use prometheus::Histogram;
 use serde_json::json;
@@ -1495,26 +1496,19 @@ impl Drop for SessionClient {
     }
 }
 
-/// Placeholder that statement arrival logging logs in place of text withheld
-/// by [`statement_might_contain_secret`].
-pub const REDACTED_STATEMENT_TEXT: &str = "<redacted>";
-
-/// Best-effort check whether statement text or bind parameters might contain
-/// a sensitive value, for statement arrival logging. Callers log
-/// [`REDACTED_STATEMENT_TEXT`] instead of text for which this returns true.
-///
-/// Arrival logging runs before parsing (so that it catches statements that
-/// crash the parser), which rules out precise AST-based redaction. Instead we
-/// sniff for keywords. Statements that carry inline sensitive values always
-/// contain one of the keywords: `CREATE SECRET`, `ALTER ROLE ... PASSWORD`,
-/// and the `CREATE CONNECTION` options that accept inline values (`PASSWORD`,
-/// `SASL PASSWORD`, `SECRET ACCESS KEY`, `CREDENTIAL`, `SESSION TOKEN`). A
-/// false positive merely withholds one log line's text.
-pub fn statement_might_contain_secret(text: &str) -> bool {
-    let text = text.to_lowercase();
-    ["secret", "password", "credential", "token"]
-        .iter()
-        .any(|keyword| text.contains(keyword))
+/// Renders SQL for statement arrival logging: parsed and displayed with its
+/// literals redacted, which is the same redaction the statement log applies.
+/// When the text does not parse, a placeholder with the byte length is
+/// returned. Raw text is never returned, so a statement that crashes the
+/// parser is not captured, an accepted limitation.
+pub fn redact_sql_for_logging(sql: &str) -> String {
+    match mz_sql_parser::parser::parse_statements_with_limit(sql) {
+        Ok(Ok(stmts)) => stmts
+            .into_iter()
+            .map(|stmt| stmt.ast.to_ast_string_redacted())
+            .join("; "),
+        Ok(Err(_)) | Err(_) => format!("<unparseable ({} bytes)>", sql.len()),
+    }
 }
 
 #[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Debug)]

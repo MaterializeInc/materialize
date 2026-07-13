@@ -20,9 +20,7 @@ use byteorder::{ByteOrder, NetworkEndian};
 use csv_core::ReadRecordResult;
 use futures::future::{BoxFuture, FutureExt, pending};
 use itertools::Itertools;
-use mz_adapter::client::{
-    REDACTED_STATEMENT_TEXT, RecordFirstRowStream, statement_might_contain_secret,
-};
+use mz_adapter::client::{RecordFirstRowStream, redact_sql_for_logging};
 use mz_adapter::session::{
     EndTransactionAction, InProgressRows, LifecycleTimestamps, PortalRefMut, PortalState, Session,
     SessionConfig, TransactionStatus,
@@ -1199,10 +1197,12 @@ where
     /// id, allow connecting a `bind` or `execute` back to the `parse` that
     /// carried the SQL text.
     ///
-    /// Authentication payloads are never logged. COPY data is logged as its
-    /// length only. Statement text and parameters that might contain
-    /// sensitive values are replaced by a placeholder, see
-    /// [`statement_might_contain_secret`].
+    /// SQL text is parsed and logged with its literals redacted, the same
+    /// redaction the statement log applies. This means a statement that
+    /// crashes the parser is not captured, an accepted limitation. Bind
+    /// parameter values are data that redaction cannot reach, so only their
+    /// count is logged. Authentication payloads are never logged. COPY data
+    /// is logged as its length only.
     async fn maybe_log_message_arrival(&mut self, message: &FrontendMessage) {
         if !self
             .adapter_client
@@ -1216,35 +1216,27 @@ where
         let session_uuid = session.uuid();
         let kind = message.name();
         match message {
-            // Bind parameters arrive as raw bytes. Decode them for
-            // readability instead of Debug-printing byte arrays.
+            FrontendMessage::Query { sql } => {
+                info!(
+                    %conn_id, %session_uuid, kind, sql = %redact_sql_for_logging(sql),
+                    "statement arrival"
+                );
+            }
+            FrontendMessage::Parse { name, sql, .. } => {
+                info!(
+                    %conn_id, %session_uuid, kind, name, sql = %redact_sql_for_logging(sql),
+                    "statement arrival"
+                );
+            }
             FrontendMessage::Bind {
                 portal_name,
                 statement_name,
                 raw_params,
                 ..
             } => {
-                let params: Vec<_> = raw_params
-                    .iter()
-                    .map(|p| p.as_ref().map(|p| String::from_utf8_lossy(p)))
-                    .collect();
-                let params = format!("{:?}", params);
-                // Values bound to a sensitive statement are sensitive
-                // themselves, so also sniff the statement this bind refers
-                // to.
-                let stmt_sensitive = session
-                    .get_prepared_statement_unverified(statement_name)
-                    .and_then(|ps| ps.stmt())
-                    .is_some_and(|stmt| {
-                        statement_might_contain_secret(&stmt.to_ast_string_simple())
-                    });
-                let params = if stmt_sensitive || statement_might_contain_secret(&params) {
-                    REDACTED_STATEMENT_TEXT
-                } else {
-                    params.as_str()
-                };
                 info!(
-                    %conn_id, %session_uuid, kind, portal_name, statement_name, params,
+                    %conn_id, %session_uuid, kind, portal_name, statement_name,
+                    num_params = raw_params.len(),
                     "statement arrival"
                 );
             }
@@ -1259,10 +1251,9 @@ where
             | FrontendMessage::SASLResponse(_) => {
                 info!(%conn_id, %session_uuid, kind, "statement arrival");
             }
-            // Log the full Debug representation for all other variants.
-            FrontendMessage::Query { .. }
-            | FrontendMessage::Parse { .. }
-            | FrontendMessage::DescribeStatement { .. }
+            // Log the full Debug representation for all other variants, which
+            // carry only object names.
+            FrontendMessage::DescribeStatement { .. }
             | FrontendMessage::DescribePortal { .. }
             | FrontendMessage::Execute { .. }
             | FrontendMessage::Flush
@@ -1274,15 +1265,10 @@ where
             | FrontendMessage::CopyFail(_) => {
                 // WARNING: When adding a variant here, consider whether its payload is sensitive or
                 // bulky!
-                let contents = format!("{:?}", message);
-                let contents = if statement_might_contain_secret(&contents) {
-                    REDACTED_STATEMENT_TEXT
-                } else {
-                    contents.as_str()
-                };
+                //
                 // (The field must not be named `message`, that name is
                 // reserved for the event text in tracing.)
-                info!(%conn_id, %session_uuid, kind, contents, "statement arrival");
+                info!(%conn_id, %session_uuid, kind, contents = ?message, "statement arrival");
             }
         }
     }
