@@ -800,6 +800,9 @@ impl LirRelationExpr {
     /// The rewrite fires only when both difference inputs are genuinely arranged on the
     /// threshold key and neither carries temporal bucketing. See [`match_anti_side`] for the
     /// full set of decline conditions.
+    ///
+    /// The walk does not descend into `LetRec` subtrees, so no rewrite ever fires inside a
+    /// recursive CTE: the fused operator's behavior under iterative re-evaluation is untested.
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
@@ -819,7 +822,13 @@ impl LirRelationExpr {
                     }
                     .as_plan(expression.lir_id);
                 }
-                todo.extend(expression.node.children_mut());
+                // Do not descend into a `LetRec`'s `values` or `body`: the fused
+                // `SetDifference` operator's partial-order/synthetic-time path is untested
+                // under iterative re-evaluation, so we decline to rewrite anything inside a
+                // recursive CTE.
+                if !matches!(expression.node, LirRelationNode::LetRec { .. }) {
+                    todo.extend(expression.node.children_mut());
+                }
             }
         }
         mz_repr::explain::trace_plan(dataflow);
@@ -1183,7 +1192,7 @@ mod tests {
             == Some(cols(underlying_key).as_slice())
     }
 
-    #[test]
+    #[mz_ore::test]
     fn remap_identity_projection_matches() {
         // Identity projection leaves the key unchanged, so an underlying arrangement keyed
         // identically still matches.
@@ -1194,7 +1203,7 @@ mod tests {
         assert!(key_serves(&[0, 1], &[0, 1], &[0, 1]));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn remap_column_drop_preserving_order_matches() {
         // The arm drops underlying column 1 but keeps 0 and 2 in order. The output key `[#0, #1]`
         // maps to underlying `[#0, #2]`, which an arrangement keyed on `[#0, #2]` serves.
@@ -1207,7 +1216,7 @@ mod tests {
         assert!(!key_serves(&[0, 1], &[0, 2], &[0, 1]));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn remap_reordering_projection_declines() {
         // A reordering projection maps `[#0, #1]` to `[#1, #0]`; an arrangement keyed on the raw
         // `[#0, #1]` no longer matches the mapped key, so the arm is declined.
@@ -1220,7 +1229,7 @@ mod tests {
         assert!(key_serves(&[0, 1], &[1, 0], &[1, 0]));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn remap_shifted_projection_differs() {
         // A projection onto entirely different underlying columns yields a mapped key that no
         // arrangement keyed on the raw columns can serve.
@@ -1231,14 +1240,14 @@ mod tests {
         assert!(!key_serves(&[0, 1], &[2, 3], &[0, 1]));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn remap_out_of_range_declines() {
         // A key column with no projection entry cannot be remapped, so the helper declines rather
         // than guess.
         assert_eq!(remap_key_through_projection(&cols(&[0, 2]), &[0, 1]), None);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn remap_non_column_key_declines() {
         // Threshold keys are plain column references; anything else is outside the shape the
         // recognizer handles.
