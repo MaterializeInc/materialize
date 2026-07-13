@@ -1137,6 +1137,8 @@ fn generate_rbac_requirements(
             sink,
             with_snapshot: _,
             in_cluster,
+            set_options: _,
+            reset_options: _,
         }) => {
             let items = iter::once(sink.from).map(|gid| catalog.resolve_item_id(&gid));
             let mut privileges = generate_read_privileges(catalog, items, role_id);

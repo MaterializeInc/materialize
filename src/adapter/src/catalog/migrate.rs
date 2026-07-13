@@ -155,6 +155,7 @@ pub(crate) async fn migrate(
         ast_rewrite_sql_server_constraints(stmt)?;
         ast_rewrite_add_missing_index_ids(tx, stmt)?;
         ast_rewrite_kafka_metadata_refresh_intervals(stmt)?;
+        ast_rewrite_small_commit_intervals(stmt)?;
         Ok(())
     })?;
 
@@ -1047,9 +1048,8 @@ fn ast_rewrite_kafka_metadata_refresh_intervals(
 ) -> Result<(), anyhow::Error> {
     use mz_sql::ast::{
         CreateSinkConnection, CreateSourceConnection, KafkaSinkConfigOptionName,
-        KafkaSourceConfigOptionName, Value, WithOptionValue,
+        KafkaSourceConfigOptionName, WithOptionValue,
     };
-    use mz_sql::plan::TryFromValue;
     // A user can persist the interval either as a string literal
     // (`WithOptionValue::Value`) or, if they wrote it as a double-quoted
     // value, as a lexed identifier (`WithOptionValue::UnresolvedItemName`).
@@ -1094,12 +1094,52 @@ fn ast_rewrite_kafka_metadata_refresh_intervals(
         return Ok(());
     };
 
-    let interval_dur = Duration::try_from_value(interval.clone()).map_err(|e| {
-        anyhow::anyhow!("invalid value for kafka metadata refresh interval: {interval:?}: {e}")
-    })?;
+    rewrite_interval_option_floor_1s(interval, "kafka metadata refresh interval")
+}
 
-    if interval_dur < Duration::from_secs(1) {
-        *interval = WithOptionValue::Value(Value::String("1s".to_string()));
+/// Planning enforces a 1 second minimum `COMMIT INTERVAL`, but smaller
+/// intervals used to be accepted (and a sub-millisecond one left the sink
+/// unable to ever commit). Rewrite any persisted smaller interval to 1s so
+/// the sink still plans after an upgrade.
+///
+/// `COMMIT INTERVAL` is a generic `CREATE SINK` option in the grammar, but only
+/// Iceberg sinks accept it and only Iceberg planning enforces the 1s floor.
+fn ast_rewrite_small_commit_intervals(stmt: &mut Statement<Raw>) -> Result<(), anyhow::Error> {
+    use mz_sql::ast::{CreateSinkConnection, CreateSinkOptionName};
+
+    let Statement::CreateSink(stmt) = stmt else {
+        return Ok(());
+    };
+    if !matches!(stmt.connection, CreateSinkConnection::Iceberg { .. }) {
+        return Ok(());
+    }
+    let interval = stmt.with_options.iter_mut().find_map(|o| {
+        if matches!(o.name, CreateSinkOptionName::CommitInterval) {
+            o.value.as_mut()
+        } else {
+            None
+        }
+    });
+    let Some(interval) = interval else {
+        return Ok(());
+    };
+
+    rewrite_interval_option_floor_1s(interval, "commit interval")
+}
+
+/// Rewrites an interval option value to `'1s'` if it is below 1 second.
+fn rewrite_interval_option_floor_1s(
+    value: &mut mz_sql::ast::WithOptionValue<Raw>,
+    label: &str,
+) -> Result<(), anyhow::Error> {
+    use mz_sql::ast::{Value, WithOptionValue};
+    use mz_sql::plan::TryFromValue;
+
+    let dur = Duration::try_from_value(value.clone())
+        .map_err(|e| anyhow::anyhow!("invalid value for {label}: {value:?}: {e}"))?;
+
+    if dur < Duration::from_secs(1) {
+        *value = WithOptionValue::Value(Value::String("1s".to_string()));
     }
 
     Ok(())
