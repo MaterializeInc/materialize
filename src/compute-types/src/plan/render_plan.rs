@@ -275,6 +275,10 @@ pub enum Expr {
         base: LirId,
         /// The negated input.
         subtract: LirId,
+        /// Key columns of `base`'s existing arrangement. See `LirRelationNode::SetDifference`.
+        base_key: Vec<LirScalarExpr>,
+        /// Key columns of `subtract`'s existing arrangement. See `LirRelationNode::SetDifference`.
+        subtract_key: Vec<LirScalarExpr>,
         /// Key/permutation/thinning of the output arrangement (thinning is empty).
         ensure_arrangement: (Vec<LirScalarExpr>, Vec<usize>, Vec<usize>),
     },
@@ -528,11 +532,15 @@ impl TryFrom<LirRelationExpr> for LetFreePlan {
                 LirRelationNode::SetDifference {
                     base,
                     subtract,
+                    base_key,
+                    subtract_key,
                     ensure_arrangement,
                 } => {
                     let expr = SetDifference {
                         base: base.lir_id,
                         subtract: subtract.lir_id,
+                        base_key,
+                        subtract_key,
                         ensure_arrangement,
                     };
                     insert_node(lir_id, parent, expr, nesting);

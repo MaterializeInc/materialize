@@ -426,10 +426,20 @@ pub enum LirRelationNode {
     /// columns of `ensure_arrangement`. Produces one output arrangement keyed
     /// by those columns with empty value, matching the `Threshold` it replaces.
     SetDifference {
-        /// The positive input (minuend), arranged by the difference key.
+        /// The positive input (minuend), arranged by `base_key`.
         base: Box<LirRelationExpr>,
-        /// The negated input (subtrahend), arranged by the difference key.
+        /// The negated input (subtrahend), arranged by `subtract_key`.
         subtract: Box<LirRelationExpr>,
+        /// Key columns of `base`'s existing arrangement.
+        ///
+        /// The operator reads `base` through this arrangement and ignores its value columns. The
+        /// key datums equal the output key datums (`ensure_arrangement.0`), so they align with
+        /// `subtract`'s key across arms even when the arms were keyed differently before a
+        /// projection was stripped. Equals `ensure_arrangement.0` when `base` carried no stripped
+        /// projection.
+        base_key: Vec<LirScalarExpr>,
+        /// Key columns of `subtract`'s existing arrangement. See `base_key`.
+        subtract_key: Vec<LirScalarExpr>,
         /// Key/permutation/thinning of the output arrangement (thinning is empty).
         ensure_arrangement: (Vec<LirScalarExpr>, Vec<usize>, Vec<usize>),
     },
@@ -816,12 +826,14 @@ impl LirRelationExpr {
         for build_desc in dataflow.objects_to_build.iter_mut() {
             let mut todo = vec![&mut build_desc.plan];
             while let Some(expression) = todo.pop() {
-                if let Some((base, subtract, ensure_arrangement)) =
+                if let Some((base, subtract, base_key, subtract_key, ensure_arrangement)) =
                     match_anti_side(&expression.node)
                 {
                     *expression = LirRelationNode::SetDifference {
                         base,
                         subtract,
+                        base_key,
+                        subtract_key,
                         ensure_arrangement,
                     }
                     .as_plan(expression.lir_id);
@@ -870,16 +882,18 @@ impl LirRelationExpr {
 /// decline condition holds, returns the `(base, subtract, ensure_arrangement)` components of a
 /// [`LirRelationNode::SetDifference`] rewrite.
 ///
-/// `base` is the positive `Union` arm taken as-is; `subtract` is the child of the `Negate` arm
-/// (the render reintroduces the negation internally). `ensure_arrangement` is copied from the
-/// matched `Threshold` so the fused node advertises the same output arrangement.
+/// `base` is the positive `Union` arm; `subtract` is the child of the `Negate` arm (the render
+/// reintroduces the negation internally). Each arm is rewritten by [`arm_direct_arrangement`] so
+/// its rendered bundle exposes an existing arrangement directly, and `base_key`/`subtract_key`
+/// name the key each arm's arrangement advertises. `ensure_arrangement` is copied from the matched
+/// `Threshold` so the fused node advertises the same output arrangement.
 ///
 /// Returns `None` (decline, leaving the plan unchanged) unless all of the following hold:
 /// * the node is a `Threshold::Basic`,
 /// * its input is an `ArrangeBy` whose `forms` are arranged (not raw),
 /// * that `ArrangeBy`'s input is a `Union` with exactly two inputs, exactly one a `Negate`,
 /// * neither `Union` arm carries a non-`Direct` temporal bucketing strategy, and
-/// * both arms are arranged on the threshold key columns (see [`arm_arrangement_matches`]).
+/// * both arms are arranged on the threshold key columns (see [`arm_direct_arrangement`]).
 ///
 /// `consolidate_output` need not be checked: lowering sets it precisely when a `Union` arm is a
 /// `Negate`, so the two-input-one-`Negate` match already implies it.
@@ -888,6 +902,8 @@ fn match_anti_side(
 ) -> Option<(
     Box<LirRelationExpr>,
     Box<LirRelationExpr>,
+    Vec<LirScalarExpr>,
+    Vec<LirScalarExpr>,
     (Vec<LirScalarExpr>, Vec<usize>, Vec<usize>),
 )> {
     let LirRelationNode::Threshold {
@@ -948,15 +964,17 @@ fn match_anti_side(
     };
     let base_arm = &inputs[1 - negate_idx];
 
-    if !arm_arrangement_matches(base_arm, threshold_key)
-        || !arm_arrangement_matches(subtract, threshold_key)
-    {
-        return None;
-    }
+    // Rewrite each arm to read its existing arrangement directly (stripping any projection that
+    // would otherwise render the arm raw and force a re-arrangement), and record the key that
+    // arrangement advertises. Declining here leaves the plan unchanged.
+    let (base, base_key) = arm_direct_arrangement(base_arm, threshold_key)?;
+    let (subtract, subtract_key) = arm_direct_arrangement(subtract, threshold_key)?;
 
     Some((
-        Box::new(base_arm.clone()),
-        subtract.clone(),
+        Box::new(base),
+        Box::new(subtract),
+        base_key,
+        subtract_key,
         ensure_arrangement,
     ))
 }
@@ -1021,6 +1039,72 @@ fn arm_arrangement_matches(arm: &LirRelationExpr, key: &[LirScalarExpr]) -> bool
                         .is_some_and(|input_key| input_key == key))
         }
         _ => false,
+    }
+}
+
+/// Rewrites a `SetDifference` arm so its rendered collection bundle exposes an existing
+/// arrangement keyed by the returned key, without applying any projection, or returns `None` to
+/// decline.
+///
+/// Accepts exactly the arms [`arm_arrangement_matches`] accepts (identical decline conditions): an
+/// optional projection-only `Mfp` wrapper over a `Get` or `ArrangeBy` that is available arranged
+/// on the projection-remapped key.
+///
+/// A projecting read (a `Get::Arrangement` with a projecting MFP, or a projection-only `Mfp`
+/// wrapper) renders the arm as a raw collection, which would force the fused operator to
+/// re-arrange it and reintroduce the arrangement the fusion is meant to eliminate. This strips
+/// that projection so the operator reads the underlying arrangement directly. Stripping is sound
+/// because the operator sums diffs per key and never consults value columns, and the underlying
+/// arrangement's key datums equal the output key datums: the projection only reorders or drops
+/// columns the operator does not read, and `mapped_key[i]` is the underlying column feeding output
+/// key position `i`. An `ArrangeBy` already renders its arrangements into the bundle, so it needs
+/// no rewrite and is returned unchanged (minus any outer projection wrapper).
+///
+/// The returned key is the key the exposed arrangement advertises: the output `key` when the arm
+/// has no stripped projection, the projection-remapped key otherwise.
+fn arm_direct_arrangement(
+    arm: &LirRelationExpr,
+    key: &[LirScalarExpr],
+) -> Option<(LirRelationExpr, Vec<LirScalarExpr>)> {
+    // Peel an optional projection-only `Mfp` wrapper, remapping `key` into the underlying node's
+    // (pre-projection) column space. Mirrors the peeling in `arm_arrangement_matches`.
+    let (node_expr, mapped_key) = match &arm.node {
+        LirRelationNode::Mfp { input, mfp, .. } if is_projection_only(mfp) => {
+            let mapped_key = remap_key_through_projection(key, &mfp.safe_mfp().projection)?;
+            (input.as_ref(), mapped_key)
+        }
+        // No projection wrapper: the arm output space equals the underlying node space.
+        _ => (arm, key.to_vec()),
+    };
+
+    match &node_expr.node {
+        LirRelationNode::Get { id, keys, plan } => {
+            // Same accept condition as `arm_arrangement_matches`: a projection-only read of an
+            // arrangement advertised on the mapped key.
+            if !get_plan_projection_only(plan) {
+                return None;
+            }
+            let form = keys
+                .arranged
+                .iter()
+                .find(|(k, _, _)| k.as_slice() == mapped_key.as_slice())?;
+            // Expose that arrangement directly via `PassArrangements`, dropping the projecting read
+            // that would otherwise render the arm raw. The advertised key datums equal the output
+            // key datums (see the function contract), so the operator reads aligned keys.
+            let node = LirRelationNode::Get {
+                id: *id,
+                keys: AvailableCollections::new_arranged(vec![form.clone()]),
+                plan: GetPlan::PassArrangements,
+            };
+            Some((node.as_plan(node_expr.lir_id), mapped_key))
+        }
+        LirRelationNode::ArrangeBy { .. } => {
+            // An `ArrangeBy` renders its `forms`/input arrangements into the bundle, so reading
+            // through it already hits an existing arrangement. Confirm the same accept condition on
+            // the peeled node and keep it (dropping only the outer projection wrapper, if any).
+            arm_arrangement_matches(node_expr, &mapped_key).then(|| (node_expr.clone(), mapped_key))
+        }
+        _ => None,
     }
 }
 
@@ -1104,6 +1188,8 @@ impl CollectionPlan for LirRelationNode {
             LirRelationNode::SetDifference {
                 base,
                 subtract,
+                base_key: _,
+                subtract_key: _,
                 ensure_arrangement: _,
             } => {
                 base.depends_on_into(out);
