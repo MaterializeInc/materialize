@@ -820,12 +820,13 @@ impl Session {
         coord_bail!("unable to create a new portal");
     }
 
-    /// Resets the session to its initial state. Returns sinks that need to be
-    /// dropped.
-    pub fn reset(&mut self) {
+    /// Resets the session to its initial state.
+    ///
+    /// Returns the parameters changed by [`SessionVars::reset_all`].
+    pub fn reset(&mut self) -> BTreeMap<&'static str, String> {
         let _ = self.clear_transaction();
         self.prepared_statements.clear();
-        self.vars.reset_all();
+        self.vars.reset_all()
     }
 
     /// Returns the [application_name] that created this session.
