@@ -31,6 +31,7 @@ use mz_expr::{
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::future::OreFutureExt;
+use mz_ore::str::StrExt;
 use mz_ore::task::{self, JoinHandle, spawn};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{assert_none, instrument};
@@ -1210,6 +1211,61 @@ impl Coordinator {
         } else {
             Ok(())
         }
+    }
+
+    /// Re-validates a `CREATE OR REPLACE` plan's drop set against the current catalog.
+    ///
+    /// `drop_ids` (the item being replaced plus its dependents) is computed at planning
+    /// time, but `CREATE [MATERIALIZED] VIEW` sequencing is staged, so other DDL can
+    /// commit between planning and the finish stage. Most DDL is excluded from that
+    /// window by the coordinator's DDL lock, but statements with off-thread purification
+    /// (e.g. `CREATE SINK`, see `must_serialize_ddl`) do not take that lock and can add
+    /// a dependent on the item being replaced. Committing the stale drop set would leave
+    /// such a dependent referencing a dropped item and corrupt the catalog.
+    ///
+    /// Callers must invoke this in the same message handler that commits the ops, so
+    /// that no further DDL can interleave between this check and the commit.
+    pub(super) fn validate_or_replace_drop_ids(
+        &self,
+        session: &Session,
+        object_kind: &'static str,
+        name: &QualifiedItemName,
+        replace: Option<CatalogItemId>,
+        drop_ids: &[CatalogItemId],
+    ) -> Result<(), AdapterError> {
+        let Some(replace_id) = replace else {
+            // Plans without `OR REPLACE` carry no drops.
+            return Ok(());
+        };
+        if self.catalog().try_get_entry(&replace_id).is_none() {
+            // The item being replaced was concurrently dropped (e.g. by an
+            // `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT`, which also does not take
+            // the DDL lock and removes the target's item id).
+            return Err(AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "catalog item",
+                dependency_id: replace_id.to_string(),
+            });
+        }
+        let current: BTreeSet<CatalogItemId> = self
+            .catalog()
+            .for_session(session)
+            .item_dependents(replace_id)
+            .into_iter()
+            .map(|id| id.unwrap_item_id())
+            .collect();
+        let planned: BTreeSet<CatalogItemId> = drop_ids.iter().copied().collect();
+        if current != planned {
+            let full_name = self
+                .catalog()
+                .resolve_full_name(name, Some(session.conn_id()));
+            return Err(AdapterError::ChangedPlan(format!(
+                "the set of objects that depend on {} {} changed while the statement \
+                 was executing",
+                object_kind,
+                full_name.to_string().quoted(),
+            )));
+        }
+        Ok(())
     }
 
     #[instrument]
