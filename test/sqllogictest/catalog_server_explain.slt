@@ -7465,23 +7465,22 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_aws_privatelink_connection_statuses";
 ----
 Explained Query:
-  →Differential Join %0[#1{connection_id}] » %1:mz_connections[#0{id}]
-    →Arrange (#1{connection_id})
-      →Monotonic Top1
-        Group By #1
-        Order By #0 desc nulls_first
-        →Map/Filter/Project
-          Project: #5, #3, #4
-          Map: record_get[1](#1), record_get[1](#2), record_get[2](#2), record_get[0](#2)
-            →Fused with Child Map/Filter/Project
-              Filter: (record_get[1](#2)) IS NOT NULL AND ((#3) IS NULL OR (#3 != record_get[2](#2)))
-              Map: record_get[1](#1), record_get[0](#1)
-                →Fused with Child Table Function unnest_list
-                  →Non-incremental GroupAggregate
-                    Aggregation: lag[order_by=[#0 asc nulls_last]](row(row(row(#0, #1, #2), row(#2{status}, 1, null)), #0{occurred_at}))
-                  Key:
-                    Project: #1
-                  →Stream mz_internal.mz_aws_privatelink_connection_status_history
+  →Differential Join %0[#1] » %1:mz_connections[#0{id}]
+    →Monotonic Top1
+      Group By #1
+      Order By #0 desc nulls_first
+      →Map/Filter/Project
+        Project: #5, #3, #4
+        Map: record_get[1](#1), record_get[1](#2), record_get[2](#2), record_get[0](#2)
+          →Fused with Child Map/Filter/Project
+            Filter: (record_get[1](#2)) IS NOT NULL AND ((#3) IS NULL OR (#3 != record_get[2](#2)))
+            Map: record_get[1](#1), record_get[0](#1)
+              →Fused with Child Table Function unnest_list
+                →Non-incremental GroupAggregate
+                  Aggregation: lag[order_by=[#0 asc nulls_last]](row(row(row(#0, #1, #2), row(#2{status}, 1, null)), #0{occurred_at}))
+                Key:
+                  Project: #1
+                →Stream mz_internal.mz_aws_privatelink_connection_status_history
     →Arrange (#0{id})
       →Fused with Child Map/Filter/Project
         Project: #1, #3
@@ -18710,34 +18709,33 @@ Explained Query:
           →Fused with Parent Map/Filter/Project
             Project: #1, #0, #2..=#9
             →Arranged mz_internal.pg_authid_core
-        →Arrange (#0)
-          →Consolidating Monotonic Top1
-            Group By #0
-            →Union
-              →Fused with Child Map/Filter/Project
-                Project: #0, #1, #3
-                Filter: NOT(#2)
-                Map: null
-                  →Read l31
-              →Differential Join %1[#0] » %0:l32[#0]
-                after %0:
-                  Project: #0, #2, #3
-                  Map: coalesce(#1, false)
-                →Arrange (#0)
-                  →Stream l32
-                →Arrange (#0)
-                  →Union
-                    →Stream l50
-                    →Map/Filter/Project
-                      Project: #0, #1
-                      Map: null
-                        →Consolidating Union
-                          →Negate Diffs
-                            →Fused with Child Map/Filter/Project
-                              Project: #0
-                                →Read l50
-                          →Unarranged Raw Stream
-                            →Arranged l33
+        →Consolidating Monotonic Top1
+          Group By #0
+          →Union
+            →Fused with Child Map/Filter/Project
+              Project: #0, #1, #3
+              Filter: NOT(#2)
+              Map: null
+                →Read l31
+            →Differential Join %1[#0] » %0:l32[#0]
+              after %0:
+                Project: #0, #2, #3
+                Map: coalesce(#1, false)
+              →Arrange (#0)
+                →Stream l32
+              →Arrange (#0)
+                →Union
+                  →Stream l50
+                  →Map/Filter/Project
+                    Project: #0, #1
+                    Map: null
+                      →Consolidating Union
+                        →Negate Diffs
+                          →Fused with Child Map/Filter/Project
+                            Project: #0
+                              →Read l50
+                        →Unarranged Raw Stream
+                          →Arranged l33
   →Return
     →Union
       →Map/Filter/Project
@@ -20641,34 +20639,33 @@ Explained Query:
       →Differential Join %1[#0] » %0:l51[#0{oid}]
         →Arrange (#0{oid})
           →Stream l51
-        →Arrange (#0)
-          →Consolidating Monotonic Top1
-            Group By #0
-            →Union
-              →Fused with Child Map/Filter/Project
-                Project: #0, #1, #3
-                Filter: NOT(#2)
-                Map: null
-                  →Read l31
-              →Differential Join %1[#0] » %0:l32[#0]
-                after %0:
-                  Project: #0, #2, #3
-                  Map: coalesce(#1, false)
-                →Arrange (#0)
-                  →Stream l32
-                →Arrange (#0)
-                  →Union
-                    →Stream l50
-                    →Map/Filter/Project
-                      Project: #0, #1
-                      Map: null
-                        →Consolidating Union
-                          →Negate Diffs
-                            →Fused with Child Map/Filter/Project
-                              Project: #0
-                                →Read l50
-                          →Unarranged Raw Stream
-                            →Arranged l33
+        →Consolidating Monotonic Top1
+          Group By #0
+          →Union
+            →Fused with Child Map/Filter/Project
+              Project: #0, #1, #3
+              Filter: NOT(#2)
+              Map: null
+                →Read l31
+            →Differential Join %1[#0] » %0:l32[#0]
+              after %0:
+                Project: #0, #2, #3
+                Map: coalesce(#1, false)
+              →Arrange (#0)
+                →Stream l32
+              →Arrange (#0)
+                →Union
+                  →Stream l50
+                  →Map/Filter/Project
+                    Project: #0, #1
+                    Map: null
+                      →Consolidating Union
+                        →Negate Diffs
+                          →Fused with Child Map/Filter/Project
+                            Project: #0
+                              →Read l50
+                        →Unarranged Raw Stream
+                          →Arranged l33
     cte l53 =
       →Union
         →Map/Filter/Project
@@ -21207,34 +21204,33 @@ Explained Query:
       →Differential Join %1[#0] » %0:l30[#0{oid}]
         →Arrange (#0{oid})
           →Stream l30
-        →Arrange (#0)
-          →Consolidating Monotonic Top1
-            Group By #0
-            →Union
-              →Fused with Child Map/Filter/Project
+        →Consolidating Monotonic Top1
+          Group By #0
+          →Union
+            →Fused with Child Map/Filter/Project
+              Project: #0, #2
+              Filter: NOT(#1)
+              Map: null
+                →Read l10
+            →Differential Join %1[#0] » %0:l11[#0]
+              after %0:
                 Project: #0, #2
-                Filter: NOT(#1)
-                Map: null
-                  →Read l10
-              →Differential Join %1[#0] » %0:l11[#0]
-                after %0:
-                  Project: #0, #2
-                  Map: coalesce(#1, false)
-                →Arrange (#0)
-                  →Stream l11
-                →Arrange (#0)
-                  →Union
-                    →Stream l29
-                    →Map/Filter/Project
-                      Project: #0, #1
-                      Map: null
-                        →Consolidating Union
-                          →Negate Diffs
-                            →Fused with Child Map/Filter/Project
-                              Project: #0
-                                →Read l29
-                          →Unarranged Raw Stream
-                            →Arranged l12
+                Map: coalesce(#1, false)
+              →Arrange (#0)
+                →Stream l11
+              →Arrange (#0)
+                →Union
+                  →Stream l29
+                  →Map/Filter/Project
+                    Project: #0, #1
+                    Map: null
+                      →Consolidating Union
+                        →Negate Diffs
+                          →Fused with Child Map/Filter/Project
+                            Project: #0
+                              →Read l29
+                        →Unarranged Raw Stream
+                          →Arranged l12
     cte l32 =
       →Union
         →Map/Filter/Project

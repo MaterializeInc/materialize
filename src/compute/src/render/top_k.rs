@@ -30,7 +30,7 @@ use mz_compute_types::plan::top_k::{
     BasicTopKPlan, MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan,
 };
 use mz_expr::func::CastUint64ToInt64;
-use mz_expr::{BinaryFunc, Columns, Eval, EvalError, UnaryFunc, func};
+use mz_expr::{BinaryFunc, Columns, Eval, EvalError, UnaryFunc, func, permutation_for_arrangement};
 use mz_ore::cast::CastFrom;
 use mz_ore::soft_assert_or_log;
 use mz_repr::fixed_length::ExtendDatums;
@@ -45,10 +45,10 @@ use timely::dataflow::operators::Operator;
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::{ClearContainer, MzReduce};
 use crate::render::Pairer;
-use crate::render::context::{CollectionBundle, Context};
+use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::errors::MaybeValidatingRow;
-use crate::typedefs::{KeyBatcher, MzTimestamp, RowRowSpine, RowSpine};
+use crate::typedefs::{ErrBatcher, ErrBuilder, KeyBatcher, MzTimestamp, RowRowSpine, RowSpine};
 use mz_row_spine::{
     DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBuilder, RowValSpine,
 };
@@ -114,7 +114,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
 
         // We create a new region to compartmentalize the topk logic.
         let outer_scope = ok_input.scope();
-        let (ok_result, err_collection) = outer_scope.clone().region_named("TopK", |inner| {
+        let bundle = outer_scope.clone().region_named("TopK", |inner| {
             let ok_input = ok_input.enter_region(inner);
             let mut err_collection = err_input.enter_region(inner);
 
@@ -152,20 +152,36 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                 }
             }
 
-            let ok_result = match top_k_plan {
+            let bundle = match top_k_plan {
                 TopKPlan::MonotonicTop1(MonotonicTop1Plan {
                     group_key,
                     order_key,
+                    arity,
                     must_consolidate,
                 }) => {
-                    let (oks, errs) = self.render_top1_monotonic(
+                    let (arrangement, errs) = self.render_top1_monotonic(
                         ok_input,
-                        group_key,
+                        group_key.clone(),
                         order_key,
+                        arity,
                         must_consolidate,
                     );
                     err_collection = err_collection.concat(errs);
-                    oks
+
+                    // Lowering advertises this group-key arrangement (see the
+                    // `MirRelationExpr::TopK` arm in `lowering.rs`), so deliver it alone,
+                    // mirroring `render_reduce_plan`'s `ArrangementFlavor::Local`. A consumer
+                    // that needs the raw collection reconstructs it from the arrangement via
+                    // the advertised permutation, exactly as for an index arrangement.
+                    let errs: KeyCollection<_, _, _> = err_collection.clone().into();
+                    let err_arrangement = errs
+                        .mz_arrange::<ColumnationChunker<_>, ErrBatcher<_, _>, ErrBuilder<_, _>, _>(
+                            "Arrange bundle err",
+                        );
+                    CollectionBundle::from_columns(
+                        group_key.iter().copied(),
+                        ArrangementFlavor::Local(arrangement, err_arrangement),
+                    )
                 }
                 TopKPlan::MonotonicTopK(MonotonicTopKPlan {
                     order_key,
@@ -264,7 +280,10 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                         "requested no validation, but received error collection"
                     );
 
-                    result.map(|(_key_hash, row)| row)
+                    CollectionBundle::from_collections(
+                        result.map(|(_key_hash, row)| row),
+                        err_collection,
+                    )
                 }
                 TopKPlan::Basic(BasicTopKPlan {
                     group_key,
@@ -287,18 +306,15 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                         ok_input, group_key, order_key, offset, limit, arity, buckets,
                     );
                     err_collection = err_collection.concat(errs);
-                    oks
+                    CollectionBundle::from_collections(oks, err_collection)
                 }
             };
 
             // Extract the results from the region.
-            (
-                ok_result.leave_region(outer_scope),
-                err_collection.leave_region(outer_scope),
-            )
+            bundle.leave_region(outer_scope)
         });
 
-        CollectionBundle::from_collections(ok_result, err_collection)
+        bundle
     }
 
     /// Constructs a TopK dataflow subgraph.
@@ -502,11 +518,24 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
         collection: VecCollection<'s, T, Row, Diff>,
         group_key: Vec<usize>,
         order_key: Vec<mz_expr::ColumnOrder>,
+        arity: usize,
         must_consolidate: bool,
     ) -> (
-        VecCollection<'s, T, Row, Diff>,
+        Arranged<'s, TraceAgent<RowRowSpine<T, Diff>>>,
         VecCollection<'s, T, DataflowErrorSer, Diff>,
     ) {
+        // The arrangement we build below is keyed by `group_key` and its value is the winning
+        // row thinned to `thinning`, following the layout `permutation_for_arrangement`
+        // dictates for `Reduce`-style group-key arrangements. A top-1 winner's group-key
+        // columns equal the key by construction, so dropping them from the value is lossless;
+        // consumers reconstruct the full row from key and value via the (unused here)
+        // permutation.
+        let key: Vec<LirScalarExpr> = group_key
+            .iter()
+            .map(|c| LirScalarExpr::column(*c))
+            .collect();
+        let (_permutation, thinning) = permutation_for_arrangement(&key, arity);
+
         // We can place our rows directly into the diff field, and only keep the relevant one
         // corresponding to evaluating our aggregate, instead of having to do a hierarchical
         // reduction. We start by mapping the group key along with the row and consolidating
@@ -560,13 +589,17 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
             )
             .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
                 "MonotonicTop1",
-                move |_key, input, output| {
-                    let accum: &monoids::Top1Monoid = &input[0].1;
-                    output.push((accum.row.clone(), Diff::ONE));
+                {
+                    let mut datum_vec = mz_repr::DatumVec::new();
+                    move |_key, input, output| {
+                        let accum: &monoids::Top1Monoid = &input[0].1;
+                        let datums = datum_vec.borrow_with(&accum.row);
+                        let value = SharedRow::pack(thinning.iter().map(|i| datums[*i]));
+                        output.push((value, Diff::ONE));
+                    }
                 },
             );
-        // TODO(database-issues#2288): Here we discard the arranged output.
-        (result.as_collection(|_k, v| v.to_row()), errs)
+        (result, errs)
     }
 }
 
