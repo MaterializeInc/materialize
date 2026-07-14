@@ -317,7 +317,7 @@ EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
   SELECT k FROM sd_base EXCEPT SELECT k FROM sd_sub
 ----
 Explained Query:
-  SetDifference ensure_arrangement={ key=[#0], permutation=id, thinning=() }
+  SetDifference ensure_arrangement={ key=[#0], permutation=id, thinning=() } base_key=[#0] subtract_key=[#0]
     ArrangeBy
       input_key=[#0]
       raw=true
@@ -432,6 +432,11 @@ EOF
 # the two arms have heterogeneous thinning (`l0` thinning=(#1), `l1` thinning=()) and one
 # arm is a `Get` advertising its arrangement directly while the other reads through an
 # `ArrangeBy`'s `input_key`. Both anti-branches collapse to `SetDifference`.
+#
+# The `subtract` arm reads `l0` as `Get::PassArrangements` (not a projecting `Get::Arrangement`).
+# The recognizer strips the projection so the operator consumes `l0`'s existing arrangement
+# directly, keyed `[#0]` (`subtract_key`), instead of re-arranging a projected raw collection.
+# That is the outer-join memory win: no per-arm `ArrangeBy` is reintroduced under the fused node.
 query T multiline
 EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 select *
@@ -526,16 +531,14 @@ Explained Query:
             project=(#0..=#2)
             map=(null, null)
             input_key=#0
-            SetDifference ensure_arrangement={ key=[#0], permutation=id, thinning=() }
+            SetDifference ensure_arrangement={ key=[#0], permutation=id, thinning=() } base_key=[#0] subtract_key=[#0]
               ArrangeBy
                 input_key=[#0]
                 raw=true
                 Get::PassArrangements l1
                   raw=false
                   arrangements[0]={ key=[#0], permutation=id, thinning=() }
-              Get::Arrangement l0
-                project=(#0)
-                key=#0
+              Get::PassArrangements l0
                 raw=false
                 arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
       ArrangeBy

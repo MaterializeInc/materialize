@@ -65,16 +65,13 @@ use crate::render::{MaybeBucketByTime, RenderTimestamp};
 use crate::typedefs::{ErrBatcher, ErrBuilder, RowRowAgent, RowRowEnter, RowRowSpine};
 use mz_row_spine::RowRowBuilder;
 
-/// One input arm, normalized to an arrangement keyed by the difference key.
+/// One input arm, read through its existing arrangement keyed by the arm's own key.
 ///
-/// The recognizer guarantees each arm is *available* arranged on the key
-/// columns, but the rendered arm bundle only exposes that arrangement directly
-/// when the arm node passes it through (e.g. a `Get::PassArrangements` or an
-/// `ArrangeBy`). An arm that applies a projection while reading its arrangement
-/// (a `Get::Arrangement` with a projecting MFP) renders to a raw collection
-/// instead, so in that case we arrange it once here on the key. This still
-/// removes the shared intermediate arrangement (trace T) over the union; it only
-/// reintroduces a per-arm arrangement for the projecting-arm shape.
+/// The recognizer rewrites each arm so its rendered bundle exposes an existing arrangement
+/// directly (`Get::PassArrangements` or an `ArrangeBy`), stripping any projection that would
+/// otherwise render the arm as a raw collection. So the arm's arrangement lookup hits and no
+/// per-arm re-arrangement is built, which is what lets the fusion eliminate the shared
+/// intermediate arrangement (trace T) over the union without reintroducing one per arm.
 enum ArmArrangement<'scope, T: RenderTimestamp> {
     Local(differential_dataflow::operators::arrange::Arranged<'scope, RowRowAgent<T, Diff>>),
     Trace(
@@ -88,14 +85,18 @@ enum ArmArrangement<'scope, T: RenderTimestamp> {
 impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
     /// Renders a `SetDifference` node into a single output arrangement.
     ///
-    /// Both `base` and `subtract` must be available arranged on `key`
-    /// (`ensure_arrangement.0`), which the recognizer guarantees. The output is
-    /// a `Local` arrangement keyed by `key` with empty (`thinning=()`) values,
-    /// matching the `Threshold` output this node replaces.
+    /// `base` must be available arranged on `base_key` and `subtract` on
+    /// `subtract_key`, which the recognizer guarantees. Those two keys carry the
+    /// same key datums as the output key (`ensure_arrangement.0`), so reading each
+    /// arm through its own arrangement produces aligned keys. The output is a
+    /// `Local` arrangement keyed by the output key with empty (`thinning=()`)
+    /// values, matching the `Threshold` output this node replaces.
     pub(crate) fn render_set_difference(
         &self,
         base: CollectionBundle<'scope, T>,
         subtract: CollectionBundle<'scope, T>,
+        base_key: Vec<LirScalarExpr>,
+        subtract_key: Vec<LirScalarExpr>,
         ensure_arrangement: (Vec<LirScalarExpr>, Vec<usize>, Vec<usize>),
     ) -> CollectionBundle<'scope, T> {
         let key = ensure_arrangement.0.clone();
@@ -104,11 +105,17 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
         // arranged once, mirroring the reduce error pattern in `render/reduce.rs`.
         let mut err_collections = Vec::with_capacity(2);
 
-        // Normalize each arm to an arrangement keyed by the difference key,
-        // arranging a raw (projecting) arm once if needed.
-        let base_arm = self.arm_arrangement(base, &key, &ensure_arrangement, &mut err_collections);
-        let sub_arm =
-            self.arm_arrangement(subtract, &key, &ensure_arrangement, &mut err_collections);
+        // Read each arm through its own existing arrangement (`base_key` /
+        // `subtract_key`). Their key datums align with the output key, so the
+        // per-key net accounting co-iterates correctly across arms.
+        let base_arm =
+            self.arm_arrangement(base, &base_key, &ensure_arrangement, &mut err_collections);
+        let sub_arm = self.arm_arrangement(
+            subtract,
+            &subtract_key,
+            &ensure_arrangement,
+            &mut err_collections,
+        );
 
         // Demultiplex the four Local/Trace combinations. `set_difference_core` is
         // generic over the two trace types; both variants read `Row` keys and
@@ -137,18 +144,18 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
         CollectionBundle::from_expressions(key, ArrangementFlavor::Local(oks, errs))
     }
 
-    /// Normalizes one input arm to an arrangement keyed by the difference key,
+    /// Reads one input arm through its existing arrangement keyed by `arm_key`,
     /// pushing the arm's error collection into `errs`.
     ///
-    /// Uses the arm's existing arrangement when present. Otherwise the arm
-    /// rendered to a raw collection (a projecting `Get::Arrangement`), so we
-    /// arrange it here on `ensure_arrangement`. The identity MFP mirrors the
-    /// `ArrangeBy` the lowering would otherwise insert; the arrangement value is
-    /// empty (`thinning=()`), which the operator ignores.
+    /// The recognizer guarantees each recognized arm exposes an arrangement on its
+    /// own key, so the `arm.arrangement(arm_key)` lookup hits. The `None` branch is
+    /// a defensive fallback: it arranges the arm on the output `ensure_arrangement`
+    /// once, mirroring the `ArrangeBy` the lowering would otherwise insert. The
+    /// arrangement value is empty (`thinning=()`), which the operator ignores.
     fn arm_arrangement(
         &self,
         arm: CollectionBundle<'scope, T>,
-        key: &[LirScalarExpr],
+        arm_key: &[LirScalarExpr],
         ensure_arrangement: &(Vec<LirScalarExpr>, Vec<usize>, Vec<usize>),
         errs: &mut Vec<
             differential_dataflow::VecCollection<
@@ -159,7 +166,7 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
             >,
         >,
     ) -> ArmArrangement<'scope, T> {
-        match arm.arrangement(key) {
+        match arm.arrangement(arm_key) {
             Some(ArrangementFlavor::Local(oks, arm_errs)) => {
                 errs.push(arm_errs.as_collection(|k, _v| k.clone()));
                 ArmArrangement::Local(oks)
@@ -180,8 +187,8 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                     ArrangementStrategy::Direct,
                 );
                 match arranged
-                    .arrangement(key)
-                    .expect("arrangement just built on `key`")
+                    .arrangement(&ensure_arrangement.0)
+                    .expect("arrangement just built on the output key")
                 {
                     ArrangementFlavor::Local(oks, arm_errs) => {
                         errs.push(arm_errs.as_collection(|k, _v| k.clone()));
