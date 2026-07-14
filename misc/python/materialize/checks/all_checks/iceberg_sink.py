@@ -455,7 +455,7 @@ class AlterIcebergSinkCommitInterval(Check):
     """Check ALTER SINK ... SET (COMMIT INTERVAL ...) on an Iceberg sink"""
 
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v26.33.0-dev")
+        return self.base_version >= MzVersion.parse_mz("v26.34.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(dedent("""
@@ -522,7 +522,7 @@ class AlterIcebergSinkCommitInterval(Check):
 class IcebergSinkCommitIntervalMigration(Check):
     """Regression test for the COMMIT INTERVAL migration (SS-80, #37493).
 
-    Since v26.33, planning rejects `COMMIT INTERVAL < 1s` for Iceberg sinks.
+    Since v26.34, planning rejects `COMMIT INTERVAL < 1s` for Iceberg sinks.
     Because catalog bootstrap re-plans every object's persisted `create_sql`,
     an environment that already has such a sink -- created on an older version
     that accepted it -- panics environmentd on upgrade ("invalid persisted
@@ -538,14 +538,14 @@ class IcebergSinkCommitIntervalMigration(Check):
     """
 
     def _can_run(self, e: Executor) -> bool:
-        # The < 1s rejection landed in v26.33. Only reproducible when the base
+        # The < 1s rejection landed in v26.34. Only reproducible when the base
         # version still accepts the value; otherwise the CREATEs in
         # initialize() fail up-front. Also makes this a no-op in non-upgrade
         # scenarios (base == current, rejecting build).
         return (
             MzVersion.parse_mz("v26.10.0-dev")
             <= self.base_version
-            < MzVersion.parse_mz("v26.33.0-dev")
+            < MzVersion.parse_mz("v26.34.0-dev")
         )
 
     def initialize(self) -> Testdrive:
@@ -573,8 +573,8 @@ class IcebergSinkCommitIntervalMigration(Check):
                 """))
 
     def manipulate(self) -> list[Testdrive]:
-        # Only flow data; the manipulate phases run on newer (rejecting)
-        # builds, so no sub-second-interval DDL here.
+        # The regression concerns booting existing sinks, so no additional DDL
+        # is needed after initialization.
         return [
             Testdrive(dedent(s))
             for s in [
@@ -588,14 +588,13 @@ class IcebergSinkCommitIntervalMigration(Check):
         ]
 
     def validate(self) -> Testdrive:
-        # Reaching validate() means bootstrap survived the upgrade. Also
-        # assert that the migration rewrote both intervals to '1s' and that
-        # the sinks are still healthy and committing.
+        # Reaching validate() means bootstrap survived. Once the migration is
+        # available, assert it rewrote both intervals to '1s'.
         return Testdrive(dedent("""
-                > SELECT create_sql LIKE '%COMMIT INTERVAL = ''1s''%' FROM (SHOW CREATE SINK iceberg_ci_migration_sink1);
+                >[version>=2603400] SELECT create_sql LIKE '%COMMIT INTERVAL = ''1s''%' FROM (SHOW CREATE SINK iceberg_ci_migration_sink1);
                 true
 
-                > SELECT create_sql LIKE '%COMMIT INTERVAL = ''1s''%' FROM (SHOW CREATE SINK iceberg_ci_migration_sink2);
+                >[version>=2603400] SELECT create_sql LIKE '%COMMIT INTERVAL = ''1s''%' FROM (SHOW CREATE SINK iceberg_ci_migration_sink2);
                 true
 
                 > SELECT status FROM mz_internal.mz_sink_statuses WHERE name LIKE 'iceberg_ci_migration_sink%';

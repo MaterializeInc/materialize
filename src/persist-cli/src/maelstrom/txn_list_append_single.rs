@@ -584,9 +584,10 @@ impl Service for TransactorService {
 
         let mut config =
             PersistConfig::new_default_configs(&mz_persist_client::BUILD_INFO, SYSTEM_TIME.clone());
-        {
+        if args.consensus_read_committed {
             // On vanilla Postgres the lock-based tuned queries are always used; enable READ
-            // COMMITTED to exercise the isolation they are designed to run under.
+            // COMMITTED to exercise the isolation they are designed to run under. Gated because
+            // it panics against CockroachDB consensus, which requires SERIALIZABLE.
             let mut updates = ConfigUpdates::default();
             updates.add(&mz_persist::postgres::PG_CONSENSUS_READ_COMMITTED, true);
             config.apply_from(&updates);

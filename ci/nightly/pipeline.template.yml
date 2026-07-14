@@ -1686,6 +1686,9 @@ steps:
         - ./ci/plugins/mzcompose:
             composition: terraform
             run: aws-upgrade
+            # Historical releases can log recovered failures that are fixed in
+            # the current build. Scan from the final upgrade for regressions.
+            log-start-at-last: "--- Upgrading to"
             # Cleanup runs in pre-exit hook
             args: [--no-cleanup]
             ci-builder: stable
@@ -2741,12 +2744,12 @@ steps:
     topics: [iceberg, postgres]
     label: Iceberg
     depends_on: build-aarch64
-    timeout_in_minutes: 30
+    timeout_in_minutes: 60
     plugins:
       - ./ci/plugins/mzcompose:
           composition: iceberg
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: hetzner-aarch64-8cpu-16gb
 
   - group: "Race Condition"
     key: race-condition

@@ -290,6 +290,10 @@ cleanup() {
   fi
 
   unset CI_EXTRA_ARGS # We don't want extra args for the annotation
+  CI_ANNOTATE_ERRORS_ARGS=()
+  if [ -n "${BUILDKITE_PLUGIN_MZCOMPOSE_LOG_START_AT_LAST:-}" ]; then
+      CI_ANNOTATE_ERRORS_ARGS+=("--log-start-at-last=$BUILDKITE_PLUGIN_MZCOMPOSE_LOG_START_AT_LAST")
+  fi
   # Continue even if ci-annotate-errors fails
   CI_ANNOTATE_ERRORS_RESULT=0
   # We have to upload artifacts before ci-annotate-errors, so that the annotations can link to the artifacts
@@ -306,7 +310,7 @@ cleanup() {
   # shellcheck disable=SC2086
   wait "$UPLOAD_PID" $TRUFFLEHOG_PID
   ci_unimportant_heading "Annotating errors"
-  bin/ci-builder run "$builder" bin/ci-annotate-errors --test-cmd="$TEST_CMD" --test-desc="$TEST_DESC" --test-result="$TEST_RESULT" "${artifacts[@]}" trufflehog.log > ci-annotate-errors.log || CI_ANNOTATE_ERRORS_RESULT=$?
+  bin/ci-builder run "$builder" bin/ci-annotate-errors "${CI_ANNOTATE_ERRORS_ARGS[@]}" --test-cmd="$TEST_CMD" --test-desc="$TEST_DESC" --test-result="$TEST_RESULT" "${artifacts[@]}" trufflehog.log > ci-annotate-errors.log || CI_ANNOTATE_ERRORS_RESULT=$?
   buildkite-agent artifact upload "ci-annotate-errors.log" &
 
   export_cov() {
