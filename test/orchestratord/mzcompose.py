@@ -2761,6 +2761,263 @@ def workflow_v1_opt_in(
     print("v1 opt-in test PASSED")
 
 
+def apply_server_side(
+    obj: dict[str, Any],
+    field_manager: str | None = None,
+    force_conflicts: bool = True,
+) -> None:
+    """Server-side apply a single object via kubectl, retrying while the
+    conversion webhook is still coming up."""
+    cmd = ["kubectl", "apply", "--server-side", "-f", "-"]
+    if force_conflicts:
+        cmd.append("--force-conflicts")
+    if field_manager:
+        cmd.append(f"--field-manager={field_manager}")
+    yaml_str = yaml.dump(obj)
+    print(f"Attempting to apply server-side:\n{yaml_str}")
+    transient_webhook_errors = (
+        "connection refused",
+        "deadline exceeded",
+        "i/o timeout",
+    )
+    max_attempts = 120
+    for attempt in range(max_attempts):
+        result = subprocess.run(cmd, input=yaml_str.encode(), capture_output=True)
+        if result.returncode == 0:
+            return
+        stderr_str = result.stderr.decode(errors="replace")
+        if attempt < max_attempts - 1 and any(
+            err in stderr_str for err in transient_webhook_errors
+        ):
+            print(f"Webhook not yet ready (attempt {attempt + 1}), retrying...")
+            time.sleep(2)
+            continue
+        print(f"Failed to apply: {result.stdout}\nSTDERR:{result.stderr}")
+        raise subprocess.CalledProcessError(
+            result.returncode,
+            result.args,
+            output=result.stdout,
+            stderr=result.stderr,
+        )
+
+
+def workflow_server_side_apply(
+    c: Composition,
+    parser: WorkflowArgumentParser,
+) -> None:
+    """Test `kubectl apply --server-side` of Materialize resources across CRD
+    versions.
+
+    When an object has managed fields recorded at another CRD version,
+    server-side apply round-trips each field manager's owned subset of the
+    object through the conversion webhook while reconciling field ownership.
+    Those subsets are partial objects that lack required fields, so the
+    conversion webhook must convert them field-wise instead of rejecting
+    them.
+
+    Regression test for the conversion webhook rejecting such partial objects
+    with "missing field `environmentdImageRef`", which broke every
+    server-side apply of a v1 resource whose managed fields were recorded at
+    v1alpha1 (the situation after enabling the v1 CRD on an existing
+    v1alpha1-managed instance).
+    """
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        help="Custom version tag to use",
+    )
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+
+    definition = setup(c, args)
+    enable_v1_crd(definition)
+
+    # Step 1: Deploy at v1alpha1 with client-side apply and complete the
+    # initial rollout. This records the applier's and orchestratord's managed
+    # fields at v1alpha1.
+    definition["materialize"]["apiVersion"] = "materialize.cloud/v1alpha1"
+    init(definition)
+    run(definition, False)
+    print("Initial v1alpha1 deployment completed")
+
+    mz = get_materialize_v1alpha1()
+    initial_request_rollout = mz["spec"]["requestRollout"]
+
+    # Guard that the test exercises what it claims to: there must be managed
+    # fields recorded at v1alpha1 for the server-side apply below to prune.
+    managed_fields = json.loads(
+        spawn.capture(
+            [
+                "kubectl",
+                "get",
+                "materializes.v1alpha1.materialize.cloud",
+                mz["metadata"]["name"],
+                "-n",
+                "materialize-environment",
+                "--show-managed-fields",
+                "-o",
+                "jsonpath={.metadata.managedFields}",
+            ]
+        )
+    )
+    assert any(
+        entry["apiVersion"] == "materialize.cloud/v1alpha1" for entry in managed_fields
+    ), f"expected managed fields recorded at v1alpha1, got {managed_fields}"
+
+    # Step 2: Server-side apply the same spec at v1. Reconciling the
+    # v1alpha1-recorded managed fields sends partial objects through the
+    # conversion webhook. Before the webhook tolerated partial objects this
+    # failed with:
+    #   failed to prune fields: failed add back owned items: failed to
+    #   convert pruned object at version materialize.cloud/v1: conversion
+    #   webhook for materialize.cloud/v1alpha1, Kind=Materialize failed
+    mz_v1 = copy.deepcopy(definition["materialize"])
+    mz_v1["apiVersion"] = "materialize.cloud/v1"
+    for field in ("requestRollout", "inPlaceRollout", "environmentdIamRoleArn"):
+        mz_v1["spec"].pop(field, None)
+    apply_server_side(mz_v1)
+    print("Server-side apply of the v1 resource succeeded")
+
+    # Adopting the resource at v1 replaces the random initial requestRollout
+    # with one derived from the v1 spec hash, which triggers one rollout.
+    # Wait for it to complete so the assertions below aren't racing it.
+    def check_rollout_complete():
+        mz = get_materialize_v1alpha1()
+        assert (
+            mz["status"]["lastCompletedRolloutRequest"] == mz["spec"]["requestRollout"]
+        ), f"Expected rollout to complete: requestRollout={mz['spec']['requestRollout']} != lastCompletedRolloutRequest={mz['status']['lastCompletedRolloutRequest']}"
+
+    retry(check_rollout_complete, 600)
+    mz = get_materialize_v1alpha1()
+    adopted_request_rollout = mz["spec"]["requestRollout"]
+    print(
+        f"v1 adoption rollout completed: requestRollout changed from "
+        f"{initial_request_rollout} to {adopted_request_rollout}"
+    )
+
+    # Step 3: Server-side re-apply the unchanged v1 spec (the routine GitOps
+    # path). The derived requestRollout is deterministic, so this must not
+    # trigger another rollout.
+    apply_server_side(mz_v1)
+    time.sleep(30)
+    mz = get_materialize_v1alpha1()
+    assert (
+        mz["spec"]["requestRollout"] == adopted_request_rollout
+    ), f"Expected requestRollout unchanged after server-side re-apply, but changed from {adopted_request_rollout} to {mz['spec']['requestRollout']}"
+    print("Confirmed: no rollout triggered by unchanged server-side re-apply")
+
+    # Step 4: Server-side apply a partial v1 manifest under a dedicated field
+    # manager that owns only a subset of the spec, without forcing conflicts.
+    # The value matches the existing one, so ownership becomes shared and
+    # nothing changes.
+    mz_partial = {
+        "apiVersion": "materialize.cloud/v1",
+        "kind": "Materialize",
+        "metadata": {
+            "name": mz_v1["metadata"]["name"],
+            "namespace": mz_v1["metadata"]["namespace"],
+        },
+        "spec": {
+            "environmentdImageRef": mz_v1["spec"]["environmentdImageRef"],
+        },
+    }
+    apply_server_side(
+        mz_partial, field_manager="materialize-ssa", force_conflicts=False
+    )
+    mz = get_materialize_v1alpha1()
+    assert (
+        mz["spec"]["requestRollout"] == adopted_request_rollout
+    ), f"Expected requestRollout unchanged after partial server-side apply, but changed from {adopted_request_rollout} to {mz['spec']['requestRollout']}"
+    print("Server-side apply of a partial v1 resource succeeded")
+
+    # Step 5: Server-side apply a partial v1 manifest that does not contain
+    # environmentdImageRef at all, under a field manager that does not own
+    # it. The applied subset lacks the fields the conversion webhook used to
+    # hard-require, and its owned subset stays that way on every future
+    # apply. balancerdReplicas is excluded from the rollout hash and set to
+    # its default, so nothing rolls out.
+    #
+    # This must force conflicts: orchestratord updates the Materialize
+    # resource by writing the full serialized object, which spells every
+    # unset optional spec field as an explicit null, so its field manager
+    # ("unknown") owns all of them, including balancerdReplicas. Forcing only
+    # transfers ownership of the one field this manifest sets.
+    mz_no_image_ref = {
+        "apiVersion": "materialize.cloud/v1",
+        "kind": "Materialize",
+        "metadata": {
+            "name": mz_v1["metadata"]["name"],
+            "namespace": mz_v1["metadata"]["namespace"],
+        },
+        "spec": {
+            "balancerdReplicas": 2,
+        },
+    }
+    apply_server_side(
+        mz_no_image_ref, field_manager="materialize-ssa-subset", force_conflicts=True
+    )
+    managed_fields = json.loads(
+        spawn.capture(
+            [
+                "kubectl",
+                "get",
+                "materializes.v1.materialize.cloud",
+                mz_v1["metadata"]["name"],
+                "-n",
+                "materialize-environment",
+                "--show-managed-fields",
+                "-o",
+                "jsonpath={.metadata.managedFields}",
+            ]
+        )
+    )
+    subset_entries = [
+        entry
+        for entry in managed_fields
+        if entry["manager"] == "materialize-ssa-subset"
+    ]
+    assert len(subset_entries) == 1, f"expected one entry, got {managed_fields}"
+    subset_fields = subset_entries[0]["fieldsV1"]["f:spec"]
+    assert "f:balancerdReplicas" in subset_fields, f"got {subset_fields}"
+    assert "f:environmentdImageRef" not in subset_fields, f"got {subset_fields}"
+
+    mz = get_materialize_v1alpha1()
+    assert (
+        mz["spec"]["requestRollout"] == adopted_request_rollout
+    ), f"Expected requestRollout unchanged after subset server-side apply, but changed from {adopted_request_rollout} to {mz['spec']['requestRollout']}"
+    assert (
+        mz["spec"]["environmentdImageRef"] == mz_v1["spec"]["environmentdImageRef"]
+    ), f"Expected environmentdImageRef unchanged, got {mz['spec']['environmentdImageRef']}"
+
+    # Re-apply the same subset. Its owned subset (which still lacks
+    # environmentdImageRef) is now what gets round-tripped through the
+    # conversion webhook during managed-field reconciliation.
+    apply_server_side(
+        mz_no_image_ref, field_manager="materialize-ssa-subset", force_conflicts=False
+    )
+    print(
+        "Server-side apply of a partial v1 resource without "
+        "environmentdImageRef succeeded"
+    )
+
+    # The resource must remain readable at both versions (both directions of
+    # the conversion webhook).
+    get_materialize_v1()
+    get_materialize_v1alpha1()
+
+    print("server-side apply test PASSED")
+
+
 OPERATOR_CERT_SECRET = "operator-materialize-operator-cert"
 OPERATOR_CA_SECRET = "operator-materialize-operator-ca"
 MATERIALIZE_CRD = "materializes.materialize.cloud"
