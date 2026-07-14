@@ -8847,17 +8847,14 @@ Explained Query:
           Project: #0..=#2, #4
             →Read l27
     cte l29 =
-      →Differential Join %1:mz_hydration_statuses[#0{object_id}, #1{replica_id}] » %0:l28[#2{hydration_object_id}, #3{id}]
-        →Arrange (#2{hydration_object_id}, #3{id})
-          →Fused with Child Map/Filter/Project
-            Filter: (#3{id}) IS NOT NULL
-              →Read l28
-        →Arranged mz_internal.mz_hydration_statuses
+      →Arrange (#2{hydration_object_id}, #3{id})
+        →Fused with Child Map/Filter/Project
+          Filter: (#3{id}) IS NOT NULL
+            →Read l28
     cte l30 =
-      →Fused with Child Map/Filter/Project
-        Project: #0..=#4
-        Map: (#1) IS NULL
-          →Read l28
+      →Differential Join %1:mz_hydration_statuses[#0{object_id}, #1{replica_id}] » %0:l29[#2{hydration_object_id}, #3{id}]
+        →Arranged l29
+        →Arranged mz_internal.mz_hydration_statuses
     cte l31 =
       →Differential Join %0:l23[#0{object_name}] » %1[#0{object_name}]
         after %1:
@@ -8865,10 +8862,7 @@ Explained Query:
           Filter: ((#7 AND #8) OR (NOT(#7) AND NOT(#8) AND (#1{cluster} = #4{cluster})))
           Map: (#1{cluster}) IS NULL, (#4{cluster}) IS NULL
         →Arrange (#0{object_name})
-          →Fused with Child Map/Filter/Project
-            Filter: (#4 OR NOT(#4))
-            Map: (#1{cluster}) IS NULL
-              →Read l23
+          →Stream l23
         →Arrange (#0{object_name})
           →Map/Filter/Project
             Project: #0, #1, #4, #5
@@ -8887,25 +8881,18 @@ Explained Query:
                       Map: null
                         →Consolidating Union
                           →Negate Diffs
-                            →Differential Join %1[#0, #1] » %0:l30[#2{hydration_object_id}, #3{id}]
-                              →Arrange (#2{hydration_object_id}, #3{id})
-                                →Fused with Child Map/Filter/Project
-                                  Project: #0..=#3
-                                  Filter: (#3{id}) IS NOT NULL AND (#4 OR NOT(#4))
-                                    →Read l30
+                            →Differential Join %1[#0, #1] » %0:l29[#2{hydration_object_id}, #3{id}]
+                              →Arranged l29
                               →Distinct GroupAggregate
                                 →Fused with Child Map/Filter/Project
                                   Project: #2, #3
-                                    →Read l29
+                                    →Read l30
                           →Fused with Child Map/Filter/Project
                             Project: #0, #1, #3
-                            Filter: (#4 OR NOT(#4))
-                              →Read l30
+                              →Read l28
                     →Fused with Child Map/Filter/Project
                       Project: #0, #1, #3, #4
-                      Filter: (#5 OR NOT(#5))
-                      Map: (#1) IS NULL
-                        →Read l29
+                        →Read l30
   →Return
     →Map/Filter/Project
       Project: #0..=#3, #6
