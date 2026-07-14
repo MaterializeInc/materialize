@@ -28,6 +28,7 @@ from materialize.parallel_workload.action import (
     CancelAction,
     ExplainAnalyzeAction,
     KillAction,
+    ReplaceMaterializedViewAction,
     StatisticsAction,
     ZeroDowntimeDeployAction,
     action_lists,
@@ -43,6 +44,7 @@ from materialize.parallel_workload.database import (
     MAX_KAFKA_SINKS,
     MAX_KAFKA_SOURCES,
     MAX_MYSQL_SOURCES,
+    MAX_NETWORK_POLICIES,
     MAX_POSTGRES_SOURCES,
     MAX_ROLES,
     MAX_SCHEMAS,
@@ -120,6 +122,9 @@ def run(
         )
         system_exe.execute(
             f"ALTER SYSTEM SET max_roles = {MAX_ROLES * 1000 + num_threads}"
+        )
+        system_exe.execute(
+            f"ALTER SYSTEM SET max_network_policies = {MAX_NETWORK_POLICIES + num_threads}"
         )
         system_exe.execute(
             f"ALTER SYSTEM SET max_clusters = {MAX_CLUSTERS * 40 + num_threads}"
@@ -541,10 +546,18 @@ def print_stats(
     # These succeed in normal runs, so they aren't broken. The assertion below
     # then targets CREATE/ALTER/write actions, where never-succeeding does mean
     # broken SQL or an impossible precondition.
+    excluded: set[type[Action]] = {ExplainAnalyzeAction}
+    if scenario == Scenario.Rename:
+        # ReplaceMaterializedViewAction re-renders the view's SELECT with the
+        # object names captured at creation. Renames invalidate them, so
+        # CREATE REPLACEMENT fails with a tolerated "does not exist"/"unknown
+        # schema", and a churny rename seed can legitimately never land a clean
+        # attempt. It succeeds in the other scenarios, so it stays checked there.
+        excluded.add(ReplaceMaterializedViewAction)
     action_classes = {
         c
         for c in action_classes
-        if not c.__name__.startswith("Drop") and c is not ExplainAnalyzeAction
+        if not c.__name__.startswith("Drop") and c not in excluded
     }
     never_succeeded = []
     for action_class in sorted(action_classes, key=lambda cls: cls.__name__):
