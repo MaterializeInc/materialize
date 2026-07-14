@@ -1891,3 +1891,30 @@ CREATE MATERIALIZED VIEW materialize.public.mvi3
     )
     AS SELECT DISTINCT 5 * x FROM materialize.public.t3;
 EOF
+
+# The target of CREATE OR REPLACE is resolved through the search path, so it can
+# live in another schema than the one the new item is created in. The finish
+# stage must not mistake that for a concurrent change to the target.
+statement ok
+CREATE SCHEMA or_replace_s1
+
+statement ok
+CREATE SCHEMA or_replace_s2
+
+statement ok
+CREATE MATERIALIZED VIEW or_replace_s2.mv_sp AS SELECT 1 AS a
+
+statement ok
+CREATE VIEW or_replace_s2.v_sp AS SELECT 1 AS a
+
+statement ok
+SET search_path = or_replace_s1, or_replace_s2
+
+statement ok
+CREATE OR REPLACE MATERIALIZED VIEW mv_sp AS SELECT 2 AS a
+
+statement ok
+CREATE OR REPLACE VIEW v_sp AS SELECT 2 AS a
+
+statement ok
+RESET search_path

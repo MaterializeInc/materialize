@@ -119,7 +119,8 @@ pub use statement::ddl::{
     AlterSourceAddSubsourceOptionExtracted, METRIC_SINK_CURATED_PREFIX_MARKER,
     MySqlConfigOptionExtracted, PgConfigOptionExtracted, PlannedAlterRoleOption,
     PlannedRoleAttributes, PlannedRoleVariable, SqlServerConfigOptionExtracted,
-    validate_metric_sink_desc, validate_metric_sink_prefix, validate_user_metric_sink_prefix,
+    ensure_no_blocking_dependents, validate_metric_sink_desc, validate_metric_sink_prefix,
+    validate_user_metric_sink_prefix,
 };
 pub use statement::{
     StatementClassification, StatementContext, StatementDesc, describe, plan, plan_copy_from,
