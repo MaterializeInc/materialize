@@ -1031,12 +1031,18 @@ fn arm_arrangement_matches(arm: &LirRelationExpr, key: &[LirScalarExpr]) -> bool
             ..
         } => {
             // The arrangement on the mapped key is either built by this node (its `forms`) or the
-            // input arrangement it reads through (`input_key`).
+            // input arrangement it reads through (`input_key`). `forms` keys are in the output
+            // column space, so they compare to `mapped_key` directly. `input_key` is in the input
+            // column space, so it only corresponds to `mapped_key` when `input_mfp` neither
+            // reorders nor drops columns. A non-identity projection would make the same index refer
+            // to different columns on the two sides, so match on `input_key` only under an identity
+            // projection.
             is_projection_only(input_mfp)
                 && (advertises_key(&forms.arranged)
-                    || input_key
-                        .as_deref()
-                        .is_some_and(|input_key| input_key == key))
+                    || (is_identity_projection(&input_mfp.safe_mfp().projection)
+                        && input_key
+                            .as_deref()
+                            .is_some_and(|input_key| input_key == key)))
         }
         _ => false,
     }
@@ -1138,6 +1144,12 @@ fn get_plan_projection_only(plan: &GetPlan) -> bool {
         GetPlan::Arrangement(_key, seek_row, mfp) => seek_row.is_none() && is_projection_only(mfp),
         GetPlan::Collection(mfp) => is_projection_only(mfp),
     }
+}
+
+/// Reports whether `proj` is the identity projection `[0, 1, ..., proj.len()-1]`: it neither
+/// reorders nor drops columns, so output column `i` is input column `i`.
+fn is_identity_projection(proj: &[usize]) -> bool {
+    proj.iter().copied().eq(0..proj.len())
 }
 
 /// Reports whether an `MfpPlan` only projects columns: no map, no filter, no temporal bound.
