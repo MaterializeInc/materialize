@@ -1008,8 +1008,16 @@ impl Coordinator {
         // We don't have any way to "duplicate" the read hold of the actual collection, which we
         // obtain below... but the current implementation of read holds guarantees that the storage
         // holds we obtain here will not be any greater than the hold we actually want.
-        let read_holds =
-            Some(self.acquire_read_holds(&dataflow_import_id_bundle(&plan, mview.cluster_id)));
+        //
+        // We hold only the plan's storage imports, whose persist part stats the pushdown
+        // explanation reads. We must not acquire holds on the plan's compute imports: an index
+        // that the materialized view was planned against can be dropped while the view keeps
+        // running, and a dropped index no longer has a compute collection to hold.
+        let id_bundle = CollectionIdBundle {
+            storage_ids: plan.source_imports.keys().copied().collect(),
+            compute_ids: BTreeMap::new(),
+        };
+        let read_holds = Some(self.acquire_read_holds(&id_bundle));
 
         let frontiers = self
             .controller
