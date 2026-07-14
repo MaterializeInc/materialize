@@ -862,6 +862,12 @@ impl AdapterError {
             AdapterError::PlanError(PlanError::ParameterNotAllowed(_)) => {
                 SqlState::UNDEFINED_PARAMETER
             }
+            // `PlanError::Unsupported` is raised (via `bail_unsupported!`) only for
+            // genuinely unsupported features, so it maps to PostgreSQL's
+            // feature-not-supported code rather than internal-error. See SQL-326.
+            AdapterError::PlanError(PlanError::Unsupported { .. }) => {
+                SqlState::FEATURE_NOT_SUPPORTED
+            }
             AdapterError::PlanError(_) => SqlState::INTERNAL_ERROR,
             AdapterError::PreparedStatementExists(_) => SqlState::DUPLICATE_PSTATEMENT,
             AdapterError::ReadOnlyTransaction => SqlState::READ_ONLY_SQL_TRANSACTION,
@@ -891,6 +897,9 @@ impl AdapterError {
                 }
                 OptimizerError::PlanError(PlanError::ParameterNotAllowed(_)) => {
                     SqlState::UNDEFINED_PARAMETER
+                }
+                OptimizerError::PlanError(PlanError::Unsupported { .. }) => {
+                    SqlState::FEATURE_NOT_SUPPORTED
                 }
                 OptimizerError::PlanError(_) => SqlState::INTERNAL_ERROR,
                 OptimizerError::RecursionLimitError(_) => RECURSION_LIMIT_ERROR_CODE,
