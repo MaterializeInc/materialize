@@ -19,7 +19,6 @@ use futures::future::BoxFuture;
 use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
-use mz_ore::metrics::{Histogram, MetricsFutureExt};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::ShardId;
 use mz_persist_client::write::WriteHandle;
@@ -179,7 +178,6 @@ impl PersistTableWriteWorker {
 
     pub(crate) fn new_txns(
         txns: TxnsHandle<SourceData, (), Timestamp, StorageDiff, TxnsCodecRow>,
-        apply_seconds: Histogram,
     ) -> Self {
         let (tx, rx) =
             tokio::sync::mpsc::unbounded_channel::<(tracing::Span, PersistTableWriteCmd)>();
@@ -188,7 +186,6 @@ impl PersistTableWriteWorker {
                 txns,
                 write_handles: BTreeMap::new(),
                 tidy: Tidy::default(),
-                apply_seconds,
             };
             worker.run(rx).await
         });
@@ -284,10 +281,6 @@ struct TxnsTableWorker {
     txns: TxnsHandle<SourceData, (), Timestamp, StorageDiff, TxnsCodecRow>,
     write_handles: BTreeMap<GlobalId, ShardId>,
     tidy: Tidy,
-    /// Latency of the deferred apply, which runs after the append response is
-    /// returned. This is the coverage `mz_append_table_duration_seconds` loses
-    /// by responding before applying.
-    apply_seconds: Histogram,
 }
 
 impl TxnsTableWorker {
@@ -483,33 +476,20 @@ impl TxnsTableWorker {
         // Sneak in any txns shard tidying from previous commits.
         txn.tidy(std::mem::take(&mut self.tidy));
         let txn_res = txn.commit_at(&mut self.txns, write_ts).await;
-        match txn_res {
+        let response = match txn_res {
             Ok(apply) => {
-                // The commit to the txns shard already made the write durable
-                // and linearized, so unblock the caller before applying. The
-                // apply is idempotent and reads of the affected data shards
-                // block until it has happened, so deferring it shifts latency
-                // from every write onto reads of the just-written shards. If
-                // we crash before applying, the next append's apply covers it,
-                // because applying is `apply_le`: it applies all unapplied
-                // txns up to its timestamp, and group commit appends at least
-                // once per timestamp interval.
-                //
-                // It is not an error for the other end to hang up.
-                let _ = tx.send(Ok(()));
-
+                // TODO: Do the applying in a background task. This will be a
+                // significant INSERT latency performance win.
                 debug!("applying {:?}", apply);
-                let tidy = apply
-                    .apply(&mut self.txns)
-                    .wall_time()
-                    .observe(self.apply_seconds.clone())
-                    .await;
+                let tidy = apply.apply(&mut self.txns).await;
                 self.tidy.merge(tidy);
 
                 // We don't serve any reads out of this TxnsHandle, so go ahead
                 // and compact as aggressively as we can (i.e. to the time we
                 // just wrote).
                 let () = self.txns.compact_to(write_ts).await;
+
+                Ok(())
             }
             Err(current) => {
                 self.tidy.merge(txn.take_tidy());
@@ -517,7 +497,7 @@ impl TxnsTableWorker {
                     "unable to commit txn at {:?} current={:?}",
                     write_ts, current
                 );
-                let response = Err(StorageError::InvalidUppers(
+                Err(StorageError::InvalidUppers(
                     self.write_handles
                         .keys()
                         .copied()
@@ -526,11 +506,11 @@ impl TxnsTableWorker {
                             current_upper: Antichain::from_elem(current),
                         })
                         .collect(),
-                ));
-                // It is not an error for the other end to hang up.
-                let _ = tx.send(response);
+                ))
             }
-        }
+        };
+        // It is not an error for the other end to hang up.
+        let _ = tx.send(response);
     }
 }
 
