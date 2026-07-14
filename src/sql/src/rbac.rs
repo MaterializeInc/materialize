@@ -1373,9 +1373,8 @@ fn generate_rbac_requirements(
                 }
             }
             // restrict_to_user_objects can only be set by superuser.
-            // SECURITY: This must use case-insensitive comparison because
-            // var.name() comes from Ident::to_string() which preserves the
-            // original casing for quoted identifiers.
+            // SECURITY: Compare case-insensitively, so this check does not
+            // depend on the planner lowercasing the name (`plan_variable_name`).
             plan::PlannedAlterRoleOption::Variable(var)
                 if var.name().eq_ignore_ascii_case("restrict_to_user_objects") =>
             {

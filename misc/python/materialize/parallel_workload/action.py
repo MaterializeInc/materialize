@@ -2887,6 +2887,23 @@ class CommitRollbackAction(Action):
         return True
 
 
+def respell_var_name(rng: random.Random, name: str) -> str:
+    """Occasionally respell a variable name, uppercased or quoted random-case.
+
+    Unquoted names are lowercased by the lexer and quoted names by the
+    planner, so every spelling this returns must address the same variable.
+    Callers must keep any bookkeeping keyed by the canonical name.
+    """
+    r = rng.random()
+    if r < 0.9:
+        return name
+    elif r < 0.95:
+        return name.upper()
+    else:
+        random_cased = "".join(c.upper() if rng.random() < 0.5 else c for c in name)
+        return f'"{random_cased}"'
+
+
 class FlipFlagsAction(Action):
     # Shortest gap between two flips, fleet-wide. Every worker's action list
     # carries this action, so weights alone put it at ~30 flips/s, which drove
@@ -3571,9 +3588,10 @@ class FlipFlagsAction(Action):
                 conn.close()
 
     def flip_flag(self, conn: Connection, flag_name: str, flag_value: str) -> None:
+        flag_spelling = respell_var_name(self.rng, flag_name)
         with conn.cursor() as cur:
             cur.execute(
-                f"ALTER SYSTEM SET {flag_name} = {flag_value};".encode(),
+                f"ALTER SYSTEM SET {flag_spelling} = {flag_value};".encode(),
             )
 
     def set_cluster_compression(self, conn: Connection, cluster: Cluster) -> None:
@@ -3591,7 +3609,7 @@ class FlipFlagsAction(Action):
     def reset_flag(self, conn: Connection, flag_name: str) -> None:
         with conn.cursor() as cur:
             cur.execute(
-                f"ALTER SYSTEM RESET {flag_name};".encode(),
+                f"ALTER SYSTEM RESET {respell_var_name(self.rng, flag_name)};".encode(),
             )
 
 
@@ -3960,7 +3978,7 @@ class SetClusterAction(Action):
             exe.commit(http=http)
         else:
             exe.rollback(http=http)
-        query = f"SET CLUSTER = {cluster}"
+        query = f"SET {respell_var_name(self.rng, 'cluster')} = {cluster}"
         exe.execute(query, http=http)
         return True
 
