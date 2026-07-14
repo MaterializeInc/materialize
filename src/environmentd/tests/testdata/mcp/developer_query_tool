@@ -183,3 +183,29 @@ mcp-developer
 ----
 200 OK
 {"jsonrpc":"2.0","id":50,"result":{"content":[{"type":"text","text":"[\n  [\n    \"materialize\"\n  ]\n]"}],"isError":false}}
+
+# =============================================================================
+# query - cluster_replica validation
+# =============================================================================
+
+# Empty cluster_replica is rejected by validation before reaching the engine.
+mcp-developer
+{"jsonrpc":"2.0","id":60,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","cluster_replica":"","sql_query":"SELECT 1"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":60,"error":{"code":-32602,"message":"Query validation failed: cluster_replica must not be empty or whitespace-only","data":{"error_type":"ValidationError"}}}
+
+# Whitespace-only cluster_replica is rejected too.
+mcp-developer
+{"jsonrpc":"2.0","id":61,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","cluster_replica":"   ","sql_query":"SELECT 1"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":61,"error":{"code":-32602,"message":"Query validation failed: cluster_replica must not be empty or whitespace-only","data":{"error_type":"ValidationError"}}}
+
+# A replica that does not exist on the target cluster fails at execution with
+# an error naming the replica, so agents can self-correct.
+mcp-developer
+{"jsonrpc":"2.0","id":62,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","cluster_replica":"r99","sql_query":"SELECT 1"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":62,"error":{"code":-32603,"message":"Query execution failed: cluster replica 'quickstart.r99' does not exist","data":{"error_type":"ExecutionError"}}}
