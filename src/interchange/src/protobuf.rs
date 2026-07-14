@@ -17,12 +17,6 @@ use prost_reflect::{
     ReflectMessage, Value,
 };
 
-/// Maximum Protobuf message nesting depth accepted when deriving a relation
-/// type. A message nested deeper than this is rejected rather than recursed
-/// into, so that a pathological (non-cyclic) message chain cannot overflow the
-/// stack while deriving the source's `RelationDesc`.
-const MAX_MESSAGE_NESTING_DEPTH: usize = 128;
-
 /// Maximum Protobuf wire nesting depth accepted when decoding a
 /// `FileDescriptorSet`.
 ///
@@ -35,10 +29,9 @@ const MAX_MESSAGE_NESTING_DEPTH: usize = 128;
 /// overflow before any of our own validation runs.
 ///
 /// We therefore reject descriptor sets nested deeper than this on the wire,
-/// before decoding them. This is distinct from [`MAX_MESSAGE_NESTING_DEPTH`],
-/// which bounds how far message *type references* (`m0 -> m1 -> ...` by name)
-/// are followed while deriving the relation type. Those references are a flat
-/// list on the wire, so a reference chain does not nest here.
+/// before decoding them. Message *type references* (`m0 -> m1 -> ...` by name)
+/// do not count toward this limit. Those references are a flat list on the wire,
+/// and relation type derivation grows its stack on demand as it follows them.
 const MAX_DESCRIPTOR_WIRE_NESTING_DEPTH: usize = 128;
 
 /// A decoded description of the schema of a Protobuf message.
@@ -165,7 +158,14 @@ fn derive_inner_type(
     seen_messages: &mut BTreeSet<String>,
     ty: Kind,
 ) -> Result<SqlColumnType, anyhow::Error> {
-    match ty {
+    // A message field can reference another message, and that chain can be
+    // arbitrarily long (though non-cyclic, which `seen_messages` enforces), so
+    // this recurses once per level. Grow the stack on demand instead of
+    // bounding the depth, so deriving the relation type from a deeply nested
+    // schema does not overflow the stack. This mirrors the jsonb recursion in
+    // `mz_repr`, and keeps schemas that a prior version already accepted and
+    // persisted decodable on re-render.
+    mz_ore::stack::maybe_grow(move || match ty {
         Kind::Bool => Ok(SqlScalarType::Bool.nullable(false)),
         Kind::Int32 | Kind::Sint32 | Kind::Sfixed32 => Ok(SqlScalarType::Int32.nullable(false)),
         Kind::Int64 | Kind::Sint64 | Kind::Sfixed64 => Ok(SqlScalarType::Int64.nullable(false)),
@@ -179,17 +179,6 @@ fn derive_inner_type(
         Kind::Message(m) => {
             if seen_messages.contains(m.name()) {
                 bail!("Recursive types are not supported: {}", m.name());
-            }
-            // `seen_messages` holds the ancestor messages currently being
-            // resolved, so its length is the current nesting depth. Bounding it
-            // prevents a stack overflow from a deeply nested (but non-cyclic)
-            // message chain, whose descriptor set is a flat, cheap-to-encode
-            // list of messages that reference each other by name.
-            if seen_messages.len() >= MAX_MESSAGE_NESTING_DEPTH {
-                bail!(
-                    "Protobuf message nesting depth exceeds limit of {}",
-                    MAX_MESSAGE_NESTING_DEPTH
-                );
             }
             seen_messages.insert(m.name().to_owned());
             let mut fields = Vec::with_capacity(m.fields().len());
@@ -205,7 +194,7 @@ fn derive_inner_type(
             };
             Ok(ty.nullable(true))
         }
-    }
+    })
 }
 
 /// The `descriptor.proto` message type that a region of the wire is being
@@ -413,7 +402,16 @@ fn check_descriptor_set_nesting_depth(bytes: &[u8]) -> Result<(), anyhow::Error>
                         return Ok(());
                     }
                 };
-                if len > buf.remaining() as u64 {
+                let len = match usize::try_from(len) {
+                    Ok(len) => len,
+                    Err(_) => {
+                        if recover(&mut frames, &mut buf) {
+                            continue;
+                        }
+                        return Ok(());
+                    }
+                };
+                if len > buf.remaining() {
                     if recover(&mut frames, &mut buf) {
                         continue;
                     }
@@ -429,7 +427,7 @@ fn check_descriptor_set_nesting_depth(bytes: &[u8]) -> Result<(), anyhow::Error>
                                 MAX_DESCRIPTOR_WIRE_NESTING_DEPTH
                             );
                         }
-                        let end_remaining = buf.remaining() - len as usize;
+                        let end_remaining = buf.remaining() - len;
                         frames.push(Frame {
                             kind: FrameKind::Len(end_remaining),
                             ctx: child,
@@ -438,7 +436,7 @@ fn check_descriptor_set_nesting_depth(bytes: &[u8]) -> Result<(), anyhow::Error>
                     // A string, bytes, scalar, or unknown field. The decoder does
                     // not parse its contents as a message, so skip it as an
                     // opaque leaf rather than recursing into it.
-                    None => buf.advance(len as usize),
+                    None => buf.advance(len),
                 }
             }
             WireType::StartGroup => {
@@ -548,9 +546,9 @@ mod stack_overflow_verification {
     // Regression test: a deep, non-cyclic protobuf message chain
     // (`m0 -> m1 -> ... -> mN`) must not overflow the stack while deriving the
     // relation type in `DecodedDescriptors::from_bytes` (reached during
-    // `CREATE SOURCE ... FORMAT PROTOBUF`). `derive_inner_type` bounds the
-    // nesting depth, so this returns a graceful error rather than aborting the
-    // process with a stack overflow.
+    // `CREATE SOURCE ... FORMAT PROTOBUF`). `derive_inner_type` grows the stack
+    // on demand, so this succeeds rather than aborting the process with a stack
+    // overflow.
     use prost::Message;
     use prost_types::field_descriptor_proto::{Label, Type};
     use prost_types::{
@@ -599,13 +597,17 @@ mod stack_overflow_verification {
 
     #[mz_ore::test]
     fn deep_chain_does_not_overflow() {
-        let bytes = deep_chain_fds(50_000);
-        // Must return an error (nesting-depth limit), not abort with a stack
-        // overflow. Before the fix this recursed once per message and aborted.
+        // A chain far deeper than a fixed stack could recurse over, but shallow
+        // enough that the resulting nested record type is itself well-behaved.
+        // Before the fix `derive_inner_type` recursed once per message on a
+        // fixed stack and aborted the process here; it now grows the stack on
+        // demand, so the chain resolves to a nested record type.
+        let bytes = deep_chain_fds(1_000);
         let res = DecodedDescriptors::from_bytes(&bytes, ".test.m0".to_string());
         assert!(
-            res.is_err(),
-            "expected a nesting-depth error for a deep message chain"
+            res.is_ok(),
+            "expected a deep message chain to decode, got: {:?}",
+            res.err()
         );
     }
 
@@ -617,6 +619,10 @@ mod stack_overflow_verification {
     /// overflows the stack.
     fn deep_nested_type_fds(depth: usize) -> Vec<u8> {
         use prost::encoding::{WireType, encode_key, encode_varint, encoded_len_varint};
+
+        fn wire_len(len: usize) -> u64 {
+            u64::try_from(len).expect("test descriptor length must fit in u64")
+        }
 
         // Build the wire encoding directly. Materializing the nested
         // `DescriptorProto` values would overflow Prost's *encoder* (and the
@@ -633,25 +639,25 @@ mod stack_overflow_verification {
         };
         let mut lens = vec![0usize; depth + 1];
         for k in 1..=depth {
-            lens[k] = key_len + encoded_len_varint(lens[k - 1] as u64) + lens[k - 1];
+            lens[k] = key_len + encoded_len_varint(wire_len(lens[k - 1])) + lens[k - 1];
         }
 
         let mut dp = Vec::with_capacity(lens[depth]);
         for k in (1..=depth).rev() {
             encode_key(NESTED_TYPE_FIELD, WireType::LengthDelimited, &mut dp);
-            encode_varint(lens[k - 1] as u64, &mut dp);
+            encode_varint(wire_len(lens[k - 1]), &mut dp);
         }
 
         // Wrap the chain: FileDescriptorProto.message_type (field 4), then
         // FileDescriptorSet.file (field 1).
         let mut fdp = vec![];
         encode_key(4, WireType::LengthDelimited, &mut fdp);
-        encode_varint(dp.len() as u64, &mut fdp);
+        encode_varint(wire_len(dp.len()), &mut fdp);
         fdp.extend_from_slice(&dp);
 
         let mut fds = vec![];
         encode_key(1, WireType::LengthDelimited, &mut fds);
-        encode_varint(fdp.len() as u64, &mut fds);
+        encode_varint(wire_len(fdp.len()), &mut fds);
         fds.extend_from_slice(&fdp);
         fds
     }
