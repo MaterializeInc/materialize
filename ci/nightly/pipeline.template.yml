@@ -596,7 +596,7 @@ steps:
   - id: sql-server-cdc-azure
     topics: [sql-server]
     label: "SQL Server (Azure SQL Database)"
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 30
     inputs: [test/sql-server-cdc]
     # Runs against a single shared Azure SQL Database, so only one build may
@@ -608,9 +608,7 @@ steps:
           composition: sql-server-cdc
           run: azure
     agents:
-      queue: hetzner-x86-64-4cpu-8gb
-    # Requires AZURE_SQL_* credentials in the CI secrets `env` file.
-    skip: "Pending Azure SQL Database credentials in the CI secrets bucket"
+      queue: linux-aarch64-small
 
   - id: http-auth
     label: HTTP auth
