@@ -1383,6 +1383,13 @@ impl<'a> RunnerInner<'a> {
             .execute("ALTER SYSTEM SET enable_reduce_mfp_fusion = on", &[])
             .await?;
 
+        // Turn on enable_fused_set_difference for coverage of the fused SetDifference
+        // operator wherever the co-arranged anti-side pattern renders.
+        // TODO(clu-168): Remove this code when we retire this feature flag.
+        self.system_client
+            .execute("ALTER SYSTEM SET enable_fused_set_difference = on", &[])
+            .await?;
+
         // Dangerous functions are useful for tests so we enable it for all tests.
         self.system_client
             .execute("ALTER SYSTEM SET unsafe_enable_unsafe_functions = on", &[])

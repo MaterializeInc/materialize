@@ -191,23 +191,16 @@ Explained Query:
             project=(#0..=#2)
             map=(null, null)
             input_key=#0
-            Threshold::Basic ensure_arrangement={ key=[#0], permutation=id, thinning=() }
+            SetDifference ensure_arrangement={ key=[#0], permutation=id, thinning=() } base_key=[#0] subtract_key=[#0]
               ArrangeBy
+                input_key=[#0]
+                raw=true
+                Get::PassArrangements l1
+                  raw=false
+                  arrangements[0]={ key=[#0], permutation=id, thinning=() }
+              Get::PassArrangements l0
                 raw=false
-                arrangements[0]={ key=[#0], permutation=id, thinning=() }
-                Union consolidate_output=true
-                  Negate
-                    Get::Arrangement l0
-                      project=(#0)
-                      key=#0
-                      raw=false
-                      arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
-                  ArrangeBy
-                    input_key=[#0]
-                    raw=true
-                    Get::PassArrangements l1
-                      raw=false
-                      arrangements[0]={ key=[#0], permutation=id, thinning=() }
+                arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
       ArrangeBy
         raw=true
         arrangements[0]={ key=[#0], permutation=id, thinning=(#1, #2) }
@@ -274,30 +267,25 @@ EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
   SELECT k FROM sd_base EXCEPT SELECT k FROM sd_sub
 ----
 Explained Query:
-  Threshold::Basic ensure_arrangement={ key=[#0], permutation=id, thinning=() }
+  SetDifference ensure_arrangement={ key=[#0], permutation=id, thinning=() } base_key=[#0] subtract_key=[#0]
     ArrangeBy
-      raw=false
-      arrangements[0]={ key=[#0], permutation=id, thinning=() }
-      Union consolidate_output=true
-        ArrangeBy
-          input_key=[#0]
+      input_key=[#0]
+      raw=true
+      Reduce::Distinct
+        key_plan=id
+        val_plan
+          project=()
+        Get::PassArrangements materialize.public.sd_base
           raw=true
-          Reduce::Distinct
-            key_plan=id
-            val_plan
-              project=()
-            Get::PassArrangements materialize.public.sd_base
-              raw=true
-        Negate
-          ArrangeBy
-            input_key=[#0]
-            raw=true
-            Reduce::Distinct
-              key_plan=id
-              val_plan
-                project=()
-              Get::PassArrangements materialize.public.sd_sub
-                raw=true
+    ArrangeBy
+      input_key=[#0]
+      raw=true
+      Reduce::Distinct
+        key_plan=id
+        val_plan
+          project=()
+        Get::PassArrangements materialize.public.sd_sub
+          raw=true
 
 Source materialize.public.sd_base
 Source materialize.public.sd_sub
