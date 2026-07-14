@@ -1811,7 +1811,13 @@ class ReplaceMaterializedViewAction(Action):
         )
         time.sleep(self.rng.random())
         try:
-            exe.execute(f"ALTER MATERIALIZED VIEW {view} APPLY REPLACEMENT {tmp_mv}")
+            # Either apply the replacement into the target view or discard it.
+            if self.rng.choice([True, False]):
+                exe.execute(
+                    f"ALTER MATERIALIZED VIEW {view} APPLY REPLACEMENT {tmp_mv}"
+                )
+            else:
+                exe.execute(f"DROP MATERIALIZED VIEW {tmp_mv}")
         except QueryError:
             # Clean up, a leaked replacement blocks all future replacements
             # of this view.
