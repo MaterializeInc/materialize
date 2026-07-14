@@ -78,6 +78,7 @@ pub struct Config {
 
     pub ephemeral_volume_class: Option<String>,
     pub scheduler_name: Option<String>,
+    pub orchestrator_kubernetes_az_label: Option<String>,
     pub enable_security_context: bool,
     pub enable_internal_statement_logging: bool,
     pub disable_statement_logging: bool,
