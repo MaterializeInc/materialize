@@ -159,7 +159,7 @@ use timely::worker::Worker as TimelyWorker;
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
-use crate::extensions::reduce::reduce_err_to_err;
+use crate::extensions::reduce::MzReduce;
 use crate::extensions::temporal_bucket::TemporalBucketing;
 use crate::logging::compute::{
     ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors, OperatorHydration,
@@ -971,17 +971,18 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                 // than a clean report of the error. The trade-off is that we lose information about
                 // multiplicities of errors, but .. this seems to be the better call.
                 let err: KeyCollection<_, _, _> = err.into();
-                let errs = reduce_err_to_err(
-                    err.mz_arrange::<
+                let errs = err
+                    .mz_arrange::<
                         ColumnationChunker<_>,
                         ErrBatcher<_, _>,
                         ErrBuilder<_, _>,
                         ErrSpine<_, _>,
-                    >("Arrange recursive err"),
-                    "Distinct recursive err",
-                    move |_k, _s, t| t.push(((), Diff::ONE)),
-                )
-                .as_collection(|k, _| k.clone());
+                    >("Arrange recursive err")
+                    .mz_reduce_abelian::<_, ErrBuilder<_, _>, ErrSpine<_, _>, _>(
+                        "Distinct recursive err",
+                        move |_k, _s, t| t.push(((), Diff::ONE)),
+                    )
+                    .as_collection(|k, _| k.clone());
 
                 oks_v.set(oks);
                 err_v.set(errs);

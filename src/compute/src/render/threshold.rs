@@ -12,18 +12,16 @@
 //! Consult [ThresholdPlan] documentation for details.
 
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::trace::Builder;
 use differential_dataflow::trace::Cursor;
 use differential_dataflow::trace::cursor::BatchCursor;
-use differential_dataflow::trace::implementations::BatchContainer;
 use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_compute_types::plan::threshold::{BasicThresholdPlan, ThresholdPlan};
 use mz_repr::{Diff, Row, Timestamp};
 use mz_row_spine::{DatumSeq, RowRowBuilder};
 use mz_timely_util::columnation::ColumnationChunker;
 
-use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
-use crate::extensions::reduce::{push_reduced, reduce_row_row_to_row_row};
+use crate::extensions::arrange::{KeyCollection, MzArrange};
+use crate::extensions::reduce::MzReduce;
 use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::typedefs::{ErrBatcher, ErrBuilder, RowRowAgent, RowRowEnter, RowRowSpine};
@@ -37,16 +35,19 @@ fn threshold_local<'scope, T: RenderTimestamp>(
     arrangement: Arranged<'scope, RowRowAgent<T, Diff>>,
     name: &str,
 ) -> Arranged<'scope, RowRowAgent<T, Diff>> {
-    reduce_row_row_to_row_row(arrangement, name, move |_key, s, t| {
-        for (record, count) in s.iter() {
-            if count.is_positive() {
-                t.push((
-                    <BatchCursor<RowRowSpine<T, Diff>> as Cursor>::owned_val(*record),
-                    *count,
-                ));
+    arrangement.mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>, _>(
+        name,
+        move |_key, s, t| {
+            for (record, count) in s.iter() {
+                if count.is_positive() {
+                    t.push((
+                        <BatchCursor<RowRowSpine<T, Diff>> as Cursor>::owned_val(*record),
+                        *count,
+                    ));
+                }
             }
-        }
-    })
+        },
+    )
 }
 
 /// Like [`threshold_local`] but over an imported trace's ok arrangement.
@@ -64,16 +65,7 @@ fn threshold_trace<'scope, T: RenderTimestamp>(
             }
         }
     };
-    let push = |buf: &mut <RowRowBuilder<T, Diff> as Builder>::Input,
-                key: DatumSeq<'_>,
-                updates: &mut Vec<(Row, T, Diff)>| {
-        let key_owned: Row = <<BatchCursor<RowRowEnter<Timestamp, Diff, T>> as Cursor>::KeyContainer as BatchContainer>::into_owned(key);
-        push_reduced(buf, &key_owned, updates);
-    };
-    #[allow(clippy::disallowed_methods)]
-    arrangement
-        .reduce_abelian::<_, RowRowBuilder<T, Diff>, RowRowSpine<T, Diff>, _>(name, logic, push)
-        .log_arrangement_size()
+    arrangement.mz_reduce_abelian::<_, RowRowBuilder<T, Diff>, RowRowSpine<T, Diff>, _>(name, logic)
 }
 
 /// Build a dataflow to threshold the input data.

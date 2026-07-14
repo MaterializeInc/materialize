@@ -21,7 +21,6 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::operators::iterate::Variable as SemigroupVariable;
 use differential_dataflow::trace::cursor::{BatchCursor, BatchValOwn};
-use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Builder, Cursor, Navigable, Trace};
 use differential_dataflow::{Data, VecCollection};
 use mz_compute_types::dyncfgs::{ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY};
@@ -44,14 +43,15 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
-use crate::extensions::reduce::{ClearContainer, push_reduced, reduce_row_to_row_row};
+use crate::extensions::reduce::{ClearContainer, MzReduce};
 use crate::render::Pairer;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::errors::MaybeValidatingRow;
 use crate::typedefs::{ErrBatcher, ErrBuilder, KeyBatcher, MzTimestamp, RowRowSpine, RowSpine};
 use mz_row_spine::{
-    DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBuilder, RowValSpine,
+    DatumContainer, DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBuilder,
+    RowValSpine,
 };
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
@@ -579,8 +579,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                 )
             })
             .into();
-        let result = reduce_row_to_row_row(
-            partial
+        let result = partial
             .mz_arrange::<
                 ColumnationChunker<_>,
                 RowBatcher<_, _>,
@@ -588,7 +587,8 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                 RowSpine<_, _>,
             >(
                 "Arranged MonotonicTop1 partial [val: empty]",
-            ),
+            )
+            .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>, _>(
                 "MonotonicTop1",
                 {
                     let mut datum_vec = mz_repr::DatumVec::new();
@@ -631,7 +631,7 @@ where
     Tr: Trace<Batch: Navigable, Time = T> + 'static,
     for<'a> BatchCursor<Tr>: Cursor<
             Key<'a> = DatumSeq<'a>,
-            KeyContainer: BatchContainer<Owned = Row>,
+            KeyContainer = DatumContainer,
             ValOwn: Data + MaybeValidatingRow<Row, Row>,
             Time = T,
             Diff = Diff,
@@ -662,122 +662,110 @@ where
         _ => Err(l),
     });
 
-    let push = |buf: &mut <Bu as Builder>::Input,
-                key: DatumSeq<'_>,
-                updates: &mut Vec<(BatchValOwn<Tr>, T, Diff)>| {
-        let key_owned: Row = <<BatchCursor<TraceAgent<RowRowSpine<T, Diff>>> as Cursor>::KeyContainer as BatchContainer>::into_owned(key);
-        push_reduced(buf, &key_owned, updates);
-    };
-    #[allow(clippy::disallowed_methods)]
     let reduced = arranged
         .clone()
-        .reduce_abelian::<_, Bu, Tr, _>(
-            "Reduced TopK input",
-            {
-                move |hash_key, source, target: &mut Vec<(BatchValOwn<Tr>, Diff)>| {
-                    // Unpack the limit, either into an integer literal or an expression to evaluate.
-                    let limit = match &limit {
-                        Some(Ok(lit)) => Some(*lit),
-                        Some(Err(expr)) => {
-                            // Unpack `key` after skipping the hash and determine the limit.
-                            // If the limit errors, use a zero limit; errors are surfaced elsewhere.
-                            let temp_storage = mz_repr::RowArena::new();
-                            let mut key_datums = datum_vec.borrow();
-                            hash_key.extend_datums(&temp_storage, &mut key_datums, None);
-                            // `key_datums[0]` is the hash; the key columns follow it.
-                            let datum_limit = expr
-                                .eval(&key_datums[1..], &temp_storage)
-                                .unwrap_or(Datum::Int64(0));
-                            Some(match datum_limit {
-                                Datum::Null => Diff::MAX,
-                                d => Diff::from(d.unwrap_int64()),
-                            })
-                        }
-                        None => None,
-                    };
-
-                    if let Some(err) = BatchValOwn::<Tr>::into_error() {
-                        for (datums, diff) in source.iter() {
-                            if diff.is_positive() {
-                                continue;
-                            }
-                            target.push((err((*datums).to_row()), Diff::ONE));
-                            return;
-                        }
+        .mz_reduce_abelian::<_, Bu, Tr, _>("Reduced TopK input", {
+            move |hash_key, source, target: &mut Vec<(BatchValOwn<Tr>, Diff)>| {
+                // Unpack the limit, either into an integer literal or an expression to evaluate.
+                let limit = match &limit {
+                    Some(Ok(lit)) => Some(*lit),
+                    Some(Err(expr)) => {
+                        // Unpack `key` after skipping the hash and determine the limit.
+                        // If the limit errors, use a zero limit; errors are surfaced elsewhere.
+                        let temp_storage = mz_repr::RowArena::new();
+                        let mut key_datums = datum_vec.borrow();
+                        hash_key.extend_datums(&temp_storage, &mut key_datums, None);
+                        // `key_datums[0]` is the hash; the key columns follow it.
+                        let datum_limit = expr
+                            .eval(&key_datums[1..], &temp_storage)
+                            .unwrap_or(Datum::Int64(0));
+                        Some(match datum_limit {
+                            Datum::Null => Diff::MAX,
+                            d => Diff::from(d.unwrap_int64()),
+                        })
                     }
+                    None => None,
+                };
 
-                    // Determine if we must actually shrink the result set.
-                    let must_shrink = offset > 0
-                        || limit
-                            .map(|l| source.iter().map(|(_, d)| *d).sum::<Diff>() > l)
-                            .unwrap_or(false);
-                    if !must_shrink {
-                        return;
-                    }
-
-                    // First go ahead and emit all records. Note that we ensure target
-                    // has the capacity to hold at least these records, and avoid any
-                    // dependencies on the user-provided (potentially unbounded) limit.
-                    target.reserve(source.len());
+                if let Some(err) = BatchValOwn::<Tr>::into_error() {
                     for (datums, diff) in source.iter() {
-                        target.push((BatchValOwn::<Tr>::ok((*datums).to_row()), -diff));
-                    }
-                    // local copies that may count down to zero.
-                    let mut offset = offset;
-                    let mut limit = limit;
-
-                    // The order in which we should produce rows.
-                    let mut indexes = (0..source.len()).collect::<Vec<_>>();
-                    // We decode the datums once, into a common buffer for efficiency.
-                    // Each row should contain `arity` columns; we should check that.
-                    let temp_storage = mz_repr::RowArena::new();
-                    let mut buffer = datum_vec.borrow();
-                    for (index, (datums, _)) in source.iter().enumerate() {
-                        datums.extend_datums(&temp_storage, &mut buffer, None);
-                        assert_eq!(buffer.len(), arity * (index + 1));
-                    }
-                    let width = buffer.len() / source.len();
-
-                    //todo: use arrangements or otherwise make the sort more performant?
-                    indexes.sort_by(|left, right| {
-                        let left = &buffer[left * width..][..width];
-                        let right = &buffer[right * width..][..width];
-                        // Note: source was originally ordered by the u8 array representation
-                        // of rows, but left.cmp(right) uses Datum::cmp.
-                        mz_expr::compare_columns(&order_key, left, right, || left.cmp(right))
-                    });
-
-                    // We now need to lay out the data in order of `buffer`, but respecting
-                    // the `offset` and `limit` constraints.
-                    for index in indexes.into_iter() {
-                        let (datums, mut diff) = source[index];
-                        if !diff.is_positive() {
+                        if diff.is_positive() {
                             continue;
                         }
-                        // If we are still skipping early records ...
-                        if offset > 0 {
-                            let to_skip =
-                                std::cmp::min(offset, usize::try_from(diff.into_inner()).unwrap());
-                            offset -= to_skip;
-                            diff -= Diff::try_from(to_skip).unwrap();
-                        }
-                        // We should produce at most `limit` records.
-                        if let Some(limit) = &mut limit {
-                            diff = std::cmp::min(diff, Diff::from(*limit));
-                            *limit -= diff;
-                        }
-                        // Output the indicated number of rows.
-                        if diff.is_positive() {
-                            // Emit retractions for the elements actually part of
-                            // the set of TopK elements.
-                            target.push((BatchValOwn::<Tr>::ok(datums.to_row()), diff));
-                        }
+                        target.push((err((*datums).to_row()), Diff::ONE));
+                        return;
                     }
                 }
-            },
-            push,
-        )
-        .log_arrangement_size();
+
+                // Determine if we must actually shrink the result set.
+                let must_shrink = offset > 0
+                    || limit
+                        .map(|l| source.iter().map(|(_, d)| *d).sum::<Diff>() > l)
+                        .unwrap_or(false);
+                if !must_shrink {
+                    return;
+                }
+
+                // First go ahead and emit all records. Note that we ensure target
+                // has the capacity to hold at least these records, and avoid any
+                // dependencies on the user-provided (potentially unbounded) limit.
+                target.reserve(source.len());
+                for (datums, diff) in source.iter() {
+                    target.push((BatchValOwn::<Tr>::ok((*datums).to_row()), -diff));
+                }
+                // local copies that may count down to zero.
+                let mut offset = offset;
+                let mut limit = limit;
+
+                // The order in which we should produce rows.
+                let mut indexes = (0..source.len()).collect::<Vec<_>>();
+                // We decode the datums once, into a common buffer for efficiency.
+                // Each row should contain `arity` columns; we should check that.
+                let temp_storage = mz_repr::RowArena::new();
+                let mut buffer = datum_vec.borrow();
+                for (index, (datums, _)) in source.iter().enumerate() {
+                    datums.extend_datums(&temp_storage, &mut buffer, None);
+                    assert_eq!(buffer.len(), arity * (index + 1));
+                }
+                let width = buffer.len() / source.len();
+
+                //todo: use arrangements or otherwise make the sort more performant?
+                indexes.sort_by(|left, right| {
+                    let left = &buffer[left * width..][..width];
+                    let right = &buffer[right * width..][..width];
+                    // Note: source was originally ordered by the u8 array representation
+                    // of rows, but left.cmp(right) uses Datum::cmp.
+                    mz_expr::compare_columns(&order_key, left, right, || left.cmp(right))
+                });
+
+                // We now need to lay out the data in order of `buffer`, but respecting
+                // the `offset` and `limit` constraints.
+                for index in indexes.into_iter() {
+                    let (datums, mut diff) = source[index];
+                    if !diff.is_positive() {
+                        continue;
+                    }
+                    // If we are still skipping early records ...
+                    if offset > 0 {
+                        let to_skip =
+                            std::cmp::min(offset, usize::try_from(diff.into_inner()).unwrap());
+                        offset -= to_skip;
+                        diff -= Diff::try_from(to_skip).unwrap();
+                    }
+                    // We should produce at most `limit` records.
+                    if let Some(limit) = &mut limit {
+                        diff = std::cmp::min(diff, Diff::from(*limit));
+                        *limit -= diff;
+                    }
+                    // Output the indicated number of rows.
+                    if diff.is_positive() {
+                        // Emit retractions for the elements actually part of
+                        // the set of TopK elements.
+                        target.push((BatchValOwn::<Tr>::ok(datums.to_row()), diff));
+                    }
+                }
+            }
+        });
     (arranged, reduced)
 }
 
