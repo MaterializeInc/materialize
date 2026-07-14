@@ -119,13 +119,39 @@ def workflow_alter_commit_interval(c: Composition) -> None:
 
 def workflow_empty_source(c: Composition) -> None:
     """A fresh Iceberg sink whose input closes after producing zero rows
-    commits one empty snapshot instead of stalling or erroring."""
+    commits empty snapshots instead of stalling or erroring."""
     key = _setup(c)
 
     c.run_testdrive_files(
         f"--var=s3-access-key={key}",
         "--var=aws-endpoint=minio:9000",
         "empty-source.td",
+    )
+
+
+def workflow_finite_source(c: Composition) -> None:
+    """A fresh Iceberg sink whose input contains data and then closes must
+    commit all the data and then seal itself with a final empty-upper
+    commit. Restarting Materialize afterwards must not re-commit or error."""
+    key = _setup(c)
+
+    c.run_testdrive_files(
+        f"--var=s3-access-key={key}",
+        "--var=aws-endpoint=minio:9000",
+        "finite-source.td",
+    )
+
+    # The sink resumes from an Iceberg table whose committed frontier is
+    # empty. It must come back healthy and idle, without committing
+    # anything new.
+    c.kill("materialized")
+    c.up("materialized")
+
+    c.run_testdrive_files(
+        "--no-reset",
+        f"--var=s3-access-key={key}",
+        "--var=aws-endpoint=minio:9000",
+        "finite-source-verify.td",
     )
 
 
