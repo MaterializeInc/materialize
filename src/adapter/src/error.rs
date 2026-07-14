@@ -110,6 +110,12 @@ pub enum AdapterError {
         /// Human-readable type of the object (e.g. "source", "source-export table").
         object_type: String,
     },
+    /// A read-then-write statement's read set has more transitive dependencies
+    /// than validation is willing to walk.
+    ReadThenWriteDependencyLimitExceeded {
+        /// The configured maximum number of dependencies.
+        max_rw_dependencies: usize,
+    },
     /// Expression violated a column's constraint
     ConstraintViolation(NotNullViolation),
     /// An error occurred while decoding COPY data.
@@ -540,6 +546,13 @@ impl AdapterError {
                      dependencies must not include sources or source-export tables",
                 object_name.quoted()
             )),
+            AdapterError::ReadThenWriteDependencyLimitExceeded {
+                max_rw_dependencies,
+            } => Some(format!(
+                "The read set transitively depends on more than {max_rw_dependencies} \
+                     objects. Reduce the number of dependencies, or raise the \
+                     read_then_write_max_dependencies system parameter."
+            )),
             AdapterError::SafeModeViolation(_) => Some(
                 "The Materialize server you are connected to is running in \
                  safe mode, which limits the features that are available."
@@ -839,6 +852,9 @@ impl AdapterError {
             AdapterError::SourceOrSinkSizeRequired { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::InvalidTableMutationSelection { .. } => {
                 SqlState::INVALID_TRANSACTION_STATE
+            }
+            AdapterError::ReadThenWriteDependencyLimitExceeded { .. } => {
+                SqlState::PROGRAM_LIMIT_EXCEEDED
             }
             AdapterError::ConstraintViolation(NotNullViolation(_)) => SqlState::NOT_NULL_VIOLATION,
             AdapterError::CopyFormatError(_) => SqlState::BAD_COPY_FILE_FORMAT,
@@ -1184,6 +1200,14 @@ impl fmt::Display for AdapterError {
                 write!(
                     f,
                     "invalid selection: operation may only (transitively) refer to non-source, non-system tables"
+                )
+            }
+            AdapterError::ReadThenWriteDependencyLimitExceeded {
+                max_rw_dependencies,
+            } => {
+                write!(
+                    f,
+                    "selection has too many transitive dependencies to validate (limit {max_rw_dependencies})"
                 )
             }
             AdapterError::ReplaceMaterializedViewSealed { name } => {

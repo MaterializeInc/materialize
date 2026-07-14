@@ -127,6 +127,18 @@ pub const ENABLE_PASSWORD_AUTH: Config<bool> = Config::new(
     "Enable password authentication.",
 );
 
+/// Upper bound on the number of transitive dependencies validated for a
+/// read-then-write statement (e.g. `DELETE ... WHERE ... IN (SELECT ...)`).
+/// Validation walks the read set's dependency graph, which is user controlled
+/// and can be arbitrarily large. The bound rejects pathological graphs with a
+/// clean error instead of consuming unbounded time and memory.
+pub const READ_THEN_WRITE_MAX_DEPENDENCIES: Config<usize> = Config::new(
+    "read_then_write_max_dependencies",
+    100_000,
+    "Maximum number of transitive dependencies validated for a read-then-write \
+     statement before it is rejected.",
+);
+
 /// OIDC issuer URL.
 pub const OIDC_ISSUER: Config<Option<&'static str>> =
     Config::new("oidc_issuer", None, "OIDC issuer URL.");
@@ -396,6 +408,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION)
         .add(&ENABLE_EXPRESSION_CACHE)
         .add(&ENABLE_PASSWORD_AUTH)
+        .add(&READ_THEN_WRITE_MAX_DEPENDENCIES)
         .add(&OIDC_ISSUER)
         .add(&OIDC_AUDIENCE)
         .add(&OIDC_AUTHENTICATION_CLAIM)

@@ -717,6 +717,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "cluster_controller_tick_interval",
     "enable_background_alter_cluster",
     "default_cluster_reconfiguration_timeout",
+    "read_then_write_max_dependencies",
 ]
 
 
