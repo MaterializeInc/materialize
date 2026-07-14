@@ -13,10 +13,8 @@ use differential_dataflow::trace::cursor::{BatchCursor, BatchKey, CursorList};
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 
-/// The merged cursor a [`TraceReader::cursor`] hands out over all of a trace's batches.
-///
-/// `master-next` moved navigation off `TraceReader` onto the batch cursor, so a trace cursor is
-/// a [`CursorList`] over the per-batch cursors rather than a single `Tr::Cursor` associated type.
+/// The merged cursor a [`TraceReader::cursor`] hands out over all of a trace's batches: a
+/// [`CursorList`] over the per-batch cursors.
 type TraceCursor<Tr> = CursorList<BatchCursor<Tr>>;
 /// Backing storage for a [`TraceCursor`]: the batches the cursor borrows from.
 type TraceStorage<Tr> = Vec<<Tr as TraceReader>::Batch>;

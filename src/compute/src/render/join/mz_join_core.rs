@@ -62,8 +62,6 @@ pub(super) fn mz_join_core<'scope, T, Tr1, Tr2, L, I, YFn, C>(
 ) -> Stream<'scope, T, C>
 where
     T: timely::progress::Timestamp + Lattice,
-    // `master-next` moved key/val/diff off `TraceReader` onto the batch cursor, so the join
-    // navigation bounds live on `BatchCursor<Tr>` and each trace's batch must be `Navigable`.
     Tr1: TraceReader<Batch: Navigable, Time = T> + Clone + 'static,
     Tr2: TraceReader<Batch: Navigable, Time = T> + Clone + 'static,
     BatchCursor<Tr1>: Cursor<Time = T, Diff = Diff>,

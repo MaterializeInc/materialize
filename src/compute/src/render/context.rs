@@ -697,9 +697,6 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         Stream<'scope, T, Vec<(DataflowErrorSer, T, Diff)>>,
     )
     where
-        // `master-next` moved the key/val/diff opinions off `TraceReader` onto the batch
-        // cursor, so the navigation bounds live on `BatchCursor<Tr>` and the batch must be
-        // `Navigable` to hand out a cursor.
         Tr: TraceReader<Batch: Navigable, Time = T> + Clone + 'static,
         for<'a> BatchCursor<Tr>:
             Cursor<Key<'a>: ExtendDatums, Val<'a>: ExtendDatums, Time = T, Diff = mz_repr::Diff>,
@@ -819,7 +816,6 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         refuel: usize,
     ) -> Stream<'scope, T, DCB::Container>
     where
-        // See `flat_map_core_fallible` for the `master-next` cursor-bound migration.
         Tr: TraceReader<Batch: Navigable, Time = T> + Clone + 'static,
         for<'a> BatchCursor<Tr>:
             Cursor<Key<'a>: ExtendDatums, Val<'a>: ExtendDatums, Time = T, Diff = mz_repr::Diff>,

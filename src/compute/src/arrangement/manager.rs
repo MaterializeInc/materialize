@@ -165,9 +165,6 @@ where
     type Time = Tr::Time;
     type Batch = Tr::Batch;
 
-    // `master-next` reduced `TraceReader` to the single `batches_through` primitive; the
-    // `cursor`/`cursor_through` methods are provided defaults that assemble a `CursorList` over
-    // the returned batches when `Self::Batch: Navigable`.
     fn batches_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<Vec<Self::Batch>> {
         self.trace.batches_through(upper)
     }

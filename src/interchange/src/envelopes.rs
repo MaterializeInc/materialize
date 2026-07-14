@@ -33,9 +33,6 @@ use crate::avro::DiffPair;
 /// with more than one pair (e.g., for primary-key violation checks).
 pub fn for_each_diff_pair<B, C, F>(batch: &B, mut on_diff_pair: F)
 where
-    // `master-next` split navigation off `BatchReader` into `Navigable`/`Cursor`,
-    // so the key/val/time/diff associated types and the `owned_*` constructors now
-    // live on the cursor `C` rather than on the batch `B`.
     B: BatchReader<Time = C::Time> + Navigable<Cursor = C>,
     C: Cursor<Storage = B, Diff = Diff>,
     C::Time: Copy,
