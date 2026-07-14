@@ -1609,7 +1609,7 @@ class AuctionScenario(ClusterScalingScenario):
                 '1970-01-01 00:00:00+00',
                 '2099-01-01 00:00:00+00',
                 '1 year') year
-            WHERE mz_now() BETWEEN year AND year + '1 year' + '{self.scale} day';
+            WHERE mz_now() BETWEEN year AND year + '1 year' + '{self.scale * 3} day';
             """,
             f"""
             -- Each day-long interval of interest
@@ -1619,7 +1619,7 @@ class AuctionScenario(ClusterScalingScenario):
                 FROM years
                 UNION ALL SELECT * FROM empty
             )
-            WHERE mz_now() BETWEEN day AND day + '1 day' + '{self.scale} day';
+            WHERE mz_now() BETWEEN day AND day + '1 day' + '{self.scale * 3} day';
             """,
             f"""
             -- Each hour-long interval of interest
@@ -1629,7 +1629,7 @@ class AuctionScenario(ClusterScalingScenario):
                 FROM days
                 UNION ALL SELECT * FROM empty
             )
-            WHERE mz_now() BETWEEN hour AND hour + '1 hour' + '{self.scale} day';
+            WHERE mz_now() BETWEEN hour AND hour + '1 hour' + '{self.scale * 3} day';
             """,
             f"""
             -- Each minute-long interval of interest
@@ -1639,7 +1639,7 @@ class AuctionScenario(ClusterScalingScenario):
                 FROM hours
                 UNION ALL SELECT * FROM empty
             )
-            WHERE mz_now() BETWEEN minute AND minute + '1 minute' + '{self.scale} day';
+            WHERE mz_now() BETWEEN minute AND minute + '1 minute' + '{self.scale * 3} day';
             """,
             f"""
             -- Any second-long interval of interest
@@ -1649,7 +1649,7 @@ class AuctionScenario(ClusterScalingScenario):
                 FROM minutes
                 UNION ALL SELECT * FROM empty
             )
-            WHERE mz_now() BETWEEN second AND second + '1 second' + '{self.scale} day';
+            WHERE mz_now() BETWEEN second AND second + '1 second' + '{self.scale * 3} day';
             """,
             # Indexes are important to ensure we expand intervals carefully.
             "CREATE DEFAULT INDEX ON years;",
@@ -1662,7 +1662,7 @@ class AuctionScenario(ClusterScalingScenario):
             CREATE VIEW moments AS
             SELECT second AS moment FROM seconds
             WHERE mz_now() >= second
-              AND mz_now() < second + '{self.scale} day';
+              AND mz_now() < second + '{self.scale * 3} day';
             """,
             """
             -- Extract pseudorandom bytes from each moment.
