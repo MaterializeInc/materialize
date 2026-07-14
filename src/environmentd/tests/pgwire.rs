@@ -901,6 +901,11 @@ fn test_pgtest_mz_desc() {
 }
 
 #[mz_ore::test]
+fn test_pgtest_mz_discard() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/discard.pt"), true);
+}
+
+#[mz_ore::test]
 fn test_pgtest_mz_notice() {
     pg_test_inner(Path::new("../../test/pgtest-mz/notice.pt"), true);
 }
