@@ -8,8 +8,9 @@
 # by the Apache License, Version 2.0.
 
 # A fresh Iceberg sink whose input finishes without producing any rows
-# is expected to commit an empty snapshot.
-# N.B. It would also be correct to make zero commits in this case.
+# is expected to commit an empty snapshot for its snapshot window and a
+# final empty-upper snapshot that seals the sink.
+# N.B. It would also be correct to make fewer commits in this case.
 #      The important part is that the sink doesn't break.
 
 > CREATE SECRET empty_access_key_secret AS '${arg.s3-access-key}'
@@ -53,10 +54,11 @@ $ duckdb-execute name=empty_iceberg
 CREATE SECRET s3_secret_empty (TYPE S3, KEY_ID 'tduser', SECRET '${arg.s3-access-key}', ENDPOINT '${arg.aws-endpoint}', URL_STYLE 'path', USE_SSL false, REGION 'minio');
 SET unsafe_enable_version_guessing = true;
 
-# We successfully made our one commit. And it is empty.
+# We made our two commits: the (empty) snapshot batch and the final batch
+# that seals the sink. Both are empty.
 # A stalled sink would never have committed anything.
 $ duckdb-query name=empty_iceberg
-SELECT count(*) = 1 FROM iceberg_snapshots('s3://test-bucket/default_namespace/empty_source_table')
+SELECT count(*) = 2 FROM iceberg_snapshots('s3://test-bucket/default_namespace/empty_source_table')
 true
 
 # The table should hold no data.
