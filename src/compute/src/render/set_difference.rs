@@ -44,8 +44,11 @@ use mz_row_spine::RowRowBuilder;
 
 /// Dirty keys processed per `co_reduce2` activation before yielding the timely worker.
 ///
-/// TODO: track the `differential/default_exert_logic` config instead of a fixed budget,
-/// so the fusion's yielding matches the rest of the arrangement machinery.
+/// TODO: this budget is a distinct knob from the `differential/default_exert_logic`
+/// exert/compaction-effort config: it bounds keys per activation, not merge or
+/// compaction work. It should become configurable rather than a fixed constant. It may
+/// end up related to the exert config (both cap CPU per activation), but is not the
+/// same setting.
 const SET_DIFFERENCE_FUEL: usize = 1_000_000;
 
 /// One input arm, read through its existing arrangement keyed by the arm's own key.
