@@ -544,6 +544,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "memory_limiter_usage_bias",
     "memory_limiter_burst_factor",
     "catalog_info_metrics_reconcile_interval",
+    "memory_limiter_enforce",
     "compute_server_maintenance_interval",
     "compute_dataflow_max_inflight_bytes_cc",
     "compute_flat_map_fuel",

@@ -6492,6 +6492,35 @@ def workflow_test_memory_limiter(c: Composition) -> None:
 
         c.kill("clusterd1")
 
+        # Test 4: With enforcement disabled, the MV should be able to hydrate
+        # even with a memory limit of 205 MiB, which would otherwise cause the
+        # replica to be terminated (see Test 2).
+        c.sql(
+            """
+            ALTER SYSTEM SET memory_limiter_usage_bias = 0.2;
+            ALTER SYSTEM SET memory_limiter_burst_factor = 0;
+            ALTER SYSTEM SET memory_limiter_enforce = false;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+        setup_workload()
+        c.up("clusterd1")
+
+        c.testdrive("> SELECT count(*) FROM mv\n1000000")
+
+        c.kill("clusterd1")
+
+        c.sql(
+            """
+            ALTER SYSTEM RESET memory_limiter_usage_bias;
+            ALTER SYSTEM RESET memory_limiter_burst_factor;
+            ALTER SYSTEM RESET memory_limiter_enforce;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+
 
 def workflow_test_paused_cluster_readhold_downgrade(c: Composition):
     """
@@ -6638,9 +6667,11 @@ def workflow_test_swap_heap_limiting(c: Composition) -> None:
 
             return None
 
-        assert get_heap_limit("swap_nolimit") is None
+        # The limiter always exports its metrics; a limit of 0 means no limit
+        # is configured and the limiter runs in observe-only mode.
+        assert get_heap_limit("swap_nolimit") == 0
         assert get_heap_limit("swap_limit") == 2000000000
-        assert get_heap_limit("noswap") is None
+        assert get_heap_limit("noswap") == 0
 
 
 def workflow_test_operator_hydration_status_reconciliation(c: Composition) -> None:

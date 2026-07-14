@@ -238,6 +238,14 @@ pub const MEMORY_LIMITER_BURST_FACTOR: Config<f64> = Config::new(
     "Multiplicative burst factor to the memory limiter's limit.",
 );
 
+/// Whether the memory limiter enforces the memory limit by terminating the process. When
+/// disabled, the limiter only observes memory usage and exports metrics.
+pub const MEMORY_LIMITER_ENFORCE: Config<bool> = Config::new(
+    "memory_limiter_enforce",
+    true,
+    "Whether the memory limiter enforces the memory limit by terminating the process.",
+);
+
 /// Enable lgalloc for columnation.
 pub const ENABLE_COLUMNATION_LGALLOC: Config<bool> = Config::new(
     "enable_columnation_lgalloc",
@@ -506,6 +514,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&MEMORY_LIMITER_INTERVAL)
         .add(&MEMORY_LIMITER_USAGE_BIAS)
         .add(&MEMORY_LIMITER_BURST_FACTOR)
+        .add(&MEMORY_LIMITER_ENFORCE)
         .add(&ENABLE_LGALLOC_EAGER_RECLAMATION)
         .add(&ENABLE_COLUMNATION_LGALLOC)
         .add(&COMPUTE_SERVER_MAINTENANCE_INTERVAL)
