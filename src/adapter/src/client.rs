@@ -13,6 +13,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
 use std::pin::{self, Pin};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
@@ -80,6 +81,23 @@ pub struct Handle {
     pub(crate) _thread: JoinOnDropHandle<()>,
 }
 
+/// A shared, cheaply readable switch for statement-arrival logging.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct StatementArrivalLogging {
+    enabled: Arc<AtomicBool>,
+}
+
+impl StatementArrivalLogging {
+    pub(crate) fn enabled(&self) -> bool {
+        // The flag does not guard any other data, so ordering beyond atomicity is unnecessary.
+        self.enabled.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn set_enabled(&self, enabled: bool) {
+        self.enabled.store(enabled, Ordering::Relaxed);
+    }
+}
+
 impl Handle {
     /// Returns the session ID associated with this coordinator.
     ///
@@ -112,6 +130,7 @@ pub struct Client {
     metrics: Metrics,
     environment_id: EnvironmentId,
     segment_client: Option<mz_segment::Client>,
+    statement_arrival_logging: StatementArrivalLogging,
 }
 
 impl Client {
@@ -122,6 +141,7 @@ impl Client {
         now: NowFn,
         environment_id: EnvironmentId,
         segment_client: Option<mz_segment::Client>,
+        statement_arrival_logging: StatementArrivalLogging,
     ) -> Client {
         // Connection ids are 32 bits and have 3 parts.
         // 1. MSB bit is always 0 because these are interpreted as an i32, and it is possible some
@@ -139,6 +159,7 @@ impl Client {
             metrics,
             environment_id,
             segment_client,
+            statement_arrival_logging,
         }
     }
 
@@ -1123,9 +1144,8 @@ impl SessionClient {
     }
 
     /// Reports whether `enable_statement_arrival_logging` is on.
-    pub async fn statement_arrival_logging_enabled(&mut self) -> bool {
-        let catalog = self.catalog_snapshot("statement_arrival_logging").await;
-        catalog.system_config().enable_statement_arrival_logging()
+    pub fn statement_arrival_logging_enabled(&self) -> bool {
+        self.inner().statement_arrival_logging.enabled()
     }
 
     /// Dumps the catalog to a JSON string.

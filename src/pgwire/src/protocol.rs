@@ -948,7 +948,7 @@ where
         let message_name = message.as_ref().map(|m| m.name()).unwrap_or_default();
 
         if let Some(message) = &message {
-            self.maybe_log_message_arrival(message).await;
+            self.maybe_log_message_arrival(message);
         }
 
         let start = message.as_ref().map(|_| Instant::now());
@@ -1205,12 +1205,8 @@ where
     /// is logged as its length only, and only when it arrives as a stray
     /// message in the ready state: messages consumed by the COPY subprotocol
     /// or the post-error drain loop don't pass through here at all.
-    async fn maybe_log_message_arrival(&mut self, message: &FrontendMessage) {
-        if !self
-            .adapter_client
-            .statement_arrival_logging_enabled()
-            .await
-        {
+    fn maybe_log_message_arrival(&mut self, message: &FrontendMessage) {
+        if !self.adapter_client.statement_arrival_logging_enabled() {
             return;
         }
         let session = self.adapter_client.session();

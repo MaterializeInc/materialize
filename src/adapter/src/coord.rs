@@ -182,7 +182,7 @@ use uuid::Uuid;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyFrom};
 use crate::catalog::{BuiltinTableUpdate, Catalog, OpenCatalogResult};
-use crate::client::{Client, Handle};
+use crate::client::{Client, Handle, StatementArrivalLogging};
 use crate::command::{Command, ExecuteResponse};
 use crate::config::{
     ClusterEvalContext, ReplicaEvalContext, ScopedParameters, ScopedParametersScope,
@@ -4602,6 +4602,18 @@ impl fmt::Debug for LastMessage {
     }
 }
 
+fn register_statement_arrival_logging(system_vars: &mut SystemVars) -> StatementArrivalLogging {
+    let statement_arrival_logging = StatementArrivalLogging::default();
+    let callback_handle = statement_arrival_logging.clone();
+    system_vars.register_callback(
+        &mz_sql::session::vars::ENABLE_STATEMENT_ARRIVAL_LOGGING,
+        Arc::new(move |system_vars| {
+            callback_handle.set_enabled(system_vars.enable_statement_arrival_logging());
+        }),
+    );
+    statement_arrival_logging
+}
+
 impl Drop for LastMessage {
     fn drop(&mut self) {
         // Only print the last message if we're currently panicking, otherwise we'd spam our logs.
@@ -4956,6 +4968,8 @@ pub fn serve(
             &mz_sql::session::vars::SUPERUSER_RESERVED_CONNECTIONS,
             connection_limit_callback,
         );
+        let statement_arrival_logging =
+            register_statement_arrival_logging(catalog.system_config_mut());
 
         let (group_commit_tx, group_commit_rx) = appends::notifier();
 
@@ -5114,6 +5128,7 @@ pub fn serve(
                     now,
                     environment_id,
                     segment_client_clone,
+                    statement_arrival_logging,
                 );
                 Ok((handle, client))
             }
@@ -5121,6 +5136,32 @@ pub fn serve(
         }
     }
     .boxed()
+}
+
+#[cfg(test)]
+mod statement_arrival_logging_tests {
+    use mz_sql::session::vars::{ENABLE_STATEMENT_ARRIVAL_LOGGING, VarInput};
+
+    use super::*;
+
+    #[mz_ore::test]
+    fn follows_system_var() {
+        let mut system_vars = SystemVars::new();
+        let statement_arrival_logging = register_statement_arrival_logging(&mut system_vars);
+
+        assert!(!statement_arrival_logging.enabled());
+        system_vars
+            .set(
+                ENABLE_STATEMENT_ARRIVAL_LOGGING.name(),
+                VarInput::Flat("on"),
+            )
+            .expect("set system variable");
+        assert!(statement_arrival_logging.enabled());
+        system_vars
+            .reset(ENABLE_STATEMENT_ARRIVAL_LOGGING.name())
+            .expect("reset system variable");
+        assert!(!statement_arrival_logging.enabled());
+    }
 }
 
 // Determines and returns the highest timestamp for each timeline, for all known

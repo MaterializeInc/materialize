@@ -1245,7 +1245,7 @@ pub(in crate::http) async fn execute_request<S: ResultSender>(
 ) -> Result<(), Error> {
     let client = &mut client.client;
 
-    if client.statement_arrival_logging_enabled().await {
+    if client.statement_arrival_logging_enabled() {
         let session = client.session();
         let conn_id = session.conn_id();
         let session_uuid = session.uuid();
