@@ -1317,9 +1317,9 @@ dependencies = [
 
 [[package]]
 name = "axum"
-version = "0.8.8"
+version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b52af3cb4058c895d37317bb27508dccc8e5f2d39454016b297bf4a400597b8"
+checksum = "31b698c5f9a010f6573133b09e0de5408834d0c82f8d7475a89fc1867a71cd90"
 dependencies = [
  "axum-core",
  "base64 0.22.1",
@@ -1344,7 +1344,7 @@ dependencies = [
  "sha1",
  "sync_wrapper",
  "tokio",
- "tokio-tungstenite",
+ "tokio-tungstenite 0.29.0",
  "tower 0.5.3",
  "tower-layer",
  "tower-service",
@@ -5265,7 +5265,7 @@ dependencies = [
  "serde_yaml",
  "thiserror 2.0.18",
  "tokio",
- "tokio-tungstenite",
+ "tokio-tungstenite 0.28.0",
  "tokio-util",
  "tower 0.5.3",
  "tower-http",
@@ -7055,6 +7055,7 @@ dependencies = [
  "tokio-metrics",
  "tokio-postgres",
  "tokio-stream",
+ "tokio-tungstenite 0.29.0",
  "tower 0.5.3",
  "tower-http",
  "tower-sessions",
@@ -7063,7 +7064,7 @@ dependencies = [
  "tracing-capture",
  "tracing-opentelemetry",
  "tracing-subscriber",
- "tungstenite",
+ "tungstenite 0.29.0",
  "url",
  "uuid",
 ]
@@ -13130,7 +13131,19 @@ dependencies = [
  "futures-util",
  "log",
  "tokio",
- "tungstenite",
+ "tungstenite 0.28.0",
+]
+
+[[package]]
+name = "tokio-tungstenite"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f72a05e828585856dacd553fba484c242c46e391fb0e58917c942ee9202915c"
+dependencies = [
+ "futures-util",
+ "log",
+ "tokio",
+ "tungstenite 0.29.0",
 ]
 
 [[package]]
@@ -13599,6 +13612,22 @@ dependencies = [
  "sha1",
  "thiserror 2.0.18",
  "utf-8",
+]
+
+[[package]]
+name = "tungstenite"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c01152af293afb9c7c2a57e4b559c5620b421f6d133261c60dd2d0cdb38e6b8"
+dependencies = [
+ "bytes",
+ "data-encoding",
+ "http 1.4.2",
+ "httparse",
+ "log",
+ "rand 0.9.4",
+ "sha1",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

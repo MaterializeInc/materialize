@@ -7165,3 +7165,264 @@ fn test_inject_audit_events_malformed() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 }
+
+// Test that the HTTP server negotiates HTTP/2 over TLS via ALPN and that
+// HTTP/1.1-only clients can still connect.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_http2_tls() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .start()
+        .await;
+
+    let https_url = Url::parse(&format!("https://{}/api/sql", server.http_local_addr())).unwrap();
+    let json: serde_json::Value = serde_json::from_str(r#"{ "query": "SELECT 42;" }"#).unwrap();
+    let ca_cert = reqwest::Certificate::from_pem(&ca.cert.to_pem().unwrap()).unwrap();
+
+    // A client that supports HTTP/2 negotiates it via ALPN.
+    let client = reqwest::Client::builder()
+        .add_root_certificate(ca_cert.clone())
+        .build()
+        .unwrap();
+    let response = client
+        .post(https_url.clone())
+        .json(&json)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.version(), reqwest::Version::HTTP_2);
+    assert!(response.status().is_success());
+    assert_contains!(response.text().await.unwrap(), "42");
+
+    // An HTTP/1.1-only client is still served.
+    let client = reqwest::Client::builder()
+        .add_root_certificate(ca_cert)
+        .http1_only()
+        .build()
+        .unwrap();
+    let response = client.post(https_url).json(&json).send().await.unwrap();
+    assert_eq!(response.version(), reqwest::Version::HTTP_11);
+    assert!(response.status().is_success());
+    assert_contains!(response.text().await.unwrap(), "42");
+}
+
+// Test that plaintext listeners serve both HTTP/1.1 and HTTP/2 (h2c via
+// prior knowledge).
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_http2_cleartext() {
+    let server = test_util::TestHarness::default().start().await;
+
+    let http_url = Url::parse(&format!("http://{}/api/sql", server.http_local_addr())).unwrap();
+    let json: serde_json::Value = serde_json::from_str(r#"{ "query": "SELECT 42;" }"#).unwrap();
+
+    // HTTP/2 with prior knowledge (h2c).
+    let client = reqwest::Client::builder()
+        .http2_prior_knowledge()
+        .build()
+        .unwrap();
+    let response = client
+        .post(http_url.clone())
+        .json(&json)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.version(), reqwest::Version::HTTP_2);
+    assert!(response.status().is_success());
+    assert_contains!(response.text().await.unwrap(), "42");
+
+    // Plain HTTP/1.1 is unchanged.
+    let response = reqwest::Client::new()
+        .post(http_url)
+        .json(&json)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.version(), reqwest::Version::HTTP_11);
+    assert!(response.status().is_success());
+    assert_contains!(response.text().await.unwrap(), "42");
+}
+
+// Test WebSockets over HTTP/2 (RFC 8441 extended CONNECT): authentication
+// works over an HTTP/2 stream, bad credentials are rejected, and the HTTP/1.1
+// WebSocket upgrade (the downgrade path) keeps working against the same
+// server.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_http2_websocket_auth() {
+    use futures::{SinkExt, StreamExt};
+    use mz_auth::password::Password;
+
+    type WsStream =
+        tokio_tungstenite::WebSocketStream<hyper_util::rt::TokioIo<hyper::upgrade::Upgraded>>;
+
+    // Reads messages until the initial ReadyForQuery, mirroring
+    // `test_util::auth_with_ws_impl` for async streams.
+    async fn read_until_ready(ws: &mut WsStream) -> Result<Vec<WebSocketResponse>, anyhow::Error> {
+        let mut msgs = Vec::new();
+        loop {
+            let msg = ws
+                .next()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("ws stream ended"))??;
+            match msg {
+                Message::Text(text) => {
+                    let msg: WebSocketResponse = serde_json::from_str(&text).unwrap();
+                    match msg {
+                        WebSocketResponse::ReadyForQuery(_) => return Ok(msgs),
+                        msg => msgs.push(msg),
+                    }
+                }
+                Message::Ping(_) => continue,
+                Message::Close(frame) => anyhow::bail!("ws closed: {frame:?}"),
+                other => panic!("unexpected message: {other:?}"),
+            }
+        }
+    }
+
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default("enable_password_auth".to_string(), "true".to_string())
+        .with_password_auth(Password("mz_system_password".to_owned()))
+        .start()
+        .await;
+
+    // Opens a WebSocket over an HTTP/2 stream via extended CONNECT.
+    let connect_ws_http2 = || async {
+        let tcp = tokio::net::TcpStream::connect(server.http_local_addr())
+            .await
+            .unwrap();
+        let (mut sender, conn) =
+            hyper::client::conn::http2::Builder::new(hyper_util::rt::TokioExecutor::new())
+                .handshake::<_, http_body_util::Empty<bytes::Bytes>>(hyper_util::rt::TokioIo::new(
+                    tcp,
+                ))
+                .await
+                .unwrap();
+        // The client can only send extended CONNECT after the server's
+        // SETTINGS frame advertising it has arrived, so drive the connection
+        // until it has been processed.
+        let mut conn = Box::pin(conn);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !conn.is_extended_connect_protocol_enabled() {
+            assert!(
+                Instant::now() < deadline,
+                "server did not advertise RFC 8441 extended CONNECT"
+            );
+            let _ = futures::poll!(conn.as_mut());
+            tokio::task::yield_now().await;
+        }
+        task::spawn(|| "h2_ws_conn", async move {
+            let _ = conn.await;
+        });
+        let req = Request::builder()
+            .method("CONNECT")
+            .extension(hyper::ext::Protocol::from_static("websocket"))
+            .uri("/api/experimental/sql")
+            .header("host", server.http_local_addr().to_string())
+            .header("sec-websocket-version", "13")
+            .body(http_body_util::Empty::<bytes::Bytes>::new())
+            .unwrap();
+        let response = sender.send_request(req).await.unwrap();
+        assert_eq!(response.version(), http::Version::HTTP_2);
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "headers: {:?}",
+            response.headers()
+        );
+        let upgraded = hyper::upgrade::on(response).await.unwrap();
+        tokio_tungstenite::WebSocketStream::from_raw_socket(
+            hyper_util::rt::TokioIo::new(upgraded),
+            tungstenite::protocol::Role::Client,
+            None,
+        )
+        .await
+    };
+
+    let auth_json = |password: &str| {
+        serde_json::to_string(&WebSocketAuth::Basic {
+            user: "mz_system".into(),
+            password: Password(password.to_owned()),
+            options: BTreeMap::default(),
+        })
+        .unwrap()
+    };
+
+    // WebSocket over HTTP/2 with valid credentials: authenticates and runs a
+    // query.
+    let mut ws = connect_ws_http2().await;
+    ws.send(Message::Text(auth_json("mz_system_password").into()))
+        .await
+        .unwrap();
+    read_until_ready(&mut ws).await.unwrap();
+    ws.send(Message::Text(r#"{"query": "SELECT 'row42'"}"#.into()))
+        .await
+        .unwrap();
+    let mut saw_row = false;
+    loop {
+        match ws.next().await.unwrap().unwrap() {
+            Message::Text(text) => match serde_json::from_str(&text).unwrap() {
+                WebSocketResponse::Row(row) => {
+                    assert_eq!(row, vec![serde_json::json!("row42")]);
+                    saw_row = true;
+                }
+                WebSocketResponse::ReadyForQuery(_) => break,
+                _ => {}
+            },
+            Message::Ping(_) => continue,
+            other => panic!("unexpected message: {other:?}"),
+        }
+    }
+    assert!(saw_row, "expected a row from SELECT over HTTP/2 WebSocket");
+
+    // WebSocket over HTTP/2 with bad credentials: the server closes the
+    // socket without revealing detail.
+    let mut ws = connect_ws_http2().await;
+    ws.send(Message::Text(auth_json("wrong_password").into()))
+        .await
+        .unwrap();
+    let err = read_until_ready(&mut ws).await.unwrap_err();
+    assert_contains!(err.to_string(), "unauthorized");
+
+    // Downgrade: the same server still serves HTTP/1.1 WebSocket upgrades,
+    // with the same authentication behavior.
+    let (mut ws, _resp) = tungstenite::connect(server.ws_addr()).unwrap();
+    test_util::auth_with_ws_impl(
+        &mut ws,
+        Message::Text(auth_json("mz_system_password").into()),
+    )
+    .unwrap();
+    ws.send(Message::Text(r#"{"query": "SELECT 'row42'"}"#.into()))
+        .unwrap();
+    let mut saw_row = false;
+    loop {
+        match ws.read().unwrap() {
+            Message::Text(text) => match serde_json::from_str(&text).unwrap() {
+                WebSocketResponse::Row(row) => {
+                    assert_eq!(row, vec![serde_json::json!("row42")]);
+                    saw_row = true;
+                }
+                WebSocketResponse::ReadyForQuery(_) => break,
+                _ => {}
+            },
+            Message::Ping(_) => continue,
+            other => panic!("unexpected message: {other:?}"),
+        }
+    }
+    assert!(
+        saw_row,
+        "expected a row from SELECT over HTTP/1.1 WebSocket"
+    );
+
+    // HTTP/1.1 with bad credentials is also still rejected.
+    let (mut ws, _resp) = tungstenite::connect(server.ws_addr()).unwrap();
+    let err =
+        test_util::auth_with_ws_impl(&mut ws, Message::Text(auth_json("wrong_password").into()))
+            .unwrap_err();
+    assert_contains!(format!("{err:?}"), "unauthorized");
+}

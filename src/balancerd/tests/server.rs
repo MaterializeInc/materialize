@@ -263,6 +263,29 @@ async fn test_balancer() {
         let resp_x509 = X509::from_der(tlsinfo.peer_certificate().unwrap()).unwrap();
         let server_x509 = X509::from_pem(&std::fs::read(&server_cert).unwrap()).unwrap();
         assert_eq!(resp_x509, server_x509);
+        // The default client negotiates HTTP/2 with balancerd via ALPN; the
+        // HTTP/2 stream is byte-proxied through to environmentd.
+        assert_eq!(resp.version(), reqwest::Version::HTTP_2);
+        assert_contains!(resp.text().await.unwrap(), "12234");
+
+        // HTTP/1.1-only clients are still served.
+        let http1_client = reqwest::Client::builder()
+            .add_root_certificate(
+                reqwest::Certificate::from_pem(&ca.cert.to_pem().unwrap()).unwrap(),
+            )
+            .pool_max_idle_per_host(0)
+            .http1_only()
+            .build()
+            .unwrap();
+        let resp = http1_client
+            .post(&https_url)
+            .header("Content-Type", "application/json")
+            .basic_auth(frontegg_user, Some(&frontegg_password))
+            .body(body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.version(), reqwest::Version::HTTP_11);
         assert_contains!(resp.text().await.unwrap(), "12234");
 
         // Generate new certs. Install only the key, reload, and make sure the old cert is still in
@@ -381,5 +404,15 @@ async fn test_balancer() {
             })
             .await
             .unwrap();
+
+        // The internal HTTP server serves h2c (HTTP/2 with prior knowledge)
+        // alongside HTTP/1.1.
+        let h2c_client = reqwest::Client::builder()
+            .http2_prior_knowledge()
+            .build()
+            .unwrap();
+        let resp = h2c_client.get(&metrics_url).send().await.unwrap();
+        assert_eq!(resp.version(), reqwest::Version::HTTP_2);
+        assert!(resp.status().is_success());
     }
 }
