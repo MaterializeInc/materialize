@@ -203,3 +203,48 @@ CREATE TABLE Person_knows_Person (
 CREATE INDEX Person_knows_Person_Person1id ON Person_knows_Person (Person1id);
 CREATE INDEX Person_knows_Person_Person2id ON person_knows_person (Person2id);
 CREATE INDEX Person_knows_Person_Person1id_Person2id ON Person_knows_Person (Person1id, Person2id);
+
+-- tables for deletion candidates
+
+DROP TABLE IF EXISTS Person_Delete_candidates;
+DROP TABLE IF EXISTS Forum_Delete_candidates;
+DROP TABLE IF EXISTS Comment_Delete_candidates;
+DROP TABLE IF EXISTS Post_Delete_candidates;
+DROP TABLE IF EXISTS Person_likes_Comment_Delete_candidates;
+DROP TABLE IF EXISTS Person_likes_Post_Delete_candidates;
+DROP TABLE IF EXISTS Forum_hasMember_Person_Delete_candidates;
+DROP TABLE IF EXISTS Person_knows_Person_Delete_candidates;
+
+CREATE TABLE Person_Delete_candidates                (deletionDate timestamp with time zone not null, id bigint not null);
+CREATE TABLE Forum_Delete_candidates                 (deletionDate timestamp with time zone not null, id bigint not null);
+CREATE TABLE Comment_Delete_candidates               (deletionDate timestamp with time zone not null, id bigint not null);
+CREATE TABLE Post_Delete_candidates                  (deletionDate timestamp with time zone not null, id bigint not null);
+CREATE TABLE Person_likes_Comment_Delete_candidates  (deletionDate timestamp with time zone not null, src bigint not null, trg bigint not null);
+CREATE TABLE Person_likes_Post_Delete_candidates     (deletionDate timestamp with time zone not null, src bigint not null, trg bigint not null);
+CREATE TABLE Forum_hasMember_Person_Delete_candidates(deletionDate timestamp with time zone not null, src bigint not null, trg bigint not null);
+CREATE TABLE Person_knows_Person_Delete_candidates   (deletionDate timestamp with time zone not null, src bigint not null, trg bigint not null);
+
+CREATE INDEX Person_Delete_candidates_id ON Person_Delete_candidates (id);
+CREATE INDEX Forum_Delete_candidates_id ON Forum_Delete_candidates (id);
+CREATE INDEX Comment_Delete_candidates_id ON Comment_Delete_candidates (id);
+CREATE INDEX Post_Delete_candidates_id ON Post_Delete_candidates (id);
+CREATE INDEX Person_likes_Comment_Delete_candidates_src_trg ON Person_likes_Comment_Delete_candidates (src, trg);
+CREATE INDEX Person_likes_Post_Delete_candidates_src_trg ON Person_likes_Post_Delete_candidates (src, trg);
+CREATE INDEX Forum_hasMember_Person_Delete_candidates_src_trg ON Forum_hasMember_Person_Delete_candidates (src, trg);
+CREATE INDEX Person_knows_Person_Delete_candidates_src_trg ON Person_knows_Person_Delete_candidates (src, trg);
+
+CREATE VIEW Comment_Delete_candidates_with_subthreads (id bigint not null) AS
+  WITH MUTUALLY RECURSIVE
+    subthread (id bigint) AS (
+      SELECT id FROM Comment_Delete_candidates
+      UNION
+      SELECT subthread.MessageId AS id
+        FROM subthread
+        JOIN Message child
+          ON child.ParentMessageId = subthread.id
+    )
+  SELECT id
+  FROM subthread
+;
+
+CREATE INDEX Comment_Delete_candidates_with_subthreads_id ON Comment_Delete_candidates_with_subthreads_id (id);
