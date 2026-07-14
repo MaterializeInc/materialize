@@ -42,6 +42,12 @@ use crate::render::{MaybeBucketByTime, RenderTimestamp};
 use crate::typedefs::{ErrBatcher, ErrBuilder, RowRowAgent, RowRowEnter, RowRowSpine};
 use mz_row_spine::RowRowBuilder;
 
+/// Dirty keys processed per `co_reduce2` activation before yielding the timely worker.
+///
+/// TODO: track the `differential/default_exert_logic` config instead of a fixed budget,
+/// so the fusion's yielding matches the rest of the arrangement machinery.
+const SET_DIFFERENCE_FUEL: usize = 1_000_000;
+
 /// One input arm, read through its existing arrangement keyed by the arm's own key.
 ///
 /// The recognizer rewrites each arm so its rendered bundle exposes an existing arrangement
@@ -101,66 +107,82 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
         // the arguments. `co_reduce2` does not log arrangement size, so the caller owns
         // that here.
         let oks = match (base_arm, sub_arm) {
-            (ArmArrangement::Local(base_oks), ArmArrangement::Local(sub_oks)) => {
-                co_reduce2::<
-                    T,
-                    RowRowAgent<T, Diff>,
-                    RowRowAgent<T, Diff>,
-                    Row,
-                    Row,
-                    Row,
-                    Diff,
-                    RowRowBuilder<T, Diff>,
-                    RowRowSpine<T, Diff>,
-                    _,
-                >(base_oks, sub_oks, "SetDifference", set_difference_threshold)
-                .log_arrangement_size()
-            }
-            (ArmArrangement::Local(base_oks), ArmArrangement::Trace(sub_oks)) => {
-                co_reduce2::<
-                    T,
-                    RowRowAgent<T, Diff>,
-                    RowRowEnter<mz_repr::Timestamp, Diff, T>,
-                    Row,
-                    Row,
-                    Row,
-                    Diff,
-                    RowRowBuilder<T, Diff>,
-                    RowRowSpine<T, Diff>,
-                    _,
-                >(base_oks, sub_oks, "SetDifference", set_difference_threshold)
-                .log_arrangement_size()
-            }
-            (ArmArrangement::Trace(base_oks), ArmArrangement::Local(sub_oks)) => {
-                co_reduce2::<
-                    T,
-                    RowRowEnter<mz_repr::Timestamp, Diff, T>,
-                    RowRowAgent<T, Diff>,
-                    Row,
-                    Row,
-                    Row,
-                    Diff,
-                    RowRowBuilder<T, Diff>,
-                    RowRowSpine<T, Diff>,
-                    _,
-                >(base_oks, sub_oks, "SetDifference", set_difference_threshold)
-                .log_arrangement_size()
-            }
-            (ArmArrangement::Trace(base_oks), ArmArrangement::Trace(sub_oks)) => {
-                co_reduce2::<
-                    T,
-                    RowRowEnter<mz_repr::Timestamp, Diff, T>,
-                    RowRowEnter<mz_repr::Timestamp, Diff, T>,
-                    Row,
-                    Row,
-                    Row,
-                    Diff,
-                    RowRowBuilder<T, Diff>,
-                    RowRowSpine<T, Diff>,
-                    _,
-                >(base_oks, sub_oks, "SetDifference", set_difference_threshold)
-                .log_arrangement_size()
-            }
+            (ArmArrangement::Local(base_oks), ArmArrangement::Local(sub_oks)) => co_reduce2::<
+                T,
+                RowRowAgent<T, Diff>,
+                RowRowAgent<T, Diff>,
+                Row,
+                Row,
+                Row,
+                Diff,
+                RowRowBuilder<T, Diff>,
+                RowRowSpine<T, Diff>,
+                _,
+            >(
+                base_oks,
+                sub_oks,
+                "SetDifference",
+                SET_DIFFERENCE_FUEL,
+                set_difference_threshold,
+            )
+            .log_arrangement_size(),
+            (ArmArrangement::Local(base_oks), ArmArrangement::Trace(sub_oks)) => co_reduce2::<
+                T,
+                RowRowAgent<T, Diff>,
+                RowRowEnter<mz_repr::Timestamp, Diff, T>,
+                Row,
+                Row,
+                Row,
+                Diff,
+                RowRowBuilder<T, Diff>,
+                RowRowSpine<T, Diff>,
+                _,
+            >(
+                base_oks,
+                sub_oks,
+                "SetDifference",
+                SET_DIFFERENCE_FUEL,
+                set_difference_threshold,
+            )
+            .log_arrangement_size(),
+            (ArmArrangement::Trace(base_oks), ArmArrangement::Local(sub_oks)) => co_reduce2::<
+                T,
+                RowRowEnter<mz_repr::Timestamp, Diff, T>,
+                RowRowAgent<T, Diff>,
+                Row,
+                Row,
+                Row,
+                Diff,
+                RowRowBuilder<T, Diff>,
+                RowRowSpine<T, Diff>,
+                _,
+            >(
+                base_oks,
+                sub_oks,
+                "SetDifference",
+                SET_DIFFERENCE_FUEL,
+                set_difference_threshold,
+            )
+            .log_arrangement_size(),
+            (ArmArrangement::Trace(base_oks), ArmArrangement::Trace(sub_oks)) => co_reduce2::<
+                T,
+                RowRowEnter<mz_repr::Timestamp, Diff, T>,
+                RowRowEnter<mz_repr::Timestamp, Diff, T>,
+                Row,
+                Row,
+                Row,
+                Diff,
+                RowRowBuilder<T, Diff>,
+                RowRowSpine<T, Diff>,
+                _,
+            >(
+                base_oks,
+                sub_oks,
+                "SetDifference",
+                SET_DIFFERENCE_FUEL,
+                set_difference_threshold,
+            )
+            .log_arrangement_size(),
         };
 
         let errs = differential_dataflow::collection::concatenate(self.scope, err_collections);

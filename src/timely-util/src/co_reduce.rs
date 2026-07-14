@@ -37,6 +37,18 @@
 //! interesting times from batch and pending times and repeatedly joins each processed
 //! time with every input time to reach the full join-closure. For a totally ordered
 //! timestamp this synthesis is a no-op.
+//!
+//! Fuel: a round finalizes the interval `[processed, upper_limit)` over the dirty-key set
+//! staged in `pending`. That set can be arbitrarily large, so the operator bounds the
+//! number of keys it processes per activation by `fuel` and yields the timely worker
+//! rather than draining the whole set in one shot. A round in progress is finalized
+//! atomically: the operator accumulates processed keys' updates into per-capability
+//! builders and only builds, ships, and seals the round's batches once its dirty set
+//! fully drains. Until then it holds the round's output capabilities (so the output
+//! frontier stays at `processed`), leaves `processed` unadvanced, defers compaction, and
+//! re-activates itself. This guarantees downstream never observes a partially emitted
+//! round as complete. Bounding keys per activation caps CPU per activation without
+//! changing output correctness or frontier semantics.
 
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
@@ -53,7 +65,7 @@ use differential_dataflow::trace::{
 use timely::PartialOrder;
 use timely::container::PushInto;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::{CapabilitySet, Operator};
+use timely::dataflow::operators::{Capability, CapabilitySet, Operator};
 use timely::progress::{Antichain, Timestamp};
 
 /// Owns the cursor's current key.
@@ -315,6 +327,40 @@ fn emit_deltas<T, V2, R2>(
     }
 }
 
+/// State of a round whose dirty set did not fully drain within one activation's fuel.
+///
+/// Persisting this across activations lets the operator bound per-activation work while
+/// still finalizing the round atomically. The round never seals `upper_limit` until
+/// `remaining` is empty, so downstream never observes a partially emitted round as
+/// complete. The held `caps` keep the output frontier at `lower_limit` while work remains.
+struct Round<T, K, V2, R2, Bu>
+where
+    T: Timestamp,
+{
+    /// Frozen finalization target. Sealed only once `remaining` drains.
+    upper_limit: Antichain<T>,
+    /// Frozen lower bound. The round's output batches start here.
+    lower_limit: Antichain<T>,
+    /// Frozen per-input read frontiers. Re-acquired cursors read at these each activation.
+    /// They stay valid across activations because the round defers compaction until it
+    /// finalizes.
+    read_base: Antichain<T>,
+    read_subtract: Antichain<T>,
+    /// Capabilities held for the round, index-aligned with `builders` and `cap_updates`.
+    /// Holding them pins the output frontier at `lower_limit` until the round finalizes.
+    caps: Vec<Capability<T>>,
+    /// Times of `caps`, precomputed for `emit_deltas`'s covering-capability lookup.
+    cap_times: Vec<T>,
+    /// Per-capability output builders, accumulated across activations.
+    builders: Vec<Bu>,
+    /// Per-capability update scratch, drained into `builders` per processed key.
+    cap_updates: Vec<Vec<(V2, T, R2)>>,
+    /// Dirty keys not yet processed this round, ascending. Values are in-region seeds.
+    remaining: BTreeMap<K, Vec<T>>,
+    /// Interesting times deferred to a later round (carried plus synthetic), by key.
+    deferred: BTreeMap<K, Vec<T>>,
+}
+
 /// A reduce over two co-arranged inputs.
 ///
 /// For each key present in either input, at every interesting time `t`, `logic` is called
@@ -329,10 +375,17 @@ fn emit_deltas<T, V2, R2>(
 /// different arrangement flavors directly without unifying them. They must agree on key
 /// GAT, owned key `K`, owned value `V`, and diff `D` (`Tr1::Diff`), since the closure sees
 /// both as homogeneous `(V, D)` slices.
+///
+/// `fuel` bounds the number of dirty keys processed per activation. When a round's dirty
+/// set exceeds `fuel`, the operator processes `fuel` keys, re-activates itself, and
+/// resumes the same round on the next activation, yielding the timely worker in between.
+/// Fueling does not change output correctness or frontier semantics: a round's output is
+/// sealed only once its dirty set fully drains.
 pub fn co_reduce2<'scope, T, Tr1, Tr2, K, V, V2, R2, Bu, Out, L>(
     base: Arranged<'scope, Tr1>,
     subtract: Arranged<'scope, Tr2>,
     name: &str,
+    fuel: usize,
     logic: L,
 ) -> Arranged<'scope, TraceAgent<Out>>
 where
@@ -364,6 +417,10 @@ where
 {
     let scope = base.stream.scope();
 
+    // A round must make progress, so process at least one key per activation. A zero
+    // budget would otherwise defer forever without draining the dirty set.
+    let fuel = fuel.max(1);
+
     // Clones of both input traces, held for the operator's lifetime: each round re-reads
     // both inputs through their own frontiers.
     let mut base_trace = base.trace.clone();
@@ -387,6 +444,9 @@ where
                     .map(Into::into);
 
                 let activator = Some(scope.activator_for(Rc::clone(&operator_info.address)));
+                // Separate activator the operator uses to re-schedule itself when a round
+                // defers work under fuel.
+                let reactivate = scope.activator_for(Rc::clone(&operator_info.address));
                 let mut empty = Out::new(operator_info.clone(), logger.clone(), activator);
                 if let Some(exert_logic) = scope
                     .worker()
@@ -410,6 +470,10 @@ where
                 // Retained capabilities and staged interesting times, keyed by output key.
                 let mut capabilities = CapabilitySet::<T>::new();
                 let mut pending: BTreeMap<K, Vec<T>> = BTreeMap::new();
+
+                // In-progress round whose dirty set did not fully drain under fuel. While
+                // `Some`, the operator resumes it before considering any newer interval.
+                let mut round: Option<Round<T, K, V2, R2, Bu>> = None;
 
                 move |(input1, frontier1), (input2, frontier2), output| {
                     // 1. Drain both inputs. Stage each batch's update times as interesting
@@ -458,66 +522,118 @@ where
                         upper_subtract = joined;
                     }
 
-                    // The processed frontier is the meet of the two received frontiers: an
-                    // output time is final only when it is final in both inputs. Inputs are
-                    // *read* at their own frontiers (`upper_base`, `upper_subtract`), not at
-                    // the meet, to avoid a straddling `cursor_through`. Reading data beyond
-                    // the meet is harmless: it cannot affect the output at any time below
-                    // the meet.
-                    let upper_limit = upper_base.meet(&upper_subtract);
-                    let lower_limit = processed.clone();
+                    // Step A: start a round if none is in progress. A round in progress
+                    // freezes its finalization target, so it is resumed toward that target
+                    // before any newer interval is considered.
+                    if round.is_none() {
+                        // The processed frontier is the meet of the two received frontiers:
+                        // an output time is final only when it is final in both inputs.
+                        // Inputs are *read* at their own frontiers (`upper_base`,
+                        // `upper_subtract`), not at the meet, to avoid a straddling
+                        // `cursor_through`. Reading data beyond the meet is harmless: it
+                        // cannot affect the output at any time below the meet.
+                        let upper_limit = upper_base.meet(&upper_subtract);
+                        let lower_limit = processed.clone();
 
-                    // Retire `[lower_limit, upper_limit)` when it is non-empty.
-                    if upper_limit != lower_limit {
-                        // Only compute if we hold a capability inside the interval; else
-                        // there is nothing to output (and we could not transmit it).
-                        if capabilities
-                            .iter()
-                            .any(|c| !upper_limit.less_equal(c.time()))
-                        {
-                            // Acquire each input cursor at its own frontier and the output
-                            // cursor at the prior processed frontier. Each `cursor_through`
-                            // returns owned storage, so no two trace borrows are held at
-                            // once, which keeps self-referencing inputs (aliasing one trace)
-                            // safe.
+                        // Retire `[lower_limit, upper_limit)` when it is non-empty.
+                        if upper_limit != lower_limit {
+                            if capabilities
+                                .iter()
+                                .any(|c| !upper_limit.less_equal(c.time()))
+                            {
+                                // Partition the staged dirty set into this round's in-region
+                                // seeds (`remaining`, processed under fuel) and beyond-upper
+                                // times carried to a later round (`deferred`).
+                                let mut remaining: BTreeMap<K, Vec<T>> = BTreeMap::new();
+                                let mut deferred: BTreeMap<K, Vec<T>> = BTreeMap::new();
+                                for (key, times) in std::mem::take(&mut pending) {
+                                    let mut seeds = Vec::new();
+                                    let mut carried = Vec::new();
+                                    for t in times {
+                                        if upper_limit.less_equal(&t) {
+                                            carried.push(t);
+                                        } else {
+                                            seeds.push(t);
+                                        }
+                                    }
+                                    if !seeds.is_empty() {
+                                        remaining.insert(key.clone(), seeds);
+                                    }
+                                    if !carried.is_empty() {
+                                        deferred.insert(key, carried);
+                                    }
+                                }
+
+                                // Snapshot the capabilities covering the round's dirty set.
+                                // The clones pin the output frontier at `lower_limit` until
+                                // the round finalizes, independent of new input arriving in
+                                // `capabilities` meanwhile.
+                                let caps: Vec<Capability<T>> =
+                                    capabilities.iter().cloned().collect();
+                                let cap_times: Vec<T> =
+                                    caps.iter().map(|c| c.time().clone()).collect();
+                                let builders: Vec<Bu> =
+                                    (0..cap_times.len()).map(|_| Bu::new()).collect();
+                                let cap_updates: Vec<Vec<(V2, T, R2)>> =
+                                    (0..cap_times.len()).map(|_| Vec::new()).collect();
+
+                                round = Some(Round {
+                                    upper_limit,
+                                    lower_limit,
+                                    read_base: upper_base.clone(),
+                                    read_subtract: upper_subtract.clone(),
+                                    caps,
+                                    cap_times,
+                                    builders,
+                                    cap_updates,
+                                    remaining,
+                                    deferred,
+                                });
+                            } else {
+                                // Empty region: nothing to output, but progress must still be
+                                // reflected. Seal and compact to the meet, advance
+                                // `processed`.
+                                output_writer.seal(upper_limit.clone());
+                                base_trace.set_logical_compaction(upper_limit.borrow());
+                                base_trace.set_physical_compaction(upper_base.borrow());
+                                subtract_trace.set_logical_compaction(upper_limit.borrow());
+                                subtract_trace.set_physical_compaction(upper_subtract.borrow());
+                                output_reader.set_logical_compaction(upper_limit.borrow());
+                                output_reader.set_physical_compaction(upper_limit.borrow());
+                                processed = upper_limit;
+                            }
+                        }
+                    }
+
+                    // Step B: drive the in-progress round, processing at most `fuel` keys.
+                    if let Some(mut r) = round.take() {
+                        if !r.remaining.is_empty() {
+                            // Acquire each input cursor at the round's frozen read frontier
+                            // and the output cursor at its frozen lower limit. Each
+                            // `cursor_through` returns owned storage, so no two trace borrows
+                            // are held at once, which keeps self-referencing inputs (aliasing
+                            // one trace) safe. Re-acquiring per activation is valid because
+                            // the round defers compaction until it finalizes, so the frozen
+                            // frontiers stay readable.
                             let (mut base_src, base_src_stor) = base_trace
-                                .cursor_through(upper_base.borrow())
+                                .cursor_through(r.read_base.borrow())
                                 .expect("failed to acquire base cursor");
                             let (mut sub_src, sub_src_stor) = subtract_trace
-                                .cursor_through(upper_subtract.borrow())
+                                .cursor_through(r.read_subtract.borrow())
                                 .expect("failed to acquire subtract cursor");
                             let (mut out_cur, out_stor) = output_reader
-                                .cursor_through(lower_limit.borrow())
+                                .cursor_through(r.lower_limit.borrow())
                                 .expect("failed to acquire output cursor");
 
-                            // Per-capability output builders and update buffers.
-                            let cap_times: Vec<T> =
-                                capabilities.iter().map(|c| c.time().clone()).collect();
-                            let mut builders: Vec<Bu> =
-                                (0..cap_times.len()).map(|_| Bu::new()).collect();
-                            let mut cap_updates: Vec<Vec<(V2, T, R2)>> =
-                                (0..cap_times.len()).map(|_| Vec::new()).collect();
-
-                            // Dirty keys are the staged keys, iterated in ascending order so
-                            // the source and output cursors advance monotonically. A key
-                            // whose staged times are all beyond `upper_limit` stays pending.
-                            let mut next_pending: BTreeMap<K, Vec<T>> = BTreeMap::new();
-                            for (key, times) in std::mem::take(&mut pending) {
-                                let mut seeds = Vec::new();
-                                let mut carried = Vec::new();
-                                for t in times {
-                                    if upper_limit.less_equal(&t) {
-                                        carried.push(t);
-                                    } else {
-                                        seeds.push(t);
-                                    }
-                                }
-                                if seeds.is_empty() {
-                                    if !carried.is_empty() {
-                                        next_pending.insert(key, carried);
-                                    }
-                                    continue;
-                                }
+                            // Drain up to `fuel` dirty keys. `remaining` is drained ascending
+                            // (a `BTreeMap`), so both this activation's seeks and the builder
+                            // pushes across activations stay in ascending key order.
+                            let mut processed_keys = 0usize;
+                            while processed_keys < fuel {
+                                let Some((key, seeds)) = r.remaining.pop_first() else {
+                                    break;
+                                };
+                                processed_keys += 1;
 
                                 let mut kw = KeyWork {
                                     inputs: vec![Vec::new(); 2],
@@ -538,23 +654,23 @@ where
                                     read_key_values(&mut out_cur, &out_stor, &mut kw.prior);
                                 }
 
-                                // Carried (beyond-upper) times remain interesting next round;
-                                // `compute_key` appends any deferred synthetic times.
-                                let mut new_interesting = carried;
+                                // Carried times are already staged in `deferred`; `compute_key`
+                                // appends any beyond-upper synthetic times.
+                                let mut new_interesting = Vec::new();
                                 compute_key(
                                     &key,
                                     &kw,
-                                    &upper_limit,
+                                    &r.upper_limit,
                                     &mut logic,
-                                    &cap_times,
-                                    &mut cap_updates,
+                                    &r.cap_times,
+                                    &mut r.cap_updates,
                                     &mut new_interesting,
                                 );
 
                                 // Push this key's updates into each capability's builder,
                                 // preserving ascending key order across the builder.
-                                for i in 0..cap_times.len() {
-                                    if cap_updates[i].is_empty() {
+                                for i in 0..r.cap_times.len() {
+                                    if r.cap_updates[i].is_empty() {
                                         continue;
                                     }
                                     // The builder assumes value-sorted input per key, but the
@@ -562,28 +678,33 @@ where
                                     // within a time). A stable sort by value reorders them
                                     // into (value, time) order while preserving the time
                                     // order within equal values.
-                                    cap_updates[i].sort_by(|a, b| a.0.cmp(&b.0));
+                                    r.cap_updates[i].sort_by(|a, b| a.0.cmp(&b.0));
                                     let mut builder_buffer = <Bu::Input>::default();
-                                    for (v2, time, r2) in cap_updates[i].drain(..) {
+                                    for (v2, time, r2) in r.cap_updates[i].drain(..) {
                                         builder_buffer.push_into(((key.clone(), v2), time, r2));
                                     }
-                                    builders[i].push(&mut builder_buffer);
+                                    r.builders[i].push(&mut builder_buffer);
                                 }
 
                                 if !new_interesting.is_empty() {
                                     new_interesting.sort();
                                     new_interesting.dedup();
-                                    next_pending.insert(key, new_interesting);
+                                    r.deferred.entry(key).or_default().extend(new_interesting);
                                 }
                             }
+                        }
 
-                            // Build and ship one batch per capability. Only one capability
-                            // may accompany each message, so each batch's upper folds in the
-                            // times of the later capabilities.
-                            let mut output_lower = lower_limit.clone();
-                            for (index, builder) in builders.drain(..).enumerate() {
-                                let mut output_upper = upper_limit.clone();
-                                for capability in &capabilities[index + 1..] {
+                        if r.remaining.is_empty() {
+                            // The round's dirty set fully drained. Only now is it safe to
+                            // build, ship, and seal: every dirty key's output below
+                            // `upper_limit` is present. Build and ship one batch per
+                            // capability. Only one capability may accompany each message, so
+                            // each batch's upper folds in the times of the later capabilities.
+                            let mut output_lower = r.lower_limit.clone();
+                            let caps = r.caps;
+                            for (index, builder) in r.builders.drain(..).enumerate() {
+                                let mut output_upper = r.upper_limit.clone();
+                                for capability in &caps[index + 1..] {
                                     output_upper.insert(capability.time().clone());
                                 }
                                 if output_upper != output_lower {
@@ -593,16 +714,38 @@ where
                                         Antichain::from_elem(T::minimum()),
                                     );
                                     let batch = builder.done(description);
-                                    output.session(&capabilities[index]).give(batch.clone());
-                                    output_writer
-                                        .insert(batch, Some(capabilities[index].time().clone()));
+                                    output.session(&caps[index]).give(batch.clone());
+                                    output_writer.insert(batch, Some(caps[index].time().clone()));
                                     output_lower = output_upper;
                                 }
                             }
 
-                            // Downgrade capabilities to the frontier of remaining pending
-                            // times.
-                            pending = next_pending;
+                            // Fold the round's deferred times back into `pending`, which may
+                            // already hold times staged from input that arrived during the
+                            // round.
+                            for (key, mut times) in std::mem::take(&mut r.deferred) {
+                                let entry = pending.entry(key).or_default();
+                                entry.append(&mut times);
+                                entry.sort();
+                                entry.dedup();
+                            }
+
+                            // Reflect observed progress. The output is sealed and compacted to
+                            // the meet; each input trace is compacted physically to the
+                            // round's read frontier (so a later `cursor_through` stays valid)
+                            // and logically to the meet (times below the meet are final).
+                            output_writer.seal(r.upper_limit.clone());
+                            base_trace.set_logical_compaction(r.upper_limit.borrow());
+                            base_trace.set_physical_compaction(r.read_base.borrow());
+                            subtract_trace.set_logical_compaction(r.upper_limit.borrow());
+                            subtract_trace.set_physical_compaction(r.read_subtract.borrow());
+                            output_reader.set_logical_compaction(r.upper_limit.borrow());
+                            output_reader.set_physical_compaction(r.upper_limit.borrow());
+                            processed = r.upper_limit;
+
+                            // Downgrade the persistent capabilities to the frontier of the
+                            // remaining pending times. Dropping the round then releases its
+                            // held capability clones, letting the output frontier advance.
                             let mut frontier = Antichain::new();
                             for times in pending.values() {
                                 for t in times {
@@ -610,20 +753,19 @@ where
                                 }
                             }
                             capabilities.downgrade(frontier.iter());
-                        }
 
-                        // Reflect observed progress. The output is sealed and compacted to
-                        // the meet; each input trace is compacted physically to its own
-                        // frontier (so next round's `cursor_through(upper_*)` stays valid)
-                        // and logically to the meet (times below the meet are final).
-                        output_writer.seal(upper_limit.clone());
-                        base_trace.set_logical_compaction(upper_limit.borrow());
-                        base_trace.set_physical_compaction(upper_base.borrow());
-                        subtract_trace.set_logical_compaction(upper_limit.borrow());
-                        subtract_trace.set_physical_compaction(upper_subtract.borrow());
-                        output_reader.set_logical_compaction(upper_limit.borrow());
-                        output_reader.set_physical_compaction(upper_limit.borrow());
-                        processed = upper_limit;
+                            // If newer input advanced the received frontiers during the round,
+                            // a further interval is now retirable. Re-activate to start it.
+                            if upper_base.meet(&upper_subtract) != processed {
+                                reactivate.activate();
+                            }
+                        } else {
+                            // Fuel exhausted with work left. Keep the round intact and
+                            // re-activate to resume it. Do NOT seal or advance `processed`:
+                            // the deferred keys still owe output below `upper_limit`.
+                            round = Some(r);
+                            reactivate.activate();
+                        }
                     }
 
                     output_writer.exert();
@@ -686,7 +828,7 @@ mod tests {
                     Builder_,
                     Spine,
                     _,
-                >(a0, a1, "test", net_positive);
+                >(a0, a1, "test", usize::MAX, net_positive);
                 let cap = out.as_collection(|k, _v| *k).inner.capture();
                 (h0, h1, cap)
             });
@@ -731,7 +873,7 @@ mod tests {
                     Builder_,
                     Spine,
                     _,
-                >(a0, a1, "test", net_positive);
+                >(a0, a1, "test", usize::MAX, net_positive);
                 let coll = out.as_collection(|k, _v| *k);
                 let (probe, probed) = coll.inner.probe();
                 let cap = probed.capture();
@@ -828,7 +970,7 @@ mod tests {
                     Builder_,
                     Spine,
                     _,
-                >(a0, a1, "test", max_present);
+                >(a0, a1, "test", usize::MAX, max_present);
                 // Retain the output value: the closure keys output on input values.
                 let cap = out.as_collection(|k, v| (*k, *v)).inner.capture();
                 (h0, h1, cap)
@@ -910,7 +1052,7 @@ mod tests {
                     Builder_,
                     Spine,
                     _,
-                >(a0, a1, "test", echo_values);
+                >(a0, a1, "test", usize::MAX, echo_values);
                 out.stream.inspect_batch(move |_t, batches| {
                     let mut recorded = sink.lock().expect("lock poisoned");
                     for batch in batches {
@@ -960,6 +1102,95 @@ mod tests {
         assert_eq!(
             multiset.into_iter().collect::<Vec<_>>(),
             vec![((1, 10), 1), ((1, 20), 1), ((1, 30), 1)]
+        );
+    }
+
+    /// Builds a one-round dataflow with `keys` keys, all present once in input 0 only (net
+    /// `+1` each), drives the single worker to completion counting worker steps, and returns
+    /// the consolidated output multiset and the step count.
+    ///
+    /// The step count is the yielding witness. `co_reduce2` is the only operator that
+    /// re-activates itself here (via its fuel path), so extra steps under a small fuel
+    /// isolate its yielding. We count worker steps rather than the operator's own closure
+    /// invocations because the closure is internal to `co_reduce2` and cannot be hooked
+    /// without changing its signature.
+    fn run_fueled_round(fuel: usize, keys: u64) -> (Vec<(u64, isize)>, usize) {
+        let (captured, steps) = timely::execute_directly(move |worker| {
+            let (mut in0, in1, cap) = worker.dataflow(|scope| {
+                let (h0, c0) = scope.new_collection::<u64, isize>();
+                let (h1, c1) = scope.new_collection::<u64, isize>();
+                let a0 = c0.map(|k| (k, k)).arrange_by_key();
+                let a1 = c1.map(|k| (k, k)).arrange_by_key();
+                let out = co_reduce2::<
+                    u64,
+                    TraceAgent<Spine>,
+                    TraceAgent<Spine>,
+                    u64,
+                    u64,
+                    u64,
+                    isize,
+                    Builder_,
+                    Spine,
+                    _,
+                >(a0, a1, "test", fuel, net_positive);
+                let cap = out.as_collection(|k, _v| *k).inner.capture();
+                (h0, h1, cap)
+            });
+
+            for k in 0..keys {
+                in0.insert(k);
+            }
+            in0.close();
+            in1.close();
+
+            // Drive to completion, counting steps. Each `co_reduce2` self-reactivation
+            // under fuel adds a step.
+            let mut steps = 0usize;
+            while worker.step() {
+                steps += 1;
+            }
+            (cap, steps)
+        });
+
+        let mut consolidated: BTreeMap<u64, isize> = BTreeMap::new();
+        for (_t, data) in captured.extract() {
+            for (k, _t, r) in data {
+                *consolidated.entry(k).or_default() += r;
+            }
+        }
+        consolidated.retain(|_k, r| *r != 0);
+        (consolidated.into_iter().collect(), steps)
+    }
+
+    #[mz_ore::test]
+    fn co_reduce_fuels() {
+        // Stage a dirty set far larger than the fuel budget in one round. Assert both that
+        // the final output is correct and complete and that the operator yielded (took more
+        // steps than the same round drained in one shot). The complete-output assertion
+        // guards the invariant that a round is never sealed while any dirty key still owes
+        // output: a premature seal would drop the deferred keys' `+1`s from the result.
+        const KEYS: u64 = 8_000;
+        const SMALL_FUEL: usize = 100;
+
+        let expected: Vec<(u64, isize)> = (0..KEYS).map(|k| (k, 1isize)).collect();
+
+        // Small fuel: many activations. Large fuel: the whole round drains in one activation.
+        let (out_small, steps_small) = run_fueled_round(SMALL_FUEL, KEYS);
+        let (out_large, steps_large) = run_fueled_round(usize::MAX, KEYS);
+
+        // (1) Output is correct and complete under both budgets: fueling shed no work.
+        assert_eq!(out_small, expected, "small-fuel output incomplete or wrong");
+        assert_eq!(out_large, expected, "large-fuel output incomplete or wrong");
+
+        // (2) The small-fuel run took strictly more worker steps, proving `co_reduce2`
+        // re-activated itself to yield rather than draining the whole dirty set in one shot.
+        assert!(
+            steps_small > steps_large,
+            "expected fueling to add worker steps: small={steps_small}, large={steps_large}"
+        );
+        assert!(
+            steps_small > 1,
+            "expected the fueled operator to take more than one activation, took {steps_small}"
         );
     }
 }
