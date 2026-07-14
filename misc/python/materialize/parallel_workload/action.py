@@ -587,7 +587,9 @@ class Action:
                 )
             if not parts:
                 return ""
-            return f" WHERE {' AND '.join(parts)}"
+            # Generated Boolean expressions can contain OR, so parenthesize
+            # each part to keep every part as a top-level conjunct.
+            return " WHERE " + " AND ".join(f"({part})" for part in parts)
 
         distinct_on_expr = None
         group_by = bool(exprs) and self.rng.random() < 0.2
@@ -1123,6 +1125,17 @@ class CopyFromStdinAction(Action):
 
 
 class InsertReturningAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        result = super().errors_to_ignore(exe)
+        # The RETURNING expressions re-render the fully-qualified table and
+        # column names, so a concurrent schema or table rename landing between
+        # the INSERT target and the RETURNING clause leaves the two referring to
+        # different names and the query fails with "does not exist". Same class
+        # as UpdateAction/DeleteAction.
+        if exe.db.complexity == Complexity.DDL or exe.db.scenario == Scenario.Rename:
+            result.extend(["does not exist"])
+        return result
+
     def run(self, exe: Executor) -> bool:
         table = None
         if exe.insert_table is not None:
