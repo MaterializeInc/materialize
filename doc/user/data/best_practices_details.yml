@@ -31,11 +31,6 @@
       To support blue/green deployments, use a two-tier architecture by moving
       compute objects to a new cluster (i.e., recreating compute objects in a new cluster).
 
-    - During cluster restarts, rehydration and query serving compete for the
-      same cluster resources. During rehydration, indexes on views are
-      recomputed, while indexes on materialized views are reloaded from storage
-      (that is, materialized view results are not recomputed).
-
 - name: architecture-two-tier
   content: |
     If the [recommended three-tier
@@ -64,11 +59,6 @@
       colocated sink can take down the compute and serving resources sharing the
       cluster.
 
-    - During cluster restarts, rehydration and query serving compete for the
-      same cluster resources. During rehydration, indexes on views are
-      recomputed, while indexes on materialized views are reloaded from storage
-      (that is, materialized view results are not recomputed).
-
 - name: architecture-three-tier
   content: |
     In production, use a three-tier architecture, if feasible.
@@ -87,10 +77,6 @@
       deployments](/manage/dbt/blue-green-deployments/)
 
     - Independent scaling of each tier.
-
-    - During cluster restarts, rehydration for indexes
-      on materialized views reloads persisted results from storage (whereas for
-      indexes on views, rehydration recomputes the results).
 
 - name: architecture-upsert-source
   content: |
