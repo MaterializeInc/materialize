@@ -21,9 +21,9 @@
 //! closure instead of baked-in arithmetic, and value-aware output accounting instead of
 //! a single collapsed empty value. The two inputs feed the closure as homogeneous
 //! `(value, diff)` multisets, so they share the input value type `V` and diff type `D`,
-//! while their trace types stay independent. That lets the operator take two distinct
-//! arrangement flavors (for example a local agent versus an entered trace) by
-//! monomorphization, the way `mz_join_core` and `set_difference_core` do.
+//! while their trace types stay independent. Callers pass two arrangement flavors
+//! (for example a local agent versus an entered trace) directly, and the operator
+//! is monomorphized per pair.
 //!
 //! The operator finalizes an output time only once it is complete in both inputs (the
 //! meet of the two per-input frontiers). It reads each input at its OWN frontier, not at
@@ -344,8 +344,8 @@ where
     /// Frozen per-input read frontiers. Re-acquired cursors read at these each activation.
     /// They stay valid across activations because the round defers compaction until it
     /// finalizes.
-    read_base: Antichain<T>,
-    read_subtract: Antichain<T>,
+    read_input0: Antichain<T>,
+    read_input1: Antichain<T>,
     /// Capabilities held for the round, index-aligned with `builders` and `cap_updates`.
     /// Holding them pins the output frontier at `lower_limit` until the round finalizes.
     caps: Vec<Capability<T>>,
@@ -365,7 +365,7 @@ where
 ///
 /// For each key present in either input, at every interesting time `t`, `logic` is called
 /// with the two consolidated `(value, diff)` multisets of the inputs' updates with time
-/// `<= t`: slice `[0]` is `base`, slice `[1]` is `subtract`. `logic` writes the desired
+/// `<= t`: slice `[0]` is `input0`, slice `[1]` is `input1`. `logic` writes the desired
 /// output `(value, diff)` multiset at `t` into its `out` argument. The operator diffs
 /// desired against prior output per value and emits the minimal updates into one output
 /// arrangement. An output time is finalized only once it is complete in both inputs, i.e.
@@ -382,8 +382,8 @@ where
 /// Fueling does not change output correctness or frontier semantics: a round's output is
 /// sealed only once its dirty set fully drains.
 pub fn co_reduce2<'scope, T, Tr1, Tr2, K, V, V2, R2, Bu, Out, L>(
-    base: Arranged<'scope, Tr1>,
-    subtract: Arranged<'scope, Tr2>,
+    input0: Arranged<'scope, Tr1>,
+    input1: Arranged<'scope, Tr2>,
     name: &str,
     fuel: usize,
     logic: L,
@@ -415,7 +415,7 @@ where
     Bu::Input: Default + PushInto<((K, V2), T, R2)>,
     L: FnMut(&K, &[&[(V, Tr1::Diff)]], &mut Vec<(V2, R2)>) + 'static,
 {
-    let scope = base.stream.scope();
+    let scope = input0.stream.scope();
 
     // A round must make progress, so process at least one key per activation. A zero
     // budget would otherwise defer forever without draining the dirty set.
@@ -423,14 +423,14 @@ where
 
     // Clones of both input traces, held for the operator's lifetime: each round re-reads
     // both inputs through their own frontiers.
-    let mut base_trace = base.trace.clone();
-    let mut subtract_trace = subtract.trace.clone();
+    let mut input0_trace = input0.trace.clone();
+    let mut input1_trace = input1.trace.clone();
 
     let mut result_trace = None;
     let stream = {
         let result_trace = &mut result_trace;
-        base.stream.binary_frontier(
-            subtract.stream,
+        input0.stream.binary_frontier(
+            input1.stream,
             Pipeline,
             Pipeline,
             name,
@@ -462,8 +462,8 @@ where
 
                 // Persistent per-input received frontiers. Each advances monotonically and
                 // combines batch uppers, `advance_upper`, and the input frontier.
-                let mut upper_base = Antichain::from_elem(T::minimum());
-                let mut upper_subtract = Antichain::from_elem(T::minimum());
+                let mut upper_input0 = Antichain::from_elem(T::minimum());
+                let mut upper_input1 = Antichain::from_elem(T::minimum());
                 // The last processed frontier. Next round's lower limit.
                 let mut processed = Antichain::from_elem(T::minimum());
 
@@ -483,7 +483,7 @@ where
                     input1.for_each(|cap, data: &mut Vec<Tr1::Batch>| {
                         capabilities.insert(cap.retain(0));
                         for batch in data.drain(..) {
-                            upper_base.clone_from(batch.upper());
+                            upper_input0.clone_from(batch.upper());
                             let mut cursor = batch.cursor();
                             stage_times(&mut cursor, &batch, &mut pending);
                         }
@@ -491,7 +491,7 @@ where
                     input2.for_each(|cap, data: &mut Vec<Tr2::Batch>| {
                         capabilities.insert(cap.retain(0));
                         for batch in data.drain(..) {
-                            upper_subtract.clone_from(batch.upper());
+                            upper_input1.clone_from(batch.upper());
                             let mut cursor = batch.cursor();
                             stage_times(&mut cursor, &batch, &mut pending);
                         }
@@ -501,25 +501,25 @@ where
                     // about, then incorporate the input frontier guarantee. Each `upper_*`
                     // stays batch-aligned to its input, which makes
                     // `cursor_through(upper_*)` straddle-free.
-                    base_trace.advance_upper(&mut upper_base);
-                    subtract_trace.advance_upper(&mut upper_subtract);
+                    input0_trace.advance_upper(&mut upper_input0);
+                    input1_trace.advance_upper(&mut upper_input1);
                     {
                         let mut joined = Antichain::new();
                         antichain_join_into(
-                            &upper_base.borrow()[..],
+                            &upper_input0.borrow()[..],
                             &frontier1.frontier()[..],
                             &mut joined,
                         );
-                        upper_base = joined;
+                        upper_input0 = joined;
                     }
                     {
                         let mut joined = Antichain::new();
                         antichain_join_into(
-                            &upper_subtract.borrow()[..],
+                            &upper_input1.borrow()[..],
                             &frontier2.frontier()[..],
                             &mut joined,
                         );
-                        upper_subtract = joined;
+                        upper_input1 = joined;
                     }
 
                     // Step A: start a round if none is in progress. A round in progress
@@ -528,11 +528,11 @@ where
                     if round.is_none() {
                         // The processed frontier is the meet of the two received frontiers:
                         // an output time is final only when it is final in both inputs.
-                        // Inputs are *read* at their own frontiers (`upper_base`,
-                        // `upper_subtract`), not at the meet, to avoid a straddling
+                        // Inputs are *read* at their own frontiers (`upper_input0`,
+                        // `upper_input1`), not at the meet, to avoid a straddling
                         // `cursor_through`. Reading data beyond the meet is harmless: it
                         // cannot affect the output at any time below the meet.
-                        let upper_limit = upper_base.meet(&upper_subtract);
+                        let upper_limit = upper_input0.meet(&upper_input1);
                         let lower_limit = processed.clone();
 
                         // Retire `[lower_limit, upper_limit)` when it is non-empty.
@@ -580,8 +580,8 @@ where
                                 round = Some(Round {
                                     upper_limit,
                                     lower_limit,
-                                    read_base: upper_base.clone(),
-                                    read_subtract: upper_subtract.clone(),
+                                    read_input0: upper_input0.clone(),
+                                    read_input1: upper_input1.clone(),
                                     caps,
                                     cap_times,
                                     builders,
@@ -594,10 +594,10 @@ where
                                 // reflected. Seal and compact to the meet, advance
                                 // `processed`.
                                 output_writer.seal(upper_limit.clone());
-                                base_trace.set_logical_compaction(upper_limit.borrow());
-                                base_trace.set_physical_compaction(upper_base.borrow());
-                                subtract_trace.set_logical_compaction(upper_limit.borrow());
-                                subtract_trace.set_physical_compaction(upper_subtract.borrow());
+                                input0_trace.set_logical_compaction(upper_limit.borrow());
+                                input0_trace.set_physical_compaction(upper_input0.borrow());
+                                input1_trace.set_logical_compaction(upper_limit.borrow());
+                                input1_trace.set_physical_compaction(upper_input1.borrow());
                                 output_reader.set_logical_compaction(upper_limit.borrow());
                                 output_reader.set_physical_compaction(upper_limit.borrow());
                                 processed = upper_limit;
@@ -615,12 +615,22 @@ where
                             // one trace) safe. Re-acquiring per activation is valid because
                             // the round defers compaction until it finalizes, so the frozen
                             // frontiers stay readable.
-                            let (mut base_src, base_src_stor) = base_trace
-                                .cursor_through(r.read_base.borrow())
-                                .expect("failed to acquire base cursor");
-                            let (mut sub_src, sub_src_stor) = subtract_trace
-                                .cursor_through(r.read_subtract.borrow())
-                                .expect("failed to acquire subtract cursor");
+                            //
+                            // NOTE: re-acquiring cursors and re-seeking every key on every
+                            // activation makes each `seek_owned_key` restart from the cursor's
+                            // initial position, so total seek work across a fuel-split round is
+                            // O(N^2 / fuel) in the round's dirty-key count N, rather than O(N)
+                            // for a single-activation round. This is dormant when the caller's
+                            // fuel budget drains a round's whole dirty set in one activation, as
+                            // production callers do today. If a smaller budget ever makes this
+                            // bite, persist the cursors in `Round` instead of re-acquiring them
+                            // here.
+                            let (mut input0_src, input0_src_stor) = input0_trace
+                                .cursor_through(r.read_input0.borrow())
+                                .expect("failed to acquire input0 cursor");
+                            let (mut input1_src, input1_src_stor) = input1_trace
+                                .cursor_through(r.read_input1.borrow())
+                                .expect("failed to acquire input1 cursor");
                             let (mut out_cur, out_stor) = output_reader
                                 .cursor_through(r.lower_limit.borrow())
                                 .expect("failed to acquire output cursor");
@@ -640,15 +650,19 @@ where
                                     prior: Vec::new(),
                                     seeds,
                                 };
-                                if seek_owned_key(&mut base_src, &base_src_stor, &key) {
+                                if seek_owned_key(&mut input0_src, &input0_src_stor, &key) {
                                     read_key_values(
-                                        &mut base_src,
-                                        &base_src_stor,
+                                        &mut input0_src,
+                                        &input0_src_stor,
                                         &mut kw.inputs[0],
                                     );
                                 }
-                                if seek_owned_key(&mut sub_src, &sub_src_stor, &key) {
-                                    read_key_values(&mut sub_src, &sub_src_stor, &mut kw.inputs[1]);
+                                if seek_owned_key(&mut input1_src, &input1_src_stor, &key) {
+                                    read_key_values(
+                                        &mut input1_src,
+                                        &input1_src_stor,
+                                        &mut kw.inputs[1],
+                                    );
                                 }
                                 if seek_owned_key(&mut out_cur, &out_stor, &key) {
                                     read_key_values(&mut out_cur, &out_stor, &mut kw.prior);
@@ -735,10 +749,10 @@ where
                             // round's read frontier (so a later `cursor_through` stays valid)
                             // and logically to the meet (times below the meet are final).
                             output_writer.seal(r.upper_limit.clone());
-                            base_trace.set_logical_compaction(r.upper_limit.borrow());
-                            base_trace.set_physical_compaction(r.read_base.borrow());
-                            subtract_trace.set_logical_compaction(r.upper_limit.borrow());
-                            subtract_trace.set_physical_compaction(r.read_subtract.borrow());
+                            input0_trace.set_logical_compaction(r.upper_limit.borrow());
+                            input0_trace.set_physical_compaction(r.read_input0.borrow());
+                            input1_trace.set_logical_compaction(r.upper_limit.borrow());
+                            input1_trace.set_physical_compaction(r.read_input1.borrow());
                             output_reader.set_logical_compaction(r.upper_limit.borrow());
                             output_reader.set_physical_compaction(r.upper_limit.borrow());
                             processed = r.upper_limit;
@@ -756,7 +770,7 @@ where
 
                             // If newer input advanced the received frontiers during the round,
                             // a further interval is now retirable. Re-activate to start it.
-                            if upper_base.meet(&upper_subtract) != processed {
+                            if upper_input0.meet(&upper_input1) != processed {
                                 reactivate.activate();
                             }
                         } else {
