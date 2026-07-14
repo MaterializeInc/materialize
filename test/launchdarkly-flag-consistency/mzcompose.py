@@ -403,6 +403,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     unsafe_enable_table_check_constraint
     unsafe_enable_table_foreign_key
     unsafe_enable_table_keys
+    unsafe_enable_unbounded_custom_type_resolution
     unsafe_enable_unorchestrated_cluster_replicas
     unsafe_enable_unsafe_functions
     unsafe_enable_unstable_dependencies
