@@ -7,10 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+FROM node:24-trixie-slim AS node
+
 # Stage 1: Build a minimum CI Builder image that we can use for the initial
 # steps like `mkpipeline` and `Build`, as well as any tests that are self
 # contained and use other Docker images.
-FROM ubuntu:noble-20260610 AS ci-builder-min
+FROM debian:13-slim AS ci-builder-min
 
 WORKDIR /workdir
 
@@ -39,14 +41,14 @@ ARG XZ_OPT=-T0
 RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
-    docker.io \
+    docker-cli \
     eatmydata \
     gdb \
     git \
     gnupg2 \
     pigz \
     python3 \
-    python3.12-venv \
+    python3-venv \
     zstd \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
@@ -107,14 +109,10 @@ RUN \
     && rust/install.sh --components=cargo \
     && rm -rf rust.asc rust.tar.gz rust
 
-# Remove Ubuntu user causing UID collisions.
-# https://bugs.launchpad.net/cloud-images/+bug/2005129
-RUN userdel -r ubuntu
-
 ENTRYPOINT ["autouseradd", "--user", "materialize"]
 
 # Stage 2: Build a full CI Builder image that can be used for any CI job.
-FROM ci-builder-min as ci-builder-full
+FROM ci-builder-min AS ci-builder-full
 
 ARG ARCH_GCC
 ARG ARCH_GO
@@ -122,7 +120,7 @@ ARG ARCH_GO
 WORKDIR /workdir
 
 # Install dependencies needed by any CI job. Not all of these are available in
-# the Ubuntu repositories.
+# the Debian repositories.
 RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     autoconf \
     automake \
@@ -132,7 +130,7 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     clang \
     cmake \
     curl \
-    docker.io \
+    docker-cli \
     gcc \
     g++ \
     gdb \
@@ -149,7 +147,6 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     lld \
     llvm \
     make \
-    npm \
     openssh-client \
     pkg-config \
     postgresql-client \
@@ -172,7 +169,7 @@ COPY apt-llvm.asc .
 
 RUN gpg --dearmor < apt-llvm.asc > /etc/apt/keyrings/apt-llvm.gpg \
     && rm apt-llvm.asc \
-    && echo "deb [signed-by=/etc/apt/keyrings/apt-llvm.gpg] http://apt.llvm.org/noble/ llvm-toolchain-noble-22 main" > /etc/apt/sources.list.d/apt-llvm.list \
+    && echo "deb [signed-by=/etc/apt/keyrings/apt-llvm.gpg] http://apt.llvm.org/trixie/ llvm-toolchain-trixie-22 main" > /etc/apt/sources.list.d/apt-llvm.list \
     && apt-get update \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     clang-22 \
@@ -187,18 +184,11 @@ RUN printf '#!/bin/sh\nexec /usr/bin/clang-22 --ld-path=/usr/bin/ld.lld-22 "$@"\
 
 # Install Node.js LTS, for our Python typechecker. This is up here because we don't
 # expect it to change often.
-
-COPY nodesource.asc .
-
-RUN gpg --dearmor < nodesource.asc > /etc/apt/keyrings/nodesource.gpg \
-    && rm nodesource.asc \
-    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_24.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends nodejs \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* \
-    && rm -rf /usr/share/doc/nodejs \
-    && npm install -g corepack \
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s ../lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack \
+    && ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && corepack enable
 
 RUN curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.$ARCH_GCC.tar.xz > shellcheck.tar.xz \
@@ -419,7 +409,7 @@ RUN mkdir /cargo && chmod 777 /cargo
 VOLUME /cargo
 
 # Stage 3: Build a lightweight CI Builder image for console/playwright jobs.
-FROM ubuntu:noble-20260610 AS ci-builder-console
+FROM debian:13-slim AS ci-builder-console
 
 ARG ARCH_GCC
 ARG ARCH_GO
@@ -437,7 +427,7 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     ca-certificates \
     curl \
     dnsmasq \
-    docker.io \
+    docker-cli \
     eatmydata \
     gettext-base \
     git \
@@ -485,8 +475,8 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     libgtk-3-0t64 \
     libharfbuzz-icu0 \
     libhyphen0 \
-    libicu74 \
-    libjpeg-turbo8 \
+    libicu76 \
+    libjpeg62-turbo \
     liblcms2-2 \
     libmanette-0.2-0 \
     libopus0 \
@@ -512,17 +502,11 @@ RUN mkdir -p /usr/local/lib/docker/cli-plugins \
     && curl -fsSL https://github.com/docker/buildx/releases/download/v0.30.1/buildx-v0.30.1.linux-$ARCH_GO > /usr/local/lib/docker/cli-plugins/docker-buildx \
     && chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx
 
-COPY nodesource.asc .
-
-RUN gpg --dearmor < nodesource.asc > /etc/apt/keyrings/nodesource.gpg \
-    && rm nodesource.asc \
-    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_24.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends nodejs \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* \
-    && rm -rf /usr/share/doc/nodejs \
-    && npm install -g corepack \
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s ../lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack \
+    && ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && corepack enable
 
 # TODO(def-) Upgrading kind/kubectl seems to cause Cloudtest failures
@@ -562,10 +546,6 @@ RUN gpg --import rust.asc \
     && rm -rf rust.asc rust.tar.gz rust
 
 COPY ssh_known_hosts /etc/ssh/ssh_known_hosts
-
-# Remove Ubuntu user causing UID collisions.
-# https://bugs.launchpad.net/cloud-images/+bug/2005129
-RUN userdel -r ubuntu
 
 # Allow passwordless sudo for the CI user (created at runtime by autouseradd).
 RUN echo "ALL ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/ci \

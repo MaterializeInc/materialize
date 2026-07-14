@@ -7,4 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM mcr.microsoft.com/playwright:v1.58.2-jammy
+FROM node:24-trixie-slim
+
+RUN npx --yes playwright@1.58.2 install --with-deps chromium \
+    && rm -rf /root/.npm /var/lib/apt/lists/*

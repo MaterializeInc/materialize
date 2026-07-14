@@ -9,7 +9,7 @@
 
 # Build and run SQLsmith, a random query generator, ported for Materialize
 
-MZFROM ubuntu-base
+MZFROM debian-base
 
 WORKDIR /workdir
 

@@ -56,7 +56,7 @@ Here's a simple example for a fictional Python load generator called
 ```Dockerfile
 # test/fancy/loadgen/Dockerfile
 
-MZFROM ubuntu-base
+MZFROM debian-base
 
 RUN apt-get update && apt-get install -qy python3
 
@@ -141,7 +141,7 @@ this:
 
 MZFROM billing-demo AS billing-demo
 
-MZFROM ubuntu-base
+MZFROM debian-base
 
 RUN apt-get update && apt-get install -qy python3
 
@@ -485,7 +485,7 @@ mzbuild images.
 ```dockerfile
 MZFROM environmentd
 
-MZFROM ubuntu-base
+MZFROM debian-base
 
 COPY --from=0 ...
 ```
