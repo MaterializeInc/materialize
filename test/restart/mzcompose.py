@@ -13,6 +13,7 @@ processes). See cluster tests for separate clusterds, see platform-checks for
 further restart scenarios.
 """
 
+import copy
 import json
 import time
 from textwrap import dedent
@@ -24,6 +25,7 @@ from psycopg.errors import (
 )
 
 from materialize import MZ_ROOT, buildkite
+from materialize.mzcompose import cluster_replica_size_map
 from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
@@ -359,6 +361,56 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
             ALTER SYSTEM RESET allowed_cluster_replica_sizes
             """),
     )
+
+
+def workflow_disabled_cluster_replica_size_survives_restart(c: Composition) -> None:
+    # SQL-306: disabling a size in `cluster_replica_sizes` that an existing
+    # replica still uses must not crash the environment at startup. Disabling
+    # is how you retire a size while leaving existing replicas running, so
+    # those replicas keep working and only new replicas of that size are
+    # refused.
+    c.down(destroy_volumes=True)
+
+    sizes = cluster_replica_size_map()
+    size = "scale=2,workers=4"
+    assert (
+        size in sizes and not sizes[size]["disabled"]
+    ), f"test assumes {size} exists and is enabled in the default size map"
+
+    # Boot with the size enabled and create a replica that uses it.
+    with c.override(Materialized(cluster_replica_size=sizes)):
+        c.up("materialized", Service("testdrive_no_reset", idle=True))
+        c.testdrive(
+            service="testdrive_no_reset",
+            input=dedent(f"""
+                > CREATE CLUSTER test REPLICAS (r1 (SIZE '{size}'))
+
+                > SHOW CLUSTER REPLICAS WHERE cluster = 'test'
+                test r1 {size} true ""
+                """),
+        )
+        c.kill("materialized")
+
+    # Restart with that size disabled. Startup rebuilds each replica from its
+    # durable size in apply_cluster_replica_update, so a disabled size must not
+    # stop the environment from booting and the existing replica must survive.
+    # A new replica of the disabled size is still refused.
+    disabled = copy.deepcopy(sizes)
+    disabled[size]["disabled"] = True
+    with c.override(Materialized(cluster_replica_size=disabled)):
+        c.up("materialized", Service("testdrive_no_reset", idle=True))
+        c.testdrive(
+            service="testdrive_no_reset",
+            input=dedent(f"""
+                # Existing replica of the now-disabled size survives the restart.
+                > SHOW CLUSTER REPLICAS WHERE cluster = 'test'
+                test r1 {size} true ""
+
+                # Creating a new replica of the disabled size is rejected.
+                ! CREATE CLUSTER REPLICA test.r2 SIZE '{size}'
+                contains:unknown cluster replica size {size}
+                """),
+        )
 
 
 def workflow_allow_user_sessions(c: Composition) -> None:
