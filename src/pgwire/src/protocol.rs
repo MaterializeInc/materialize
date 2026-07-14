@@ -2154,12 +2154,15 @@ where
                 // This code is somewhat awkwardly structured because we
                 // can't hold `var` across an await point.
                 let qn = name.to_string();
+                // The find is case-insensitive because the plan name is
+                // lowercase while some canonical var names are mixed-case
+                // (e.g. `TimeZone`).
                 let msg = if let Some(var) = self
                     .adapter_client
                     .session()
                     .vars_mut()
                     .notify_set()
-                    .find(|v| v.name() == qn)
+                    .find(|v| v.name().eq_ignore_ascii_case(&qn))
                 {
                     Some(BackendMessage::ParameterStatus(var.name(), var.value()))
                 } else {
