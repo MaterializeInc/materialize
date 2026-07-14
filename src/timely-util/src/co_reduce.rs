@@ -534,6 +534,12 @@ where
                                 if cap_updates[i].is_empty() {
                                     continue;
                                 }
+                                // The builder assumes value-sorted input per key, but the
+                                // updates arrive time-ordered (ascending time, then value
+                                // within a time). A stable sort by value reorders them into
+                                // (value, time) order while preserving the time order within
+                                // equal values.
+                                cap_updates[i].sort_by(|a, b| a.0.cmp(&b.0));
                                 builder_buffer.clear();
                                 for (v2, time, r2) in cap_updates[i].drain(..) {
                                     builder_buffer.push(((key.clone(), v2), time, r2));
@@ -614,11 +620,14 @@ mod tests {
     // has no such wrapper, and the stock arrangement is exactly what these unit tests need.
     #![allow(clippy::disallowed_methods)]
 
+    use std::sync::{Arc, Mutex};
+
     use super::*;
+    use differential_dataflow::AsCollection;
     use differential_dataflow::input::Input;
     use differential_dataflow::trace::implementations::ord_neu::{OrdValSpine, RcOrdValBuilder};
     use timely::dataflow::operators::capture::Extract;
-    use timely::dataflow::operators::{Capture, Probe};
+    use timely::dataflow::operators::{Capture, Inspect, Probe, ToStream};
 
     type Spine = OrdValSpine<u64, u64, u64, isize>;
     type Builder_ = RcOrdValBuilder<u64, u64, u64, isize>;
@@ -796,6 +805,107 @@ mod tests {
             .collect();
         rows.sort();
         assert_eq!(rows, vec![((1u64, 20u64), 1isize)]);
+    }
+
+    /// Echoes every input `(value, diff)` unchanged, so one key emits every distinct
+    /// input value as its own output value.
+    fn echo_values(_k: &u64, inputs: &[&[(u64, isize)]], out: &mut Vec<(u64, isize)>) {
+        for slice in inputs {
+            for (v, d) in *slice {
+                out.push((*v, *d));
+            }
+        }
+    }
+
+    #[mz_ore::test]
+    fn co_reduce_multi_value_per_key() {
+        // Read the output arrangement back through its batch stream. A linear scan of a
+        // batch (or `as_collection` + external consolidation) always recovers the correct
+        // multiset even from a value-unsorted batch, because updates are only ever combined
+        // when values compare equal, never dropped. So the corruption is invisible to a
+        // summed readback. It is visible only in the batch's stored value order, which
+        // downstream value seeks (binary search) and spine merges rely on being ascending.
+        //
+        // Batches are `Rc`-backed (neither `Send` nor `Ord`), so they cannot leave the
+        // worker via `capture`/`extract`. Instead an `inspect_batch` walks each batch's
+        // cursor in place and records, per key, its `(value, time, diff)` updates in stored
+        // order into a shared buffer.
+        type Recorded = Vec<(u64, Vec<(u64, u64, isize)>)>;
+        let recorded: Arc<Mutex<Recorded>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&recorded);
+        timely::execute_directly(move |worker| {
+            worker.dataflow::<u64, _, _>(|scope| {
+                // Key 1 gains a new distinct value at each of three times, in non-ascending
+                // value order. Feeding all updates as one stream message makes
+                // `arrange_by_key` form a single batch spanning times 0, 1, 2 under one
+                // capability, so all three times retire in one round under that capability.
+                // `emit_deltas` appends them to the same per-key buffer time-major
+                // (30@t0, 10@t1, 20@t2), i.e. value-unsorted. Without the value sort the
+                // builder writes the vals in that order, violating the batch invariant.
+                let a0 = vec![
+                    ((1u64, 30u64), 0, 1isize),
+                    ((1u64, 10u64), 1, 1isize),
+                    ((1u64, 20u64), 2, 1isize),
+                ]
+                .to_stream(scope)
+                .as_collection()
+                .arrange_by_key();
+                let out =
+                    co_reduce::<u64, TraceAgent<Spine>, u64, u64, u64, isize, Builder_, Spine, _>(
+                        vec![a0],
+                        "test",
+                        echo_values,
+                    );
+                out.stream.inspect_batch(move |_t, batches| {
+                    let mut recorded = sink.lock().expect("lock poisoned");
+                    for batch in batches {
+                        let mut cursor = batch.cursor();
+                        while cursor.key_valid(batch) {
+                            let key = own_current_key::<_, u64>(&cursor, batch);
+                            let mut updates: Vec<(u64, u64, isize)> = Vec::new();
+                            read_key_values(&mut cursor, batch, &mut updates);
+                            recorded.push((key, updates));
+                            cursor.step_key(batch);
+                        }
+                    }
+                });
+            });
+        });
+
+        let recorded = Arc::try_unwrap(recorded)
+            .expect("no outstanding references")
+            .into_inner()
+            .expect("lock poisoned");
+
+        // The batch invariant: within a batch each key's stored values are strictly
+        // ascending. The pre-fix code stores them time-major (30, 10, 20), failing this.
+        for (key, updates) in &recorded {
+            let mut vals_order: Vec<u64> = Vec::new();
+            for (v, _t, _d) in updates {
+                if vals_order.last() != Some(v) {
+                    vals_order.push(*v);
+                }
+            }
+            let mut sorted = vals_order.clone();
+            sorted.sort();
+            assert_eq!(
+                vals_order, sorted,
+                "key {key} stored values are not ascending: {vals_order:?}"
+            );
+        }
+
+        // The multiset is correct regardless (see the note above), asserted for completeness.
+        let mut multiset: BTreeMap<(u64, u64), isize> = BTreeMap::new();
+        for (key, updates) in &recorded {
+            for (v, _t, d) in updates {
+                *multiset.entry((*key, *v)).or_default() += d;
+            }
+        }
+        multiset.retain(|_kv, r| *r != 0);
+        assert_eq!(
+            multiset.into_iter().collect::<Vec<_>>(),
+            vec![((1, 10), 1), ((1, 20), 1), ((1, 30), 1)]
+        );
     }
 
     /// Net of three inputs: `d0 + d1 - d2`, keep positive residual on the empty value.
