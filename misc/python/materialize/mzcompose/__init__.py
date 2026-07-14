@@ -319,6 +319,9 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter("persist_fast_path_order", "true", ["true", "false"]),
         VariableSystemParameter(
+            "enable_materialized_view_keys", "false", ["true", "false"]
+        ),
+        VariableSystemParameter(
             "persist_gc_use_active_gc",
             ("true" if version > MzVersion.parse_mz("v0.143.0-dev") else "false"),
             (
