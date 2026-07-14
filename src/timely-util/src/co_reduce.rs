@@ -1193,4 +1193,103 @@ mod tests {
             "expected the fueled operator to take more than one activation, took {steps_small}"
         );
     }
+
+    #[mz_ore::test]
+    fn co_reduce_fuels_retraction() {
+        // `co_reduce_fuels` only covers insertion under small fuel. Retraction is the case
+        // that actually stresses the fuel/seal interaction: a round must not seal while any
+        // fuel-deferred key still owes a retraction, or the stale `+1` from a prior round
+        // would survive in the output. Stage a dirty set (KEYS/2) far larger than the fuel
+        // budget for the retracting round, so it spans many activations before it seals.
+        const KEYS: u64 = 8_000;
+        const SMALL_FUEL: usize = 100;
+
+        let stream: Vec<(u64, u64, isize)> = {
+            let captured = timely::execute_directly(move |worker| {
+                let (mut in0, mut in1, probe, cap) = worker.dataflow(|scope| {
+                    let (h0, c0) = scope.new_collection::<u64, isize>();
+                    let (h1, c1) = scope.new_collection::<u64, isize>();
+                    let a0 = c0.map(|k| (k, k)).arrange_by_key();
+                    let a1 = c1.map(|k| (k, k)).arrange_by_key();
+                    let out = co_reduce2::<
+                        u64,
+                        TraceAgent<Spine>,
+                        TraceAgent<Spine>,
+                        u64,
+                        u64,
+                        u64,
+                        isize,
+                        Builder_,
+                        Spine,
+                        _,
+                    >(a0, a1, "test", SMALL_FUEL, net_positive);
+                    let coll = out.as_collection(|k, _v| *k);
+                    let (probe, probed) = coll.inner.probe();
+                    let cap = probed.capture();
+                    (h0, h1, probe, cap)
+                });
+
+                // Round 1 (time 0): every key present once in input 0 only. net(k) = 1 for
+                // all KEYS keys -> output +1 each.
+                for k in 0..KEYS {
+                    in0.insert(k);
+                }
+                in0.advance_to(1);
+                in1.advance_to(1);
+                in0.flush();
+                in1.flush();
+                worker.step_while(|| probe.less_than(in0.time()));
+
+                // Round 2 (time 1): retract the first half of the keys by matching them on
+                // input 1, netting those keys to 0 -> output -1 each. The other half is
+                // untouched and stays at +1.
+                for k in 0..KEYS / 2 {
+                    in1.insert(k);
+                }
+                in0.advance_to(2);
+                in1.advance_to(2);
+                in0.flush();
+                in1.flush();
+                worker.step_while(|| probe.less_than(in0.time()));
+
+                in0.close();
+                in1.close();
+                cap
+            });
+
+            captured
+                .extract()
+                .into_iter()
+                .flat_map(|(t, data)| data.into_iter().map(move |(k, _t, r)| (k, t, r)))
+                .collect()
+        };
+
+        // Every retracted key must appear as a negative diff in the change stream, not merely
+        // be absent from the final consolidated output: fuel must retract explicitly, not
+        // just fail to re-emit.
+        let mut retracted: BTreeSet<u64> = BTreeSet::new();
+        for (k, _t, r) in &stream {
+            if *k < KEYS / 2 && *r < 0 {
+                retracted.insert(*k);
+            }
+        }
+        assert_eq!(
+            retracted.len(),
+            usize::try_from(KEYS / 2).expect("KEYS/2 fits in usize"),
+            "expected every retracted key to appear as a negative diff in the change stream"
+        );
+
+        // Consolidating over time leaves exactly the surviving keys, each once.
+        let mut consolidated: BTreeMap<u64, isize> = BTreeMap::new();
+        for (k, _t, r) in &stream {
+            *consolidated.entry(*k).or_default() += r;
+        }
+        consolidated.retain(|_k, r| *r != 0);
+        let expected: Vec<(u64, isize)> = (KEYS / 2..KEYS).map(|k| (k, 1isize)).collect();
+        assert_eq!(
+            consolidated.into_iter().collect::<Vec<_>>(),
+            expected,
+            "final output must be exactly the surviving keys"
+        );
+    }
 }
