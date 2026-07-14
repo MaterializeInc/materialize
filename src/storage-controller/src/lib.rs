@@ -56,8 +56,8 @@ use mz_storage_client::client::{
     StatusUpdate, StorageCommand, StorageResponse, TableData,
 };
 use mz_storage_client::controller::{
-    BoxFuture, CollectionDescription, DataSource, ExportDescription, ExportState,
-    IntrospectionType, MonotonicAppender, PersistEpoch, Response, StorageController,
+    AppendTableResponse, BoxFuture, CollectionDescription, DataSource, ExportDescription,
+    ExportState, IntrospectionType, MonotonicAppender, PersistEpoch, Response, StorageController,
     StorageMetadata, StorageTxn, StorageWriteOp, WallclockLag, WallclockLagHistogramPeriod,
 };
 use mz_storage_client::healthcheck::{
@@ -2086,6 +2086,7 @@ impl StorageController for Controller {
         write_ts: Timestamp,
         advance_to: Timestamp,
         commands: Vec<(GlobalId, Vec<TableData>)>,
+        response: AppendTableResponse,
     ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError> {
         if self.read_only {
             // While in read only mode, ONLY collections that have been migrated
@@ -2109,7 +2110,7 @@ impl StorageController for Controller {
 
         Ok(self
             .persist_table_worker
-            .append(write_ts, advance_to, commands))
+            .append(write_ts, advance_to, commands, response))
     }
 
     fn monotonic_appender(&self, id: GlobalId) -> Result<MonotonicAppender, StorageError> {

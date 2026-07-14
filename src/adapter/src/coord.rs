@@ -158,7 +158,9 @@ use mz_sql::session::vars::{MAX_CREDIT_CONSUMPTION_RATE, SystemVars, Var};
 use mz_sql_parser::ast::ExplainStage;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::client::TableData;
-use mz_storage_client::controller::{CollectionDescription, DataSource, ExportDescription};
+use mz_storage_client::controller::{
+    AppendTableResponse, CollectionDescription, DataSource, ExportDescription,
+};
 use mz_storage_types::connections::Connection as StorageConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConnection};
@@ -2809,7 +2811,12 @@ impl Coordinator {
                 let fut = self
                     .controller
                     .storage
-                    .append_table(min_timestamp, boot_ts.step_forward(), all_appends)
+                    .append_table(
+                        min_timestamp,
+                        boot_ts.step_forward(),
+                        all_appends,
+                        AppendTableResponse::Applied,
+                    )
                     .expect("cannot fail to append");
                 async {
                     fut.await
@@ -2995,7 +3002,12 @@ impl Coordinator {
         let table_fence_rx = self
             .controller
             .storage
-            .append_table(write_ts.clone(), advance_to, appends)
+            .append_table(
+                write_ts.clone(),
+                advance_to,
+                appends,
+                AppendTableResponse::Applied,
+            )
             .expect("invalid updates");
 
         self.apply_local_write(write_ts).await;

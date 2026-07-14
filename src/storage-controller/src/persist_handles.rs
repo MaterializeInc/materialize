@@ -25,6 +25,7 @@ use mz_persist_client::ShardId;
 use mz_persist_client::write::WriteHandle;
 use mz_repr::{GlobalId, Timestamp};
 use mz_storage_client::client::{TableData, Update};
+use mz_storage_client::controller::AppendTableResponse;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::{InvalidUpper, TxnsCodecRow};
 use mz_storage_types::sources::SourceData;
@@ -79,6 +80,7 @@ enum PersistTableWriteCmd {
         write_ts: Timestamp,
         advance_to: Timestamp,
         updates: Vec<(GlobalId, Vec<TableData>)>,
+        response: AppendTableResponse,
         tx: tokio::sync::oneshot::Sender<Result<(), StorageError>>,
     },
     Shutdown,
@@ -246,6 +248,7 @@ impl PersistTableWriteWorker {
         write_ts: Timestamp,
         advance_to: Timestamp,
         updates: Vec<(GlobalId, Vec<TableData>)>,
+        response: AppendTableResponse,
     ) -> tokio::sync::oneshot::Receiver<Result<(), StorageError>> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         // Always send the append command to the txn-wal layer, even for empty
@@ -256,6 +259,7 @@ impl PersistTableWriteWorker {
             write_ts,
             advance_to,
             updates,
+            response,
             tx,
         });
         rx
@@ -332,9 +336,10 @@ impl TxnsTableWorker {
                     write_ts,
                     advance_to,
                     updates,
+                    response,
                     tx,
                 } => {
-                    self.append(write_ts, advance_to, updates, tx)
+                    self.append(write_ts, advance_to, updates, response, tx)
                         .instrument(span)
                         .await
                 }
@@ -420,6 +425,7 @@ impl TxnsTableWorker {
         write_ts: Timestamp,
         advance_to: Timestamp,
         updates: Vec<(GlobalId, Vec<TableData>)>,
+        response: AppendTableResponse,
         tx: tokio::sync::oneshot::Sender<Result<(), StorageError>>,
     ) {
         debug!(
@@ -486,25 +492,38 @@ impl TxnsTableWorker {
         match txn_res {
             Ok(apply) => {
                 // The commit to the txns shard already made the write durable
-                // and linearized, so unblock the caller before applying. The
-                // apply is idempotent and reads of the affected data shards
-                // block until it has happened, so deferring it shifts latency
-                // from every write onto reads of the just-written shards. If
-                // we crash before applying, the next append's apply covers it,
-                // because applying is `apply_le`: it applies all unapplied
-                // txns up to its timestamp, and group commit appends at least
-                // once per timestamp interval.
+                // and linearized. Applying is idempotent, and reads of the
+                // affected data shards block until it completes. It is
+                // therefore safe to respond before applying. If we crash
+                // before applying, the next append's `apply_le` covers all
+                // unapplied transactions up to its timestamp. Group commit
+                // appends at least once per timestamp interval.
                 //
-                // It is not an error for the other end to hang up.
-                let _ = tx.send(Ok(()));
+                let response_before_apply = matches!(response, AppendTableResponse::Committed);
+                let response_tx = if response_before_apply {
+                    // It is not an error for the other end to hang up.
+                    let _ = tx.send(Ok(()));
+                    None
+                } else {
+                    Some(tx)
+                };
 
                 debug!("applying {:?}", apply);
-                let tidy = apply
-                    .apply(&mut self.txns)
-                    .wall_time()
-                    .observe(self.apply_seconds.clone())
-                    .await;
+                let tidy = if response_before_apply {
+                    apply
+                        .apply(&mut self.txns)
+                        .wall_time()
+                        .observe(self.apply_seconds.clone())
+                        .await
+                } else {
+                    apply.apply(&mut self.txns).await
+                };
                 self.tidy.merge(tidy);
+
+                if let Some(tx) = response_tx {
+                    // It is not an error for the other end to hang up.
+                    let _ = tx.send(Ok(()));
+                }
 
                 // We don't serve any reads out of this TxnsHandle, so go ahead
                 // and compact as aggressively as we can (i.e. to the time we

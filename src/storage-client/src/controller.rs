@@ -289,6 +289,15 @@ pub enum StorageWriteOp {
     Delete { filter: RowPredicate },
 }
 
+/// Controls when an append-table response is delivered to its caller.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AppendTableResponse {
+    /// Respond once the transaction is durably committed to the txn WAL.
+    Committed,
+    /// Respond once the transaction is physically applied to its data shards.
+    Applied,
+}
+
 impl StorageWriteOp {
     /// Returns whether this operation appends an empty set of updates.
     pub fn is_empty_append(&self) -> bool {
@@ -601,7 +610,8 @@ pub trait StorageController: Debug {
 
     /// Append `updates` into the local input named `id` and advance its upper to `upper`.
     ///
-    /// The method returns a oneshot that can be awaited to indicate completion of the write.
+    /// The method returns a oneshot that can be awaited to indicate the completion selected by
+    /// `response`.
     /// The method may return an error, indicating an immediately visible error, and also the
     /// oneshot may return an error if one is encountered during the write.
     ///
@@ -612,6 +622,7 @@ pub trait StorageController: Debug {
         write_ts: Timestamp,
         advance_to: Timestamp,
         commands: Vec<(GlobalId, Vec<TableData>)>,
+        response: AppendTableResponse,
     ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError>;
 
     /// Returns a [`MonotonicAppender`] which is a channel that can be used to monotonically

@@ -173,6 +173,7 @@ async fn handle_commands(
                 write_ts,
                 advance_to,
                 updates,
+                response: _,
                 tx,
             } => {
                 let mut ids = BTreeSet::new();

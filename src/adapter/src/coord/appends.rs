@@ -29,6 +29,7 @@ use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{ExplainPlanPlan, ExplainTimestampPlan, Explainee, ExplaineeStatement, Plan};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_client::client::TableData;
+use mz_storage_client::controller::AppendTableResponse;
 use mz_timestamp_oracle::WriteTimestamp;
 use smallvec::SmallVec;
 use tokio::sync::{Notify, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore, oneshot};
@@ -39,6 +40,24 @@ use crate::coord::{Coordinator, Message, PendingTxn, PlanValidity};
 use crate::session::{GroupCommitWriteLocks, Session, WriteLocks};
 use crate::util::{CompletedClientTransmitter, ResultExt};
 use crate::{AdapterError, ExecuteContext};
+
+// Small groups cannot keep the next group commit supplied while every client
+// waits for physical apply. Scalability tests show this starvation through four
+// writers. For larger groups, waiting avoids reads piling up behind apply.
+const MAX_COMMITTED_RESPONSE_USER_WRITES: usize = 4;
+
+fn append_table_response(
+    updated_collection_count: usize,
+    user_write_count: usize,
+) -> AppendTableResponse {
+    if updated_collection_count > 1
+        || (1..=MAX_COMMITTED_RESPONSE_USER_WRITES).contains(&user_write_count)
+    {
+        AppendTableResponse::Committed
+    } else {
+        AppendTableResponse::Applied
+    }
+}
 
 /// Tables that we emit updates for when starting a new session.
 pub(crate) static REQUIRED_BUILTIN_TABLES: &[&LazyLock<BuiltinTable>] = &[&MZ_SESSIONS];
@@ -556,6 +575,11 @@ impl Coordinator {
                 }
             })
             .collect();
+        let updated_collection_count = appends
+            .iter()
+            .filter(|(_, updates)| !updates.iter().all(TableData::is_empty))
+            .count();
+        let append_response = append_table_response(updated_collection_count, responses.len());
         if !modified_tables.is_empty() {
             info!(
                 "Appending to tables, {modified_tables:?}, at {timestamp}, advancing to {advance_to}"
@@ -573,7 +597,7 @@ impl Coordinator {
         let append_fut = self
             .controller
             .storage
-            .append_table(timestamp, advance_to, appends)
+            .append_table(timestamp, advance_to, appends, append_response)
             .expect("invalid updates")
             .wall_time()
             .observe(histogram);
@@ -717,6 +741,22 @@ impl Coordinator {
         let write_lock_handle = Arc::clone(write_lock_handle);
 
         write_lock_handle.try_lock_owned().ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_storage_client::controller::AppendTableResponse;
+
+    use super::append_table_response;
+
+    #[mz_ore::test]
+    fn test_append_table_response() {
+        assert_eq!(append_table_response(0, 0), AppendTableResponse::Applied);
+        assert_eq!(append_table_response(1, 1), AppendTableResponse::Committed);
+        assert_eq!(append_table_response(1, 4), AppendTableResponse::Committed);
+        assert_eq!(append_table_response(1, 5), AppendTableResponse::Applied);
+        assert_eq!(append_table_response(2, 5), AppendTableResponse::Committed);
     }
 }
 
