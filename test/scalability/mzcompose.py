@@ -308,13 +308,20 @@ def get_baseline_and_other_endpoints(
     use_balancerd = args.use_balancerd
     baseline_endpoint: Endpoint | None = None
     other_endpoints: list[Endpoint] = []
-    for i, specified_target in enumerate(args.target):
+    # --materialize-url is appended once per remote target, so index it by the
+    # number of remote targets seen so far rather than the overall target
+    # position (which is wrong as soon as targets are mixed, e.g. HEAD + remote).
+    remote_target_index = 0
+    for specified_target in args.target:
         endpoint: Endpoint | None = None
 
         if specified_target == TARGET_MATERIALIZE_LOCAL:
             endpoint = MaterializeLocal()
         elif specified_target == TARGET_MATERIALIZE_REMOTE:
-            endpoint = MaterializeRemote(materialize_url=args.materialize_url[i])
+            endpoint = MaterializeRemote(
+                materialize_url=args.materialize_url[remote_target_index]
+            )
+            remote_target_index += 1
         elif specified_target == TARGET_POSTGRES:
             endpoint = PostgresContainer(composition=c)
         elif specified_target == TARGET_HEAD:
