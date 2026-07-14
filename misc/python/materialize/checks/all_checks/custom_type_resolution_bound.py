@@ -64,13 +64,16 @@ class CustomTypeResolutionBound(Check):
 
     def validate(self) -> Testdrive:
         # Reaching validation means every bootstrap in the scenario re-planned
-        # `wide` successfully. A normal session still applies the bound, so
-        # resolving the grandfathered type returns the graceful planning error
-        # rather than panicking.
+        # `wide` successfully. Versions with the bound return the graceful
+        # planning error rather than panicking. Earlier versions reach pgwire
+        # encoding, which cannot encode the nested list value.
         return Testdrive(
             "> SELECT name FROM mz_types WHERE name = 'wide'\n"
             "wide\n"
             "\n"
-            "! SELECT NULL::wide\n"
+            "![version<2603400] SELECT NULL::wide\n"
+            "contains: no binary output function available for type list\n"
+            "\n"
+            "![version>=2603400] SELECT NULL::wide\n"
             "contains: custom type is too complex to resolve\n"
         )

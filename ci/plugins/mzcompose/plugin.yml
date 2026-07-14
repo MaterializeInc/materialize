@@ -19,6 +19,8 @@ configuration:
       type: string
     env:
       type: object
+    log-start-at-last:
+      type: string
     run:
       type: string
     run-timeout:

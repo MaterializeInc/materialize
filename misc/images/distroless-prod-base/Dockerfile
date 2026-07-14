@@ -28,7 +28,9 @@ MZFROM tini-static AS tini
 # hardcoded runAsUser/fsGroup, so no UID gate is needed.
 FROM debian:13-slim AS useradd
 RUN groupadd --system --gid=999 materialize \
-    && useradd --system --gid=999 --uid=999 --create-home materialize
+    && useradd --system --gid=999 --uid=999 --create-home materialize \
+    && mkdir /mzdata /scratch \
+    && chown materialize:materialize /mzdata /scratch
 
 # `debug` variant of the same distroless build id as the plain `nonroot` pin. It
 # adds a busybox shell (`/busybox/sh`), kept intentionally so entrypoint.sh and
@@ -72,6 +74,10 @@ COPY nsswitch.conf /etc/nsswitch.conf
 COPY --from=useradd /etc/passwd /etc/passwd
 COPY --from=useradd /etc/group /etc/group
 COPY --from=useradd --chown=999:999 /home/materialize /home/materialize
+# Empty Docker volumes inherit the ownership of their image mountpoints. The
+# process orchestrator needs to create directories beneath both paths.
+COPY --from=useradd --chown=999:999 /mzdata /mzdata
+COPY --from=useradd --chown=999:999 /scratch /scratch
 
 USER materialize
 ENV HOME=/home/materialize

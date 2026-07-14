@@ -227,12 +227,15 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     crdb_keepalives_interval
     crdb_keepalives_retries
     crdb_tcp_user_timeout
+    default_cluster_reconfiguration_timeout
     default_timestamp_interval
     disallow_unmaterializable_functions_as_of
     enable_0dt_caught_up_replica_status_check
     enable_0dt_caught_up_stability_check
     enable_0dt_deployment_panic_after_timeout
     enable_alter_table_add_column
+    enable_background_alter_cluster
+    enable_statement_arrival_logging
     enable_binary_date_bin
     enable_bounded_staleness_isolation
     enable_cluster_controller
@@ -336,6 +339,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     persist_fetch_semaphore_cost_adjustment
     persist_gc_fallback_threshold_ms
     persist_gc_min_versions
+    persist_pg_consensus_read_committed
     persist_pubsub_client_receiver_channel_size
     persist_pubsub_client_sender_channel_size
     persist_pubsub_connect_attempt_timeout
@@ -356,7 +360,6 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     persist_txns_data_shard_retryer_multiplier
     persist_usage_state_fetch_concurrency_limit
     persist_use_critical_since_txn
-    persist_use_postgres_tuned_queries
     persist_write_combine_inline_writes
     pg_source_connect_timeout
     pg_source_snapshot_statement_timeout
