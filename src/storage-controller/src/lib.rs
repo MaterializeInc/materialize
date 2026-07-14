@@ -1665,6 +1665,14 @@ impl StorageController for Controller {
 
                 (export_description, as_of)
             };
+            // If the connection hasn't changed, there's no sense in restarting
+            // the sink dataflow. Catalog changes that don't affect the
+            // connection's runtime config, like GRANT and REVOKE, also arrive
+            // here.
+            if new_export_description.sink.connection == connection {
+                continue;
+            }
+
             let current_sink = new_export_description.sink.clone();
 
             new_export_description.sink.connection = connection;
