@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/sequencer/inner.rs
-revision: dbfcdcbd34
+revision: e6fbabee58
 ---
 
 # adapter::coord::sequencer::inner
@@ -15,4 +15,4 @@ The generic `sequence_staged` driver and the `Staged` / `StagedContext` / `Stage
 `execute_side_effecting_func` (used by the frontend peek path) performs no RBAC check itself; RBAC is pre-checked by the caller via `rbac::check_plan` before `Command::ExecuteSideEffectingFunc` is sent.
 Connection secret content is validated through `check_connection_secret_content_guards` for `CREATE CONNECTION` and `ALTER CONNECTION`, and through `check_secret_content_guards_of_dependents` when a secret's value changes, before any catalog entry is installed or persisted.
 Privilege grant/revoke operations group all grantee changes for the same target object into a single `Op::UpdatePrivilege` carrying a `privileges: Vec<MzAclItem>`, so a bulk grant/revoke affecting one object is a single durable write rather than one per grantee.
-`sequence_alter_sink` (the `ALTER SINK ... SET FROM` path) syncs `resolved_ids` to match the new `create_sql` and `from` target before constructing the updated `Sink` and emitting `Op::UpdateItem`. The `resolved_ids` derived from the old `create_sql` still references the old input; without this sync the in-memory catalog disagrees with `create_sql` until the next reload, and the temporary-dependency check in `Op::UpdateItem` (which reads `uses()`) would not see the new input.
+`sequence_alter_sink` handles `ALTER SINK` operations including `SET FROM` and option changes (e.g. `COMMIT INTERVAL`). It syncs `resolved_ids` to match the new `create_sql` and `from` target before constructing the updated `Sink` and emitting `Op::UpdateItem`. The `resolved_ids` derived from the old `create_sql` still references the old input; without this sync the in-memory catalog disagrees with `create_sql` until the next reload, and the temporary-dependency check in `Op::UpdateItem` (which reads `uses()`) would not see the new input. Option edits from the plan's `set_options` and `reset_options` fields are applied to the `CREATE SINK` statement via `plan::apply_sink_option_edits` after name resolution.

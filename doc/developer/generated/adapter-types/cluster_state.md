@@ -1,6 +1,6 @@
 ---
 source: src/adapter-types/src/cluster_state.rs
-revision: 73111c3e52
+revision: 8598d82c1c
 ---
 
 # adapter-types::cluster_state
@@ -15,6 +15,11 @@ Key types:
 * `ReplicaShape` — the config dimensions that distinguish one replica from another. Two replicas with equal shape are interchangeable. `ReplicaShape::matches` compares availability zones as unordered pools so a reorder alone does not force a reprovision.
 * `AvailabilityZones` — the availability zones in configured provisioning order. Order is significant (the orchestrator round-robins placement across the list) and is part of the `ExpectedClusterState` witness. `AvailabilityZones::pool` converts to an unordered `AvailabilityZonePool` for interchangeability checks.
 * `AvailabilityZonePool` — unordered set of zones produced by `AvailabilityZones::pool`. Used for the one comparison that must ignore order: replica interchangeability.
-* `ReconfigurationRecord` — in-flight graceful reconfiguration record: `target` and `deadline`.
-* `ReconfigurationTarget` — the full config shape a reconfiguration is moving to: `size`, `replication_factor`, `availability_zones`, `logging`.
+* `ReconfigurationRecord` — graceful reconfiguration record mirrored from durable state: `target`, `deadline`, `on_timeout`, `status`. `is_in_progress` returns true when `status` is `InProgress`.
+* `ReconfigurationStatus` — lifecycle status of a graceful reconfiguration: `InProgress`, `Finalized`, `TimedOut`, `Cancelled`, `ResourceExhausted`.
+* `ReconfigurationAudit` — the lifecycle transition a write to the `reconfiguration` record represents, declared by the writer at the decision point: `Started`, `Cancelled`, `Finalized { forced }`, `TimedOut`, `ResourceExhausted`.
+* `OnTimeout` — the action a graceful reconfiguration applies once its deadline passes with the target not yet hydrated: `Commit` (cut over anyway) or `Rollback` (revert to pre-reconfiguration shape).
+* `ReconfigurationTarget` — the full config shape a reconfiguration is moving to: `size`, `replication_factor`, `availability_zones`, `logging`. `shape()` returns the per-replica `ReplicaShape` (everything but `replication_factor`).
 * `BurstRecord` — active hydration-burst record: `burst_size`, `linger_duration`, `steady_hydrated_at`.
+* `BurstAudit` — lifecycle transition for a burst record: `Started` or `Finished { cause }`.
+* `BurstFinishCause` — why a hydration burst finished: `LingerElapsed` or `NoLongerWarranted`.

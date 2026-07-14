@@ -1,6 +1,6 @@
 ---
 source: src/catalog/src/durable.rs
-revision: 584bb9030c
+revision: 8598d82c1c
 ---
 
 # catalog::durable
