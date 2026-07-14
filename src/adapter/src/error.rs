@@ -753,7 +753,8 @@ impl AdapterError {
                     .into(),
             ),
             AdapterError::ResourceExhaustion { resource_type, .. } => Some(format!(
-                "Drop an existing {resource_type} or contact support to request a limit increase."
+                "Drop an existing {resource_type}, or contact support to request a limit increase. \
+                 For more information about resource limits, see https://materialize.com/docs/sql/alter-system-set/#other-configuration-parameters"
             )),
             AdapterError::StatementTimeout => Some(
                 "Consider increasing the maximum allowed statement duration for this session by \
