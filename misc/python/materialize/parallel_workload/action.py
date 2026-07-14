@@ -1781,6 +1781,8 @@ class RenameKafkaSinkAction(Action):
 class ReplaceMaterializedViewAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         errors = [
+            # Constant materialized views can be sealed before replacement is applied
+            "is sealed and thus cannot be replaced",
             # A concurrent or leaked replacement of the same view
             "because it already has a replacement",
             "is sealed and thus cannot be replaced",
