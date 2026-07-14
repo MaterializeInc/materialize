@@ -13,16 +13,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! A variadic reduce over N homogeneous co-arranged inputs.
+//! A reduce over two co-arranged inputs.
 //!
-//! [`co_reduce`] takes N arrangements sharing one trace type and key, and a per-key
-//! `logic` closure, and produces a single output arrangement. It generalizes a fused
-//! two-input set-difference operator along three axes: N inputs instead of two, a
-//! caller closure instead of baked-in arithmetic, and value-aware output accounting
-//! instead of a single collapsed empty value.
+//! [`co_reduce2`] takes two arrangements that agree on key type but may carry distinct
+//! trace types, and a per-key `logic` closure, and produces a single output arrangement.
+//! It generalizes a fused two-input set-difference operator along two axes: a caller
+//! closure instead of baked-in arithmetic, and value-aware output accounting instead of
+//! a single collapsed empty value. The two inputs feed the closure as homogeneous
+//! `(value, diff)` multisets, so they share the input value type `V` and diff type `D`,
+//! while their trace types stay independent. That lets the operator take two distinct
+//! arrangement flavors (for example a local agent versus an entered trace) by
+//! monomorphization, the way `mz_join_core` and `set_difference_core` do.
 //!
-//! The operator finalizes an output time only once it is complete in every input (the
-//! meet of the per-input frontiers). It reads each input at its OWN frontier, not at
+//! The operator finalizes an output time only once it is complete in both inputs (the
+//! meet of the two per-input frontiers). It reads each input at its OWN frontier, not at
 //! the meet: `cursor_through(meet)` would panic with "upper straddles batch" whenever
 //! the meet fell inside a batch of an input whose frontier ran ahead. Reading each
 //! input at its own frontier is straddle-free, and reading data beyond the meet is
@@ -47,11 +51,9 @@ use differential_dataflow::trace::{
     BatchReader, Builder, Cursor, Description, ExertionLogic, Trace, TraceReader,
 };
 use timely::PartialOrder;
-use timely::container::CapacityContainerBuilder;
+use timely::container::PushInto;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::CapabilitySet;
-use timely::dataflow::operators::generic::OutputBuilder;
-use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+use timely::dataflow::operators::{CapabilitySet, Operator};
 use timely::progress::{Antichain, Timestamp};
 
 /// Owns the cursor's current key.
@@ -313,299 +315,322 @@ fn emit_deltas<T, V2, R2>(
     }
 }
 
-/// A variadic reduce over N homogeneous co-arranged inputs.
+/// A reduce over two co-arranged inputs.
 ///
-/// For each key present in any input, at every interesting time `t`, `logic` is called
-/// with, per input `i`, the consolidated `(value, diff)` multiset of that input's updates
-/// with time `<= t` (slice `inputs[i]`, in the order the `inputs` vec was passed). `logic`
-/// writes the desired output `(value, diff)` multiset at `t` into its `out` argument. The
-/// operator diffs desired against prior output per value and emits the minimal updates into
-/// one output arrangement. An output time is finalized only once it is complete in every
-/// input, i.e. `<=`-covered by the meet of all input frontiers.
-#[allow(clippy::too_many_arguments)]
-pub fn co_reduce<'scope, T, Tr, K, V, V2, R2, Bu, Out, L>(
-    inputs: Vec<Arranged<'scope, Tr>>,
+/// For each key present in either input, at every interesting time `t`, `logic` is called
+/// with the two consolidated `(value, diff)` multisets of the inputs' updates with time
+/// `<= t`: slice `[0]` is `base`, slice `[1]` is `subtract`. `logic` writes the desired
+/// output `(value, diff)` multiset at `t` into its `out` argument. The operator diffs
+/// desired against prior output per value and emits the minimal updates into one output
+/// arrangement. An output time is finalized only once it is complete in both inputs, i.e.
+/// `<=`-covered by the meet of the two input frontiers.
+///
+/// The two inputs may carry distinct trace types (`Tr1`, `Tr2`), so callers can pass two
+/// different arrangement flavors directly without unifying them. They must agree on key
+/// GAT, owned key `K`, owned value `V`, and diff `D` (`Tr1::Diff`), since the closure sees
+/// both as homogeneous `(V, D)` slices.
+pub fn co_reduce2<'scope, T, Tr1, Tr2, K, V, V2, R2, Bu, Out, L>(
+    base: Arranged<'scope, Tr1>,
+    subtract: Arranged<'scope, Tr2>,
     name: &str,
     logic: L,
 ) -> Arranged<'scope, TraceAgent<Out>>
 where
     T: Timestamp + Lattice + Ord,
-    Tr: TraceReader<Time = T> + Clone + 'static,
-    Tr::KeyContainer: BatchContainer<Owned = K>,
-    Tr::ValContainer: BatchContainer<Owned = V>,
+    Tr1: TraceReader<Time = T> + Clone + 'static,
+    // `Tr2` shares the key GAT with `Tr1` so their keys compare, and its diff is pinned to
+    // `Tr1::Diff` so both inputs feed the closure as the one input diff type `D`.
+    Tr2: for<'a> TraceReader<Key<'a> = Tr1::Key<'a>, Time = T, Diff = Tr1::Diff> + Clone + 'static,
+    Tr1::Diff: Semigroup + Clone + 'static,
+    Tr1::KeyContainer: BatchContainer<Owned = K>,
+    Tr1::ValContainer: BatchContainer<Owned = V>,
+    // The key GAT equate does not equate the owned-key container type, so bound `Tr2`'s
+    // key and value containers to the same owned types explicitly.
+    Tr2::KeyContainer: BatchContainer<Owned = K>,
+    Tr2::ValContainer: BatchContainer<Owned = V>,
     K: Ord + Clone + 'static,
     V: Ord + Clone + 'static,
     V2: Ord + Clone + 'static,
-    Tr::Diff: Semigroup + Clone + 'static,
     R2: Abelian + Clone + 'static,
-    Out: for<'a> Trace<Key<'a> = Tr::Key<'a>, ValOwn = V2, Time = T, Diff = R2> + 'static,
+    Out: for<'a> Trace<Key<'a> = Tr1::Key<'a>, ValOwn = V2, Time = T, Diff = R2> + 'static,
     Out::KeyContainer: BatchContainer<Owned = K>,
     Out::ValContainer: BatchContainer<Owned = V2>,
-    Bu: Builder<Time = T, Input = Vec<((K, V2), T, R2)>, Output = Out::Batch> + 'static,
-    L: FnMut(&K, &[&[(V, Tr::Diff)]], &mut Vec<(V2, R2)>) + 'static,
+    // `Bu::Input` is only required to be default-constructible and to accept output tuples.
+    // This admits builders whose input is not a `Vec` (for example a columnar stack), which
+    // a `Vec`-typed bound would reject.
+    Bu: Builder<Time = T, Output = Out::Batch> + 'static,
+    Bu::Input: Default + PushInto<((K, V2), T, R2)>,
+    L: FnMut(&K, &[&[(V, Tr1::Diff)]], &mut Vec<(V2, R2)>) + 'static,
 {
-    let scope = inputs[0].stream.scope();
-    let num_inputs = inputs.len();
+    let scope = base.stream.scope();
 
-    // Clones of every input trace, held for the operator's lifetime: each round re-reads
-    // every input through its own frontier.
-    let mut traces: Vec<Tr> = inputs.iter().map(|a| a.trace.clone()).collect();
-
-    let mut builder = OperatorBuilder::new(name.to_owned(), scope.clone());
-    let operator_info = builder.operator_info();
-
-    // The output must exist before the inputs so each input's connection to output port 0
-    // is registered, which is what lets `cap.retain(0)` mint an output capability.
-    let (output, stream) = builder.new_output::<Vec<Out::Batch>>();
-    let mut output = OutputBuilder::<T, CapacityContainerBuilder<Vec<Out::Batch>>>::from(output);
-    let mut input_handles: Vec<_> = inputs
-        .iter()
-        .map(|a| builder.new_input(a.stream.clone(), Pipeline))
-        .collect();
+    // Clones of both input traces, held for the operator's lifetime: each round re-reads
+    // both inputs through their own frontiers.
+    let mut base_trace = base.trace.clone();
+    let mut subtract_trace = subtract.trace.clone();
 
     let mut result_trace = None;
-    {
+    let stream = {
         let result_trace = &mut result_trace;
-        let mut logic = logic;
-        builder.build(move |_capabilities| {
-            let logger = scope
-                .worker()
-                .logger_for::<differential_dataflow::logging::DifferentialEventBuilder>(
-                    "differential/arrange",
-                )
-                .map(Into::into);
+        base.stream.binary_frontier(
+            subtract.stream,
+            Pipeline,
+            Pipeline,
+            name,
+            move |_capability, operator_info| {
+                let mut logic = logic;
+                let logger = scope
+                    .worker()
+                    .logger_for::<differential_dataflow::logging::DifferentialEventBuilder>(
+                        "differential/arrange",
+                    )
+                    .map(Into::into);
 
-            let activator = Some(scope.activator_for(Rc::clone(&operator_info.address)));
-            let mut empty = Out::new(operator_info.clone(), logger.clone(), activator);
-            if let Some(exert_logic) = scope
-                .worker()
-                .config()
-                .get::<ExertionLogic>("differential/default_exert_logic")
-                .cloned()
-            {
-                empty.set_exert_logic(exert_logic);
-            }
-            let (mut output_reader, mut output_writer) =
-                TraceAgent::new(empty, operator_info, logger);
-            *result_trace = Some(output_reader.clone());
+                let activator = Some(scope.activator_for(Rc::clone(&operator_info.address)));
+                let mut empty = Out::new(operator_info.clone(), logger.clone(), activator);
+                if let Some(exert_logic) = scope
+                    .worker()
+                    .config()
+                    .get::<ExertionLogic>("differential/default_exert_logic")
+                    .cloned()
+                {
+                    empty.set_exert_logic(exert_logic);
+                }
+                let (mut output_reader, mut output_writer) =
+                    TraceAgent::new(empty, operator_info, logger);
+                *result_trace = Some(output_reader.clone());
 
-            // Persistent per-input received frontiers. Each advances monotonically and
-            // combines batch uppers, `advance_upper`, and the input frontier.
-            let mut uppers: Vec<Antichain<T>> = (0..num_inputs)
-                .map(|_| Antichain::from_elem(T::minimum()))
-                .collect();
-            // The last processed frontier. Next round's lower limit.
-            let mut processed = Antichain::from_elem(T::minimum());
+                // Persistent per-input received frontiers. Each advances monotonically and
+                // combines batch uppers, `advance_upper`, and the input frontier.
+                let mut upper_base = Antichain::from_elem(T::minimum());
+                let mut upper_subtract = Antichain::from_elem(T::minimum());
+                // The last processed frontier. Next round's lower limit.
+                let mut processed = Antichain::from_elem(T::minimum());
 
-            // Retained capabilities and staged interesting times, keyed by output key.
-            let mut capabilities = CapabilitySet::<T>::new();
-            let mut pending: BTreeMap<K, Vec<T>> = BTreeMap::new();
+                // Retained capabilities and staged interesting times, keyed by output key.
+                let mut capabilities = CapabilitySet::<T>::new();
+                let mut pending: BTreeMap<K, Vec<T>> = BTreeMap::new();
 
-            move |frontiers: &[timely::progress::frontier::MutableAntichain<T>]| {
-                let mut output = output.activate();
-
-                // 1. Drain every input. Stage each batch's update times as interesting
-                //    seeds in `pending`, capture output capabilities, and record the batch
-                //    upper. Diffs and values are re-read from the input traces at process
-                //    time, not staged.
-                for i in 0..num_inputs {
-                    input_handles[i].for_each(|cap, data: &mut Vec<Tr::Batch>| {
+                move |(input1, frontier1), (input2, frontier2), output| {
+                    // 1. Drain both inputs. Stage each batch's update times as interesting
+                    //    seeds in `pending`, capture output capabilities, and record the
+                    //    batch upper. Diffs and values are re-read from the input traces at
+                    //    process time, not staged.
+                    input1.for_each(|cap, data: &mut Vec<Tr1::Batch>| {
                         capabilities.insert(cap.retain(0));
                         for batch in data.drain(..) {
-                            uppers[i].clone_from(batch.upper());
+                            upper_base.clone_from(batch.upper());
                             let mut cursor = batch.cursor();
                             stage_times(&mut cursor, &batch, &mut pending);
                         }
                     });
-                }
-
-                // Advance each received frontier through empty regions the trace knows
-                // about, then incorporate the input frontier guarantee. Each `uppers[i]`
-                // stays batch-aligned to input `i`, which makes `cursor_through(uppers[i])`
-                // straddle-free.
-                for i in 0..num_inputs {
-                    traces[i].advance_upper(&mut uppers[i]);
-                    let mut joined = Antichain::new();
-                    antichain_join_into(
-                        &uppers[i].borrow()[..],
-                        &frontiers[i].frontier()[..],
-                        &mut joined,
-                    );
-                    uppers[i] = joined;
-                }
-
-                // The processed frontier is the meet of the per-input received frontiers:
-                // an output time is final only when it is final in every input. Inputs are
-                // *read* at their own frontiers (`uppers[i]`), not at the meet, to avoid a
-                // straddling `cursor_through`. Reading data beyond the meet is harmless: it
-                // cannot affect the output at any time below the meet.
-                let mut upper_limit = uppers[0].clone();
-                for u in &uppers[1..] {
-                    upper_limit = upper_limit.meet(u);
-                }
-                let lower_limit = processed.clone();
-
-                // Retire `[lower_limit, upper_limit)` when it is non-empty.
-                if upper_limit != lower_limit {
-                    // Only compute if we hold a capability inside the interval; else there
-                    // is nothing to output (and we could not transmit it).
-                    if capabilities
-                        .iter()
-                        .any(|c| !upper_limit.less_equal(c.time()))
-                    {
-                        // Acquire each input cursor at its own frontier and the output
-                        // cursor at the prior processed frontier. Each `cursor_through`
-                        // returns owned storage, so no two trace borrows are held at once,
-                        // which keeps self-referencing inputs (aliasing one trace) safe.
-                        let mut cursors: Vec<(Tr::Cursor, Tr::Storage)> =
-                            Vec::with_capacity(num_inputs);
-                        for i in 0..num_inputs {
-                            cursors.push(
-                                traces[i]
-                                    .cursor_through(uppers[i].borrow())
-                                    .expect("failed to acquire input cursor"),
-                            );
+                    input2.for_each(|cap, data: &mut Vec<Tr2::Batch>| {
+                        capabilities.insert(cap.retain(0));
+                        for batch in data.drain(..) {
+                            upper_subtract.clone_from(batch.upper());
+                            let mut cursor = batch.cursor();
+                            stage_times(&mut cursor, &batch, &mut pending);
                         }
-                        let (mut out_cur, out_stor) = output_reader
-                            .cursor_through(lower_limit.borrow())
-                            .expect("failed to acquire output cursor");
+                    });
 
-                        // Per-capability output builders and update buffers.
-                        let cap_times: Vec<T> =
-                            capabilities.iter().map(|c| c.time().clone()).collect();
-                        let mut builders: Vec<Bu> =
-                            (0..cap_times.len()).map(|_| Bu::new()).collect();
-                        let mut cap_updates: Vec<Vec<(V2, T, R2)>> =
-                            (0..cap_times.len()).map(|_| Vec::new()).collect();
-                        let mut builder_buffer: Vec<((K, V2), T, R2)> = Vec::new();
+                    // Advance each received frontier through empty regions the trace knows
+                    // about, then incorporate the input frontier guarantee. Each `upper_*`
+                    // stays batch-aligned to its input, which makes
+                    // `cursor_through(upper_*)` straddle-free.
+                    base_trace.advance_upper(&mut upper_base);
+                    subtract_trace.advance_upper(&mut upper_subtract);
+                    {
+                        let mut joined = Antichain::new();
+                        antichain_join_into(
+                            &upper_base.borrow()[..],
+                            &frontier1.frontier()[..],
+                            &mut joined,
+                        );
+                        upper_base = joined;
+                    }
+                    {
+                        let mut joined = Antichain::new();
+                        antichain_join_into(
+                            &upper_subtract.borrow()[..],
+                            &frontier2.frontier()[..],
+                            &mut joined,
+                        );
+                        upper_subtract = joined;
+                    }
 
-                        // Dirty keys are the staged keys, iterated in ascending order so the
-                        // source and output cursors advance monotonically. A key whose
-                        // staged times are all beyond `upper_limit` stays pending.
-                        let mut next_pending: BTreeMap<K, Vec<T>> = BTreeMap::new();
-                        for (key, times) in std::mem::take(&mut pending) {
-                            let mut seeds = Vec::new();
-                            let mut carried = Vec::new();
-                            for t in times {
-                                if upper_limit.less_equal(&t) {
-                                    carried.push(t);
-                                } else {
-                                    seeds.push(t);
+                    // The processed frontier is the meet of the two received frontiers: an
+                    // output time is final only when it is final in both inputs. Inputs are
+                    // *read* at their own frontiers (`upper_base`, `upper_subtract`), not at
+                    // the meet, to avoid a straddling `cursor_through`. Reading data beyond
+                    // the meet is harmless: it cannot affect the output at any time below
+                    // the meet.
+                    let upper_limit = upper_base.meet(&upper_subtract);
+                    let lower_limit = processed.clone();
+
+                    // Retire `[lower_limit, upper_limit)` when it is non-empty.
+                    if upper_limit != lower_limit {
+                        // Only compute if we hold a capability inside the interval; else
+                        // there is nothing to output (and we could not transmit it).
+                        if capabilities
+                            .iter()
+                            .any(|c| !upper_limit.less_equal(c.time()))
+                        {
+                            // Acquire each input cursor at its own frontier and the output
+                            // cursor at the prior processed frontier. Each `cursor_through`
+                            // returns owned storage, so no two trace borrows are held at
+                            // once, which keeps self-referencing inputs (aliasing one trace)
+                            // safe.
+                            let (mut base_src, base_src_stor) = base_trace
+                                .cursor_through(upper_base.borrow())
+                                .expect("failed to acquire base cursor");
+                            let (mut sub_src, sub_src_stor) = subtract_trace
+                                .cursor_through(upper_subtract.borrow())
+                                .expect("failed to acquire subtract cursor");
+                            let (mut out_cur, out_stor) = output_reader
+                                .cursor_through(lower_limit.borrow())
+                                .expect("failed to acquire output cursor");
+
+                            // Per-capability output builders and update buffers.
+                            let cap_times: Vec<T> =
+                                capabilities.iter().map(|c| c.time().clone()).collect();
+                            let mut builders: Vec<Bu> =
+                                (0..cap_times.len()).map(|_| Bu::new()).collect();
+                            let mut cap_updates: Vec<Vec<(V2, T, R2)>> =
+                                (0..cap_times.len()).map(|_| Vec::new()).collect();
+
+                            // Dirty keys are the staged keys, iterated in ascending order so
+                            // the source and output cursors advance monotonically. A key
+                            // whose staged times are all beyond `upper_limit` stays pending.
+                            let mut next_pending: BTreeMap<K, Vec<T>> = BTreeMap::new();
+                            for (key, times) in std::mem::take(&mut pending) {
+                                let mut seeds = Vec::new();
+                                let mut carried = Vec::new();
+                                for t in times {
+                                    if upper_limit.less_equal(&t) {
+                                        carried.push(t);
+                                    } else {
+                                        seeds.push(t);
+                                    }
                                 }
-                            }
-                            if seeds.is_empty() {
-                                if !carried.is_empty() {
-                                    next_pending.insert(key, carried);
-                                }
-                                continue;
-                            }
-
-                            let mut kw = KeyWork {
-                                inputs: (0..num_inputs).map(|_| Vec::new()).collect(),
-                                prior: Vec::new(),
-                                seeds,
-                            };
-                            for i in 0..num_inputs {
-                                let (cursor, storage) = &mut cursors[i];
-                                if seek_owned_key(cursor, storage, &key) {
-                                    read_key_values(cursor, storage, &mut kw.inputs[i]);
-                                }
-                            }
-                            if seek_owned_key(&mut out_cur, &out_stor, &key) {
-                                read_key_values(&mut out_cur, &out_stor, &mut kw.prior);
-                            }
-
-                            // Carried (beyond-upper) times remain interesting next round;
-                            // `compute_key` appends any deferred synthetic times.
-                            let mut new_interesting = carried;
-                            compute_key(
-                                &key,
-                                &kw,
-                                &upper_limit,
-                                &mut logic,
-                                &cap_times,
-                                &mut cap_updates,
-                                &mut new_interesting,
-                            );
-
-                            // Push this key's updates into each capability's builder,
-                            // preserving ascending key order across the builder.
-                            for i in 0..cap_times.len() {
-                                if cap_updates[i].is_empty() {
+                                if seeds.is_empty() {
+                                    if !carried.is_empty() {
+                                        next_pending.insert(key, carried);
+                                    }
                                     continue;
                                 }
-                                // The builder assumes value-sorted input per key, but the
-                                // updates arrive time-ordered (ascending time, then value
-                                // within a time). A stable sort by value reorders them into
-                                // (value, time) order while preserving the time order within
-                                // equal values.
-                                cap_updates[i].sort_by(|a, b| a.0.cmp(&b.0));
-                                builder_buffer.clear();
-                                for (v2, time, r2) in cap_updates[i].drain(..) {
-                                    builder_buffer.push(((key.clone(), v2), time, r2));
+
+                                let mut kw = KeyWork {
+                                    inputs: vec![Vec::new(); 2],
+                                    prior: Vec::new(),
+                                    seeds,
+                                };
+                                if seek_owned_key(&mut base_src, &base_src_stor, &key) {
+                                    read_key_values(
+                                        &mut base_src,
+                                        &base_src_stor,
+                                        &mut kw.inputs[0],
+                                    );
                                 }
-                                builders[i].push(&mut builder_buffer);
-                            }
+                                if seek_owned_key(&mut sub_src, &sub_src_stor, &key) {
+                                    read_key_values(&mut sub_src, &sub_src_stor, &mut kw.inputs[1]);
+                                }
+                                if seek_owned_key(&mut out_cur, &out_stor, &key) {
+                                    read_key_values(&mut out_cur, &out_stor, &mut kw.prior);
+                                }
 
-                            if !new_interesting.is_empty() {
-                                new_interesting.sort();
-                                new_interesting.dedup();
-                                next_pending.insert(key, new_interesting);
-                            }
-                        }
-
-                        // Build and ship one batch per capability. Only one capability may
-                        // accompany each message, so each batch's upper folds in the times
-                        // of the later capabilities.
-                        let mut output_lower = lower_limit.clone();
-                        for (index, builder) in builders.drain(..).enumerate() {
-                            let mut output_upper = upper_limit.clone();
-                            for capability in &capabilities[index + 1..] {
-                                output_upper.insert(capability.time().clone());
-                            }
-                            if output_upper != output_lower {
-                                let description = Description::new(
-                                    output_lower.clone(),
-                                    output_upper.clone(),
-                                    Antichain::from_elem(T::minimum()),
+                                // Carried (beyond-upper) times remain interesting next round;
+                                // `compute_key` appends any deferred synthetic times.
+                                let mut new_interesting = carried;
+                                compute_key(
+                                    &key,
+                                    &kw,
+                                    &upper_limit,
+                                    &mut logic,
+                                    &cap_times,
+                                    &mut cap_updates,
+                                    &mut new_interesting,
                                 );
-                                let batch = builder.done(description);
-                                output.session(&capabilities[index]).give(batch.clone());
-                                output_writer
-                                    .insert(batch, Some(capabilities[index].time().clone()));
-                                output_lower = output_upper;
+
+                                // Push this key's updates into each capability's builder,
+                                // preserving ascending key order across the builder.
+                                for i in 0..cap_times.len() {
+                                    if cap_updates[i].is_empty() {
+                                        continue;
+                                    }
+                                    // The builder assumes value-sorted input per key, but the
+                                    // updates arrive time-ordered (ascending time, then value
+                                    // within a time). A stable sort by value reorders them
+                                    // into (value, time) order while preserving the time
+                                    // order within equal values.
+                                    cap_updates[i].sort_by(|a, b| a.0.cmp(&b.0));
+                                    let mut builder_buffer = <Bu::Input>::default();
+                                    for (v2, time, r2) in cap_updates[i].drain(..) {
+                                        builder_buffer.push_into(((key.clone(), v2), time, r2));
+                                    }
+                                    builders[i].push(&mut builder_buffer);
+                                }
+
+                                if !new_interesting.is_empty() {
+                                    new_interesting.sort();
+                                    new_interesting.dedup();
+                                    next_pending.insert(key, new_interesting);
+                                }
                             }
+
+                            // Build and ship one batch per capability. Only one capability
+                            // may accompany each message, so each batch's upper folds in the
+                            // times of the later capabilities.
+                            let mut output_lower = lower_limit.clone();
+                            for (index, builder) in builders.drain(..).enumerate() {
+                                let mut output_upper = upper_limit.clone();
+                                for capability in &capabilities[index + 1..] {
+                                    output_upper.insert(capability.time().clone());
+                                }
+                                if output_upper != output_lower {
+                                    let description = Description::new(
+                                        output_lower.clone(),
+                                        output_upper.clone(),
+                                        Antichain::from_elem(T::minimum()),
+                                    );
+                                    let batch = builder.done(description);
+                                    output.session(&capabilities[index]).give(batch.clone());
+                                    output_writer
+                                        .insert(batch, Some(capabilities[index].time().clone()));
+                                    output_lower = output_upper;
+                                }
+                            }
+
+                            // Downgrade capabilities to the frontier of remaining pending
+                            // times.
+                            pending = next_pending;
+                            let mut frontier = Antichain::new();
+                            for times in pending.values() {
+                                for t in times {
+                                    frontier.insert(t.clone());
+                                }
+                            }
+                            capabilities.downgrade(frontier.iter());
                         }
 
-                        // Downgrade capabilities to the frontier of remaining pending times.
-                        pending = next_pending;
-                        let mut frontier = Antichain::new();
-                        for times in pending.values() {
-                            for t in times {
-                                frontier.insert(t.clone());
-                            }
-                        }
-                        capabilities.downgrade(frontier.iter());
+                        // Reflect observed progress. The output is sealed and compacted to
+                        // the meet; each input trace is compacted physically to its own
+                        // frontier (so next round's `cursor_through(upper_*)` stays valid)
+                        // and logically to the meet (times below the meet are final).
+                        output_writer.seal(upper_limit.clone());
+                        base_trace.set_logical_compaction(upper_limit.borrow());
+                        base_trace.set_physical_compaction(upper_base.borrow());
+                        subtract_trace.set_logical_compaction(upper_limit.borrow());
+                        subtract_trace.set_physical_compaction(upper_subtract.borrow());
+                        output_reader.set_logical_compaction(upper_limit.borrow());
+                        output_reader.set_physical_compaction(upper_limit.borrow());
+                        processed = upper_limit;
                     }
 
-                    // Reflect observed progress. The output is sealed and compacted to the
-                    // meet; each input trace is compacted physically to its own frontier (so
-                    // next round's `cursor_through(uppers[i])` stays valid) and logically to
-                    // the meet (times below the meet are final).
-                    output_writer.seal(upper_limit.clone());
-                    for i in 0..num_inputs {
-                        traces[i].set_logical_compaction(upper_limit.borrow());
-                        traces[i].set_physical_compaction(uppers[i].borrow());
-                    }
-                    output_reader.set_logical_compaction(upper_limit.borrow());
-                    output_reader.set_physical_compaction(upper_limit.borrow());
-                    processed = upper_limit;
+                    output_writer.exert();
                 }
-
-                output_writer.exert();
-            }
-        });
-    }
+            },
+        )
+    };
 
     Arranged {
         stream,
@@ -650,12 +675,18 @@ mod tests {
                 let (h1, c1) = scope.new_collection::<u64, isize>();
                 let a0 = c0.map(|k| (k, k)).arrange_by_key();
                 let a1 = c1.map(|k| (k, k)).arrange_by_key();
-                let out =
-                    co_reduce::<u64, TraceAgent<Spine>, u64, u64, u64, isize, Builder_, Spine, _>(
-                        vec![a0, a1],
-                        "test",
-                        net_positive,
-                    );
+                let out = co_reduce2::<
+                    u64,
+                    TraceAgent<Spine>,
+                    TraceAgent<Spine>,
+                    u64,
+                    u64,
+                    u64,
+                    isize,
+                    Builder_,
+                    Spine,
+                    _,
+                >(a0, a1, "test", net_positive);
                 let cap = out.as_collection(|k, _v| *k).inner.capture();
                 (h0, h1, cap)
             });
@@ -689,12 +720,18 @@ mod tests {
                 let (h1, c1) = scope.new_collection::<u64, isize>();
                 let a0 = c0.map(|k| (k, k)).arrange_by_key();
                 let a1 = c1.map(|k| (k, k)).arrange_by_key();
-                let out =
-                    co_reduce::<u64, TraceAgent<Spine>, u64, u64, u64, isize, Builder_, Spine, _>(
-                        vec![a0, a1],
-                        "test",
-                        net_positive,
-                    );
+                let out = co_reduce2::<
+                    u64,
+                    TraceAgent<Spine>,
+                    TraceAgent<Spine>,
+                    u64,
+                    u64,
+                    u64,
+                    isize,
+                    Builder_,
+                    Spine,
+                    _,
+                >(a0, a1, "test", net_positive);
                 let coll = out.as_collection(|k, _v| *k);
                 let (probe, probed) = coll.inner.probe();
                 let cap = probed.capture();
@@ -780,12 +817,18 @@ mod tests {
                 let (h1, c1) = scope.new_collection::<(u64, u64), isize>();
                 let a0 = c0.arrange_by_key();
                 let a1 = c1.arrange_by_key();
-                let out =
-                    co_reduce::<u64, TraceAgent<Spine>, u64, u64, u64, isize, Builder_, Spine, _>(
-                        vec![a0, a1],
-                        "test",
-                        max_present,
-                    );
+                let out = co_reduce2::<
+                    u64,
+                    TraceAgent<Spine>,
+                    TraceAgent<Spine>,
+                    u64,
+                    u64,
+                    u64,
+                    isize,
+                    Builder_,
+                    Spine,
+                    _,
+                >(a0, a1, "test", max_present);
                 // Retain the output value: the closure keys output on input values.
                 let cap = out.as_collection(|k, v| (*k, *v)).inner.capture();
                 (h0, h1, cap)
@@ -850,12 +893,24 @@ mod tests {
                 .to_stream(scope)
                 .as_collection()
                 .arrange_by_key();
-                let out =
-                    co_reduce::<u64, TraceAgent<Spine>, u64, u64, u64, isize, Builder_, Spine, _>(
-                        vec![a0],
-                        "test",
-                        echo_values,
-                    );
+                // `co_reduce2` is two-input; the second arm carries no updates, so
+                // `echo_values` echoes only `a0` and the stored-order guard still holds.
+                let a1 = Vec::<((u64, u64), u64, isize)>::new()
+                    .to_stream(scope)
+                    .as_collection()
+                    .arrange_by_key();
+                let out = co_reduce2::<
+                    u64,
+                    TraceAgent<Spine>,
+                    TraceAgent<Spine>,
+                    u64,
+                    u64,
+                    u64,
+                    isize,
+                    Builder_,
+                    Spine,
+                    _,
+                >(a0, a1, "test", echo_values);
                 out.stream.inspect_batch(move |_t, batches| {
                     let mut recorded = sink.lock().expect("lock poisoned");
                     for batch in batches {
@@ -906,56 +961,5 @@ mod tests {
             multiset.into_iter().collect::<Vec<_>>(),
             vec![((1, 10), 1), ((1, 20), 1), ((1, 30), 1)]
         );
-    }
-
-    /// Net of three inputs: `d0 + d1 - d2`, keep positive residual on the empty value.
-    fn net3_positive(_k: &u64, inputs: &[&[(u64, isize)]], out: &mut Vec<(u64, isize)>) {
-        let sum = |s: &[(u64, isize)]| s.iter().map(|(_v, d)| *d).sum::<isize>();
-        let net = sum(inputs[0]) + sum(inputs[1]) - sum(inputs[2]);
-        if net > 0 {
-            out.push((0u64, net));
-        }
-    }
-
-    #[mz_ore::test]
-    fn co_reduce_three_inputs() {
-        let captured = timely::execute_directly(move |worker| {
-            let (mut in0, mut in1, mut in2, cap) = worker.dataflow(|scope| {
-                let (h0, c0) = scope.new_collection::<u64, isize>();
-                let (h1, c1) = scope.new_collection::<u64, isize>();
-                let (h2, c2) = scope.new_collection::<u64, isize>();
-                let a0 = c0.map(|k| (k, k)).arrange_by_key();
-                let a1 = c1.map(|k| (k, k)).arrange_by_key();
-                let a2 = c2.map(|k| (k, k)).arrange_by_key();
-                let out =
-                    co_reduce::<u64, TraceAgent<Spine>, u64, u64, u64, isize, Builder_, Spine, _>(
-                        vec![a0, a1, a2],
-                        "test",
-                        net3_positive,
-                    );
-                let cap = out.as_collection(|k, _v| *k).inner.capture();
-                (h0, h1, h2, cap)
-            });
-            // key 1: in0 +1, in1 +1, in2 +1. net = 1 + 1 - 1 = +1 -> {(1, 0, +1)}.
-            // key 2: in0 +1, in2 +1 twice. net = 1 + 0 - 2 = -1 -> dropped.
-            in0.insert(1);
-            in1.insert(1);
-            in2.insert(1);
-            in0.insert(2);
-            in2.insert(2);
-            in2.insert(2);
-            in0.close();
-            in1.close();
-            in2.close();
-            cap
-        });
-        let mut rows: Vec<(u64, u64, isize)> = captured
-            .extract()
-            .into_iter()
-            .flat_map(|(_t, data)| data)
-            .map(|(k, _t, r)| (k, 0u64, r))
-            .collect();
-        rows.sort();
-        assert_eq!(rows, vec![(1u64, 0u64, 1isize)]);
     }
 }
