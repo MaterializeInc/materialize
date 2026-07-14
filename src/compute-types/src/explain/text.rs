@@ -533,11 +533,16 @@ impl LirRelationExpr {
             SetDifference {
                 base,
                 subtract,
+                base_key,
+                subtract_key,
                 ensure_arrangement,
             } => {
                 write!(f, "{}→Set Difference ", ctx.indent)?;
                 let ensure_arrangement = Arrangement::from(ensure_arrangement);
                 ensure_arrangement.fmt_text(f, ctx)?;
+                let base_key = CompactScalars(mode.seq(base_key, None));
+                let subtract_key = CompactScalars(mode.seq(subtract_key, None));
+                write!(f, " base_key=[{base_key}] subtract_key=[{subtract_key}]")?;
                 writeln!(f, "{annotations}")?;
 
                 ctx.indented(|ctx| {
@@ -983,11 +988,16 @@ impl LirRelationExpr {
             SetDifference {
                 base,
                 subtract,
+                base_key,
+                subtract_key,
                 ensure_arrangement,
             } => {
                 let ensure_arrangement = Arrangement::from(ensure_arrangement);
                 write!(f, "{}SetDifference ensure_arrangement=", ctx.indent)?;
                 ensure_arrangement.fmt_text(f, ctx)?;
+                let base_key = CompactScalars(mode.seq(base_key, None));
+                let subtract_key = CompactScalars(mode.seq(subtract_key, None));
+                write!(f, " base_key=[{base_key}] subtract_key=[{subtract_key}]")?;
                 writeln!(f, "{}", annotations)?;
                 ctx.indented(|ctx| {
                     base.fmt_text(f, ctx)?;

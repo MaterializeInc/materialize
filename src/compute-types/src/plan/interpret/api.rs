@@ -458,6 +458,7 @@ where
                     base,
                     subtract,
                     ensure_arrangement,
+                    ..
                 } => {
                     // Descend recursively into all children.
                     let base = self.apply_rec(base, rg)?;
@@ -784,6 +785,7 @@ where
                     base,
                     subtract,
                     ensure_arrangement,
+                    ..
                 } => {
                     // Descend recursively into all children.
                     let base = self.apply_rec(base, rg)?;
