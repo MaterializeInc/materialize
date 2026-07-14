@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/statement/ddl.rs
-revision: 3d7eb1c1da
+revision: e6fbabee58
 ---
 
 # mz-sql::plan::statement::ddl
@@ -17,6 +17,9 @@ The `iceberg_sink_builder` function accepts an optional `storage_connection: Opt
 `TOPIC METADATA REFRESH INTERVAL` for Kafka sources and sinks is validated to be between 1 second and 1 hour (inclusive); intervals outside this range produce a planning error (enforcing librdkafka runtime constraints at plan time for the upper bound, and preventing excessive refreshes or zero/negative durations for the lower bound).
 `SourceExportStatementDetails::Postgres` carries a `cast_oid_full_range: bool` field; `plan_create_subsource` passes it through to `generate_column_casts` to control whether OID-based casts cover the full range.
 `plan_alter_cluster` rejects `ALTER CLUSTER ... WITH (...)` on unmanaged clusters: when the cluster is not managed, any non-empty `with_options` list produces the error `"ALTER... WITH not supported for unmanaged clusters"`.
+`plan_alter_cluster` rejects a `WAIT` clause when no shape dimension (`SIZE`, `AVAILABILITY ZONES`, or `INTROSPECTION`) is being changed: there is no hydrate-overlap to wait on, so accepting it would silently be a no-op.
+`plan_alter_sink` handles `AlterSinkAction::SetOptions` and `AlterSinkAction::ResetOptions`, currently restricted to the `CommitInterval` option name. A `SET` that is identical to the current with-options returns `Plan::AlterNoop`. A `RESET` of an option that is not set is rejected. The refactored path reconstructs the original `CREATE SINK` statement and applies all edits before re-planning, for both `ChangeRelation` and option-edit paths.
+`iceberg_sink_builder` enforces a minimum `COMMIT INTERVAL` of 1 second; intervals shorter than 1 second produce the error `"COMMIT INTERVAL must be at least 1 second"`.
 `plan_role_variable` (used by `plan_alter_role`) accepts a `StatementContext` and calls `vars::check_transaction_isolation_feature_flag` on any `SET` assignment, enforcing the same feature-flag gate as the `SET` and connection-option paths.
 `DROP … name1, name2, …` resolves all named items before running the non-cascade dependency check, so that two co-dependent items listed in the same statement do not block each other: dependents whose ids appear in the same drop set are excluded from `ensure_no_blocking_dependents`.
 `AvroSchema::Glue { connection, seed, .. }` in a source format is fully planned: the connection is resolved and must be a `Connection::GlueSchemaRegistry` item, and the `seed` must be present (populated by purification); a missing seed produces the error `"Avro Glue seed resolution has not been performed"`. The resulting `Schema` carries `wire_format: WireFormat::Glue { registry: Some(glue_connection_id) }`.

@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/catalog/transact.rs
-revision: dbfcdcbd34
+revision: 48f39edbbf
 ---
 
 # adapter::catalog::transact
@@ -20,3 +20,6 @@ When dropping a cluster replica, the code expands dependent objects (including m
 When dropping items, all storage collections associated with a dropped entry are scheduled for removal unconditionally; whether the item was a replacement target is not considered at this stage.
 `Op::UpdateItem` enforces that a non-temporary item must not depend on a temporary one, mirroring the same invariant already enforced by `Op::CreateItem`. Temporary objects are session-scoped and never persisted; a durable item referencing one is a dangling reference that would panic the coordinator when its `create_sql` is re-planned on catalog apply (apply emits durable items before temporary ones). This prevents ALTER paths such as `ALTER SINK ... SET FROM` from repointing a persistent item at a temporary object.
 `Op::RenameSchema` iterates over `schema.items`, `schema.types`, and `schema.functions` so that types and functions defined in the schema are renamed alongside regular items. A `seen: BTreeSet<CatalogItemId>` dedup guard prevents duplicate retraction/addition updates when a temporary item depends on multiple objects in the renamed schema, which would otherwise produce a diff that consolidates to an invalid value and panics catalog apply.
+`Op::UpdateClusterConfig` carries two optional audit-intent fields: `reconfiguration_audit: Option<ReconfigurationAudit>` and `burst_audit: Option<BurstAudit>`. Any config write that moves the reconfiguration lifecycle (status change, fresh record, or drop of an in-progress record) without a declared `reconfiguration_audit` is rejected with an error, enforcing that catalog coherence and audit event are committed in a single transaction. `ReconfigurationAudit` variants map to `ReconfigurationLifecycleV1` audit log entries (Started, Cancelled, Finalized with a `forced` flag, TimedOut, ResourceExhausted). `BurstAudit` variants map to `HydrationBurstLifecycleV1` entries.
+`ReplicaCreateDropReason::GracefulReconfiguration` is the audit-log reason emitted when the cluster controller's graceful-reconfiguration strategy creates a replica during the hydrate-overlap phase of a background `ALTER CLUSTER`. It maps to `CreateOrDropClusterReplicaReasonV1::Reconfiguration` with no scheduling-decisions blob.
+`tx_replace_item` routes temporary dependents through `temporary_item_updates` (in-memory retract plus add) rather than `tx.update_item`. Temporary objects live only in the in-memory catalog and are never part of the durable transaction, so `tx.update_item` would silently no-op, leaving them referencing the removed item and tripping the catalog consistency check. This mirrors how `Op::RenameItem` handles its temporary dependents.

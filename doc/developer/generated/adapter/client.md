@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/client.rs
-revision: dbd2c3fc06
+revision: e4df9977da
 ---
 
 # adapter::client
@@ -16,3 +16,5 @@ During `startup`, `Client` constructs a `PeekClient` from the `StartupResponse` 
 `Handle` holds the coordinator's background task handle and is used to await coordinator shutdown.
 `RecordFirstRowStream` is an adapter stream that records the timestamp of the first row for metrics.
 `TimeoutType` enumerates session-level timeouts (currently `IdleInTransactionSession`); the `Timeout` struct manages active timeout tasks and delivers expired timeouts through `SessionClient::recv_timeout`.
+`SessionClient::statement_arrival_logging_enabled` checks the `enable_statement_arrival_logging` system variable via the session's catalog snapshot.
+`redact_sql_for_logging(sql) -> String` parses SQL and re-serialises it with literals redacted (the same redaction the statement log applies). If the text does not parse or exceeds the statement batch size limit, a placeholder with the byte length is returned instead.

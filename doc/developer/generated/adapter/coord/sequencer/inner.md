@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/sequencer/inner.rs
-revision: dbfcdcbd34
+revision: e6fbabee58
 ---
 
 # adapter::coord::sequencer::inner
@@ -17,4 +17,4 @@ Write operations (`sequence_insert`, `sequence_read_then_write`) reject sessions
 `await_real_time_recent_timestamp` and the private `real_time_recent_timestamp_error` helper convert `StorageError::RtrTimeout` and `StorageError::RtrDropFailure` to the dedicated `AdapterError::RtrTimeout` / `AdapterError::RtrDropFailure` variants (with humanized collection names) before propagating; these helpers are called from the RTR-awaiting tasks in `peek`, `explain_timestamp`, and `command_handler`.
 `sequence_side_effecting_func` handles `PgCancelBackend` with a `NULL` connection-id argument by returning `NULL` immediately (matching PostgreSQL semantics), before attempting to look up or cancel any connection.
 `execute_side_effecting_func` (used by the frontend peek path) performs no RBAC check itself; RBAC is pre-checked by the caller via `rbac::check_plan` before `Command::ExecuteSideEffectingFunc` is sent. The caller retains the target connection's `ConnectionId` handle until the command completes so that the connection found in `active_conns` during execution is the same one the check was performed against.
-`sequence_alter_sink` (the `ALTER SINK ... SET FROM` path) syncs `resolved_ids` to match the new `create_sql` and `from` target before constructing the updated `Sink` and emitting `Op::UpdateItem`. The `resolved_ids` derived from the old `create_sql` still references the old input; without this sync the in-memory catalog disagrees with `create_sql` until the next reload, and the temporary-dependency check in `Op::UpdateItem` (which reads `uses()`) would not see the new input.
+`sequence_alter_sink` handles `ALTER SINK` operations including `SET FROM` and option changes (e.g. `COMMIT INTERVAL`). It syncs `resolved_ids` to match the new `create_sql` and `from` target before constructing the updated `Sink` and emitting `Op::UpdateItem`. The `resolved_ids` derived from the old `create_sql` still references the old input; without this sync the in-memory catalog disagrees with `create_sql` until the next reload, and the temporary-dependency check in `Op::UpdateItem` (which reads `uses()`) would not see the new input. Option edits from the plan's `set_options` and `reset_options` fields are applied to the `CREATE SINK` statement via `plan::apply_sink_option_edits` after name resolution.

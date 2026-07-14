@@ -1,6 +1,6 @@
 ---
 source: src/cluster-controller/src/lib.rs
-revision: 73111c3e52
+revision: 8598d82c1c
 ---
 
 # mz-cluster-controller
@@ -11,15 +11,16 @@ The crate depends only on primitive id/shape types and the `ClusterControllerCtx
 
 Key modules:
 
-* `ctx` — The `ClusterControllerCtx` trait (the pull/apply boundary), `ClusterState`, `StateWrite`, `Decision`, `ApplyOutcome`, `ObservedReplica`, and the compare-and-append witness types re-exported from `mz-adapter-types`.
-* `strategy` — The `Strategy` trait (two pure functions per tick), `DesiredReplica`, and `BaselineStrategy` (the always-present implicit strategy that holds the steady-state replica set).
+* `ctx` — The `ClusterControllerCtx` trait (the pull/apply boundary), `ClusterState`, `StateWrite`, `Decision`, `ApplyOutcome`, `ObservedReplica`, `ReconfigurationWrite`, `BurstWrite`, and the compare-and-append witness types re-exported from `mz-adapter-types`.
+* `strategy` — The `Strategy` trait (three pure functions per tick plus `signal_request`), `DesiredReplica`, `SignalRequest`, `LiveSignals`, `BaselineStrategy` (the always-present implicit strategy that holds the steady-state replica set), and `GracefulReconfigurationStrategy` (engaged while a reconfiguration record is in progress).
 
 Key types defined in `lib.rs`:
 
-* `ClusterController` — holds the strategy set and drives `reconcile` ticks.
-* `reconcile` — two-phase tick: phase 1 (`update_state`) merges and applies durable writes per cluster; phase 2 (`desired_replicas`) diffs the unified desired set against the actual replicas and emits creates/drops.
+* `ClusterController` — holds the strategy set (baseline plus graceful-reconfiguration) and drives `reconcile` ticks.
+* `reconcile` — two-phase tick: phase 1 (`update_state`) fetches live signals, merges and applies durable writes per cluster; phase 2 (`desired_replicas`) diffs the unified desired set against the actual replicas and emits creates/drops. A `ResourceExhausted` outcome from phase 2 triggers `shed_decision`.
 * `merge_state_writes` — disjoint-union join of per-strategy `StateWrite`s under a conflict alarm via `soft_panic_or_log!`.
 * `reconcile_replicas` — pure multiset union/diff kernel that closes the replica gap.
 * `ReplicaNameGen` — generates deterministic fresh replica names past the highest observed `rNN` index.
+* `shed_decision` — emits an `UpdateClusterState` that marks the graceful reconfiguration as `ResourceExhausted` when a phase-2 apply is rejected for exceeding the resource budget.
 
 Key dependencies: `mz-adapter-types` (witness types), `mz-compute-types` (replica logging config), `mz-controller-types` (cluster/replica IDs), `mz-repr` (timestamps), `mz-ore`.

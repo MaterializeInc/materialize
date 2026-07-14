@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/catalog/cluster_state.rs
-revision: 73111c3e52
+revision: 8598d82c1c
 ---
 
 # adapter::catalog::cluster_state
@@ -11,4 +11,4 @@ Projects a managed cluster's durable catalog config into the `ExpectedClusterSta
 
 The function uses an exhaustive destructure of `ClusterVariantManaged` (no `..`) so that adding a field to the managed config is a compile error until the author decides whether the witness must cover it.
 
-Also provides `check_cluster_state(state: &CatalogState, cluster_id: ClusterId, expected: &ExpectedClusterState) -> Result<(), AdapterError>` which re-projects the live config and returns `Err(AdapterError::ClusterStateChanged)` if it no longer equals the witness. This is the compare-and-append check the apply path calls before transacting each decision batch.
+Also provides `cluster_matches_expected(state: &CatalogState, cluster_id: ClusterId, expected: &ExpectedClusterState) -> bool` which re-projects the live config and returns `false` if the cluster is missing, unmanaged, or its projected state no longer equals the witness. A missing or unmanaged cluster never matches. This is the compare half of the compare-and-append, evaluated inside the catalog transaction so the check and the commit cannot be separated.

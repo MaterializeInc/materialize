@@ -1,6 +1,6 @@
 ---
 source: src/postgres-client/src/lib.rs
-revision: d6dff42fd6
+revision: 83c55157ed
 ---
 
 # mz-postgres-client
@@ -9,8 +9,12 @@ Provides `PostgresClient`, a pooled Postgres/CockroachDB client built on `deadpo
 
 The crate exposes:
 * `PostgresClientKnobs` — a trait for supplying runtime-configurable pool parameters.
-* `PostgresClientConfig` — bundles a connection URL, a `PostgresClientKnobs` impl, and `PostgresClientMetrics`. Defaults to `SERIALIZABLE` isolation; callers can supply an `IsolationLevelFn` closure via `PostgresClientConfig::with_isolation` to select the isolation level per connection dynamically (the resolver runs once per new connection, so a dyncfg-backed closure lets a flag change take effect as the pool cycles connections).
+* `PostgresClientConfig` — bundles a connection URL, an `Arc<dyn PostgresClientKnobs>`, and `PostgresClientMetrics`. Defaults to `SERIALIZABLE` isolation; callers can supply an `IsolationLevelFn` closure via `PostgresClientConfig::with_isolation` to select the isolation level per connection dynamically (the resolver runs once per new connection, so a dyncfg-backed closure lets a flag change take effect as the pool cycles connections).
 * `IsolationLevel` — an enum with `Serializable` and `ReadCommitted` variants used by the isolation resolver.
+* `IsolationLevelFn` — type alias for `Arc<dyn Fn() -> IsolationLevel + Send + Sync>`.
+* `Client` — a pooled connection wrapper that records the `IsolationLevel` it was created under; exposes `isolation_level() -> IsolationLevel`. Derefs to `DeadpoolClient`.
+* `Connection` — type alias for `Object<Manager>`, the connection handle handed out by `PostgresClient::get_connection`.
+* `Manager` — the public `deadpool::managed::Manager` implementation that creates `Client` values, applying the resolved isolation level and `statement_timeout` once per connection.
 * `PostgresClient` — opened from a config; provides `get_connection()` which acquires a pooled connection and updates Prometheus metrics on each call.
 * `error` — `PostgresError` with `Determinate`/`Indeterminate` classification.
 * `metrics` — `PostgresClientMetrics` for observing pool behavior.

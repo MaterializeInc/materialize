@@ -1,6 +1,6 @@
 ---
 source: src/storage-controller/src/lib.rs
-revision: f7236a6fe1
+revision: 6c590b0a3c
 ---
 
 # storage-controller
