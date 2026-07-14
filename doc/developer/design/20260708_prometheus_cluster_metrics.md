@@ -99,7 +99,7 @@ Materialize has three compute sinks today: `Subscribe`, `MaterializedView`, and 
 
 1. **No downstream reader.** `Subscribe` pushes to a session, `MaterializedView` writes into persist, `CopyToS3Oneshot` uploads to a bucket. The Prometheus sink writes into an in-process `MetricsRegistry` that Prometheus pulls from over HTTP later. The sink's "output" is memory state, not an outgoing stream.
 2. **No `as_of` / snapshot semantics.** `MaterializedView` and `CopyToS3Oneshot` care about a specific snapshot; `Subscribe` cares about what to backfill. A metrics sink just wants "the current state" continually.
-3. **No user-visible completion.** All three existing compute sinks eventually complete (subscribe closes, MV drops, `COPY` finishes). Prometheus sinks run for the lifetime of the replica.
+3. **Dropped only with the replica.** From compute's perspective the sink has an ordinary dataflow lifecycle: created, run, and torn down like any other dataflow (6.1). The adapter never issues such a drop for a Prometheus sink, so it lives for the lifetime of the replica and is cancelled only when the replica is dropped.
 4. **Not created by a user SQL statement.** `MaterializedView` and `Subscribe` are created by user DDL; `CopyToS3Oneshot` by `COPY TO`. Prometheus sinks are materialized from `BuiltinPrometheusSink` statics installed at replica create. The sink's `sink_id` is a system-generated `GlobalId`, and its `ComputeSinkDesc` is built by the adapter's bootstrap path rather than by a user-facing planner call.
 
 ### 6.4 Data flow into the sink
@@ -123,7 +123,7 @@ Because the sink SQL is written by us as part of the database itself, we can con
 Two failure modes need separate signals, because the sink can only observe one of them from inside its own dataflow.
 
 - **Data-plane errors (sink is running, SQL is producing errors).** SQL-level errors (division by zero, casts, etc.) flow through the standard compute error side channel. The `PrometheusSink` operator consumes both the OK and ERR streams from its input (the same shape `MaterializedView` uses when it writes OK/ERR shards to persist), emits gauges and counters from the OK stream, and increments `mz_prom_sink_errors_total{sink="<name>"}` for each error row. Alert on non-zero increment rate for this counter.
-- **Liveness (sink is not running at all).** If the dataflow never rendered, the worker is wedged, or the operator has crashed, nothing gets emitted, including the error counter. The freshness metric `mz_prom_sink_last_update_seconds{sink="<name>"}` covers this case: when the sink's frontier stops advancing the timestamp stops updating, so a staleness alert on that metric fires. This is the primary signal for "sink is broken."
+- **Liveness (sink stopped advancing).** Once the sink is running, the freshness metric `mz_prom_sink_last_update_seconds{sink="<name>"}` is the primary signal that it has stalled. If it stops making progress, the frontier stops advancing, the timestamp stops updating, and a staleness alert on that metric fires. This does not cover the case where the dataflow is never rendered at all, which is a larger problem.
 
 The two signals are complementary and neither subsumes the other. Alerting rules should include both.
 
