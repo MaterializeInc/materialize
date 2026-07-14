@@ -92,6 +92,7 @@ pub mod reduce_elision;
 pub mod reduce_reduction;
 pub mod reduction_pushdown;
 pub mod redundant_join;
+pub mod semijoin_elimination;
 pub mod semijoin_idempotence;
 pub mod threshold_elision;
 pub mod typecheck;
@@ -645,6 +646,7 @@ impl Default for FuseAndCollapse {
                 // Note that this eliminates one redundant input per join,
                 // so it is necessary to run this section in a loop.
                 Box::new(RedundantJoin::default()),
+                Box::new(semijoin_elimination::SemijoinElimination::default()),
                 // As a final logical action, convert any constant expression to a constant.
                 // Some optimizations fight against this, and we want to be sure to end as a
                 // `MirRelationExpr::Constant` if that is the case, so that subsequent use can
@@ -939,6 +941,7 @@ impl Optimizer {
                     // Predicate pushdown required to tidy after join fusion.
                     Box::new(PredicatePushdown::default()),
                     Box::new(RedundantJoin::default()),
+                    Box::new(semijoin_elimination::SemijoinElimination::default()),
                     // Redundant join produces projects that need to be fused.
                     Box::new(fusion::Fusion),
                     Box::new(compound::UnionNegateFusion),
