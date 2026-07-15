@@ -793,12 +793,6 @@ db error: ERROR: access to system object function version is restricted
 DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
 
 simple conn=agent_restricted,user=agent
-SELECT mz_environment_id();
-----
-db error: ERROR: access to system object function mz_environment_id is restricted
-DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
-
-simple conn=agent_restricted,user=agent
 SELECT mz_is_superuser();
 ----
 db error: ERROR: access to system object function mz_is_superuser is restricted
@@ -824,6 +818,43 @@ simple conn=agent_restricted,user=agent
 SELECT current_database();
 ----
 materialize
+COMPLETE 1
+
+# =============================================================================
+# Test: mz_environment_id() is intentionally NOT restricted
+# =============================================================================
+#
+# The environment ID is a process-lifetime constant, not sensitive system
+# state, so it is deliberately excluded from the restrict_to_user_objects
+# gate. It is folded to a literal at plan time (see the Scalar registration
+# in src/sql/src/func.rs and
+# doc/developer/design/20260508_restrict_to_user_objects.md). A restricted
+# session can therefore reach it both directly and indirectly.
+
+# Direct call: returns the env id rather than erroring.
+simple conn=agent_restricted,user=agent
+SELECT mz_environment_id() IS NOT NULL;
+----
+t
+COMPLETE 1
+
+# Indirect: a user view that references it, created and granted by a
+# privileged role, is readable by the restricted agent. Because the value
+# is baked into the view definition at plan time, this returns the env id.
+simple conn=mz_system,user=mz_system
+CREATE VIEW agent_objects.env_id_view AS SELECT mz_environment_id() AS env_id;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON agent_objects.env_id_view TO agent;
+----
+COMPLETE 0
+
+simple conn=agent_restricted,user=agent
+SELECT env_id IS NOT NULL FROM agent_objects.env_id_view;
+----
+t
 COMPLETE 1
 
 # Reset the role default for cleanup (so other tests aren't affected)

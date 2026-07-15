@@ -38,7 +38,6 @@ use crate::plan::scope::Scope;
 use crate::plan::side_effecting_func::PG_CATALOG_SEF_BUILTINS;
 use crate::plan::transform_ast;
 use crate::plan::typeconv::{self, CastContext};
-use crate::rbac;
 use crate::session::vars::{self, ENABLE_TIME_AT_TIME_ZONE};
 
 /// A specifier for a function or an operator.
@@ -4691,17 +4690,18 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         // `mz_environment_id` is a plan-time constant: its value is fixed
         // for the lifetime of the envd process. Fold directly to a literal
         // here so downstream layers (MVs, indexes, dataflow) can treat it
-        // as an ordinary string, not an unmaterializable function. The
-        // `restrict_to_user_objects` gate that previously lived in the
-        // unmaterializable evaluator moves alongside the fold: without
-        // this check, restricted-session RBAC would silently regress.
+        // as an ordinary string, not an unmaterializable function.
+        //
+        // Unlike the other system-information functions in this file, it is
+        // intentionally not gated by `restrict_to_user_objects`. The
+        // environment ID is not sensitive, and because the fold bakes the
+        // value into any stored view that references it, a gate here could
+        // only ever be partial (it would catch direct calls but not values
+        // already materialized into a view), which is more misleading than
+        // no gate at all. See
+        // doc/developer/design/20260508_restrict_to_user_objects.md.
         "mz_environment_id" => Scalar {
             params!() => Operation::nullary(|ecx| {
-                if ecx.catalog().restrict_to_user_objects() {
-                    return Err(rbac::UnauthorizedError::RestrictedSystemObject {
-                        object_name: "function mz_environment_id".to_string(),
-                    }.into());
-                }
                 let env_id = ecx.catalog().config().environment_id.to_string();
                 Ok(HirScalarExpr::literal(
                     Datum::String(&env_id),
