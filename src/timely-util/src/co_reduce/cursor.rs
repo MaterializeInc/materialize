@@ -17,14 +17,19 @@
 
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
+use std::marker::PhantomData;
 
 use differential_dataflow::consolidation::consolidate;
 use differential_dataflow::difference::{Abelian, Semigroup};
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::trace::Cursor;
+use differential_dataflow::trace::cursor::cursor_list;
 use differential_dataflow::trace::implementations::BatchContainer;
+use differential_dataflow::trace::{BatchReader, Builder, Cursor, Description, Navigable};
 use timely::PartialOrder;
-use timely::progress::Antichain;
+use timely::container::PushInto;
+use timely::progress::{Antichain, Timestamp};
+
+use super::CoReduceTactic;
 
 /// Owns the cursor's current key.
 pub(super) fn own_current_key<C, K>(cursor: &C, storage: &C::Storage) -> K
@@ -131,8 +136,8 @@ pub(super) fn compute_key<T, K, V, D, V2, R2, L>(
     kw: &KeyWork<T, V, D, V2, R2>,
     upper_limit: &Antichain<T>,
     logic: &mut L,
-    cap_times: &[T],
-    cap_updates: &mut [Vec<(V2, T, R2)>],
+    held_times: &[T],
+    updates: &mut [Vec<(V2, T, R2)>],
     new_interesting: &mut Vec<T>,
 ) where
     T: Lattice + Ord + Clone,
@@ -197,14 +202,7 @@ pub(super) fn compute_key<T, K, V, D, V2, R2, L>(
 
         // Emit per-value delta = desired - current. Both are consolidated and sorted by
         // value, so merge-walk them.
-        emit_deltas(
-            &desired,
-            &current,
-            &t,
-            cap_times,
-            cap_updates,
-            &mut produced,
-        );
+        emit_deltas(&desired, &current, &t, held_times, updates, &mut produced);
 
         // Synthesize joins of `t` with every partner not already <= t.
         for tp in &partners {
@@ -225,13 +223,13 @@ pub(super) fn compute_key<T, K, V, D, V2, R2, L>(
 }
 
 /// Merge-walks `desired` and `current` (both consolidated, sorted by value) and pushes
-/// `desired - current` per value into `produced` and the covering capability's updates.
+/// `desired - current` per value into `produced` and the covering held time's updates.
 pub(super) fn emit_deltas<T, V2, R2>(
     desired: &[(V2, R2)],
     current: &[(V2, R2)],
     t: &T,
-    cap_times: &[T],
-    cap_updates: &mut [Vec<(V2, T, R2)>],
+    held_times: &[T],
+    updates: &mut [Vec<(V2, T, R2)>],
     produced: &mut Vec<(V2, T, R2)>,
 ) where
     T: Lattice + Ord + Clone,
@@ -245,16 +243,16 @@ pub(super) fn emit_deltas<T, V2, R2>(
             return;
         }
         produced.push((v.clone(), t.clone(), delta.clone()));
-        // Latest capability covering `t`. One must exist: `t` is reachable from a batch
+        // Latest held time covering `t`. One must exist: `t` is reachable from a batch
         // or a pending time, both of which retain a capability at or below their time.
-        let idx = cap_times
+        let idx = held_times
             .iter()
             .enumerate()
             .rev()
             .find(|(_, ct)| PartialOrder::less_equal(*ct, t))
             .map(|(i, _)| i)
-            .expect("a capability covers every produced time");
-        cap_updates[idx].push((v.clone(), t.clone(), delta));
+            .expect("a held time covers every produced time");
+        updates[idx].push((v.clone(), t.clone(), delta));
     };
     while di < desired.len() && ci < current.len() {
         match desired[di].0.cmp(&current[ci].0) {
@@ -288,5 +286,275 @@ pub(super) fn emit_deltas<T, V2, R2>(
         neg.negate();
         push(&current[ci].0, neg, produced);
         ci += 1;
+    }
+}
+
+/// Builds one output batch per held time, folding later held times into each batch's
+/// upper so the descriptions tile `[lower, upper)` in ascending order. Zero-width
+/// batches are skipped. Shared by the cursor and reference tactics so both satisfy the
+/// driver's tiling contract by construction.
+pub(super) fn build_tiled_batches<T, Bu>(
+    held_times: &[T],
+    builders: Vec<Bu>,
+    lower: &Antichain<T>,
+    upper: &Antichain<T>,
+) -> Vec<(T, Bu::Output)>
+where
+    T: Timestamp + Lattice,
+    Bu: Builder<Time = T>,
+{
+    let mut produced = Vec::new();
+    let mut output_lower = lower.clone();
+    for (index, builder) in builders.into_iter().enumerate() {
+        let mut output_upper = upper.clone();
+        for time in &held_times[index + 1..] {
+            output_upper.insert(time.clone());
+        }
+        if output_upper != output_lower {
+            let description = Description::new(
+                output_lower.clone(),
+                output_upper.clone(),
+                Antichain::from_elem(T::minimum()),
+            );
+            produced.push((held_times[index].clone(), builder.done(description)));
+            output_lower = output_upper;
+        }
+    }
+    produced
+}
+
+/// State of an in-flight round.
+///
+/// `builders` and `updates` are allocated once in `begin`, sized from `held`, and
+/// mutated by successive `step` calls. They must persist across calls: a fuel-limited
+/// round spans many activations, and rebuilding them would discard prior activations'
+/// rows.
+struct RoundState<B0, B1, BOut, K, V2, R2, Bu>
+where
+    B0: BatchReader,
+{
+    history0: Vec<B0>,
+    history1: Vec<B1>,
+    output: Vec<BOut>,
+    lower: Antichain<B0::Time>,
+    upper: Antichain<B0::Time>,
+    held_times: Vec<B0::Time>,
+    builders: Vec<Bu>,
+    updates: Vec<Vec<(V2, B0::Time, R2)>>,
+    /// Dirty keys not yet processed this round, ascending. Values are in-region seeds.
+    remaining: BTreeMap<K, Vec<B0::Time>>,
+    /// Beyond-upper synthetic times discovered this round, folded into pending at finish.
+    deferred: BTreeMap<K, Vec<B0::Time>>,
+}
+
+/// The conventional cursor-based [`CoReduceTactic`]: incremental per-key evaluation
+/// over the interesting-time join-closure, reading full histories through batch
+/// cursors.
+pub struct CursorTactic<B0, B1, BOut, K, V, V2, R2, Bu, L>
+where
+    B0: BatchReader,
+{
+    logic: L,
+    /// Staged interesting times by key, surviving across rounds. Holds both times not
+    /// yet retired (one input's frontier lags) and beyond-upper synthetic times.
+    pending: BTreeMap<K, Vec<B0::Time>>,
+    round: Option<RoundState<B0, B1, BOut, K, V2, R2, Bu>>,
+    _marker: PhantomData<(V, V2, R2)>,
+}
+
+impl<B0, B1, BOut, K, V, V2, R2, Bu, L> CursorTactic<B0, B1, BOut, K, V, V2, R2, Bu, L>
+where
+    B0: BatchReader,
+    K: Ord,
+{
+    pub fn new(logic: L) -> Self {
+        Self {
+            logic,
+            pending: BTreeMap::new(),
+            round: None,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<B0, B1, BOut, K, V, V2, R2, Bu, L> CoReduceTactic<B0, B1, BOut>
+    for CursorTactic<B0, B1, BOut, K, V, V2, R2, Bu, L>
+where
+    B0: BatchReader + Navigable + Clone,
+    B1: BatchReader<Time = B0::Time> + Navigable + Clone,
+    BOut: BatchReader<Time = B0::Time> + Navigable + Clone,
+    B0::Time: Timestamp + Lattice + Ord,
+    B0::Cursor: Cursor<Time = B0::Time>,
+    <B0::Cursor as Cursor>::Diff: Semigroup + Clone + 'static,
+    <B0::Cursor as Cursor>::KeyContainer: BatchContainer<Owned = K>,
+    <B0::Cursor as Cursor>::ValContainer: BatchContainer<Owned = V>,
+    B1::Cursor: Cursor<Time = B0::Time, Diff = <B0::Cursor as Cursor>::Diff>,
+    <B1::Cursor as Cursor>::KeyContainer: BatchContainer<Owned = K>,
+    <B1::Cursor as Cursor>::ValContainer: BatchContainer<Owned = V>,
+    BOut::Cursor: Cursor<Time = B0::Time, Diff = R2, ValOwn = V2>,
+    <BOut::Cursor as Cursor>::KeyContainer: BatchContainer<Owned = K>,
+    <BOut::Cursor as Cursor>::ValContainer: BatchContainer<Owned = V2>,
+    K: Ord + Clone + 'static,
+    V: Ord + Clone + 'static,
+    V2: Ord + Clone + 'static,
+    R2: Abelian + Clone + 'static,
+    Bu: Builder<Time = B0::Time, Output = BOut> + 'static,
+    Bu::Input: Default + PushInto<((K, V2), B0::Time, R2)>,
+    L: FnMut(&K, &[&[(V, <B0::Cursor as Cursor>::Diff)]], &mut Vec<(V2, R2)>) + 'static,
+{
+    fn begin(
+        &mut self,
+        history0: Vec<B0>,
+        new0: Vec<B0>,
+        history1: Vec<B1>,
+        new1: Vec<B1>,
+        output: Vec<BOut>,
+        lower: &Antichain<B0::Time>,
+        upper: &Antichain<B0::Time>,
+        held: &Antichain<B0::Time>,
+    ) {
+        assert!(self.round.is_none(), "begin called with a round in flight");
+        for batch in &new0 {
+            let mut cursor = batch.cursor();
+            stage_times(&mut cursor, batch, &mut self.pending);
+        }
+        for batch in &new1 {
+            let mut cursor = batch.cursor();
+            stage_times(&mut cursor, batch, &mut self.pending);
+        }
+        // Partition the staged dirty set into this round's in-region seeds (processed
+        // under fuel) and beyond-upper times kept staged for a later round.
+        let mut remaining: BTreeMap<K, Vec<B0::Time>> = BTreeMap::new();
+        let mut kept: BTreeMap<K, Vec<B0::Time>> = BTreeMap::new();
+        for (key, times) in std::mem::take(&mut self.pending) {
+            let mut seeds = Vec::new();
+            let mut carried = Vec::new();
+            for t in times {
+                if upper.less_equal(&t) {
+                    carried.push(t);
+                } else {
+                    seeds.push(t);
+                }
+            }
+            if !seeds.is_empty() {
+                remaining.insert(key.clone(), seeds);
+            }
+            if !carried.is_empty() {
+                kept.insert(key, carried);
+            }
+        }
+        self.pending = kept;
+        let held_times: Vec<B0::Time> = held.elements().to_vec();
+        let builders: Vec<Bu> = (0..held_times.len()).map(|_| Bu::new()).collect();
+        let updates: Vec<Vec<(V2, B0::Time, R2)>> =
+            (0..held_times.len()).map(|_| Vec::new()).collect();
+        self.round = Some(RoundState {
+            history0,
+            history1,
+            output,
+            lower: lower.clone(),
+            upper: upper.clone(),
+            held_times,
+            builders,
+            updates,
+            remaining,
+            deferred: BTreeMap::new(),
+        });
+    }
+
+    fn step(&mut self, fuel: usize) -> bool {
+        let Some(r) = self.round.as_mut() else {
+            return true;
+        };
+        if r.remaining.is_empty() {
+            return true;
+        }
+        // Build cursors over the frozen batch vectors. Batch handles are Rc-backed, so
+        // the clones are cheap. Rebuilding per step re-seeks from scratch, which makes
+        // total seek work across a fuel-split round O(N^2 / fuel) in the round's
+        // dirty-key count N. Dormant while production callers drain a round's whole
+        // dirty set in one activation. If a smaller budget ever makes this bite,
+        // persist the cursors in RoundState instead.
+        let (mut input0_src, input0_stor) = cursor_list(r.history0.clone());
+        let (mut input1_src, input1_stor) = cursor_list(r.history1.clone());
+        let (mut out_cur, out_stor) = cursor_list(r.output.clone());
+
+        let mut processed_keys = 0usize;
+        while processed_keys < fuel {
+            let Some((key, seeds)) = r.remaining.pop_first() else {
+                break;
+            };
+            processed_keys += 1;
+
+            let mut kw = KeyWork {
+                inputs: vec![Vec::new(); 2],
+                prior: Vec::new(),
+                seeds,
+            };
+            if seek_owned_key(&mut input0_src, &input0_stor, &key) {
+                read_key_values(&mut input0_src, &input0_stor, &mut kw.inputs[0]);
+            }
+            if seek_owned_key(&mut input1_src, &input1_stor, &key) {
+                read_key_values(&mut input1_src, &input1_stor, &mut kw.inputs[1]);
+            }
+            if seek_owned_key(&mut out_cur, &out_stor, &key) {
+                read_key_values(&mut out_cur, &out_stor, &mut kw.prior);
+            }
+
+            let mut new_interesting = Vec::new();
+            compute_key(
+                &key,
+                &kw,
+                &r.upper,
+                &mut self.logic,
+                &r.held_times,
+                &mut r.updates,
+                &mut new_interesting,
+            );
+
+            // Push this key's updates into each held time's builder, preserving
+            // ascending key order across the builder. The builder assumes value-sorted
+            // input per key, but the updates arrive time-ordered. A stable sort by
+            // value reorders them into (value, time) order.
+            for i in 0..r.held_times.len() {
+                if r.updates[i].is_empty() {
+                    continue;
+                }
+                r.updates[i].sort_by(|a, b| a.0.cmp(&b.0));
+                let mut buffer = <Bu::Input>::default();
+                for (v2, time, r2) in r.updates[i].drain(..) {
+                    buffer.push_into(((key.clone(), v2), time, r2));
+                }
+                r.builders[i].push(&mut buffer);
+            }
+
+            if !new_interesting.is_empty() {
+                new_interesting.sort();
+                new_interesting.dedup();
+                r.deferred.entry(key).or_default().extend(new_interesting);
+            }
+        }
+        r.remaining.is_empty()
+    }
+
+    fn finish(&mut self) -> (Vec<(B0::Time, BOut)>, Antichain<B0::Time>) {
+        let r = self.round.take().expect("finish called without a round");
+        assert!(r.remaining.is_empty(), "finish called with keys remaining");
+        let produced = build_tiled_batches(&r.held_times, r.builders, &r.lower, &r.upper);
+        // Fold the round's deferred times back into pending, which still holds the
+        // carried beyond-upper times from begin.
+        for (key, mut times) in r.deferred {
+            let entry = self.pending.entry(key).or_default();
+            entry.append(&mut times);
+            entry.sort();
+            entry.dedup();
+        }
+        let mut frontier = Antichain::new();
+        for times in self.pending.values() {
+            for t in times {
+                frontier.insert(t.clone());
+            }
+        }
+        (produced, frontier)
     }
 }
