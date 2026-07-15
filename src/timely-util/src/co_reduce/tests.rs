@@ -88,6 +88,51 @@ fn co_reduce_sum_two_inputs_static() {
 }
 
 #[mz_ore::test]
+fn co_reduce_reference_smoke() {
+    let captured = timely::execute_directly(move |worker| {
+        let (mut in0, mut in1, cap) = worker.dataflow(|scope| {
+            let (h0, c0) = scope.new_collection::<u64, isize>();
+            let (h1, c1) = scope.new_collection::<u64, isize>();
+            let a0 = c0.map(|k| (k, k)).arrange_by_key();
+            let a1 = c1.map(|k| (k, k)).arrange_by_key();
+            let out = super::co_reduce2_reference::<
+                u64,
+                TraceAgent<Spine>,
+                TraceAgent<Spine>,
+                u64,
+                u64,
+                u64,
+                isize,
+                Builder_,
+                Spine,
+                _,
+            >(a0, a1, "test", usize::MAX, net_positive);
+            let cap = out.as_collection(|k, _v| *k).inner.capture();
+            (h0, h1, cap)
+        });
+        // input 0: keys 1,2,3 each once; input 1: key 2 once, key 3 twice.
+        // net: 1 -> +1 (keep), 2 -> 0 (drop), 3 -> -1 (drop). Output: {1}.
+        in0.insert(1);
+        in0.insert(2);
+        in0.insert(3);
+        in1.insert(2);
+        in1.insert(3);
+        in1.insert(3);
+        in0.close();
+        in1.close();
+        cap
+    });
+    let mut rows: Vec<(u64, u64, isize)> = captured
+        .extract()
+        .into_iter()
+        .flat_map(|(_t, data)| data)
+        .map(|(k, _t, r)| (k, 0u64, r))
+        .collect();
+    rows.sort();
+    assert_eq!(rows, vec![(1u64, 0u64, 1isize)]);
+}
+
+#[mz_ore::test]
 fn co_reduce_incremental() {
     let captured = timely::execute_directly(move |worker| {
         let (mut in0, mut in1, probe, cap) = worker.dataflow(|scope| {

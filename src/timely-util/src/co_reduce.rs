@@ -70,11 +70,14 @@ use timely::dataflow::operators::{CapabilitySet, Operator};
 use timely::progress::{Antichain, Timestamp};
 
 mod cursor;
+mod reference;
 
 #[cfg(test)]
 mod tests;
 
 pub use cursor::CursorTactic;
+#[doc(hidden)]
+pub use reference::co_reduce2_reference;
 
 /// A per-round engine for a two-input key-wise reduction.
 ///
