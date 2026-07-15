@@ -9,7 +9,7 @@ menu:
     weight: 20
 ---
 
-{{< private-preview />}}
+{{< public-preview />}}
 
 {{< source-versioning-disambiguation is_new=true
 other_ref="[old reference page](/sql/create-source/postgres/)" include_blurb=true >}}
