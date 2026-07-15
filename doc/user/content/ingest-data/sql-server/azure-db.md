@@ -26,10 +26,10 @@ instead.
 ## Before you begin
 
 - Make sure Change Data Capture (CDC) is available on your Azure SQL Database.
-  CDC is supported on all current service tiers, but must be enabled per
-  database. Unlike self-hosted SQL Server, Azure SQL Database has **no SQL
-  Server Agent**: the CDC capture and cleanup work is driven by an internal
-  scheduler, so there is nothing to start or monitor.
+  CDC has compute requirements and is not supported on lower service tiers. CDC
+  must also be enabled per database and per table. See [Azure SQL documentation](
+  https://learn.microsoft.com/en-us/azure/azure-sql/database/change-data-capture-overview?view=azuresql)
+  for details on service tiers and CDC configuration.
 
 - Ensure you have access to your database via the [`sqlcmd` client](https://learn.microsoft.com/en-us/sql/tools/sqlcmd/sqlcmd-utility),
   or your preferred SQL client, as a member of `db_owner`.
@@ -46,21 +46,28 @@ can enable CDC and create/manage the user, role, and privileges.
 
 ### 1. Create a Materialize user in Azure SQL Database.
 
-Azure SQL Database is a single-database service. There is no reusable server
-login and no `master` access for granting server-scoped permissions, so create a
-[contained database user](https://learn.microsoft.com/en-us/sql/relational-databases/security/contained-database-users-making-your-database-portable)
-directly in the database you want to replicate.
+Azure SQL Database is a single-database service. Because it does not provide
+reusable server logins or access to the master database for granting
+server-scoped permissions, create a [contained database user](https://learn.microsoft.com/en-us/sql/relational-databases/security/contained-database-users-making-your-database-portable) directly in the
+database you want to replicate.
 
-Connect to the database you want to replicate as a member of `db_owner`. Create a
-user, a gating role for the capture instances, and grant the privileges Materialize
-needs (replace `<PASSWORD>` with your own password):
+Connect to the database you want to replicate as a member of `db_owner`, then
+create the user (replace `<PASSWORD>` with your own password):
 
 ```sql
 CREATE USER materialize WITH PASSWORD = '<PASSWORD>';
+```
 
+Create a gating role for the capture instances and add the user to it:
+
+```sql
 CREATE ROLE materialize_role;
 ALTER ROLE materialize_role ADD MEMBER materialize;
+```
 
+Grant the privileges Materialize needs:
+
+```sql
 -- SELECT on the replicated tables and the CDC change tables.
 ALTER ROLE db_datareader ADD MEMBER materialize;
 
@@ -154,22 +161,26 @@ Select the option that works best for you.
 
 {{< tab "Use an SSH tunnel">}}
 
-To create an SSH tunnel from Materialize to your database, you launch an
-instance to serve as an SSH bastion host, configure the bastion host to allow
-traffic only from Materialize, and then configure your database's private
-network to allow traffic from the bastion host.
+This assumes your Azure SQL Database is already reachable over a private IP in a
+virtual network via an [Azure Private Endpoint](https://learn.microsoft.com/en-us/azure/azure-sql/database/private-endpoint-overview?view=azuresql),
+with the `privatelink.database.windows.net` DNS zone integrated so
+`<server>.database.windows.net` resolves to the private IP.
 
-1. [Launch an Azure VM with a static public IP address](https://learn.microsoft.com/en-us/azure/virtual-network/ip-services/virtual-network-deploy-static-pip-arm-portal?toc=%2Fazure%2Fvirtual-machines%2Ftoc.json)
+To create the SSH tunnel, you launch an instance to serve as an SSH bastion host
+in that network and configure the bastion host to allow traffic from Materialize.
+The bastion forwards traffic to the database's private endpoint.
+
+1. [Launch a Linux VM with a static public IP address](https://learn.microsoft.com/en-us/azure/virtual-machines/linux/quick-create-portal)
 to serve as your SSH bastion host.
 
     - Make sure the VM is publicly accessible and in the same virtual network as
-      your database.
+      the private endpoint (or a peered network).
     - Add a key pair and note the username. You'll use this username when
       connecting Materialize to your bastion host.
     - Make sure the VM has a static public IP address. You'll use this IP
       address when connecting Materialize to your bastion host.
 
-1. Configure the SSH bastion host to allow traffic only from Materialize.
+1. Configure the SSH bastion host to allow traffic from Materialize.
 
     1. In the [SQL Shell](/console/), or your preferred
        SQL client connected to Materialize, get the static egress IP addresses for
@@ -180,10 +191,7 @@ to serve as your SSH bastion host.
        ```
 
     1. Update your SSH bastion host's [firewall rules](https://learn.microsoft.com/en-us/azure/virtual-network/tutorial-filter-network-traffic?toc=%2Fazure%2Fvirtual-machines%2Ftoc.json)
-    to allow traffic from each IP address from the previous step.
-
-1. Update your [Azure SQL Database firewall rules](https://learn.microsoft.com/en-us/azure/azure-sql/database/firewall-configure?view=azuresql)
-   to allow traffic from the SSH bastion host.
+    to allow SSH traffic from each IP address from the previous step.
 
 1. Set the server's [connection policy](https://learn.microsoft.com/en-us/azure/azure-sql/database/connectivity-architecture?view=azuresql#connection-policy)
    to **Proxy**:
@@ -195,17 +203,17 @@ to serve as your SSH bastion host.
       --connection-type Proxy
     ```
 
-    Because the bastion runs inside Azure, the default `Redirect` policy tells
-    the client to reconnect directly to the backend node on a high port
-    (11000-11999), bypassing the SSH tunnel. `Proxy` keeps all traffic on the
-    gateway at port 1433, which is the only port the tunnel forwards.
+    With the `Redirect` policy, the gateway tells the client to reconnect
+    directly to the backend node on a high port, which bypasses the single port
+    the SSH tunnel forwards. `Proxy` keeps all traffic on the gateway at port
+    1433, which is the port the tunnel forwards.
 
     If the connection policy is left as `Redirect`, creating the source or
     validating the connection fails with an error like:
 
     ```text
     Server requested a connection to an alternative address:
-    `ed8de3ae2c6f.tr12112.westus2-a.worker.database.windows.net:11019`
+    `<backend-node>.worker.database.windows.net:<high-port>`
     ```
 
 {{< /tab >}}
