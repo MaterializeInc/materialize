@@ -305,6 +305,8 @@ class Endpoints:
     mz_host: str
     mz_port: int
     mz_system_port: int
+    mz_http_port: int | None = None
+    minio_port: int | None = None
     pg_port: int | None = None
     mysql_port: int | None = None
     sqlserver_port: int | None = None

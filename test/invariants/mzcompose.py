@@ -15,6 +15,7 @@ toxiproxy disrupts the envd<->clusterd, metadata-store, source, and sink
 connections, and strictly again after healing.
 """
 
+import os
 import random
 import subprocess
 import threading
@@ -36,6 +37,7 @@ from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.postgres import Postgres, PostgresMetadata
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
 
@@ -43,10 +45,16 @@ from materialize.mzcompose.services.toxiproxy import Toxiproxy
 # It must be a fixed port because Kafka advertises it back to clients.
 KAFKA_HOST_PORT = 30993
 
+# Local iteration: run the Materialize services from this image instead of
+# building the current source. An environment variable, not a workflow
+# argument, because the image acquisition happens before workflow arguments
+# are parsed.
+INVARIANTS_IMAGE = os.environ.get("INVARIANTS_IMAGE")
+
 
 def materialized_service(image: str | None = None) -> Materialized:
     return Materialized(
-        image=image,
+        image=image or INVARIANTS_IMAGE,
         # Route the metadata store (persist consensus and the timestamp
         # oracle) and the persist blob store through toxiproxy. The proxies
         # must exist before this service starts.
@@ -67,6 +75,10 @@ def materialized_service(image: str | None = None) -> Materialized:
         additional_system_parameter_defaults={
             "unsafe_enable_unorchestrated_cluster_replicas": "true",
             "allow_real_time_recency": "true",
+            "enable_refresh_every_mvs": "true",
+            "enable_bounded_staleness_isolation": "true",
+            "enable_replacement_materialized_views": "true",
+            "enable_within_timestamp_order_by_in_subscribe": "true",
         },
         depends_on=["toxiproxy"],
     )
@@ -75,7 +87,7 @@ def materialized_service(image: str | None = None) -> Materialized:
 def clusterd_service(name: str, image: str | None = None) -> Clusterd:
     return Clusterd(
         name=name,
-        image=image,
+        image=image or INVARIANTS_IMAGE,
         # The controller connects through toxiproxy, so the host in request
         # URIs doesn't match this clusterd's hostname.
         environment_extra=["CLUSTERD_GRPC_HOST="],
@@ -93,7 +105,9 @@ CLUSTERD_NAMES = ["clusterd-compute", "clusterd-compute2", "clusterd-storage"]
 SERVICES = [
     Toxiproxy(),
     PostgresMetadata(),
-    Minio(setup_materialize=True),
+    # The extra bucket serves the COPY TO S3 checker, reachable for
+    # Materialize by container name and for the harness via the host port.
+    Minio(setup_materialize=True, additional_directories=["copytos3"]),
     materialized_service(),
     *(clusterd_service(name) for name in CLUSTERD_NAMES),
     # Second replica of the compute cluster, behind its own leg: peeks keep
@@ -122,6 +136,10 @@ SERVICES = [
             "SINK:PLAINTEXT,HOST:PLAINTEXT",
         ],
     ),
+    # The schema registry talks to Kafka directly (it is harness-side
+    # infrastructure for the broker); Materialize reaches it through the
+    # csr leg.
+    SchemaRegistry(kafka_servers=[("kafka", "9096")]),
 ]
 
 # One leg per connection of the system under test. All proxies are created
@@ -171,6 +189,7 @@ LEGS = {
     "sql-server": Leg("sql-server", (Proxy("sql_server", 1433, "sql-server:1433"),)),
     "kafka-source": Leg("kafka-source", (Proxy("kafka_source", 9092, "kafka:9092"),)),
     "kafka-sink": Leg("kafka-sink", (Proxy("kafka_sink", 9192, "kafka:9192"),)),
+    "csr": Leg("csr", (Proxy("csr", 8081, "schema-registry:8081"),)),
 }
 
 # Sources and sinks run in `storage`, MVs and indexes in `compute`, both on
@@ -302,6 +321,8 @@ def run_scenario(c: Composition, name: str, args, log: EventLog) -> None:
             mz_host="127.0.0.1",
             mz_port=c.default_port("materialized"),
             mz_system_port=c.port("materialized", 6877),
+            mz_http_port=c.port("materialized", 6876),
+            minio_port=c.default_port("minio"),
             pg_port=(
                 c.default_port("postgres")
                 if "postgres" in scenario_class.services

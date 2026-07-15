@@ -92,6 +92,10 @@ class SubscribeChecker(Checker):
         # Fresh sessions may pin a historical start, e.g. the end-of-run
         # history audit replays from the earliest retained timestamp.
         self.as_of_clause = ""
+        # Optional "WITHIN TIMESTAMP ORDER BY <expr>" clause plus the index
+        # into the data tuple to assert the documented in-timestamp ordering.
+        self.order_clause = ""
+        self.order_index: int | None = None
         self.client = MzClient(ctx, name)
         self._cursor = "c_" + name.replace("-", "_")
         self._active = False
@@ -105,6 +109,7 @@ class SubscribeChecker(Checker):
         self._last_ts: int | None = None
         self._as_of: int | None = None
         self._resumed = False
+        self._last_order_key: tuple[int, tuple] | None = None
 
     def check_once(self) -> None:
         try:
@@ -156,7 +161,8 @@ class SubscribeChecker(Checker):
         self.client.query("BEGIN")
         self.client.query(
             f"DECLARE {self._cursor} CURSOR FOR"
-            f" SUBSCRIBE ({self.inner_query}) WITH (PROGRESS) {self.as_of_clause}"
+            f" SUBSCRIBE ({self.inner_query}) {self.order_clause}"
+            f" WITH (PROGRESS) {self.as_of_clause}"
         )
 
     def _process(self, rows: list[tuple]) -> None:
@@ -176,7 +182,19 @@ class SubscribeChecker(Checker):
             if progressed:
                 self._apply_pending(ts)
             else:
-                self._pending.append((ts, int(row[2]), tuple(row[3:])))
+                data = tuple(row[3:])
+                if self.order_index is not None:
+                    # WITHIN TIMESTAMP ORDER BY: rows of one timestamp must
+                    # arrive sorted by the ordering expression.
+                    key = (ts, (data[self.order_index],))
+                    last = self._last_order_key
+                    if last is not None and last[0] == ts and key[1] < last[1]:
+                        raise InvariantViolation(
+                            f"{self.name}: rows within timestamp {ts} out of"
+                            f" order: {key[1]} after {last[1]}"
+                        )
+                    self._last_order_key = key
+                self._pending.append((ts, int(row[2]), data))
 
     def _apply_pending(self, progress_ts: int) -> None:
         ready = sorted(
@@ -245,3 +263,42 @@ class SubscribeChecker(Checker):
 
     def close(self) -> None:
         self.client.reset()
+
+
+class ProgressPeek(PeekChecker):
+    """A source's ingestion progress must never move backwards.
+
+    NOTE: doc/user documents a `<name>_progress` relation per source, but
+    sources created with the current syntax do not create one (see
+    FINDINGS-BUGS.md B2), so this reads the source's write frontier from
+    mz_internal.mz_frontiers instead. Reads run on one session under the
+    default strict serializable isolation, so two consecutive reads are
+    ordered in real time and the frontier must be non-decreasing.
+    """
+
+    pause = (1.0, 4.0)
+
+    def __init__(self, rng, ctx, object_name: str, name: str = "progress-peek") -> None:
+        super().__init__(rng, ctx, name, ["quickstart"])
+        self.query = (
+            "SELECT f.write_frontier::text::numeric"
+            " FROM mz_internal.mz_frontiers f"
+            " JOIN mz_objects o ON f.object_id = o.id"
+            f" WHERE o.name = '{object_name}'"
+        )
+        self.last: int | None = None
+
+    def check_once(self) -> None:
+        rows = self.peek(self.query)
+        if len(rows) != 1 or rows[0][0] is None:
+            # The catalog row can lag object creation, and a NULL frontier
+            # (the empty frontier) only occurs for completed collections.
+            raise TransientError(f"{self.name}: no frontier row: {rows}")
+        value = int(rows[0][0])
+        if self.last is not None and value < self.last:
+            raise InvariantViolation(
+                f"{self.name}: write frontier moved backwards:"
+                f" {value} < {self.last}"
+            )
+        self.last = value
+        self.validations += 1

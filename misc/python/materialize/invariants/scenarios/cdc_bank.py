@@ -19,10 +19,15 @@ op ids for exact final reconciliation against the upstream oracle.
 """
 
 import random
+import time
 from abc import abstractmethod
 from typing import Any
 
-from materialize.invariants.checkers import PeekChecker, SubscribeChecker
+from materialize.invariants.checkers import (
+    PeekChecker,
+    ProgressPeek,
+    SubscribeChecker,
+)
 from materialize.invariants.framework import (
     CONVERGE_TIMEOUT,
     SEED_RANGE,
@@ -116,6 +121,116 @@ class UpstreamTransfer(Action):
 
     def close(self) -> None:
         self._drop_conn()
+
+
+class SourceTableChurn(Action):
+    """Source versioning: add and drop tables on the running source.
+
+    CREATE TABLE .. FROM SOURCE snapshots just the new table while the
+    existing tables keep serving (their ingestion may pause during the
+    snapshot, which surfaces as skipped checker rounds). Reads on the new
+    table block until its snapshot completes, so the first value a read
+    returns is a transactionally consistent state and must show the
+    conserved total.
+    """
+
+    name = "source-table"
+
+    def __init__(
+        self, rng: random.Random, client: MzClient, scenario: "CdcBank"
+    ) -> None:
+        super().__init__(rng)
+        self.client = client
+        self.scenario = scenario
+        self.nonce = 0
+        self.next_at = time.monotonic() + 20.0
+
+    def run(self) -> Outcome | None:
+        now = time.monotonic()
+        if now < self.next_at:
+            return None
+        self.next_at = now + self.rng.uniform(45.0, 90.0)
+        # A leftover from a cycle whose drop had an UNKNOWN outcome.
+        if self.nonce > 0:
+            self.client.write(f"DROP TABLE IF EXISTS accounts_v{self.nonce}")
+        self.nonce += 1
+        name = f"accounts_v{self.nonce}"
+        outcome = self.client.write(
+            f"CREATE TABLE {name} FROM SOURCE bank_source"
+            f" (REFERENCE {self.scenario.accounts_reference})"
+        )
+        if outcome != Outcome.COMMITTED:
+            return outcome
+        deadline = time.monotonic() + 120.0
+        validated = False
+        while time.monotonic() < deadline:
+            try:
+                rows = self.client.query(
+                    f"SELECT coalesce(sum(balance), 0) FROM {name}", timeout=30
+                )
+            except TransientError:
+                continue
+            total = int(rows[0][0])
+            if total != self.scenario.total:
+                raise InvariantViolation(
+                    f"snapshot of {name} shows a non-conserved total:"
+                    f" {total} != {self.scenario.total}"
+                )
+            validated = True
+            break
+        if not validated:
+            self.scenario.ctx.log.log(
+                "op", f"{name} snapshot did not become readable in time"
+            )
+        self.client.write(f"DROP TABLE IF EXISTS {name}")
+        return Outcome.COMMITTED if validated else Outcome.UNKNOWN
+
+    def close(self) -> None:
+        self.client.reset()
+
+
+class UpstreamSchemaChurn(Action):
+    """Documented-compatible upstream schema changes on the transfers table.
+
+    Adding a column upstream, and dropping a column that was added after
+    source creation, must not disturb ingestion (the column is simply not
+    ingested). Upstream connection trouble is oracle-side and transient.
+    """
+
+    name = "upstream-ddl"
+
+    def __init__(self, rng: random.Random, scenario: "CdcBank") -> None:
+        super().__init__(rng)
+        self.scenario = scenario
+        self.nonce = 0
+        self.next_at = time.monotonic() + 30.0
+
+    def run(self) -> Outcome | None:
+        now = time.monotonic()
+        if now < self.next_at:
+            return None
+        self.next_at = now + self.rng.uniform(30.0, 60.0)
+        self.nonce += 1
+        statements = [f"ALTER TABLE transfers ADD COLUMN extra_{self.nonce} int"]
+        if self.nonce > 1:
+            statements.insert(
+                0, f"ALTER TABLE transfers DROP COLUMN extra_{self.nonce - 1}"
+            )
+        try:
+            conn = self.scenario.connect_upstream()
+            try:
+                cur = conn.cursor()
+                for sql in statements:
+                    cur.execute(sql)
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception as e:
+            # The previous cycle's ADD may not have applied (its connection
+            # died), making this DROP fail. The next cycle moves on to a
+            # fresh column name either way.
+            raise TransientError(f"upstream DDL failed: {e}") from e
+        return Outcome.COMMITTED
 
 
 class CdcTotalPeek(PeekChecker):
@@ -277,6 +392,13 @@ class CdcBank(Scenario):
     # Real-time recency is documented for Kafka, PostgreSQL, and MySQL
     # sources only.
     rtr_supported = True
+    # Whether the documented-compatible upstream schema changes (add
+    # column, drop later-added column) are exercised. SQL Server is
+    # excluded: its CDC capture instances pin the captured column list, so
+    # column changes are a different, heavier operation there.
+    upstream_ddl_supported = True
+    # The CREATE TABLE .. FROM SOURCE reference for the accounts table.
+    accounts_reference: str
 
     def __init__(self, ctx: ScenarioContext) -> None:
         super().__init__(ctx)
@@ -315,17 +437,28 @@ class CdcBank(Scenario):
         client.reset()
 
     def make_worker(self, index: int, rng: random.Random) -> WorkerBundle:
-        return WorkerBundle(actions=[UpstreamTransfer(rng, index, self)], weights=[1])
+        actions: list[Action] = [UpstreamTransfer(rng, index, self)]
+        weights = [20]
+        if index == 0:
+            actions.append(
+                SourceTableChurn(rng, MzClient(self.ctx, "source-table"), self)
+            )
+            weights.append(1)
+            if self.upstream_ddl_supported:
+                actions.append(UpstreamSchemaChurn(rng, self))
+                weights.append(1)
+        return WorkerBundle(actions=actions, weights=weights)
 
     def checkers(self) -> list[Checker]:
-        rngs = [random.Random(self.ctx.rng.randrange(SEED_RANGE)) for _ in range(4)]
+        rngs = [random.Random(self.ctx.rng.randrange(SEED_RANGE)) for _ in range(5)]
         checkers: list[Checker] = [
             CdcTotalPeek(rngs[0], self.ctx, self),
             TransferCountPeek(rngs[1], self.ctx, self),
             CdcTotalSubscribe(rngs[2], self.ctx, self),
+            ProgressPeek(rngs[3], self.ctx, "bank_source"),
         ]
         if self.rtr_supported:
-            checkers.append(RtrPeek(rngs[3], self.ctx, self))
+            checkers.append(RtrPeek(rngs[4], self.ctx, self))
         return checkers
 
     def _upstream_state(self) -> tuple[list[tuple[int, int]], int]:
@@ -422,6 +555,7 @@ class CdcBank(Scenario):
 
 class PgCdcBank(CdcBank):
     name = "pg-cdc-bank"
+    accounts_reference = "accounts"
     services = ["postgres"]
     legs = [
         "metadata",
@@ -476,6 +610,7 @@ class PgCdcBank(CdcBank):
 
 class MySqlCdcBank(CdcBank):
     name = "mysql-cdc-bank"
+    accounts_reference = "bank.accounts"
     services = ["mysql"]
     legs = [
         "metadata",
@@ -549,6 +684,8 @@ class MySqlCdcBank(CdcBank):
 class SqlServerCdcBank(CdcBank):
     name = "sqlserver-cdc-bank"
     rtr_supported = False
+    upstream_ddl_supported = False
+    accounts_reference = "dbo.accounts"
     services = ["sql-server"]
     legs = [
         "metadata",

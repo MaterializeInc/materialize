@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 from materialize.invariants.framework import Scenario
+from materialize.invariants.scenarios.avro_loopback import AvroLoopback
 from materialize.invariants.scenarios.cdc_bank import (
     MySqlCdcBank,
     PgCdcBank,
@@ -17,6 +18,7 @@ from materialize.invariants.scenarios.kafka_ledger import KafkaLedger
 from materialize.invariants.scenarios.kafka_upsert import KafkaUpsert
 from materialize.invariants.scenarios.sink_roundtrip import SinkRoundtrip
 from materialize.invariants.scenarios.table_bank import TableBank
+from materialize.invariants.scenarios.webhook_set import WebhookSet
 
 SCENARIOS: dict[str, type[Scenario]] = {
     scenario.name: scenario
@@ -28,5 +30,7 @@ SCENARIOS: dict[str, type[Scenario]] = {
         KafkaLedger,
         KafkaUpsert,
         SinkRoundtrip,
+        WebhookSet,
+        AvroLoopback,
     ]
 }

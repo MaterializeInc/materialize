@@ -2115,6 +2115,7 @@ steps:
     key: invariants
     steps:
       - id: invariants-table-bank-large
+        topics: [kafka, mysql, postgres, sql-server]
         label: "Invariants (table-bank, large)"
         depends_on: build-aarch64
         artifact_paths: [invariants-events.log]
@@ -2127,6 +2128,7 @@ steps:
               args: [--scenario=table-bank, --complexity=large, --runtime=1200]
 
       - id: invariants-table-bank-upgrade
+        topics: [kafka, mysql, postgres, sql-server]
         label: "Invariants (table-bank, upgrade under load)"
         depends_on: build-aarch64
         artifact_paths: [invariants-events.log]
@@ -2145,6 +2147,7 @@ steps:
                 ]
 
       - id: invariants-table-bank
+        topics: [kafka, mysql, postgres, sql-server]
         label: "Invariants (table-bank)"
         depends_on: build-aarch64
         artifact_paths: [invariants-events.log]
@@ -2157,6 +2160,7 @@ steps:
               args: [--scenario=table-bank, --complexity=high, --runtime=1200]
 
       - id: invariants-pg-cdc-bank
+        topics: [kafka, mysql, postgres, sql-server]
         label: "Invariants (pg-cdc-bank)"
         depends_on: build-aarch64
         artifact_paths: [invariants-events.log]
@@ -2169,6 +2173,7 @@ steps:
               args: [--scenario=pg-cdc-bank, --complexity=high, --runtime=1200]
 
       - id: invariants-mysql-cdc-bank
+        topics: [kafka, mysql, postgres, sql-server]
         label: "Invariants (mysql-cdc-bank)"
         depends_on: build-aarch64
         artifact_paths: [invariants-events.log]
@@ -2181,6 +2186,7 @@ steps:
               args: [--scenario=mysql-cdc-bank, --complexity=high, --runtime=1200]
 
       - id: invariants-sqlserver-cdc-bank
+        topics: [kafka, mysql, postgres, sql-server]
         label: "Invariants (sqlserver-cdc-bank)"
         depends_on: build-x86_64
         artifact_paths: [invariants-events.log]
@@ -2196,6 +2202,7 @@ steps:
               args: [--scenario=sqlserver-cdc-bank, --complexity=high, --runtime=1200]
 
       - id: invariants-kafka-ledger
+        topics: [kafka, mysql, postgres, sql-server]
         label: "Invariants (kafka-ledger)"
         depends_on: build-aarch64
         artifact_paths: [invariants-events.log]
@@ -2208,6 +2215,7 @@ steps:
               args: [--scenario=kafka-ledger, --complexity=high, --runtime=1200]
 
       - id: invariants-kafka-upsert
+        topics: [kafka, mysql, postgres, sql-server]
         label: "Invariants (kafka-upsert)"
         depends_on: build-aarch64
         artifact_paths: [invariants-events.log]
@@ -2220,6 +2228,7 @@ steps:
               args: [--scenario=kafka-upsert, --complexity=high, --runtime=1200]
 
       - id: invariants-sink-roundtrip
+        topics: [kafka, mysql, postgres, sql-server]
         label: "Invariants (sink-roundtrip)"
         depends_on: build-aarch64
         artifact_paths: [invariants-events.log]
@@ -2230,6 +2239,32 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: invariants
               args: [--scenario=sink-roundtrip, --complexity=high, --runtime=1200]
+
+      - id: invariants-webhook-set
+        topics: [kafka, mysql, postgres, sql-server]
+        label: "Invariants (webhook-set)"
+        depends_on: build-aarch64
+        artifact_paths: [invariants-events.log]
+        timeout_in_minutes: 60
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: invariants
+              args: [--scenario=webhook-set, --complexity=high, --runtime=1200]
+
+      - id: invariants-avro-loopback
+        topics: [kafka, mysql, postgres, sql-server]
+        label: "Invariants (avro-loopback)"
+        depends_on: build-aarch64
+        artifact_paths: [invariants-events.log]
+        timeout_in_minutes: 60
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: invariants
+              args: [--scenario=avro-loopback, --complexity=high, --runtime=1200]
 
   - group: "Parallel Workload"
     key: parallel-workload
