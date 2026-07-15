@@ -7297,26 +7297,7 @@ def workflow_github_11322(c: Composition) -> None:
 
 
 def workflow_test_replacement_mv_drop_after_restart(c: Composition) -> None:
-    """
-    Regression test for incident 1136: dropping a replacement MV after an
-    envd restart destroys the target MV's persist shard.
-
-    Bootstrap does not restore the `primary` link of replacement-MV storage
-    collections, so dropping a replacement MV after an envd restart marks the
-    target MV's shard as finalizable. The shard finalization task then seals
-    and tombstones the target's live shard, permanently losing the target
-    MV's data. Before materialize#37696, a subsequent CREATE REPLACEMENT
-    MATERIALIZED VIEW, which registers a new storage collection on the
-    tombstoned shard, additionally panicked envd with "cmd remove_rollups
-    unexpectedly tried to commit a new state on a tombstone" and left the
-    environment crash-looping during bootstrap.
-
-    The MVs live in a cluster with no replicas so that no dataflow holds a
-    persist read lease on the target's shard. Leases of readers that died
-    with the envd restart expire only after 15 minutes, and an unexpired
-    lease would keep the finalization task from tombstoning the shard within
-    the runtime of this test.
-    """
+    """Dropping a replacement MV after restart must preserve the target shard."""
 
     def storage_metadata() -> dict:
         port = c.port("materialized", 6878)
@@ -7327,6 +7308,8 @@ def workflow_test_replacement_mv_drop_after_restart(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up("materialized")
 
+    # Without a replica, no dataflow holds a persist read lease after restart.
+    # Such a lease would delay finalization beyond the runtime of this test.
     c.sql("""
         CREATE CLUSTER stalled SIZE 'scale=1,workers=1', REPLICATION FACTOR 0;
         CREATE TABLE t (a int);
@@ -7346,19 +7329,14 @@ def workflow_test_replacement_mv_drop_after_restart(c: Composition) -> None:
     # Drop the replacement without applying it.
     c.sql("DROP MATERIALIZED VIEW rp")
 
-    # The drop must not have marked the target's shard as finalizable. This
-    # check must happen right after the drop: once the finalization task has
-    # tombstoned the shard, the next catalog transaction removes it from
-    # unfinalized_shards again, hiding the damage from this check.
+    # The finalization record is removed by the next catalog transaction after
+    # finalization completes, so inspect it immediately after the drop.
     unfinalized = storage_metadata()["unfinalized_shards"]
     assert mv_shard not in unfinalized, (
         f"dropping the replacement marked the target's shard {mv_shard} for"
         " finalization"
     )
 
-    # Re-creating a replacement registers a new storage collection on the
-    # target's shard. Before materialize#37696 this panicked envd when the
-    # shard had already been tombstoned.
     c.sql(
         "CREATE REPLACEMENT MATERIALIZED VIEW rp2 FOR mv"
         " IN CLUSTER stalled AS SELECT * FROM t"
