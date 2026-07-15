@@ -1,33 +1,435 @@
-# doc/user/data/mz_introspection.yml
-#
-# Column documentation for relations in the mz_introspection schema, rendered by
-# the catalog-relation shortcode and checked against the catalog by
-# ci/test/lint-docs-catalog.py. Each relation lists its base columns and any
-# per_worker or raw variants. Column `meaning` must match the catalog
-# column_comments verbatim. Use inline markdown links, not reference-style links.
 relations:
-  - name: mz_active_peeks
-    description: |
-      The `mz_active_peeks` view describes all read queries ("peeks") that are pending in the [dataflow](/get-started/arrangements/#dataflows) layer.
+- name: mz_active_peeks
+  description: 'The `mz_active_peeks` view describes all read queries ("peeks") that are pending in the [dataflow](/get-started/arrangements/#dataflows) layer.
+
+    '
+  columns:
+  - name: id
+    type: uuid
+    meaning: The ID of the peek request.
+  - name: object_id
+    type: text
+    meaning: The ID of the collection the peek is targeting. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources), or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables).
+  - name: type
+    type: text
+    meaning: 'The type of the corresponding peek: `index` if targeting an index or temporary dataflow; `persist` for a source, materialized view, or table.'
+  - name: time
+    type: mz_timestamp
+    meaning: The timestamp the peek has requested.
+  variants:
+  - name: mz_active_peeks_per_worker
+    kind: per_worker
+    description: 'The same data as `mz_active_peeks`, but split by Timely Dataflow worker.
+
+      '
     columns:
-      - name: id
-        type: uuid
-        meaning: The ID of the peek request.
-      - name: object_id
-        type: text
-        meaning: "The ID of the collection the peek is targeting. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources), or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables)."
-      - name: type
-        type: text
-        meaning: "The type of the corresponding peek: `index` if targeting an index or temporary dataflow; `persist` for a source, materialized view, or table."
-      - name: time
-        type: mz_timestamp
-        meaning: The timestamp the peek has requested.
-    variants:
-      - name: mz_active_peeks_per_worker
-        kind: per_worker
-        description: |
-          The same data as `mz_active_peeks`, but split by Timely Dataflow worker.
-        columns:
-          - name: worker_id
-            type: uint8
-            meaning: The ID of the Timely Dataflow worker.
+    - name: worker_id
+      type: uint8
+      meaning: The ID of the Timely Dataflow worker.
+- name: mz_arrangement_sharing
+  description: The `mz_arrangement_sharing` view describes how many times each [arrangement](/get-started/arrangements/#arrangements) in the system is used.
+  columns:
+  - name: operator_id
+    type: uint8
+    meaning: The ID of the operator that created the arrangement. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+  - name: count
+    type: bigint
+    meaning: The number of operators that share the arrangement.
+- name: mz_arrangement_sizes
+  description: 'The `mz_arrangement_sizes` view describes the size of each [arrangement](/get-started/arrangements/#arrangements) in the system.
+
+
+    The size, capacity, and allocations are an approximation, which may underestimate the actual size in memory.
+
+    Specifically, reductions can use more memory than we show here.'
+  columns:
+  - name: operator_id
+    type: uint8
+    meaning: The ID of the operator that created the arrangement. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+  - name: records
+    type: bigint
+    meaning: The number of records in the arrangement.
+  - name: batches
+    type: bigint
+    meaning: The number of batches in the arrangement.
+  - name: size
+    type: bigint
+    meaning: The utilized size in bytes of the arrangement.
+  - name: capacity
+    type: bigint
+    meaning: The capacity in bytes of the arrangement. Can be larger than the size.
+  - name: allocations
+    type: bigint
+    meaning: The number of separate memory allocations backing the arrangement.
+- name: mz_compute_error_counts
+  description: 'The `mz_compute_error_counts` view describes the counts of errors in objects exported by [dataflows](/get-started/arrangements/#dataflows) in the system.
+
+
+    Dataflow exports that don''t have any errors are not included in this view.'
+  columns:
+  - name: export_id
+    type: text
+    meaning: The ID of the dataflow export. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
+  - name: count
+    type: numeric
+    meaning: The count of errors present in this dataflow export.
+- name: mz_compute_exports
+  description: The `mz_compute_exports` view describes the objects exported by [dataflows](/get-started/arrangements/#dataflows) in the system.
+  columns:
+  - name: export_id
+    type: text
+    meaning: The ID of the index, materialized view, or subscription exported by the dataflow. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_internal.mz_subscriptions.id`](../mz_internal#mz_subscriptions).
+  - name: dataflow_id
+    type: uint8
+    meaning: The ID of the dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows).
+- name: mz_compute_frontiers
+  description: 'The `mz_compute_frontiers` view describes the frontier of each [dataflow](/get-started/arrangements/#dataflows) export in the system.
+
+    The frontier describes the earliest timestamp at which the output of the dataflow may change; data prior to that timestamp is sealed.'
+  columns:
+  - name: export_id
+    type: text
+    meaning: The ID of the dataflow export. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
+  - name: time
+    type: mz_timestamp
+    meaning: The next timestamp at which the dataflow output may change.
+- name: mz_compute_import_frontiers
+  description: 'The `mz_compute_import_frontiers` view describes the frontiers of each [dataflow](/get-started/arrangements/#dataflows) import in the system.
+
+    The frontier describes the earliest timestamp at which the input into the dataflow may change; data prior to that timestamp is sealed.'
+  columns:
+  - name: export_id
+    type: text
+    meaning: The ID of the dataflow export. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
+  - name: import_id
+    type: text
+    meaning: The ID of the dataflow import. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources) or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables) or [`mz_compute_exports.export_id`](#mz_compute_exports).
+  - name: time
+    type: mz_timestamp
+    meaning: The next timestamp at which the dataflow input may change.
+- name: mz_compute_operator_durations_histogram
+  description: The `mz_compute_operator_durations_histogram` view describes a histogram of the duration in nanoseconds of each invocation for each [dataflow](/get-started/arrangements/#dataflows) operator.
+  columns:
+  - name: id
+    type: uint8
+    meaning: The ID of the operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+  - name: duration_ns
+    type: uint8
+    meaning: The upper bound of the duration bucket in nanoseconds.
+  - name: count
+    type: numeric
+    meaning: The (noncumulative) count of invocations in the bucket.
+- name: mz_dataflows
+  description: The `mz_dataflows` view describes the [dataflows](/get-started/arrangements/#dataflows) in the system.
+  columns:
+  - name: id
+    type: uint8
+    meaning: The ID of the dataflow.
+  - name: name
+    type: text
+    meaning: The internal name of the dataflow.
+- name: mz_dataflow_addresses
+  description: The `mz_dataflow_addresses` view describes how the [dataflow](/get-started/arrangements/#dataflows) channels and operators in the system are nested into scopes.
+  columns:
+  - name: id
+    type: uint8
+    meaning: The ID of the channel or operator. Corresponds to [`mz_dataflow_channels.id`](#mz_dataflow_channels) or [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+  - name: address
+    type: bigint list
+    meaning: A list of scope-local indexes indicating the path from the root to this channel or operator.
+- name: mz_dataflow_arrangement_sizes
+  description: 'The `mz_dataflow_arrangement_sizes` view describes the size of arrangements per
+
+    operators under each dataflow.'
+  columns:
+  - name: id
+    type: uint8
+    meaning: The ID of the [dataflow]. Corresponds to [`mz_dataflows.id`](#mz_dataflows).
+  - name: name
+    type: text
+    meaning: The name of the [dataflow].
+  - name: records
+    type: bigint
+    meaning: The number of records in all arrangements in the dataflow.
+  - name: batches
+    type: bigint
+    meaning: The number of batches in all arrangements in the dataflow.
+  - name: size
+    type: bigint
+    meaning: The utilized size in bytes of the arrangements.
+  - name: capacity
+    type: bigint
+    meaning: The capacity in bytes of the arrangements. Can be larger than the size.
+  - name: allocations
+    type: bigint
+    meaning: The number of separate memory allocations backing the arrangements.
+- name: mz_dataflow_channels
+  description: 'The `mz_dataflow_channels` view describes the communication channels between [dataflow](/get-started/arrangements/#dataflows) operators.
+
+    A communication channel connects one of the outputs of a source operator to one of the inputs of a target operator.'
+  columns:
+  - name: id
+    type: uint8
+    meaning: The ID of the channel.
+  - name: from_index
+    type: uint8
+    meaning: The scope-local index of the source operator. Corresponds to [`mz_dataflow_addresses.address`](#mz_dataflow_addresses).
+  - name: from_port
+    type: uint8
+    meaning: The source operator's output port.
+  - name: to_index
+    type: uint8
+    meaning: The scope-local index of the target operator. Corresponds to [`mz_dataflow_addresses.address`](#mz_dataflow_addresses).
+  - name: to_port
+    type: uint8
+    meaning: The target operator's input port.
+  - name: type
+    type: text
+    meaning: The container type of the channel.
+- name: mz_dataflow_channel_operators
+  description: The `mz_dataflow_channel_operators` view associates [dataflow](/get-started/arrangements/#dataflows) channels with the operators that are their endpoints.
+  columns:
+  - name: id
+    type: uint8
+    meaning: The ID of the channel. Corresponds to [`mz_dataflow_channels.id`](#mz_dataflow_channels).
+  - name: from_operator_id
+    type: uint8
+    meaning: The ID of the source of the channel. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+  - name: from_operator_address
+    type: uint8 list
+    meaning: The address of the source of the channel. Corresponds to [`mz_dataflow_addresses.address`](#mz_dataflow_addresses).
+  - name: to_operator_id
+    type: uint8
+    meaning: The ID of the target of the channel. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+  - name: to_operator_address
+    type: uint8 list
+    meaning: The address of the target of the channel. Corresponds to [`mz_dataflow_addresses.address`](#mz_dataflow_addresses).
+  - name: type
+    type: text
+    meaning: The container type of the channel.
+- name: mz_dataflow_global_ids
+  description: The `mz_dataflow_global_ids` view associates [dataflow](/get-started/arrangements/#dataflows) ids with global ids (ids of the form `u8` or `t5`).
+  columns:
+  - name: id
+    type: uint8
+    meaning: The dataflow ID.
+  - name: global_id
+    type: text
+    meaning: A global ID associated with that dataflow.
+- name: mz_dataflow_operators
+  description: The `mz_dataflow_operators` view describes the [dataflow](/get-started/arrangements/#dataflows) operators in the system.
+  columns:
+  - name: id
+    type: uint8
+    meaning: The ID of the operator.
+  - name: name
+    type: text
+    meaning: The internal name of the operator.
+- name: mz_dataflow_operator_dataflows
+  description: The `mz_dataflow_operator_dataflows` view describes the [dataflow](/get-started/arrangements/#dataflows) to which each operator belongs.
+  columns:
+  - name: id
+    type: uint8
+    meaning: The ID of the operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+  - name: name
+    type: text
+    meaning: The internal name of the operator.
+  - name: dataflow_id
+    type: uint8
+    meaning: The ID of the dataflow hosting the operator. Corresponds to [`mz_dataflows.id`](#mz_dataflows).
+  - name: dataflow_name
+    type: text
+    meaning: The internal name of the dataflow hosting the operator.
+- name: mz_dataflow_operator_parents
+  description: The `mz_dataflow_operator_parents` view describes how [dataflow](/get-started/arrangements/#dataflows) operators are nested into scopes, by relating operators to their parent operators.
+  columns:
+  - name: id
+    type: uint8
+    meaning: The ID of the operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+  - name: parent_id
+    type: uint8
+    meaning: The ID of the operator's parent operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+- name: mz_expected_group_size_advice
+  description: 'The `mz_expected_group_size_advice` view provides advice on opportunities to set [query hints](/sql/select/#query-hints).
+
+    Query hints are applicable to dataflows maintaining [`MIN`](/sql/functions/#min), [`MAX`](/sql/functions/#max), or [Top K](/transform-data/patterns/top-k) query patterns.
+
+    The maintainance of these query patterns is implemented inside an operator scope, called a region,
+
+    through a hierarchical scheme for either aggregation or Top K computations.'
+  columns:
+  - name: dataflow_id
+    type: uint8
+    meaning: The ID of the [dataflow]. Corresponds to [`mz_dataflows.id`](#mz_dataflows).
+  - name: dataflow_name
+    type: text
+    meaning: The internal name of the dataflow hosting the min/max aggregation or Top K.
+  - name: region_id
+    type: uint8
+    meaning: The ID of the root operator scope. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+  - name: region_name
+    type: text
+    meaning: The internal name of the root operator scope for the min/max aggregation or Top K.
+  - name: levels
+    type: bigint
+    meaning: The number of levels in the hierarchical scheme implemented by the region.
+  - name: to_cut
+    type: bigint
+    meaning: The number of levels that can be eliminated (cut) from the region's hierarchy.
+  - name: savings
+    type: numeric
+    meaning: A conservative estimate of the amount of memory in bytes to be saved by applying the hint.
+  - name: hint
+    type: double precision
+    meaning: The hint value that will eliminate `to_cut` levels from the region's hierarchy.
+- name: mz_mappable_objects
+  description: The `mz_mappable_objects` identifies indexes (and their underlying views) and materialized views which can be debugged using the [`mz_lir_mapping`](#mz_lir_mapping) view.
+  columns:
+  - name: name
+    type: text
+    meaning: The name of the object. This name is unquoted, and you might need to call `quote_ident` if you want to reference the name shown here.
+  - name: global_id
+    type: text
+    meaning: The global ID of the object.
+- name: mz_lir_mapping
+  description: 'The `mz_lir_mapping` view describes the low-level internal representation (LIR) plan that corresponds to global ids of indexes (and their underlying views) and materialized views.
+
+    You can find a list of all debuggable objects in [`mz_mappable_objects`](#mz_mappable_objects).
+
+    LIR is a higher-level representation than dataflows; this view is used for profiling and debugging indices and materialized views.
+
+    Note that LIR is not a stable interface and may change at any time.
+
+    In particular, you should not attempt to parse `operator` descriptions.
+
+    LIR nodes are implemented by zero or more dataflow operators with sequential ids.
+
+    We use the range `[operator_id_start, operator_id_end)` to record this information.
+
+    If an LIR node was implemented without any dataflow operators, `operator_id_start` will be equal to `operator_id_end`.'
+  columns:
+  - name: global_id
+    type: text
+    meaning: The global ID.
+  - name: lir_id
+    type: uint8
+    meaning: The LIR node ID.
+  - name: operator
+    type: text
+    meaning: The LIR operator, in the format `OperatorName INPUTS [OPTIONS]`.
+  - name: parent_lir_id
+    type: uint8
+    meaning: The parent of this LIR node. May be `NULL`.
+  - name: nesting
+    type: uint2
+    meaning: The nesting level of this LIR node.
+  - name: operator_id_start
+    type: uint8
+    meaning: The first dataflow operator ID implementing this LIR operator (inclusive).
+  - name: operator_id_end
+    type: uint8
+    meaning: The first dataflow operator ID _after_ this LIR operator (exclusive).
+- name: mz_message_counts
+  description: 'The `mz_message_counts` view describes the messages and message batches sent and received over the [dataflow](/get-started/arrangements/#dataflows) channels in the system.
+
+    It distinguishes between individual records (`sent`, `received`) and batches of records (`batch_sent`, `batch_sent`).'
+  columns:
+  - name: channel_id
+    type: uint8
+    meaning: The ID of the channel. Corresponds to [`mz_dataflow_channels.id`](#mz_dataflow_channels).
+  - name: sent
+    type: numeric
+    meaning: The number of messages sent.
+  - name: received
+    type: numeric
+    meaning: The number of messages received.
+  - name: batch_sent
+    type: numeric
+    meaning: The number of batches sent.
+  - name: batch_received
+    type: numeric
+    meaning: The number of batches received.
+- name: mz_peek_durations_histogram
+  description: The `mz_peek_durations_histogram` view describes a histogram of the duration in nanoseconds of read queries ("peeks") in the [dataflow](/get-started/arrangements/#dataflows) layer.
+  columns:
+  - name: type
+    type: text
+    meaning: 'The peek variant: `index` or `persist`.'
+  - name: duration_ns
+    type: uint8
+    meaning: The upper bound of the bucket in nanoseconds.
+  - name: count
+    type: numeric
+    meaning: The (noncumulative) count of peeks in this bucket.
+- name: mz_records_per_dataflow
+  description: The `mz_records_per_dataflow` view describes the number of records in each [dataflow](/get-started/arrangements/#dataflows).
+  columns:
+  - name: id
+    type: uint8
+    meaning: The ID of the dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows).
+  - name: name
+    type: text
+    meaning: The internal name of the dataflow.
+  - name: records
+    type: bigint
+    meaning: The number of records in the dataflow.
+  - name: batches
+    type: bigint
+    meaning: The number of batches in the dataflow.
+  - name: size
+    type: bigint
+    meaning: The utilized size in bytes of the arrangements.
+  - name: capacity
+    type: bigint
+    meaning: The capacity in bytes of the arrangements. Can be larger than the size.
+  - name: allocations
+    type: bigint
+    meaning: The number of separate memory allocations backing the arrangements.
+- name: mz_records_per_dataflow_operator
+  description: The `mz_records_per_dataflow_operator` view describes the number of records in each [dataflow](/get-started/arrangements/#dataflows) operator in the system.
+  columns:
+  - name: id
+    type: uint8
+    meaning: The ID of the operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+  - name: name
+    type: text
+    meaning: The internal name of the operator.
+  - name: dataflow_id
+    type: uint8
+    meaning: The ID of the dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows).
+  - name: records
+    type: bigint
+    meaning: The number of records in the operator.
+  - name: batches
+    type: bigint
+    meaning: The number of batches in the dataflow.
+  - name: size
+    type: bigint
+    meaning: The utilized size in bytes of the arrangement.
+  - name: capacity
+    type: bigint
+    meaning: The capacity in bytes of the arrangement. Can be larger than the size.
+  - name: allocations
+    type: bigint
+    meaning: The number of separate memory allocations backing the arrangement.
+- name: mz_scheduling_elapsed
+  description: The `mz_scheduling_elapsed` view describes the total amount of time spent in each [dataflow](/get-started/arrangements/#dataflows) operator.
+  columns:
+  - name: id
+    type: uint8
+    meaning: The ID of the operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+  - name: elapsed_ns
+    type: numeric
+    meaning: The total elapsed time spent in the operator in nanoseconds.
+- name: mz_scheduling_parks_histogram
+  description: The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow](/get-started/arrangements/#dataflows) worker park events. A park event occurs when a worker has no outstanding work.
+  columns:
+  - name: slept_for_ns
+    type: uint8
+    meaning: The actual length of the park event in nanoseconds.
+  - name: requested_ns
+    type: uint8
+    meaning: The requested length of the park event in nanoseconds.
+  - name: count
+    type: numeric
+    meaning: The (noncumulative) count of park events in this bucket.

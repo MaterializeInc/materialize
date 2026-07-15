@@ -1,10 +1,10 @@
-# doc/user/data/catalog_types.yml
-#
-# Maps a catalog column type name to its documentation URL. The catalog-relation
-# shortcode uses this to render type links, because shortcode-rendered cells go
-# through RenderString and cannot see the page-level reference-link definitions.
-# Extend this map as new relations are migrated to data entries.
 uuid: /sql/types/uuid
 text: /sql/types/text
 mz_timestamp: /sql/types/mz_timestamp
 uint8: /sql/types/uint8
+bigint: /sql/types/bigint
+numeric: /sql/types/numeric
+bigint list: /sql/types/list
+uint8 list: /sql/types/list
+double precision: /sql/types/double-precision
+uint2: /sql/types/uint2
