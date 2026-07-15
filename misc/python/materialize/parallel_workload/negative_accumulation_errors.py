@@ -22,8 +22,11 @@ accumulations or similar issues").
 # error messages are reworded, update this list in a single commit so the
 # rest of Parallel Workload picks up the new strings automatically.
 NEGATIVE_ACCUMULATION_ERRORS: list[str] = [
-    # Many places
+    # Many places. NOTE: "Non-monotonic input" is only the internal
+    # `error_logger.log` text; the client-facing EvalError is the lowercase
+    # "... on non-monotonic input" below (monotonic top-k, top-1, reduction).
     "Non-monotonic input",
+    "on non-monotonic input",
     # TopK
     "Negative multiplicities in TopK",
     # Reduce

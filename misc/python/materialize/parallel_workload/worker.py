@@ -34,6 +34,8 @@ class Worker:
     weights: list[float]
     end_time: float
     num_queries: Counter[type[Action]]
+    num_successes: Counter[type[Action]]
+    num_skips: Counter[type[Action]]
     autocommit: bool
     system: bool
     exe: Executor | None
@@ -58,6 +60,10 @@ class Worker:
         self.weights = weights
         self.end_time = end_time
         self.num_queries = Counter()
+        # Unlike num_queries, these are never cleared: they feed the
+        # end-of-run action coverage check.
+        self.num_successes = Counter()
+        self.num_skips = Counter()
         self.autocommit = autocommit
         self.system = system
         self.ignored_errors = defaultdict(Counter)
@@ -68,85 +74,108 @@ class Worker:
     def run(
         self, host: str, pg_port: int, http_port: int, user: str, database: Database
     ) -> None:
-        self.conn = psycopg.connect(
-            host=host, port=pg_port, user=user, dbname="materialize"
-        )
-        self.conn.autocommit = self.autocommit
-        cur = self.conn.cursor()
-        ws = websocket.WebSocket()
-        ws_conn_id, ws_secret_key = ws_connect(ws, host, http_port, user)
-        self.exe = Executor(self.rng, cur, ws, database)
-        self.exe.set_isolation("SERIALIZABLE")
-        cur.execute("SET auto_route_catalog_queries TO false")
-        if self.exe.use_ws:
-            self.exe.pg_pid = ws_conn_id
-        else:
-            cur.execute("SELECT pg_backend_pid()")
-            self.exe.pg_pid = cur.fetchall()[0][0]
+        # In scenarios with kills and deploys materialized can go down at any
+        # point during the setup, keep retrying.
+        for i in range(300):
+            try:
+                self.conn = psycopg.connect(
+                    host=host, port=pg_port, user=user, dbname="materialize"
+                )
+                self.conn.autocommit = self.autocommit
+                cur = self.conn.cursor()
+                ws = websocket.WebSocket()
+                ws_conn_id, ws_secret_key = ws_connect(ws, host, http_port, user)
+                self.exe = Executor(self.rng, cur, ws, database, user=user)
+                self.exe.set_isolation("SERIALIZABLE")
+                cur.execute("SET auto_route_catalog_queries TO false")
+                if self.exe.use_ws:
+                    self.exe.pg_pid = ws_conn_id
+                else:
+                    cur.execute("SELECT pg_backend_pid()")
+                    self.exe.pg_pid = cur.fetchall()[0][0]
+            except Exception:
+                if time.time() > self.end_time:
+                    return
+                if i == 299:
+                    raise
+                time.sleep(1)
+            else:
+                break
+        assert self.exe
 
         while time.time() < self.end_time:
             action = self.rng.choices(self.actions, self.weights)[0]
-            try:
-                if self.exe.rollback_next:
-                    try:
-                        self.exe.rollback()
-                    except QueryError as e:
-                        # ROLLBACK can itself be cancelled by
-                        # `pg_cancel_backend`, leaving psycopg in
-                        # `InFailedSqlTransaction`. Force a reconnect rather
-                        # than retry the rollback.
-                        if (
-                            "Please disconnect and re-connect" in e.msg
-                            or "server closed the connection unexpectedly" in e.msg
-                            or "Can't create a connection to host" in e.msg
-                            or "Connection refused" in e.msg
-                            or "the connection is lost" in e.msg
-                            or "connection in transaction status INERROR" in e.msg
-                            or "canceling statement due to user request" in e.msg
-                            or "current transaction is aborted" in e.msg
-                        ):
-                            self.exe.reconnect_next = True
-                            self.exe.rollback_next = False
-                            continue
+            if not action.applicable(self.exe):
+                continue
+            if self.exe.rollback_next:
+                try:
+                    self.exe.rollback()
+                except QueryError:
+                    # ROLLBACK can itself fail, e.g. cancelled by
+                    # `pg_cancel_backend` or on a broken WS session. Force a
+                    # reconnect rather than leaving a session with an open
+                    # aborted transaction behind.
+                    self.exe.reconnect_next = True
                     self.exe.rollback_next = False
-                if self.exe.reconnect_next:
-                    ReconnectAction(self.rng, self.composition, random_role=False).run(
-                        self.exe
-                    )
-                    self.exe.reconnect_next = False
-                if action.run(self.exe):
-                    self.num_queries[type(action)] += 1
-            except QueryError as e:
-                self.num_queries[type(action)] += 1
-                # TODO(def-): Reduce number of errors for temp tables/views? At
-                # least the errors will be fast, so maybe not worth it
-                # if "temp" in e.msg:
-                #     print(e.query)
-                #     print(e.msg)
-                for error_to_ignore in action.errors_to_ignore(self.exe):
-                    if error_to_ignore in e.msg:
-                        self.ignored_errors[error_to_ignore][type(action)] += 1
-                        if (
-                            "Please disconnect and re-connect" in e.msg
-                            or "server closed the connection unexpectedly" in e.msg
-                            or "Can't create a connection to host" in e.msg
-                            or "Connection refused" in e.msg
-                            or "the connection is lost" in e.msg
-                            or "connection in transaction status INERROR" in e.msg
-                        ):
-                            self.exe.reconnect_next = True
-                        else:
-                            self.exe.rollback_next = True
-                        break
-                else:
-                    thread_name = threading.current_thread().getName()
-                    self.occurred_exception = e
-                    print(f"+++ [{thread_name}] Query failed: {e.query} {e.msg}")
-                    raise
-            except Exception as e:
-                self.occurred_exception = e
-                raise e
+                    continue
+                self.exe.rollback_next = False
+            if self.exe.reconnect_next:
+                self.exe.reconnect_next = False
+                # Run as its own action so failures are attributed to
+                # ReconnectAction, not to `action`, which hasn't run yet.
+                self.run_action(
+                    ReconnectAction(self.rng, self.composition, random_role=False)
+                )
+                if self.exe.reconnect_next or self.exe.rollback_next:
+                    # Reconnecting failed with an ignored error. Always retry
+                    # the reconnect, never fall through to the action: the
+                    # old session may hold an aborted transaction that fails
+                    # all statements.
+                    self.exe.reconnect_next = True
+                    self.exe.rollback_next = False
+                    time.sleep(1)
+                    continue
+            self.run_action(action)
 
         self.exe.cur.connection.close()
         if self.exe.ws:
             self.exe.ws.close()
+
+    def run_action(self, action: Action) -> None:
+        assert self.exe
+        try:
+            if action.run(self.exe):
+                self.num_queries[type(action)] += 1
+                self.num_successes[type(action)] += 1
+            else:
+                self.num_skips[type(action)] += 1
+        except QueryError as e:
+            self.num_queries[type(action)] += 1
+            # TODO(def-): Reduce number of errors for temp tables/views? At
+            # least the errors will be fast, so maybe not worth it
+            # if "temp" in e.msg:
+            #     print(e.query)
+            #     print(e.msg)
+            for error_to_ignore in action.errors_to_ignore(self.exe):
+                if error_to_ignore in e.msg:
+                    self.ignored_errors[error_to_ignore][type(action)] += 1
+                    if (
+                        "Please disconnect and re-connect" in e.msg
+                        or "server closed the connection unexpectedly" in e.msg
+                        or "Can't create a connection to host" in e.msg
+                        or "Connection refused" in e.msg
+                        or "the connection is lost" in e.msg
+                        or "connection in transaction status INERROR" in e.msg
+                    ):
+                        self.exe.reconnect_next = True
+                    else:
+                        self.exe.rollback_next = True
+                    break
+            else:
+                thread_name = threading.current_thread().getName()
+                self.occurred_exception = e
+                print(f"+++ [{thread_name}] Query failed: {e.query} {e.msg}")
+                raise
+        except Exception as e:
+            self.occurred_exception = e
+            raise e
