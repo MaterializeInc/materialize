@@ -394,11 +394,6 @@ impl Coordinator {
     /// controller's [`ClusterControllerCtx::has_hydratable_objects`] pull (see
     /// the trait method for the approximation contract and why mismatches with
     /// the hydration check are self-healing).
-    ///
-    /// Counts the dataflow-backed items among the cluster's `bound_objects`:
-    /// indexes, materialized views, sinks, and ingestion sources. A webhook
-    /// source is bound to its cluster but runs no dataflow on any replica, so
-    /// it is nothing a burst could accelerate.
     fn cluster_has_hydratable_objects(&self, cluster_id: ClusterId) -> bool {
         use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc};
 
@@ -412,6 +407,8 @@ impl Coordinator {
                 CatalogItem::Index(_) | CatalogItem::MaterializedView(_) | CatalogItem::Sink(_) => {
                     true
                 }
+                // Only ingestions: a webhook source is bound to its cluster but
+                // runs no dataflow on any replica, nothing a burst accelerates.
                 CatalogItem::Source(source) => matches!(
                     source.data_source,
                     DataSourceDesc::Ingestion { .. } | DataSourceDesc::OldSyntaxIngestion { .. }

@@ -186,7 +186,7 @@ shape is in [`mz_clusters`](../mz_catalog/#mz_clusters).
 
 ## `mz_cluster_auto_scaling_strategies`
 
-The `mz_cluster_auto_scaling_strategies` collection view shows the configured
+The `mz_cluster_auto_scaling_strategies` collection shows the configured
 `AUTO SCALING STRATEGY` of each managed cluster that has one, together with any
 in-flight autoscaling state. A row is present while a strategy is configured or
 an autoscaling action is running.

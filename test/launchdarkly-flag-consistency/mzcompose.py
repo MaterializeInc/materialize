@@ -252,7 +252,6 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_eq_classes_withholding_errors
     enable_fixed_correlated_cte_lowering
     enable_frontend_subscribes
-    enable_glue_schema_registry
     enable_hydration_burst
     enable_introspection_subscribes
     enable_less_reduce_in_eqprop

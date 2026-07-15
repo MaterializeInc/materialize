@@ -102,8 +102,8 @@ pub trait Strategy: Send + Sync {
 pub struct SignalRequest {
     /// Probe which of the cluster's replicas report all collections hydrated.
     pub hydration: bool,
-    /// Check whether the cluster has at least one hydratable object (an index,
-    /// materialized view, ingestion source, or sink bound to it).
+    /// Check whether the cluster has at least one hydratable object bound to
+    /// it. See `ClusterControllerCtx::has_hydratable_objects` for what counts.
     pub hydratable_objects: bool,
 }
 
@@ -474,7 +474,6 @@ impl Strategy for HydrationBurstStrategy {
         SignalRequest {
             hydration: active,
             hydratable_objects: active && state.burst.is_none(),
-            ..Default::default()
         }
     }
 

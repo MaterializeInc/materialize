@@ -463,10 +463,8 @@ fn reconcile_replicas(
 
     let mut decisions = Vec::new();
 
-    // Track existing names so freshly-created replicas avoid collisions: both the
-    // controller-owned replicas and the non-owned (INTERNAL / BILLED AS) names the
-    // observation reserves, so a generated name can never collide with a replica
-    // already on the cluster.
+    // Track existing names, owned and reserved, so a generated name never
+    // collides with a replica already on the cluster.
     let used_names: Vec<&str> = state
         .replicas
         .iter()

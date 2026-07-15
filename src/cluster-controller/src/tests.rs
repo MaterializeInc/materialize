@@ -1931,7 +1931,7 @@ mod hydration_burst {
     };
     use crate::ctx::{
         AutoScalingPolicy, AvailabilityZones, BurstAudit, BurstFinishCause, BurstRecord,
-        BurstWrite, ClusterState, OnHydrationPolicy, ReplicaShape, StateWrite,
+        BurstWrite, ClusterState, OnHydrationPolicy, ReplicaShape,
     };
     use crate::strategy::{
         ConfigSignals, HYDRATION_BURST_STRATEGY_NAME, HydrationBurstStrategy, LiveSignals, Strategy,
@@ -2091,26 +2091,13 @@ mod hydration_burst {
     }
 
     #[mz_ore::test]
-    fn burst_arms_with_unreporting_steady_replica_and_objects() {
-        // A cluster WITH objects whose steady replica reports nothing (crashed,
-        // restarting, or not yet registered with the compute controller) reads
-        // as un-hydrated, so a burst arms. Correct: the objects are not served
-        // and a burst replica can pick them up.
-        let (s, signals) = burst_state(
-            "100cc",
-            1,
-            "400cc",
-            Duration::from_millis(10),
-            vec![observed(replica(1), "r0", "100cc")],
-            None,
-        );
-        let write = HydrationBurstStrategy.update_state(&s, &signals, &config(), now(1000));
-        assert!(
-            write.burst.is_some(),
-            "burst arms on an unreporting steady replica"
-        );
-
-        // Same with the steady replica absent entirely.
+    fn burst_arms_with_absent_steady_replica() {
+        // A cluster On (rf 1) with objects but no steady replica observed at all
+        // (still provisioning, or crashed) reads as un-hydrated, so a burst
+        // arms. Correct: the objects are not served and a burst replica can pick
+        // them up. The kernel cannot distinguish this from a present-but-
+        // unreporting replica: both are absence from `hydrated_replicas`, which
+        // `burst_arms_when_steady_unhydrated` covers.
         let (s, signals) = burst_state(
             "100cc",
             1,
@@ -2633,25 +2620,5 @@ mod hydration_burst {
                 .any(|r| r.shape.size == "400cc"),
             "the burst replica was created under a matching witness"
         );
-    }
-
-    #[mz_ore::test]
-    fn burst_success_precedence_when_hydrated_with_record() {
-        // Record present and steady hydrated, but already stamped within linger:
-        // the record is held, not torn down, until linger elapses (a previous
-        // arm/stamp test path). Here a fresh stamp happens because not yet stamped.
-        let (s, mut signals) = burst_state(
-            "100cc",
-            1,
-            "400cc",
-            Duration::from_millis(50),
-            vec![observed(replica(1), "r0", "100cc")],
-            Some(record("400cc", Duration::from_millis(50), None)),
-        );
-        signals.hydrated_replicas.insert(replica(1));
-        let write: StateWrite =
-            HydrationBurstStrategy.update_state(&s, &signals, &config(), now(2000));
-        let burst = written_burst_record(&write).expect("stamped");
-        assert_eq!(burst.steady_hydrated_at, Some(now(2000)));
     }
 }
