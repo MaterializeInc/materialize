@@ -1,0 +1,33 @@
+# doc/user/data/mz_introspection.yml
+#
+# Column documentation for relations in the mz_introspection schema, rendered by
+# the catalog-relation shortcode and checked against the catalog by
+# ci/test/lint-docs-catalog.py. Each relation lists its base columns and any
+# per_worker or raw variants. Column `meaning` must match the catalog
+# column_comments verbatim. Use inline markdown links, not reference-style links.
+relations:
+  - name: mz_active_peeks
+    description: |
+      The `mz_active_peeks` view describes all read queries ("peeks") that are pending in the [dataflow](/get-started/arrangements/#dataflows) layer.
+    columns:
+      - name: id
+        type: uuid
+        meaning: The ID of the peek request.
+      - name: object_id
+        type: text
+        meaning: "The ID of the collection the peek is targeting. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources), or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables)."
+      - name: type
+        type: text
+        meaning: "The type of the corresponding peek: `index` if targeting an index or temporary dataflow; `persist` for a source, materialized view, or table."
+      - name: time
+        type: mz_timestamp
+        meaning: The timestamp the peek has requested.
+    variants:
+      - name: mz_active_peeks_per_worker
+        kind: per_worker
+        description: |
+          The same data as `mz_active_peeks`, but split by Timely Dataflow worker.
+        columns:
+          - name: worker_id
+            type: uint8
+            meaning: The ID of the Timely Dataflow worker.
