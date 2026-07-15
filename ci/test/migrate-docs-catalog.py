@@ -196,3 +196,45 @@ def migrate(md_text: str) -> tuple[list[dict], str, dict[str, str]]:
         rewritten_md += "\n"
 
     return entries, rewritten_md, types_seen
+
+
+if __name__ == "__main__":
+    import sys
+
+    md_path = sys.argv[
+        1
+    ]  # e.g. doc/user/content/reference/system-catalog/mz_introspection.md
+    md_text = open(md_path, encoding="utf-8").read()
+    entries, rewritten, types = migrate(md_text)
+
+    # Schema is the data file basename (matches the markers' schema).
+    import os
+
+    schema_name = os.path.splitext(os.path.basename(md_path))[0]
+    data_path = os.path.join("doc", "user", "data", f"{schema_name}.yml")
+
+    import yaml
+
+    existing = {}
+    if os.path.exists(data_path):
+        existing = yaml.safe_load(open(data_path, encoding="utf-8")) or {}
+    relations = existing.get("relations", [])
+    have = {r["name"] for r in relations}
+    for e in entries:
+        if e["name"] not in have:
+            relations.append(e)
+    existing["relations"] = relations
+
+    types_path = os.path.join("doc", "user", "data", "catalog_types.yml")
+    types_map = {}
+    if os.path.exists(types_path):
+        types_map = yaml.safe_load(open(types_path, encoding="utf-8")) or {}
+    for k, v in types.items():
+        types_map.setdefault(k, v)
+
+    open(md_path, "w", encoding="utf-8").write(rewritten)
+    with open(data_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(existing, f, sort_keys=False, allow_unicode=True, width=10_000)
+    with open(types_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(types_map, f, sort_keys=False, allow_unicode=True, width=10_000)
+    print(f"migrated {len(entries)} relations into {data_path}")
