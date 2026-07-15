@@ -26,6 +26,7 @@ from typing import Any
 from urllib.parse import quote
 
 import pg8000
+import psycopg
 import requests
 from pg8000.exceptions import InterfaceError
 from psycopg import Cursor
@@ -125,12 +126,19 @@ SERVICES = [
             # balancerd.
             DnsmasqEntry(
                 type="cname",
-                key="materialized",
+                key="sni.test",
                 value="environmentd.environment-58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3-0.svc.cluster.local",
             ),
             DnsmasqEntry(
                 type="address",
                 key="environmentd.environment-58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3-0.svc.cluster.local",
+                value=STATIC_IPS["materialized"],
+            ),
+            # An A record with no CNAME, to exercise the resolver's no-CNAME
+            # fallback path (see workflow_pgwire_with_sni_no_cname).
+            DnsmasqEntry(
+                type="address",
+                key="direct.test",
                 value=STATIC_IPS["materialized"],
             ),
         ],
@@ -147,8 +155,12 @@ SERVICES = [
             "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
             f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
             f"--frontegg-admin-role={ADMIN_ROLE}",
+            # HTTPS resolves directly to materialized. The generic HTTPS tests
+            # (http, ip-forwarding) do not run dnsmasq, so this must resolve
+            # without the sni.test CNAME. Workflows that exercise SNI routing
+            # over pgwire start dnsmasq and rely on the pgwire template below.
             "--https-sni-resolver-template=materialized:6876",
-            "--pgwire-sni-resolver-template=materialized:6875",
+            "--pgwire-sni-resolver-template=sni.test:6875",
             "--tls-key=/secrets/balancerd.key",
             "--tls-cert=/secrets/balancerd.crt",
             "--internal-tls",
@@ -215,15 +227,22 @@ def grant_all_admin_user(c: Composition):
 
 
 # Assert that contains is present in balancer metrics.
+# Per-connection metrics (tx/rx) are only recorded once the proxied connection
+# closes, and there is a short delay between the client disconnecting and
+# balancerd recording them, so poll for a few seconds.
 def assert_metrics(c: Composition, contains: str):
-    result = c.exec(
-        "materialized",
-        "curl",
-        "http://balancerd:6878/metrics",
-        "-s",
-        capture=True,
-    )
-    assert contains in result.stdout
+    for _ in range(20):
+        result = c.exec(
+            "materialized",
+            "curl",
+            "http://balancerd:6878/metrics",
+            "-s",
+            capture=True,
+        )
+        if contains in result.stdout:
+            return
+        time.sleep(0.5)
+    raise AssertionError(f"{contains!r} not found in balancerd metrics")
 
 
 def sql_cursor(
@@ -236,6 +255,29 @@ def sql_cursor(
         sslmode="require",
         startup_params=startup_params,
     )
+
+
+def sni_sql_cursor(
+    c: Composition, service="balancerd", email="u1@example.com"
+) -> Cursor:
+    """Connect so that the client sends TLS SNI, unlike sql_cursor.
+
+    libpq only sends SNI when host is a hostname, so connecting to 127.0.0.1
+    silently takes balancerd's Frontegg resolver path instead of the SNI
+    path. host=localhost supplies the SNI while hostaddr pins the TCP
+    connection to 127.0.0.1.
+    """
+    conn = psycopg.connect(
+        host="localhost",
+        hostaddr="127.0.0.1",
+        port=c.default_port(service),
+        user=email,
+        password=app_password(email),
+        dbname="materialize",
+        sslmode="require",
+    )
+    conn.autocommit = True
+    return conn.cursor()
 
 
 def pg8000_sql_cursor(
@@ -640,9 +682,17 @@ def workflow_mz_not_running(c: Composition) -> None:
         sql_cursor(c)
         raise RuntimeError("connect() expected to fail")
     except OperationalError as e:
+        # With Mz down, balancerd cannot reach the tenant's backend and reports
+        # it to the client as "upstream server not available" (a resolve
+        # failure and a refused connection both surface this way), without
+        # leaking the underlying DNS or connection error. The remaining strings
+        # are defensive fallbacks for client-side failures depending on how the
+        # connection drops.
         assert any(
             expected in str(e)
             for expected in [
+                "internal error",
+                "upstream server not available",
                 "No route to host",
                 "Connection timed out",
                 "failure in name resolution",
@@ -650,7 +700,7 @@ def workflow_mz_not_running(c: Composition) -> None:
                 "Name or service not known",
                 "SSL connection has been closed unexpectedly",
             ]
-        )
+        ), f"unexpected error connecting with Mz down: {e}"
     except:
         raise RuntimeError("connect() threw an unexpected exception")
 
@@ -673,9 +723,8 @@ def workflow_user(c: Composition) -> None:
                 "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
                 f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
                 f"--frontegg-admin-role={ADMIN_ROLE}",
-                "--https-sni-resolver-template=materialized:6876",
-                # We want to use the frontegg resolver in this
-                "--pgwire-sni-resolver-template=materialized:6875",
+                "--https-sni-resolver-template=sni.test:6876",
+                "--pgwire-sni-resolver-template=sni.test:6875",
                 "--tls-key=/secrets/balancerd.key",
                 "--tls-cert=/secrets/balancerd.crt",
                 "--internal-tls",
@@ -693,9 +742,11 @@ def workflow_user(c: Composition) -> None:
         ),
     ):
         c.up("balancerd", "dnsmasq", "frontegg-mock", "materialized")
-        # Metrics aren't recorded until the connection has closed
-        # Non-admin user.
-        with contextlib.closing(sql_cursor(c, email=OTHER_USER)) as cursor:
+        # Non-admin user. Close the connection, not just the cursor: the tx/rx
+        # metrics are only recorded once balancerd finishes proxying, which
+        # happens when the client connection closes.
+        cursor = sql_cursor(c, email=OTHER_USER)
+        with contextlib.closing(cursor.connection):
             try:
                 cursor.execute("DROP DATABASE materialize CASCADE")
                 raise RuntimeError("execute() expected to fail")
@@ -706,7 +757,6 @@ def workflow_user(c: Composition) -> None:
 
             cursor.execute("SELECT current_user()")
             assert OTHER_USER in str(cursor.fetchall())
-            cursor.close()
 
         assert_metrics(c, 'mz_balancer_tenant_connection_active{source="pgwire"')
         assert_metrics(c, 'mz_balancer_tenant_connection_rx{source="pgwire"')
@@ -773,10 +823,71 @@ def workflow_pgwire_with_sni(c: Composition) -> None:
         "materialized",
         Service("testdrive", idle=True),
     )
-    # We're going to run this using ssl and, notably, without frontegg mock.
-    # This should mean that we need to rely on SNI to do tenant resolution
-    cursor = sql_cursor(c)
+    # The cursor must send SNI for balancerd to take the SNI resolution path,
+    # and frontegg mock is not necessarily up, so Frontegg resolution cannot
+    # be relied on as a fallback.
+    cursor = sni_sql_cursor(c)
     cursor.execute("select 1;")
+    # The tenant is extracted from the CNAME behind the SNI template (see the
+    # dnsmasq entries).
+    assert_metrics(
+        c,
+        'mz_balancer_tenant_pgwire_sni_count{has_sni="true",tenant="58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3"}',
+    )
+
+
+def workflow_pgwire_with_sni_no_cname(c: Composition) -> None:
+    """Like workflow_pgwire_with_sni, but the SNI templates resolve directly
+    to an A record with no CNAME, exercising the resolver's no-CNAME fallback
+    path (no tenant can be extracted, but routing must still work).
+
+    This mirrors self-managed deployments, where orchestratord points the
+    resolver templates at plain Kubernetes services that resolve to A records
+    without a CNAME. It is also the degraded path in cloud when a CNAME
+    lookup transiently fails."""
+    with c.override(
+        Balancerd(
+            command=[
+                "--startup-log-filter=debug",
+                "service",
+                "--pgwire-listen-addr=0.0.0.0:6875",
+                "--https-listen-addr=0.0.0.0:6876",
+                "--internal-http-listen-addr=0.0.0.0:6878",
+                "--frontegg-resolver-template=materialized:6875",
+                "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
+                f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
+                f"--frontegg-admin-role={ADMIN_ROLE}",
+                "--https-sni-resolver-template=direct.test:6876",
+                "--pgwire-sni-resolver-template=direct.test:6875",
+                "--tls-key=/secrets/balancerd.key",
+                "--tls-cert=/secrets/balancerd.crt",
+                "--internal-tls",
+                "--tls-mode=require",
+                "--default-config=balancerd_inject_proxy_protocol_header_http=true",
+                # Nonsensical but we don't need cancellations here
+                "--cancellation-resolver-dir=/secrets/",
+            ],
+            depends_on=["test-certs"],
+            volumes=[
+                "secrets:/secrets",
+            ],
+            dns=[STATIC_IPS["dnsmasq"]],
+            networks={"balancerd": {"ipv4_address": STATIC_IPS["balancerd"]}},
+        ),
+    ):
+        c.up(
+            "balancerd",
+            "dnsmasq",
+            "materialized",
+            Service("testdrive", idle=True),
+        )
+        cursor = sni_sql_cursor(c)
+        cursor.execute("select 1;")
+        # Routing worked, but with no CNAME there is no tenant to extract.
+        assert_metrics(
+            c,
+            'mz_balancer_tenant_pgwire_sni_count{has_sni="true",tenant="unknown"}',
+        )
 
 
 def workflow_split_proxy_header(c: Composition) -> None:
