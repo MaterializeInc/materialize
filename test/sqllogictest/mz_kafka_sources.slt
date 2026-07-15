@@ -1,0 +1,115 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Behavioural tests for mz_catalog.mz_kafka_sources. The view is a
+# BuiltinMaterializedView backed by SQL over mz_internal.mz_catalog_raw:
+# see MZ_KAFKA_SOURCES in src/catalog/src/builtin/mz_catalog.rs and the
+# parse_kafka_source_details helper in
+# src/expr/src/scalar/func/impls/jsonb.rs. These tests pin down the
+# column shape, nullability, and cross-catalog invariants that must be
+# preserved as the SQL evolves.
+#
+# NOTE: the column is named `group_id_prefix` but holds the *full*
+# computed group.id (see KafkaSourceConnection::group_id /
+# KafkaConnection::id_base), not just the user-supplied prefix. This
+# mislabelled semantics is inherited from the pre-conversion BuiltinTable
+# and is preserved verbatim in the MV; the `mz_environment_id()` segment
+# is folded to a literal at plan time (see the Scalar registration in
+# src/sql/src/func.rs). Renaming the column is a separate change.
+
+mode cockroach
+
+reset-server
+
+# --- Schema -------------------------------------------------------------------
+
+# Lock down: 3 columns, canonical order, types, and nullability.
+query TTT
+SELECT c.name, c.type, c.nullable::text
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_objects o ON c.id = o.id
+JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
+WHERE o.name = 'mz_kafka_sources' AND s.name = 'mz_catalog'
+ORDER BY c.position
+----
+id  text  false
+group_id_prefix  text  false
+topic  text  false
+
+# --- Cross-catalog FK invariant -----------------------------------------------
+
+# Every row in mz_kafka_sources must join back to a source in mz_sources.
+query I
+SELECT count(*) FROM mz_catalog.mz_kafka_sources ks
+LEFT JOIN mz_sources s ON ks.id = s.id
+WHERE s.id IS NULL
+----
+0
+
+# --- Row-count parity with mz_sources -----------------------------------------
+
+# The set of rows in mz_kafka_sources must be exactly the set of kafka
+# sources visible in mz_sources.
+query I
+SELECT
+  (SELECT count(*) FROM mz_catalog.mz_kafka_sources)
+  - (SELECT count(*) FROM mz_sources WHERE type = 'kafka')
+----
+0
+
+# --- Non-null contract --------------------------------------------------------
+
+# All three columns are NOT NULL in the desc.
+query I
+SELECT count(*) FROM mz_catalog.mz_kafka_sources
+WHERE id IS NULL OR group_id_prefix IS NULL OR topic IS NULL
+----
+0
+
+# --- group_id_prefix contains the environment_id marker ----------------------
+
+# group_id_prefix has the shape
+#   <user_prefix_or_empty>materialize-<env_id>-<connection_id>-<gid>
+# See KafkaSourceConnection::group_id / KafkaConnection::id_base. Any row
+# missing the middle segment implies the environment_id interpolation
+# has drifted from the reference implementation.
+#
+# NOTE: this only checks the shape. The full end-to-end parity between this
+# column and the real runtime consumer group ID (both the default and the
+# GROUP ID PREFIX cases) is asserted in test/testdrive/kafka-commit.td, which
+# needs a live Kafka source and so cannot run here.
+query I
+SELECT count(*) FROM mz_catalog.mz_kafka_sources
+WHERE group_id_prefix NOT LIKE '%materialize-' || mz_environment_id() || '-%'
+----
+0
+
+# --- Non-kafka sources are excluded ------------------------------------------
+
+# A LOAD GENERATOR source is a source but must not appear in
+# mz_kafka_sources.
+statement ok
+CREATE SOURCE lg_src IN CLUSTER quickstart FROM LOAD GENERATOR COUNTER
+
+query I
+SELECT count(*) FROM mz_catalog.mz_kafka_sources
+WHERE id = (SELECT id FROM mz_sources WHERE name = 'lg_src')
+----
+0
+
+statement ok
+DROP SOURCE lg_src
+
+# --- The view is queryable and empty on a fresh env -------------------------
+
+# Fresh envs have no upstream Kafka, so this view must be empty.
+query I
+SELECT count(*) FROM mz_catalog.mz_kafka_sources
+----
+0

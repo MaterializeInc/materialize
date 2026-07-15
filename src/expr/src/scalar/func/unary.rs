@@ -468,6 +468,8 @@ derive_unary!(
     ParseCatalogCreateSql,
     ParseCatalogId,
     ParseCatalogPrivileges,
+    ParseKafkaSourceDetails,
+    ParsePostgresSourceDetails,
     RedactSql,
     RoundFloat32,
     RoundFloat64,

@@ -119,6 +119,11 @@ impl<C: ConnectionAccess> KafkaSourceConnection<C> {
     ///
     /// The caller is responsible for providing the source ID as it is not known
     /// to `KafkaSourceConnection`.
+    ///
+    /// NOTE: the `mz_catalog.mz_kafka_sources` builtin materialized view
+    /// reconstructs this value in SQL (user prefix concatenated with
+    /// `KafkaConnection::id_base`). Keep the two in sync. See the note on
+    /// `id_base` and the parity check in `test/testdrive/kafka-commit.td`.
     pub fn group_id(&self, connection_context: &ConnectionContext, source_id: GlobalId) -> String {
         format!(
             "{}{}",

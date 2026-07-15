@@ -19,13 +19,12 @@ use mz_catalog::builtin::{
     MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_SIZE_INTERNAL,
     MZ_CLUSTER_REPLICA_SIZES, MZ_COLUMNS, MZ_EGRESS_IPS, MZ_FUNCTIONS,
     MZ_HISTORY_RETENTION_STRATEGIES, MZ_ICEBERG_SINKS, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS,
-    MZ_KAFKA_SINKS, MZ_KAFKA_SOURCE_TABLES, MZ_KAFKA_SOURCES, MZ_LICENSE_KEYS, MZ_LIST_TYPES,
-    MZ_MAP_TYPES, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_MYSQL_SOURCE_TABLES,
-    MZ_OBJECT_DEPENDENCIES, MZ_OBJECT_GLOBAL_IDS, MZ_OPERATORS, MZ_POSTGRES_SOURCE_TABLES,
-    MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_SESSIONS, MZ_SINKS,
-    MZ_SOURCE_REFERENCES, MZ_SQL_SERVER_SOURCE_TABLES, MZ_SSH_TUNNEL_CONNECTIONS,
-    MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES,
-    MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
+    MZ_KAFKA_SINKS, MZ_KAFKA_SOURCE_TABLES, MZ_LICENSE_KEYS, MZ_LIST_TYPES, MZ_MAP_TYPES,
+    MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_MYSQL_SOURCE_TABLES, MZ_OBJECT_DEPENDENCIES,
+    MZ_OBJECT_GLOBAL_IDS, MZ_OPERATORS, MZ_POSTGRES_SOURCE_TABLES, MZ_PSEUDO_TYPES,
+    MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_SESSIONS, MZ_SINKS, MZ_SOURCE_REFERENCES,
+    MZ_SQL_SERVER_SOURCE_TABLES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD,
+    MZ_SUBSCRIPTIONS, MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::durable::SourceReferences;
@@ -61,9 +60,7 @@ use mz_storage_types::connections::aws::{AwsAuth, AwsConnection};
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::string_or_secret::StringOrSecret;
 use mz_storage_types::sinks::{IcebergSinkConnection, KafkaSinkConnection, StorageSinkConnection};
-use mz_storage_types::sources::{
-    GenericSourceConnection, KafkaSourceConnection, PostgresSourceConnection, SourceConnection,
-};
+use mz_storage_types::sources::SourceConnection;
 use smallvec::smallvec;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
@@ -278,16 +275,8 @@ impl CatalogState {
             }
             CatalogItem::Source(source) => {
                 match &source.data_source {
-                    DataSourceDesc::Ingestion { desc, .. }
-                    | DataSourceDesc::OldSyntaxIngestion { desc, .. } => match &desc.connection {
-                        GenericSourceConnection::Postgres(postgres) => {
-                            self.pack_postgres_source_update(id, postgres, diff)
-                        }
-                        GenericSourceConnection::Kafka(kafka) => {
-                            self.pack_kafka_source_update(id, source.global_id(), kafka, diff)
-                        }
-                        _ => vec![],
-                    },
+                    DataSourceDesc::Ingestion { .. }
+                    | DataSourceDesc::OldSyntaxIngestion { .. } => vec![],
                     DataSourceDesc::IngestionExport {
                         ingestion_id,
                         external_reference: UnresolvedItemName(external_reference),
@@ -554,41 +543,6 @@ impl CatalogState {
                 } else {
                     Datum::Null
                 },
-            ]),
-            diff,
-        )]
-    }
-
-    fn pack_postgres_source_update(
-        &self,
-        id: CatalogItemId,
-        postgres: &PostgresSourceConnection<ReferencedConnection>,
-        diff: Diff,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        vec![BuiltinTableUpdate::row(
-            &*MZ_POSTGRES_SOURCES,
-            Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                Datum::String(&postgres.publication_details.slot),
-                Datum::from(postgres.publication_details.timeline_id),
-            ]),
-            diff,
-        )]
-    }
-
-    fn pack_kafka_source_update(
-        &self,
-        item_id: CatalogItemId,
-        collection_id: GlobalId,
-        kafka: &KafkaSourceConnection<ReferencedConnection>,
-        diff: Diff,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        vec![BuiltinTableUpdate::row(
-            &*MZ_KAFKA_SOURCES,
-            Row::pack_slice(&[
-                Datum::String(&item_id.to_string()),
-                Datum::String(&kafka.group_id(&self.config.connection_context, collection_id)),
-                Datum::String(&kafka.topic),
             ]),
             diff,
         )]

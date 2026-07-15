@@ -300,43 +300,76 @@ pub static MZ_KAFKA_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| Built
         column_semantic_types: &[("id", SemanticType::CatalogItemId)],
     }),
 });
-pub static MZ_KAFKA_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_kafka_sources",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_KAFKA_SOURCES_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("group_id_prefix", SqlScalarType::String.nullable(false))
-        .with_column("topic", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "id",
-            "The ID of the Kafka source. Corresponds to `mz_catalog.mz_sources.id`.",
-        ),
-        (
-            "group_id_prefix",
-            "The value of the `GROUP ID PREFIX` connection option.",
-        ),
-        (
-            "topic",
-            "The name of the Kafka topic the source is reading from.",
-        ),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "kafka_source",
-        description: "Kafka-specific source configuration (topic, group ID)",
-        links: &const {
-            [OntologyLink {
-                name: "details_of",
-                target: "source",
-                properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
-            }]
-        },
-        column_semantic_types: &[("id", SemanticType::CatalogItemId)],
-    }),
+pub static MZ_KAFKA_SOURCES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_kafka_sources",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_KAFKA_SOURCES_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("group_id_prefix", SqlScalarType::String.nullable(false))
+            .with_column("topic", SqlScalarType::String.nullable(false))
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "id",
+                "The ID of the Kafka source. Corresponds to `mz_catalog.mz_sources.id`.",
+            ),
+            (
+                "group_id_prefix",
+                "The value of the `GROUP ID PREFIX` connection option.",
+            ),
+            (
+                "topic",
+                "The name of the Kafka topic the source is reading from.",
+            ),
+        ]),
+        // NOTE: the `group_id_prefix` column is misnamed. It holds the
+        // full computed `group.id` (see `KafkaSourceConnection::group_id`
+        // / `KafkaConnection::id_base`), not just the user-supplied
+        // prefix. The MV reproduces that behaviour verbatim.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL group_id_prefix,
+    ASSERT NOT NULL topic
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+    COALESCE(details->>'group_id_prefix', '')
+        || 'materialize-' || mz_environment_id()
+        || '-' || (details->>'connection_id')
+        || '-' || mz_internal.parse_catalog_id(data->'value'->'global_id')
+        AS group_id_prefix,
+    details->>'topic' AS topic
+FROM
+    mz_internal.mz_catalog_raw,
+    LATERAL (
+        SELECT mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')
+    ) AS l(parsed),
+    LATERAL (
+        SELECT mz_internal.parse_kafka_source_details(data->'value'->'definition'->'V1'->>'create_sql')
+    ) AS d(details)
+WHERE
+    data->>'kind' = 'Item' AND
+    parsed->>'source_type' = 'kafka'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "kafka_source",
+            description: "Kafka-specific source configuration (topic, group ID)",
+            links: &const {
+                [OntologyLink {
+                    name: "details_of",
+                    target: "source",
+                    properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+                }]
+            },
+            column_semantic_types: &[("id", SemanticType::CatalogItemId)],
+        }),
+    }
 });
 
 pub static MZ_DATABASES: LazyLock<BuiltinMaterializedView> =

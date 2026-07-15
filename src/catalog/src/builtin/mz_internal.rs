@@ -49,43 +49,72 @@ pub static MZ_CATALOG_RAW: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSou
     access: vec![],
     ontology: None,
 });
-pub static MZ_POSTGRES_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_postgres_sources",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::TABLE_MZ_POSTGRES_SOURCES_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("replication_slot", SqlScalarType::String.nullable(false))
-        .with_column("timeline_id", SqlScalarType::UInt64.nullable(true))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "id",
-            "The ID of the source. Corresponds to `mz_catalog.mz_sources.id`.",
-        ),
-        (
-            "replication_slot",
-            "The name of the replication slot in the PostgreSQL database that Materialize will create and stream data from.",
-        ),
-        (
-            "timeline_id",
-            "The PostgreSQL timeline ID determined on source creation.",
-        ),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "postgres_source",
-        description: "Postgres source-level details",
-        links: &const {
-            [OntologyLink {
-                name: "details_of",
-                target: "source",
-                properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
-            }]
-        },
-        column_semantic_types: &[("id", SemanticType::CatalogItemId)],
-    }),
+pub static MZ_POSTGRES_SOURCES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_postgres_sources",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_POSTGRES_SOURCES_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("replication_slot", SqlScalarType::String.nullable(false))
+            .with_column("timeline_id", SqlScalarType::UInt64.nullable(true))
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "id",
+                "The ID of the source. Corresponds to `mz_catalog.mz_sources.id`.",
+            ),
+            (
+                "replication_slot",
+                "The name of the replication slot in the PostgreSQL database that Materialize will create and stream data from.",
+            ),
+            (
+                "timeline_id",
+                "The PostgreSQL timeline ID determined on source creation.",
+            ),
+        ]),
+        // `parse_postgres_source_details` extracts `slot` and `timeline_id`
+        // from the hex-encoded protobuf `DETAILS` option on the persisted
+        // `CREATE SOURCE`. Any row where that decode fails poisons the whole
+        // MV, so this MV MUST be filtered to postgres sources first via
+        // `parse_catalog_create_sql`.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL replication_slot
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+    details->>'slot' AS replication_slot,
+    (details->>'timeline_id')::uint8 AS timeline_id
+FROM
+    mz_internal.mz_catalog_raw,
+    LATERAL (
+        SELECT mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')
+    ) AS l(parsed),
+    LATERAL (
+        SELECT mz_internal.parse_postgres_source_details(data->'value'->'definition'->'V1'->>'create_sql')
+    ) AS d(details)
+WHERE
+    data->>'kind' = 'Item' AND
+    parsed->>'source_type' = 'postgres'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "postgres_source",
+            description: "Postgres source-level details",
+            links: &const {
+                [OntologyLink {
+                    name: "details_of",
+                    target: "source",
+                    properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+                }]
+            },
+            column_semantic_types: &[("id", SemanticType::CatalogItemId)],
+        }),
+    }
 });
 pub static MZ_POSTGRES_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_postgres_source_tables",
