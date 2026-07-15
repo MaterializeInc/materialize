@@ -695,6 +695,230 @@ WHERE
     }
 });
 
+pub static MZ_CLUSTER_RECONFIGURATIONS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_cluster_reconfigurations",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_CLUSTER_RECONFIGURATIONS_OID,
+        desc: RelationDesc::builder()
+            .with_column("cluster_id", SqlScalarType::String.nullable(false))
+            .with_column("status", SqlScalarType::String.nullable(false))
+            .with_column("deadline", SqlScalarType::MzTimestamp.nullable(false))
+            .with_column("on_timeout", SqlScalarType::String.nullable(false))
+            .with_column("target", SqlScalarType::Jsonb.nullable(false))
+            .with_column("changes", SqlScalarType::Jsonb.nullable(false))
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "cluster_id",
+                "The ID of the cluster. Corresponds to `mz_clusters.id`.",
+            ),
+            (
+                "status",
+                "The lifecycle status of the reconfiguration: `in-progress` while the controller converges on the target, then a terminal `finalized`, `timed-out`, `cancelled`, or `resource-exhausted`. The record is retained after it settles, so the latest outcome stays inspectable until a later reconfiguration overwrites it.",
+            ),
+            (
+                "deadline",
+                "The deadline by which the reconfiguration must complete. After it passes, the `on_timeout` action applies.",
+            ),
+            (
+                "on_timeout",
+                "The action applied if `deadline` passes before the target hydrates: `commit` (cut over to the not-yet-hydrated target) or `rollback` (revert to the pre-reconfiguration shape).",
+            ),
+            (
+                "target",
+                "The config shape the cluster is reconfiguring to, as JSON: `size`, `replication_factor`, `availability_zones`, and `logging`. The realized (current) shape is in `mz_clusters`.",
+            ),
+            (
+                "changes",
+                "The dimensions in which `target` differs from the cluster's realized configuration, as a JSON object holding the target value per changed dimension. Empty (`{}`) once a record settles with its target applied. A rolled-back record keeps the abandoned diff.",
+            ),
+        ]),
+        // One row per managed cluster with a reconfiguration record, retained
+        // with a terminal `status` after it settles until the next `ALTER`
+        // overwrites it. Two null flavors get filtered: unmanaged clusters
+        // store their config under the `Unmanaged` variant, so the `Managed`
+        // lookup is SQL NULL (the CTE's WHERE), and a managed cluster that has
+        // never gracefully reconfigured has the optional field unset, which
+        // `mz_catalog_raw` serializes as explicit JSON `null` rather than
+        // omitting the key (hence `!= 'null'`, `IS NOT NULL` would not filter
+        // it). Status values are kebab-case like the
+        // catalog's other multi-word values, and the ELSE arms pass unmapped
+        // enum variants through verbatim: falling to NULL would trip the
+        // ASSERT NOT NULL and error every read of this relation and of
+        // `mz_show_clusters`, which joins it. `changes` diffs `target` against
+        // the realized config per dimension. Both sides come from the same raw
+        // catalog document, so the jsonb comparison is trivially canonical,
+        // and it matches the routing's shape-equality (an AZ reorder counts
+        // as a change in both).
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL cluster_id,
+    ASSERT NOT NULL status,
+    ASSERT NOT NULL deadline,
+    ASSERT NOT NULL on_timeout,
+    ASSERT NOT NULL target,
+    ASSERT NOT NULL changes
+) AS
+WITH
+    managed AS (
+        SELECT
+            mz_internal.parse_catalog_id(data->'key'->'id') AS cluster_id,
+            data->'value'->'config'->'variant'->'Managed' AS config
+        FROM mz_internal.mz_catalog_raw
+        WHERE
+            data->>'kind' = 'Cluster' AND
+            data->'value'->'config'->'variant'->'Managed' IS NOT NULL
+    ),
+    records AS (
+        SELECT
+            cluster_id,
+            config,
+            config->'reconfiguration' AS reconfiguration,
+            config->'reconfiguration'->'target' AS target
+        FROM managed
+        WHERE config->'reconfiguration' != 'null'
+    )
+SELECT
+    r.cluster_id,
+    CASE r.reconfiguration->>'status'
+        WHEN 'InProgress' THEN 'in-progress'
+        WHEN 'Finalized' THEN 'finalized'
+        WHEN 'TimedOut' THEN 'timed-out'
+        WHEN 'Cancelled' THEN 'cancelled'
+        WHEN 'ResourceExhausted' THEN 'resource-exhausted'
+        ELSE r.reconfiguration->>'status'
+    END AS status,
+    (r.reconfiguration->>'deadline')::mz_timestamp AS deadline,
+    CASE r.reconfiguration->>'on_timeout'
+        WHEN 'Commit' THEN 'commit'
+        WHEN 'Rollback' THEN 'rollback'
+        ELSE r.reconfiguration->>'on_timeout'
+    END AS on_timeout,
+    r.target,
+    CASE WHEN r.target->'size' != r.config->'size'
+        THEN jsonb_build_object('size', r.target->'size') ELSE '{}'::jsonb END ||
+    CASE WHEN r.target->'replication_factor' != r.config->'replication_factor'
+        THEN jsonb_build_object('replication_factor', r.target->'replication_factor') ELSE '{}'::jsonb END ||
+    CASE WHEN r.target->'availability_zones' != r.config->'availability_zones'
+        THEN jsonb_build_object('availability_zones', r.target->'availability_zones') ELSE '{}'::jsonb END ||
+    CASE WHEN r.target->'logging' != r.config->'logging'
+        THEN jsonb_build_object('logging', r.target->'logging') ELSE '{}'::jsonb END
+    AS changes
+FROM records r",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "cluster_reconfiguration",
+            description: "Latest graceful cluster reconfiguration",
+            links: &const {
+                [OntologyLink {
+                    // At most one reconfiguration record per cluster (unique
+                    // key on `cluster_id`), so the FK is one-to-one.
+                    name: "belongs_to_cluster",
+                    target: "cluster",
+                    properties: LinkProperties::fk("cluster_id", "id", Cardinality::OneToOne),
+                }]
+            },
+            column_semantic_types: &[("cluster_id", SemanticType::ClusterId)],
+        }),
+    }
+});
+
+pub const MZ_CLUSTER_RECONFIGURATIONS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_cluster_reconfigurations_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_CLUSTER_RECONFIGURATIONS_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_cluster_reconfigurations (cluster_id)",
+    is_retained_metrics_object: false,
+};
+
+pub static MZ_CLUSTER_AUTO_SCALING_STRATEGIES: LazyLock<BuiltinMaterializedView> = LazyLock::new(
+    || {
+        BuiltinMaterializedView {
+            name: "mz_cluster_auto_scaling_strategies",
+            schema: MZ_INTERNAL_SCHEMA,
+            oid: oid::MV_MZ_CLUSTER_AUTO_SCALING_STRATEGIES_OID,
+            desc: RelationDesc::builder()
+                .with_column("cluster_id", SqlScalarType::String.nullable(false))
+                .with_column("strategy", SqlScalarType::Jsonb.nullable(false))
+                .with_column("state", SqlScalarType::Jsonb.nullable(true))
+                .with_key(vec![0])
+                .finish(),
+            column_comments: BTreeMap::from_iter([
+                (
+                    "cluster_id",
+                    "The ID of the cluster. Corresponds to `mz_clusters.id`.",
+                ),
+                (
+                    "strategy",
+                    "**Unstable** The configured autoscaling policy, as JSON. Currently an `on_hydration` sub-policy carrying its `hydration_size` and optional `linger_duration`.",
+                ),
+                (
+                    "state",
+                    "**Unstable** The in-flight autoscaling runtime state, as JSON keyed by strategy, or `NULL` when nothing is running. Currently a `burst` key carrying the active hydration burst: its `burst_size`, `linger_duration`, and `steady_hydrated_at`.",
+                ),
+            ]),
+            // One row per managed cluster with a strategy configured or a burst
+            // running (a burst can briefly outlive a just-removed policy).
+            // Absent fields serialize as JSON `null`. `state` is keyed by
+            // strategy so a future strategy's state is another key, not a
+            // schema change.
+            sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL cluster_id,
+    ASSERT NOT NULL strategy
+) AS
+WITH
+    managed AS (
+        SELECT
+            mz_internal.parse_catalog_id(data->'key'->'id') AS cluster_id,
+            data->'value'->'config'->'variant'->'Managed'->'auto_scaling_strategy' AS strategy,
+            data->'value'->'config'->'variant'->'Managed'->'burst' AS burst
+        FROM mz_internal.mz_catalog_raw
+        WHERE
+            data->>'kind' = 'Cluster' AND
+            data->'value'->'config'->'variant'->'Managed' IS NOT NULL
+    )
+SELECT
+    m.cluster_id,
+    COALESCE(m.strategy, 'null'::jsonb) AS strategy,
+    CASE WHEN m.burst != 'null' THEN jsonb_build_object('burst', m.burst) END AS state
+FROM managed m
+WHERE m.strategy != 'null' OR m.burst != 'null'",
+            is_retained_metrics_object: false,
+            access: vec![PUBLIC_SELECT],
+            ontology: Some(Ontology {
+                entity_name: "cluster_auto_scaling_strategy",
+                description: "Configured cluster autoscaling strategy and in-flight state",
+                links: &const {
+                    [OntologyLink {
+                        // At most one row per managed cluster (unique key on
+                        // `cluster_id`), so the FK is one-to-one.
+                        name: "belongs_to_cluster",
+                        target: "cluster",
+                        properties: LinkProperties::fk("cluster_id", "id", Cardinality::OneToOne),
+                    }]
+                },
+                column_semantic_types: &[("cluster_id", SemanticType::ClusterId)],
+            }),
+        }
+    },
+);
+
+pub const MZ_CLUSTER_AUTO_SCALING_STRATEGIES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_cluster_auto_scaling_strategies_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_CLUSTER_AUTO_SCALING_STRATEGIES_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_cluster_auto_scaling_strategies (cluster_id)",
+    is_retained_metrics_object: false,
+};
+
 pub static MZ_INTERNAL_CLUSTER_REPLICAS: LazyLock<BuiltinMaterializedView> =
     LazyLock::new(|| BuiltinMaterializedView {
         name: "mz_internal_cluster_replicas",
@@ -5160,9 +5384,21 @@ pub static MZ_SHOW_CLUSTERS: LazyLock<BuiltinView> = LazyLock::new(|| {
     desc: RelationDesc::builder()
         .with_column("name", SqlScalarType::String.nullable(false))
         .with_column("replicas", SqlScalarType::String.nullable(true))
+        // One-line summary of any in-flight reconfiguration or burst, NULL
+        // when the cluster is steady.
+        .with_column("activity", SqlScalarType::String.nullable(true))
         .with_column("comment", SqlScalarType::String.nullable(false))
         .finish(),
     column_comments: BTreeMap::new(),
+    // Settled reconfiguration records are retained, so match only
+    // `in-progress`. A non-null auto-scaling `state` means a live burst.
+    // The reconfiguration summary names only the dimensions the record
+    // actually changes (from `changes`), with values where they read well.
+    // NOTE: `||` with a NULL operand nulls the whole summary. `burst_size`
+    // is a non-optional field of its record, keep it that way or COALESCE.
+    // The NULLIF guards an empty diff (not expected in-progress), which
+    // otherwise would render a dangling 'reconfiguring'.
+    // Neither input needs `mz_now()`, keeping this indexed view non-temporal.
     sql: "
     WITH clusters AS (
         SELECT
@@ -5178,10 +5414,38 @@ pub static MZ_SHOW_CLUSTERS: LazyLock<BuiltinView> = LazyLock::new(|| {
         SELECT id, comment
         FROM mz_internal.mz_comments
         WHERE object_type = 'cluster' AND object_sub_id IS NULL
+    ),
+    reconfigurations AS (
+        SELECT
+            cluster_id,
+            'reconfiguring ' || NULLIF(array_to_string(ARRAY[
+                'size to ' || (changes->>'size'),
+                'replication factor to ' || (changes->>'replication_factor'),
+                CASE WHEN changes->'availability_zones' IS NOT NULL THEN 'availability zones' END,
+                CASE WHEN changes->'logging' IS NOT NULL THEN 'introspection settings' END
+            ], ', '), '') AS summary
+        FROM mz_internal.mz_cluster_reconfigurations
+        WHERE status = 'in-progress'
     )
-    SELECT name, replicas, COALESCE(comment, '') as comment
+    SELECT
+        name,
+        replicas,
+        CASE
+            WHEN recon.summary IS NOT NULL AND scaling.state IS NOT NULL
+                THEN recon.summary
+                     || '; hydration burst at ' || (scaling.state->'burst'->>'burst_size')
+            WHEN recon.summary IS NOT NULL
+                THEN recon.summary
+            WHEN scaling.state IS NOT NULL
+                THEN 'hydration burst at ' || (scaling.state->'burst'->>'burst_size')
+            ELSE NULL
+        END AS activity,
+        COALESCE(comment, '') as comment
     FROM clusters
-    LEFT JOIN comments ON clusters.id = comments.id",
+    LEFT JOIN comments ON clusters.id = comments.id
+    LEFT JOIN reconfigurations recon
+        ON clusters.id = recon.cluster_id
+    LEFT JOIN mz_internal.mz_cluster_auto_scaling_strategies scaling ON clusters.id = scaling.cluster_id",
     access: vec![PUBLIC_SELECT],
     ontology: None,
 }

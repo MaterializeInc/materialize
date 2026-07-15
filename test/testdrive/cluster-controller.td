@@ -456,3 +456,174 @@ ALTER SYSTEM SET enable_cluster_controller = true
 > ALTER CLUSTER cc_unmanaged SET (MANAGED = false)
 
 > DROP CLUSTER cc_unmanaged CASCADE
+
+# ----- Observability: introspection relations + SHOW CLUSTERS -----
+#
+# mz_internal.mz_cluster_reconfigurations retains one row per cluster that has been
+# reconfigured: the target delta (target shape as JSON, deadline, on_timeout) and a
+# `status` that is `in-progress` while the reconfiguration runs, then a terminal
+# `finalized` / `timed-out` / `cancelled`. The row is never cleared by settling,
+# only overwritten by the next ALTER. SHOW CLUSTERS folds an in-progress
+# reconfiguration and the auto-scaling state into a single `activity` summary, NULL
+# when steady.
+
+> CREATE CLUSTER cc_obs (SIZE 'scale=1,workers=1', REPLICATION FACTOR 2)
+
+# Never reconfigured yet, so the relation has no row for this cluster ...
+> SELECT count(*) FROM mz_internal.mz_cluster_reconfigurations recon JOIN mz_clusters ON mz_clusters.id = recon.cluster_id WHERE mz_clusters.name = 'cc_obs'
+0
+
+# ... and SHOW CLUSTERS reports no activity.
+> SELECT name, activity FROM (SHOW CLUSTERS) WHERE name = 'cc_obs'
+cc_obs <null>
+
+# A completed background reconfiguration advances the realized config and retains
+# the record with status `finalized`, so activity settles back to NULL (only an
+# in-progress reconfiguration reads as activity).
+> ALTER CLUSTER cc_obs SET (SIZE 'scale=1,workers=2')
+> SELECT size FROM mz_clusters WHERE name = 'cc_obs'
+scale=1,workers=2
+> SELECT recon.status FROM mz_internal.mz_cluster_reconfigurations recon JOIN mz_clusters ON mz_clusters.id = recon.cluster_id WHERE mz_clusters.name = 'cc_obs'
+finalized
+> SELECT name, activity FROM (SHOW CLUSTERS) WHERE name = 'cc_obs'
+cc_obs <null>
+
+# The audit log captured the lifecycle: `started` when the record was written,
+# `finalized` at cut-over. Every transition records the active deadline.
+> SELECT row_number() OVER (ORDER BY id), details->>'transition', details->>'deadline' IS NOT NULL FROM mz_catalog.mz_audit_events WHERE event_type = 'alter' AND object_type = 'cluster' AND details->>'cluster_name' = 'cc_obs' AND details->>'transition' IS NOT NULL
+1 started true
+2 finalized true
+
+# The event carries the full target shape, not just size and replication factor,
+# so an AZ- or introspection-only reconfiguration (which leaves size and rf
+# unchanged) is still legible here. cc_obs pins no zones and overrides no logging,
+# so those read as their defaults: an empty zone list, introspection debugging
+# off, and the default 1s introspection interval.
+> SELECT details->>'target_size', details->>'target_replication_factor', details->>'target_availability_zones', details->'target_logging'->>'log_logging', details->'target_logging'->>'interval' FROM mz_catalog.mz_audit_events WHERE event_type = 'alter' AND object_type = 'cluster' AND details->>'cluster_name' = 'cc_obs' AND details->>'transition' = 'started'
+scale=1,workers=2 2 [] false "{\"nanos\":0,\"secs\":1}"
+
+> DROP CLUSTER cc_obs
+
+# An ALTER-back: a reconfiguration is started, then re-targeted back to the
+# cluster's original size. Whether the second ALTER cancels the in-flight
+# record or the first has already cut over and the second reshapes back is a
+# matter of timing, so only convergent facts are asserted: the cluster
+# settles at the original size with a single replica, the lifecycle's first
+# transition is `started` and its last is terminal, and the retained record
+# reports a terminal status. The exact cancel semantics are pinned in the
+# controller's kernel unit tests.
+> CREATE CLUSTER cc_cancel (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
+
+> ALTER CLUSTER cc_cancel SET (SIZE 'scale=1,workers=2')
+> ALTER CLUSTER cc_cancel SET (SIZE 'scale=1,workers=1')
+
+> SELECT size FROM mz_clusters WHERE name = 'cc_cancel'
+scale=1,workers=1
+> SELECT name, activity FROM (SHOW CLUSTERS) WHERE name = 'cc_cancel'
+cc_cancel <null>
+
+> SELECT (SELECT details->>'transition' FROM mz_catalog.mz_audit_events WHERE event_type = 'alter' AND object_type = 'cluster' AND details->>'cluster_name' = 'cc_cancel' AND details->>'transition' IS NOT NULL ORDER BY id ASC LIMIT 1), (SELECT details->>'transition' IN ('cancelled', 'finalized') FROM mz_catalog.mz_audit_events WHERE event_type = 'alter' AND object_type = 'cluster' AND details->>'cluster_name' = 'cc_cancel' AND details->>'transition' IS NOT NULL ORDER BY id DESC LIMIT 1)
+started true
+
+> SELECT recon.status IN ('cancelled', 'finalized') FROM mz_internal.mz_cluster_reconfigurations recon JOIN mz_clusters ON mz_clusters.id = recon.cluster_id WHERE mz_clusters.name = 'cc_cancel'
+true
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_cancel'
+1
+
+> DROP CLUSTER cc_cancel
+
+# ----- Rollback at the deadline: record retained as timed-out + timed-out event -----
+#
+# A reconfiguration whose deadline passes before the target hydrates under ON
+# TIMEOUT ROLLBACK is abandoned: the controller drops the target set and retains the
+# record with status `timed-out` without touching the realized config, and the audit
+# log records a matching `timed-out` transition. A TIMEOUT of '0s' puts the deadline
+# in the past, so the rollback happens on the controller's first tick.
+
+> CREATE CLUSTER cc_rollback (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
+
+> ALTER CLUSTER cc_rollback SET (SIZE 'scale=1,workers=2') WITH (WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT 'ROLLBACK'))
+
+# The `timed-out` transition is the definitive rollback signal; poll for it, then
+# read back the settled state. The deadline rides along on every transition.
+> SELECT row_number() OVER (ORDER BY id), details->>'transition', details->>'deadline' IS NOT NULL FROM mz_catalog.mz_audit_events WHERE event_type = 'alter' AND object_type = 'cluster' AND details->>'cluster_name' = 'cc_rollback' AND details->>'transition' IS NOT NULL
+1 started true
+2 timed-out true
+
+# Rolled back: realized config untouched, the record retained as timed-out, replica set unchanged.
+> SELECT size FROM mz_clusters WHERE name = 'cc_rollback'
+scale=1,workers=1
+> SELECT recon.status FROM mz_internal.mz_cluster_reconfigurations recon JOIN mz_clusters ON mz_clusters.id = recon.cluster_id WHERE mz_clusters.name = 'cc_rollback'
+timed-out
+> SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'cc_rollback'
+cc_rollback r1 scale=1,workers=1
+
+# A forced cut-over: TIMEOUT '0s' with ON TIMEOUT COMMIT advances the realized
+# config to the (necessarily un-hydrated) target on the first tick. The retained
+# record carries status `finalized` with the deadline, so a reader can tell it was a
+# past-deadline (forced) cut-over.
+> ALTER CLUSTER cc_rollback SET (SIZE 'scale=1,workers=2') WITH (WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT 'COMMIT'))
+> SELECT size FROM mz_clusters WHERE name = 'cc_rollback'
+scale=1,workers=2
+> SELECT recon.status FROM mz_internal.mz_cluster_reconfigurations recon JOIN mz_clusters ON mz_clusters.id = recon.cluster_id WHERE mz_clusters.name = 'cc_rollback'
+finalized
+
+# An in-flight reconfiguration observed deterministically: a sleeping materialized
+# view in the cluster (the same mz_sleep pattern as above) keeps the target set
+# from hydrating, so the record stays in-progress. The deadline is far away, so no
+# timeout can interfere. There is no unblock-and-converge step: the sleep runs on
+# the replica's worker thread, so even dropping the view cannot unwedge the
+# replicas. The scenario instead ends by dropping the cluster with the record in
+# flight, which must succeed and leaves the lifecycle at `started`.
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET unsafe_enable_unstable_dependencies = true
+
+> CREATE TABLE cc_rollback_t (id int)
+
+> INSERT INTO cc_rollback_t VALUES (1)
+
+> CREATE MATERIALIZED VIEW cc_rollback_slow IN CLUSTER cc_rollback AS
+  SELECT mz_unsafe.mz_sleep(id * 3600) AS s FROM cc_rollback_t
+
+# Change several dimensions at once: size and introspection interval are shape
+# dimensions (each alone would route through a record), and the replication
+# factor rides along in the same statement's record.
+> ALTER CLUSTER cc_rollback SET (SIZE 'scale=1,workers=4', REPLICATION FACTOR 2, INTROSPECTION INTERVAL '2s') WITH (WAIT UNTIL READY (TIMEOUT '600s', ON TIMEOUT 'ROLLBACK'))
+
+# The relation shows the in-flight reconfiguration: status `in-progress`, the target
+# (as JSON), the deadline, and the on_timeout action, while the realized size stays
+# at the pre-ALTER shape.
+> SELECT recon.status, recon.on_timeout, recon.target->>'size', mz_clusters.size FROM mz_internal.mz_cluster_reconfigurations recon JOIN mz_clusters ON mz_clusters.id = recon.cluster_id WHERE mz_clusters.name = 'cc_rollback'
+in-progress rollback scale=1,workers=4 scale=1,workers=2
+
+# `changes` diffs the target against the realized config per dimension: all three
+# altered dimensions appear with their target values, and the untouched
+# availability zones do not.
+> SELECT recon.changes->>'size', recon.changes->>'replication_factor', recon.changes->'logging'->'interval'->>'secs', recon.changes->'availability_zones' IS NULL FROM mz_internal.mz_cluster_reconfigurations recon JOIN mz_clusters ON mz_clusters.id = recon.cluster_id WHERE mz_clusters.name = 'cc_rollback'
+scale=1,workers=4 2 2 true
+
+# SHOW CLUSTERS folds that into the single `activity` column, naming exactly the
+# changed dimensions. (Compared as a boolean because the multi-word activity
+# string cannot be matched as a bare value.)
+> SELECT name, activity = 'reconfiguring size to scale=1,workers=4, replication factor to 2, introspection settings' FROM (SHOW CLUSTERS) WHERE name = 'cc_rollback'
+cc_rollback true
+
+# Dropping the cluster with the record in flight must succeed (the sleeping view
+# rides along via CASCADE), and the controller's stale in-flight decisions are
+# rejected rather than applied against the vanished cluster.
+> DROP CLUSTER cc_rollback CASCADE
+
+> DROP TABLE cc_rollback_t
+
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET unsafe_enable_unstable_dependencies = false
+
+# The audit history survives the drop, in order: the rolled-back attempt, the
+# forced COMMIT cut-over, and the in-flight attempt that ended with the cluster
+# dropped. Every transition carries the deadline.
+> SELECT row_number() OVER (ORDER BY id), details->>'transition', details->>'deadline' IS NOT NULL FROM mz_catalog.mz_audit_events WHERE event_type = 'alter' AND object_type = 'cluster' AND details->>'cluster_name' = 'cc_rollback' AND details->>'transition' IS NOT NULL
+1 started true
+2 timed-out true
+3 started true
+4 finalized true
+5 started true
