@@ -1450,12 +1450,16 @@ async fn build_avro_encoder(
             let client = mz_aws_glue_schema_registry::ClientConfig::new(sdk_config).build();
             let compatibility =
                 compatibility_level.map(mz_storage_client::sink::glue_compatibility_from_csr);
-            // `subject` (`{topic}-key` or `{topic}-value`) is used verbatim as
-            // the Glue schema name, no mangling needed. Kafka topic chars
-            // `[a-zA-Z0-9._-]` are a subset of Glue's `[a-zA-Z0-9-_$#.]`, and
-            // the `-` in the suffix is valid. The longest suffix, `-value`, is
-            // 6 chars, so the max Kafka topic length (249) plus the suffix
-            // lands exactly on Glue's max schema name length (255).
+            // `subject` is used verbatim as the Glue schema name. When it is
+            // topic-derived (`{topic}-key` or `{topic}-value`) no mangling is
+            // needed: Kafka topic chars `[a-zA-Z0-9._-]` are a subset of Glue's
+            // `[a-zA-Z0-9-_$#.]`, and the longest suffix `-value` (6 chars) plus
+            // the max Kafka topic length (249) lands exactly on Glue's max
+            // schema name length (255).
+            //
+            // A user-supplied schema name carries no such guarantee. As with
+            // CSR subjects, it is not validated at plan time, so an out-of-range
+            // or ill-formed name is rejected by Glue here at registration.
             //
             // Kafka topic name rules:
             // https://github.com/a0x8o/kafka/blob/master/core/src/main/scala/kafka/common/Topic.scala
@@ -1527,15 +1531,18 @@ fn encode_collection<'scope>(
                     (Some(desc), Some(KafkaSinkFormatType::Avro {
                         schema,
                         compatibility_level,
+                        schema_name,
                         wire_format,
                     })) => {
+                        let subject = schema_name
+                            .unwrap_or_else(|| format!("{}-key", connection.topic));
                         let encoder = build_avro_encoder(
                             desc,
                             false,
                             schema,
                             compatibility_level,
                             wire_format,
-                            format!("{}-key", connection.topic),
+                            subject,
                             &storage_configuration,
                         )
                         .await?;
@@ -1561,15 +1568,18 @@ fn encode_collection<'scope>(
                 KafkaSinkFormatType::Avro {
                     schema,
                     compatibility_level,
+                    schema_name,
                     wire_format,
                 } => {
+                    let subject = schema_name
+                        .unwrap_or_else(|| format!("{}-value", connection.topic));
                     let encoder = build_avro_encoder(
                         value_desc,
                         debezium,
                         schema,
                         compatibility_level,
                         wire_format,
-                        format!("{}-value", connection.topic),
+                        subject,
                         &storage_configuration,
                     )
                     .await?;

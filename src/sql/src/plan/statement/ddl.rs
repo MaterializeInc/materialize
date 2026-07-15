@@ -2301,7 +2301,17 @@ fn source_sink_cluster_config<'a, 'ctx>(
 
 generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool, Default(true)));
 
-generate_extracted_config!(GlueAvroOption, (SchemaName, String));
+// `SchemaName` is source-only (a source reads one value schema by name). The
+// `Key`/`Value`-prefixed options are sink-only. Which options are valid in
+// which context is enforced by the source purifier and the sink planner.
+generate_extracted_config!(
+    GlueAvroOption,
+    (SchemaName, String),
+    (KeySchemaName, String),
+    (ValueSchemaName, String),
+    (KeyCompatibilityLevel, String),
+    (ValueCompatibilityLevel, String)
+);
 
 #[derive(Debug)]
 pub struct Schema {
@@ -3973,8 +3983,128 @@ fn kafka_sink_builder(
                 } else {
                     options.value_compatibility_level
                 },
+                // Confluent always derives the subject from the topic.
+                schema_name: None,
                 wire_format: WireFormat::Confluent {
                     registry: Some(csr_connection),
+                },
+            })
+        }
+        Format::Avro(AvroSchema::Glue {
+            connection,
+            with_options,
+            seed,
+        }) => {
+            if seed.is_some() {
+                sql_bail!("SEED option does not make sense with sinks");
+            }
+
+            let extracted: GlueAvroOptionExtracted = with_options.try_into()?;
+            let GlueAvroOptionExtracted {
+                schema_name,
+                key_schema_name,
+                value_schema_name,
+                key_compatibility_level,
+                value_compatibility_level,
+                seen: _,
+            } = extracted;
+
+            // The singular `SCHEMA NAME` is source-only: a source reads one
+            // value schema by name, but a sink registers separate key and value
+            // schemas that must not share a name. Steer users to the per-side
+            // options instead.
+            if schema_name.is_some() {
+                sql_bail!(
+                    "SCHEMA NAME is not supported for AWS Glue Schema Registry sinks, \
+                     use KEY SCHEMA NAME and VALUE SCHEMA NAME instead"
+                );
+            }
+
+            // The `KEY`-prefixed options only apply to the key schema, so they
+            // are meaningless without a key. Mirror the CSR clause, which
+            // rejects key-side options without a corresponding KEY field rather
+            // than silently ignoring them. This is checked here rather than
+            // per-side because the key branch runs only when a key exists.
+            if key_desc_and_indices.is_none()
+                && (key_schema_name.is_some() || key_compatibility_level.is_some())
+            {
+                sql_bail!(
+                    "KEY SCHEMA NAME and KEY COMPATIBILITY LEVEL require a corresponding KEY field"
+                );
+            }
+
+            let item = scx.get_item_by_resolved_name(&connection)?;
+            let glue_connection = match item.connection()? {
+                Connection::GlueSchemaRegistry(_) => item.id(),
+                _ => {
+                    sql_bail!(
+                        "{} is not an AWS Glue Schema Registry connection",
+                        scx.catalog
+                            .resolve_full_name(item.name())
+                            .to_string()
+                            .quoted()
+                    )
+                }
+            };
+
+            // Parse the compatibility level through the CSR enum, which rejects
+            // Glue-only levels like DISABLED. `None` leaves the level unset, so
+            // a newly created schema defaults to Glue's `BACKWARD`.
+            let compatibility_level = {
+                let raw = if is_key {
+                    key_compatibility_level
+                } else {
+                    value_compatibility_level
+                };
+                raw.map(|s| {
+                    mz_ccsr::CompatibilityLevel::try_from(s.to_uppercase().as_str())
+                        .map_err(PlanError::Unstructured)
+                })
+                .transpose()?
+            };
+
+            // The schema name defaults to the topic-derived subject and can be
+            // overridden per side. The topic-derived fallback is applied in the
+            // storage layer, which knows the resolved topic name.
+            let schema_name = if is_key {
+                key_schema_name
+            } else {
+                value_schema_name
+            };
+
+            // Unlike the CSR clause, the Glue clause carries no fullname or doc
+            // options, so the schema is generated with defaults.
+            let schema = if is_key {
+                AvroSchemaGenerator::new(
+                    desc.clone(),
+                    false,
+                    Default::default(),
+                    "row",
+                    false,
+                    Some(sink_from),
+                    false,
+                )?
+                .schema()
+                .to_string()
+            } else {
+                AvroSchemaGenerator::new(
+                    desc.clone(),
+                    matches!(envelope, SinkEnvelope::Debezium),
+                    Default::default(),
+                    "envelope",
+                    false,
+                    Some(sink_from),
+                    true,
+                )?
+                .schema()
+                .to_string()
+            };
+            Ok(KafkaSinkFormatType::Avro {
+                schema,
+                compatibility_level,
+                schema_name,
+                wire_format: WireFormat::Glue {
+                    registry: Some(glue_connection),
                 },
             })
         }
