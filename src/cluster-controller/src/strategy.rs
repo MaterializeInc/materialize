@@ -427,6 +427,20 @@ impl HydrationBurstStrategy {
         state.auto_scaling_policy.as_ref()?.on_hydration.as_ref()
     }
 
+    /// The in-flight burst record, but only while the current config still
+    /// warrants it: the policy is active ([`Self::active_policy`]) and the
+    /// record's size matches the policy's `HYDRATION SIZE`. `None` for a stale
+    /// record, which `update_state` tears down.
+    fn warranted_record<'a>(
+        &self,
+        state: &'a ClusterState,
+        config: &ConfigSignals,
+    ) -> Option<&'a BurstRecord> {
+        let record = state.burst.as_ref()?;
+        let policy = self.active_policy(state, config)?;
+        (record.burst_size == policy.hydration_size).then_some(record)
+    }
+
     /// Whether at least one steady-state (realized-config) replica reports all
     /// current objects hydrated. On a cluster with zero user objects a replica
     /// reads hydrated once its (near-instant) introspection-log dataflows
@@ -482,23 +496,18 @@ impl Strategy for HydrationBurstStrategy {
             ..Default::default()
         };
 
-        // Cleanup precedence: a burst no longer warranted by current config tears
-        // down regardless of linger. `active_policy` is `None` when burst is
-        // disabled / the cluster is off / no policy; a `HYDRATION SIZE` change makes
-        // the record's size stale (a fresh record at the new size is written below
-        // on a later tick once warranted).
-        let Some(policy) = self.active_policy(state, config) else {
-            return if state.burst.is_some() {
-                clear(BurstFinishCause::NoLongerWarranted)
-            } else {
-                StateWrite::default()
-            };
-        };
-        if let Some(record) = &state.burst {
-            if record.burst_size != policy.hydration_size {
-                return clear(BurstFinishCause::NoLongerWarranted);
-            }
+        // Cleanup precedence: a burst no longer warranted tears down regardless
+        // of linger. Catalog writes retire records they invalidate themselves,
+        // so this arm mainly covers the burst dyncfg switching off, and
+        // backstops any stale record that reaches us anyway.
+        if state.burst.is_some() && self.warranted_record(state, config).is_none() {
+            return clear(BurstFinishCause::NoLongerWarranted);
         }
+        let Some(policy) = self.active_policy(state, config) else {
+            // No record (the cleanup above handled that) and no active policy:
+            // nothing to arm.
+            return StateWrite::default();
+        };
 
         let steady_hydrated = self.steady_hydrated(state, signals);
 
@@ -592,10 +601,13 @@ impl Strategy for HydrationBurstStrategy {
         _config: &ConfigSignals,
         _now: Timestamp,
     ) -> Vec<DesiredReplica> {
-        // Keyed purely on the record's presence: the cleanup arm of `update_state`
-        // clears a stale record, so a record present here always reflects a burst
-        // the current config still warrants. One replica at the burst size, with
-        // the cluster's AZ pool and logging (only the size differs from steady).
+        // Keying on record presence is sound even on a phase-2 re-read
+        // snapshot: catalog writes retire records they invalidate in the same
+        // transaction, so a snapshot never pairs a record with a config that
+        // does not warrant it. And the burst dyncfg is latched once per tick,
+        // so a switch-off is handled by phase 1's cleanup before this runs.
+        // One replica at the burst size, with the cluster's AZ pool and
+        // logging (only the size differs from steady).
         let Some(record) = &state.burst else {
             return Vec::new();
         };

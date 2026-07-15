@@ -3396,6 +3396,24 @@ impl ClusterVariantManaged {
             logging: logging.clone(),
         }
     }
+
+    /// Whether the in-flight `burst` record is no longer warranted by this
+    /// config: the `ON HYDRATION` policy was removed or re-sized away from the
+    /// record's size, or the cluster was turned off (`replication_factor` 0).
+    /// `false` when there is no record.
+    pub fn has_unwarranted_burst_record(&self) -> bool {
+        let Some(record) = &self.burst else {
+            return false;
+        };
+        let Some(policy) = self
+            .auto_scaling_strategy
+            .as_ref()
+            .and_then(|strategy| strategy.on_hydration.as_ref())
+        else {
+            return true;
+        };
+        self.replication_factor == 0 || record.burst_size != policy.hydration_size
+    }
 }
 
 impl From<ClusterVariantManaged> for durable::ClusterVariantManaged {

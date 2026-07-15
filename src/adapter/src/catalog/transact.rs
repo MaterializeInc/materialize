@@ -2858,11 +2858,28 @@ impl Catalog {
             Op::UpdateClusterConfig {
                 id,
                 name,
-                config,
+                mut config,
                 reconfiguration_audit,
-                burst_audit,
+                mut burst_audit,
             } => {
                 let mut cluster = state.get_cluster(id).clone();
+                // A write that invalidates the in-flight burst (policy removed
+                // or re-sized, cluster turned off) retires the record here, in
+                // the same transaction. Retiring at this chokepoint rather
+                // than in each sequencer path means no writer can forget, so a
+                // committed config never carries a record it does not warrant.
+                // Writes that declare a burst intent manage the record
+                // themselves.
+                if burst_audit.is_none() {
+                    if let ClusterVariant::Managed(managed) = &mut config.variant {
+                        if managed.has_unwarranted_burst_record() {
+                            managed.burst = None;
+                            burst_audit = Some(BurstAudit::Finished {
+                                cause: BurstFinishCause::NoLongerWarranted,
+                            });
+                        }
+                    }
+                }
                 // Writes that declare no reconfiguration intent must not move
                 // the reconfiguration lifecycle, or the audit log would
                 // silently lose the transition. Writer bug, fails the
@@ -3854,6 +3871,64 @@ mod tests {
             &managed(Some(record(Some(Timestamp::from(100u64))))),
             &managed(Some(record(None))),
         ));
+    }
+
+    #[mz_ore::test]
+    fn test_has_unwarranted_burst_record() {
+        use std::time::Duration;
+
+        use mz_catalog::memory::objects::{BurstState, ClusterVariantManaged};
+        use mz_controller::clusters::ReplicaLogging;
+        use mz_repr::optimize::OptimizerFeatureOverrides;
+        use mz_sql::plan::{AutoScalingStrategy, OnHydration};
+
+        let managed = |replication_factor: u32,
+                       strategy: Option<AutoScalingStrategy>,
+                       burst: Option<BurstState>| ClusterVariantManaged {
+            size: "small".into(),
+            availability_zones: Vec::new(),
+            logging: ReplicaLogging {
+                log_logging: false,
+                interval: None,
+            },
+            replication_factor,
+            optimizer_feature_overrides: OptimizerFeatureOverrides::default(),
+            schedule: Default::default(),
+            auto_scaling_strategy: strategy,
+            reconfiguration: None,
+            burst,
+        };
+        let policy = |hydration_size: &str| AutoScalingStrategy {
+            on_hydration: Some(OnHydration {
+                hydration_size: hydration_size.into(),
+                linger_duration: None,
+            }),
+        };
+        let record = || BurstState {
+            burst_size: "large".into(),
+            linger_duration: Duration::from_secs(60),
+            steady_hydrated_at: None,
+        };
+
+        // No record: nothing to retire, with or without a policy.
+        assert!(!managed(1, None, None).has_unwarranted_burst_record());
+        assert!(!managed(1, Some(policy("large")), None).has_unwarranted_burst_record());
+
+        // A record backed by a matching, active policy is warranted.
+        assert!(!managed(1, Some(policy("large")), Some(record())).has_unwarranted_burst_record());
+
+        // Unwarranted: policy removed, policy re-sized, or cluster turned off.
+        assert!(managed(1, None, Some(record())).has_unwarranted_burst_record());
+        assert!(
+            managed(
+                1,
+                Some(AutoScalingStrategy { on_hydration: None }),
+                Some(record())
+            )
+            .has_unwarranted_burst_record()
+        );
+        assert!(managed(1, Some(policy("xlarge")), Some(record())).has_unwarranted_burst_record());
+        assert!(managed(0, Some(policy("large")), Some(record())).has_unwarranted_burst_record());
     }
 
     #[mz_ore::test]
