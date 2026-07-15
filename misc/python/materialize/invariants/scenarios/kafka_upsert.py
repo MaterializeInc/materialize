@@ -122,10 +122,16 @@ class UpsertUniquePeek(PeekChecker):
 
 
 class KeyStateSubscribe(SubscribeChecker):
-    """Per-key versions must never move backwards within a session."""
+    """Per-key versions must never move backwards within a session.
+
+    Uses WITHIN TIMESTAMP ORDER BY, so the base checker additionally
+    asserts the documented in-timestamp arrival order by key.
+    """
 
     def __init__(self, rng, ctx, scenario: "KafkaUpsert") -> None:
         super().__init__(rng, ctx, "state-subscribe", "SELECT key, ver FROM key_state")
+        self.order_clause = "WITHIN TIMESTAMP ORDER BY key"
+        self.order_index = 0
         self.scenario = scenario
         self.last: dict[str, int] = {}
 
@@ -150,6 +156,97 @@ class KeyStateSubscribe(SubscribeChecker):
                     f" {version} < {self.last[key]}"
                 )
             self.last[key] = version
+
+
+class UpsertEnvelopeSubscribe(Checker):
+    """SUBSCRIBE .. ENVELOPE UPSERT emits a sound per-key state machine.
+
+    The documented envelope output: `mz_state` is `upsert` with the new
+    value, `delete` with nulled value columns, or `key_violation` if the
+    query held more than one live row per key (which key_state never
+    legitimately does). Per session: timestamps never decrease, a delete
+    only follows a live key, and versions never move backwards (the single
+    owner only writes increasing versions).
+    """
+
+    name = "envelope-subscribe"
+    pause = (0.0, 0.2)
+
+    def __init__(self, rng: random.Random, ctx: ScenarioContext) -> None:
+        super().__init__(rng)
+        self.ctx = ctx
+        self.client = MzClient(ctx, self.name)
+        self._cursor = "c_envelope"
+        self._active = False
+        self.last_ts: int | None = None
+        self.live: set[str] = set()
+        self.high_water: dict[str, int] = {}
+
+    def check_once(self) -> None:
+        try:
+            if not self._active:
+                # Fresh session, no cross-session continuity is guaranteed.
+                self.last_ts = None
+                self.live = set()
+                self.high_water = {}
+                self.client.query("BEGIN")
+                self.client.query(
+                    f"DECLARE {self._cursor} CURSOR FOR"
+                    " SUBSCRIBE (SELECT key, ver FROM key_state)"
+                    " ENVELOPE UPSERT (KEY (key)) WITH (PROGRESS)"
+                )
+                self._active = True
+            rows = self.client.query(
+                f"FETCH ALL {self._cursor} WITH (timeout = '1s')",
+                timeout=max(30.0, self.ctx.complexity.query_timeout),
+            )
+        except TransientError:
+            self._active = False
+            raise
+        validated = False
+        for row in rows:
+            ts, progressed, state = int(row[0]), bool(row[1]), row[2]
+            if self.last_ts is not None and ts < self.last_ts:
+                raise InvariantViolation(
+                    f"{self.name}: timestamp went backwards: {ts} < {self.last_ts}"
+                )
+            self.last_ts = ts
+            if progressed:
+                continue
+            key, ver = row[3], row[4]
+            if state == "upsert":
+                if ver is None:
+                    raise InvariantViolation(
+                        f"{self.name}: upsert for {key} at {ts} without a value"
+                    )
+                version = int(ver)
+                if version < self.high_water.get(str(key), -1):
+                    raise InvariantViolation(
+                        f"{self.name}: key {key} version moved backwards at"
+                        f" {ts}: {version} < {self.high_water[str(key)]}"
+                    )
+                self.high_water[str(key)] = version
+                self.live.add(str(key))
+                validated = True
+            elif state == "delete":
+                if str(key) not in self.live:
+                    raise InvariantViolation(
+                        f"{self.name}: delete for key {key} at {ts} that was"
+                        " never live in this session"
+                    )
+                self.live.discard(str(key))
+                validated = True
+            else:
+                # key_violation means the subscribed query held more than
+                # one live row per key, which key_state never does.
+                raise InvariantViolation(
+                    f"{self.name}: mz_state {state!r} for key {key} at {ts}"
+                )
+        if validated:
+            self.validations += 1
+
+    def close(self) -> None:
+        self.client.reset()
 
 
 class KafkaUpsert(Scenario):
@@ -209,10 +306,11 @@ class KafkaUpsert(Scenario):
         )
 
     def checkers(self) -> list[Checker]:
-        rngs = [random.Random(self.ctx.rng.randrange(SEED_RANGE)) for _ in range(2)]
+        rngs = [random.Random(self.ctx.rng.randrange(SEED_RANGE)) for _ in range(3)]
         return [
             UpsertUniquePeek(rngs[0], self.ctx, self),
             KeyStateSubscribe(rngs[1], self.ctx, self),
+            UpsertEnvelopeSubscribe(rngs[2], self.ctx),
         ]
 
     def converge(self) -> None:

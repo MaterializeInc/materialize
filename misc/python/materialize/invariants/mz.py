@@ -26,7 +26,7 @@ import time
 from typing import Any
 
 import psycopg
-from psycopg.errors import QueryCanceled
+from psycopg.errors import QueryCanceled, SerializationFailure
 
 from materialize.invariants.framework import (
     Outcome,
@@ -196,9 +196,68 @@ class MzClient:
                 raise
             if isinstance(e, QueryCanceled) or _is_connection_error(e):
                 raise TransientError(f"{type(e).__name__}: {e}") from e
+            if isinstance(e, SerializationFailure):
+                # SQLSTATE 40001, the documented retryable class, e.g. a
+                # bounded staleness read with no readable timestamp in bound.
+                raise TransientError(f"{type(e).__name__}: {e}") from e
             if any(snippet in str(e) for snippet in CONCURRENT_DDL_ERROR_SNIPPETS):
                 raise TransientError(f"{type(e).__name__}: {e}") from e
             raise UnexpectedQueryError(f"query failed: {sql[:200]}: {e}") from e
+
+    def copy_out(self, sql: str, timeout: float | None = None) -> list[tuple[str, ...]]:
+        """Run `COPY (..) TO STDOUT` and return the tab-split text rows.
+
+        Same error classification as query().
+        """
+        conn = self._connect()
+        with self._lock:
+            self._deadline = time.monotonic() + (timeout or self.default_timeout)
+        try:
+            rows = []
+            with conn.cursor() as cur, cur.copy(sql.encode()) as copy:
+                for row in copy.rows():
+                    rows.append(tuple("" if c is None else str(c) for c in row))
+            return rows
+        except Exception as e:
+            self.reset()
+            if isinstance(
+                e, QueryCanceled | SerializationFailure
+            ) or _is_connection_error(e):
+                raise TransientError(f"{type(e).__name__}: {e}") from e
+            if any(snippet in str(e) for snippet in CONCURRENT_DDL_ERROR_SNIPPETS):
+                raise TransientError(f"{type(e).__name__}: {e}") from e
+            raise UnexpectedQueryError(f"copy out failed: {sql[:200]}: {e}") from e
+        finally:
+            with self._lock:
+                self._deadline = None
+
+    def copy_in(self, sql: str, data: str, timeout: float | None = None) -> Outcome:
+        """Run `COPY .. FROM STDIN`, feed `data`, and classify the outcome.
+
+        A COPY is a single statement, so it applies atomically. Cancellation
+        or connection loss leaves the outcome UNKNOWN. A definite server
+        rejection surfaces as UnexpectedQueryError, since none of our
+        fixed-shape COPYs have a legitimate reason to be rejected.
+        """
+        try:
+            conn = self._connect()
+            with self._lock:
+                self._deadline = time.monotonic() + (timeout or self.default_timeout)
+            with conn.cursor() as cur, cur.copy(sql.encode()) as copy:
+                copy.write(data)
+            return Outcome.COMMITTED
+        except TransientError:
+            return Outcome.UNKNOWN
+        except Exception as e:
+            self.reset()
+            if isinstance(e, QueryCanceled) or "canceling statement due to" in str(e):
+                return Outcome.UNKNOWN
+            if _is_connection_error(e):
+                return Outcome.UNKNOWN
+            raise UnexpectedQueryError(f"copy in rejected: {sql[:200]}: {e}") from e
+        finally:
+            with self._lock:
+                self._deadline = None
 
     def write(
         self, sql: str, params: Any = None, timeout: float | None = None

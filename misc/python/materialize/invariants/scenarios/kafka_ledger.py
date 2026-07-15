@@ -20,7 +20,11 @@ cannot legitimately duplicate an event, which makes "exactly once" checkable.
 import json
 import random
 
-from materialize.invariants.checkers import PeekChecker, SubscribeChecker
+from materialize.invariants.checkers import (
+    PeekChecker,
+    ProgressPeek,
+    SubscribeChecker,
+)
 from materialize.invariants.framework import (
     CONVERGE_TIMEOUT,
     SEED_RANGE,
@@ -36,13 +40,16 @@ from materialize.invariants.framework import (
     WorkerBundle,
     wait_until,
 )
-from materialize.invariants.mz import MzClient
+from materialize.invariants.mz import MzClient, UnexpectedQueryError
 
 TOPIC = "invariants-ledger"
 PARTITIONS = 3
 # Bounds how long an unresolved produce can straddle the converge phase.
 MESSAGE_TIMEOUT_MS = 30_000
 SENTINEL_WORKER = -1
+# Worker id used for real-time recency marker events. Negative so the
+# regular count bounds and reconciliation never see them.
+RTR_MARKER_WORKER = -2
 
 
 def make_producer(bootstrap: str):
@@ -117,8 +124,7 @@ class EventCountPeek(PeekChecker):
     def check_once(self) -> None:
         watermark = self.scenario.event_rows.get()
         rows = self.peek(
-            "SELECT count(*) FROM events"
-            f" WHERE (data->>'worker')::int <> {SENTINEL_WORKER}"
+            "SELECT count(*) FROM events WHERE (data->>'worker')::int >= 0"
         )
         high = self.scenario.oplog.attempted_count()
         count = int(rows[0][0])
@@ -135,17 +141,140 @@ class EventCountPeek(PeekChecker):
         self.validations += 1
 
 
-class WorkerStatsSubscribe(SubscribeChecker):
-    """Per-worker count and max seq must never move backwards in-session."""
+class EventMetadataPeek(PeekChecker):
+    """The documented INCLUDE metadata columns must be sound.
 
-    def __init__(self, rng, ctx, scenario: "KafkaLedger") -> None:
+    (partition, offset) identifies one Kafka message, so a duplicated pair
+    means an event was ingested twice, which detects duplication directly
+    instead of only through count bounds. The included key must match the
+    payload's worker id (producers key every message that way), offsets per
+    partition never move backwards, and the broker timestamp is never in
+    the future beyond clock skew.
+    """
+
+    def __init__(self, rng, ctx) -> None:
+        super().__init__(rng, ctx, "metadata-peek", ["quickstart", "compute"])
+        self.max_offsets: dict[int, int] = {}
+
+    def check_once(self) -> None:
+        duplicated = self.peek(
+            "SELECT part, kafka_offset FROM events"
+            " GROUP BY part, kafka_offset HAVING count(*) > 1"
+        )
+        if duplicated:
+            raise InvariantViolation(
+                f"duplicate (partition, offset) pairs ingested: {duplicated[:20]}"
+            )
+        mismatched = self.peek(
+            "SELECT count(*) FROM events"
+            " WHERE msg_key IS DISTINCT FROM data->>'worker'"
+        )
+        if int(mismatched[0][0]) != 0:
+            raise InvariantViolation(
+                f"{mismatched[0][0]} events whose INCLUDE KEY does not match"
+                " the payload's worker id"
+            )
+        skewed = self.peek(
+            "SELECT count(*) FROM events"
+            " WHERE kafka_ts > now() + INTERVAL '5 minutes'"
+        )
+        if int(skewed[0][0]) != 0:
+            raise InvariantViolation(
+                f"{skewed[0][0]} events with a far-future INCLUDE TIMESTAMP"
+            )
+        watermarks = dict(self.max_offsets)
+        rows = self.peek("SELECT part, max(kafka_offset) FROM events GROUP BY part")
+        for row in rows:
+            part, max_offset = int(row[0]), int(row[1])
+            if watermarks.get(part, -1) > max_offset:
+                raise InvariantViolation(
+                    f"partition {part} max offset moved backwards:"
+                    f" {max_offset} < {watermarks[part]}"
+                )
+            if max_offset > self.max_offsets.get(part, -1):
+                self.max_offsets[part] = max_offset
+        self.validations += 1
+
+
+class KafkaRtrPeek(Checker):
+    """Real-time recency for Kafka sources: a read issued after the broker
+    acknowledged a produce must include that event.
+
+    Mirrors the CDC scenarios' RTR checker. RTR queries legitimately error
+    or time out while the source leg is disrupted (skipped round), but a
+    successful read missing an acknowledged event is a violation.
+    """
+
+    name = "rtr-peek"
+    pause = (2.0, 6.0)
+
+    def __init__(self, rng, ctx, bootstrap: str) -> None:
+        super().__init__(rng)
+        self.ctx = ctx
+        self.client = MzClient(ctx, "rtr-peek")
+        self.bootstrap = bootstrap
+        self.producer = None
+        self.markers = 0
+        self._session_ready = False
+
+    def check_once(self) -> None:
+        if self.producer is None:
+            self.producer = make_producer(self.bootstrap)
+        marker = self.markers + 1
+        self.producer.produce(
+            TOPIC,
+            value=json.dumps({"worker": RTR_MARKER_WORKER, "seq": marker}).encode(),
+            key=str(RTR_MARKER_WORKER).encode(),
+        )
+        if self.producer.flush(30) != 0:
+            # The marker was not acknowledged, so it creates no lower bound.
+            self.producer = None
+            raise TransientError("RTR marker produce not acknowledged")
+        self.markers = marker
+        try:
+            if not self._session_ready:
+                self.client.query("SET real_time_recency = true")
+                self._session_ready = True
+            rows = self.client.query(
+                "SELECT count(*) FROM events"
+                f" WHERE (data->>'worker')::int = {RTR_MARKER_WORKER}"
+            )
+        except TransientError:
+            self._session_ready = False
+            raise
+        except UnexpectedQueryError as e:
+            self._session_ready = False
+            if "timed out before ingesting" in str(e) or "storage error" in str(e):
+                raise TransientError(str(e)) from e
+            raise
+        count = int(rows[0][0])
+        if count < self.markers:
+            raise InvariantViolation(
+                f"real-time recency violated: read issued after broker ack"
+                f" saw {count} markers, expected at least {self.markers}"
+            )
+        self.validations += 1
+
+    def close(self) -> None:
+        if self.producer is not None:
+            self.producer.flush(10)
+        self.client.reset()
+
+
+class WorkerStatsSubscribe(SubscribeChecker):
+    """Per-worker count and max seq must never move backwards in-session.
+
+    Works against any scenario that maintains a worker_stats relation with
+    (worker, cnt, max_seq) columns.
+    """
+
+    def __init__(self, rng, ctx) -> None:
         super().__init__(
             rng,
             ctx,
             "stats-subscribe",
             "SELECT worker, cnt, max_seq FROM worker_stats",
         )
-        self.scenario = scenario
         self.last: dict[int, tuple[int, int]] = {}
 
     def check_once(self) -> None:
@@ -210,11 +339,14 @@ class KafkaLedger(Scenario):
             "CREATE SOURCE ledger_source IN CLUSTER storage"
             f" FROM KAFKA CONNECTION kafka_src_conn (TOPIC '{TOPIC}')",
             f'CREATE TABLE events FROM SOURCE ledger_source (REFERENCE "{TOPIC}")'
-            " FORMAT JSON ENVELOPE NONE",
+            " KEY FORMAT TEXT VALUE FORMAT JSON"
+            " INCLUDE KEY AS msg_key, PARTITION AS part,"
+            " OFFSET AS kafka_offset, TIMESTAMP AS kafka_ts"
+            " ENVELOPE NONE",
             "CREATE MATERIALIZED VIEW worker_stats IN CLUSTER compute AS"
             " SELECT (data->>'worker')::int AS worker, count(*) AS cnt,"
             " max((data->>'seq')::bigint) AS max_seq FROM events"
-            f" WHERE (data->>'worker')::int <> {SENTINEL_WORKER} GROUP BY 1",
+            " WHERE (data->>'worker')::int >= 0 GROUP BY 1",
             "CREATE INDEX worker_stats_idx IN CLUSTER compute"
             " ON worker_stats (worker)",
         ]:
@@ -228,10 +360,13 @@ class KafkaLedger(Scenario):
         )
 
     def checkers(self) -> list[Checker]:
-        rngs = [random.Random(self.ctx.rng.randrange(SEED_RANGE)) for _ in range(2)]
+        rngs = [random.Random(self.ctx.rng.randrange(SEED_RANGE)) for _ in range(5)]
         return [
             EventCountPeek(rngs[0], self.ctx, self),
-            WorkerStatsSubscribe(rngs[1], self.ctx, self),
+            WorkerStatsSubscribe(rngs[1], self.ctx),
+            EventMetadataPeek(rngs[2], self.ctx),
+            KafkaRtrPeek(rngs[3], self.ctx, self.bootstrap),
+            ProgressPeek(rngs[4], self.ctx, "ledger_source"),
         ]
 
     def converge(self) -> None:
@@ -245,6 +380,9 @@ class KafkaLedger(Scenario):
                 value=json.dumps(
                     {"worker": SENTINEL_WORKER, "seq": partition}
                 ).encode(),
+                # Keyed like every other message so the INCLUDE KEY checker
+                # holds for sentinels too.
+                key=str(SENTINEL_WORKER).encode(),
                 partition=partition,
             )
         if producer.flush(60) != 0:
