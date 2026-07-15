@@ -1297,6 +1297,29 @@ impl StorageCollectionsImpl {
     }
 }
 
+/// Partitions the finalization WAL by whether an active collection references
+/// each shard.
+fn partition_finalizable_shards(
+    collection_metadata: BTreeMap<GlobalId, ShardId>,
+    active_collection_ids: &BTreeSet<GlobalId>,
+    unfinalized_shards: BTreeSet<ShardId>,
+) -> (BTreeSet<ShardId>, BTreeSet<ShardId>) {
+    let active_shards: BTreeSet<_> = collection_metadata
+        .into_iter()
+        .filter_map(|(id, shard)| active_collection_ids.contains(&id).then_some(shard))
+        .collect();
+    let referenced_shards = unfinalized_shards
+        .intersection(&active_shards)
+        .copied()
+        .collect();
+    let finalizable_shards = unfinalized_shards
+        .difference(&active_shards)
+        .copied()
+        .collect();
+
+    (referenced_shards, finalizable_shards)
+}
+
 // See comments on the above impl for StorageCollectionsImpl.
 #[async_trait]
 impl StorageCollections for StorageCollectionsImpl {
@@ -1320,14 +1343,27 @@ impl StorageCollections for StorageCollectionsImpl {
         )
         .await?;
 
-        // All shards that belong to collections dropped in the last epoch are
-        // eligible for finalization.
+        // All unreferenced shards that belong to collections dropped in the
+        // last epoch are eligible for finalization. Active collection metadata
+        // is authoritative over stale finalization WAL entries.
         //
-        // n.b. this introduces an unlikely race condition: if a collection is
-        // dropped from the catalog, but the dataflow is still running on a
-        // worker, assuming the shard is safe to finalize on reboot may cause
-        // the cluster to panic.
-        let unfinalized_shards = txn.get_unfinalized_shards().into_iter().collect_vec();
+        // A dropped collection can still have a dataflow running on a worker.
+        // Finalizing its shard on reboot can cause that worker to panic.
+        let (referenced_shards, unfinalized_shards) = partition_finalizable_shards(
+            txn.get_collection_metadata(),
+            &init_ids,
+            txn.get_unfinalized_shards(),
+        );
+        if !referenced_shards.is_empty() {
+            warn!(
+                ?referenced_shards,
+                "removing active collection shards from the finalization WAL"
+            );
+            // Collection metadata is authoritative. Removing these entries in
+            // the initialization transaction keeps them out of the finalizer
+            // queue.
+            txn.mark_shards_as_finalized(referenced_shards);
+        }
 
         info!(?unfinalized_shards, "initializing finalizable_shards");
 
@@ -3190,6 +3226,28 @@ mod tests {
     use mz_secrets::InMemorySecretsController;
 
     use super::*;
+
+    #[mz_ore::test]
+    fn test_partition_finalizable_shards() {
+        let active_shard = ShardId::new();
+        let dropped_shard = ShardId::new();
+        let collection_metadata = BTreeMap::from([
+            (GlobalId::User(1), active_shard),
+            (GlobalId::User(2), active_shard),
+            (GlobalId::User(3), dropped_shard),
+        ]);
+        let active_collection_ids = BTreeSet::from([GlobalId::User(1), GlobalId::User(2)]);
+        let unfinalized_shards = BTreeSet::from([active_shard, dropped_shard]);
+
+        let (referenced_shards, finalizable_shards) = partition_finalizable_shards(
+            collection_metadata,
+            &active_collection_ids,
+            unfinalized_shards,
+        );
+
+        assert_eq!(referenced_shards, BTreeSet::from([active_shard]));
+        assert_eq!(finalizable_shards, BTreeSet::from([dropped_shard]));
+    }
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr`

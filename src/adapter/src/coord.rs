@@ -2641,7 +2641,7 @@ impl Coordinator {
                         .entry(policy.expect("materialized views have a compaction window"))
                         .or_insert_with(Default::default)
                         .storage_ids
-                        .insert(mview.global_id_writes());
+                        .extend(mview.global_ids());
 
                     let mut df_desc = self
                         .catalog()

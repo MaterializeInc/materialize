@@ -7305,29 +7305,64 @@ def workflow_test_replacement_mv_drop_after_restart(c: Composition) -> None:
         resp.raise_for_status()
         return resp.json()["storage_metadata"]
 
+    def storage_collection_states() -> dict[str, str]:
+        port = c.port("materialized", 6878)
+        resp = requests.get(f"http://localhost:{port}/api/coordinator/dump")
+        resp.raise_for_status()
+        return resp.json()["controller"]["storage_collections"]["collections"]
+
+    def debug_global_id(global_id: str) -> str:
+        assert global_id.startswith("u"), global_id
+        return f"User({global_id[1:]})"
+
+    def data_shard(collection_state: str) -> str:
+        match = re.search(r"data_shard: ShardId\(([^)]+)\)", collection_state)
+        assert match is not None, collection_state
+        return match.group(1)
+
     c.down(destroy_volumes=True)
     c.up("materialized")
 
-    # Without a replica, no dataflow holds a persist read lease after restart.
-    # Such a lease would delay finalization beyond the runtime of this test.
     c.sql("""
-        CREATE CLUSTER stalled SIZE 'scale=1,workers=1', REPLICATION FACTOR 0;
+        CREATE CLUSTER stalled SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
         CREATE TABLE t (a int);
         CREATE MATERIALIZED VIEW mv IN CLUSTER stalled AS SELECT * FROM t;
-        CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv
+        CREATE REPLACEMENT MATERIALIZED VIEW rp1 FOR mv
             IN CLUSTER stalled AS SELECT * FROM t;
         """)
 
     [(mv_id,)] = c.sql_query("SELECT id FROM mz_materialized_views WHERE name = 'mv'")
-    mv_shard = storage_metadata()["collection_metadata"][mv_id]
+    [(rp1_id,)] = c.sql_query("SELECT id FROM mz_materialized_views WHERE name = 'rp1'")
 
-    # Restart envd. Bootstrap re-creates the in-memory storage collections
-    # state, including the replacement's `primary` link to its target.
+    c.sql("""
+        ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp1;
+        CREATE REPLACEMENT MATERIALIZED VIEW rp2 FOR mv
+            IN CLUSTER stalled AS SELECT * FROM t;
+        ALTER CLUSTER stalled SET (REPLICATION FACTOR 0);
+        """)
+    [(rp2_id,)] = c.sql_query("SELECT id FROM mz_materialized_views WHERE name = 'rp2'")
+
+    # Without a replica, no dataflow holds a persist read lease after restart.
+    # Such a lease would delay finalization beyond the runtime of this test.
     c.kill("materialized")
     c.up("materialized")
 
-    # Drop the replacement without applying it.
-    c.sql("DROP MATERIALIZED VIEW rp")
+    collection_states = storage_collection_states()
+    mv_state = collection_states[mv_id]
+    rp1_state = collection_states[rp1_id]
+    rp2_state = collection_states[rp2_id]
+    mv_shard = data_shard(mv_state)
+
+    assert data_shard(rp1_state) == mv_shard
+    assert data_shard(rp2_state) == mv_shard
+    assert "primary: None" in mv_state, mv_state
+    assert f"primary: Some({debug_global_id(mv_id)})" in rp1_state, rp1_state
+    assert f"primary: Some({debug_global_id(rp1_id)})" in rp2_state, rp2_state
+    for collection_state in (mv_state, rp1_state, rp2_state):
+        assert "read_policy: LagWriteFrontier" in collection_state, collection_state
+
+    # Drop the staged replacement without applying it.
+    c.sql("DROP MATERIALIZED VIEW rp2")
 
     # The finalization record is removed by the next catalog transaction after
     # finalization completes, so inspect it immediately after the drop.
@@ -7338,7 +7373,7 @@ def workflow_test_replacement_mv_drop_after_restart(c: Composition) -> None:
     )
 
     c.sql(
-        "CREATE REPLACEMENT MATERIALIZED VIEW rp2 FOR mv"
+        "CREATE REPLACEMENT MATERIALIZED VIEW rp3 FOR mv"
         " IN CLUSTER stalled AS SELECT * FROM t"
     )
 
