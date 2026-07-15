@@ -11,8 +11,8 @@
 $ skip-if
 SELECT true
 
-$ skip-if
-SELECT mz_version_num() < 13300;
+#$ skip-if
+#SELECT mz_version_num() < 13300;
 
 $ set-sql-timeout duration=1s
 

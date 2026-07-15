@@ -209,6 +209,14 @@ SERVICES = [
             "--orchestrator-process-secrets-directory=/mzdata/secrets",
             "--orchestrator-process-scratch-directory=/scratch",
         ],
+        healthcheck=[
+            "CMD",
+            "/busybox/wget",
+            "-q",
+            "-O",
+            "-",
+            "http://localhost:6878/api/readyz",
+        ],
         # We can not restart this container at will, as it does not have clusterd
         sanity_restart=False,
     ),

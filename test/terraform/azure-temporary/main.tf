@@ -292,6 +292,10 @@ module "operator" {
     module.aks,
     module.database,
     module.storage,
+    # The operator chart renders cert-manager Certificate/Issuer resources for
+    # the conversion webhook (install_v1_crd defaults to true), so cert-manager
+    # CRDs must be registered before the operator's helm_release applies.
+    module.cert_manager,
   ]
 }
 
