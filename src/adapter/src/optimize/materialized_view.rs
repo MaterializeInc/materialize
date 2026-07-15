@@ -230,6 +230,13 @@ impl Optimize<LocalMirPlan> for Optimizer {
         for &i in self.non_null_assertions.iter() {
             rel_typ.column_types[i].nullable = false;
         }
+        if !self.config.enable_materialized_view_keys() {
+            // The optimizer-inferred keys are not stable across optimizer
+            // changes or replacement materialized views, so downstream
+            // consumers must not rely on them. Drop them before they reach the
+            // persisted schema.
+            rel_typ.keys.clear();
+        }
         let rel_desc = RelationDesc::new(rel_typ, self.column_names.clone());
 
         let mut df_builder = {

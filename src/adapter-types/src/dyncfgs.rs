@@ -373,10 +373,24 @@ pub const DEFAULT_CLUSTER_RECONFIGURATION_TIMEOUT: Config<Duration> = Config::ne
     "The reconfiguration deadline written when a config-shape ALTER CLUSTER omits WITH (WAIT ...).",
 );
 
+/// Whether a materialized view's persisted schema records the unique keys the
+/// optimizer inferred from its plan.
+///
+/// These keys are not stable. An optimizer change or a replacement materialized
+/// view can produce different real keys while downstream consumers were planned
+/// against the old ones, which is unsound. Defaults to off so no consumer relies
+/// on them.
+pub const ENABLE_MATERIALIZED_VIEW_KEYS: Config<bool> = Config::new(
+    "enable_materialized_view_keys",
+    false,
+    "Whether to record the optimizer-inferred unique keys in a materialized view's persisted schema.",
+);
+
 /// Adds the full set of all adapter `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&ALLOW_USER_SESSIONS)
+        .add(&ENABLE_MATERIALIZED_VIEW_KEYS)
         .add(&ENABLE_CLUSTER_CONTROLLER)
         .add(&CLUSTER_CONTROLLER_TICK_INTERVAL)
         .add(&ENABLE_BACKGROUND_ALTER_CLUSTER)

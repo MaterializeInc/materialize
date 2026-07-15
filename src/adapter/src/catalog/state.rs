@@ -1411,6 +1411,9 @@ impl CatalogState {
                     .features();
                 let optimizer_config =
                     optimize::OptimizerConfig::from(system_vars).override_from(&overrides);
+                // Read before `optimizer_config` is moved into the optimizer below.
+                let enable_materialized_view_keys =
+                    optimizer_config.enable_materialized_view_keys();
                 let previous_exprs = previous_item.map(|item| match item {
                     CatalogItem::MaterializedView(materialized_view) => (
                         materialized_view.raw_expr,
@@ -1455,6 +1458,12 @@ impl CatalogState {
 
                 for &i in &materialized_view.non_null_assertions {
                     typ.column_types[i].nullable = false;
+                }
+                if !enable_materialized_view_keys {
+                    // Keep the persisted schema consistent with the creation
+                    // path, which drops the unstable optimizer-inferred keys
+                    // when the feature is disabled.
+                    typ.keys.clear();
                 }
                 let desc = RelationDesc::new(typ, materialized_view.column_names);
                 let desc = VersionedRelationDesc::new(desc);

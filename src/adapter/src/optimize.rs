@@ -63,7 +63,7 @@ pub mod view;
 use std::fmt::Debug;
 
 use mz_adapter_types::connection::ConnectionId;
-use mz_adapter_types::dyncfgs::PERSIST_FAST_PATH_ORDER;
+use mz_adapter_types::dyncfgs::{ENABLE_MATERIALIZED_VIEW_KEYS, PERSIST_FAST_PATH_ORDER};
 use mz_catalog::memory::objects::{CatalogCollectionEntry, CatalogEntry, Index};
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
@@ -285,8 +285,19 @@ pub struct OptimizerConfig {
     persist_fast_path_order: bool,
     // Enable calculating with_snapshot metadata for subscribes.
     subscribe_snapshot_optimization: bool,
+    // Whether to record the optimizer-inferred unique keys in a materialized
+    // view's persisted schema.
+    enable_materialized_view_keys: bool,
     /// Optimizer feature flags.
     pub features: OptimizerFeatures,
+}
+
+impl OptimizerConfig {
+    /// Whether to record the optimizer-inferred unique keys in a materialized
+    /// view's persisted schema.
+    pub fn enable_materialized_view_keys(&self) -> bool {
+        self.enable_materialized_view_keys
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -305,6 +316,7 @@ impl From<&SystemVars> for OptimizerConfig {
             no_fast_path: false,
             persist_fast_path_order: PERSIST_FAST_PATH_ORDER.get(vars.dyncfgs()),
             subscribe_snapshot_optimization: SUBSCRIBE_SNAPSHOT_OPTIMIZATION.get(vars.dyncfgs()),
+            enable_materialized_view_keys: ENABLE_MATERIALIZED_VIEW_KEYS.get(vars.dyncfgs()),
             features: OptimizerFeatures::from(vars),
         }
     }
