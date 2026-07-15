@@ -87,7 +87,7 @@ impl<P, S> DataflowDescription<P, S> {
         // Ensure that as_of <= until.
         soft_assert_or_log!(
             timely::PartialOrder::less_equal(as_of, until),
-            "expected empty `as_of ≤ until`, got `{as_of:?} ≰ {until:?}`",
+            "expected `as_of ≤ until`, got `{as_of:?} ≰ {until:?}`",
         );
         // IF `as_of` is not a single timestamp this can't be a single time dataflow.
         let Some(as_of) = as_of.as_option() else {
