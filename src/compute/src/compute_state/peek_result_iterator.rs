@@ -9,8 +9,15 @@ use std::iter::FusedIterator;
 use std::num::NonZeroI64;
 use std::ops::Range;
 
+use differential_dataflow::trace::cursor::{BatchCursor, BatchKey, CursorList};
 use differential_dataflow::trace::implementations::BatchContainer;
-use differential_dataflow::trace::{Cursor, TraceReader};
+use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
+
+/// The merged cursor a [`TraceReader::cursor`] hands out over all of a trace's batches: a
+/// [`CursorList`] over the per-batch cursors.
+type TraceCursor<Tr> = CursorList<BatchCursor<Tr>>;
+/// Backing storage for a [`TraceCursor`]: the batches the cursor borrows from.
+type TraceStorage<Tr> = Vec<<Tr as TraceReader>::Batch>;
 use mz_ore::result::ResultExt;
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena};
@@ -18,12 +25,12 @@ use timely::order::PartialOrder;
 
 pub struct PeekResultIterator<Tr>
 where
-    Tr: TraceReader,
+    Tr: TraceReader<Batch: Navigable>,
 {
     // For debug/trace logging.
     target_id: GlobalId,
-    cursor: Tr::Cursor,
-    storage: Tr::Storage,
+    cursor: TraceCursor<Tr>,
+    storage: TraceStorage<Tr>,
     map_filter_project: mz_expr::SafeMfpPlan,
     peek_timestamp: mz_repr::Timestamp,
     row_builder: Row,
@@ -32,26 +39,31 @@ where
 }
 
 /// Helper to handle literals in peeks
-struct Literals<Tr: TraceReader> {
+struct Literals<Tr: TraceReader<Batch: Navigable>> {
     /// The literals in a container, sorted by `Ord`.
-    literals: Tr::KeyContainer,
+    literals: <BatchCursor<Tr> as Cursor>::KeyContainer,
     /// The range of the literals that are still available.
     range: Range<usize>,
     /// The current index in the literals.
     current_index: Option<usize>,
 }
 
-impl<Tr: TraceReader<KeyContainer: BatchContainer<Owned: Ord>>> Literals<Tr> {
+impl<Tr> Literals<Tr>
+where
+    Tr: TraceReader<Batch: Navigable>,
+    BatchCursor<Tr>: Cursor<KeyContainer: BatchContainer<Owned: Ord>>,
+{
     /// Construct a new `Literals` from a mutable slice of literals. Sorts contents.
     fn new(
-        literals: &mut [<Tr::KeyContainer as BatchContainer>::Owned],
-        cursor: &mut Tr::Cursor,
-        storage: &Tr::Storage,
+        literals: &mut [<<BatchCursor<Tr> as Cursor>::KeyContainer as BatchContainer>::Owned],
+        cursor: &mut TraceCursor<Tr>,
+        storage: &TraceStorage<Tr>,
     ) -> Self {
         // We have to sort the literal constraints because cursor.seek_key can
         // seek only forward.
         literals.sort();
-        let mut container = Tr::KeyContainer::with_capacity(literals.len());
+        let mut container =
+            <BatchCursor<Tr> as Cursor>::KeyContainer::with_capacity(literals.len());
         for constraint in literals {
             container.push_own(constraint)
         }
@@ -66,7 +78,7 @@ impl<Tr: TraceReader<KeyContainer: BatchContainer<Owned: Ord>>> Literals<Tr> {
     }
 
     /// Returns the current literal, if any.
-    fn peek(&self) -> Option<Tr::Key<'_>> {
+    fn peek(&self) -> Option<BatchKey<'_, Tr>> {
         self.current_index
             .and_then(|index| self.literals.get(index))
     }
@@ -77,7 +89,7 @@ impl<Tr: TraceReader<KeyContainer: BatchContainer<Owned: Ord>>> Literals<Tr> {
     }
 
     /// Seeks the cursor to the next key of a matching literal, if any.
-    fn seek_next_literal_key(&mut self, cursor: &mut Tr::Cursor, storage: &Tr::Storage) {
+    fn seek_next_literal_key(&mut self, cursor: &mut TraceCursor<Tr>, storage: &TraceStorage<Tr>) {
         while let Some(index) = self.range.next() {
             let literal = self.literals.get(index).expect("index out of bounds");
             cursor.seek_key(storage, literal);
@@ -99,7 +111,8 @@ impl<Tr: TraceReader<KeyContainer: BatchContainer<Owned: Ord>>> Literals<Tr> {
 /// constraints, if any.
 impl<Tr> PeekResultIterator<Tr>
 where
-    for<'a> Tr: TraceReader<
+    Tr: TraceReader<Batch: Navigable>,
+    for<'a> BatchCursor<Tr>: Cursor<
             Key<'a>: ExtendDatums + Eq,
             KeyContainer: BatchContainer<Owned = Row>,
             Val<'a>: ExtendDatums,
@@ -136,20 +149,23 @@ where
     }
 }
 
-impl<Tr> FusedIterator for PeekResultIterator<Tr> where
-    for<'a> Tr: TraceReader<
+impl<Tr> FusedIterator for PeekResultIterator<Tr>
+where
+    Tr: TraceReader<Batch: Navigable>,
+    for<'a> BatchCursor<Tr>: Cursor<
             Key<'a>: ExtendDatums + Eq,
             KeyContainer: BatchContainer<Owned = Row>,
             Val<'a>: ExtendDatums,
             TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
             DiffGat<'a> = &'a Diff,
-        >
+        >,
 {
 }
 
 impl<Tr> Iterator for PeekResultIterator<Tr>
 where
-    for<'a> Tr: TraceReader<
+    Tr: TraceReader<Batch: Navigable>,
+    for<'a> BatchCursor<Tr>: Cursor<
             Key<'a>: ExtendDatums + Eq,
             KeyContainer: BatchContainer<Owned = Row>,
             Val<'a>: ExtendDatums,
@@ -194,7 +210,8 @@ where
 
 impl<Tr> PeekResultIterator<Tr>
 where
-    for<'a> Tr: TraceReader<
+    Tr: TraceReader<Batch: Navigable>,
+    for<'a> BatchCursor<Tr>: Cursor<
             Key<'a>: ExtendDatums + Eq,
             KeyContainer: BatchContainer<Owned = Row>,
             Val<'a>: ExtendDatums,
