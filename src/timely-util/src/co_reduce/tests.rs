@@ -26,6 +26,7 @@ use super::*;
 use differential_dataflow::AsCollection;
 use differential_dataflow::input::Input;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::operators::iterate::Variable;
 use differential_dataflow::trace::implementations::ord_neu::{OrdValSpine, RcOrdValBuilder};
 use proptest::prelude::*;
 use proptest::strategy::Union;
@@ -927,4 +928,308 @@ proptest! {
             return Err(TestCaseError::fail(e));
         }
     }
+}
+
+// ===================== Nested recursion: SCC-style iterative fixpoint =====================
+//
+// Differential's flagship nested-recursion example (`algorithms::graphs::scc`) runs a
+// reduce inside an iterative `Product`-timestamped scope whose feedback edge advances the
+// iteration coordinate. Every test above feeds `co_reduce2` direct updates and never
+// places it in such a feedback loop, so its frontier and capability handling under an
+// advancing iteration coordinate went untested. These tests close that gap. They mirror
+// the recursive set difference the SQL layer already exercises: `live = candidates EXCEPT
+// dead` and `dead = dead UNION even(live)`, with `co_reduce2` as the loop-body reduce.
+//
+// The `dead` set is monotone. It only ever gains nodes, because its own recursion carries
+// its prior contents forward. That is what makes the fixpoint converge: once an even node
+// enters `dead` it stays, so `live` loses every even candidate permanently and the
+// fixpoint is exactly the odd candidates.
+
+/// Union/threshold logic: a key is present in the output (value `0`, diff `+1`) iff its net
+/// multiplicity summed across both inputs is positive. Used as a two-input `distinct`, so
+/// the monotone `dead` union does not accumulate multiplicity across iterations. `logic`
+/// must map fully cancelled input to empty output, which this does (net `0` emits nothing).
+fn either_present(_k: &u64, inputs: &[&[(u64, isize)]], out: &mut Vec<(u64, isize)>) {
+    let sum = |s: &[(u64, isize)]| s.iter().map(|(_v, d)| *d).sum::<isize>();
+    if sum(inputs[0]) + sum(inputs[1]) > 0 {
+        out.push((0u64, 1));
+    }
+}
+
+/// Runs the two `Pair`-time arrangements through `co_reduce2` (cursor tactic) or
+/// `co_reduce2_reference` (reference tactic), so a recursive dataflow can be driven through
+/// either tactic from one call site. Both tactics carry the same driver, so the feedback
+/// loop stresses the same frontier and capability logic regardless of the branch.
+macro_rules! recur_reduce {
+    ($reference:expr, $a0:expr, $a1:expr, $name:expr, $fuel:expr, $logic:expr) => {
+        if $reference {
+            co_reduce2_reference::<
+                Pair,
+                TraceAgent<PairSpine>,
+                TraceAgent<PairSpine>,
+                u64,
+                u64,
+                u64,
+                isize,
+                PairBuilder,
+                PairSpine,
+                _,
+            >($a0, $a1, $name, $fuel, $logic)
+        } else {
+            co_reduce2::<
+                Pair,
+                TraceAgent<PairSpine>,
+                TraceAgent<PairSpine>,
+                u64,
+                u64,
+                u64,
+                isize,
+                PairBuilder,
+                PairSpine,
+                _,
+            >($a0, $a1, $name, $fuel, $logic)
+        }
+    };
+}
+
+/// Drives the recursive `live = candidates EXCEPT dead` / `dead = dead UNION even(live)`
+/// fixpoint through `co_reduce2` (or the reference tactic, if `reference`) in a single
+/// iterative `Pair`-timestamped scope. `sets[i]` is the candidate set at outer time `i`;
+/// consecutive sets are diffed into inserts and removals. A small `fuel` forces the
+/// loop-body reduce to yield mid-round inside the feedback loop, exercising the contract
+/// that a fuel-withholding round still collapses its frontier to empty so the recursive
+/// scope does not deadlock. Returns the raw captured change stream as
+/// `(node, outer_time, diff)`.
+fn run_recursive(sets: &[Vec<u64>], fuel: usize, reference: bool) -> Vec<(u64, u64, isize)> {
+    let sets: Vec<Vec<u64>> = sets.to_vec();
+    let captured = timely::execute_directly(move |worker| {
+        let (mut input, probe, cap) = worker.dataflow::<u64, _, _>(|root| {
+            let (input, cand) = root.new_collection::<u64, isize>();
+            let live = root.iterative::<u64, _, _>(|inner| {
+                let cand = cand.enter(inner);
+                // Advance the iteration coordinate by one per feedback pass.
+                let (dead_var, dead) = Variable::new(inner, Product::new(Default::default(), 1));
+                // live = candidates EXCEPT dead.
+                let live = {
+                    let ca = cand.map(|k| (k, 0u64)).arrange_by_key();
+                    let da = dead.clone().map(|k| (k, 0u64)).arrange_by_key();
+                    recur_reduce!(reference, ca, da, "recursive-live", fuel, net_positive)
+                        .as_collection(|k, _v| *k)
+                };
+                // dead_next = distinct(dead UNION even(live)). Deduping the union keeps
+                // `dead` at multiplicity one so the loop reaches a fixpoint.
+                let dead_next = {
+                    let da = dead.map(|k| (k, 0u64)).arrange_by_key();
+                    let ea = live
+                        .clone()
+                        .filter(|k| k % 2 == 0)
+                        .map(|k| (k, 0u64))
+                        .arrange_by_key();
+                    recur_reduce!(reference, da, ea, "recursive-dead", fuel, either_present)
+                        .as_collection(|k, _v| *k)
+                };
+                dead_var.set(dead_next);
+                live.leave(root)
+            });
+            let (probe, probed) = live.inner.probe();
+            let cap = probed.capture();
+            (input, probe, cap)
+        });
+
+        let mut current: BTreeSet<u64> = BTreeSet::new();
+        for (round, set) in sets.into_iter().enumerate() {
+            let target: BTreeSet<u64> = set.into_iter().collect();
+            for &k in target.difference(&current) {
+                input.insert(k);
+            }
+            for &k in current.difference(&target) {
+                input.remove(k);
+            }
+            current = target;
+            let next = u64::try_from(round + 1).expect("round count fits in u64");
+            input.advance_to(next);
+            input.flush();
+            worker.step_while(|| probe.less_than(input.time()));
+        }
+        input.close();
+        cap
+    });
+
+    captured
+        .extract()
+        .into_iter()
+        .flat_map(|(t, data)| data.into_iter().map(move |(k, _t, r)| (k, t, r)))
+        .collect()
+}
+
+/// Consolidates a `(node, time, diff)` change stream to the final per-node multiset,
+/// summing over all times and dropping zeros.
+fn final_multiset(stream: &[(u64, u64, isize)]) -> Vec<(u64, isize)> {
+    let mut acc: BTreeMap<u64, isize> = BTreeMap::new();
+    for (k, _t, r) in stream {
+        *acc.entry(*k).or_default() += *r;
+    }
+    acc.retain(|_k, r| *r != 0);
+    acc.into_iter().collect()
+}
+
+#[mz_ore::test]
+fn co_reduce_recursive_set_difference() {
+    // Candidates 0..=5. The fixpoint is the odd candidates: every even one is trapped in
+    // `dead` after the first pass and stays there.
+    let candidates = vec![vec![0u64, 1, 2, 3, 4, 5]];
+    let expected = vec![(1u64, 1isize), (3, 1), (5, 1)];
+
+    // Both tactics, and both a one-shot and a fuel-yielding loop body, agree on the
+    // analytic fixpoint. A fuel of 1 forces the reduce to yield inside the feedback loop.
+    for reference in [false, true] {
+        for fuel in [1usize, usize::MAX] {
+            assert_eq!(
+                final_multiset(&run_recursive(&candidates, fuel, reference)),
+                expected,
+                "fixpoint wrong (reference={reference}, fuel={fuel})"
+            );
+        }
+    }
+}
+
+#[mz_ore::test]
+fn co_reduce_recursive_incremental() {
+    // Round 0: candidates 0..=5 -> fixpoint {1, 3, 5}. Round 1: drop 5 (an odd survivor)
+    // and add 6 (an even node that `dead` immediately traps) -> fixpoint {1, 3}. The
+    // recursive reduce must re-run incrementally across the outer round and retract 5. A
+    // round's changes land at its own outer time, so round 1's diffs appear at time 1.
+    let sets = vec![vec![0u64, 1, 2, 3, 4, 5], vec![0u64, 1, 2, 3, 4, 6]];
+
+    for reference in [false, true] {
+        let stream = run_recursive(&sets, usize::MAX, reference);
+
+        // The dropped survivor 5 must appear as an explicit retraction at round 1 (time 1),
+        // not merely be absent from the final state.
+        assert!(
+            stream.iter().any(|(k, t, r)| *k == 5 && *t == 1 && *r < 0),
+            "expected an explicit retraction of node 5 at round 1 (reference={reference}), \
+             got {stream:?}"
+        );
+
+        // The final state after both rounds is {1, 3}.
+        assert_eq!(
+            final_multiset(&stream),
+            vec![(1u64, 1isize), (3, 1)],
+            "final incremental state wrong (reference={reference})"
+        );
+    }
+}
+
+// A doubly nested iterative scope, mirroring SCC's outer-loop-over-inner-fixpoint shape.
+// The inner scope runs the `live`/`dead` set-difference fixpoint at the depth-two timestamp
+// `Product<Pair, u64>`. The outer scope accumulates the inner result into a monotone `acc`
+// variable at `Pair`. `co_reduce2` therefore runs under two live feedback edges at once,
+// the deepest nesting these tests reach.
+type Nested = Product<Pair, u64>;
+type NestedSpine = OrdValSpine<u64, u64, Nested, isize>;
+type NestedBuilder = RcOrdValBuilder<u64, u64, Nested, isize>;
+
+#[mz_ore::test]
+fn co_reduce_recursive_nested_scopes() {
+    let candidates = vec![0u64, 1, 2, 3, 4, 5];
+    let captured = timely::execute_directly(move |worker| {
+        let (mut input, cap) = worker.dataflow::<u64, _, _>(|root| {
+            let (input, cand) = root.new_collection::<u64, isize>();
+            let acc = root.iterative::<u64, _, _>(|mid| {
+                let cand_mid = cand.enter(mid);
+                let (acc_var, acc) = Variable::new(mid, Product::new(Default::default(), 1));
+
+                // Inner fixpoint at Product<Pair, u64>: live = candidates EXCEPT dead.
+                let live = mid.iterative::<u64, _, _>(|inner| {
+                    let cand_in = cand_mid.enter(inner);
+                    let (dead_var, dead) =
+                        Variable::new(inner, Product::new(Default::default(), 1));
+                    let live = {
+                        let ca = cand_in.map(|k| (k, 0u64)).arrange_by_key();
+                        let da = dead.clone().map(|k| (k, 0u64)).arrange_by_key();
+                        co_reduce2::<
+                            Nested,
+                            TraceAgent<NestedSpine>,
+                            TraceAgent<NestedSpine>,
+                            u64,
+                            u64,
+                            u64,
+                            isize,
+                            NestedBuilder,
+                            NestedSpine,
+                            _,
+                        >(ca, da, "nested-live", usize::MAX, net_positive)
+                        .as_collection(|k, _v| *k)
+                    };
+                    let dead_next = {
+                        let da = dead.map(|k| (k, 0u64)).arrange_by_key();
+                        let ea = live
+                            .clone()
+                            .filter(|k| k % 2 == 0)
+                            .map(|k| (k, 0u64))
+                            .arrange_by_key();
+                        co_reduce2::<
+                            Nested,
+                            TraceAgent<NestedSpine>,
+                            TraceAgent<NestedSpine>,
+                            u64,
+                            u64,
+                            u64,
+                            isize,
+                            NestedBuilder,
+                            NestedSpine,
+                            _,
+                        >(da, ea, "nested-dead", usize::MAX, either_present)
+                        .as_collection(|k, _v| *k)
+                    };
+                    dead_var.set(dead_next);
+                    live.leave(mid)
+                });
+
+                // Outer fixpoint at Pair: acc = distinct(acc UNION live). `live` is constant
+                // across outer passes, so acc converges once it has absorbed it.
+                let acc_next = {
+                    let aa = acc.clone().map(|k| (k, 0u64)).arrange_by_key();
+                    let la = live.map(|k| (k, 0u64)).arrange_by_key();
+                    co_reduce2::<
+                        Pair,
+                        TraceAgent<PairSpine>,
+                        TraceAgent<PairSpine>,
+                        u64,
+                        u64,
+                        u64,
+                        isize,
+                        PairBuilder,
+                        PairSpine,
+                        _,
+                    >(aa, la, "outer-acc", usize::MAX, either_present)
+                    .as_collection(|k, _v| *k)
+                };
+                acc_var.set(acc_next);
+                acc.leave(root)
+            });
+            let cap = acc.inner.capture();
+            (input, cap)
+        });
+
+        for k in candidates {
+            input.insert(k);
+        }
+        input.close();
+        cap
+    });
+
+    let stream: Vec<(u64, u64, isize)> = captured
+        .extract()
+        .into_iter()
+        .flat_map(|(t, data)| data.into_iter().map(move |(k, _t, r)| (k, t, r)))
+        .collect();
+
+    // The doubly nested fixpoint is the same odd survivors, accumulated at the root.
+    assert_eq!(
+        final_multiset(&stream),
+        vec![(1u64, 1isize), (3, 1), (5, 1)],
+        "doubly nested fixpoint wrong"
+    );
 }
