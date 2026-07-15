@@ -724,7 +724,9 @@ pub fn show_columns<'a>(
         | ty @ CatalogItemType::Func
         | ty @ CatalogItemType::Secret
         | ty @ CatalogItemType::Type
-        | ty @ CatalogItemType::Sink => {
+        | ty @ CatalogItemType::Sink
+        | ty @ CatalogItemType::Api
+        | ty @ CatalogItemType::Metric => {
             sql_bail!("{full_name} is a {ty} and so does not have columns");
         }
     }

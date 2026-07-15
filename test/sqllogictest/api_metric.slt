@@ -1,0 +1,352 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests for `CREATE API`, `CREATE METRIC`, and the matching DROP paths.
+
+mode standard
+
+reset-server
+
+# Feature flag is off by default: CREATE API errors until ALTER SYSTEM
+# turns it on.
+statement error enable_prometheus_metrics_api
+CREATE API materialize.public.gated FORMAT PROMETHEUS
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_prometheus_metrics_api=on
+----
+COMPLETE 0
+
+statement ok
+CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'))
+
+statement ok
+CREATE VIEW leads_by_status AS
+SELECT 1 AS count, 'open' AS status
+UNION ALL
+SELECT 2, 'closed'
+
+# --- CREATE API ---
+
+statement ok
+CREATE API materialize.public.metrics_a
+FORMAT PROMETHEUS IN CLUSTER c
+
+# Recreating without IF NOT EXISTS is an error.
+statement error api "materialize.public.metrics_a" already exists
+CREATE API materialize.public.metrics_a
+FORMAT PROMETHEUS IN CLUSTER c
+
+# IF NOT EXISTS is a no-op.
+statement ok
+CREATE API IF NOT EXISTS materialize.public.metrics_a
+FORMAT PROMETHEUS IN CLUSTER c
+
+# An API with no IN CLUSTER clause uses the session's active cluster.
+statement ok
+SET cluster = c
+
+statement ok
+CREATE API materialize.public.metrics_default_cluster
+FORMAT PROMETHEUS
+
+statement ok
+RESET cluster
+
+# --- CREATE METRIC ---
+
+statement ok
+CREATE METRIC materialize.public.leads
+IN API materialize.public.metrics_a
+AS (
+  TYPE 'gauge',
+  HELP 'count of leads by status',
+  SERIES FROM materialize.public.leads_by_status,
+  VALUE COLUMN 'count'
+)
+
+# Required options.
+statement error CREATE METRIC requires a TYPE option
+CREATE METRIC materialize.public.no_type
+IN API materialize.public.metrics_a
+AS (
+  HELP 'x',
+  SERIES FROM materialize.public.leads_by_status,
+  VALUE COLUMN 'count'
+)
+
+statement error CREATE METRIC requires a HELP option
+CREATE METRIC materialize.public.no_help
+IN API materialize.public.metrics_a
+AS (
+  TYPE 'gauge',
+  SERIES FROM materialize.public.leads_by_status,
+  VALUE COLUMN 'count'
+)
+
+statement error CREATE METRIC requires a SERIES FROM option
+CREATE METRIC materialize.public.no_view
+IN API materialize.public.metrics_a
+AS (
+  TYPE 'gauge',
+  HELP 'x',
+  VALUE COLUMN 'count'
+)
+
+statement error CREATE METRIC requires a VALUE COLUMN option
+CREATE METRIC materialize.public.no_value_col
+IN API materialize.public.metrics_a
+AS (
+  TYPE 'gauge',
+  HELP 'x',
+  SERIES FROM materialize.public.leads_by_status
+)
+
+# Only `gauge` is supported today.
+statement error CREATE METRIC only supports TYPE 'gauge'
+CREATE METRIC materialize.public.counter_metric
+IN API materialize.public.metrics_a
+AS (
+  TYPE 'counter',
+  HELP 'x',
+  SERIES FROM materialize.public.leads_by_status,
+  VALUE COLUMN 'count'
+)
+
+# VALUE COLUMN must exist in the view.
+statement error VALUE COLUMN "missing" not found
+CREATE METRIC materialize.public.bad_value_col
+IN API materialize.public.metrics_a
+AS (
+  TYPE 'gauge',
+  HELP 'x',
+  SERIES FROM materialize.public.leads_by_status,
+  VALUE COLUMN 'missing'
+)
+
+# VALUE COLUMN must be numeric; `status` is text.
+statement error VALUE COLUMN "status" has type text, but CREATE METRIC requires a numeric value column
+CREATE METRIC materialize.public.non_numeric_value_col
+IN API materialize.public.metrics_a
+AS (
+  TYPE 'gauge',
+  HELP 'x',
+  SERIES FROM materialize.public.leads_by_status,
+  VALUE COLUMN 'status'
+)
+
+# IN API must reference an actual API.
+statement error materialize\.public\.leads_by_status is a view, not an API
+CREATE METRIC materialize.public.api_is_a_view
+IN API materialize.public.leads_by_status
+AS (
+  TYPE 'gauge',
+  HELP 'x',
+  SERIES FROM materialize.public.leads_by_status,
+  VALUE COLUMN 'count'
+)
+
+# SERIES FROM must reference a relation, not e.g. an API.
+statement error SERIES FROM target materialize\.public\.metrics_a is a api
+CREATE METRIC materialize.public.series_from_api
+IN API materialize.public.metrics_a
+AS (
+  TYPE 'gauge',
+  HELP 'x',
+  SERIES FROM materialize.public.metrics_a,
+  VALUE COLUMN 'count'
+)
+
+# --- Prometheus identifier validation ---
+#
+# The metric name, label names (the relation's non-value columns), and HELP
+# text are handed verbatim to Prometheus at scrape time, where an invalid
+# value would panic `MetricsRegistry::register`. CREATE METRIC must reject
+# them up front instead.
+
+# A metric name that is not a valid Prometheus identifier (contains a hyphen).
+statement error would produce an invalid Prometheus metric
+CREATE METRIC materialize.public."http-requests"
+IN API materialize.public.metrics_a
+AS (
+  TYPE 'gauge',
+  HELP 'x',
+  SERIES FROM materialize.public.leads_by_status,
+  VALUE COLUMN 'count'
+)
+
+# A label name that is not a valid Prometheus identifier (starts with a digit).
+statement ok
+CREATE VIEW responses_by_class AS
+SELECT 1 AS count, 'ok' AS "2xx"
+
+statement error would produce an invalid Prometheus metric
+CREATE METRIC materialize.public.responses
+IN API materialize.public.metrics_a
+AS (
+  TYPE 'gauge',
+  HELP 'x',
+  SERIES FROM materialize.public.responses_by_class,
+  VALUE COLUMN 'count'
+)
+
+# Empty HELP text is rejected (Prometheus requires a non-empty help string).
+statement error would produce an invalid Prometheus metric
+CREATE METRIC materialize.public.empty_help
+IN API materialize.public.metrics_a
+AS (
+  TYPE 'gauge',
+  HELP '',
+  SERIES FROM materialize.public.leads_by_status,
+  VALUE COLUMN 'count'
+)
+
+# A metric name with a colon is a valid Prometheus identifier, so it is
+# accepted (colons are reserved for recording rules by convention, but the
+# data model permits them).
+statement ok
+CREATE METRIC materialize.public."leads:total"
+IN API materialize.public.metrics_a
+AS (
+  TYPE 'gauge',
+  HELP 'x',
+  SERIES FROM materialize.public.leads_by_status,
+  VALUE COLUMN 'count'
+)
+
+statement ok
+DROP METRIC materialize.public."leads:total"
+
+statement ok
+DROP VIEW responses_by_class
+
+# --- Catalog views ---
+
+# mz_apis lists every API the user can see; the row should include the
+# resolved cluster (`c`).
+query TTT rowsort
+SELECT a.name, c.name, r.name
+FROM mz_catalog.mz_apis a
+JOIN mz_clusters c ON a.cluster_id = c.id
+JOIN mz_roles r ON a.owner_id = r.id
+WHERE a.name = 'metrics_a'
+----
+metrics_a
+c
+materialize
+
+# mz_metrics resolves api_id and series_from into other catalog views.
+query TTTTTT rowsort
+SELECT m.name, a.name, m.type, m.help, v.name, m.value_column
+FROM mz_catalog.mz_metrics m
+JOIN mz_catalog.mz_apis a ON m.api_id = a.id
+JOIN mz_views v ON m.series_from = v.id
+WHERE m.name = 'leads'
+----
+leads
+metrics_a
+gauge
+count of leads by status
+leads_by_status
+count
+
+# Both kinds also show up in `mz_objects`.
+query TT rowsort
+SELECT name, type FROM mz_catalog.mz_objects
+WHERE name IN ('metrics_a', 'leads')
+----
+leads
+metric
+metrics_a
+api
+
+# --- Dependencies ---
+
+# A view referenced by a metric cannot be dropped without CASCADE.
+statement error cannot drop view "leads_by_status": still depended upon by metric "leads"
+DROP VIEW materialize.public.leads_by_status
+
+# Same for the API.
+statement error cannot drop api "metrics_a": still depended upon by metric "leads"
+DROP API materialize.public.metrics_a
+
+# DROP VIEW ... CASCADE drops the metric but leaves the API alone.
+statement ok
+DROP VIEW materialize.public.leads_by_status CASCADE
+
+# Re-running DROP METRIC IF EXISTS confirms the metric is gone; the API
+# survived the cascade and can be dropped without CASCADE now.
+statement ok
+DROP METRIC IF EXISTS materialize.public.leads
+
+# Same dependency story for materialized views and tables. We don't
+# repeat coverage of every relation kind end-to-end; just confirm the
+# generic dependency graph applies.
+
+statement ok
+CREATE MATERIALIZED VIEW mv IN CLUSTER c AS SELECT 1::int AS count
+
+statement ok
+CREATE METRIC materialize.public.from_mv
+IN API materialize.public.metrics_a
+AS (TYPE 'gauge', HELP 'mv', SERIES FROM materialize.public.mv, VALUE COLUMN 'count')
+
+statement error cannot drop materialized view "mv": still depended upon by metric "from_mv"
+DROP MATERIALIZED VIEW materialize.public.mv
+
+statement ok
+DROP MATERIALIZED VIEW materialize.public.mv CASCADE
+
+statement ok
+CREATE TABLE t (count int)
+
+statement ok
+CREATE METRIC materialize.public.from_table
+IN API materialize.public.metrics_a
+AS (TYPE 'gauge', HELP 't', SERIES FROM materialize.public.t, VALUE COLUMN 'count')
+
+statement error cannot drop table "t": still depended upon by metric "from_table"
+DROP TABLE materialize.public.t
+
+# A column added to a table that feeds a metric becomes a Prometheus label, so
+# ALTER TABLE ADD COLUMN revalidates the new name the same way CREATE METRIC
+# does — otherwise the metric would silently drop out of its scrape output.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_alter_table_add_column=on
+----
+COMPLETE 0
+
+# A label name starting with a digit is not a valid Prometheus identifier.
+statement error cannot add column "2xx" to "t": it feeds a METRIC and the name is not a valid Prometheus label
+ALTER TABLE materialize.public.t ADD COLUMN "2xx" int
+
+# A valid identifier is accepted.
+statement ok
+ALTER TABLE materialize.public.t ADD COLUMN status int
+
+statement ok
+DROP TABLE materialize.public.t CASCADE
+
+# --- DROP ---
+
+statement ok
+DROP API materialize.public.metrics_a
+
+statement ok
+DROP API materialize.public.metrics_default_cluster
+
+# DROP IF EXISTS on a missing object is a no-op.
+statement ok
+DROP API IF EXISTS materialize.public.metrics_a
+
+statement ok
+DROP METRIC IF EXISTS materialize.public.leads
+
+statement ok
+DROP CLUSTER c

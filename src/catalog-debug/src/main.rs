@@ -730,7 +730,9 @@ async fn upgrade_check(
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => None,
+            | CatalogItem::Connection(_)
+            | CatalogItem::Api(_)
+            | CatalogItem::Metric(_) => None,
         });
 
     let mut storage_errors = BTreeMap::default();

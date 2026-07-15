@@ -273,7 +273,9 @@ impl CatalogState {
                 | CommentObjectId::Func(item_id)
                 | CommentObjectId::Connection(item_id)
                 | CommentObjectId::Type(item_id)
-                | CommentObjectId::Secret(item_id) => {
+                | CommentObjectId::Secret(item_id)
+                | CommentObjectId::Api(item_id)
+                | CommentObjectId::Metric(item_id) => {
                     let entry = self.entry_by_id.get(&item_id);
                     match entry {
                         None => comment_inconsistencies

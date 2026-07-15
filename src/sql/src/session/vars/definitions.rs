@@ -2223,6 +2223,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_prometheus_metrics_api,
+        desc: "Whether to allow CREATE API / CREATE METRIC and the matching /metrics/custom HTTP endpoint.",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_create_table_from_source,
         desc: "Whether to allow CREATE TABLE .. FROM SOURCE syntax.",
         default: true,

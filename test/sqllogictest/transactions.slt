@@ -296,6 +296,7 @@ DETAIL: The following relations in the query are outside the transaction's time 
 Only the following relations are available:
 "materialize.public.t"
 "materialize.public.t5727"
+"mz_catalog.mz_apis"
 "mz_catalog.mz_array_types"
 "mz_catalog.mz_base_types"
 "mz_catalog.mz_columns"
@@ -307,6 +308,7 @@ Only the following relations are available:
 "mz_catalog.mz_list_types"
 "mz_catalog.mz_map_types"
 "mz_catalog.mz_materialized_views"
+"mz_catalog.mz_metrics"
 "mz_catalog.mz_operators"
 "mz_catalog.mz_pseudo_types"
 "mz_catalog.mz_role_auth"

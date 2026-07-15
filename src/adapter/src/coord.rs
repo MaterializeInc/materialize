@@ -2708,7 +2708,9 @@ impl Coordinator {
                 CatalogItem::Log(_)
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
-                | CatalogItem::Secret(_) => {}
+                | CatalogItem::Secret(_)
+                | CatalogItem::Api(_)
+                | CatalogItem::Metric(_) => {}
             }
         }
 
@@ -3277,7 +3279,9 @@ impl Coordinator {
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_)
-                | CatalogItem::Connection(_) => (),
+                | CatalogItem::Connection(_)
+                | CatalogItem::Api(_)
+                | CatalogItem::Metric(_) => (),
             }
         }
 
@@ -3676,7 +3680,9 @@ impl Coordinator {
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_)
-                | CatalogItem::Connection(_) => (),
+                | CatalogItem::Connection(_)
+                | CatalogItem::Api(_)
+                | CatalogItem::Metric(_) => (),
             }
         }
 
@@ -3708,7 +3714,9 @@ impl Coordinator {
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_)
-                | CatalogItem::Connection(_) => continue,
+                | CatalogItem::Connection(_)
+                | CatalogItem::Api(_)
+                | CatalogItem::Metric(_) => continue,
             };
             if let Some(plan) = self.catalog.try_get_physical_plan(&gid) {
                 catalog_ids.push(gid);

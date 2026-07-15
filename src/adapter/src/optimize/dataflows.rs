@@ -372,7 +372,9 @@ impl<'a> DataflowBuilder<'a> {
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)
                     | CatalogItem::Secret(_)
-                    | CatalogItem::Connection(_) => {
+                    | CatalogItem::Connection(_)
+                    | CatalogItem::Api(_)
+                    | CatalogItem::Metric(_) => {
                         // Non-importable thing; can't get here.
                         unreachable!()
                     }
@@ -552,7 +554,9 @@ impl<'a> DataflowBuilder<'a> {
                 | CatalogItem::Log(_)
                 | CatalogItem::MaterializedView(_)
                 | CatalogItem::Sink(_)
-                | CatalogItem::Func(_) => Ok(false),
+                | CatalogItem::Func(_)
+                | CatalogItem::Api(_)
+                | CatalogItem::Metric(_) => Ok(false),
             }
         })?;
 

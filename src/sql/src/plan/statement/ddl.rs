@@ -55,13 +55,13 @@ use mz_sql_parser::ast::{
     ClusterAlterOptionValue, ClusterAlterUntilReadyOption, ClusterAlterUntilReadyOptionName,
     ClusterFeature, ClusterFeatureName, ClusterOption, ClusterOptionName,
     ClusterScheduleOptionValue, ColumnDef, ColumnOption, CommentObjectType, CommentStatement,
-    ConnectionOption, ConnectionOptionName, CreateClusterReplicaStatement, CreateClusterStatement,
-    CreateConnectionOption, CreateConnectionOptionName, CreateConnectionStatement,
-    CreateConnectionType, CreateDatabaseStatement, CreateIndexStatement,
-    CreateMaterializedViewStatement, CreateNetworkPolicyStatement, CreateRoleStatement,
-    CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection, CreateSinkOption,
-    CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection, CreateSourceOption,
-    CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
+    ConnectionOption, ConnectionOptionName, CreateApiStatement, CreateClusterReplicaStatement,
+    CreateClusterStatement, CreateConnectionOption, CreateConnectionOptionName,
+    CreateConnectionStatement, CreateConnectionType, CreateDatabaseStatement, CreateIndexStatement,
+    CreateMaterializedViewStatement, CreateMetricStatement, CreateNetworkPolicyStatement,
+    CreateRoleStatement, CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection,
+    CreateSinkOption, CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection,
+    CreateSourceOption, CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
     CreateSubsourceOptionName, CreateSubsourceStatement, CreateTableFromSourceStatement,
     CreateTableStatement, CreateTypeAs, CreateTypeListOption, CreateTypeListOptionName,
     CreateTypeMapOption, CreateTypeMapOptionName, CreateTypeStatement, CreateViewStatement,
@@ -71,16 +71,16 @@ use mz_sql_parser::ast::{
     FormatSpecifier, GlueAvroOption, GlueAvroOptionName, IcebergSinkConfigOption, Ident,
     IfExistsBehavior, IndexOption, IndexOptionName, KafkaSinkConfigOption, KeyConstraint,
     LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewOption,
-    MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, NetworkPolicyOption,
-    NetworkPolicyOptionName, NetworkPolicyRuleDefinition, NetworkPolicyRuleOption,
-    NetworkPolicyRuleOptionName, PgConfigOption, PgConfigOptionName, ProtobufSchema,
-    QualifiedReplica, RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue,
-    ReplicaDefinition, ReplicaOption, ReplicaOptionName, RoleAttribute, SetRoleVar,
-    SourceErrorPolicy, SourceIncludeMetadata, SqlServerConfigOption, SqlServerConfigOptionName,
-    Statement, TableConstraint, TableFromSourceColumns, TableFromSourceOption,
-    TableFromSourceOptionName, TableOption, TableOptionName, UnresolvedDatabaseName,
-    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
-    WithOptionValue,
+    MaterializedViewOptionName, MetricOption, MetricOptionName, MySqlConfigOption,
+    MySqlConfigOptionName, NetworkPolicyOption, NetworkPolicyOptionName,
+    NetworkPolicyRuleDefinition, NetworkPolicyRuleOption, NetworkPolicyRuleOptionName,
+    PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica, RefreshAtOptionValue,
+    RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition, ReplicaOption,
+    ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata,
+    SqlServerConfigOption, SqlServerConfigOptionName, Statement, TableConstraint,
+    TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName, TableOption,
+    TableOptionName, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
+    UnresolvedSchemaName, Value, ViewDefinition, WithOptionValue,
 };
 use mz_sql_parser::ident;
 use mz_sql_parser::parser::StatementParseResult;
@@ -144,6 +144,7 @@ use crate::plan::scope::Scope;
 use crate::plan::statement::ddl::connection::{INALTERABLE_OPTIONS, MUTUALLY_EXCLUSIVE_SETS};
 use crate::plan::statement::{StatementContext, StatementDesc, scl};
 use crate::plan::typeconv::CastContext;
+use crate::plan::with_options;
 use crate::plan::with_options::{OptionalDuration, OptionalString, TryFromValue};
 use crate::plan::{
     AlterClusterPlan, AlterClusterPlanStrategy, AlterClusterRenamePlan,
@@ -152,17 +153,18 @@ use crate::plan::{
     AlterOptionParameter, AlterRetainHistoryPlan, AlterRolePlan, AlterSchemaRenamePlan,
     AlterSchemaSwapPlan, AlterSecretPlan, AlterSetClusterPlan, AlterSinkPlan,
     AlterSourceTimestampIntervalPlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
-    AlterSystemSetPlan, AlterTablePlan, ClusterSchedule, CommentPlan, ComputeReplicaConfig,
-    ComputeReplicaIntrospectionConfig, ConnectionDetails, CreateClusterManagedPlan,
+    AlterSystemSetPlan, AlterTablePlan, Api, ClusterSchedule, CommentPlan, ComputeReplicaConfig,
+    ComputeReplicaIntrospectionConfig, ConnectionDetails, CreateApiPlan, CreateClusterManagedPlan,
     CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
     CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateNetworkPolicyPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
-    DropObjectsPlan, DropOwnedPlan, HirRelationExpr, Index, MaterializedView, NetworkPolicyRule,
-    NetworkPolicyRuleAction, NetworkPolicyRuleDirection, Plan, PlanClusterOption, PlanNotice,
-    PolicyAddress, QueryContext, ReplicaConfig, Secret, Sink, Source, Table, TableDataSource, Type,
-    VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders,
-    WebhookValidation, literal, plan_utils, query, transform_ast,
+    CreateMetricPlan, CreateNetworkPolicyPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan,
+    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
+    DataSourceDesc, DropObjectsPlan, DropOwnedPlan, HirRelationExpr, Index, MaterializedView,
+    Metric, NetworkPolicyRule, NetworkPolicyRuleAction, NetworkPolicyRuleDirection, Plan,
+    PlanClusterOption, PlanNotice, PolicyAddress, QueryContext, ReplicaConfig, Secret, Sink,
+    Source, Table, TableDataSource, Type, VariableValue, View, WebhookBodyFormat,
+    WebhookHeaderFilters, WebhookHeaders, WebhookValidation, literal, plan_utils, query,
+    transform_ast,
 };
 use crate::session::vars::{
     self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_COLLECTION_PARTITION_BY,
@@ -3285,7 +3287,7 @@ fn plan_sink(
                     });
                 }
             }
-            Sink | View | Index | Type | Func | Secret | Connection => {
+            Sink | View | Index | Type | Func | Secret | Connection | Api | Metric => {
                 let name = scx.catalog.minimal_qualification(from.name());
                 return Err(PlanError::InvalidSinkFrom {
                     name: name.to_string(),
@@ -4108,7 +4110,7 @@ pub fn plan_create_index(
                     );
                 }
             }
-            Sink | Index | Type | Func | Secret | Connection => {
+            Sink | Index | Type | Func | Secret | Connection | Api | Metric => {
                 sql_bail!(
                     "index cannot be created on {} because it is a {}",
                     on_name.full_name_str(),
@@ -5301,6 +5303,230 @@ pub fn plan_create_cluster_replica(
     }))
 }
 
+pub fn describe_create_api(
+    _: &StatementContext,
+    _: CreateApiStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn describe_create_metric(
+    _: &StatementContext,
+    _: CreateMetricStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_create_api(
+    scx: &StatementContext,
+    mut stmt: CreateApiStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    scx.require_feature_flag(&vars::ENABLE_PROMETHEUS_METRICS_API)?;
+    let cluster = match &stmt.in_cluster {
+        Some(ResolvedClusterName { id, .. }) => scx.catalog.get_cluster(*id),
+        None => scx.resolve_cluster(None)?,
+    };
+    let cluster_id = cluster.id();
+    // Stamp the resolved cluster into the AST so the persisted SQL always
+    // names the cluster explicitly. Without this the catalog rehydration
+    // can't recover the cluster after an `ALTER CLUSTER RENAME` and the
+    // mz_apis view can't surface a `cluster_id` column.
+    stmt.in_cluster = Some(ResolvedClusterName {
+        id: cluster_id,
+        print_name: None,
+    });
+
+    let CreateApiStatement {
+        if_not_exists,
+        name: ref unresolved,
+        format: _,
+        in_cluster: _,
+    } = stmt;
+
+    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(unresolved.clone())?)?;
+    let create_sql = normalize::create_statement(scx, Statement::CreateApi(stmt.clone()))?;
+
+    let full_name = scx.catalog.resolve_full_name(&name);
+    let partial_name = PartialItemName::from(full_name.clone());
+    if let (false, Ok(item)) = (if_not_exists, scx.catalog.resolve_item(&partial_name)) {
+        return Err(PlanError::ItemAlreadyExists {
+            name: full_name.to_string(),
+            item_type: item.item_type(),
+        });
+    }
+
+    Ok(Plan::CreateApi(CreateApiPlan {
+        name,
+        api: Api {
+            create_sql,
+            cluster_id,
+        },
+        if_not_exists,
+    }))
+}
+
+generate_extracted_config!(
+    MetricOption,
+    (Ty, String),
+    (Help, String),
+    (SeriesFrom, with_options::Object),
+    (ValueColumn, String)
+);
+
+pub fn plan_create_metric(
+    scx: &StatementContext,
+    stmt: CreateMetricStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    scx.require_feature_flag(&vars::ENABLE_PROMETHEUS_METRICS_API)?;
+    let CreateMetricStatement {
+        if_not_exists,
+        name: ref unresolved_name,
+        in_api: ref unresolved_api,
+        ref options,
+    } = stmt;
+
+    let name =
+        scx.allocate_qualified_name(normalize::unresolved_item_name(unresolved_name.clone())?)?;
+
+    let MetricOptionExtracted {
+        seen: _,
+        ty,
+        help,
+        series_from,
+        value_column,
+    } = options.clone().try_into()?;
+
+    let metric_type = ty
+        .ok_or_else(|| sql_err!("CREATE METRIC requires a TYPE option"))?
+        .to_lowercase();
+    if metric_type != "gauge" {
+        sql_bail!("CREATE METRIC only supports TYPE 'gauge' today; got {metric_type:?}");
+    }
+    let help = help.ok_or_else(|| sql_err!("CREATE METRIC requires a HELP option"))?;
+    let series_from_object: with_options::Object =
+        series_from.ok_or_else(|| sql_err!("CREATE METRIC requires a SERIES FROM option"))?;
+    let value_column =
+        value_column.ok_or_else(|| sql_err!("CREATE METRIC requires a VALUE COLUMN option"))?;
+
+    // The name resolver already filled in IDs for `IN API <api>` and
+    // `SERIES FROM <view>`; extract them directly.
+    let api_id = match unresolved_api {
+        ResolvedItemName::Item { id, .. } => *id,
+        ResolvedItemName::Cte { .. } | ResolvedItemName::Error => {
+            sql_bail!("IN API target must be a catalog item")
+        }
+    };
+    let api_entry = scx.catalog.get_item(&api_id);
+    if api_entry.item_type() != CatalogItemType::Api {
+        sql_bail!(
+            "{} is a {}, not an API",
+            scx.catalog.resolve_full_name(api_entry.name()),
+            api_entry.item_type()
+        );
+    }
+
+    let series_from = CatalogItemId::from(&series_from_object);
+    let view_entry = scx.catalog.get_item(&series_from);
+    match view_entry.item_type() {
+        CatalogItemType::View
+        | CatalogItemType::MaterializedView
+        | CatalogItemType::Source
+        | CatalogItemType::Table => {}
+        other => sql_bail!(
+            "SERIES FROM target {} is a {}; expected a relation",
+            scx.catalog.resolve_full_name(view_entry.name()),
+            other
+        ),
+    }
+    let view_collection = view_entry.at_version(RelationVersionSelector::Latest);
+    let view_desc = view_collection.relation_desc().ok_or_else(|| {
+        sql_err!(
+            "SERIES FROM target {} does not produce rows",
+            scx.catalog.resolve_full_name(view_entry.name())
+        )
+    })?;
+    // The value column must exist and be numeric: at scrape time its value is
+    // parsed into an `f64` for the Prometheus gauge, so a non-numeric column
+    // could never produce a meaningful sample.
+    let value_column_name = mz_repr::ColumnName::from(value_column.as_str());
+    let (_, value_col_type) = view_desc.get_by_name(&value_column_name).ok_or_else(|| {
+        sql_err!(
+            "VALUE COLUMN {} not found in {}",
+            value_column.quoted(),
+            scx.catalog.resolve_full_name(view_entry.name()),
+        )
+    })?;
+    if !matches!(
+        value_col_type.scalar_type,
+        SqlScalarType::Int16
+            | SqlScalarType::Int32
+            | SqlScalarType::Int64
+            | SqlScalarType::UInt16
+            | SqlScalarType::UInt32
+            | SqlScalarType::UInt64
+            | SqlScalarType::Float32
+            | SqlScalarType::Float64
+            | SqlScalarType::Numeric { .. }
+    ) {
+        sql_bail!(
+            "VALUE COLUMN {} has type {}, but CREATE METRIC requires a numeric value column",
+            value_column.quoted(),
+            scx.humanize_sql_scalar_type(&value_col_type.scalar_type, false),
+        );
+    }
+
+    // The metric's name, HELP text, and label names are handed verbatim to
+    // Prometheus at scrape time, where `MetricsRegistry::register` *panics* if
+    // any of them is rejected (an invalid identifier, or empty HELP). Validate
+    // here, at CREATE time, where we can return a clean error instead of
+    // aborting `environmentd` on the next scrape. The label names are the
+    // relation's columns other than the value column (mirroring the scrape
+    // path in `mz-environmentd`). We construct a real `prometheus::Desc` rather
+    // than re-deriving the rules so this can never drift from what `register`
+    // accepts.
+    let label_names: Vec<String> = view_desc
+        .iter()
+        .map(|(col_name, _ty)| col_name.as_str().to_string())
+        .filter(|col_name| col_name.as_str() != value_column.as_str())
+        .collect();
+    if let Err(err) = prometheus::core::Desc::new(
+        name.item.clone(),
+        help.clone(),
+        label_names,
+        Default::default(),
+    ) {
+        sql_bail!(
+            "CREATE METRIC {} would produce an invalid Prometheus metric: {}",
+            name.item.quoted(),
+            err
+        );
+    }
+
+    let create_sql = normalize::create_statement(scx, Statement::CreateMetric(stmt.clone()))?;
+
+    let full_name = scx.catalog.resolve_full_name(&name);
+    let partial_name = PartialItemName::from(full_name.clone());
+    if let (false, Ok(item)) = (if_not_exists, scx.catalog.resolve_item(&partial_name)) {
+        return Err(PlanError::ItemAlreadyExists {
+            name: full_name.to_string(),
+            item_type: item.item_type(),
+        });
+    }
+
+    Ok(Plan::CreateMetric(CreateMetricPlan {
+        name,
+        metric: Metric {
+            create_sql,
+            api_id,
+            metric_type,
+            help,
+            series_from,
+            value_column,
+        },
+        if_not_exists,
+    }))
+}
+
 pub fn describe_create_secret(
     _: &StatementContext,
     _: CreateSecretStatement<Aug>,
@@ -5744,7 +5970,9 @@ fn dependency_prevents_drop(object_type: ObjectType, dep: &dyn CatalogItem) -> b
         | ObjectType::Database
         | ObjectType::Schema
         | ObjectType::Func
-        | ObjectType::NetworkPolicy => match dep.item_type() {
+        | ObjectType::NetworkPolicy
+        | ObjectType::Api
+        | ObjectType::Metric => match dep.item_type() {
             CatalogItemType::Func
             | CatalogItemType::Table
             | CatalogItemType::Source
@@ -5753,7 +5981,9 @@ fn dependency_prevents_drop(object_type: ObjectType, dep: &dyn CatalogItem) -> b
             | CatalogItemType::Sink
             | CatalogItemType::Type
             | CatalogItemType::Secret
-            | CatalogItemType::Connection => true,
+            | CatalogItemType::Connection
+            | CatalogItemType::Api
+            | CatalogItemType::Metric => true,
             CatalogItemType::Index => false,
         },
     }
@@ -6484,7 +6714,9 @@ pub fn plan_alter_item_set_cluster(
         | ObjectType::Database
         | ObjectType::Schema
         | ObjectType::Func
-        | ObjectType::NetworkPolicy => {
+        | ObjectType::NetworkPolicy
+        | ObjectType::Api
+        | ObjectType::Metric => {
             bail_never_supported!(
                 format!("ALTER {object_type} SET CLUSTER"),
                 "sql/alter-set-cluster/",
@@ -6926,7 +7158,9 @@ pub fn plan_alter_object_swap(
             | ObjectType::Connection
             | ObjectType::Database
             | ObjectType::Func
-            | ObjectType::NetworkPolicy,
+            | ObjectType::NetworkPolicy
+            | ObjectType::Api
+            | ObjectType::Metric,
             _,
             _,
         ) => Err(PlanError::Unsupported {
@@ -7693,6 +7927,38 @@ pub fn plan_alter_table_add_column(
         }
     }
 
+    // A METRIC's `SERIES FROM` relation contributes every non-value column as a
+    // Prometheus label, so a column added to a table that feeds a metric becomes
+    // a new label at scrape time. A metric depends on its relation directly
+    // (`used_by`), and a freshly added column can never be the metric's
+    // (pre-existing) value column — so it is always a label. Reject names
+    // Prometheus would refuse here, matching CREATE METRIC validation, rather
+    // than silently dropping the metric from its scrape output. (Indirect
+    // dependents, e.g. a view over the table, keep their fixed projection and
+    // are unaffected.)
+    let feeds_metric = scx
+        .catalog
+        .get_item(&relation_id)
+        .used_by()
+        .iter()
+        .any(|id| scx.catalog.get_item(id).item_type() == CatalogItemType::Metric);
+    if feeds_metric {
+        if let Err(err) = prometheus::core::Desc::new(
+            "metric".to_string(),
+            "help".to_string(),
+            vec![column_name.as_str().to_string()],
+            Default::default(),
+        ) {
+            sql_bail!(
+                "cannot add column {} to {}: it feeds a METRIC and the name is not a valid \
+                 Prometheus label: {}",
+                column_name.as_str().quoted(),
+                item_name.item.quoted(),
+                err
+            );
+        }
+    }
+
     let scalar_type = scalar_type_from_sql(scx, &data_type)?;
     // TODO(alter_table): Support non-nullable columns with default values.
     let column_type = scalar_type.nullable(true);
@@ -7746,6 +8012,14 @@ pub fn plan_alter_materialized_view_apply_replacement(
             replacement_name: scx.catalog.minimal_qualification(replacement.name()),
         });
     }
+
+    // NOTE: A dependent METRIC's labels and value column come from this MV's
+    // columns, so a shape change here could break it. That can't happen today:
+    // `CREATE REPLACEMENT MATERIALIZED VIEW` requires the replacement's schema
+    // to match the target's exactly (see `create_materialized_view.rs`, "we
+    // don't support schema evolution"). If MV schema evolution is ever added,
+    // revalidate dependent metrics here the way `plan_alter_table_add_column`
+    // does for new columns.
 
     Ok(Plan::AlterMaterializedViewApplyReplacement(
         AlterMaterializedViewApplyReplacementPlan {
@@ -8016,7 +8290,9 @@ pub(crate) fn resolve_item_or_type<'a>(
         | ObjectType::Database
         | ObjectType::Schema
         | ObjectType::Func
-        | ObjectType::NetworkPolicy => scx.catalog.resolve_item(&name),
+        | ObjectType::NetworkPolicy
+        | ObjectType::Api
+        | ObjectType::Metric => scx.catalog.resolve_item(&name),
     };
 
     match catalog_item {

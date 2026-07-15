@@ -1236,7 +1236,9 @@ impl From<CommentObjectId> for ObjectId {
             | CommentObjectId::Func(item_id)
             | CommentObjectId::Connection(item_id)
             | CommentObjectId::Type(item_id)
-            | CommentObjectId::Secret(item_id) => ObjectId::Item(item_id),
+            | CommentObjectId::Secret(item_id)
+            | CommentObjectId::Api(item_id)
+            | CommentObjectId::Metric(item_id) => ObjectId::Item(item_id),
             CommentObjectId::Role(id) => ObjectId::Role(id),
             CommentObjectId::Database(id) => ObjectId::Database(id),
             CommentObjectId::Schema(id) => ObjectId::Schema(id),
@@ -1297,6 +1299,8 @@ pub enum CommentObjectId {
     Connection(CatalogItemId),
     Type(CatalogItemId),
     Secret(CatalogItemId),
+    Api(CatalogItemId),
+    Metric(CatalogItemId),
     Role(RoleId),
     Database(DatabaseId),
     Schema((ResolvedDatabaseSpecifier, SchemaSpecifier)),

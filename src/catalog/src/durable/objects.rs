@@ -1529,6 +1529,8 @@ pub fn item_type(create_sql: &str) -> CatalogItemType {
         Some("FUNCTION") => CatalogItemType::Func,
         Some("SECRET") => CatalogItemType::Secret,
         Some("CONNECTION") => CatalogItemType::Connection,
+        Some("API") => CatalogItemType::Api,
+        Some("METRIC") => CatalogItemType::Metric,
         _ => panic!("unexpected create sql: {}", create_sql),
     }
 }

@@ -1238,3 +1238,5 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17102  mz_cluster_reconfigurations_ind
 17103  mz_cluster_auto_scaling_strategies
 17104  mz_cluster_auto_scaling_strategies_ind
+17105  mz_apis
+17106  mz_metrics
