@@ -35,7 +35,7 @@
 {{- range .columns }}
 <tr>
 <td><code>{{ .name }}</code></td>
-<td>{{- $u := index $.types .type -}}{{- if $u -}}<a href="{{ $u }}"><code>{{ .type }}</code></a>{{- else -}}<code>{{ .type }}</code>{{- end -}}</td>
+<td>{{- $u := index $.types .type -}}{{- if $u -}}{{ printf "[`%s`](%s)" .type $u | $.Page.RenderString }}{{- else -}}{{ printf "`%s`" .type | $.Page.RenderString }}{{- end -}}</td>
 <td>{{ .meaning | $.Page.RenderString }}</td>
 </tr>
 {{- end }}
