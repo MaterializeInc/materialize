@@ -33,10 +33,14 @@ from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.workload_replay.config import cluster_replica_sizes
+from materialize.workload_replay.config import (
+    additional_system_parameter_defaults,
+    cluster_replica_sizes,
+)
 from materialize.workload_replay.executor import benchmark, test
 from materialize.workload_replay.util import (
     get_paths,
+    load_workload,
     print_workload_stats,
     update_captured_workloads_repo,
 )
@@ -69,10 +73,7 @@ SERVICES = [
         cluster_replica_size=cluster_replica_sizes,
         ports=[6875, 6874, 6876, 6877, 6878, 6880, 6881, 26257],
         environment_extra=["MZ_NO_BUILTIN_CONSOLE=0"],
-        additional_system_parameter_defaults={
-            "enable_rbac_checks": "false",
-            "webhook_concurrent_request_limit": "5000",
-        },
+        additional_system_parameter_defaults=additional_system_parameter_defaults,
     ),
     Testdrive(
         seed=1,
@@ -133,6 +134,17 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         default=["*.yml"],
         help="run against the specified files",
     )
+    parser.add_argument(
+        "--skip-large",
+        action="store_true",
+        help="skip workloads tagged `settings.large: true` (e.g. nightly skips them but release-qualification does not)",
+    )
+    parser.add_argument(
+        "--skip-without-data-scale",
+        action="store_true",
+        default=False,
+        help="Skip workloads that have scale_data: false in their settings",
+    )
     parser.add_argument("--verbose", action=argparse.BooleanOptionalAction)
     parser.add_argument(
         "--create-objects", action=argparse.BooleanOptionalAction, default=True
@@ -164,6 +176,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     def run(file: pathlib.Path) -> None:
+        workload = load_workload(file)
+        settings = workload.get("settings", {})
+        if args.skip_large and settings.get("large", False):
+            print(f"-- Skipping {file} (settings.large: true and --skip-large)")
+            return
+        if args.skip_without_data_scale and not settings.get("scale_data", True):
+            print(f"-- Skipping {file} (scale_data: false)")
+            return
+
         # Anonymized captures reuse object names (cluster_0, db_0, ...) across
         # files and test() does not clean up between them, so reset all state
         # first. Otherwise the second file fails on duplicate CREATE
@@ -177,13 +198,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.rm(*service_names, destroy_volumes=True)
         c.rm_volumes("mzdata")
 
-        with open(file) as f:
-            workload = yaml.load(f, Loader=yaml.CSafeLoader)
         # When scale_data is false, use 100% initial data
-        settings = workload.get("settings", {})
         factor_initial_data = args.factor_initial_data
         if not settings.get("scale_data", True):
             factor_initial_data = 1.0
+        else:
+            # A workload can shrink itself further via
+            # `settings.factor_initial_data_multiplier` — useful when a single
+            # captured workload is dramatically larger than the rest and would
+            # blow past the CI timeout at the global factor.
+            factor_initial_data *= settings.get("factor_initial_data_multiplier", 1.0)
         print_workload_stats(file, workload)
         test(
             c,
@@ -268,6 +292,11 @@ def workflow_benchmark(c: Composition, parser: WorkflowArgumentParser) -> None:
         default=False,
         help="Skip workloads that have scale_data: false in their settings",
     )
+    parser.add_argument(
+        "--skip-large",
+        action="store_true",
+        help="skip workloads tagged `settings.large: true` (e.g. nightly skips them but release-qualification does not)",
+    )
     args = parser.parse_args()
 
     print(f"-- Random seed is {args.seed}")
@@ -276,11 +305,13 @@ def workflow_benchmark(c: Composition, parser: WorkflowArgumentParser) -> None:
     all_paths = get_paths(args.files)
     workloads: dict[pathlib.Path, dict] = {}
     for path in all_paths:
-        with open(path) as f:
-            workload = yaml.load(f, Loader=yaml.CSafeLoader)
+        workload = load_workload(path)
         settings = workload.get("settings", {})
         if not settings.get("scale_data", True) and args.skip_without_data_scale:
             print(f"-- Skipping {path} (scale_data: false)")
+            continue
+        if settings.get("large", False) and args.skip_large:
+            print(f"-- Skipping {path} (settings.large: true)")
             continue
         workloads[path] = workload
 
