@@ -294,6 +294,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `llvm.aarch64.neon.uaddlv.i32.v16i8` on OS `linux`
     fn suggestions_to_data_maps_byte_range_to_line_col() {
         let source = "SELECT custoser_name FROM users";
         let rope = Rope::from_str(source);

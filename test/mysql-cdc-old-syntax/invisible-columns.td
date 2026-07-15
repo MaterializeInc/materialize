@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# TODO: Reenable when SS-314 is fixed
+# TODO: Reenable when SS-314 is fixed, and uncomment the following skip-if
 $ skip-if
 SELECT true
 
