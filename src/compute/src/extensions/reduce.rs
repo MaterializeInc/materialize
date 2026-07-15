@@ -56,11 +56,9 @@ pub(crate) trait MzReduce<'scope, T1: TraceReader> {
         logic: L,
     ) -> Arranged<'scope, TraceAgent<T2>>
     where
-        // `differential`'s `reduce_abelian` names the shared key container `KC` and equates both
-        // cursors' keys to `KC::ReadItem<'a>`. The input pins `KC` (uniquely inferable from the
-        // concrete input arrangement), which lets the compiler normalize the higher-ranked key
-        // equality that a projection-to-projection bound would not. This wrapper forwards `KC` and
-        // pins `KeyContainer = KC` on both traces, so `KC` stays inferable at call sites.
+        // `KC` is a distinct parameter, not `T1::KeyContainer`: pinning it from the concrete input
+        // lets the compiler normalize the higher-ranked key equality on both cursors to
+        // `KC::ReadItem`, which a projection-to-projection bound would not.
         T1: TraceReader<Batch: Navigable>,
         KC: BatchContainer,
         BatchCursor<T1>: Cursor<Time = T1::Time, KeyContainer = KC>,
@@ -86,6 +84,7 @@ impl<'scope, T1> MzReduce<'scope, T1> for Arranged<'scope, T1>
 where
     T1: TraceReader + Clone + 'static,
 {
+    /// Applies `reduce` to arranged data, and returns an arrangement of output data.
     fn mz_reduce_abelian<L, Bu, T2, KC>(
         self,
         name: &str,
@@ -119,7 +118,7 @@ where
             |buf: &mut Bu::Input,
              key: KC::ReadItem<'_>,
              updates: &mut Vec<(BatchValOwn<T2>, T2::Time, BatchDiff<T2>)>| {
-                ClearContainer::clear(buf);
+                buf.clear();
                 let key_owned = KC::into_owned(key);
                 for (val, time, diff) in updates.drain(..) {
                     buf.push_into(((key_owned.clone(), val), time, diff));
