@@ -1069,6 +1069,32 @@ class ViewsMaterializedNested(Generator):
         print(f"{cls.COUNT}")
 
 
+class ReadThenWriteNestedViews(Generator):
+    # A read-then-write (DELETE ... WHERE ... IN (SELECT ... FROM deep_view))
+    # validates the transitive dependencies of its read set. That validation
+    # must not recurse over the view chain (SQL-426: it used to, overflowing the
+    # coordinator stack). This is a smoke test of the read-then-write path over
+    # a nested-view read set. The inner SELECT is a one-shot peek that inlines
+    # the chain, so COUNT is capped like ViewsNested. The deep-chain validation
+    # itself is covered by a Rust unit test.
+    COUNT = min(Generator.COUNT, 10)
+
+    @classmethod
+    def body(cls) -> None:
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
+        print("> CREATE TABLE t (a INTEGER);")
+        print("> INSERT INTO t VALUES (1);")
+        print("> CREATE VIEW c0 AS SELECT a FROM t;")
+
+        for i in cls.all():
+            print(f"> CREATE VIEW c{i} AS SELECT a FROM c{i-1};")
+
+        print(f"> DELETE FROM t WHERE a IN (SELECT a FROM c{cls.COUNT});")
+        cls.store_explain_and_run("SELECT count(*) FROM t;")
+        print("0")
+
+
 class CTEs(Generator):
     COUNT = min(
         Generator.COUNT, 10

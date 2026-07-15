@@ -1941,6 +1941,10 @@ class FlipFlagsAction(Action):
             "cluster_controller_tick_interval",
             "enable_background_alter_cluster",
             "default_cluster_reconfiguration_timeout",
+            # A safety bound on read-then-write dependency validation. Flipping
+            # it low would make ordinary DELETE/UPDATE/INSERT ... SELECT fail,
+            # which the workload does not expect.
+            "read_then_write_max_dependencies",
         ]
 
     def run(self, exe: Executor) -> bool:
