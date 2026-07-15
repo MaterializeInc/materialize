@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/statement/ddl.rs
-revision: e6fbabee58
+revision: bfdf7c6abb
 ---
 
 # mz-sql::plan::statement::ddl
@@ -24,3 +24,4 @@ The `iceberg_sink_builder` function accepts an optional `storage_connection: Opt
 `DROP … name1, name2, …` resolves all named items before running the non-cascade dependency check, so that two co-dependent items listed in the same statement do not block each other: dependents whose ids appear in the same drop set are excluded from `ensure_no_blocking_dependents`.
 `AvroSchema::Glue { connection, seed, .. }` in a source format is fully planned: the connection is resolved and must be a `Connection::GlueSchemaRegistry` item, and the `seed` must be present (populated by purification); a missing seed produces the error `"Avro Glue seed resolution has not been performed"`. The resulting `Schema` carries `wire_format: WireFormat::Glue { registry: Some(glue_connection_id) }`.
 `get_encoding_inner` builds the `Schema::wire_format` field directly inside each `AvroSchema` match arm rather than from a legacy `(csr_connection, confluent_wire_format)` pair. For `AvroSchema::InlineSchema`, the `CONFLUENT WIRE FORMAT` option controls whether `WireFormat::Confluent { registry: None }` or `WireFormat::None` is produced. For `AvroSchema::Csr`, the error message for a non-CSR connection item now reads `"is not a Confluent Schema Registry connection"`. `generate_extracted_config!(GlueAvroOption, (SchemaName, String))` is generated at module level, making `GlueAvroOptionExtracted` available for use in planning and purification.
+`plan_create_type` validates nested type references using a shared `TypeResolutionBudget`, rejecting types that exceed `MAX_TYPE_NESTING_DEPTH` (128) or `MAX_TYPE_RESOLUTION_NODES` (100,000) at `CREATE TYPE` time with graceful planning errors. Map key types are validated under a separate per-root budget (since the key type is not part of the resolved type tree at runtime), while the value type and record fields draw from the function's main budget.

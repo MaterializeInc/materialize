@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/statement/ddl.rs
-revision: e6fbabee58
+revision: bfdf7c6abb
 ---
 
 # mz-sql::plan::statement::ddl
@@ -17,3 +17,4 @@ The `iceberg_sink_builder` function accepts an optional `storage_connection: Opt
 `plan_alter_cluster` rejects a `WAIT` clause when no shape dimension (`SIZE`, `AVAILABILITY ZONES`, or `INTROSPECTION`) is being changed: there is no hydrate-overlap to wait on.
 `plan_alter_sink` handles `AlterSinkAction::SetOptions` and `AlterSinkAction::ResetOptions`, currently restricted to the `CommitInterval` option name. A `SET` identical to the current with-options returns `Plan::AlterNoop`. A `RESET` of an option that is not set is rejected.
 `iceberg_sink_builder` enforces a minimum `COMMIT INTERVAL` of 1 second; intervals shorter than 1 second produce the error `"COMMIT INTERVAL must be at least 1 second"`.
+`plan_create_type` validates nested type references using a shared `TypeResolutionBudget`, rejecting types that exceed the nesting depth limit (128) or total resolution node limit (100,000) with graceful planning errors.

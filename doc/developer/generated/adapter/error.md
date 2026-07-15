@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/error.rs
-revision: 8598d82c1c
+revision: 75cdbb9e3f
 ---
 
 # adapter::error
@@ -13,3 +13,4 @@ Several constructor helpers on `AdapterError` (e.g. `concurrent_dependency_drop_
 The `ShouldTerminateGracefully` trait (private) identifies errors — such as `FenceError::DeployGeneration` — that should cause a clean process exit rather than a panic.
 `RecursionLimitError` (from `mz_ore::stack`) carries a `std::backtrace::Backtrace` field and does not implement `Clone`; as a result, `AdapterError` is also not `Clone`.
 The `eval_error_code` helper maps `EvalError` variants to SQLSTATE codes exhaustively (no wildcard fallthrough to `XX000`). `InvalidRangeError::InvalidRangeData` maps to `SqlState::DATA_EXCEPTION`.
+`code()` matches `AdapterError::PlanError(PlanError::Unsupported { .. })` to `SqlState::FEATURE_NOT_SUPPORTED` before the catch-all `PlanError(_) => SqlState::INTERNAL_ERROR` arm; the same match is applied for `OptimizerError::PlanError(PlanError::Unsupported { .. })` in the optimizer-error mapping. `PlanError::Unsupported` is raised via `bail_unsupported!` for genuinely unsupported features, so it maps to PostgreSQL's feature-not-supported code rather than internal-error.
