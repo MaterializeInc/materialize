@@ -6579,6 +6579,7 @@ dependencies = [
  "mz-adapter-types",
  "mz-compute-types",
  "mz-controller-types",
+ "mz-dyncfg",
  "mz-ore",
  "mz-repr",
  "tokio",

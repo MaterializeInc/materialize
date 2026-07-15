@@ -27,6 +27,7 @@
 //! [`ClusterControllerCtx`]: crate::ctx::ClusterControllerCtx
 
 use std::collections::BTreeSet;
+use std::time::Duration;
 
 use mz_controller_types::ReplicaId;
 use mz_repr::Timestamp;
@@ -56,12 +57,12 @@ pub trait Strategy: Send + Sync {
     fn name(&self) -> &'static str;
 
     /// The live signals this strategy needs to evaluate `state` this tick,
-    /// declared as a pure function of the durable state. The kernel unions the
-    /// requests across strategies, fetches them through the ctx, and passes the
-    /// result to [`Strategy::update_state`] and [`Strategy::desired_replicas`].
-    /// The default requests nothing, which suits a strategy that works off
-    /// durable state alone (like the baseline).
-    fn signal_request(&self, _state: &ClusterState) -> SignalRequest {
+    /// declared as a pure function of the durable state and the tick's config
+    /// signals. The kernel unions the requests across strategies, fetches them
+    /// through the ctx, and passes the result to [`Strategy::update_state`] and
+    /// [`Strategy::desired_replicas`]. The default requests nothing, which suits
+    /// a strategy that works off durable state alone (like the baseline).
+    fn signal_request(&self, _state: &ClusterState, _config: &ConfigSignals) -> SignalRequest {
         SignalRequest::default()
     }
 
@@ -73,6 +74,7 @@ pub trait Strategy: Send + Sync {
         &self,
         _state: &ClusterState,
         _signals: &LiveSignals,
+        _config: &ConfigSignals,
         _now: Timestamp,
     ) -> StateWrite {
         StateWrite::default()
@@ -84,6 +86,7 @@ pub trait Strategy: Send + Sync {
         &self,
         state: &ClusterState,
         signals: &LiveSignals,
+        config: &ConfigSignals,
         now: Timestamp,
     ) -> Vec<DesiredReplica>;
 }
@@ -118,6 +121,24 @@ impl SignalRequest {
             hydratable_objects: self.hydratable_objects || hydratable_objects,
         }
     }
+}
+
+/// Environment-wide configuration the strategies consult, latched by the kernel
+/// once per tick from the controller's dyncfgs so every strategy decides against
+/// one consistent config.
+///
+/// Config signals are the third input category next to durable [`ClusterState`]
+/// and per-cluster [`LiveSignals`]: not durable cluster state (so never witness
+/// material, a flip does not need to reject an in-flight decision) and not
+/// per-cluster observations.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ConfigSignals {
+    /// Whether the hydration-burst strategy is enabled environment-wide (the
+    /// break-glass flag).
+    pub burst_enabled: bool,
+    /// The system-default burst linger duration, written into a new `burst`
+    /// record when the policy's `linger_duration` is omitted.
+    pub default_burst_linger: Duration,
 }
 
 /// The fulfilled live signals for one cluster, fetched by the kernel per the
@@ -157,6 +178,7 @@ impl Strategy for BaselineStrategy {
         &self,
         state: &ClusterState,
         _signals: &LiveSignals,
+        _config: &ConfigSignals,
         _now: Timestamp,
     ) -> Vec<DesiredReplica> {
         let shape = state.realized_shape();
@@ -223,7 +245,7 @@ impl Strategy for GracefulReconfigurationStrategy {
         GRACEFUL_RECONFIGURATION_STRATEGY_NAME
     }
 
-    fn signal_request(&self, state: &ClusterState) -> SignalRequest {
+    fn signal_request(&self, state: &ClusterState, _config: &ConfigSignals) -> SignalRequest {
         SignalRequest {
             hydration: state
                 .reconfiguration
@@ -237,6 +259,7 @@ impl Strategy for GracefulReconfigurationStrategy {
         &self,
         state: &ClusterState,
         signals: &LiveSignals,
+        _config: &ConfigSignals,
         now: Timestamp,
     ) -> StateWrite {
         let Some(record) = &state.reconfiguration else {
@@ -310,6 +333,7 @@ impl Strategy for GracefulReconfigurationStrategy {
         &self,
         state: &ClusterState,
         signals: &LiveSignals,
+        _config: &ConfigSignals,
         now: Timestamp,
     ) -> Vec<DesiredReplica> {
         let Some(record) = &state.reconfiguration else {
@@ -395,8 +419,9 @@ impl HydrationBurstStrategy {
     fn active_policy<'a>(
         &self,
         state: &'a ClusterState,
+        config: &ConfigSignals,
     ) -> Option<&'a crate::ctx::OnHydrationPolicy> {
-        if !state.burst_enabled || state.replication_factor == 0 {
+        if !config.burst_enabled || state.replication_factor == 0 {
             return None;
         }
         state.auto_scaling_policy.as_ref()?.on_hydration.as_ref()
@@ -423,7 +448,7 @@ impl Strategy for HydrationBurstStrategy {
         HYDRATION_BURST_STRATEGY_NAME
     }
 
-    fn signal_request(&self, state: &ClusterState) -> SignalRequest {
+    fn signal_request(&self, state: &ClusterState, config: &ConfigSignals) -> SignalRequest {
         // Hydration is consulted whenever the policy is active: by the arm
         // check with no record, and by the linger lifecycle with one. Object
         // existence only gates arming, so it is requested only record-less.
@@ -431,7 +456,7 @@ impl Strategy for HydrationBurstStrategy {
         // policy still gets its replicas probed each tick. The probe is
         // in-memory controller state, an accepted cost for keeping requests
         // pure over durable state.
-        let active = self.active_policy(state).is_some();
+        let active = self.active_policy(state, config).is_some();
         SignalRequest {
             hydration: active,
             hydratable_objects: active && state.burst.is_none(),
@@ -443,6 +468,7 @@ impl Strategy for HydrationBurstStrategy {
         &self,
         state: &ClusterState,
         signals: &LiveSignals,
+        config: &ConfigSignals,
         now: Timestamp,
     ) -> StateWrite {
         // Both teardown arms clear the record, but they declare different
@@ -461,7 +487,7 @@ impl Strategy for HydrationBurstStrategy {
         // disabled / the cluster is off / no policy; a `HYDRATION SIZE` change makes
         // the record's size stale (a fresh record at the new size is written below
         // on a later tick once warranted).
-        let Some(policy) = self.active_policy(state) else {
+        let Some(policy) = self.active_policy(state, config) else {
             return if state.burst.is_some() {
                 clear(BurstFinishCause::NoLongerWarranted)
             } else {
@@ -492,8 +518,9 @@ impl Strategy for HydrationBurstStrategy {
                 if steady_hydrated || !signals.has_hydratable_objects {
                     StateWrite::default()
                 } else {
-                    let linger_duration =
-                        policy.linger_duration.unwrap_or(state.default_burst_linger);
+                    let linger_duration = policy
+                        .linger_duration
+                        .unwrap_or(config.default_burst_linger);
                     StateWrite {
                         burst: Some(BurstWrite {
                             record: Some(BurstRecord {
@@ -562,6 +589,7 @@ impl Strategy for HydrationBurstStrategy {
         &self,
         state: &ClusterState,
         _signals: &LiveSignals,
+        _config: &ConfigSignals,
         _now: Timestamp,
     ) -> Vec<DesiredReplica> {
         // Keyed purely on the record's presence: the cleanup arm of `update_state`

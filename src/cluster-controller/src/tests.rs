@@ -18,8 +18,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use mz_adapter_types::dyncfgs::all_dyncfgs;
 use mz_compute_types::config::ComputeReplicaLogging;
 use mz_controller_types::{ClusterId, ReplicaId};
+use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
 use mz_repr::Timestamp;
 
@@ -29,7 +31,23 @@ use crate::ctx::{
     ClusterState, Decision, ObservedReplica, ReconfigurationAudit, ReconfigurationStatus,
     ReplicaShape, StateWrite,
 };
-use crate::strategy::{DesiredReplica, LiveSignals, Strategy};
+use crate::strategy::{ConfigSignals, DesiredReplica, LiveSignals, Strategy};
+
+/// A controller over the crate's dyncfgs at their defaults: burst enabled (the
+/// break-glass default) and a zero default linger, so seam tests observe burst
+/// teardown as soon as the steady set hydrates.
+fn controller() -> ClusterController {
+    ClusterController::new(all_dyncfgs(ConfigSet::default()))
+}
+
+/// The config signals the kernel tests evaluate against, matching what
+/// [`controller`]'s dyncfg defaults latch each tick.
+fn config() -> ConfigSignals {
+    ConfigSignals {
+        burst_enabled: true,
+        default_burst_linger: Duration::ZERO,
+    }
+}
 
 fn cluster(n: u64) -> ClusterId {
     ClusterId::user(n).expect("valid user cluster id")
@@ -56,12 +74,8 @@ fn observed(replica_id: ReplicaId, name: &str, size: &str) -> ObservedReplica {
 }
 
 /// Builds a managed cluster state with the given realized size,
-/// replication factor, and replicas. No reconfiguration or burst in flight.
-/// `has_hydratable_objects` defaults to `true` so kernel-level scenarios that
-/// are about replica hydration (not object existence) keep their meaning;
-/// through the seam the field is irrelevant. `FakeCtx::cluster_states`
-/// returns it at the adapter default and the controller's pull consults
-/// `FakeCtx::has_hydratable_objects` instead.
+/// replication factor, and replicas. No reconfiguration or burst in flight and
+/// no autoscaling policy.
 fn state(
     cluster_id: ClusterId,
     size: &str,
@@ -77,8 +91,6 @@ fn state(
         auto_scaling_policy: None,
         reconfiguration: None,
         burst: None,
-        burst_enabled: true,
-        default_burst_linger: Duration::ZERO,
         replicas,
         reserved_replica_names: Vec::new(),
     }
@@ -353,7 +365,7 @@ async fn steady_state_is_a_noop() {
     )];
     let mut ctx = FakeCtx::new(states);
 
-    ClusterController::new().reconcile(&mut ctx).await;
+    controller().reconcile(&mut ctx).await;
 
     // Desired (2 @ 100cc) equals actual, so no decision of any kind was applied.
     assert!(
@@ -373,7 +385,7 @@ async fn create_skips_reserved_replica_names() {
     s.reserved_replica_names = vec!["r1".to_string()];
     let mut ctx = FakeCtx::new(vec![s]);
 
-    ClusterController::new().reconcile(&mut ctx).await;
+    controller().reconcile(&mut ctx).await;
 
     let created: Vec<&str> = ctx
         .applied
@@ -394,7 +406,7 @@ async fn create_skips_reserved_replica_names() {
 #[mz_ore::test(tokio::test)]
 async fn no_managed_clusters_is_a_noop() {
     let mut ctx = FakeCtx::new(vec![]);
-    ClusterController::new().reconcile(&mut ctx).await;
+    controller().reconcile(&mut ctx).await;
     assert!(ctx.applied.is_empty());
 }
 
@@ -410,7 +422,7 @@ async fn under_provisioned_baseline_creates() {
     )];
     let mut ctx = FakeCtx::new(states);
 
-    ClusterController::new().reconcile(&mut ctx).await;
+    controller().reconcile(&mut ctx).await;
 
     let creates = ctx.creates();
     assert_eq!(creates.len(), 2, "should create the two missing replicas");
@@ -439,7 +451,7 @@ async fn over_provisioned_baseline_drops() {
     )];
     let mut ctx = FakeCtx::new(states);
 
-    ClusterController::new().reconcile(&mut ctx).await;
+    controller().reconcile(&mut ctx).await;
 
     assert!(ctx.creates().is_empty());
     let drops = ctx.drops();
@@ -459,7 +471,7 @@ async fn wrong_shape_replica_dropped() {
     )];
     let mut ctx = FakeCtx::new(states);
 
-    ClusterController::new().reconcile(&mut ctx).await;
+    controller().reconcile(&mut ctx).await;
 
     let creates = ctx.creates();
     let drops = ctx.drops();
@@ -489,6 +501,7 @@ impl Strategy for FixedStrategy {
         &self,
         _state: &ClusterState,
         _signals: &LiveSignals,
+        _config: &ConfigSignals,
         _now: Timestamp,
     ) -> Vec<DesiredReplica> {
         (0..self.count)
@@ -502,7 +515,10 @@ impl Strategy for FixedStrategy {
 fn controller_with(strategies: Vec<Box<dyn Strategy>>) -> ClusterController {
     // The kernel runs whatever strategies it holds. We construct one directly
     // for union/diff tests rather than going through `new()`.
-    ClusterController { strategies }
+    ClusterController {
+        strategies,
+        dyncfgs: all_dyncfgs(ConfigSet::default()),
+    }
 }
 
 #[mz_ore::test(tokio::test)]
@@ -601,6 +617,7 @@ async fn caa_conflict_is_rejected_and_recovered() {
             &self,
             state: &ClusterState,
             _signals: &LiveSignals,
+            _config: &ConfigSignals,
             now: Timestamp,
         ) -> StateWrite {
             // Only write while no record exists, so once the write lands the
@@ -630,6 +647,7 @@ async fn caa_conflict_is_rejected_and_recovered() {
             &self,
             state: &ClusterState,
             _signals: &LiveSignals,
+            _config: &ConfigSignals,
             _now: Timestamp,
         ) -> Vec<DesiredReplica> {
             // Mirror the realized set so phase 2 is a no-op for a steady cluster:
@@ -762,7 +780,7 @@ async fn create_drop_is_caa_guarded_and_recovers() {
     // Reject the (sole, phase-2) apply this tick.
     ctx.reject_next = 1;
 
-    let controller = ClusterController::new();
+    let controller = controller();
     controller.reconcile(&mut ctx).await;
 
     // The drop carried the durable state it was derived from and was rejected;
@@ -830,7 +848,7 @@ async fn rejection_is_isolated_per_cluster() {
     let mut ctx = FakeCtx::new(vec![over_provisioned(c1), over_provisioned(c2)]);
     ctx.reject_next = 1;
 
-    ClusterController::new().reconcile(&mut ctx).await;
+    controller().reconcile(&mut ctx).await;
 
     // One cluster's drop was rejected (still 2 replicas), the other converged to
     // rf=1. A batched apply would leave both at 2.
@@ -860,6 +878,7 @@ async fn disjoint_state_writes_merge_into_one_apply() {
             &self,
             _state: &ClusterState,
             _signals: &LiveSignals,
+            _config: &ConfigSignals,
             _now: Timestamp,
         ) -> StateWrite {
             StateWrite {
@@ -871,6 +890,7 @@ async fn disjoint_state_writes_merge_into_one_apply() {
             &self,
             _state: &ClusterState,
             _signals: &LiveSignals,
+            _config: &ConfigSignals,
             _now: Timestamp,
         ) -> Vec<DesiredReplica> {
             // No replica contribution: this test is about the phase-1 merge, and
@@ -887,6 +907,7 @@ async fn disjoint_state_writes_merge_into_one_apply() {
             &self,
             _state: &ClusterState,
             _signals: &LiveSignals,
+            _config: &ConfigSignals,
             _now: Timestamp,
         ) -> StateWrite {
             StateWrite {
@@ -898,6 +919,7 @@ async fn disjoint_state_writes_merge_into_one_apply() {
             &self,
             _state: &ClusterState,
             _signals: &LiveSignals,
+            _config: &ConfigSignals,
             _now: Timestamp,
         ) -> Vec<DesiredReplica> {
             Vec::new()
@@ -943,6 +965,7 @@ async fn conflicting_state_writes_trip_the_tripwire() {
             &self,
             _state: &ClusterState,
             _signals: &LiveSignals,
+            _config: &ConfigSignals,
             _now: Timestamp,
         ) -> StateWrite {
             StateWrite {
@@ -954,6 +977,7 @@ async fn conflicting_state_writes_trip_the_tripwire() {
             &self,
             _state: &ClusterState,
             _signals: &LiveSignals,
+            _config: &ConfigSignals,
             _now: Timestamp,
         ) -> Vec<DesiredReplica> {
             Vec::new()
@@ -968,6 +992,7 @@ async fn conflicting_state_writes_trip_the_tripwire() {
             &self,
             _state: &ClusterState,
             _signals: &LiveSignals,
+            _config: &ConfigSignals,
             _now: Timestamp,
         ) -> StateWrite {
             StateWrite {
@@ -979,6 +1004,7 @@ async fn conflicting_state_writes_trip_the_tripwire() {
             &self,
             _state: &ClusterState,
             _signals: &LiveSignals,
+            _config: &ConfigSignals,
             _now: Timestamp,
         ) -> Vec<DesiredReplica> {
             Vec::new()
@@ -1057,8 +1083,6 @@ fn reconfiguring_state(
         auto_scaling_policy: None,
         reconfiguration: Some(rec),
         burst: None,
-        burst_enabled: true,
-        default_burst_linger: Duration::ZERO,
         replicas,
         reserved_replica_names: Vec::new(),
     };
@@ -1112,9 +1136,9 @@ fn graceful_desires_target_while_in_flight() {
 
     let g = GracefulReconfigurationStrategy;
     // No cut-over while not hydrated.
-    assert!(g.update_state(&state, &signals, now).is_empty());
+    assert!(g.update_state(&state, &signals, &config(), now).is_empty());
     // Desires the two target-shape replicas.
-    let desired = g.desired_replicas(&state, &signals, now);
+    let desired = g.desired_replicas(&state, &signals, &config(), now);
     assert_eq!(desired.len(), 2);
     assert!(desired.iter().all(|d| d.shape.size == "200cc"));
 }
@@ -1139,7 +1163,7 @@ fn graceful_cuts_over_when_target_hydrated() {
     let now = Timestamp::from(1000u64);
 
     let g = GracefulReconfigurationStrategy;
-    let write = g.update_state(&state, &signals, now);
+    let write = g.update_state(&state, &signals, &config(), now);
     assert_eq!(write.new_size.as_deref(), Some("200cc"));
     assert_eq!(write.new_replication_factor, Some(2));
     // The record is retained with terminal status on cut-over, and the write
@@ -1175,8 +1199,11 @@ fn graceful_partial_hydration_does_not_cut_over() {
     let now = Timestamp::from(1000u64);
 
     let g = GracefulReconfigurationStrategy;
-    assert!(g.update_state(&state, &signals, now).is_empty());
-    assert_eq!(g.desired_replicas(&state, &signals, now).len(), 2);
+    assert!(g.update_state(&state, &signals, &config(), now).is_empty());
+    assert_eq!(
+        g.desired_replicas(&state, &signals, &config(), now).len(),
+        2
+    );
 }
 
 #[mz_ore::test]
@@ -1197,7 +1224,7 @@ fn graceful_rf_zero_target_cuts_over_on_first_tick() {
     let now = Timestamp::from(1000u64); // well before the deadline
 
     let g = GracefulReconfigurationStrategy;
-    let write = g.update_state(&state, &signals, now);
+    let write = g.update_state(&state, &signals, &config(), now);
     assert_eq!(write.new_size.as_deref(), Some("200cc"));
     assert_eq!(write.new_replication_factor, Some(0));
     assert_eq!(
@@ -1235,7 +1262,7 @@ fn graceful_extra_unhydrated_same_shape_replica_does_not_block_cutover() {
     let now = Timestamp::from(1000u64); // before the deadline
 
     let g = GracefulReconfigurationStrategy;
-    let write = g.update_state(&state, &signals, now);
+    let write = g.update_state(&state, &signals, &config(), now);
     assert_eq!(
         written_reconfiguration_status(&write),
         Some(ReconfigurationStatus::Finalized),
@@ -1267,14 +1294,17 @@ fn graceful_timeout_vs_hydrated_precedence() {
     let now = Timestamp::from(9999u64); // well past the deadline
 
     let g = GracefulReconfigurationStrategy;
-    let write = g.update_state(&state, &signals, now);
+    let write = g.update_state(&state, &signals, &config(), now);
     assert_eq!(
         write.new_size.as_deref(),
         Some("200cc"),
         "success cuts over"
     );
     // Still desired (awaiting the cut-over a rejected tick could not apply).
-    assert_eq!(g.desired_replicas(&state, &signals, now).len(), 1);
+    assert_eq!(
+        g.desired_replicas(&state, &signals, &config(), now).len(),
+        1
+    );
 }
 
 #[mz_ore::test]
@@ -1297,7 +1327,7 @@ fn graceful_timeout_marks_record_timed_out_and_drops_target() {
     let now = Timestamp::from(9999u64);
 
     let g = GracefulReconfigurationStrategy;
-    let write = g.update_state(&state, &signals, now);
+    let write = g.update_state(&state, &signals, &config(), now);
     assert!(write.new_size.is_none(), "no cut-over on timeout");
     assert!(
         write.new_replication_factor.is_none()
@@ -1322,7 +1352,8 @@ fn graceful_timeout_marks_record_timed_out_and_drops_target() {
     // and wrote nothing, phase 2 sees it reached and already drops the target,
     // so the rollback's replica drops stay prompt.
     assert!(
-        g.desired_replicas(&state, &signals, now).is_empty(),
+        g.desired_replicas(&state, &signals, &config(), now)
+            .is_empty(),
         "timed out: target replicas no longer desired"
     );
 }
@@ -1348,7 +1379,7 @@ fn graceful_commit_on_timeout_cuts_over_unhydrated() {
     let now = Timestamp::from(9999u64); // past the deadline, target un-hydrated
 
     let g = GracefulReconfigurationStrategy;
-    let write = g.update_state(&state, &signals, now);
+    let write = g.update_state(&state, &signals, &config(), now);
     assert_eq!(
         write.new_size.as_deref(),
         Some("200cc"),
@@ -1365,7 +1396,7 @@ fn graceful_commit_on_timeout_cuts_over_unhydrated() {
         "and declares the cut-over forced"
     );
     assert_eq!(
-        g.desired_replicas(&state, &signals, now).len(),
+        g.desired_replicas(&state, &signals, &config(), now).len(),
         1,
         "commit keeps desiring the target (it becomes the realized set)"
     );
@@ -1391,13 +1422,23 @@ fn graceful_deadline_fires_at_exact_timestamp() {
 
     let (early, early_signals) = mk(OnTimeout::Commit);
     assert!(
-        g.update_state(&early, &early_signals, Timestamp::from(deadline - 1))
-            .is_empty(),
+        g.update_state(
+            &early,
+            &early_signals,
+            &config(),
+            Timestamp::from(deadline - 1)
+        )
+        .is_empty(),
         "no cut-over one tick before the deadline"
     );
 
     let (commit, commit_signals) = mk(OnTimeout::Commit);
-    let write = g.update_state(&commit, &commit_signals, Timestamp::from(deadline));
+    let write = g.update_state(
+        &commit,
+        &commit_signals,
+        &config(),
+        Timestamp::from(deadline),
+    );
     assert_eq!(
         write.new_size.as_deref(),
         Some("200cc"),
@@ -1410,7 +1451,12 @@ fn graceful_deadline_fires_at_exact_timestamp() {
     );
 
     let (rollback, rollback_signals) = mk(OnTimeout::Rollback);
-    let write = g.update_state(&rollback, &rollback_signals, Timestamp::from(deadline));
+    let write = g.update_state(
+        &rollback,
+        &rollback_signals,
+        &config(),
+        Timestamp::from(deadline),
+    );
     assert_eq!(
         write.new_size, None,
         "rollback does not advance the realized config at the deadline"
@@ -1421,8 +1467,13 @@ fn graceful_deadline_fires_at_exact_timestamp() {
         "but marks the record timed out"
     );
     assert!(
-        g.desired_replicas(&rollback, &rollback_signals, Timestamp::from(deadline))
-            .is_empty(),
+        g.desired_replicas(
+            &rollback,
+            &rollback_signals,
+            &config(),
+            Timestamp::from(deadline)
+        )
+        .is_empty(),
         "rollback stops desiring the target at exactly the deadline"
     );
 }
@@ -1446,11 +1497,11 @@ fn graceful_rollback_on_timeout_before_deadline_still_overlaps() {
 
     let g = GracefulReconfigurationStrategy;
     assert!(
-        g.update_state(&state, &signals, now).is_empty(),
+        g.update_state(&state, &signals, &config(), now).is_empty(),
         "no cut-over before the deadline"
     );
     assert_eq!(
-        g.desired_replicas(&state, &signals, now).len(),
+        g.desired_replicas(&state, &signals, &config(), now).len(),
         1,
         "target desired during the overlap regardless of on_timeout"
     );
@@ -1481,8 +1532,6 @@ fn graceful_az_only_reconfiguration_is_a_shape_change() {
             status: ReconfigurationStatus::InProgress,
         }),
         burst: None,
-        burst_enabled: true,
-        default_burst_linger: Duration::ZERO,
         replicas: vec![ObservedReplica {
             replica_id: replica(1),
             name: "r0".to_string(),
@@ -1498,7 +1547,7 @@ fn graceful_az_only_reconfiguration_is_a_shape_change() {
     let now = Timestamp::from(1000u64);
 
     let g = GracefulReconfigurationStrategy;
-    let desired = g.desired_replicas(&state, &signals, now);
+    let desired = g.desired_replicas(&state, &signals, &config(), now);
     assert_eq!(desired.len(), 1);
     assert_eq!(
         desired[0].shape.availability_zones.0,
@@ -1510,7 +1559,7 @@ fn graceful_az_only_reconfiguration_is_a_shape_change() {
     // Mark the realized replica hydrated: it is NOT a target replica (wrong AZ),
     // so this must not trigger a cut-over.
     signals.hydrated_replicas.insert(replica(1));
-    assert!(g.update_state(&state, &signals, now).is_empty());
+    assert!(g.update_state(&state, &signals, &config(), now).is_empty());
 }
 
 #[mz_ore::test(tokio::test)]
@@ -1532,7 +1581,7 @@ async fn graceful_full_flow_overlap_then_cutover() {
     );
     let mut ctx = FakeCtx::new(vec![state]);
 
-    let controller = ClusterController::new();
+    let controller = controller();
 
     // Tick 1: overlap, create two 200cc replicas, no drops, no cut-over.
     controller.reconcile(&mut ctx).await;
@@ -1608,7 +1657,7 @@ async fn graceful_alter_back_finalizes_without_churn() {
     // The controller probes hydration through the ctx. The existing replica is
     // already hydrated.
     ctx.hydrated = BTreeSet::from([replica(1)]);
-    let controller = ClusterController::new();
+    let controller = controller();
 
     controller.reconcile(&mut ctx).await;
 
@@ -1649,7 +1698,7 @@ async fn graceful_rollback_at_timeout_drops_target_through_seam() {
     let mut ctx = FakeCtx::new(vec![state]);
     // Past the deadline (1000), target un-hydrated.
     ctx.now = Timestamp::from(9999u64);
-    let controller = ClusterController::new();
+    let controller = controller();
 
     controller.reconcile(&mut ctx).await;
 
@@ -1735,7 +1784,7 @@ async fn graceful_commit_at_timeout_cuts_over_through_seam() {
     let mut ctx = FakeCtx::new(vec![state]);
     // Past the deadline (1000), target un-hydrated.
     ctx.now = Timestamp::from(9999u64);
-    let controller = ClusterController::new();
+    let controller = controller();
 
     controller.reconcile(&mut ctx).await;
 
@@ -1791,7 +1840,7 @@ async fn resource_exhaustion_sheds_the_reconfiguration() {
     let expected = state.expected();
     let mut ctx = FakeCtx::new(vec![state]);
     ctx.exhaust_next = 1;
-    let controller = ClusterController::new();
+    let controller = controller();
 
     controller.reconcile(&mut ctx).await;
 
@@ -1860,7 +1909,7 @@ async fn resource_exhaustion_without_transient_strategy_sheds_nothing() {
     )];
     let mut ctx = FakeCtx::new(states);
     ctx.exhaust_next = 1;
-    let controller = ClusterController::new();
+    let controller = controller();
 
     controller.reconcile(&mut ctx).await;
 
@@ -1877,20 +1926,20 @@ mod hydration_burst {
     use mz_repr::Timestamp;
 
     use super::{
-        ObservedReplica, cluster, observed, replica, state, written_burst_audit,
-        written_burst_record,
+        ObservedReplica, cluster, config, controller, observed, replica, state,
+        written_burst_audit, written_burst_record,
     };
     use crate::ctx::{
         AutoScalingPolicy, AvailabilityZones, BurstAudit, BurstFinishCause, BurstRecord,
         BurstWrite, ClusterState, OnHydrationPolicy, ReplicaShape, StateWrite,
     };
     use crate::strategy::{
-        HYDRATION_BURST_STRATEGY_NAME, HydrationBurstStrategy, LiveSignals, Strategy,
+        ConfigSignals, HYDRATION_BURST_STRATEGY_NAME, HydrationBurstStrategy, LiveSignals, Strategy,
     };
 
     /// A MANUAL cluster carrying an `ON HYDRATION` policy at `hydration_size` with
-    /// the given linger, plus an optional in-flight burst record. `burst_enabled`
-    /// is on and the default linger is zero, matching a steady environment.
+    /// the given linger, plus an optional in-flight burst record. Evaluate against
+    /// [`config`], which enables burst with a zero default linger.
     fn burst_state(
         size: &str,
         rf: u32,
@@ -1940,7 +1989,7 @@ mod hydration_burst {
             vec![observed(replica(1), "r0", "100cc")],
             None,
         );
-        let write = HydrationBurstStrategy.update_state(&s, &signals, now(1000));
+        let write = HydrationBurstStrategy.update_state(&s, &signals, &config(), now(1000));
         let burst = written_burst_record(&write).expect("a burst record is written");
         assert_eq!(burst.burst_size, "400cc");
         assert_eq!(burst.linger_duration, Duration::from_millis(10));
@@ -1969,8 +2018,11 @@ mod hydration_burst {
                 linger_duration: None,
             }),
         });
-        s.default_burst_linger = Duration::from_secs(42);
-        let write = HydrationBurstStrategy.update_state(&s, &signals, now(1000));
+        let config = ConfigSignals {
+            default_burst_linger: Duration::from_secs(42),
+            ..config()
+        };
+        let write = HydrationBurstStrategy.update_state(&s, &signals, &config, now(1000));
         let burst = written_burst_record(&write).expect("written");
         assert_eq!(burst.linger_duration, Duration::from_secs(42));
     }
@@ -1990,7 +2042,7 @@ mod hydration_burst {
         signals.hydrated_replicas.insert(replica(1));
         assert!(
             HydrationBurstStrategy
-                .update_state(&s, &signals, now(1000))
+                .update_state(&s, &signals, &config(), now(1000))
                 .is_empty()
         );
     }
@@ -2017,14 +2069,14 @@ mod hydration_burst {
         let (s, signals) = base(vec![observed(replica(1), "r0", "100cc")]);
         assert!(
             HydrationBurstStrategy
-                .update_state(&s, &signals, now(1000))
+                .update_state(&s, &signals, &config(), now(1000))
                 .is_empty()
         );
         // Steady replica absent entirely (a brand-new cluster's first ticks).
         let (s, signals) = base(Vec::new());
         assert!(
             HydrationBurstStrategy
-                .update_state(&s, &signals, now(1000))
+                .update_state(&s, &signals, &config(), now(1000))
                 .is_empty()
         );
         // Steady replica reporting hydrated despite zero user objects (its
@@ -2033,7 +2085,7 @@ mod hydration_burst {
         signals.hydrated_replicas.insert(replica(1));
         assert!(
             HydrationBurstStrategy
-                .update_state(&s, &signals, now(1000))
+                .update_state(&s, &signals, &config(), now(1000))
                 .is_empty()
         );
     }
@@ -2052,7 +2104,7 @@ mod hydration_burst {
             vec![observed(replica(1), "r0", "100cc")],
             None,
         );
-        let write = HydrationBurstStrategy.update_state(&s, &signals, now(1000));
+        let write = HydrationBurstStrategy.update_state(&s, &signals, &config(), now(1000));
         assert!(
             write.burst.is_some(),
             "burst arms on an unreporting steady replica"
@@ -2067,7 +2119,7 @@ mod hydration_burst {
             Vec::new(),
             None,
         );
-        let write = HydrationBurstStrategy.update_state(&s, &signals, now(1000));
+        let write = HydrationBurstStrategy.update_state(&s, &signals, &config(), now(1000));
         assert!(
             write.burst.is_some(),
             "burst arms with no steady replica at all"
@@ -2086,7 +2138,7 @@ mod hydration_burst {
             vec![observed(replica(1), "r0", "100cc")],
             Some(record("400cc", Duration::from_millis(10), None)),
         );
-        let desired = HydrationBurstStrategy.desired_replicas(&s, &signals, now(1000));
+        let desired = HydrationBurstStrategy.desired_replicas(&s, &signals, &config(), now(1000));
         assert_eq!(desired.len(), 1);
         assert_eq!(desired[0].shape.size, "400cc");
     }
@@ -2103,7 +2155,7 @@ mod hydration_burst {
         );
         assert!(
             HydrationBurstStrategy
-                .desired_replicas(&s, &signals, now(1000))
+                .desired_replicas(&s, &signals, &config(), now(1000))
                 .is_empty()
         );
     }
@@ -2121,7 +2173,7 @@ mod hydration_burst {
             Some(record("400cc", Duration::from_millis(100), None)),
         );
         signals.hydrated_replicas.insert(replica(1));
-        let write = HydrationBurstStrategy.update_state(&s, &signals, now(1000));
+        let write = HydrationBurstStrategy.update_state(&s, &signals, &config(), now(1000));
         let burst = written_burst_record(&write).expect("stamped");
         assert_eq!(burst.steady_hydrated_at, Some(now(1000)));
         assert_eq!(
@@ -2135,12 +2187,12 @@ mod hydration_burst {
         s.burst = Some(record("400cc", Duration::from_millis(100), Some(1000)));
         assert!(
             HydrationBurstStrategy
-                .update_state(&s, &signals, now(1050))
+                .update_state(&s, &signals, &config(), now(1050))
                 .is_empty()
         );
 
         // Stamped, linger elapsed (now=1101 > 1000+100): tear down.
-        let write = HydrationBurstStrategy.update_state(&s, &signals, now(1101));
+        let write = HydrationBurstStrategy.update_state(&s, &signals, &config(), now(1101));
         assert_eq!(
             write.burst,
             Some(BurstWrite {
@@ -2166,7 +2218,7 @@ mod hydration_burst {
             Some(record("400cc", Duration::from_millis(100), Some(1000))),
         );
         // hydrated_replicas is empty: the steady replica went un-hydrated.
-        let write = HydrationBurstStrategy.update_state(&s, &signals, now(1050));
+        let write = HydrationBurstStrategy.update_state(&s, &signals, &config(), now(1050));
         let burst = written_burst_record(&write).expect("rewritten");
         assert_eq!(burst.steady_hydrated_at, None, "stamp reset on re-arm");
         assert_eq!(
@@ -2191,7 +2243,7 @@ mod hydration_burst {
         s.replication_factor = 0;
         assert_eq!(
             HydrationBurstStrategy
-                .update_state(&s, &signals, now(1000))
+                .update_state(&s, &signals, &config(), now(1000))
                 .burst,
             Some(BurstWrite {
                 record: None,
@@ -2217,7 +2269,7 @@ mod hydration_burst {
         s.auto_scaling_policy = None;
         assert_eq!(
             HydrationBurstStrategy
-                .update_state(&s, &signals, now(1000))
+                .update_state(&s, &signals, &config(), now(1000))
                 .burst,
             Some(BurstWrite {
                 record: None,
@@ -2242,7 +2294,7 @@ mod hydration_burst {
         );
         assert_eq!(
             HydrationBurstStrategy
-                .update_state(&s, &signals, now(1000))
+                .update_state(&s, &signals, &config(), now(1000))
                 .burst,
             Some(BurstWrite {
                 record: None,
@@ -2265,17 +2317,20 @@ mod hydration_burst {
             vec![observed(replica(1), "r0", "100cc")],
             None,
         );
-        s.burst_enabled = false;
+        let config = ConfigSignals {
+            burst_enabled: false,
+            ..config()
+        };
         assert!(
             HydrationBurstStrategy
-                .update_state(&s, &signals, now(1000))
+                .update_state(&s, &signals, &config, now(1000))
                 .is_empty()
         );
 
         s.burst = Some(record("400cc", Duration::from_millis(100), None));
         assert_eq!(
             HydrationBurstStrategy
-                .update_state(&s, &signals, now(1000))
+                .update_state(&s, &signals, &config, now(1000))
                 .burst,
             Some(BurstWrite {
                 record: None,
@@ -2299,12 +2354,12 @@ mod hydration_burst {
         let signals = LiveSignals::default();
         assert!(
             HydrationBurstStrategy
-                .update_state(&s, &signals, now(1000))
+                .update_state(&s, &signals, &config(), now(1000))
                 .is_empty()
         );
         assert!(
             HydrationBurstStrategy
-                .desired_replicas(&s, &signals, now(1000))
+                .desired_replicas(&s, &signals, &config(), now(1000))
                 .is_empty()
         );
     }
@@ -2322,7 +2377,7 @@ mod hydration_burst {
             Some(record("400cc", Duration::from_millis(10), None)),
         );
         s.availability_zones = vec!["az1".to_string(), "az2".to_string()];
-        let desired = HydrationBurstStrategy.desired_replicas(&s, &signals, now(1000));
+        let desired = HydrationBurstStrategy.desired_replicas(&s, &signals, &config(), now(1000));
         let expected = ReplicaShape {
             size: "400cc".to_string(),
             availability_zones: AvailabilityZones(s.availability_zones.clone()),
@@ -2339,7 +2394,6 @@ mod hydration_burst {
     #[mz_ore::test(tokio::test)]
     async fn burst_seam_creates_then_tears_down() {
         use super::FakeCtx;
-        use crate::ClusterController;
         use crate::ctx::Decision;
 
         // A cluster with a 100cc steady replica that is not hydrated and an
@@ -2356,7 +2410,7 @@ mod hydration_burst {
         );
         let mut ctx = FakeCtx::new(vec![s]);
         ctx.has_hydratable_objects.insert(c, true);
-        let controller = ClusterController::new();
+        let controller = controller();
         controller.reconcile(&mut ctx).await;
 
         // The burst replica was created at the hydration size.
@@ -2399,7 +2453,6 @@ mod hydration_burst {
     #[mz_ore::test(tokio::test)]
     async fn burst_empty_cluster_never_arms_through_seam() {
         use super::FakeCtx;
-        use crate::ClusterController;
 
         // A strategy-carrying cluster with zero hydratable objects never arms,
         // tick after tick, neither while its steady replica has not yet
@@ -2418,7 +2471,7 @@ mod hydration_burst {
         // No `has_hydratable_objects` entry on the ctx: the pull reports no
         // objects.
         let mut ctx = FakeCtx::new(vec![s]);
-        let controller = ClusterController::new();
+        let controller = controller();
 
         // Ticks with the steady replica not reporting hydrated (booting).
         controller.reconcile(&mut ctx).await;
@@ -2449,7 +2502,6 @@ mod hydration_burst {
     #[mz_ore::test(tokio::test)]
     async fn burst_arms_when_first_object_lands_through_seam() {
         use super::FakeCtx;
-        use crate::ClusterController;
         use crate::ctx::Decision;
 
         // The dual of the never-arms test: the same cluster arms as soon as its
@@ -2464,7 +2516,7 @@ mod hydration_burst {
             None,
         );
         let mut ctx = FakeCtx::new(vec![s]);
-        let controller = ClusterController::new();
+        let controller = controller();
 
         controller.reconcile(&mut ctx).await;
         assert!(ctx.applied.is_empty(), "no objects: nothing happens");
@@ -2491,7 +2543,6 @@ mod hydration_burst {
     #[mz_ore::test(tokio::test)]
     async fn burst_policy_alter_rejects_in_flight_decision() {
         use super::FakeCtx;
-        use crate::ClusterController;
         use crate::ctx::Decision;
 
         // The `auto_scaling_policy` field of the compare-and-append witness is
@@ -2519,7 +2570,7 @@ mod hydration_burst {
         // the rejection is attributable solely to the witness `auto_scaling_policy`.
         ctx.concurrent_policy_alter.insert(c, None);
 
-        let controller = ClusterController::new();
+        let controller = controller();
         controller.reconcile(&mut ctx).await;
 
         // The burst write was attempted but rejected by its compare-and-append
@@ -2551,7 +2602,6 @@ mod hydration_burst {
     #[mz_ore::test(tokio::test)]
     async fn burst_unchanged_policy_passes_witness() {
         use super::FakeCtx;
-        use crate::ClusterController;
 
         // The dual of the rejection test: with the witness check on but no
         // concurrent policy `ALTER`, the matching `auto_scaling_policy` lets the
@@ -2569,7 +2619,7 @@ mod hydration_burst {
         ctx.has_hydratable_objects.insert(c, true);
         ctx.witness_check = true;
 
-        let controller = ClusterController::new();
+        let controller = controller();
         controller.reconcile(&mut ctx).await;
 
         assert!(
@@ -2599,7 +2649,8 @@ mod hydration_burst {
             Some(record("400cc", Duration::from_millis(50), None)),
         );
         signals.hydrated_replicas.insert(replica(1));
-        let write: StateWrite = HydrationBurstStrategy.update_state(&s, &signals, now(2000));
+        let write: StateWrite =
+            HydrationBurstStrategy.update_state(&s, &signals, &config(), now(2000));
         let burst = written_burst_record(&write).expect("stamped");
         assert_eq!(burst.steady_hydrated_at, Some(now(2000)));
     }

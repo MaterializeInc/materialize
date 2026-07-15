@@ -14,6 +14,7 @@ async-trait.workspace = true
 mz-adapter-types = { path = "../adapter-types" }
 mz-compute-types = { path = "../compute-types" }
 mz-controller-types = { path = "../controller-types" }
+mz-dyncfg = { path = "../dyncfg" }
 mz-ore = { path = "../ore", features = ["async", "tracing"] }
 mz-repr = { path = "../repr" }
 tracing.workspace = true

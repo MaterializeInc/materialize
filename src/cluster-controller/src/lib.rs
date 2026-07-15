@@ -38,7 +38,9 @@ pub mod strategy;
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use mz_adapter_types::dyncfgs::{DEFAULT_HYDRATION_BURST_LINGER, ENABLE_HYDRATION_BURST};
 use mz_controller_types::ClusterId;
+use mz_dyncfg::ConfigSet;
 use mz_ore::soft_panic_or_log;
 
 use crate::ctx::{
@@ -47,32 +49,40 @@ use crate::ctx::{
     ReplicaShape, StateWrite,
 };
 use crate::strategy::{
-    BaselineStrategy, DesiredReplica, GracefulReconfigurationStrategy, HydrationBurstStrategy,
-    LiveSignals, SignalRequest, Strategy,
+    BaselineStrategy, ConfigSignals, DesiredReplica, GracefulReconfigurationStrategy,
+    HydrationBurstStrategy, LiveSignals, SignalRequest, Strategy,
 };
 
 /// The cluster controller. Holds the (stateless) set of strategies and drives a
 /// reconcile tick against a [`ClusterControllerCtx`].
 pub struct ClusterController {
     strategies: Vec<Box<dyn Strategy>>,
-}
-
-impl Default for ClusterController {
-    fn default() -> Self {
-        Self::new()
-    }
+    /// The dyncfgs the config signals are latched from each tick. A shared
+    /// handle: updates made by the config system are visible here without any
+    /// push, so a flipped flag takes effect on the next tick.
+    dyncfgs: ConfigSet,
 }
 
 impl ClusterController {
     /// A controller with the full set of strategies. Each strategy's rustdoc
     /// describes when it engages.
-    pub fn new() -> Self {
+    pub fn new(dyncfgs: ConfigSet) -> Self {
         Self {
             strategies: vec![
                 Box::new(BaselineStrategy),
                 Box::new(GracefulReconfigurationStrategy),
                 Box::new(HydrationBurstStrategy),
             ],
+            dyncfgs,
+        }
+    }
+
+    /// The tick's config signals, latched from the dyncfgs so every strategy
+    /// decides against one consistent config per tick.
+    fn config_signals(&self) -> ConfigSignals {
+        ConfigSignals {
+            burst_enabled: ENABLE_HYDRATION_BURST.get(&self.dyncfgs),
+            default_burst_linger: DEFAULT_HYDRATION_BURST_LINGER.get(&self.dyncfgs),
         }
     }
 
@@ -107,7 +117,8 @@ impl ClusterController {
         // safety, which is why the merged write carries the cluster's `expected`.
         // See `merge_state_writes` for the join and its conflict handling.
         let states = ctx.cluster_states(&cluster_ids).await;
-        let signals = self.fetch_signals(ctx, &states).await;
+        let config = self.config_signals();
+        let signals = self.fetch_signals(ctx, &states, &config).await;
         let now = ctx.now();
         // Set when we issue any phase-1 apply, applied or rejected. Either way
         // the durable state may have moved (our write, or the concurrent `ALTER`
@@ -120,7 +131,7 @@ impl ClusterController {
         // that is probably about to go stale.
         let mut rejected = BTreeSet::new();
         for state in &states {
-            let write = self.merge_state_writes(state, &signals[&state.cluster_id], now);
+            let write = self.merge_state_writes(state, &signals[&state.cluster_id], &config, now);
             if write.is_empty() {
                 continue;
             }
@@ -145,7 +156,7 @@ impl ClusterController {
         // if the durable state has since diverged.
         let (states, signals) = if phase_1_wrote {
             let states = ctx.cluster_states(&cluster_ids).await;
-            let signals = self.fetch_signals(ctx, &states).await;
+            let signals = self.fetch_signals(ctx, &states, &config).await;
             (states, signals)
         } else {
             (states, signals)
@@ -155,7 +166,8 @@ impl ClusterController {
             if rejected.contains(&state.cluster_id) {
                 continue;
             }
-            let decisions = self.collect_replica_decisions(state, &signals[&state.cluster_id], now);
+            let decisions =
+                self.collect_replica_decisions(state, &signals[&state.cluster_id], &config, now);
             if decisions.is_empty() {
                 continue;
             }
@@ -240,12 +252,13 @@ impl ClusterController {
         &self,
         state: &ClusterState,
         signals: &LiveSignals,
+        config: &ConfigSignals,
         now: mz_repr::Timestamp,
     ) -> StateWrite {
         let writes: Vec<StateWrite> = self
             .strategies
             .iter()
-            .map(|strategy| strategy.update_state(state, signals, now))
+            .map(|strategy| strategy.update_state(state, signals, config, now))
             .filter(|write| !write.is_empty())
             .collect();
 
@@ -301,14 +314,16 @@ impl ClusterController {
     /// Fetch the live signals the strategies declared they need for `states`.
     ///
     /// Each strategy names its needs as a pure function of the durable state
-    /// ([`Strategy::signal_request`]), so the kernel stays ignorant of when a
-    /// strategy engages. Signals are fetched per cluster and only where
-    /// requested: a steady cluster is never probed, keeping the ctx seam
-    /// pay-for-what-you-use. The returned map has an entry for every state.
+    /// and the tick's config signals ([`Strategy::signal_request`]), so the
+    /// kernel stays ignorant of when a strategy engages. Signals are fetched per
+    /// cluster and only where requested: a steady cluster is never probed,
+    /// keeping the ctx seam pay-for-what-you-use. The returned map has an entry
+    /// for every state.
     async fn fetch_signals(
         &self,
         ctx: &mut dyn ClusterControllerCtx,
         states: &[ClusterState],
+        config: &ConfigSignals,
     ) -> BTreeMap<ClusterId, LiveSignals> {
         let mut signals = BTreeMap::new();
         for state in states {
@@ -316,7 +331,7 @@ impl ClusterController {
                 .strategies
                 .iter()
                 .fold(SignalRequest::default(), |acc, strategy| {
-                    acc.union(strategy.signal_request(state))
+                    acc.union(strategy.signal_request(state, config))
                 });
             let mut live = LiveSignals::default();
             if request.hydratable_objects {
@@ -340,6 +355,7 @@ impl ClusterController {
         &self,
         state: &ClusterState,
         signals: &LiveSignals,
+        config: &ConfigSignals,
         now: mz_repr::Timestamp,
     ) -> Vec<Decision> {
         // Each strategy's contribution, tagged with the strategy name for
@@ -350,7 +366,7 @@ impl ClusterController {
             .map(|strategy| {
                 (
                     strategy.name(),
-                    strategy.desired_replicas(state, signals, now),
+                    strategy.desired_replicas(state, signals, config, now),
                 )
             })
             .collect();

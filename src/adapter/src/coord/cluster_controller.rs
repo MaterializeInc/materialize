@@ -29,10 +29,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use mz_adapter_types::dyncfgs::{
-    CLUSTER_CONTROLLER_TICK_INTERVAL, DEFAULT_HYDRATION_BURST_LINGER, ENABLE_CLUSTER_CONTROLLER,
-    ENABLE_HYDRATION_BURST,
-};
+use mz_adapter_types::dyncfgs::{CLUSTER_CONTROLLER_TICK_INTERVAL, ENABLE_CLUSTER_CONTROLLER};
 use mz_catalog::memory::objects::{ClusterConfig, ClusterVariant};
 use mz_cluster_controller::ClusterController;
 use mz_cluster_controller::ctx::{
@@ -206,9 +203,12 @@ impl Coordinator {
     pub(crate) fn spawn_cluster_controller_task(&self) {
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let reconcile_now = Arc::clone(&self.reconcile_now);
+        // A shared handle: dyncfg updates land in the same underlying values, so
+        // the controller task sees flag flips without any push.
+        let dyncfgs = self.catalog().system_config().dyncfgs().clone();
 
         spawn(|| "cluster_controller", async move {
-            let controller = ClusterController::new();
+            let controller = ClusterController::new(dyncfgs);
             let mut ctx = CoordCtx {
                 internal_cmd_tx,
                 now: Timestamp::MIN,
@@ -376,10 +376,6 @@ impl Coordinator {
             }
         }
 
-        let dyncfgs = self.catalog().system_config().dyncfgs();
-        let burst_enabled = ENABLE_HYDRATION_BURST.get(dyncfgs);
-        let default_burst_linger = DEFAULT_HYDRATION_BURST_LINGER.get(dyncfgs);
-
         Some(ClusterState {
             cluster_id,
             size: expected.size,
@@ -389,8 +385,6 @@ impl Coordinator {
             auto_scaling_policy: expected.auto_scaling_policy,
             reconfiguration: expected.reconfiguration,
             burst: expected.burst,
-            burst_enabled,
-            default_burst_linger,
             replicas,
             reserved_replica_names,
         })

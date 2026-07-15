@@ -28,7 +28,6 @@
 //! pulls is left for when the controller actually moves off-process.
 
 use std::collections::BTreeSet;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use mz_compute_types::config::ComputeReplicaLogging;
@@ -76,15 +75,6 @@ pub struct ClusterState {
     pub reconfiguration: Option<ReconfigurationRecord>,
     /// In-flight hydration burst, if any.
     pub burst: Option<BurstRecord>,
-    /// Whether the hydration-burst strategy is enabled environment-wide (the
-    /// break-glass flag). A **config signal**, not durable cluster state, so it is
-    /// excluded from [`ClusterState::expected`]: the controller derives it fresh
-    /// each tick and a flip does not need to reject an in-flight decision.
-    pub burst_enabled: bool,
-    /// The system-default burst linger duration, written into a new `burst` record
-    /// when the policy's `linger_duration` is omitted. A config signal, excluded
-    /// from the witness for the same reason as `burst_enabled`.
-    pub default_burst_linger: Duration,
     /// The replicas that actually exist on the cluster.
     pub replicas: Vec<ObservedReplica>,
     /// Names of replicas physically on the cluster that the controller does *not*
