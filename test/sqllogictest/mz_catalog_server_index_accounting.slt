@@ -237,6 +237,7 @@ mz_cluster_prometheus_metrics  metric_name
 mz_cluster_prometheus_metrics  metric_type
 mz_cluster_prometheus_metrics  process_id
 mz_cluster_prometheus_metrics  value
+mz_cluster_reconfigurations  changes
 mz_cluster_reconfigurations  cluster_id
 mz_cluster_reconfigurations  deadline
 mz_cluster_reconfigurations  on_timeout

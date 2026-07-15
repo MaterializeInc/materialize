@@ -182,6 +182,7 @@ shape is in [`mz_clusters`](../mz_catalog/#mz_clusters).
 | `deadline`     | [`mz_timestamp`] | The deadline by which the reconfiguration must complete. After it passes, the `on_timeout` action applies. |
 | `on_timeout`   | [`text`]         | The action applied if `deadline` passes before the target hydrates: `commit` (cut over to the not-yet-hydrated target) or `rollback` (revert to the pre-reconfiguration shape). |
 | `target`       | [`jsonb`]        | The config shape the cluster is reconfiguring to, as JSON: `size`, `replication_factor`, `availability_zones`, and `logging`. The realized (current) shape is in `mz_clusters`. |
+| `changes`      | [`jsonb`]        | The dimensions in which `target` differs from the cluster's realized configuration, as a JSON object holding the target value per changed dimension. Empty (`{}`) once a record settles with its target applied. A rolled-back record keeps the abandoned diff. |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_cluster_auto_scaling_strategies -->
 

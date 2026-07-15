@@ -706,6 +706,7 @@ pub static MZ_CLUSTER_RECONFIGURATIONS: LazyLock<BuiltinMaterializedView> = Lazy
             .with_column("deadline", SqlScalarType::MzTimestamp.nullable(false))
             .with_column("on_timeout", SqlScalarType::String.nullable(false))
             .with_column("target", SqlScalarType::Jsonb.nullable(false))
+            .with_column("changes", SqlScalarType::Jsonb.nullable(false))
             .with_key(vec![0])
             .finish(),
         column_comments: BTreeMap::from_iter([
@@ -729,6 +730,10 @@ pub static MZ_CLUSTER_RECONFIGURATIONS: LazyLock<BuiltinMaterializedView> = Lazy
                 "target",
                 "The config shape the cluster is reconfiguring to, as JSON: `size`, `replication_factor`, `availability_zones`, and `logging`. The realized (current) shape is in `mz_clusters`.",
             ),
+            (
+                "changes",
+                "The dimensions in which `target` differs from the cluster's realized configuration, as a JSON object holding the target value per changed dimension. Empty (`{}`) once a record settles with its target applied. A rolled-back record keeps the abandoned diff.",
+            ),
         ]),
         // One row per managed cluster with a reconfiguration record, retained
         // with a terminal `status` after it settles until the next `ALTER`
@@ -742,7 +747,11 @@ pub static MZ_CLUSTER_RECONFIGURATIONS: LazyLock<BuiltinMaterializedView> = Lazy
         // catalog's other multi-word values, and the ELSE arms pass unmapped
         // enum variants through verbatim: falling to NULL would trip the
         // ASSERT NOT NULL and error every read of this relation and of
-        // `mz_show_clusters`, which joins it.
+        // `mz_show_clusters`, which joins it. `changes` diffs `target` against
+        // the realized config per dimension. Both sides come from the same raw
+        // catalog document, so the jsonb comparison is trivially canonical,
+        // and it matches the routing's shape-equality (an AZ reorder counts
+        // as a change in both).
         sql: "
 IN CLUSTER mz_catalog_server
 WITH (
@@ -750,37 +759,55 @@ WITH (
     ASSERT NOT NULL status,
     ASSERT NOT NULL deadline,
     ASSERT NOT NULL on_timeout,
-    ASSERT NOT NULL target
+    ASSERT NOT NULL target,
+    ASSERT NOT NULL changes
 ) AS
 WITH
     managed AS (
         SELECT
             mz_internal.parse_catalog_id(data->'key'->'id') AS cluster_id,
-            data->'value'->'config'->'variant'->'Managed'->'reconfiguration' AS reconfiguration
+            data->'value'->'config'->'variant'->'Managed' AS config
         FROM mz_internal.mz_catalog_raw
         WHERE
             data->>'kind' = 'Cluster' AND
             data->'value'->'config'->'variant'->'Managed' IS NOT NULL
+    ),
+    records AS (
+        SELECT
+            cluster_id,
+            config,
+            config->'reconfiguration' AS reconfiguration,
+            config->'reconfiguration'->'target' AS target
+        FROM managed
+        WHERE config->'reconfiguration' != 'null'
     )
 SELECT
-    m.cluster_id,
-    CASE m.reconfiguration->>'status'
+    r.cluster_id,
+    CASE r.reconfiguration->>'status'
         WHEN 'InProgress' THEN 'in-progress'
         WHEN 'Finalized' THEN 'finalized'
         WHEN 'TimedOut' THEN 'timed-out'
         WHEN 'Cancelled' THEN 'cancelled'
         WHEN 'ResourceExhausted' THEN 'resource-exhausted'
-        ELSE m.reconfiguration->>'status'
+        ELSE r.reconfiguration->>'status'
     END AS status,
-    (m.reconfiguration->>'deadline')::mz_timestamp AS deadline,
-    CASE m.reconfiguration->>'on_timeout'
+    (r.reconfiguration->>'deadline')::mz_timestamp AS deadline,
+    CASE r.reconfiguration->>'on_timeout'
         WHEN 'Commit' THEN 'commit'
         WHEN 'Rollback' THEN 'rollback'
-        ELSE m.reconfiguration->>'on_timeout'
+        ELSE r.reconfiguration->>'on_timeout'
     END AS on_timeout,
-    m.reconfiguration->'target' AS target
-FROM managed m
-WHERE m.reconfiguration != 'null'",
+    r.target,
+    CASE WHEN r.target->'size' != r.config->'size'
+        THEN jsonb_build_object('size', r.target->'size') ELSE '{}'::jsonb END ||
+    CASE WHEN r.target->'replication_factor' != r.config->'replication_factor'
+        THEN jsonb_build_object('replication_factor', r.target->'replication_factor') ELSE '{}'::jsonb END ||
+    CASE WHEN r.target->'availability_zones' != r.config->'availability_zones'
+        THEN jsonb_build_object('availability_zones', r.target->'availability_zones') ELSE '{}'::jsonb END ||
+    CASE WHEN r.target->'logging' != r.config->'logging'
+        THEN jsonb_build_object('logging', r.target->'logging') ELSE '{}'::jsonb END
+    AS changes
+FROM records r",
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
         ontology: Some(Ontology {
@@ -5365,10 +5392,13 @@ pub static MZ_SHOW_CLUSTERS: LazyLock<BuiltinView> = LazyLock::new(|| {
     column_comments: BTreeMap::new(),
     // Settled reconfiguration records are retained, so match only
     // `in-progress`. A non-null auto-scaling `state` means a live burst.
-    // No `mz_now()`, so the view stays indexable. NOTE: `||` with a NULL
-    // operand nulls the whole summary. `size` and `burst_size` are
-    // non-optional fields of their records, keep it that way or COALESCE.
-    // Neither needs `mz_now()`, keeping this indexed view non-temporal.
+    // The reconfiguration summary names only the dimensions the record
+    // actually changes (from `changes`), with values where they read well.
+    // NOTE: `||` with a NULL operand nulls the whole summary. `burst_size`
+    // is a non-optional field of its record, keep it that way or COALESCE.
+    // The NULLIF guards an empty diff (not expected in-progress), which
+    // otherwise would render a dangling 'reconfiguring'.
+    // Neither input needs `mz_now()`, keeping this indexed view non-temporal.
     sql: "
     WITH clusters AS (
         SELECT
@@ -5384,16 +5414,28 @@ pub static MZ_SHOW_CLUSTERS: LazyLock<BuiltinView> = LazyLock::new(|| {
         SELECT id, comment
         FROM mz_internal.mz_comments
         WHERE object_type = 'cluster' AND object_sub_id IS NULL
+    ),
+    reconfigurations AS (
+        SELECT
+            cluster_id,
+            'reconfiguring ' || NULLIF(array_to_string(ARRAY[
+                'size to ' || (changes->>'size'),
+                'replication factor to ' || (changes->>'replication_factor'),
+                CASE WHEN changes->'availability_zones' IS NOT NULL THEN 'availability zones' END,
+                CASE WHEN changes->'logging' IS NOT NULL THEN 'introspection settings' END
+            ], ', '), '') AS summary
+        FROM mz_internal.mz_cluster_reconfigurations
+        WHERE status = 'in-progress'
     )
     SELECT
         name,
         replicas,
         CASE
-            WHEN recon.cluster_id IS NOT NULL AND scaling.state IS NOT NULL
-                THEN 'reconfiguring to ' || (recon.target->>'size')
+            WHEN recon.summary IS NOT NULL AND scaling.state IS NOT NULL
+                THEN recon.summary
                      || '; hydration burst at ' || (scaling.state->'burst'->>'burst_size')
-            WHEN recon.cluster_id IS NOT NULL
-                THEN 'reconfiguring to ' || (recon.target->>'size')
+            WHEN recon.summary IS NOT NULL
+                THEN recon.summary
             WHEN scaling.state IS NOT NULL
                 THEN 'hydration burst at ' || (scaling.state->'burst'->>'burst_size')
             ELSE NULL
@@ -5401,8 +5443,8 @@ pub static MZ_SHOW_CLUSTERS: LazyLock<BuiltinView> = LazyLock::new(|| {
         COALESCE(comment, '') as comment
     FROM clusters
     LEFT JOIN comments ON clusters.id = comments.id
-    LEFT JOIN mz_internal.mz_cluster_reconfigurations recon
-        ON clusters.id = recon.cluster_id AND recon.status = 'in-progress'
+    LEFT JOIN reconfigurations recon
+        ON clusters.id = recon.cluster_id
     LEFT JOIN mz_internal.mz_cluster_auto_scaling_strategies scaling ON clusters.id = scaling.cluster_id",
     access: vec![PUBLIC_SELECT],
     ontology: None,

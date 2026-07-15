@@ -1952,82 +1952,117 @@ mz_internal.mz_show_clusters:
                       Key: (#0{id})
           →Stream l1
     cte l3 =
-      →Arrange (#0{id})
-        →Arranged l2
-    cte l4 =
-      →Differential Join %1:mz_comments[#0{id}] » %0:l3[#0{id}]
-        after %0:
-          Project: #0, #4, #5, #3
-          Filter: (#1{object_type} = "cluster") AND (#2{object_sub_id}) IS NULL
-        →Arranged l3
-        →Arranged mz_internal.mz_comments
-    cte l5 =
-      →Union
-        →Map/Filter/Project
-          Project: #0..=#3
-          Map: null
-            →Consolidating Union
-              →Negate Diffs
-                →Differential Join %1[#0] » %0:l3[#0{id}]
-                  →Arranged l3
-                  →Distinct GroupAggregate
-                    →Fused with Child Map/Filter/Project
-                      Project: #0
-                        →Read l4
-              →Unarranged Raw Stream
-                →Arranged l2
-        →Stream l4
-    cte l6 =
-      →Differential Join %1:mz_cluster_reconfigurations[#0{cluster_id}] » %0:l5[#0{id}]
-        after %0:
-          Project: #0, #5..=#7, #4
-          Filter: (#1{status} = "in-progress")
-        →Arrange (#0{id})
-          →Stream l5
-        →Arranged mz_internal.mz_cluster_reconfigurations
-    cte l7 =
-      →Union
-        →Map/Filter/Project
-          Project: #0..=#5
-          Map: null, null
-            →Consolidating Union
-              →Negate Diffs
-                →Fused with Child Map/Filter/Project
-                  Project: #0..=#3
-                    →Read l6
-              →Stream l5
+      →Distinct GroupAggregate
         →Fused with Child Map/Filter/Project
-          Project: #0..=#3, #0, #4
-            →Read l6
-    cte l8 =
-      →Differential Join %1:mz_cluster_auto_scaling_strategies[#0{cluster_id}] » %0:l7[#0{id}]
-        →Arrange (#0{id})
-          →Stream l7
-        →Arranged mz_internal.mz_cluster_auto_scaling_strategies
+          Project: #0
+            →Arranged l2
+              Key: (#0, #1)
   →Return
-    →Map/Filter/Project
-      Project: #0, #1, #6, #7
-      Map: case when ((#3{cluster_id}) IS NOT NULL AND (#5{state}) IS NOT NULL) then ((("reconfiguring to " || (#4{target} ->> "size")) || "; hydration burst at ") || ((#5{state} -> "burst") ->> "burst_size")) else case when (#3{cluster_id}) IS NOT NULL then ("reconfiguring to " || (#4{target} ->> "size")) else case when (#5{state}) IS NOT NULL then ("hydration burst at " || ((#5{state} -> "burst") ->> "burst_size")) else null end end end, coalesce(#2{comment}, "")
+    →Delta Join [%0:l2[#0] » %1[#0] » %2[#0] » %3[#0]] [%1[#0] » %0:l2[#0] » %2[#0] » %3[#0]] [%2[#0] » %0:l2[#0] » %1[#0] » %3[#0]] [%3[#0] » %0:l2[#0] » %1[#0] » %2[#0]]
+      path %0:
+        after %1:
+          Project: #0..=#2, #5
+          Map: case when (#4) IS NULL then "" else coalesce(#3, "") end
+        after %2:
+          Project: #0..=#3, #6
+          Map: case when (#5) IS NULL then null else #4 end
+        after %3:
+          Project: #1, #2, #8, #3
+          Map: case when (#6) IS NULL then null else #5 end, case when ((#4{summary}) IS NOT NULL AND (#7{state}) IS NOT NULL) then ((#4 || "; hydration burst at ") || ((#7 -> "burst") ->> "burst_size")) else case when (#4) IS NOT NULL then #4 else case when (#7) IS NOT NULL then ("hydration burst at " || ((#7 -> "burst") ->> "burst_size")) else null end end end
+      path %1:
+        after %2:
+          Project: #1, #2, #0, #3, #6
+          Map: case when (#5) IS NULL then null else #4 end
+        after %3:
+          Project: #1, #2, #8, #3
+          Map: case when (#6) IS NULL then null else #5 end, case when ((#4{summary}) IS NOT NULL AND (#7{state}) IS NOT NULL) then ((#4 || "; hydration burst at ") || ((#7 -> "burst") ->> "burst_size")) else case when (#4) IS NOT NULL then #4 else case when (#7) IS NOT NULL then ("hydration burst at " || ((#7 -> "burst") ->> "burst_size")) else null end end end
+      path %2:
+        after %1:
+          Project: #1, #2, #0, #3, #6
+          Map: case when (#5) IS NULL then "" else coalesce(#4, "") end
+        after %3:
+          Project: #1, #2, #8, #4
+          Map: case when (#6) IS NULL then null else #5 end, case when ((#3{summary}) IS NOT NULL AND (#7{state}) IS NOT NULL) then ((#3 || "; hydration burst at ") || ((#7 -> "burst") ->> "burst_size")) else case when (#3) IS NOT NULL then #3 else case when (#7) IS NOT NULL then ("hydration burst at " || ((#7 -> "burst") ->> "burst_size")) else null end end end
+      path %3:
+        after %1:
+          Project: #1, #2, #0, #3, #6
+          Map: case when (#5) IS NULL then "" else coalesce(#4, "") end
+        after %2:
+          Project: #1, #2, #8, #4
+          Map: case when (#6) IS NULL then null else #5 end, case when ((#7{summary}) IS NOT NULL AND (#3{state}) IS NOT NULL) then ((#7 || "; hydration burst at ") || ((#3 -> "burst") ->> "burst_size")) else case when (#7) IS NOT NULL then #7 else case when (#3) IS NOT NULL then ("hydration burst at " || ((#3 -> "burst") ->> "burst_size")) else null end end end
+      →Arrange (#0)
+        →Arranged l2
+      →Arrange (#0)
         →Union
+          →Fused with Child Map/Filter/Project
+            Project: #0, #3, #4
+            Filter: (#1{object_type} = "cluster") AND (#2{object_sub_id}) IS NULL
+            Map: true
+              →Arranged mz_internal.mz_comments
+                Key: (#0{id})
           →Map/Filter/Project
-            Project: #0..=#5
-            Map: null
-              →Consolidating Union
-                →Negate Diffs
-                  →Fused with Child Map/Filter/Project
-                    Project: #0..=#4
-                      →Read l8
-                →Fused with Child Map/Filter/Project
-                  Project: #1..=#5
-                    →Read l7
-          →Stream l8
+            Project: #0..=#2
+            Map: null, null
+              →Threshold Diffs #0
+                →Arrange (#0)
+                  →Consolidating Union
+                    →Negate Diffs
+                      →Fused with Child Map/Filter/Project
+                        Project: #0
+                        Filter: (#1{object_type} = "cluster") AND (#2{object_sub_id}) IS NULL
+                          →Arranged mz_internal.mz_comments
+                            Key: (#0{id})
+                    →Unarranged Raw Stream
+                      →Arranged l3
+      →Arrange (#0)
+        →Union
+          →Fused with Child Map/Filter/Project
+            Project: #0, #6, #7
+            Filter: (#1{status} = "in-progress")
+            Map: ("reconfiguring " || case when ("" = array_to_string(array[("size to " || (#5{changes} ->> "size")), ("replication factor to " || (#5{changes} ->> "replication_factor")), case when ((#5{changes} -> "availability_zones")) IS NOT NULL then "availability zones" else null end, case when ((#5{changes} -> "logging")) IS NOT NULL then "introspection settings" else null end], ", ")) then null else array_to_string(array[("size to " || (#5{changes} ->> "size")), ("replication factor to " || (#5{changes} ->> "replication_factor")), case when ((#5{changes} -> "availability_zones")) IS NOT NULL then "availability zones" else null end, case when ((#5{changes} -> "logging")) IS NOT NULL then "introspection settings" else null end], ", ") end), true
+              →Arranged mz_internal.mz_cluster_reconfigurations
+                Key: (#0{cluster_id})
+          →Map/Filter/Project
+            Project: #0..=#2
+            Map: null, null
+              →Threshold Diffs #0
+                →Arrange (#0)
+                  →Consolidating Union
+                    →Negate Diffs
+                      →Fused with Child Map/Filter/Project
+                        Project: #0
+                        Filter: (#1{status} = "in-progress")
+                          →Arranged mz_internal.mz_cluster_reconfigurations
+                            Key: (#0{cluster_id})
+                    →Unarranged Raw Stream
+                      →Arranged l3
+      →Arrange (#0)
+        →Union
+          →Fused with Child Map/Filter/Project
+            Project: #0, #2, #3
+            Map: true
+              →Arranged mz_internal.mz_cluster_auto_scaling_strategies
+                Key: (#0{cluster_id})
+          →Map/Filter/Project
+            Project: #0..=#2
+            Map: null, null
+              →Threshold Diffs #0
+                →Arrange (#0)
+                  →Consolidating Union
+                    →Negate Diffs
+                      →Fused with Child Map/Filter/Project
+                        Project: #0
+                          →Arranged mz_internal.mz_cluster_auto_scaling_strategies
+                            Key: (#0{cluster_id})
+                    →Unarranged Raw Stream
+                      →Arranged l3
 
 Used Indexes:
   - mz_catalog.mz_clusters_ind (*** full scan ***, differential join)
-  - mz_internal.mz_cluster_reconfigurations_ind (differential join)
-  - mz_internal.mz_cluster_auto_scaling_strategies_ind (differential join)
+  - mz_internal.mz_cluster_reconfigurations_ind (*** full scan ***)
+  - mz_internal.mz_cluster_auto_scaling_strategies_ind (*** full scan ***)
   - mz_catalog.mz_cluster_replicas_ind (*** full scan ***)
-  - mz_internal.mz_comments_ind (differential join)
+  - mz_internal.mz_comments_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
 
@@ -5180,9 +5215,9 @@ mz_internal.mz_cluster_reconfigurations:
   →Read mz_internal.mz_catalog_raw
 
 Source mz_internal.mz_catalog_raw
-  project=(#2..=#6)
-  filter=(("Cluster" = (#0{data} ->> "kind")) AND (json_null != #1) AND (#1 != json_null))
-  map=((((((#0{data} -> "value") -> "config") -> "variant") -> "Managed") -> "reconfiguration"), parse_catalog_id(((#0{data} -> "key") -> "id")), case when ("InProgress" = (#1{reconfiguration} ->> "status")) then "in-progress" else case when ("Finalized" = (#1 ->> "status")) then "finalized" else case when ("TimedOut" = (#1 ->> "status")) then "timed-out" else case when ("Cancelled" = (#1 ->> "status")) then "cancelled" else case when ("ResourceExhausted" = (#1 ->> "status")) then "resource-exhausted" else (#1 ->> "status") end end end end end, text_to_mz_timestamp((#1{reconfiguration} ->> "deadline")), case when ("Commit" = (#1{reconfiguration} ->> "on_timeout")) then "commit" else case when ("Rollback" = (#1 ->> "on_timeout")) then "rollback" else (#1 ->> "on_timeout") end end, (#1{reconfiguration} -> "target"))
+  project=(#3, #5..=#7, #4, #8)
+  filter=(("Cluster" = (#0{data} ->> "kind")) AND (json_null != #2) AND (#2 != json_null))
+  map=(((((#0{data} -> "value") -> "config") -> "variant") -> "Managed"), (#1 -> "reconfiguration"), parse_catalog_id(((#0{data} -> "key") -> "id")), (#2 -> "target"), case when ("InProgress" = (#2{reconfiguration} ->> "status")) then "in-progress" else case when ("Finalized" = (#2 ->> "status")) then "finalized" else case when ("TimedOut" = (#2 ->> "status")) then "timed-out" else case when ("Cancelled" = (#2 ->> "status")) then "cancelled" else case when ("ResourceExhausted" = (#2 ->> "status")) then "resource-exhausted" else (#2 ->> "status") end end end end end, text_to_mz_timestamp((#2{reconfiguration} ->> "deadline")), case when ("Commit" = (#2{reconfiguration} ->> "on_timeout")) then "commit" else case when ("Rollback" = (#2 ->> "on_timeout")) then "rollback" else (#2 ->> "on_timeout") end end, (((case when ((#1{config} -> "size") != (#4{target} -> "size")) then jsonb_build_object("size", jsonbable_to_jsonb((#4 -> "size"))) else {} end || case when ((#1{config} -> "replication_factor") != (#4{target} -> "replication_factor")) then jsonb_build_object("replication_factor", jsonbable_to_jsonb((#4 -> "replication_factor"))) else {} end) || case when ((#1{config} -> "availability_zones") != (#4{target} -> "availability_zones")) then jsonb_build_object("availability_zones", jsonbable_to_jsonb((#4 -> "availability_zones"))) else {} end) || case when ((#1{config} -> "logging") != (#4{target} -> "logging")) then jsonb_build_object("logging", jsonbable_to_jsonb((#4 -> "logging"))) else {} end))
 
 Target cluster: mz_catalog_server
 

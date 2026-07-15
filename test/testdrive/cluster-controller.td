@@ -585,7 +585,10 @@ ALTER SYSTEM SET unsafe_enable_unstable_dependencies = true
 > CREATE MATERIALIZED VIEW cc_rollback_slow IN CLUSTER cc_rollback AS
   SELECT mz_unsafe.mz_sleep(id * 3600) AS s FROM cc_rollback_t
 
-> ALTER CLUSTER cc_rollback SET (SIZE 'scale=1,workers=4') WITH (WAIT UNTIL READY (TIMEOUT '600s', ON TIMEOUT 'ROLLBACK'))
+# Change several dimensions at once: size and introspection interval are shape
+# dimensions (each alone would route through a record), and the replication
+# factor rides along in the same statement's record.
+> ALTER CLUSTER cc_rollback SET (SIZE 'scale=1,workers=4', REPLICATION FACTOR 2, INTROSPECTION INTERVAL '2s') WITH (WAIT UNTIL READY (TIMEOUT '600s', ON TIMEOUT 'ROLLBACK'))
 
 # The relation shows the in-flight reconfiguration: status `in-progress`, the target
 # (as JSON), the deadline, and the on_timeout action, while the realized size stays
@@ -593,9 +596,16 @@ ALTER SYSTEM SET unsafe_enable_unstable_dependencies = true
 > SELECT recon.status, recon.on_timeout, recon.target->>'size', mz_clusters.size FROM mz_internal.mz_cluster_reconfigurations recon JOIN mz_clusters ON mz_clusters.id = recon.cluster_id WHERE mz_clusters.name = 'cc_rollback'
 in-progress rollback scale=1,workers=4 scale=1,workers=2
 
-# SHOW CLUSTERS folds that into the single `activity` column. (Compared as a
-# boolean because the multi-word activity string cannot be matched as a bare value.)
-> SELECT name, activity = 'reconfiguring to scale=1,workers=4' FROM (SHOW CLUSTERS) WHERE name = 'cc_rollback'
+# `changes` diffs the target against the realized config per dimension: all three
+# altered dimensions appear with their target values, and the untouched
+# availability zones do not.
+> SELECT recon.changes->>'size', recon.changes->>'replication_factor', recon.changes->'logging'->'interval'->>'secs', recon.changes->'availability_zones' IS NULL FROM mz_internal.mz_cluster_reconfigurations recon JOIN mz_clusters ON mz_clusters.id = recon.cluster_id WHERE mz_clusters.name = 'cc_rollback'
+scale=1,workers=4 2 2 true
+
+# SHOW CLUSTERS folds that into the single `activity` column, naming exactly the
+# changed dimensions. (Compared as a boolean because the multi-word activity
+# string cannot be matched as a bare value.)
+> SELECT name, activity = 'reconfiguring size to scale=1,workers=4, replication factor to 2, introspection settings' FROM (SHOW CLUSTERS) WHERE name = 'cc_rollback'
 cc_rollback true
 
 # Dropping the cluster with the record in flight must succeed (the sleeping view
