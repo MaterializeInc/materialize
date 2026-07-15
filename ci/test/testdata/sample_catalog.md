@@ -8,7 +8,7 @@ It has more detail.
 | Field  | Type       | Meaning                                       |
 |--------|------------|-----------------------------------------------|
 | `id`   | [`uint8`]  | The ID. Corresponds to [`mz_bar.id`](#mz_bar). |
-| `name` | [`text`]   | The name.                                     |
+| `name` | [`text`]   | The name of the [dataflow].                   |
 
 <!-- RELATION_SPEC_UNDOCUMENTED test_schema.mz_foo_per_worker -->
 

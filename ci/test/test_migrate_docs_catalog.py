@@ -56,7 +56,16 @@ def test_migrate_extracts_documented_relation():
             "type": "uint8",
             "meaning": "The ID. Corresponds to [`mz_bar.id`](#mz_bar).",
         },
-        {"name": "name", "type": "text", "meaning": "The name."},
+        {
+            "name": "name",
+            "type": "text",
+            # The bare shortcut ref stays unresolved in column "meaning": once
+            # resolved it would be an inline link, and lint-docs-catalog.py's
+            # comment-text stripping only strips already-resolved links,
+            # discarding the brackets a raw shortcut keeps. See
+            # `inline_links`'s `resolve_shortcuts` docstring.
+            "meaning": "The name of the [dataflow].",
+        },
     ]
     assert types == {"uint8": "/sql/types/uint8", "text": "/sql/types/text"}
 

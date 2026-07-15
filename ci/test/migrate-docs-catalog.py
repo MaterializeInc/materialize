@@ -44,10 +44,22 @@ def parse_reference_defs(lines: list[str]) -> dict[str, str]:
     return refs
 
 
-def inline_links(text: str, refs: dict[str, str]) -> str:
-    """Convert reference-style links (`[text][label]` and shortcut `[text]`)
-    into inline links (`[text](url)`) using `refs`. Existing inline links and
-    unknown labels are left untouched."""
+def inline_links(
+    text: str, refs: dict[str, str], resolve_shortcuts: bool = True
+) -> str:
+    """Convert reference-style links (`[text][label]` and, when
+    `resolve_shortcuts`, shortcut `[text]`) into inline links (`[text](url)`)
+    using `refs`. Existing inline links and unknown labels are left
+    untouched.
+
+    `resolve_shortcuts` is False for column `meaning` text (see
+    `_parse_table`): `lint-docs-catalog.py`'s comment-text stripping treats a
+    resolved shortcut the same as any other inline link and drops it down to
+    bare text, but it leaves an *unresolved* shortcut's brackets in place, and
+    that bracketed form is what the live SQL comment literally contains. Two-
+    part links do not have this problem: the stripper matches `[text][label]`
+    syntactically, independent of resolution, so resolving them here is safe.
+    """
 
     def two_part_sub(m: re.Match) -> str:
         link_text, label = m.group(1), m.group(2)
@@ -56,6 +68,9 @@ def inline_links(text: str, refs: dict[str, str]) -> str:
         return m.group(0)
 
     text = TWO_PART_LINK_RE.sub(two_part_sub, text)
+
+    if not resolve_shortcuts:
+        return text
 
     def shortcut_sub(m: re.Match) -> str:
         link_text = m.group(1)
@@ -103,7 +118,7 @@ def _parse_table(
             {
                 "name": field_match.group(1),
                 "type": type_match.group(1),
-                "meaning": inline_links(fields[2], refs),
+                "meaning": inline_links(fields[2], refs, resolve_shortcuts=False),
             }
         )
         last_row_idx = idx
