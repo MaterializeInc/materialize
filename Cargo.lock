@@ -9996,6 +9996,7 @@ dependencies = [
  "mz-persist",
  "mz-persist-client",
  "mz-persist-types",
+ "mz-postgres-client",
  "mz-repr",
  "mz-timestamp-oracle",
  "mz-txn-wal",

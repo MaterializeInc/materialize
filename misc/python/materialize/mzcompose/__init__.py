@@ -435,6 +435,11 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "persist_blob_cache_scale_with_threads", "true", ["true", "false"]
         ),
+        VariableSystemParameter(
+            "persist_pg_consensus_pipeline_connections",
+            "50",
+            ["0", "10", "25", "50", "100", "200"],
+        ),
         persist_pg_consensus_read_committed,
         VariableSystemParameter(
             "persist_state_update_lease_timeout", "1s", ["0s", "1s", "10s"]

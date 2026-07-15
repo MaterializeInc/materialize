@@ -1711,6 +1711,14 @@ class FlipFlagsAction(Action):
         self.flags_with_values["persist_optimize_ignored_data_fetch"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values["persist_pg_consensus_pipeline_connections"] = [
+            "0",
+            "10",
+            "25",
+            "50",
+            "100",
+            "200",
+        ]
         self.flags_with_values["persist_source_fetch_concurrency"] = [
             "1",
             "2",

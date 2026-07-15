@@ -26,6 +26,7 @@ check_all_files_referenced_in_ci() {
         -not -wholename "./test/console/mzcompose.py" `# Only run manually` \
         -not -wholename "./test/cargo-fuzz/mzcompose.py" `# Enabled in release qualification later in the cargo-fuzz stack` \
         -not -wholename "./test/mzcompose_examples/mzcompose.py" `# Example only` \
+        -not -wholename "./test/persist-consensus-scaling/mzcompose.py" `# Benchmark, only run manually` \
         -not -wholename "./test/get-cloud-hostname/mzcompose.py" `# Utility, no test` \
         | sed -e "s|.*/\([^/]*\)/mzcompose.py|\1|")
     while read -r composition; do
