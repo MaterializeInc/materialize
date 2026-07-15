@@ -60,7 +60,8 @@ use differential_dataflow::lattice::{Lattice, antichain_join_into};
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{
-    BatchReader, Builder, Cursor, Description, ExertionLogic, Trace, TraceReader,
+    BatchCursor, BatchDiff, BatchReader, Builder, Cursor, Description, ExertionLogic, Navigable,
+    Trace, TraceReader,
 };
 use timely::PartialOrder;
 use timely::container::PushInto;
@@ -390,30 +391,38 @@ pub fn co_reduce2<'scope, T, Tr1, Tr2, K, V, V2, R2, Bu, Out, L>(
 ) -> Arranged<'scope, TraceAgent<Out>>
 where
     T: Timestamp + Lattice + Ord,
+    // The inputs are read only through their batch cursors, so all key, value, and diff
+    // opinions are stated on `BatchCursor<Tr>` rather than on the trace itself, which in this
+    // differential version carries only a time opinion. Both batches must be `Navigable` so the
+    // operator can build cursors over them.
     Tr1: TraceReader<Time = T> + Clone + 'static,
-    // `Tr2` shares the key GAT with `Tr1` so their keys compare, and its diff is pinned to
-    // `Tr1::Diff` so both inputs feed the closure as the one input diff type `D`.
-    Tr2: for<'a> TraceReader<Key<'a> = Tr1::Key<'a>, Time = T, Diff = Tr1::Diff> + Clone + 'static,
-    Tr1::Diff: Semigroup + Clone + 'static,
-    Tr1::KeyContainer: BatchContainer<Owned = K>,
-    Tr1::ValContainer: BatchContainer<Owned = V>,
-    // The key GAT equate does not equate the owned-key container type, so bound `Tr2`'s
-    // key and value containers to the same owned types explicitly.
-    Tr2::KeyContainer: BatchContainer<Owned = K>,
-    Tr2::ValContainer: BatchContainer<Owned = V>,
+    Tr1::Batch: Navigable,
+    Tr2: TraceReader<Time = T> + Clone + 'static,
+    Tr2::Batch: Navigable,
+    BatchCursor<Tr1>: Cursor<Time = T>,
+    <BatchCursor<Tr1> as Cursor>::Diff: Semigroup + Clone + 'static,
+    <BatchCursor<Tr1> as Cursor>::KeyContainer: BatchContainer<Owned = K>,
+    <BatchCursor<Tr1> as Cursor>::ValContainer: BatchContainer<Owned = V>,
+    // `Tr2`'s diff is pinned to `Tr1`'s so both inputs feed the closure as the one input diff
+    // type, and its key and value containers carry the same owned types.
+    BatchCursor<Tr2>: Cursor<Time = T, Diff = BatchDiff<Tr1>>,
+    <BatchCursor<Tr2> as Cursor>::KeyContainer: BatchContainer<Owned = K>,
+    <BatchCursor<Tr2> as Cursor>::ValContainer: BatchContainer<Owned = V>,
     K: Ord + Clone + 'static,
     V: Ord + Clone + 'static,
     V2: Ord + Clone + 'static,
     R2: Abelian + Clone + 'static,
-    Out: for<'a> Trace<Key<'a> = Tr1::Key<'a>, ValOwn = V2, Time = T, Diff = R2> + 'static,
-    Out::KeyContainer: BatchContainer<Owned = K>,
-    Out::ValContainer: BatchContainer<Owned = V2>,
+    Out: Trace<Time = T> + 'static,
+    Out::Batch: Navigable,
+    BatchCursor<Out>: Cursor<Time = T, Diff = R2, ValOwn = V2>,
+    <BatchCursor<Out> as Cursor>::KeyContainer: BatchContainer<Owned = K>,
+    <BatchCursor<Out> as Cursor>::ValContainer: BatchContainer<Owned = V2>,
     // `Bu::Input` is only required to be default-constructible and to accept output tuples.
     // This admits builders whose input is not a `Vec` (for example a columnar stack), which
     // a `Vec`-typed bound would reject.
     Bu: Builder<Time = T, Output = Out::Batch> + 'static,
     Bu::Input: Default + PushInto<((K, V2), T, R2)>,
-    L: FnMut(&K, &[&[(V, Tr1::Diff)]], &mut Vec<(V2, R2)>) + 'static,
+    L: FnMut(&K, &[&[(V, BatchDiff<Tr1>)]], &mut Vec<(V2, R2)>) + 'static,
 {
     let scope = input0.stream.scope();
 
