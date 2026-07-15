@@ -26,6 +26,8 @@ use super::*;
 use differential_dataflow::AsCollection;
 use differential_dataflow::input::Input;
 use differential_dataflow::trace::implementations::ord_neu::{OrdValSpine, RcOrdValBuilder};
+use proptest::prelude::*;
+use proptest::strategy::Union;
 use timely::dataflow::operators::capture::Extract;
 use timely::dataflow::operators::vec::UnorderedInput;
 use timely::dataflow::operators::{Capture, Inspect, Probe, ToStream};
@@ -754,4 +756,54 @@ fn co_reduce_pair_nonlinear_synthetic_delta() {
     // Output appears exactly at the synthetic join (1,1), a time in neither input.
     let expected = vec![((1u64, 0u64), Pair::new(1, 1), 1isize)];
     assert_eq!(cursor, expected);
+}
+
+// ===================== Property A: differential fuzzing of the two tactics =====================
+
+/// Small domains force key collisions, diff cancellations, and incomparable times.
+fn arb_updates() -> impl Strategy<Value = Vec<((u64, u64), Pair, isize)>> {
+    proptest::collection::vec(
+        (
+            (0..6u64, 0..4u64),
+            (0..4u64, 0..4u64).prop_map(|(a, b)| Pair::new(a, b)),
+            Union::new(vec![Just(1isize), Just(-1isize)]),
+        )
+            .prop_map(|(kv, t, d)| (kv, t, d)),
+        0..30,
+    )
+}
+
+fn arb_fuel() -> impl Strategy<Value = usize> {
+    Union::new(vec![Just(1usize), Just(7usize), Just(usize::MAX)])
+}
+
+// `Logic` is a named fn-pointer type. Each of these functions is otherwise a distinct
+// zero-sized fn-item type, so the cast is required to unify them into one `Union`, not
+// a numeric conversion.
+#[allow(clippy::as_conversions)]
+fn arb_logic() -> impl Strategy<Value = Logic> {
+    Union::new(vec![
+        Just(net_positive as Logic),
+        Just(max_present as Logic),
+        Just(echo_values as Logic),
+    ])
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 48, ..ProptestConfig::default() })]
+
+    /// Property A: the cursor tactic and the reference tactic produce identical
+    /// consolidated change streams on identical inputs, across fuel budgets.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn co_reduce_differential(
+        updates0 in arb_updates(),
+        updates1 in arb_updates(),
+        fuel in arb_fuel(),
+        logic in arb_logic(),
+    ) {
+        let cursor = consolidate_updates(run_pair(&updates0, &updates1, fuel, logic, false));
+        let reference = consolidate_updates(run_pair(&updates0, &updates1, usize::MAX, logic, true));
+        prop_assert_eq!(cursor, reference);
+    }
 }
