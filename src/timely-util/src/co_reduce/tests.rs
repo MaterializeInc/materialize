@@ -25,13 +25,14 @@ use super::cursor::{own_current_key, read_key_values};
 use super::*;
 use differential_dataflow::AsCollection;
 use differential_dataflow::input::Input;
+use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::implementations::ord_neu::{OrdValSpine, RcOrdValBuilder};
 use proptest::prelude::*;
 use proptest::strategy::Union;
 use timely::dataflow::operators::capture::Extract;
 use timely::dataflow::operators::vec::UnorderedInput;
 use timely::dataflow::operators::{Capture, Inspect, Probe, ToStream};
-use timely::order::Product;
+use timely::order::{PartialOrder, Product};
 
 type Spine = OrdValSpine<u64, u64, u64, isize>;
 type Builder_ = RcOrdValBuilder<u64, u64, u64, isize>;
@@ -317,7 +318,7 @@ fn co_reduce_multi_value_per_key() {
             .to_stream(scope)
             .as_collection()
             .arrange_by_key();
-            // `co_reduce2` is two-input; the second arm carries no updates, so
+            // `co_reduce2` is two-input. The second arm carries no updates, so
             // `echo_values` echoes only `a0` and the stored-order guard still holds.
             let a1 = Vec::<((u64, u64), u64, isize)>::new()
                 .to_stream(scope)
@@ -805,5 +806,125 @@ proptest! {
         let cursor = consolidate_updates(run_pair(&updates0, &updates1, fuel, logic, false));
         let reference = consolidate_updates(run_pair(&updates0, &updates1, usize::MAX, logic, true));
         prop_assert_eq!(cursor, reference);
+    }
+}
+
+// ===================== Property B: from-scratch oracle model =====================
+//
+// Property A only checks the two tactics against each other, so a bug that both share
+// (e.g. in a helper both call, or a shared misreading of the operator contract) is
+// invisible to it. `oracle_check` below is an independent model with no code path in
+// common with either tactic: it accumulates each input's raw updates directly and calls
+// `logic` itself, rather than reading anything the operator produced internally.
+
+/// Brute-force model check: at every time in the join-closure of all input AND output
+/// times, the output accumulated up to that time must equal `logic` applied to the
+/// inputs accumulated up to that time, per key. Including output times catches
+/// emissions at times outside the input closure.
+fn oracle_check(
+    updates0: &[((u64, u64), Pair, isize)],
+    updates1: &[((u64, u64), Pair, isize)],
+    output: &[((u64, u64), Pair, isize)],
+    logic: Logic,
+) -> Result<(), String> {
+    let mut times: Vec<Pair> = updates0
+        .iter()
+        .chain(updates1.iter())
+        .chain(output.iter())
+        .map(|(_, t, _)| *t)
+        .collect();
+    times.sort();
+    times.dedup();
+    // Join-closure fixpoint: a non-linear `logic` can produce a real delta at a
+    // synthetic join time that neither input nor output mentions on its own, so the
+    // closure must be completed before checking, not just seeded from observed times.
+    loop {
+        let mut grown = Vec::new();
+        for i in 0..times.len() {
+            for j in (i + 1)..times.len() {
+                let joined = times[i].join(&times[j]);
+                if times.binary_search(&joined).is_err() {
+                    grown.push(joined);
+                }
+            }
+        }
+        if grown.is_empty() {
+            break;
+        }
+        times.extend(grown);
+        times.sort();
+        times.dedup();
+    }
+
+    let mut keys: Vec<u64> = updates0
+        .iter()
+        .chain(updates1.iter())
+        .chain(output.iter())
+        .map(|((k, _), _, _)| *k)
+        .collect();
+    keys.sort();
+    keys.dedup();
+
+    for q in &times {
+        for k in &keys {
+            let acc = |updates: &[((u64, u64), Pair, isize)]| {
+                let mut a: Vec<(u64, isize)> = updates
+                    .iter()
+                    .filter(|((k2, _), t, _)| k2 == k && PartialOrder::less_equal(t, q))
+                    .map(|((_, v), _, d)| (*v, *d))
+                    .collect();
+                differential_dataflow::consolidation::consolidate(&mut a);
+                a
+            };
+            let acc0 = acc(updates0);
+            let acc1 = acc(updates1);
+            // The logic contract requires logic(empty, empty) == empty, so evaluating
+            // on empty accumulations is well-defined.
+            let mut desired: Vec<(u64, isize)> = Vec::new();
+            logic(k, &[&acc0, &acc1], &mut desired);
+            differential_dataflow::consolidation::consolidate(&mut desired);
+            let actual = acc(output);
+            if desired != actual {
+                return Err(format!(
+                    "key {k} at {q:?}: desired {desired:?}, actual {actual:?}"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 48, ..ProptestConfig::default() })]
+
+    /// Property B: the cursor tactic's output matches the from-scratch model at every
+    /// closure time, fuzzed across fuel budgets.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn co_reduce_oracle_cursor(
+        updates0 in arb_updates(),
+        updates1 in arb_updates(),
+        fuel in arb_fuel(),
+        logic in arb_logic(),
+    ) {
+        let output = run_pair(&updates0, &updates1, fuel, logic, false);
+        if let Err(e) = oracle_check(&updates0, &updates1, &output, logic) {
+            return Err(TestCaseError::fail(e));
+        }
+    }
+
+    /// Property B: the reference tactic's output matches the from-scratch model at every
+    /// closure time.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn co_reduce_oracle_reference(
+        updates0 in arb_updates(),
+        updates1 in arb_updates(),
+        logic in arb_logic(),
+    ) {
+        let output = run_pair(&updates0, &updates1, usize::MAX, logic, true);
+        if let Err(e) = oracle_check(&updates0, &updates1, &output, logic) {
+            return Err(TestCaseError::fail(e));
+        }
     }
 }
