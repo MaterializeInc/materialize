@@ -287,6 +287,7 @@ mod tests {
     };
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `llvm.aarch64.neon.uaddlv.i32.v16i8` on OS `linux`
     fn suggestions_to_data_empty_returns_none() {
         let rope = Rope::from_str("SELECT 1");
         assert!(suggestions_to_data(&[], &rope).is_none());
@@ -546,6 +547,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `llvm.aarch64.neon.uaddlv.i32.v16i8` on OS `linux`
     fn harvest_candidates_none_returns_default() {
         let c = harvest_candidates(None);
         assert!(c.items.is_empty());
