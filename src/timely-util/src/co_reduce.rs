@@ -101,6 +101,10 @@ pub use reference::co_reduce2_reference;
 ///   `finish`'s returned frontier must be at-or-below every time the tactic withholds
 ///   for later rounds, and MUST be the empty antichain when nothing is withheld, else
 ///   capabilities are held forever and recursive scopes deadlock.
+///
+/// A tactic that evaluates a caller `logic` at interesting times may see fully cancelled
+/// input accumulations. Such a `logic` must produce the empty output there, per the
+/// contract on [`co_reduce2`].
 pub trait CoReduceTactic<B0, B1, BOut>
 where
     B0: BatchReader,

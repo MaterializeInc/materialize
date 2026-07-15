@@ -44,8 +44,8 @@ where
 ///
 /// Keys are visited in ascending order across a round, so advancing each source cursor
 /// forward to successive targets is monotone. On a match the cursor is left positioned
-/// at the key (values at their start); on a miss it stops at the first key greater than
-/// `target`.
+/// at the key with values at their start. On a miss it stops at the first key greater
+/// than `target`.
 pub(super) fn seek_owned_key<C, K>(cursor: &mut C, storage: &C::Storage, target: &K) -> bool
 where
     C: Cursor,
@@ -148,7 +148,7 @@ pub(super) fn compute_key<T, K, V, D, V2, R2, L>(
     L: FnMut(&K, &[&[(V, D)]], &mut Vec<(V2, R2)>),
 {
     // Partners for synthetic-time joins: every input time and prior-output time. Both
-    // lie in the join-closure of input times; including prior is redundant but harmless.
+    // lie in the join-closure of input times, so including prior is redundant but harmless.
     let mut partners: Vec<T> = Vec::new();
     for hist in &kw.inputs {
         partners.extend(hist.iter().map(|(_v, t, _d)| t.clone()));
