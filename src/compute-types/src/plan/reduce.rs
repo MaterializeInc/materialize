@@ -751,6 +751,7 @@ pub fn reduction_type(func: &AggregateFunc) -> ReductionType {
         | AggregateFunc::Rank { .. }
         | AggregateFunc::DenseRank { .. }
         | AggregateFunc::LagLead { .. }
+        | AggregateFunc::LagLeadConst { .. }
         | AggregateFunc::FirstValue { .. }
         | AggregateFunc::LastValue { .. }
         | AggregateFunc::WindowAggregate { .. }
