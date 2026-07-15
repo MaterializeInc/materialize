@@ -421,6 +421,28 @@ pub enum LirRelationNode {
         /// for the underlying convention.
         temporal_bucketing_strategies: Vec<ArrangementStrategy>,
     },
+    /// Computes `Threshold(base - subtract)` reading two inputs co-arranged on
+    /// the difference key. Both inputs must be available arranged by the key
+    /// columns of `ensure_arrangement`. Produces one output arrangement keyed
+    /// by those columns with empty value, matching the `Threshold` it replaces.
+    SetDifference {
+        /// The positive input (minuend), arranged by `base_key`.
+        base: Box<LirRelationExpr>,
+        /// The negated input (subtrahend), arranged by `subtract_key`.
+        subtract: Box<LirRelationExpr>,
+        /// Key columns of `base`'s existing arrangement.
+        ///
+        /// The operator reads `base` through this arrangement and ignores its value columns. The
+        /// key datums equal the output key datums (`ensure_arrangement.0`), so they align with
+        /// `subtract`'s key across arms even when the arms were keyed differently before a
+        /// projection was stripped. Equals `ensure_arrangement.0` when `base` carried no stripped
+        /// projection.
+        base_key: Vec<LirScalarExpr>,
+        /// Key columns of `subtract`'s existing arrangement. See `base_key`.
+        subtract_key: Vec<LirScalarExpr>,
+        /// Key/permutation/thinning of the output arrangement (thinning is empty).
+        ensure_arrangement: (Vec<LirScalarExpr>, Vec<usize>, Vec<usize>),
+    },
     /// The `input` plan, but with additional arrangements.
     ///
     /// This operator does not change the logical contents of `input`, but ensures
@@ -471,6 +493,10 @@ impl LirRelationNode {
             | ArrangeBy { input, .. } => {
                 first = Some(&**input);
             }
+            SetDifference { base, subtract, .. } => {
+                first = Some(&**base);
+                second = Some(&**subtract);
+            }
             Join { inputs, .. } | Union { inputs, .. } => {
                 rest = Some(inputs);
             }
@@ -509,6 +535,10 @@ impl LirRelationNode {
             | Threshold { input, .. }
             | ArrangeBy { input, .. } => {
                 first = Some(&mut **input);
+            }
+            SetDifference { base, subtract, .. } => {
+                first = Some(&mut **base);
+                second = Some(&mut **subtract);
             }
             Join { inputs, .. } | Union { inputs, .. } => {
                 rest = Some(inputs);
@@ -583,6 +613,12 @@ impl LirRelationExpr {
 
         // Subsequently, we perform plan refinements for the dataflow.
         Self::refine_source_mfps(&mut dataflow);
+
+        // Recognize the co-arranged anti-side shape and fuse it into a single
+        // `SetDifference` node. Gated behind a feature flag, dormant otherwise.
+        if features.enable_fused_set_difference {
+            Self::refine_set_difference(&mut dataflow);
+        }
 
         // Note: `consolidate_output` for `Union` and per-input
         // `temporal_bucketing_strategies` are decided at lowering time (see the
@@ -767,6 +803,47 @@ impl LirRelationExpr {
         mz_repr::explain::trace_plan(dataflow);
     }
 
+    /// Recognizes the co-arranged anti-side shape
+    /// `Threshold::Basic(ArrangeBy(Union(base, Negate(subtract))))` and rewrites it in place
+    /// to a single [`LirRelationNode::SetDifference`] node.
+    ///
+    /// The rewrite fires only when both difference inputs are genuinely arranged on the
+    /// threshold key and neither carries temporal bucketing. See [`match_anti_side`] for the
+    /// full set of decline conditions.
+    ///
+    /// The walk descends into `LetRec` subtrees. Inside a recursive CTE the anti-side's arms
+    /// are recursive-CTE references, which render as raw collections rather than arranged
+    /// imports, so `match_anti_side` declines and no fusion happens there. The arrangement
+    /// requirement, not a `LetRec`-specific guard, is what keeps the rewrite out of recursive
+    /// scopes, which is correct on the merits: with raw arms the fused operator would build
+    /// the arrangement itself, the same work the `Threshold` already does, so there is no win.
+    #[mz_ore::instrument(
+        target = "optimizer",
+        level = "debug",
+        fields(path.segment = "refine_set_difference")
+    )]
+    fn refine_set_difference(dataflow: &mut DataflowDescription<Self>) {
+        for build_desc in dataflow.objects_to_build.iter_mut() {
+            let mut todo = vec![&mut build_desc.plan];
+            while let Some(expression) = todo.pop() {
+                if let Some((base, subtract, base_key, subtract_key, ensure_arrangement)) =
+                    match_anti_side(&expression.node)
+                {
+                    *expression = LirRelationNode::SetDifference {
+                        base,
+                        subtract,
+                        base_key,
+                        subtract_key,
+                        ensure_arrangement,
+                    }
+                    .as_plan(expression.lir_id);
+                }
+                todo.extend(expression.node.children_mut());
+            }
+        }
+        mz_repr::explain::trace_plan(dataflow);
+    }
+
     /// Refines the plans of objects to be built as part of a single-time `dataflow` to relax
     /// the setting of the `must_consolidate` attribute of monotonic operators, if necessary,
     /// whenever the input is deemed to be physically monotonic.
@@ -792,6 +869,287 @@ impl LirRelationExpr {
         mz_repr::explain::trace_plan(dataflow);
         Ok(())
     }
+}
+
+/// Matches the co-arranged anti-side shape
+/// `Threshold::Basic(ArrangeBy(raw=false)(Union([base, Negate(subtract)])))` and, when every
+/// decline condition holds, returns the `(base, subtract, ensure_arrangement)` components of a
+/// [`LirRelationNode::SetDifference`] rewrite.
+///
+/// `base` is the positive `Union` arm; `subtract` is the child of the `Negate` arm (the render
+/// reintroduces the negation internally). Each arm is rewritten by [`arm_direct_arrangement`] so
+/// its rendered bundle exposes an existing arrangement directly, and `base_key`/`subtract_key`
+/// name the key each arm's arrangement advertises. `ensure_arrangement` is copied from the matched
+/// `Threshold` so the fused node advertises the same output arrangement.
+///
+/// Returns `None` (decline, leaving the plan unchanged) unless all of the following hold:
+/// * the node is a `Threshold::Basic`,
+/// * its input is an `ArrangeBy` whose `forms` are arranged (not raw),
+/// * that `ArrangeBy`'s input is a `Union` with exactly two inputs, exactly one a `Negate`,
+/// * neither `Union` arm carries a non-`Direct` temporal bucketing strategy, and
+/// * both arms are arranged on the threshold key columns (see [`arm_direct_arrangement`]).
+///
+/// `consolidate_output` need not be checked: lowering sets it precisely when a `Union` arm is a
+/// `Negate`, so the two-input-one-`Negate` match already implies it.
+fn match_anti_side(
+    node: &LirRelationNode,
+) -> Option<(
+    Box<LirRelationExpr>,
+    Box<LirRelationExpr>,
+    Vec<LirScalarExpr>,
+    Vec<LirScalarExpr>,
+    (Vec<LirScalarExpr>, Vec<usize>, Vec<usize>),
+)> {
+    let LirRelationNode::Threshold {
+        input,
+        threshold_plan: ThresholdPlan::Basic(basic),
+    } = node
+    else {
+        return None;
+    };
+    let ensure_arrangement = basic.ensure_arrangement.clone();
+    let threshold_key = &ensure_arrangement.0;
+
+    let LirRelationNode::ArrangeBy {
+        input: union_expr,
+        forms,
+        ..
+    } = &input.node
+    else {
+        return None;
+    };
+    if forms.raw {
+        return None;
+    }
+
+    let LirRelationNode::Union {
+        inputs,
+        temporal_bucketing_strategies,
+        ..
+    } = &union_expr.node
+    else {
+        return None;
+    };
+    if inputs.len() != 2 {
+        return None;
+    }
+    // The `SetDifference` node has no slot for a temporal bucketing strategy and the phase-1
+    // render reconstructs a plain consolidating concat that does not reproduce per-input
+    // bucketing. Fusing a bucketable arm would silently drop the bucketing and regress, so
+    // decline whenever any arm requests a non-`Direct` (the no-op default) strategy.
+    if temporal_bucketing_strategies
+        .iter()
+        .any(|strategy| !matches!(strategy, ArrangementStrategy::Direct))
+    {
+        return None;
+    }
+
+    // Exactly one arm must be a `Negate`.
+    let mut negate_arms = inputs
+        .iter()
+        .enumerate()
+        .filter(|(_, arm)| matches!(arm.node, LirRelationNode::Negate { .. }));
+    let (negate_idx, negate_arm) = negate_arms.next()?;
+    if negate_arms.next().is_some() {
+        return None;
+    }
+    let LirRelationNode::Negate { input: subtract } = &negate_arm.node else {
+        return None;
+    };
+    let base_arm = &inputs[1 - negate_idx];
+
+    // Rewrite each arm to read its existing arrangement directly (stripping any projection that
+    // would otherwise render the arm raw and force a re-arrangement), and record the key that
+    // arrangement advertises. Declining here leaves the plan unchanged.
+    let (base, base_key) = arm_direct_arrangement(base_arm, threshold_key)?;
+    let (subtract, subtract_key) = arm_direct_arrangement(subtract, threshold_key)?;
+
+    Some((
+        Box::new(base),
+        Box::new(subtract),
+        base_key,
+        subtract_key,
+        ensure_arrangement,
+    ))
+}
+
+/// Reports whether a `Union` arm is available arranged on the `key` columns, permitting an
+/// optional leading projection-to-key MFP.
+///
+/// The arm may be wrapped in a single `Mfp` node whose plan only projects (no map, filter, or
+/// temporal bound); such a projection is stripped before inspecting the underlying node. A
+/// non-projection `Mfp` is not stripped, leaving `Mfp` as the node type, which is rejected.
+///
+/// The underlying node must be a `Get` or `ArrangeBy`, the only nodes that advertise their
+/// arrangements at the node level. Any read MFP the node applies (a `GetPlan` MFP or an
+/// `ArrangeBy`'s `input_mfp`) must itself be projection-only, since a filter or map between the
+/// arm and its arrangement changes the collection the operator would consume. Only the key
+/// columns must match; permutation and thinning may differ between arms, because the
+/// operator sums diffs per key and ignores value contents.
+///
+/// A stripped projection-only `Mfp` renames the arm's output columns relative to the underlying
+/// node. `key` lives in the arm's output (post-projection) space, whereas the underlying node
+/// advertises its arrangement key in its own (pre-projection) space. The key is mapped back
+/// through the projection before comparing, so a reordering or column-dropping projection cannot
+/// produce a false `#i`-vs-`#i` match. The mapped key must match the underlying arrangement key
+/// exactly; the operator only serves the case where the input is already keyed as the output
+/// needs and does not attempt to permute.
+fn arm_arrangement_matches(arm: &LirRelationExpr, key: &[LirScalarExpr]) -> bool {
+    let (node, mapped_key) = match &arm.node {
+        LirRelationNode::Mfp { input, mfp, .. } if is_projection_only(mfp) => {
+            // `is_projection_only` guarantees no expressions, predicates, or temporal bounds, so
+            // the projection alone describes the mapping: `output_col[i] = underlying_col[proj[i]]`.
+            let Some(mapped_key) = remap_key_through_projection(key, &mfp.safe_mfp().projection)
+            else {
+                return false;
+            };
+            (&input.node, mapped_key)
+        }
+        // No projection wrapper: the arm output space equals the underlying node space.
+        node => (node, key.to_vec()),
+    };
+    let key = mapped_key.as_slice();
+
+    let advertises_key = |arranged: &[(Vec<LirScalarExpr>, Vec<usize>, Vec<usize>)]| -> bool {
+        arranged.iter().any(|(k, _, _)| k.as_slice() == key)
+    };
+
+    match node {
+        LirRelationNode::Get { keys, plan, .. } => {
+            get_plan_projection_only(plan) && advertises_key(&keys.arranged)
+        }
+        LirRelationNode::ArrangeBy {
+            input_key,
+            input_mfp,
+            forms,
+            ..
+        } => {
+            // The arrangement on the mapped key is either built by this node (its `forms`) or the
+            // input arrangement it reads through (`input_key`). `forms` keys are in the output
+            // column space, so they compare to `mapped_key` directly. `input_key` is in the input
+            // column space, so it only corresponds to `mapped_key` when `input_mfp` neither
+            // reorders nor drops columns. A non-identity projection would make the same index refer
+            // to different columns on the two sides, so match on `input_key` only under an identity
+            // projection.
+            is_projection_only(input_mfp)
+                && (advertises_key(&forms.arranged)
+                    || (is_identity_projection(&input_mfp.safe_mfp().projection)
+                        && input_key
+                            .as_deref()
+                            .is_some_and(|input_key| input_key == key)))
+        }
+        _ => false,
+    }
+}
+
+/// Rewrites a `SetDifference` arm so its rendered collection bundle exposes an existing
+/// arrangement keyed by the returned key, without applying any projection, or returns `None` to
+/// decline.
+///
+/// Accepts exactly the arms [`arm_arrangement_matches`] accepts (identical decline conditions): an
+/// optional projection-only `Mfp` wrapper over a `Get` or `ArrangeBy` that is available arranged
+/// on the projection-remapped key.
+///
+/// A projecting read (a `Get::Arrangement` with a projecting MFP, or a projection-only `Mfp`
+/// wrapper) renders the arm as a raw collection, which would force the fused operator to
+/// re-arrange it and reintroduce the arrangement the fusion is meant to eliminate. This strips
+/// that projection so the operator reads the underlying arrangement directly. Stripping is sound
+/// because the operator sums diffs per key and never consults value columns, and the underlying
+/// arrangement's key datums equal the output key datums: the projection only reorders or drops
+/// columns the operator does not read, and `mapped_key[i]` is the underlying column feeding output
+/// key position `i`. An `ArrangeBy` already renders its arrangements into the bundle, so it needs
+/// no rewrite and is returned unchanged (minus any outer projection wrapper).
+///
+/// The returned key is the key the exposed arrangement advertises: the output `key` when the arm
+/// has no stripped projection, the projection-remapped key otherwise.
+fn arm_direct_arrangement(
+    arm: &LirRelationExpr,
+    key: &[LirScalarExpr],
+) -> Option<(LirRelationExpr, Vec<LirScalarExpr>)> {
+    // Peel an optional projection-only `Mfp` wrapper, remapping `key` into the underlying node's
+    // (pre-projection) column space. Mirrors the peeling in `arm_arrangement_matches`.
+    let (node_expr, mapped_key) = match &arm.node {
+        LirRelationNode::Mfp { input, mfp, .. } if is_projection_only(mfp) => {
+            let mapped_key = remap_key_through_projection(key, &mfp.safe_mfp().projection)?;
+            (input.as_ref(), mapped_key)
+        }
+        // No projection wrapper: the arm output space equals the underlying node space.
+        _ => (arm, key.to_vec()),
+    };
+
+    match &node_expr.node {
+        LirRelationNode::Get { id, keys, plan } => {
+            // Same accept condition as `arm_arrangement_matches`: a projection-only read of an
+            // arrangement advertised on the mapped key.
+            if !get_plan_projection_only(plan) {
+                return None;
+            }
+            let form = keys
+                .arranged
+                .iter()
+                .find(|(k, _, _)| k.as_slice() == mapped_key.as_slice())?;
+            // Expose that arrangement directly via `PassArrangements`, dropping the projecting read
+            // that would otherwise render the arm raw. The advertised key datums equal the output
+            // key datums (see the function contract), so the operator reads aligned keys.
+            let node = LirRelationNode::Get {
+                id: *id,
+                keys: AvailableCollections::new_arranged(vec![form.clone()]),
+                plan: GetPlan::PassArrangements,
+            };
+            Some((node.as_plan(node_expr.lir_id), mapped_key))
+        }
+        LirRelationNode::ArrangeBy { .. } => {
+            // An `ArrangeBy` renders its `forms`/input arrangements into the bundle, so reading
+            // through it already hits an existing arrangement. Confirm the same accept condition on
+            // the peeled node and keep it (dropping only the outer projection wrapper, if any).
+            arm_arrangement_matches(node_expr, &mapped_key).then(|| (node_expr.clone(), mapped_key))
+        }
+        _ => None,
+    }
+}
+
+/// Maps `key` from the arm's output (post-projection) column space into the underlying node's
+/// (pre-projection) column space through `proj`, where `output_col[i] = underlying_col[proj[i]]`.
+///
+/// Every `key` entry must be a plain column reference, since threshold keys are full-row column
+/// lists over the arm output. Returns `None` (decline) if any entry is not a plain column
+/// reference or falls outside `proj`, either of which means the key is not the shape this
+/// recognizer knows how to remap.
+fn remap_key_through_projection(
+    key: &[LirScalarExpr],
+    proj: &[usize],
+) -> Option<Vec<LirScalarExpr>> {
+    key.iter()
+        .map(|expr| {
+            let LirScalarExpr::Column(col, _) = expr else {
+                return None;
+            };
+            proj.get(*col).copied().map(LirScalarExpr::column)
+        })
+        .collect()
+}
+
+/// Reports whether a `GetPlan` reads its collection with at most a projection: no seek, no
+/// filter, no map.
+fn get_plan_projection_only(plan: &GetPlan) -> bool {
+    match plan {
+        GetPlan::PassArrangements => true,
+        // A seek is a literal equality constraint, so it disqualifies the plan.
+        GetPlan::Arrangement(_key, seek_row, mfp) => seek_row.is_none() && is_projection_only(mfp),
+        GetPlan::Collection(mfp) => is_projection_only(mfp),
+    }
+}
+
+/// Reports whether `proj` is the identity projection `[0, 1, ..., proj.len()-1]`: it neither
+/// reorders nor drops columns, so output column `i` is input column `i`.
+fn is_identity_projection(proj: &[usize]) -> bool {
+    proj.iter().copied().eq(0..proj.len())
+}
+
+/// Reports whether an `MfpPlan` only projects columns: no map, no filter, no temporal bound.
+fn is_projection_only(mfp: &MfpPlan<LirScalarExpr>) -> bool {
+    let safe_mfp = mfp.safe_mfp();
+    safe_mfp.expressions.is_empty() && safe_mfp.predicates.is_empty() && !mfp.has_temporal_bounds()
 }
 
 impl CollectionPlan for LirRelationNode {
@@ -832,6 +1190,16 @@ impl CollectionPlan for LirRelationNode {
                 for input in inputs {
                     input.depends_on_into(out);
                 }
+            }
+            LirRelationNode::SetDifference {
+                base,
+                subtract,
+                base_key: _,
+                subtract_key: _,
+                ensure_arrangement: _,
+            } => {
+                base.depends_on_into(out);
+                subtract.depends_on_into(out);
             }
             LirRelationNode::Mfp {
                 input,
@@ -902,4 +1270,87 @@ fn bucketing_of_expected_group_size(expected_group_size: Option<u64>) -> Vec<u64
 
     buckets.reverse();
     buckets
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cols(indices: &[usize]) -> Vec<LirScalarExpr> {
+        indices.iter().copied().map(LirScalarExpr::column).collect()
+    }
+
+    /// Reproduces the arrangement-match decision `arm_arrangement_matches` makes after stripping a
+    /// projection-only `Mfp`: the threshold `key` remapped through `proj` must equal the
+    /// underlying arrangement key exactly.
+    fn key_serves(key: &[usize], proj: &[usize], underlying_key: &[usize]) -> bool {
+        remap_key_through_projection(&cols(key), proj).as_deref()
+            == Some(cols(underlying_key).as_slice())
+    }
+
+    #[mz_ore::test]
+    fn remap_identity_projection_matches() {
+        // Identity projection leaves the key unchanged, so an underlying arrangement keyed
+        // identically still matches.
+        assert_eq!(
+            remap_key_through_projection(&cols(&[0, 1]), &[0, 1]),
+            Some(cols(&[0, 1]))
+        );
+        assert!(key_serves(&[0, 1], &[0, 1], &[0, 1]));
+    }
+
+    #[mz_ore::test]
+    fn remap_column_drop_preserving_order_matches() {
+        // The arm drops underlying column 1 but keeps 0 and 2 in order. The output key `[#0, #1]`
+        // maps to underlying `[#0, #2]`, which an arrangement keyed on `[#0, #2]` serves.
+        assert_eq!(
+            remap_key_through_projection(&cols(&[0, 1]), &[0, 2]),
+            Some(cols(&[0, 2]))
+        );
+        assert!(key_serves(&[0, 1], &[0, 2], &[0, 2]));
+        // An arrangement keyed on the raw (unmapped) columns must NOT be accepted.
+        assert!(!key_serves(&[0, 1], &[0, 2], &[0, 1]));
+    }
+
+    #[mz_ore::test]
+    fn remap_reordering_projection_declines() {
+        // A reordering projection maps `[#0, #1]` to `[#1, #0]`; an arrangement keyed on the raw
+        // `[#0, #1]` no longer matches the mapped key, so the arm is declined.
+        assert_eq!(
+            remap_key_through_projection(&cols(&[0, 1]), &[1, 0]),
+            Some(cols(&[1, 0]))
+        );
+        assert!(!key_serves(&[0, 1], &[1, 0], &[0, 1]));
+        // It does serve an arrangement keyed on the actually-mapped columns.
+        assert!(key_serves(&[0, 1], &[1, 0], &[1, 0]));
+    }
+
+    #[mz_ore::test]
+    fn remap_shifted_projection_differs() {
+        // A projection onto entirely different underlying columns yields a mapped key that no
+        // arrangement keyed on the raw columns can serve.
+        assert_eq!(
+            remap_key_through_projection(&cols(&[0, 1]), &[2, 3]),
+            Some(cols(&[2, 3]))
+        );
+        assert!(!key_serves(&[0, 1], &[2, 3], &[0, 1]));
+    }
+
+    #[mz_ore::test]
+    fn remap_out_of_range_declines() {
+        // A key column with no projection entry cannot be remapped, so the helper declines rather
+        // than guess.
+        assert_eq!(remap_key_through_projection(&cols(&[0, 2]), &[0, 1]), None);
+    }
+
+    #[mz_ore::test]
+    fn remap_non_column_key_declines() {
+        // Threshold keys are plain column references; anything else is outside the shape the
+        // recognizer handles.
+        let key = vec![LirScalarExpr::literal_ok(
+            mz_repr::Datum::True,
+            mz_repr::ReprScalarType::Bool,
+        )];
+        assert_eq!(remap_key_through_projection(&key, &[0]), None);
+    }
 }

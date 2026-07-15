@@ -628,6 +628,7 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
                 enable_variadic_left_join_lowering: v.enable_variadic_left_join_lowering,
                 enable_letrec_fixpoint_analysis: v.enable_letrec_fixpoint_analysis,
                 enable_reduce_mfp_fusion: Default::default(),
+                enable_fused_set_difference: Default::default(),
                 enable_cardinality_estimates: Default::default(),
                 persist_fast_path_limit: Default::default(),
                 reoptimize_imported_views: v.reoptimize_imported_views,

@@ -713,3 +713,112 @@ SELECT string_agg(rtrim(t), chr(10) ORDER BY cy) FROM a;
                                     ....#
                                     +.
 EOF
+
+# Fused SetDifference inside a recursive CTE (CLU-168). `enable_fused_set_difference`
+# is on in the sqllogictest runner. The anti-side (`... EXCEPT SELECT x FROM blocked`)
+# lives in the recursive binding, so the fused operator runs at the recursion's
+# partial-order iteration timestamp. `blocked` is indexed, so its arrangement imports
+# into the loop and the subtract arm reads it arranged; the base arm is distinct-
+# arranged. Both arms arranged, so the recognizer fuses. This exercises the operator
+# under iterative re-evaluation, not just the plan rewrite.
+
+statement ok
+CREATE TABLE sd_edges (src int, dst int)
+
+statement ok
+INSERT INTO sd_edges VALUES (1, 2), (2, 3), (3, 4), (1, 3)
+
+statement ok
+CREATE TABLE sd_blocked (x int)
+
+statement ok
+INSERT INTO sd_blocked VALUES (3)
+
+statement ok
+CREATE DEFAULT INDEX ON sd_blocked
+
+# Nodes reachable from 1, minus blocked nodes, recomputed each iteration. Node 3 is
+# blocked, so it never enters `reach`, and node 4 (only reachable through 3) stays
+# unreachable. Fixpoint: {1, 2}.
+query I
+WITH MUTUALLY RECURSIVE
+    reach (x int) AS (
+        ((VALUES (1)) UNION (SELECT e.dst FROM sd_edges e JOIN reach r ON e.src = r.x))
+        EXCEPT
+        (SELECT x FROM sd_blocked)
+    )
+SELECT x FROM reach ORDER BY x
+----
+1
+2
+
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR
+WITH MUTUALLY RECURSIVE
+    reach (x int) AS (
+        ((VALUES (1)) UNION (SELECT e.dst FROM sd_edges e JOIN reach r ON e.src = r.x))
+        EXCEPT
+        (SELECT x FROM sd_blocked)
+    )
+SELECT x FROM reach ORDER BY x
+----
+Explained Query:
+  Finish order_by=[#0 asc nulls_last] output=[#0]
+    With Mutually Recursive
+      cte l0 =
+        ArrangeBy
+          input_key=[#0]
+          raw=true
+          SetDifference ensure_arrangement={ key=[#0], permutation=id, thinning=() } base_key=[#0] subtract_key=[#0]
+            ArrangeBy
+              input_key=[#0]
+              raw=true
+              Reduce::Distinct
+                key_plan=id
+                val_plan
+                  project=()
+                Union
+                  Join::Linear
+                    linear_stage[0]
+                      closure
+                        project=(#1)
+                      lookup={ relation=1, key=[#0{x}] }
+                      stream={ key=[#0{src}], thinning=(#1) }
+                    source={ relation=0, key=[#0{src}] }
+                    ArrangeBy
+                      raw=true
+                      arrangements[0]={ key=[#0{src}], permutation=id, thinning=(#1) }
+                      Get::Collection materialize.public.sd_edges
+                        raw=true
+                    ArrangeBy
+                      raw=true
+                      arrangements[0]={ key=[#0{x}], permutation=id, thinning=() }
+                      Get::Collection l0
+                        filter=((#0{x}) IS NOT NULL)
+                        raw=true
+                  Constant
+                    - (1)
+            ArrangeBy
+              input_key=[#0]
+              raw=true
+              Reduce::Distinct
+                input_key=#0{x}
+                key_plan=id
+                val_plan
+                  project=()
+                Get::PassArrangements materialize.public.sd_blocked
+                  raw=false
+                  arrangements[0]={ key=[#0{x}], permutation=id, thinning=() }
+    Return
+      Get::PassArrangements l0
+        raw=true
+
+Source materialize.public.sd_edges
+  filter=((#0{src}) IS NOT NULL)
+
+Used Indexes:
+  - materialize.public.sd_blocked_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF

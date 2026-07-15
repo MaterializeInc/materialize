@@ -174,6 +174,7 @@ pub(crate) mod errors;
 mod flat_map;
 mod join;
 mod reduce;
+mod set_difference;
 pub mod sinks;
 mod threshold;
 mod top_k;
@@ -1366,6 +1367,29 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                 }
                 let errs = differential_dataflow::collection::concatenate(self.scope, errs);
                 CollectionBundle::from_collections(oks, errs)
+            }
+            SetDifference {
+                base,
+                subtract,
+                base_key,
+                subtract_key,
+                ensure_arrangement,
+            } => {
+                // Phase 2: read the two co-arranged inputs directly and produce one
+                // output arrangement via the fused operator, eliminating the
+                // intermediate `ArrangeBy` (trace T) the reconstructed
+                // `Threshold(ArrangeBy(Union(..)))` dataflow would build. Each arm is
+                // read through its own existing arrangement (`base_key`/`subtract_key`),
+                // whose key datums align with the output key.
+                let base = expect_input(base);
+                let subtract = expect_input(subtract);
+                self.render_set_difference(
+                    base,
+                    subtract,
+                    base_key,
+                    subtract_key,
+                    ensure_arrangement,
+                )
             }
             ArrangeBy {
                 input_key,

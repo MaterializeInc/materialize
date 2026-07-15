@@ -246,19 +246,16 @@ EXPLAIN WITH(humanized expressions)
 SELECT a FROM t EXCEPT SELECT b FROM mv
 ----
 Explained Query:
-  →Threshold Diffs #0
-    →Arrange (#0)
-      →Consolidating Union
-        →Unarranged Raw Stream
-          →Distinct GroupAggregate
-            →Fused with Child Map/Filter/Project
-              Project: #0
-                →Arranged materialize.public.t
-                  Key: (#0{a})
-        →Negate Diffs
-          →Unarranged Raw Stream
-            →Distinct GroupAggregate
-              →Read materialize.public.mv
+  →Set Difference #0 base_key=[#0] subtract_key=[#0]
+    →Unarranged Raw Stream
+      →Distinct GroupAggregate
+        →Fused with Child Map/Filter/Project
+          Project: #0
+            →Arranged materialize.public.t
+              Key: (#0{a})
+    →Unarranged Raw Stream
+      →Distinct GroupAggregate
+        →Read materialize.public.mv
 
 Source materialize.public.mv
   project=(#1)
