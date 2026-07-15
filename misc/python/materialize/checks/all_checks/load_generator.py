@@ -56,6 +56,164 @@ class LoadGeneratorAsOfUpTo(Check):
             """))
 
 
+class LoadGeneratorTpch(Check):
+    def initialize(self) -> Testdrive:
+        return Testdrive(dedent("""
+            > CREATE SOURCE lg_tpch FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.0001, UP TO 10);
+            > CREATE TABLE lg_tpch_customer FROM SOURCE lg_tpch (REFERENCE customer);
+            > CREATE TABLE lg_tpch_nation FROM SOURCE lg_tpch (REFERENCE nation);
+            > CREATE TABLE lg_tpch_region FROM SOURCE lg_tpch (REFERENCE region);
+            > CREATE TABLE lg_tpch_supplier FROM SOURCE lg_tpch (REFERENCE supplier);
+        """))
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
+            > CREATE TABLE lg_tpch_orders FROM SOURCE lg_tpch (REFERENCE orders);
+            > CREATE TABLE lg_tpch_lineitem FROM SOURCE lg_tpch (REFERENCE lineitem);
+                """,
+                """
+            > CREATE TABLE lg_tpch_part FROM SOURCE lg_tpch (REFERENCE part);
+            > CREATE TABLE lg_tpch_partsupp FROM SOURCE lg_tpch (REFERENCE partsupp);
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(dedent("""
+            > SELECT count(*) FROM lg_tpch_nation;
+            25
+            > SELECT count(*) FROM lg_tpch_region;
+            5
+            > SELECT count(*) FROM lg_tpch_customer;
+            15
+            > SELECT count(*) FROM lg_tpch_supplier;
+            1
+            > SELECT count(*) FROM lg_tpch_orders;
+            150
+            > SELECT count(*) FROM lg_tpch_part;
+            20
+            > SELECT count(*) FROM lg_tpch_partsupp;
+            80
+            # Every lineitem belongs to an existing order.
+            > SELECT count(*) > 0 FROM lg_tpch_lineitem;
+            true
+            > SELECT count(*) FROM lg_tpch_lineitem l
+              LEFT JOIN lg_tpch_orders o ON l.l_orderkey = o.o_orderkey
+              WHERE o.o_orderkey IS NULL;
+            0
+        """))
+
+
+class LoadGeneratorMarketing(Check):
+    def initialize(self) -> Testdrive:
+        return Testdrive(dedent("""
+            > CREATE SOURCE lg_marketing FROM LOAD GENERATOR MARKETING (TICK INTERVAL '100ms', UP TO 100);
+            > CREATE TABLE lg_mkt_customers FROM SOURCE lg_marketing (REFERENCE customers);
+            > CREATE TABLE lg_mkt_impressions FROM SOURCE lg_marketing (REFERENCE impressions);
+        """))
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
+            > CREATE TABLE lg_mkt_clicks FROM SOURCE lg_marketing (REFERENCE clicks);
+            > CREATE TABLE lg_mkt_leads FROM SOURCE lg_marketing (REFERENCE leads);
+                """,
+                """
+            > CREATE TABLE lg_mkt_coupons FROM SOURCE lg_marketing (REFERENCE coupons);
+            > CREATE TABLE lg_mkt_predictions FROM SOURCE lg_marketing (REFERENCE conversion_predictions);
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(dedent("""
+            > SELECT count(*) > 0 FROM lg_mkt_customers;
+            true
+            > SELECT count(*) > 0 FROM lg_mkt_impressions;
+            true
+            > SELECT count(*) > 0 FROM lg_mkt_leads;
+            true
+            # Referential integrity between the marketing relations.
+            > SELECT count(*) FROM lg_mkt_impressions i
+              LEFT JOIN lg_mkt_customers c ON i.customer_id = c.id
+              WHERE c.id IS NULL;
+            0
+            > SELECT count(*) FROM lg_mkt_clicks cl
+              LEFT JOIN lg_mkt_impressions i ON cl.impression_id = i.id
+              WHERE i.id IS NULL;
+            0
+            > SELECT count(*) FROM lg_mkt_coupons co
+              LEFT JOIN lg_mkt_leads l ON co.lead_id = l.id
+              WHERE l.id IS NULL;
+            0
+        """))
+
+
+class LoadGeneratorKeyValue(Check):
+    def initialize(self) -> Testdrive:
+        return Testdrive(dedent("""
+            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            ALTER SYSTEM SET enable_load_generator_key_value = true
+
+            > CREATE SOURCE lg_key_value1 FROM LOAD GENERATOR KEY VALUE (
+                KEYS 16,
+                PARTITIONS 4,
+                SNAPSHOT ROUNDS 3,
+                SEED 123,
+                VALUE SIZE 10,
+                BATCH SIZE 2
+              )
+              ENVELOPE UPSERT;
+        """))
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
+            > CREATE SOURCE lg_key_value2 FROM LOAD GENERATOR KEY VALUE (
+                KEYS 8,
+                PARTITIONS 2,
+                SNAPSHOT ROUNDS 1,
+                TRANSACTIONAL SNAPSHOT false,
+                SEED 42,
+                VALUE SIZE 10,
+                BATCH SIZE 2
+              )
+              INCLUDE KEY AS named_key
+              ENVELOPE UPSERT;
+                """,
+                """
+            > CREATE MATERIALIZED VIEW lg_key_value_mv1 AS
+              SELECT partition, count(*) AS cnt FROM lg_key_value1 GROUP BY partition;
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(dedent("""
+            > SELECT partition, count(*) FROM lg_key_value1 GROUP BY partition;
+            0 4
+            1 4
+            2 4
+            3 4
+            > SELECT min(key), max(key) FROM lg_key_value1;
+            0 15
+            > SELECT * FROM lg_key_value_mv1;
+            0 4
+            1 4
+            2 4
+            3 4
+            > SELECT min(named_key), max(named_key), count(*) FROM lg_key_value2;
+            0 7 8
+        """))
+
+
 class LoadGeneratorMultiReplica(Check):
     def _can_run(self, e: Executor) -> bool:
         return self.base_version >= MzVersion.parse_mz("v0.134.0-dev")
