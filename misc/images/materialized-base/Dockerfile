@@ -20,6 +20,9 @@ FROM debian:13-slim
 
 ARG CI_SANITIZER=none
 
+ARG BUILD_PROFILE=optimize
+LABEL build.profile=$BUILD_PROFILE
+
 RUN groupadd --system --gid=999 materialize \
     && useradd --system --gid=999 --uid=999 --create-home materialize \
     && apt-get update \
