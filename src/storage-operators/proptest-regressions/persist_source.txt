@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 30de45b312c033e03a3b6d1ade21cbefa00db4158eb3934456597e55e387361a # shrinks to rows = [Row{[Numeric(1)]}, Row{[Numeric(0.25)]}, Row{[Numeric(1.5)]}], predicate = CallBinary(Gte(Gte), CallBinary(MulFloat32(MulFloat32), CallBinary(AddFloat32(AddFloat32), Literal(Ok(Row{[Float32(0.0)]}), ReprColumnType { scalar_type: Float32, nullable: false }), CallUnary(CastNumericToFloat32(CastNumericToFloat32), CallBinary(RoundNumeric(RoundNumericBinary), Column(0), Literal(Ok(Row{[Int32(24699)]}), ReprColumnType { scalar_type: Int32, nullable: false })))), Literal(Ok(Row{[Float32(0.0)]}), ReprColumnType { scalar_type: Float32, nullable: false })), Literal(Ok(Row{[Float32(0.0087531805)]}), ReprColumnType { scalar_type: Float32, nullable: false }))
