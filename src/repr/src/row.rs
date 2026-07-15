@@ -904,7 +904,8 @@ impl<'a, T> Hash for DatumList<'a, T> {
 impl<T> Ord for DatumList<'_, T> {
     #[inline(always)]
     fn cmp(&self, other: &DatumList<'_, T>) -> Ordering {
-        self.iter().cmp(other.iter())
+        // Grow the stack: lists can be arbitrarily deeply nested (e.g. jsonb).
+        mz_ore::stack::maybe_grow(|| self.iter().cmp(other.iter()))
     }
 }
 
@@ -972,7 +973,8 @@ impl<'a, T> Hash for DatumMap<'a, T> {
 impl<'a, T> Ord for DatumMap<'a, T> {
     #[inline(always)]
     fn cmp(&self, other: &DatumMap<'a, T>) -> Ordering {
-        self.iter().cmp(other.iter())
+        // Grow the stack: maps can be arbitrarily deeply nested (e.g. jsonb).
+        mz_ore::stack::maybe_grow(|| self.iter().cmp(other.iter()))
     }
 }
 
@@ -1049,7 +1051,8 @@ impl<'a> DatumNested<'a> {
 
 impl<'a> Ord for DatumNested<'a> {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.datum().cmp(&other.datum())
+        // Grow the stack: this recurses once per level of nested list/map values.
+        mz_ore::stack::maybe_grow(|| self.datum().cmp(&other.datum()))
     }
 }
 
@@ -3487,6 +3490,25 @@ mod tests {
     use crate::SqlScalarType;
 
     use super::*;
+
+    // Regression: comparing deeply nested list values must not overflow the
+    // stack (STACK-7). `Datum` ordering recurses once per nesting level.
+    #[mz_ore::test]
+    fn cmp_deep_nested_list_does_not_overflow() {
+        fn deep() -> Row {
+            // `push_list` byte-copies the inner value, so building does not recurse.
+            let mut row = Row::pack_slice(&[Datum::Int64(1)]);
+            for _ in 0..50_000 {
+                let mut next = Row::default();
+                next.packer().push_list([row.unpack_first()]);
+                row = next;
+            }
+            row
+        }
+        let a = deep();
+        let b = deep();
+        assert_eq!(a.unpack_first().cmp(&b.unpack_first()), Ordering::Equal);
+    }
 
     fn hash<T: Hash>(t: &T) -> u64 {
         let mut hasher = DefaultHasher::new();
