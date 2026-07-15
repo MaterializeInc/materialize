@@ -53,7 +53,7 @@
 use libfuzzer_sys::arbitrary::{self, Unstructured};
 use libfuzzer_sys::fuzz_target;
 use mz_avro::schema::resolve_schemas;
-use mz_avro::{Schema, from_avro_datum};
+use mz_avro::{from_avro_datum, Schema};
 
 /// One of the primitive Avro types, ordered by promotability so the reader
 /// rendering can pick a "wider" target. `int` ⊑ `long` ⊑ `float` ⊑ `double`.
@@ -190,7 +190,9 @@ fn render_writer(shape: &Shape, out: &mut String) {
             out.push('}');
         }
         Shape::Record { name, fields, .. } => {
-            out.push_str(&format!("{{\"type\":\"record\",\"name\":\"N{name}\",\"fields\":["));
+            out.push_str(&format!(
+                "{{\"type\":\"record\",\"name\":\"N{name}\",\"fields\":["
+            ));
             for (i, f) in fields.iter().enumerate() {
                 if i > 0 {
                     out.push(',');
@@ -238,12 +240,51 @@ fn render_reader_promoted(
             out.push('"');
         }
         Shape::Union(variants) => {
+            // Widen the promotable variants while keeping their types distinct.
+            // Widening each independently could collapse two variants onto the
+            // same type (`[int, long]` becoming `[long, long]`), which Avro
+            // rejects as a duplicate union type. That makes the whole reader
+            // schema unparseable, so the writer->reader decode oracle below is
+            // silently skipped for this input. We emit the non-promotable
+            // variants (only `null`, per `gen_shape`) first, then the
+            // promotables in ascending source order with strictly increasing
+            // targets. Reserving one chain slot for every later variant keeps a
+            // valid assignment reachable, since PROMO_CHAIN has one slot per
+            // possible source index.
             out.push('[');
-            for (i, v) in variants.iter().enumerate() {
-                if i > 0 {
+            let mut written = 0;
+            for v in variants
+                .iter()
+                .filter(|v| !matches!(v, Shape::Promotable(_)))
+            {
+                if written > 0 {
                     out.push(',');
                 }
                 render_reader_promoted(u, v, out)?;
+                written += 1;
+            }
+            let mut promo: Vec<usize> = variants
+                .iter()
+                .filter_map(|v| match v {
+                    Shape::Promotable(idx) => Some(*idx),
+                    _ => None,
+                })
+                .collect();
+            promo.sort_unstable();
+            let m = promo.len();
+            let mut min_target = 0;
+            for (k, idx) in promo.into_iter().enumerate() {
+                if written > 0 {
+                    out.push(',');
+                }
+                let lo = idx.max(min_target);
+                let hi = (PROMO_CHAIN.len() - 1) - (m - 1 - k);
+                let target = u.int_in_range(lo..=hi)?;
+                min_target = target + 1;
+                out.push('"');
+                out.push_str(PROMO_CHAIN[target]);
+                out.push('"');
+                written += 1;
             }
             out.push(']');
         }
@@ -262,7 +303,9 @@ fn render_reader_promoted(
             fields,
             reader_extra_default,
         } => {
-            out.push_str(&format!("{{\"type\":\"record\",\"name\":\"N{name}\",\"fields\":["));
+            out.push_str(&format!(
+                "{{\"type\":\"record\",\"name\":\"N{name}\",\"fields\":["
+            ));
             for (i, f) in fields.iter().enumerate() {
                 if i > 0 {
                     out.push(',');
@@ -279,7 +322,10 @@ fn render_reader_promoted(
             }
             out.push_str("]}");
         }
-        Shape::Enum { name, reader_default } => {
+        Shape::Enum {
+            name,
+            reader_default,
+        } => {
             out.push_str(&format!(
                 "{{\"type\":\"enum\",\"name\":\"N{name}\",\"symbols\":[\"A\",\"B\",\"C\"]"
             ));
