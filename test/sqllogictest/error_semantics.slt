@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 # This file is for error semantics and evaluation order/short-circuiting, see
-# https://github.com/MaterializeInc/database-issues/issues/4972
+# https://linear.app/materializeinc/issue/STG-54
 #
 
 ########################################################################################################################
