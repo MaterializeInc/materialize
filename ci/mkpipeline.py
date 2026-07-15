@@ -562,7 +562,7 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
         ]
     )
 
-    if ui.env_is_truthy("CI_FORCE_SWITCH_TO_AWS", "0"):
+    if ui.env_is_truthy("CI_FORCE_SWITCH_TO_AWS", "1"):
         stuck = set(
             {
                 "hetzner-x86-64-16cpu-32gb",
