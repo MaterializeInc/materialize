@@ -9,7 +9,7 @@
 
 # Build and run SQLancer ported for Materialize
 
-MZFROM ubuntu-base
+MZFROM debian-base
 
 WORKDIR /workdir
 
