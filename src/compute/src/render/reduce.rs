@@ -62,6 +62,9 @@ use mz_row_spine::{
     RowValBuilder,
 };
 
+/// Key container of trace `Tr`'s batch cursor.
+type BatchKeyContainer<Tr> = <BatchCursor<Tr> as Cursor>::KeyContainer;
+
 impl<'scope, T: RenderTimestamp> Context<'scope, T> {
     /// Renders a `MirRelationExpr::Reduce` using various non-obvious techniques to
     /// minimize worst-case incremental update times and memory footprint.
@@ -1175,10 +1178,8 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                         );
                         // After complaining, output an error here so that we can eventually
                         // report it in an error stream.
-                        target.push((
-                            err(<<BatchCursor<Tr> as Cursor>::KeyContainer as BatchContainer>::into_owned(key)),
-                            Diff::ONE,
-                        ));
+                        let key = <BatchKeyContainer<Tr> as BatchContainer>::into_owned(key);
+                        target.push((err(key), Diff::ONE));
                         return;
                     }
                 }
