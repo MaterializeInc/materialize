@@ -811,8 +811,12 @@ impl LirRelationExpr {
     /// threshold key and neither carries temporal bucketing. See [`match_anti_side`] for the
     /// full set of decline conditions.
     ///
-    /// The walk does not descend into `LetRec` subtrees, so no rewrite ever fires inside a
-    /// recursive CTE: the fused operator's behavior under iterative re-evaluation is untested.
+    /// The walk descends into `LetRec` subtrees. Inside a recursive CTE the anti-side's arms
+    /// are recursive-CTE references, which render as raw collections rather than arranged
+    /// imports, so `match_anti_side` declines and no fusion happens there. The arrangement
+    /// requirement, not a `LetRec`-specific guard, is what keeps the rewrite out of recursive
+    /// scopes, which is correct on the merits: with raw arms the fused operator would build
+    /// the arrangement itself, the same work the `Threshold` already does, so there is no win.
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
@@ -834,13 +838,7 @@ impl LirRelationExpr {
                     }
                     .as_plan(expression.lir_id);
                 }
-                // Do not descend into a `LetRec`'s `values` or `body`: the fused
-                // `SetDifference` operator's partial-order/synthetic-time path is untested
-                // under iterative re-evaluation, so we decline to rewrite anything inside a
-                // recursive CTE.
-                if !matches!(expression.node, LirRelationNode::LetRec { .. }) {
-                    todo.extend(expression.node.children_mut());
-                }
+                todo.extend(expression.node.children_mut());
             }
         }
         mz_repr::explain::trace_plan(dataflow);

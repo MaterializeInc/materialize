@@ -332,15 +332,13 @@ Target cluster: quickstart
 
 EOF
 
-# The recognizer must not fire inside a `LetRec` (a recursive CTE): the fused operator's
-# partial-order/synthetic-time path is untested under iterative re-evaluation. `c`'s
-# recursive definition below is itself an anti-side shape (`sd_base EXCEPT c`, self-
-# referencing `c`), so absent the `LetRec`-skip it would be a fusion candidate. The trailing
-# `EXCEPT sd_sub` is a second anti-side shape that lives in the `LetRec`'s body; the walk
-# declines it too, since it skips the entire `LetRec` subtree (both `values` and `body`) rather
-# than only the recursively-evaluated bindings. Compare to the plain (non-recursive) `EXCEPT`
-# golden above, which fuses under the same flag: that proves the decline below is specific to
-# being inside a `LetRec`, not a general regression of the recognizer.
+# The recognizer fires inside a `LetRec` (a recursive CTE) too. `c`'s recursive definition
+# below is an anti-side shape (`sd_base EXCEPT c`) and the trailing `EXCEPT sd_sub` in the
+# body is a second one; both fuse, since the walk descends into the `LetRec`'s `values` and
+# `body` and each arm is arranged. The fused operator handles the partial-order timestamps a
+# recursive scope introduces (its iteration coordinate) with the same interesting-time
+# synthesis it uses for any partial order. Fusion still requires arranged arms: a subtrahend
+# that is a bare already-distinct recursive reference renders raw and does not fuse.
 query T multiline
 EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 WITH MUTUALLY RECURSIVE
@@ -359,36 +357,16 @@ Explained Query:
       ArrangeBy
         input_key=[#0]
         raw=true
-        Threshold::Basic ensure_arrangement={ key=[#0], permutation=id, thinning=() }
+        SetDifference ensure_arrangement={ key=[#0], permutation=id, thinning=() } base_key=[#0] subtract_key=[#0]
           ArrangeBy
-            raw=false
-            arrangements[0]={ key=[#0], permutation=id, thinning=() }
-            Union consolidate_output=true
-              ArrangeBy
-                input_key=[#0]
+            input_key=[#0]
+            raw=true
+            Reduce::Distinct
+              key_plan=id
+              val_plan
+                project=()
+              Get::PassArrangements materialize.public.sd_base
                 raw=true
-                Reduce::Distinct
-                  key_plan=id
-                  val_plan
-                    project=()
-                  Get::PassArrangements materialize.public.sd_base
-                    raw=true
-              Negate
-                ArrangeBy
-                  input_key=[#0]
-                  raw=true
-                  Reduce::Distinct
-                    key_plan=id
-                    val_plan
-                      project=()
-                    Get::PassArrangements l0
-                      raw=true
-  Return
-    Threshold::Basic ensure_arrangement={ key=[#0], permutation=id, thinning=() }
-      ArrangeBy
-        raw=false
-        arrangements[0]={ key=[#0], permutation=id, thinning=() }
-        Union consolidate_output=true
           ArrangeBy
             input_key=[#0]
             raw=true
@@ -398,16 +376,26 @@ Explained Query:
                 project=()
               Get::PassArrangements l0
                 raw=true
-          Negate
-            ArrangeBy
-              input_key=[#0]
-              raw=true
-              Reduce::Distinct
-                key_plan=id
-                val_plan
-                  project=()
-                Get::PassArrangements materialize.public.sd_sub
-                  raw=true
+  Return
+    SetDifference ensure_arrangement={ key=[#0], permutation=id, thinning=() } base_key=[#0] subtract_key=[#0]
+      ArrangeBy
+        input_key=[#0]
+        raw=true
+        Reduce::Distinct
+          key_plan=id
+          val_plan
+            project=()
+          Get::PassArrangements l0
+            raw=true
+      ArrangeBy
+        input_key=[#0]
+        raw=true
+        Reduce::Distinct
+          key_plan=id
+          val_plan
+            project=()
+          Get::PassArrangements materialize.public.sd_sub
+            raw=true
 
 Source materialize.public.sd_base
 Source materialize.public.sd_sub
