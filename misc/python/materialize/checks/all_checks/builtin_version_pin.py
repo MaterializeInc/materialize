@@ -88,8 +88,8 @@ class BuiltinItemVersionPin(Check):
     """
 
     def _can_run(self, e: Executor) -> bool:
-        # mz_iceberg_sinks is the newest builtin referenced below.
-        return self.base_version >= MzVersion.parse_mz("v26.25.0")
+        # Only fixed in v26.34.0
+        return self.base_version >= MzVersion.parse_mz("v26.34.0")
 
     def _active_builtins(self) -> list[str]:
         """Builtins safe to pin for this upgrade.

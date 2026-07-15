@@ -64,14 +64,26 @@ class CustomTypeResolutionBound(Check):
 
     def validate(self) -> Testdrive:
         # Reaching validation means every bootstrap in the scenario re-planned
-        # `wide` successfully. Versions with the bound return the graceful
-        # planning error rather than panicking. Earlier versions reach pgwire
-        # encoding, which cannot encode the nested list value.
+        # `wide` successfully. That the type survived every bootstrap is what the
+        # unconditional `mz_types` check below proves. The `SELECT NULL::wide`
+        # assertions only pin the graceful failure of the versions that have a
+        # stable, known diagnostic for it:
+        #
+        # - v26.34.0 and later enforce the bound, so resolving the grandfathered
+        #   type returns "custom type is too complex to resolve" rather than
+        #   panicking.
+        # - v26.29.0 up to v26.34.0 have no bound, so resolution succeeds and
+        #   pgwire binary encoding rejects the nested list. v26.29.0 introduced
+        #   the "no binary output function available for type list" wording.
+        #
+        # Versions before v26.29.0 are left unasserted. Their `SELECT NULL::wide`
+        # either succeeds or reports a different diagnostic, and the self-managed
+        # upgrade scenarios reach back that far (v0.147.0).
         return Testdrive(
             "> SELECT name FROM mz_types WHERE name = 'wide'\n"
             "wide\n"
             "\n"
-            "![version<2603400] SELECT NULL::wide\n"
+            "![2602900<=version<2603400] SELECT NULL::wide\n"
             "contains: no binary output function available for type list\n"
             "\n"
             "![version>=2603400] SELECT NULL::wide\n"
