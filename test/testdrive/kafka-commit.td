@@ -13,6 +13,14 @@ $ set-arg-default default-storage-size=scale=1,workers=1
 
 # Test that the source ingestion pipeline commits offsets back to Kafka with
 # the expected group ID.
+#
+# This also guards the `mz_catalog.mz_kafka_sources` builtin materialized view:
+# its `group_id_prefix` column reconstructs the consumer group ID in SQL (see
+# MZ_KAFKA_SOURCES in src/catalog/src/builtin/mz_catalog.rs). We capture that
+# column and feed it to `kafka-verify-commit`, which connects to Kafka with
+# that exact group ID. If the SQL reconstruction ever diverges from the real
+# runtime group ID (KafkaSourceConnection::group_id / KafkaConnection::id_base),
+# Kafka finds no committed offset under the captured group and this test fails.
 
 # Initial setup.
 

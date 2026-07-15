@@ -79,6 +79,11 @@ WHERE id IS NULL OR group_id_prefix IS NULL OR topic IS NULL
 # See KafkaSourceConnection::group_id / KafkaConnection::id_base. Any row
 # missing the middle segment implies the environment_id interpolation
 # has drifted from the reference implementation.
+#
+# NOTE: this only checks the shape. The full end-to-end parity between this
+# column and the real runtime consumer group ID (both the default and the
+# GROUP ID PREFIX cases) is asserted in test/testdrive/kafka-commit.td, which
+# needs a live Kafka source and so cannot run here.
 query I
 SELECT count(*) FROM mz_catalog.mz_kafka_sources
 WHERE group_id_prefix NOT LIKE '%materialize-' || mz_environment_id() || '-%'
