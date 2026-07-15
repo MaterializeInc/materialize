@@ -4891,8 +4891,10 @@ pub fn plan_create_cluster_inner(
         };
 
         // Plan the autoscaling strategy. Gated by a `feature_flags!` flag (not a
-        // dyncfg) because a stored `CREATE CLUSTER` is re-parsed at catalog
-        // rehydration, where dyncfgs are not consulted.
+        // dyncfg), matching the other cluster-DDL gates like SCHEDULE. The gate
+        // applies to new DDL only: clusters are stored structurally, not as SQL,
+        // so existing configs survive a flag rollback and keep rendering in
+        // SHOW CREATE CLUSTER.
         let auto_scaling_strategy = match auto_scaling_strategy {
             Some(value) => {
                 scx.require_feature_flag(&ENABLE_AUTO_SCALING_STRATEGY)?;
@@ -5351,9 +5353,9 @@ fn validate_auto_scaling_strategy(
 ) -> Result<(), PlanError> {
     if let (Some(on_hydration), Some(cluster_size)) = (&strategy.on_hydration, cluster_size) {
         if on_hydration.hydration_size == cluster_size {
-            sql_bail!(
-                "HYDRATION SIZE must differ from the cluster SIZE ('{cluster_size}'); a burst replica at the same size would not accelerate hydration"
-            );
+            return Err(PlanError::HydrationSizeEqualsClusterSize {
+                size: cluster_size.to_string(),
+            });
         }
     }
     if schedule_non_manual {
@@ -6576,10 +6578,11 @@ pub fn plan_alter_cluster(
                 }
             }
 
-            if reset_options.contains(&AutoScalingStrategy) {
-                scx.require_feature_flag(&ENABLE_AUTO_SCALING_STRATEGY)?;
-            }
-
+            // RESET (AUTO SCALING STRATEGY) is deliberately not feature-gated:
+            // resetting to the default must stay available after a flag
+            // rollback, or a cluster that picked up a policy while the flag was
+            // on would carry it forever (and the strategy/schedule
+            // compatibility check would then also block SCHEDULE changes).
             for option in reset_options {
                 match option {
                     AutoScalingStrategy => options.auto_scaling_strategy = Reset,

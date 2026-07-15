@@ -2144,11 +2144,10 @@ feature_flags!(
     },
     {
         name: enable_auto_scaling_strategy,
-        // `enable_for_item_parsing: true` is required: stored `CREATE CLUSTER`
-        // statements carrying `AUTO SCALING STRATEGY` are re-parsed at catalog
-        // rehydration, where dyncfgs are not consulted. A `feature_flags!` gate
-        // holds there, so a stored statement does not fail to re-parse after the
-        // flag is turned off.
+        // `enable_for_item_parsing: true` matches the other cluster-DDL gates
+        // (e.g. `enable_cluster_schedule_refresh`). It is defensive here:
+        // clusters are stored structurally, not as SQL, so nothing re-parses
+        // `AUTO SCALING STRATEGY` at catalog open.
         desc: "`AUTO SCALING STRATEGY` cluster option",
         default: false,
         enable_for_item_parsing: true,
