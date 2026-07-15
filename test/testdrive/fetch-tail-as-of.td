@@ -11,7 +11,7 @@
 # Make sure that the AS OF is observed for SUBSCRIBE
 #
 
-$ set-regex match=\d{13} replacement=<TIMESTAMP>
+$ set-regex match=\d{13,} replacement=<TIMESTAMP>
 
 > CREATE TABLE t1 (f1 INTEGER);
 > CREATE DEFAULT INDEX ON t1
@@ -66,12 +66,25 @@ contains:imestamp
 # (`as_of` equals the exclusive `up_to`), so the subscribe is guaranteed empty.
 # Optimization used to trip the `is_single_time` invariant assertion, which
 # expected an empty `until` whenever `as_of` was `MAX`, and surfaced as an
-# internal optimizer error.
+# internal optimizer error. The empty subscribe is now short-circuited without
+# installing a dataflow.
 > BEGIN
 
 > DECLARE c CURSOR FOR SUBSCRIBE t1 AS OF 18446744073709551615 UP TO 18446744073709551615;
 
 # No rows expected.
 > FETCH ALL c WITH (timeout = '5s');
+
+> COMMIT
+
+# The short-circuited empty subscribe still honors `WITH (PROGRESS)`: it emits
+# the initial progress row at the snapshot timestamp before completing, matching
+# a subscribe that installs a dataflow.
+> BEGIN
+
+> DECLARE c CURSOR FOR SUBSCRIBE t1 WITH (PROGRESS = TRUE) AS OF 18446744073709551615 UP TO 18446744073709551615;
+
+> FETCH ALL c WITH (timeout = '5s');
+<TIMESTAMP> true <null> <null>
 
 > COMMIT
