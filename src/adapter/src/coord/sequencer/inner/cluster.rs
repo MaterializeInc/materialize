@@ -2224,6 +2224,15 @@ impl Coordinator {
             {
                 return Err(AdapterError::AlterClusterUnmanagedWhileReconfiguring);
             }
+            // Same hazard for an in-flight burst: the unmanaged variant has no
+            // burst field either, so converting would drop the record with no
+            // `Finished` audit event and strand the billed burst replica as an
+            // ordinary unmanaged replica nothing ever tears down. Absence of a
+            // record means the burst has settled, so no in-progress check is
+            // needed.
+            if managed.burst.is_some() {
+                return Err(AdapterError::AlterClusterUnmanagedWhileBursting);
+            }
         }
 
         let ops = vec![catalog::Op::UpdateClusterConfig {

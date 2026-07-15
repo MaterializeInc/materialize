@@ -440,6 +440,31 @@ impl Catalog {
         }
     }
 
+    /// The cluster config's `burst` record, if any.
+    fn burst_record_of(config: &ClusterConfig) -> Option<&mz_catalog::memory::objects::BurstState> {
+        match &config.variant {
+            ClusterVariant::Managed(managed) => managed.burst.as_ref(),
+            ClusterVariant::Unmanaged => None,
+        }
+    }
+
+    /// Whether a cluster config write moves the burst lifecycle: a record
+    /// appears or disappears. Unlike reconfiguration there is no status field,
+    /// so presence transitions are the whole lifecycle. Bookkeeping rewrites of
+    /// an existing record (the hydration stamp and its reset) move nothing.
+    ///
+    /// Every such movement is an audit-log transition, so a write performing
+    /// one must declare the matching intent.
+    fn burst_lifecycle_moved(old_config: &ClusterConfig, new_config: &ClusterConfig) -> bool {
+        matches!(
+            (
+                Self::burst_record_of(old_config),
+                Self::burst_record_of(new_config),
+            ),
+            (None, Some(_)) | (Some(_), None)
+        )
+    }
+
     /// Whether a cluster config write moves the reconfiguration lifecycle: a
     /// status change, a fresh record, or the drop of an in-progress record.
     ///
@@ -566,14 +591,12 @@ impl Catalog {
         cluster_name: &str,
         audit: BurstAudit,
     ) -> Result<ClusterHydrationBurstV1, AdapterError> {
-        fn burst(config: &ClusterConfig) -> Option<&mz_catalog::memory::objects::BurstState> {
-            match &config.variant {
-                ClusterVariant::Managed(managed) => managed.burst.as_ref(),
-                ClusterVariant::Unmanaged => None,
-            }
-        }
         let (transition, finish_cause, record) = match audit {
-            BurstAudit::Started => (HydrationBurstLifecycleV1::Started, None, burst(new_config)),
+            BurstAudit::Started => (
+                HydrationBurstLifecycleV1::Started,
+                None,
+                Self::burst_record_of(new_config),
+            ),
             BurstAudit::Finished { cause } => {
                 let cause = match cause {
                     BurstFinishCause::LingerElapsed => BurstFinishCauseV1::LingerElapsed,
@@ -582,7 +605,7 @@ impl Catalog {
                 (
                     HydrationBurstLifecycleV1::Finished,
                     Some(cause),
-                    burst(old_config),
+                    Self::burst_record_of(old_config),
                 )
             }
         };
@@ -2852,6 +2875,14 @@ impl Catalog {
                          audit intent"
                     )));
                 }
+                // The same contract for the burst lifecycle: a record appearing
+                // or disappearing without a declared intent would silently lose
+                // the started/finished audit transition.
+                if burst_audit.is_none() && Self::burst_lifecycle_moved(&cluster.config, &config) {
+                    return Err(AdapterError::Internal(format!(
+                        "cluster {name} burst record moved without a declared audit intent"
+                    )));
+                }
                 let reconfiguration_event = reconfiguration_audit
                     .map(|audit| Self::reconfiguration_audit_details(&config, id, &name, audit))
                     .transpose()?;
@@ -3750,6 +3781,78 @@ mod tests {
         assert!(!Catalog::reconfiguration_lifecycle_moved(
             &managed(Some(record(ReconfigurationStatus::Cancelled))),
             &unmanaged,
+        ));
+    }
+
+    #[mz_ore::test]
+    fn test_burst_lifecycle_moved() {
+        use std::time::Duration;
+
+        use mz_catalog::memory::objects::{
+            BurstState, ClusterConfig, ClusterVariant, ClusterVariantManaged,
+        };
+        use mz_controller::clusters::ReplicaLogging;
+        use mz_repr::Timestamp;
+        use mz_repr::optimize::OptimizerFeatureOverrides;
+
+        let managed = |burst: Option<BurstState>| ClusterConfig {
+            variant: ClusterVariant::Managed(ClusterVariantManaged {
+                size: "small".into(),
+                availability_zones: Vec::new(),
+                logging: ReplicaLogging {
+                    log_logging: false,
+                    interval: None,
+                },
+                replication_factor: 1,
+                optimizer_feature_overrides: OptimizerFeatureOverrides::default(),
+                schedule: Default::default(),
+                auto_scaling_strategy: None,
+                reconfiguration: None,
+                burst,
+            }),
+            workload_class: None,
+        };
+        let unmanaged = ClusterConfig {
+            variant: ClusterVariant::Unmanaged,
+            workload_class: None,
+        };
+        let record = |steady_hydrated_at| BurstState {
+            burst_size: "large".into(),
+            linger_duration: Duration::from_secs(60),
+            steady_hydrated_at,
+        };
+
+        // Lifecycle movements: these writes must declare an audit intent.
+        // A fresh record appears.
+        assert!(Catalog::burst_lifecycle_moved(
+            &managed(None),
+            &managed(Some(record(None))),
+        ));
+        // The record is cleared.
+        assert!(Catalog::burst_lifecycle_moved(
+            &managed(Some(record(None))),
+            &managed(None),
+        ));
+        // The record is dropped by converting the cluster to unmanaged (which
+        // the sequencer refuses, and this guard backstops).
+        assert!(Catalog::burst_lifecycle_moved(
+            &managed(Some(record(None))),
+            &unmanaged,
+        ));
+
+        // Not movements: no record at all, and the bookkeeping rewrites (the
+        // hydration stamp and its reset) that keep the record present.
+        assert!(!Catalog::burst_lifecycle_moved(
+            &managed(None),
+            &managed(None)
+        ));
+        assert!(!Catalog::burst_lifecycle_moved(
+            &managed(Some(record(None))),
+            &managed(Some(record(Some(Timestamp::from(100u64))))),
+        ));
+        assert!(!Catalog::burst_lifecycle_moved(
+            &managed(Some(record(Some(Timestamp::from(100u64))))),
+            &managed(Some(record(None))),
         ));
     }
 
