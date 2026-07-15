@@ -24,7 +24,7 @@ TWO_PART_LINK_RE = re.compile(r"\[([^\]]+)\]\[([^\]]+)\]")
 # immediately followed by `(` (inline link) or `[` (two-part link).
 SHORTCUT_LINK_RE = re.compile(r"\[([^\]]+)\](?!\(|\[)")
 
-HEADING_RE = re.compile(r"^## `")
+HEADING_RE = re.compile(r"^#{2,6} `")
 HEADER_SEPARATOR_RE = re.compile(r"\|?(\s*-+\s*)(\|\s*-+\s*){2}\|?")
 # Field names are enclosed in backticks.
 FIELD_NAME_RE = re.compile(r"`(.*)`")
@@ -94,11 +94,11 @@ def _parse_table(
             break
         fields = [f.strip() for f in stripped[1:].split("|")]
         if len(fields) < 3:
-            break
+            raise ValueError(f"unexpected field format: {stripped}")
         field_match = FIELD_NAME_RE.search(fields[0])
         type_match = FIELD_TYPE_RE.search(fields[1])
         if not field_match or not type_match:
-            break
+            raise ValueError(f"unexpected field format: {stripped}")
         columns.append(
             {
                 "name": field_match.group(1),
@@ -152,7 +152,11 @@ def migrate(md_text: str) -> tuple[list[dict], str, dict[str, str]]:
             idx += 1
             continue
 
-        description_start = (heading_idx + 1) if heading_idx is not None else idx
+        if heading_idx is None:
+            raise ValueError(
+                f"no heading found before RELATION_SPEC marker for {schema}.{object_name}"
+            )
+        description_start = heading_idx + 1
         description_lines = lines[description_start:idx]
         while description_lines and description_lines[0].strip() == "":
             description_lines.pop(0)

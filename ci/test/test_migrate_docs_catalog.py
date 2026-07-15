@@ -11,6 +11,8 @@ import pathlib
 
 import importlib.util
 
+import pytest
+
 _spec = importlib.util.spec_from_file_location(
     "migrate_docs_catalog",
     pathlib.Path(__file__).parent / "migrate-docs-catalog.py",
@@ -76,3 +78,43 @@ def test_migrate_rewrites_markdown_section():
     assert "| `x`" in rewritten
     # Trailing prose after the mz_baz table preserved.
     assert "See [more](/somewhere) for details." in rewritten
+
+
+def test_migrate_accepts_non_h2_heading_level():
+    # mz_catalog.md uses `###` for relation headings; the converter must not
+    # be hardcoded to `##`.
+    md = """### `mz_qux`
+
+The `mz_qux` view is documented under a level-3 heading.
+
+<!-- RELATION_SPEC test_schema.mz_qux -->
+| Field | Type      | Meaning |
+|-------|-----------|---------|
+| `id`  | [`uint8`] | The ID. |
+
+[`uint8`]: /sql/types/uint8
+"""
+    entries, _, _ = migrate_docs_catalog.migrate(md)
+    assert len(entries) == 1
+    assert entries[0]["name"] == "mz_qux"
+    assert "documented under a level-3 heading" in entries[0]["description"]
+
+
+def test_migrate_raises_when_marker_has_no_preceding_heading():
+    md = """<!-- RELATION_SPEC test_schema.mz_qux -->
+| Field | Type      | Meaning |
+|-------|-----------|---------|
+| `id`  | [`uint8`] | The ID. |
+"""
+    with pytest.raises(ValueError, match="test_schema.mz_qux"):
+        migrate_docs_catalog.migrate(md)
+
+
+def test_parse_table_raises_on_malformed_row():
+    lines = [
+        "| Field | Type | Meaning |",
+        "|-------|------|---------|",
+        "| no_backticks_here | text | broken row |",
+    ]
+    with pytest.raises(ValueError, match="unexpected field format"):
+        migrate_docs_catalog._parse_table(lines, 0, {})
