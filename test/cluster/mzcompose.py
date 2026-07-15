@@ -7301,15 +7301,15 @@ def workflow_test_replacement_mv_drop_after_restart(c: Composition) -> None:
     Regression test for incident 1136: dropping a replacement MV after an
     envd restart destroys the target MV's persist shard.
 
-    Bootstrap does not restore the `primary` link of replacement-MV storage
-    collections, so dropping a replacement MV after an envd restart marks the
-    target MV's shard as finalizable. The shard finalization task then seals
-    and tombstones the target's live shard, permanently losing the target
-    MV's data. Before materialize#37696, a subsequent CREATE REPLACEMENT
-    MATERIALIZED VIEW, which registers a new storage collection on the
-    tombstoned shard, additionally panicked envd with "cmd remove_rollups
-    unexpectedly tried to commit a new state on a tombstone" and left the
-    environment crash-looping during bootstrap.
+    Bootstrap used to rebuild the storage collection of a replacement MV
+    without its `primary` link, so dropping a replacement MV after an envd
+    restart marked the target MV's shard as finalizable. The shard
+    finalization task then sealed and tombstoned the target's live shard,
+    permanently losing the target MV's data. Before materialize#37696, a
+    subsequent CREATE REPLACEMENT MATERIALIZED VIEW, which registers a new
+    storage collection on the tombstoned shard, additionally panicked envd
+    with "cmd remove_rollups unexpectedly tried to commit a new state on a
+    tombstone" and left the environment crash-looping during bootstrap.
 
     The MVs live in a cluster with no replicas so that no dataflow holds a
     persist read lease on the target's shard. Leases of readers that died

@@ -3227,9 +3227,27 @@ impl Coordinator {
                     };
                 }
                 CatalogItem::MaterializedView(mv) => {
+                    // All versions of a materialized view write to the same
+                    // persist shard, and the `primary` link records shard
+                    // ownership: a collection whose `primary` is set does not
+                    // own the shard, so dropping it must neither release the
+                    // shard's since nor finalize the shard.
+                    //
+                    // We restore the links the way runtime operations create
+                    // them: the earliest version owns the shard, every later
+                    // version (added by a replacement apply) points at the
+                    // version it replaced, and a pending replacement MV
+                    // points at the latest collection of its target. Later
+                    // versions have higher `GlobalId`s, so each link points
+                    // at a lower id, which the storage layer's registration
+                    // order requires.
+                    let mut prev_gid = mv
+                        .replacement_target
+                        .map(|target_id| catalog.get_entry(&target_id).latest_global_id());
                     let collection_descs = mv.collection_descs().map(|(gid, _version, desc)| {
-                        let collection_desc =
+                        let mut collection_desc =
                             CollectionDescription::for_other(desc, mv.initial_as_of.clone());
+                        collection_desc.primary = prev_gid.replace(gid);
                         (gid, collection_desc)
                     });
 
