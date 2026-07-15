@@ -27,7 +27,9 @@ use differential_dataflow::AsCollection;
 use differential_dataflow::input::Input;
 use differential_dataflow::trace::implementations::ord_neu::{OrdValSpine, RcOrdValBuilder};
 use timely::dataflow::operators::capture::Extract;
+use timely::dataflow::operators::vec::UnorderedInput;
 use timely::dataflow::operators::{Capture, Inspect, Probe, ToStream};
+use timely::order::Product;
 
 type Spine = OrdValSpine<u64, u64, u64, isize>;
 type Builder_ = RcOrdValBuilder<u64, u64, u64, isize>;
@@ -569,4 +571,187 @@ fn co_reduce_fuels_retraction() {
         expected,
         "final output must be exactly the surviving keys"
     );
+}
+
+// ===================== Partially ordered timestamp: harness and fixed cases =====================
+//
+// `Pair` is a partially ordered timestamp: two updates at incomparable times can have a join that
+// neither input mentions, and a non-linear `logic` can produce a real delta only visible at that
+// synthetic join time. `run_pair` below drives `co_reduce2` (or the reference tactic) at `Pair`
+// times so Tasks 5-6 can fuzz the two tactics against each other and against a from-scratch model.
+
+/// A partially ordered test timestamp. Product's derived Ord is lexicographic, a
+/// linear extension of its componentwise PartialOrder, as the tactics' evaluation
+/// order requires.
+type Pair = Product<u64, u64>;
+type PairSpine = OrdValSpine<u64, u64, Pair, isize>;
+type PairBuilder = RcOrdValBuilder<u64, u64, Pair, isize>;
+type Logic = fn(&u64, &[&[(u64, isize)]], &mut Vec<(u64, isize)>);
+
+/// Runs both inputs through `co_reduce2` (or the reference tactic, if `reference`) at `Pair`
+/// timestamps and returns the raw captured change stream.
+fn run_pair(
+    updates0: &[((u64, u64), Pair, isize)],
+    updates1: &[((u64, u64), Pair, isize)],
+    fuel: usize,
+    logic: Logic,
+    reference: bool,
+) -> Vec<((u64, u64), Pair, isize)> {
+    let updates0 = updates0.to_vec();
+    let updates1 = updates1.to_vec();
+    let captured = timely::execute_directly(move |worker| {
+        // `Pair` refines `u64` (its own outer coordinate), not `()`, so it cannot be the root
+        // dataflow's timestamp directly: `worker.dataflow` requires `Refines<()>`. Host the
+        // computation in a `Pair`-timestamped child scope of a `u64`-timestamped root instead.
+        // The root does nothing but satisfy that bound.
+        let (mut input0, cap0, mut input1, cap1, cap) = worker.dataflow::<u64, _, _>(|root| {
+            root.scoped::<Pair, _, _>("co_reduce_pair_test", |scope| {
+                let ((input0, cap0), stream0) =
+                    scope.new_unordered_input::<((u64, u64), Pair, isize)>();
+                let ((input1, cap1), stream1) =
+                    scope.new_unordered_input::<((u64, u64), Pair, isize)>();
+                let a0 = stream0.as_collection().arrange_by_key();
+                let a1 = stream1.as_collection().arrange_by_key();
+                let out = if reference {
+                    co_reduce2_reference::<
+                        Pair,
+                        TraceAgent<PairSpine>,
+                        TraceAgent<PairSpine>,
+                        u64,
+                        u64,
+                        u64,
+                        isize,
+                        PairBuilder,
+                        PairSpine,
+                        _,
+                    >(a0, a1, "test", fuel, logic)
+                } else {
+                    co_reduce2::<
+                        Pair,
+                        TraceAgent<PairSpine>,
+                        TraceAgent<PairSpine>,
+                        u64,
+                        u64,
+                        u64,
+                        isize,
+                        PairBuilder,
+                        PairSpine,
+                        _,
+                    >(a0, a1, "test", fuel, logic)
+                };
+                let cap = out.as_collection(|k, v| (*k, *v)).inner.capture();
+                (input0, cap0, input1, cap1, cap)
+            })
+        });
+        for u in updates0 {
+            input0
+                .activate()
+                .session(&cap0.delayed(&u.1))
+                .give(u.clone());
+        }
+        for u in updates1 {
+            input1
+                .activate()
+                .session(&cap1.delayed(&u.1))
+                .give(u.clone());
+        }
+        drop(cap0);
+        drop(cap1);
+        while worker.step() {}
+        cap
+    });
+    captured
+        .extract()
+        .into_iter()
+        .flat_map(|(_t, data)| data)
+        .collect()
+}
+
+/// Consolidates a change stream: sums diffs per `((key, value), time)`, drops zeros.
+fn consolidate_updates(
+    mut stream: Vec<((u64, u64), Pair, isize)>,
+) -> Vec<((u64, u64), Pair, isize)> {
+    stream.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+    let mut out: Vec<((u64, u64), Pair, isize)> = Vec::new();
+    for (kv, t, d) in stream {
+        match out.last_mut() {
+            Some((lkv, lt, ld)) if *lkv == kv && *lt == t => *ld += d,
+            _ => out.push((kv, t, d)),
+        }
+    }
+    out.retain(|(_, _, d)| *d != 0);
+    out
+}
+
+/// The canonical partial-order case: two updates at incomparable times, fed through a linear
+/// `logic` (`net_positive`). Their join `(1, 1)` is a time neither input mentions. Since
+/// `net_positive` is linear, the output at the join equals the sum of the outputs at the two
+/// updates' own times, so no extra delta is owed there. The exact stream is just the two
+/// per-update emissions, each at its own time.
+#[mz_ore::test]
+fn co_reduce_pair_synthetic_time() {
+    let updates0 = vec![
+        ((1u64, 10u64), Pair::new(0, 1), 1isize),
+        ((1u64, 11u64), Pair::new(1, 0), 1isize),
+    ];
+    let updates1 = vec![];
+    let cursor = consolidate_updates(run_pair(
+        &updates0,
+        &updates1,
+        usize::MAX,
+        net_positive,
+        false,
+    ));
+    let reference = consolidate_updates(run_pair(
+        &updates0,
+        &updates1,
+        usize::MAX,
+        net_positive,
+        true,
+    ));
+    assert_eq!(cursor, reference);
+    let expected = vec![
+        ((1u64, 0u64), Pair::new(0, 1), 1isize),
+        ((1u64, 0u64), Pair::new(1, 0), 1isize),
+    ];
+    assert_eq!(cursor, expected);
+}
+
+/// A genuinely non-linear logic (thresholded net): below threshold 2 the output is empty, at or
+/// above it the output is a single row. Net at each of the two incomparable times is 1 (below
+/// threshold, empty), but net at their join is 2 (at threshold), so the join carries a REAL delta
+/// that neither input time can produce on its own.
+fn net_at_least_two(_k: &u64, inputs: &[&[(u64, isize)]], out: &mut Vec<(u64, isize)>) {
+    let sum = |s: &[(u64, isize)]| s.iter().map(|(_v, d)| *d).sum::<isize>();
+    let net = sum(inputs[0]) - sum(inputs[1]);
+    if net >= 2 {
+        out.push((0u64, 1));
+    }
+}
+
+#[mz_ore::test]
+fn co_reduce_pair_nonlinear_synthetic_delta() {
+    let updates0 = vec![
+        ((1u64, 10u64), Pair::new(0, 1), 1isize),
+        ((1u64, 11u64), Pair::new(1, 0), 1isize),
+    ];
+    let updates1 = vec![];
+    let cursor = consolidate_updates(run_pair(
+        &updates0,
+        &updates1,
+        usize::MAX,
+        net_at_least_two,
+        false,
+    ));
+    let reference = consolidate_updates(run_pair(
+        &updates0,
+        &updates1,
+        usize::MAX,
+        net_at_least_two,
+        true,
+    ));
+    assert_eq!(cursor, reference);
+    // Output appears exactly at the synthetic join (1,1), a time in neither input.
+    let expected = vec![((1u64, 0u64), Pair::new(1, 1), 1isize)];
+    assert_eq!(cursor, expected);
 }
