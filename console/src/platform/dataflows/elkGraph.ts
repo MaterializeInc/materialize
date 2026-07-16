@@ -52,6 +52,18 @@ const GROUP_LAYOUT_OPTIONS: Record<string, string> = {
   "elk.layered.spacing.nodeNodeBetweenLayers": "48",
 };
 
+// An expanded region is a sized container: same auto-sizing as a LIR group,
+// but with more top padding for the region header RegionNode renders (label +
+// toggle + stats). Must NOT set hierarchyHandling, so it inherits
+// INCLUDE_CHILDREN from the root, letting cross-boundary edges relocate.
+const REGION_LAYOUT_OPTIONS: Record<string, string> = {
+  "elk.algorithm": "layered",
+  "elk.direction": "DOWN",
+  "elk.padding": "[top=32,left=12,bottom=12,right=12]",
+  "elk.spacing.nodeNode": "24",
+  "elk.layered.spacing.nodeNodeBetweenLayers": "48",
+};
+
 // A view is always one scope's direct children, so without a grouping this
 // is flat: nothing is nested inside anything else. With a grouping, a
 // group's members (VisibleNodes or other groups) become its elk children;
@@ -69,7 +81,7 @@ export function toElkGraph(
     else childrenOf.set(parentKey, [id]);
   };
   for (const n of graph.nodes)
-    addChild(grouping?.parentOf.get(n.id) ?? "", n.id);
+    addChild(n.parentId ?? grouping?.parentOf.get(n.id) ?? "", n.id);
   for (const g of groupById.values())
     addChild(grouping?.parentOf.get(g.id) ?? "", g.id);
 
@@ -85,6 +97,13 @@ export function toElkGraph(
     const node = nodeById.get(id);
     if (!node) {
       throw new Error(`missing visible node for id ${id} building elk graph`);
+    }
+    if (node.kind === "region" && node.expanded) {
+      return {
+        id,
+        layoutOptions: REGION_LAYOUT_OPTIONS,
+        children: (childrenOf.get(id) ?? []).map(buildNode),
+      };
     }
     return { id, ...NODE_DIMENSIONS[node.kind] };
   };
