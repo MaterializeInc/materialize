@@ -11,7 +11,12 @@ import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import React from "react";
-import { Route, Routes, useLocation } from "react-router-dom";
+import {
+  Route,
+  Routes,
+  useLocation,
+  useNavigationType,
+} from "react-router-dom";
 
 import type { Cluster } from "~/api/materialize/cluster/clusterList";
 import { ErrorCode } from "~/api/materialize/types";
@@ -44,23 +49,43 @@ vi.mock("@xyflow/react", () => ({
     nodes: {
       id: string;
       type?: string;
-      data: { node?: { label: string }; label?: string };
+      data: {
+        node?: { label: string };
+        label?: string;
+        onToggleExpand?: (id: string) => void;
+      };
     }[];
     children?: React.ReactNode;
     onNodeClick?: (e: unknown, node: unknown) => void;
     onNodeDoubleClick?: (e: unknown, node: unknown) => void;
   }) => (
     <div data-testid="react-flow">
-      {nodes.map((n) => (
-        <div
-          key={n.id}
-          data-testid={`node-${n.id}`}
-          onClick={() => onNodeClick?.(null, n)}
-          onDoubleClick={() => onNodeDoubleClick?.(null, n)}
-        >
-          {n.data.node ? n.data.node.label : n.data.label}
-        </div>
-      ))}
+      {nodes.map((n) => {
+        const node = n.data.node;
+        return (
+          <div
+            key={n.id}
+            data-testid={`node-${n.id}`}
+            onClick={() => onNodeClick?.(null, n)}
+            onDoubleClick={() => onNodeDoubleClick?.(null, n)}
+          >
+            {/* Mirrors RegionNode's own disclosure triangle (nodes.tsx),
+                just enough to drive the toggle from a test: the flat
+                renderer above never instantiates the real node components. */}
+            {n.type === "region" && node && (
+              <button
+                type="button"
+                data-testid="region-toggle"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  n.data.onToggleExpand?.(n.id);
+                }}
+              />
+            )}
+            {node ? node.label : n.data.label}
+          </div>
+        );
+      })}
       {children}
     </div>
   ),
@@ -217,6 +242,25 @@ const lirSpansResult = {
   rows: [["u7", "1", null, "0", "Join::Differential", "41", "42"]],
 };
 
+// Dataflow 50: root [50], leaf Join [50,1] (op 51) covered by a LIR span at
+// root scope, and unrelated sibling region RegionA [50,2] (op 52) with child
+// LeafA [50,2,1] (op 53). Exercises the LIR-grouping/in-place-expansion
+// interlock: Join's group box must disappear the instant RegionA is
+// expanded, even though the two aren't nested under each other.
+const expandInteractionOperatorsResult = {
+  ...operatorsResult,
+  rows: [
+    ["50", ["50"], "Dataflow", "0", "0", "0"],
+    ["51", ["50", "1"], "Join", "0", "0", "0"],
+    ["52", ["50", "2"], "RegionA", "0", "0", "0"],
+    ["53", ["50", "2", "1"], "LeafA", "0", "0", "1"],
+  ],
+};
+const expandInteractionSpansResult = {
+  ...lirSpansResult,
+  rows: [["u8", "1", null, "0", "Join::Differential", "51", "52"]],
+};
+
 beforeEach(() => {
   fitViewSpy.mockClear();
   const store = getStore();
@@ -279,6 +323,17 @@ beforeEach(() => {
           ],
         });
       }
+      if (body.includes("'50'")) {
+        return HttpResponse.json({
+          results: [
+            expandInteractionOperatorsResult,
+            okResult,
+            expandInteractionSpansResult,
+            okResult,
+            okResult,
+          ],
+        });
+      }
       return HttpResponse.json({
         results: [operatorsResult, okResult, okResult, okResult, okResult],
       });
@@ -291,6 +346,13 @@ beforeEach(() => {
 // graph (which would still look right if it were only in component state).
 const LocationProbe = () => (
   <div data-testid="location-search">{useLocation().search}</div>
+);
+
+// Exposes the type of the most recent navigation, so a test can tell a
+// `replace` (no new history entry) apart from a `push` without any direct
+// access to the router's own history stack (MemoryRouter doesn't expose one).
+const NavigationProbe = () => (
+  <div data-testid="navigation-type">{useNavigationType()}</div>
 );
 
 describe("DataflowDetailPage", () => {
@@ -662,5 +724,94 @@ describe("DataflowDetailPage", () => {
     expect(screen.getByText("Members")).toBeInTheDocument();
     expect(screen.getByText("Records")).toBeInTheDocument();
     expect(screen.getByText("Memory")).toBeInTheDocument();
+  });
+
+  describe("region in-place expansion", () => {
+    it("toggling a region writes the expand param without a history push", async () => {
+      await renderComponent(
+        <Routes>
+          <Route
+            path="/clusters/:clusterId/:clusterName/dataflows/:dataflowId"
+            element={
+              <>
+                <DataflowDetailPage />
+                <LocationProbe />
+                <NavigationProbe />
+              </>
+            }
+          />
+        </Routes>,
+        {
+          initialRouterEntries: ["/clusters/u5/test_cluster/dataflows/8"],
+        },
+      );
+
+      const regionAId = nodeIdOf([8, 1]);
+      const regionANode = await screen.findByTestId(`node-${regionAId}`);
+      await userEvent.click(within(regionANode).getByTestId("region-toggle"));
+
+      expect(screen.getByTestId("location-search").textContent).toBe(
+        "?expand=8.1",
+      );
+      // Toggling replaces the current history entry rather than pushing a
+      // new one: expand/collapse clicks would otherwise spam the back
+      // button, unlike an actual scope navigation.
+      expect(screen.getByTestId("navigation-type").textContent).toBe("REPLACE");
+    });
+
+    it("navigating into a scope clears the expand param", async () => {
+      await renderComponent(
+        <Routes>
+          <Route
+            path="/clusters/:clusterId/:clusterName/dataflows/:dataflowId"
+            element={
+              <>
+                <DataflowDetailPage />
+                <LocationProbe />
+              </>
+            }
+          />
+        </Routes>,
+        {
+          initialRouterEntries: [
+            "/clusters/u5/test_cluster/dataflows/8?expand=8.1",
+          ],
+        },
+      );
+
+      const regionAId = nodeIdOf([8, 1]);
+      await screen.findByTestId(`node-${regionAId}`);
+      await userEvent.dblClick(screen.getByTestId(`node-${regionAId}`));
+
+      await screen.findByTestId(`node-${nodeIdOf([8, 1, 1])}`);
+      expect(screen.getByTestId("location-search").textContent).toBe(
+        "?scope=8.1",
+      );
+    });
+
+    it("does not group by LIR while a region is expanded", async () => {
+      await renderComponent(
+        <Routes>
+          <Route
+            path="/clusters/:clusterId/:clusterName/dataflows/:dataflowId"
+            element={<DataflowDetailPage />}
+          />
+        </Routes>,
+        {
+          initialRouterEntries: [
+            "/clusters/u5/test_cluster/dataflows/50?expand=50.2",
+          ],
+        },
+      );
+
+      await screen.findByTestId(`node-${nodeIdOf([50, 2])}`);
+      // The LIR group box that would otherwise wrap Join is suppressed while
+      // RegionA is expanded, even though the two are unrelated siblings.
+      expect(screen.queryByTestId("node-u8/1")).not.toBeInTheDocument();
+      // Join itself still renders, just ungrouped.
+      expect(
+        screen.getByTestId(`node-${nodeIdOf([50, 1])}`),
+      ).toBeInTheDocument();
+    });
   });
 });
