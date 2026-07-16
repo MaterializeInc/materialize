@@ -29,13 +29,30 @@
 //! expressions re-use complex subexpressions.
 
 use mz_expr::visit::VisitChildren;
-use mz_expr::{MapFilterProject, MirRelationExpr};
+use mz_expr::{MapFilterProject, MirRelationExpr, RECURSION_LIMIT};
+use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
 use crate::TransformCtx;
 
 /// Canonicalizes MFPs and performs common sub-expression elimination.
 #[derive(Debug)]
-pub struct CanonicalizeMfp;
+pub struct CanonicalizeMfp {
+    recursion_guard: RecursionGuard,
+}
+
+impl Default for CanonicalizeMfp {
+    fn default() -> CanonicalizeMfp {
+        CanonicalizeMfp {
+            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
+        }
+    }
+}
+
+impl CheckedRecursion for CanonicalizeMfp {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        &self.recursion_guard
+    }
+}
 
 impl crate::Transform for CanonicalizeMfp {
     fn name(&self) -> &'static str {
@@ -61,19 +78,21 @@ impl crate::Transform for CanonicalizeMfp {
 impl CanonicalizeMfp {
     /// Extract and optimize MFPs.
     pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
-        let mut mfp = MapFilterProject::extract_non_errors_from_expr_mut(relation);
-        // Optimize MFP, e.g., perform CSE Push MFPs through `Negate` operators,
-        // if encountered. This is a first steps toward a `CanonicalizeLinear`,
-        // which puts linear operators in a canonical representation.
-        mfp.optimize();
-        if let MirRelationExpr::Negate { input } = relation {
-            Self::rebuild_mfp(mfp, &mut **input);
-            relation.try_visit_mut_children(|e| self.action(e))?;
-        } else {
-            relation.try_visit_mut_children(|e| self.action(e))?;
-            Self::rebuild_mfp(mfp, relation);
-        }
-        Ok(())
+        self.checked_recur(|_| {
+            let mut mfp = MapFilterProject::extract_non_errors_from_expr_mut(relation);
+            // Optimize MFP, e.g., perform CSE Push MFPs through `Negate` operators,
+            // if encountered. This is a first steps toward a `CanonicalizeLinear`,
+            // which puts linear operators in a canonical representation.
+            mfp.optimize();
+            if let MirRelationExpr::Negate { input } = relation {
+                Self::rebuild_mfp(mfp, &mut **input);
+                relation.try_visit_mut_children(|e| self.action(e))?;
+            } else {
+                relation.try_visit_mut_children(|e| self.action(e))?;
+                Self::rebuild_mfp(mfp, relation);
+            }
+            Ok(())
+        })
     }
 
     /// Canonicalize the MapFilterProject to Map-Filter-Project, in that order.
@@ -92,5 +111,35 @@ impl CanonicalizeMfp {
                 *relation = relation.take_dangerous().project(project);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_repr::ReprRelationType;
+
+    use super::*;
+
+    /// Dismantle a deep expression iteratively, as dropping it recursively
+    /// could overflow the stack.
+    fn dismantle(expr: MirRelationExpr) {
+        let mut todo = vec![expr];
+        while let Some(mut e) = todo.pop() {
+            todo.extend(e.children_mut().map(|c| c.take_dangerous()));
+        }
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn action_errors_on_deep_plan() {
+        let mut expr = MirRelationExpr::constant(vec![], ReprRelationType::new(vec![]));
+        for _ in 0..RECURSION_LIMIT + 100 {
+            // Constructed directly, as the `negate` builder cancels double negation.
+            expr = MirRelationExpr::Negate {
+                input: Box::new(expr),
+            };
+        }
+        assert!(CanonicalizeMfp::default().action(&mut expr).is_err());
+        dismantle(expr);
     }
 }

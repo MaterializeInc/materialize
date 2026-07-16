@@ -74,7 +74,7 @@ impl crate::Transform for Join {
         // LiteralLifting is removed in favor of EquivalencePropagation.
         if transformed {
             PredicatePushdown::default().action(relation, &mut BTreeMap::new())?;
-            CanonicalizeMfp.action(relation)?
+            CanonicalizeMfp::default().action(relation)?
         }
         mz_repr::explain::trace_plan(&*relation);
         Ok(())

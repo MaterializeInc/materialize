@@ -10,8 +10,9 @@
 //! Detects an input being unioned with its negation and cancels them out
 
 use itertools::Itertools;
-use mz_expr::MirRelationExpr;
 use mz_expr::visit::Visit;
+use mz_expr::{MirRelationExpr, RECURSION_LIMIT};
+use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 
 use crate::{TransformCtx, TransformError};
 
@@ -26,7 +27,23 @@ use crate::{TransformCtx, TransformError};
 /// binding (from two inputs of a Union), and then we don't make any `compare_branches` call
 /// where `relation` and `other` are in different Let bindings.
 #[derive(Debug)]
-pub struct UnionBranchCancellation;
+pub struct UnionBranchCancellation {
+    recursion_guard: RecursionGuard,
+}
+
+impl Default for UnionBranchCancellation {
+    fn default() -> UnionBranchCancellation {
+        UnionBranchCancellation {
+            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
+        }
+    }
+}
+
+impl CheckedRecursion for UnionBranchCancellation {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        &self.recursion_guard
+    }
+}
 
 impl crate::Transform for UnionBranchCancellation {
     fn name(&self) -> &'static str {
@@ -86,16 +103,16 @@ impl UnionBranchCancellation {
                                      inputs: &[MirRelationExpr],
                                      input_signs: &[bool],
                                      start_idx: usize|
-             -> Option<usize> {
+             -> Result<Option<usize>, RecursionLimitError> {
                 for i in start_idx..inputs.len() {
                     // Only compare branches with opposite signs
                     if sign != input_signs[i] {
-                        if let BranchCmp::Inverse = Self::compare_branches(input, &inputs[i]) {
-                            return Some(i);
+                        if let BranchCmp::Inverse = self.compare_branches(input, &inputs[i])? {
+                            return Ok(Some(i));
                         }
                     }
                 }
-                None
+                Ok(None)
             };
 
             let base_sign = Self::branch_sign(base);
@@ -103,7 +120,7 @@ impl UnionBranchCancellation {
 
             // Compare branches if there is at least a negated branch
             if std::iter::once(&base_sign).chain(&input_signs).any(|x| *x) {
-                if let Some(j) = matching_negation(&*base, base_sign, inputs, &input_signs, 0) {
+                if let Some(j) = matching_negation(&*base, base_sign, inputs, &input_signs, 0)? {
                     let relation_typ = base.typ();
                     **base = MirRelationExpr::constant(vec![], relation_typ.clone());
                     inputs[j] = MirRelationExpr::constant(vec![], relation_typ);
@@ -111,7 +128,7 @@ impl UnionBranchCancellation {
 
                 for i in 0..inputs.len() {
                     if let Some(j) =
-                        matching_negation(&inputs[i], input_signs[i], inputs, &input_signs, i + 1)
+                        matching_negation(&inputs[i], input_signs[i], inputs, &input_signs, i + 1)?
                     {
                         let relation_typ = inputs[i].typ();
                         inputs[i] = MirRelationExpr::constant(vec![], relation_typ.clone());
@@ -153,14 +170,20 @@ impl UnionBranchCancellation {
     /// with negated row count values, ie. one of them contains an extra Negate operator.
     /// Negate operators may appear interleaved with Map, Filter and Project
     /// operators, but these operators must appear in the same order in both branches.
-    fn compare_branches(relation: &MirRelationExpr, other: &MirRelationExpr) -> BranchCmp {
-        match (relation, other) {
+    ///
+    /// Returns an error if the branch depth exceeds the recursion limit.
+    fn compare_branches(
+        &self,
+        relation: &MirRelationExpr,
+        other: &MirRelationExpr,
+    ) -> Result<BranchCmp, RecursionLimitError> {
+        self.checked_recur(|_| match (relation, other) {
             (
                 MirRelationExpr::Negate { input: input1 },
                 MirRelationExpr::Negate { input: input2 },
-            ) => Self::compare_branches(&*input1, &*input2),
+            ) => self.compare_branches(&*input1, &*input2),
             (r, MirRelationExpr::Negate { input }) | (MirRelationExpr::Negate { input }, r) => {
-                Self::compare_branches(&*input, r).inverse()
+                Ok(self.compare_branches(&*input, r)?.inverse())
             }
             (
                 MirRelationExpr::Map {
@@ -173,9 +196,9 @@ impl UnionBranchCancellation {
                 },
             ) => {
                 if scalars1 == scalars2 {
-                    Self::compare_branches(&*input1, &*input2)
+                    self.compare_branches(&*input1, &*input2)
                 } else {
-                    BranchCmp::Distinct
+                    Ok(BranchCmp::Distinct)
                 }
             }
             (
@@ -189,9 +212,9 @@ impl UnionBranchCancellation {
                 },
             ) => {
                 if predicates1 == predicates2 {
-                    Self::compare_branches(&*input1, &*input2)
+                    self.compare_branches(&*input1, &*input2)
                 } else {
-                    BranchCmp::Distinct
+                    Ok(BranchCmp::Distinct)
                 }
             }
             (
@@ -205,18 +228,63 @@ impl UnionBranchCancellation {
                 },
             ) => {
                 if outputs1 == outputs2 {
-                    Self::compare_branches(&*input1, &*input2)
+                    self.compare_branches(&*input1, &*input2)
                 } else {
-                    BranchCmp::Distinct
+                    Ok(BranchCmp::Distinct)
                 }
             }
             _ => {
                 if relation == other {
-                    BranchCmp::Equivalent
+                    Ok(BranchCmp::Equivalent)
                 } else {
-                    BranchCmp::Distinct
+                    Ok(BranchCmp::Distinct)
                 }
             }
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_expr::MirScalarExpr;
+    use mz_repr::ReprRelationType;
+
+    use super::*;
+
+    /// Dismantle a deep expression iteratively, as dropping it recursively
+    /// could overflow the stack.
+    fn dismantle(expr: MirRelationExpr) {
+        let mut todo = vec![expr];
+        while let Some(mut e) = todo.pop() {
+            todo.extend(e.children_mut().map(|c| c.take_dangerous()));
         }
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn action_errors_on_deep_branch_comparison() {
+        let typ = ReprRelationType::new(vec![]);
+        let mut base = MirRelationExpr::constant(vec![], typ.clone());
+        let mut other = MirRelationExpr::constant(vec![], typ);
+        for _ in 0..RECURSION_LIMIT + 100 {
+            base = MirRelationExpr::Filter {
+                input: Box::new(base),
+                predicates: vec![MirScalarExpr::literal_true()],
+            };
+            other = MirRelationExpr::Filter {
+                input: Box::new(other),
+                predicates: vec![MirScalarExpr::literal_true()],
+            };
+        }
+        let mut expr = MirRelationExpr::Union {
+            base: Box::new(base),
+            inputs: vec![other.negate()],
+        };
+        assert!(
+            UnionBranchCancellation::default()
+                .action(&mut expr)
+                .is_err()
+        );
+        dismantle(expr);
     }
 }

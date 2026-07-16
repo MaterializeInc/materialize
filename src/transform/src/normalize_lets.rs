@@ -115,7 +115,7 @@ impl NormalizeLets {
         // Promote all `Let` and `LetRec` AST nodes to the roots.
         // After this, all non-`LetRec` nodes contain no further `Let` or `LetRec` nodes,
         // placing all `LetRec` nodes around the root, if not always in a single AST node.
-        let_motion::promote_let_rec(relation);
+        let_motion::promote_let_rec(relation)?;
         let_motion::assert_no_lets(relation);
         let_motion::assert_letrec_major(relation);
 
@@ -123,7 +123,7 @@ impl NormalizeLets {
         inlining::inline_lets(relation, self.inline_mfp)?;
 
         // Return to letrec-major form to refresh types.
-        let_motion::promote_let_rec(relation);
+        let_motion::promote_let_rec(relation)?;
         support::refresh_types(relation, features)?;
 
         // Renumber bindings for good measure.
@@ -345,8 +345,8 @@ mod let_motion {
     use std::collections::{BTreeMap, BTreeSet};
 
     use itertools::Itertools;
-    use mz_expr::{LetRecLimit, LocalId, MirRelationExpr};
-    use mz_ore::stack::RecursionLimitError;
+    use mz_expr::{LetRecLimit, LocalId, MirRelationExpr, RECURSION_LIMIT};
+    use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 
     use crate::normalize_lets::support::replace_bindings_from_map;
 
@@ -354,7 +354,9 @@ mod let_motion {
     ///
     /// We cannot (without further reasoning) fuse stacked `LetRec` stages, and instead we just promote
     /// `LetRec` to the roots of their expressions (e.g. as children of another `LetRec` stage).
-    pub(crate) fn promote_let_rec(expr: &mut MirRelationExpr) {
+    ///
+    /// Returns an error if the `LetRec` nesting depth exceeds the recursion limit.
+    pub(crate) fn promote_let_rec(expr: &mut MirRelationExpr) -> Result<(), RecursionLimitError> {
         // First, promote all `LetRec` nodes above all other nodes.
         let mut worklist = vec![&mut *expr];
         while let Some(mut expr) = worklist.pop() {
@@ -366,7 +368,8 @@ mod let_motion {
         }
 
         // Harvest any potential `Let` nodes, via a post-order traversal.
-        post_order_harvest_lets(expr);
+        let guard = RecursionGuard::with_limit(RECURSION_LIMIT);
+        post_order_harvest_lets(expr, &guard)
     }
 
     /// A stand in for the types of bindings we might encounter.
@@ -508,32 +511,39 @@ mod let_motion {
 
     /// Performs a post-order traversal of the `LetRec` nodes at the root of an expression.
     ///
-    /// The traversal is only of the `LetRec` nodes, for which fear of stack exhaustion is nominal.
-    fn post_order_harvest_lets(expr: &mut MirRelationExpr) {
-        if let MirRelationExpr::LetRec {
-            ids,
-            values,
-            limits,
-            body,
-        } = expr
-        {
-            // Only recursively descend through `LetRec` stages.
-            for value in values.iter_mut() {
-                post_order_harvest_lets(value);
-            }
-
-            let mut bindings = BTreeMap::new();
-            for ((id, mut value), max_iter) in ids
-                .drain(..)
-                .zip_eq(values.drain(..))
-                .zip_eq(limits.drain(..))
+    /// The traversal is only of the `LetRec` nodes, but those can be deeply nested in each
+    /// other's values, so the recursion is checked against `guard`.
+    fn post_order_harvest_lets(
+        expr: &mut MirRelationExpr,
+        guard: &RecursionGuard,
+    ) -> Result<(), RecursionLimitError> {
+        guard.checked_recur(|_| {
+            if let MirRelationExpr::LetRec {
+                ids,
+                values,
+                limits,
+                body,
+            } = expr
             {
-                bindings.extend(harvest_non_recursive(&mut value));
-                bindings.insert(id, (value, max_iter));
+                // Only recursively descend through `LetRec` stages.
+                for value in values.iter_mut() {
+                    post_order_harvest_lets(value, guard)?;
+                }
+
+                let mut bindings = BTreeMap::new();
+                for ((id, mut value), max_iter) in ids
+                    .drain(..)
+                    .zip_eq(values.drain(..))
+                    .zip_eq(limits.drain(..))
+                {
+                    bindings.extend(harvest_non_recursive(&mut value));
+                    bindings.insert(id, (value, max_iter));
+                }
+                bindings.extend(harvest_non_recursive(body));
+                replace_bindings_from_map(bindings, ids, values, limits);
             }
-            bindings.extend(harvest_non_recursive(body));
-            replace_bindings_from_map(bindings, ids, values, limits);
-        }
+            Ok(())
+        })
     }
 
     /// Harvest any safe-to-lift non-recursive bindings from a `LetRec`
@@ -1040,5 +1050,45 @@ mod renumbering {
             worklist.extend(expr.children_mut().rev());
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_expr::LocalId;
+    use mz_expr::RECURSION_LIMIT;
+    use mz_repr::ReprRelationType;
+
+    use super::*;
+
+    /// Dismantle a deep expression iteratively, as dropping it recursively
+    /// could overflow the stack.
+    fn dismantle(expr: MirRelationExpr) {
+        let mut todo = vec![expr];
+        while let Some(mut e) = todo.pop() {
+            todo.extend(e.children_mut().map(|c| c.take_dangerous()));
+        }
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn action_errors_on_deep_letrec_nest() {
+        let typ = ReprRelationType::new(vec![]);
+        let mut expr = MirRelationExpr::constant(vec![], typ.clone());
+        for i in 0..u64::try_from(RECURSION_LIMIT + 100).unwrap() {
+            expr = MirRelationExpr::LetRec {
+                ids: vec![LocalId::new(i)],
+                values: vec![expr],
+                limits: vec![None],
+                body: Box::new(MirRelationExpr::constant(vec![], typ.clone())),
+            };
+        }
+        let features = OptimizerFeatures::default();
+        assert!(
+            NormalizeLets::new(false)
+                .action(&mut expr, &features)
+                .is_err()
+        );
+        dismantle(expr);
     }
 }

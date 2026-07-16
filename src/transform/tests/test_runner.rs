@@ -283,7 +283,9 @@ mod tests {
         // TODO(justin): is there a way to just extract these from the Optimizer list of
         // transforms?
         match name {
-            "CanonicalizeMfp" => Ok(Box::new(mz_transform::canonicalize_mfp::CanonicalizeMfp)),
+            "CanonicalizeMfp" => Ok(Box::new(
+                mz_transform::canonicalize_mfp::CanonicalizeMfp::default(),
+            )),
             "EquivalencePropagation" => Ok(Box::new(
                 mz_transform::equivalence_propagation::EquivalencePropagation::default(),
             )),
@@ -326,7 +328,7 @@ mod tests {
             ))),
             "ThresholdElision" => Ok(Box::new(mz_transform::threshold_elision::ThresholdElision)),
             "UnionBranchCancellation" => Ok(Box::new(
-                mz_transform::union_cancel::UnionBranchCancellation,
+                mz_transform::union_cancel::UnionBranchCancellation::default(),
             )),
             "UnionNegateFusion" => Ok(Box::new(mz_transform::compound::UnionNegateFusion)),
             "UnionFusion" => Ok(Box::new(mz_transform::fusion::union::Union)),

@@ -637,7 +637,7 @@ impl Default for FuseAndCollapse {
                 Box::new(compound::UnionNegateFusion),
                 // This goes after union fusion so we can cancel out
                 // more branches at a time.
-                Box::new(UnionBranchCancellation),
+                Box::new(UnionBranchCancellation::default()),
                 // This should run before redundant join to ensure that key info
                 // is correct.
                 Box::new(NormalizeLets::new(false)),
@@ -874,7 +874,7 @@ impl Optimizer {
                 limit: 100,
                 transforms: vec![Box::new(JoinImplementation::default())],
             }),
-            Box::new(CanonicalizeMfp),
+            Box::new(CanonicalizeMfp::default()),
             // Identifies common relation subexpressions.
             Box::new(cse::relation_cse::RelationCSE::new(false)),
             // `RelationCSE` can create new points of interest for `ProjectionPushdown`: If an MFP
@@ -885,7 +885,7 @@ impl Optimizer {
             Box::new(ProjectionPushdown::skip_joins());
                 if ctx.features.enable_projection_pushdown_after_relation_cse,
             // Plans look nicer if we tidy MFPs again after ProjectionPushdown.
-            Box::new(CanonicalizeMfp);
+            Box::new(CanonicalizeMfp::default());
                 if ctx.features.enable_projection_pushdown_after_relation_cse,
             // Rewrite If-chains matching a single expression against literals
             // into a CaseLiteral lookup for O(log n) evaluation.
@@ -931,7 +931,7 @@ impl Optimizer {
                 name: "fixpoint_logical_cleanup_pass_01",
                 limit: 100,
                 transforms: vec![
-                    Box::new(CanonicalizeMfp),
+                    Box::new(CanonicalizeMfp::default()),
                     // Remove threshold operators which have no effect.
                     Box::new(ThresholdElision),
                     // Projection pushdown may unblock fusing joins and unions.
@@ -944,7 +944,7 @@ impl Optimizer {
                     Box::new(compound::UnionNegateFusion),
                     // This goes after union fusion so we can cancel out
                     // more branches at a time.
-                    Box::new(UnionBranchCancellation),
+                    Box::new(UnionBranchCancellation::default()),
                     // The last RelationCSE before JoinImplementation should be with
                     // inline_mfp = true.
                     Box::new(cse::relation_cse::RelationCSE::new(true)),
@@ -968,7 +968,7 @@ impl Optimizer {
         let transforms: Vec<Box<dyn Transform>> = vec![
             Box::new(canonicalization::ReduceScalars),
             Box::new(LiteralConstraints),
-            Box::new(CanonicalizeMfp),
+            Box::new(CanonicalizeMfp::default()),
             // We might have arrived at a constant, e.g., due to contradicting literal constraints.
             Box::new(Fixpoint {
                 name: "fast_path_fold_constants_fixpoint",

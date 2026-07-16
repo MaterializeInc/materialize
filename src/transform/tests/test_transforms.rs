@@ -255,7 +255,7 @@ fn handle_apply(
         }
         "union_branch_cancellation" => {
             use mz_transform::union_cancel::UnionBranchCancellation;
-            let transform = UnionBranchCancellation;
+            let transform = UnionBranchCancellation::default();
             apply_transform(transform, catalog, input)
         }
         transform => Err(format!("unsupported pipeline transform: {transform}")),
