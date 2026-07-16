@@ -894,6 +894,130 @@ describe("deriveVisibleGraph in-place expansion", () => {
     );
     expect(inner).toBeDefined();
   });
+
+  it("nests an expanded region's own boundary ports inside it, rather than leaving them at the elk root", () => {
+    // Channel 1 (fromAddress [5,1,0]) resolves to the region's own inbound
+    // port (scope [5,1]): with the region expanded (not viewRoot itself),
+    // that port must carry parentId = the region, or elk lays it out at the
+    // top level alongside the region instead of nested inside it.
+    const regionId = nodeIdOf([5, 1]);
+    const g = deriveVisibleGraph(
+      structure,
+      structure.root,
+      new Set([regionId]),
+    );
+    const port = g.nodes.find(
+      (n) => n.kind === "port" && n.id === `${regionId}:in:0`,
+    );
+    expect(port).toBeDefined();
+    expect(port!.parentId).toBe(regionId);
+  });
+});
+
+describe("deriveVisibleGraph two-level (grandchild-region) expansion", () => {
+  // A genuine grandchild region, unlike OPS/CHANNELS above where [5,1]'s
+  // children are both leaves: RegionOuter [7,1] contains RegionInner
+  // [7,1,1], which itself contains a leaf [7,1,1,1]. Boundary crossings
+  // mirror CHANNELS' ends-in-0 pseudo-vertex pattern at each nesting level
+  // (Timely gates every scope crossing through the box's own address, one
+  // hop at a time, so a channel into a doubly-nested leaf chains through
+  // both boundaries rather than naming the leaf directly).
+  const NESTED_OPS: OperatorRow[] = [
+    {
+      id: "70",
+      address: ["7"],
+      name: "Dataflow",
+      arrangementRecords: null,
+      arrangementSize: null,
+      elapsedNs: "0",
+    },
+    {
+      id: "71",
+      address: ["7", "1"],
+      name: "RegionOuter",
+      arrangementRecords: "0",
+      arrangementSize: "0",
+      elapsedNs: "5",
+    },
+    {
+      id: "72",
+      address: ["7", "1", "1"],
+      name: "RegionInner",
+      arrangementRecords: "0",
+      arrangementSize: "0",
+      elapsedNs: "3",
+    },
+    {
+      id: "73",
+      address: ["7", "1", "1", "1"],
+      name: "LeafInner",
+      arrangementRecords: "0",
+      arrangementSize: "0",
+      elapsedNs: "2",
+    },
+  ];
+  const NESTED_CHANNELS: ChannelRow[] = [
+    // Outer boundary: RegionOuter's own inbound pseudo-vertex -> RegionInner
+    // (its child, one level down).
+    {
+      id: "700",
+      fromOperatorAddress: ["7", "1", "0"],
+      fromPort: "0",
+      toOperatorAddress: ["7", "1", "1"],
+      toPort: "0",
+      messagesSent: "4",
+      batchesSent: "1",
+      channelType: "rows",
+    },
+    // Inner boundary: RegionInner's own inbound pseudo-vertex -> LeafInner
+    // (its child, one level further down).
+    {
+      id: "701",
+      fromOperatorAddress: ["7", "1", "1", "0"],
+      fromPort: "0",
+      toOperatorAddress: ["7", "1", "1", "1"],
+      toPort: "0",
+      messagesSent: "4",
+      batchesSent: "1",
+      channelType: "rows",
+    },
+  ];
+  const nested = buildDataflowStructure(NESTED_OPS, NESTED_CHANNELS, [], []);
+  const outerId = nodeIdOf([7, 1]);
+  const innerId = nodeIdOf([7, 1, 1]);
+  const leafId = nodeIdOf([7, 1, 1, 1]);
+
+  it("materializes the grandchild region's own children, nested under the grandchild", () => {
+    const g = deriveVisibleGraph(
+      nested,
+      nested.root,
+      new Set([outerId, innerId]),
+    );
+    const innerRegion = g.nodes.find((n) => n.id === innerId);
+    expect(innerRegion).toBeDefined();
+    // RegionInner is itself expanded and nested inside RegionOuter.
+    expect(innerRegion!.expanded).toBe(true);
+    expect(innerRegion!.parentId).toBe(outerId);
+
+    const leaf = g.nodes.find((n) => n.id === leafId);
+    expect(leaf).toBeDefined();
+    expect(leaf!.parentId).toBe(innerId);
+  });
+
+  it("resolves an edge crossing into the grandchild to the deepest visible node", () => {
+    const g = deriveVisibleGraph(
+      nested,
+      nested.root,
+      new Set([outerId, innerId]),
+    );
+    // Channel 701 (RegionInner's own inbound boundary -> LeafInner) must
+    // land on LeafInner itself, not stop at RegionInner's box: with both
+    // levels expanded, LeafInner is the deepest visible node this crossing
+    // can resolve to.
+    const toLeaf = g.edges.find((e) => e.target === leafId);
+    expect(toLeaf).toBeDefined();
+    expect(toLeaf!.source).toBe(`${innerId}:in:0`);
+  });
 });
 
 describe("commonAncestorScope / representativeInView", () => {
