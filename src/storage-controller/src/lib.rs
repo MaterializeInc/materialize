@@ -506,10 +506,17 @@ impl StorageController for Controller {
         self.storage_collections.check_exists(id)
     }
 
-    fn create_instance(&mut self, id: StorageInstanceId, workload_class: Option<String>) {
+    fn create_instance(
+        &mut self,
+        id: StorageInstanceId,
+        workload_class: Option<String>,
+        replica_logging_interval: Option<Duration>,
+    ) {
         let metrics = self.metrics.for_instance(id);
+        let mut parameters = self.config.parameters.clone();
+        parameters.replica_logging_interval = replica_logging_interval;
         let mut instance = Instance::new(
-            self.config.parameters.clone(),
+            parameters,
             workload_class,
             metrics,
             self.now.clone(),
