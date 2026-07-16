@@ -461,14 +461,244 @@ pub fn pkcs12der_from_pem(
 #[cfg(test)]
 mod tests {
     use openssl::asn1::Asn1Time;
+    use openssl::bn::{BigNum, MsbOption};
     use openssl::ec::{EcGroup, EcKey};
     use openssl::hash::MessageDigest;
     use openssl::nid::Nid;
     use openssl::pkey::Private;
     use openssl::rsa::Rsa;
     use openssl::x509::X509NameBuilder;
+    use openssl::x509::extension::{BasicConstraints, SubjectAlternativeName};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
+    use tokio_postgres::tls::{MakeTlsConnect, TlsConnect};
 
     use super::*;
+
+    /// A throwaway CA that can issue leaf certificates.
+    struct TestCa {
+        cert: X509,
+        key: PKey<Private>,
+    }
+
+    fn random_serial() -> openssl::asn1::Asn1Integer {
+        let mut bn = BigNum::new().unwrap();
+        bn.rand(64, MsbOption::MAYBE_ZERO, false).unwrap();
+        bn.to_asn1_integer().unwrap()
+    }
+
+    impl TestCa {
+        fn new() -> TestCa {
+            let key = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
+            let mut name = X509NameBuilder::new().unwrap();
+            name.append_entry_by_text("CN", "mz-tls-util test CA")
+                .unwrap();
+            let name = name.build();
+            let mut builder = X509::builder().unwrap();
+            builder.set_version(2).unwrap();
+            builder.set_serial_number(&random_serial()).unwrap();
+            builder.set_subject_name(&name).unwrap();
+            builder.set_issuer_name(&name).unwrap();
+            builder.set_pubkey(&key).unwrap();
+            builder
+                .set_not_before(&Asn1Time::days_from_now(0).unwrap())
+                .unwrap();
+            builder
+                .set_not_after(&Asn1Time::days_from_now(1).unwrap())
+                .unwrap();
+            builder
+                .append_extension(BasicConstraints::new().critical().ca().build().unwrap())
+                .unwrap();
+            builder.sign(&key, MessageDigest::sha256()).unwrap();
+            TestCa {
+                cert: builder.build(),
+                key,
+            }
+        }
+
+        /// Issues a leaf certificate, returning its PEM cert and PKCS#8 key.
+        fn issue(&self, cn: &str, dns_san: Option<&str>) -> (Vec<u8>, Vec<u8>) {
+            let key = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
+            let mut name = X509NameBuilder::new().unwrap();
+            name.append_entry_by_text("CN", cn).unwrap();
+            let name = name.build();
+            let mut builder = X509::builder().unwrap();
+            builder.set_version(2).unwrap();
+            builder.set_serial_number(&random_serial()).unwrap();
+            builder.set_subject_name(&name).unwrap();
+            builder.set_issuer_name(self.cert.subject_name()).unwrap();
+            builder.set_pubkey(&key).unwrap();
+            builder
+                .set_not_before(&Asn1Time::days_from_now(0).unwrap())
+                .unwrap();
+            builder
+                .set_not_after(&Asn1Time::days_from_now(1).unwrap())
+                .unwrap();
+            if let Some(dns) = dns_san {
+                let san = SubjectAlternativeName::new()
+                    .dns(dns)
+                    .build(&builder.x509v3_context(Some(&self.cert), None))
+                    .unwrap();
+                builder.append_extension(san).unwrap();
+            }
+            builder.sign(&self.key, MessageDigest::sha256()).unwrap();
+            (
+                builder.build().to_pem().unwrap(),
+                key.private_key_to_pem_pkcs8().unwrap(),
+            )
+        }
+    }
+
+    /// Starts a TLS server on an ephemeral port. Each connection receives
+    /// "ok" once the handshake, including client certificate verification
+    /// when `client_ca_pem` is given, has completed on the server side.
+    async fn run_tls_server(
+        cert_pem: &[u8],
+        key_pem: &[u8],
+        client_ca_pem: Option<&[u8]>,
+    ) -> std::net::SocketAddr {
+        let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(cert_pem)
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let key = PrivateKeyDer::from_pem_slice(key_pem).unwrap();
+        let builder = rustls::ServerConfig::builder();
+        let config = match client_ca_pem {
+            Some(ca_pem) => {
+                let mut roots = rustls::RootCertStore::empty();
+                for cert in CertificateDer::pem_slice_iter(ca_pem) {
+                    roots.add(cert.unwrap()).unwrap();
+                }
+                let verifier = rustls::server::WebPkiClientVerifier::builder(Arc::new(roots))
+                    .build()
+                    .unwrap();
+                builder.with_client_cert_verifier(verifier)
+            }
+            None => builder.with_no_client_auth(),
+        }
+        .with_single_cert(certs, key)
+        .unwrap();
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        mz_ore::task::spawn(|| "tls-test-server", async move {
+            loop {
+                let (stream, _) = listener.accept().await.unwrap();
+                let acceptor = acceptor.clone();
+                mz_ore::task::spawn(|| "tls-test-server-conn", async move {
+                    let mut tls = acceptor.accept(stream).await.unwrap();
+                    tls.write_all(b"ok").await.unwrap();
+                    tls.shutdown().await.unwrap();
+                });
+            }
+        });
+        addr
+    }
+
+    /// Completes a TLS handshake for `host` via `make_tls_rustls`, returning
+    /// the established stream. Panics if certificate validation fails.
+    async fn rustls_connect(
+        config: &tokio_postgres::Config,
+        host: &str,
+        addr: impl tokio::net::ToSocketAddrs,
+    ) -> RustlsTlsStream<TcpStream> {
+        let mut make = make_tls_rustls(config).unwrap();
+        let connect = MakeTlsConnect::<TcpStream>::make_tls_connect(&mut make, host).unwrap();
+        let tcp = TcpStream::connect(addr).await.unwrap();
+        TlsConnect::<TcpStream>::connect(connect, tcp)
+            .await
+            .unwrap()
+    }
+
+    /// Completes a TLS handshake for `host` via the openssl `make_tls`,
+    /// returning the established stream. Panics if validation fails.
+    async fn openssl_connect(
+        config: &tokio_postgres::Config,
+        host: &str,
+        addr: impl tokio::net::ToSocketAddrs,
+    ) -> postgres_openssl::TlsStream<TcpStream> {
+        let mut make = make_tls(config).unwrap();
+        let connect = MakeTlsConnect::<TcpStream>::make_tls_connect(&mut make, host).unwrap();
+        let tcp = TcpStream::connect(addr).await.unwrap();
+        TlsConnect::<TcpStream>::connect(connect, tcp)
+            .await
+            .unwrap()
+    }
+
+    /// Reads the "ok" the test server sends after its side of the handshake,
+    /// including any client certificate verification, has succeeded.
+    async fn assert_server_ok<S: AsyncRead + AsyncWrite + Unpin>(mut tls: S) {
+        let mut buf = [0u8; 2];
+        tls.read_exact(&mut buf).await.unwrap();
+        assert_eq!(&buf, b"ok");
+    }
+
+    /// In verify modes with no explicit sslrootcert, both connectors must
+    /// trust CAs from the environment's default trust store (SSL_CERT_FILE).
+    /// Guards the native root loading in `make_tls_rustls`.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // uses the network and openssl FFI
+    async fn verify_full_trusts_default_store() {
+        let ca = TestCa::new();
+        let (server_cert, server_key) = ca.issue("server", Some("localhost"));
+
+        let mut ca_file = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut ca_file, &ca.cert.to_pem().unwrap()).unwrap();
+        // SAFETY: env mutation is process global, but nextest gives each test
+        // its own process, which is how CI runs. Under plain `cargo test`
+        // this can race with other tests that read the environment.
+        unsafe { std::env::set_var("SSL_CERT_FILE", ca_file.path()) };
+
+        let addr = run_tls_server(&server_cert, &server_key, None).await;
+        let mut config = tokio_postgres::Config::new();
+        config.ssl_mode(SslMode::VerifyFull);
+
+        assert_server_ok(rustls_connect(&config, "localhost", addr).await).await;
+        assert_server_ok(openssl_connect(&config, "localhost", addr).await).await;
+    }
+
+    /// Both connectors must present the configured client certificate when
+    /// the server requires one.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // uses the network and openssl FFI
+    async fn client_certs_accepted() {
+        let ca = TestCa::new();
+        let (server_cert, server_key) = ca.issue("server", Some("localhost"));
+        let (client_cert, client_key) = ca.issue("client", None);
+        let ca_pem = ca.cert.to_pem().unwrap();
+
+        let addr = run_tls_server(&server_cert, &server_key, Some(&ca_pem)).await;
+        let mut config = tokio_postgres::Config::new();
+        config.ssl_mode(SslMode::VerifyFull);
+        config.ssl_root_cert(&ca_pem);
+        config.ssl_cert(&client_cert);
+        config.ssl_key(&client_key);
+
+        assert_server_ok(rustls_connect(&config, "localhost", addr).await).await;
+        assert_server_ok(openssl_connect(&config, "localhost", addr).await).await;
+    }
+
+    /// Validates the rustls connector against a real endpoint whose
+    /// certificate chains to a public CA, exercising the platform trust store
+    /// end to end. Needs external network access, so it only runs when the
+    /// Nightly pipeline sets MZ_TLS_UTIL_TEST_EXTERNAL_CAS.
+    ///
+    /// The openssl connector is deliberately not covered. Our vendored
+    /// openssl compiles its default trust store path to /usr/local/ssl, which
+    /// does not exist at runtime, so `make_tls` cannot validate public CAs
+    /// unless SSL_CERT_FILE points at a bundle.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // uses the network and openssl FFI
+    async fn external_public_ca_endpoint() {
+        if std::env::var_os("MZ_TLS_UTIL_TEST_EXTERNAL_CAS").is_none() {
+            return;
+        }
+        const HOST: &str = "s3.amazonaws.com";
+        let mut config = tokio_postgres::Config::new();
+        config.ssl_mode(SslMode::VerifyFull);
+        // Completing the handshake is the assertion. connect() fails if the
+        // chain does not validate against the platform trust store.
+        drop(rustls_connect(&config, HOST, (HOST, 443)).await);
+    }
 
     fn self_signed_der(key: &PKey<Private>, digest: MessageDigest) -> Vec<u8> {
         let mut name = X509NameBuilder::new().unwrap();

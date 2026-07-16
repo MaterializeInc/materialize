@@ -172,6 +172,23 @@ steps:
       queue: hetzner-aarch64-16cpu-32gb
     sanitizer: skip
 
+  - id: cargo-test-tls-external
+    label: ":rust: TLS validation against public CAs"
+    depends_on: []
+    timeout_in_minutes: 30
+    retry:
+      automatic:
+        # Tolerate transient network failures reaching the external endpoint.
+        - exit_status: 1
+          limit: 1
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: cargo-test
+          args: [--tls-external]
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+    sanitizer: skip
+
   - group: Benchmarks
     key: benchmark
     steps:

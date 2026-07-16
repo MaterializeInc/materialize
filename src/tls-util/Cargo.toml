@@ -27,7 +27,8 @@ tracing.workspace = true
 x509-cert.workspace = true
 
 [dev-dependencies]
-mz-ore = { path = "../ore", features = ["test"] }
+mz-ore = { path = "../ore", features = ["async", "test"] }
+tempfile.workspace = true
 
 [features]
 default = []
