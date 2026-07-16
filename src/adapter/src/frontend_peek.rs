@@ -732,10 +732,16 @@ impl PeekClient {
                     )
                     .await?;
 
-                // If this is the first (non-AS OF) query in a multi-statement transaction, store
-                // the read holds in the coordinator, so subsequent queries can validate against
-                // them.
-                if in_immediate_multi_stmt_txn {
+                // If this query pins the timestamp of a multi-statement transaction, store
+                // the read holds in the coordinator, so subsequent queries can validate
+                // against them. The stored holds define the transaction's timedomain, so
+                // only the statement that determines the transaction timestamp may establish
+                // them, over the same id bundle. A timestamp-less determination (e.g. a
+                // constant query) doesn't pin the transaction timestamp, so its holds must
+                // not be stored.
+                if in_immediate_multi_stmt_txn
+                    && determination.timestamp_context.contains_timestamp()
+                {
                     self.call_coordinator(|tx| Command::StoreTransactionReadHolds {
                         conn_id: session.conn_id().clone(),
                         read_holds: read_holds.clone(),

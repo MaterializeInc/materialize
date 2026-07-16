@@ -257,3 +257,63 @@ EOF
 
 statement ok
 COMMIT
+
+# Regression test for SQL-520: a timestamp-independent query must not extend
+# the transaction's timedomain. The frontend peek sequencing used to store the
+# read holds it acquired for a timestamp-independent query as the
+# transaction's read holds. A later statement then established the
+# transaction's timestamp determination over a smaller id bundle, but the
+# timedomain validation of subsequent statements ran against the stored
+# (larger) read hold set. Such statements could thus read collections whose
+# since was not covered by the transaction timestamp, leading to
+# SinceViolation panics.
+
+statement ok
+CREATE SCHEMA other
+
+statement ok
+CREATE VIEW other.const_view AS SELECT 1 AS x
+
+statement ok
+CREATE TABLE other.t2 (i INT)
+
+simple
+BEGIN;
+SELECT * FROM other.const_view;
+SELECT * FROM t;
+----
+COMPLETE 0
+1
+COMPLETE 1
+COMPLETE 0
+
+# `other.t2` is outside the timedomain established by `SELECT * FROM t`. The
+# constant view query must not have widened the timedomain to the `other`
+# schema.
+query error Transactions can only reference objects in the same timedomain.
+SELECT * FROM other.t2
+
+statement ok
+ROLLBACK
+
+# The same bug also affected statements sequenced by the old peek path
+# (EXECUTE always is): the stored read holds of the timestamp-independent
+# query made the old path validate the timedomain against them and spuriously
+# fail.
+simple
+BEGIN;
+SELECT * FROM other.const_view;
+PREPARE p AS SELECT * FROM t;
+EXECUTE p;
+----
+COMPLETE 0
+1
+COMPLETE 1
+COMPLETE 0
+COMPLETE 0
+
+statement ok
+ROLLBACK
+
+statement ok
+DROP SCHEMA other CASCADE
