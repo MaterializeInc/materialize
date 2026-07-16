@@ -41,7 +41,7 @@ use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, Pre
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::vec::Map;
 use timely::dataflow::{Scope, StreamVec};
-use timely::progress::Antichain;
+use timely::progress::{Antichain, Timestamp};
 
 use crate::source::sql_server::{ReplicationError, SourceOutputInfo, TransientError};
 use crate::source::types::Probe;
@@ -85,6 +85,25 @@ pub(crate) fn render<'scope>(
                 }
                 return Ok(());
             }
+
+            // Seed `offset_committed` from the resumption LSN, or if not set, from the
+            // `initial_lsn` (see [`SourceOutputInfo::resume_lsn`]). Otherwise it stays at the
+            // default 0 until the initial snapshot durably commits and the first resume
+            // upper arrives, which for a large snapshot can be a long time. During that
+            // window the ingestion-lag calculation subtracts 0 from the (large) upstream
+            // LSN and reports an enormous, bogus lag.
+            //
+            // NOTE: This runs before connecting to the upstream so a slow or failing
+            // connection does not leave the statistic unset.
+            let mut max_committed_lsn = outputs
+                .values()
+                .map(SourceOutputInfo::resume_lsn)
+                .min()
+                .unwrap_or_else(Lsn::minimum);
+            for stat in config.statistics.values() {
+                stat.set_offset_committed(max_committed_lsn.abbreviate());
+            }
+
             let conn_config = connection
                 .resolve_config(
                     &config.config.connection_context.secrets_reader,
@@ -194,8 +213,14 @@ pub(crate) fn render<'scope>(
                                 }
                             }
                         }
+                        // Never regress below the seeded resumption LSN. During the initial
+                        // snapshot the resume upper sits at the minimum, which would otherwise
+                        // drag the committed offset back to 0 and reintroduce the bogus lag.
+                        if *committed_upper > max_committed_lsn {
+                            max_committed_lsn = *committed_upper;
+                        }
                         for stat in config.statistics.values() {
-                            stat.set_offset_committed(committed_upper.abbreviate());
+                            stat.set_offset_committed(max_committed_lsn.abbreviate());
                         }
                     }
                 };
