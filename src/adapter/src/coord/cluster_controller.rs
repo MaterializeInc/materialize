@@ -727,13 +727,10 @@ impl Coordinator {
             managed.logging = logging.clone();
         }
         if let Some(reconfiguration) = reconfiguration {
-            managed.reconfiguration = reconfiguration
-                .record
-                .as_ref()
-                .map(reconfiguration_from_controller);
+            managed.reconfiguration = reconfiguration.record.as_ref().map(memory_reconfiguration);
         }
         if let Some(burst) = burst {
-            managed.burst = burst.record.as_ref().map(burst_from_controller);
+            managed.burst = burst.record.as_ref().map(memory_burst);
         }
         // The audit intents travel with the write, declared by the strategy at
         // the decision point. We pass them through untouched so the events are
@@ -847,7 +844,7 @@ fn on_timeout_from_controller(action: OnTimeout) -> mz_sql::plan::OnTimeoutActio
     }
 }
 
-fn reconfiguration_from_controller(
+fn memory_reconfiguration(
     record: &ReconfigurationRecord,
 ) -> mz_catalog::memory::objects::ReconfigurationState {
     // Destructure the source (no `..`): a field added to the controller type is a
@@ -899,7 +896,7 @@ fn status_from_controller(
     }
 }
 
-fn burst_from_controller(
+fn memory_burst(
     record: &mz_cluster_controller::ctx::BurstRecord,
 ) -> mz_catalog::memory::objects::BurstState {
     // Destructure the source (no `..`): a field added to the controller type is a
