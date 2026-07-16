@@ -2451,6 +2451,27 @@ impl CatalogItem {
         }
     }
 
+    /// Whether this item runs a dataflow on its cluster's replicas and so has
+    /// hydration state: an index, materialized view, sink, or ingestion
+    /// source. Non-ingestion sources (webhooks, ingestion exports) are bound
+    /// to a cluster but run no dataflow on any replica.
+    pub fn is_hydratable(&self) -> bool {
+        match self {
+            CatalogItem::Index(_) | CatalogItem::MaterializedView(_) | CatalogItem::Sink(_) => true,
+            CatalogItem::Source(source) => matches!(
+                source.data_source,
+                DataSourceDesc::Ingestion { .. } | DataSourceDesc::OldSyntaxIngestion { .. }
+            ),
+            CatalogItem::Table(_)
+            | CatalogItem::Log(_)
+            | CatalogItem::View(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_) => false,
+        }
+    }
+
     pub fn cluster_id(&self) -> Option<ClusterId> {
         match self {
             CatalogItem::MaterializedView(mv) => Some(mv.cluster_id),

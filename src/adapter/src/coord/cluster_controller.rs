@@ -395,26 +395,13 @@ impl Coordinator {
     /// the trait method for the approximation contract and why mismatches with
     /// the hydration check are self-healing).
     fn cluster_has_hydratable_objects(&self, cluster_id: ClusterId) -> bool {
-        use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc};
-
         let Some(cluster) = self.catalog().try_get_cluster(cluster_id) else {
             return false;
         };
         cluster
             .bound_objects
             .iter()
-            .any(|id| match self.catalog().get_entry(id).item() {
-                CatalogItem::Index(_) | CatalogItem::MaterializedView(_) | CatalogItem::Sink(_) => {
-                    true
-                }
-                // Only ingestions: a webhook source is bound to its cluster but
-                // runs no dataflow on any replica, nothing a burst accelerates.
-                CatalogItem::Source(source) => matches!(
-                    source.data_source,
-                    DataSourceDesc::Ingestion { .. } | DataSourceDesc::OldSyntaxIngestion { .. }
-                ),
-                _ => false,
-            })
+            .any(|id| self.catalog().get_entry(id).item().is_hydratable())
     }
 
     /// Starts per-replica hydration checks for `cluster_id`.
