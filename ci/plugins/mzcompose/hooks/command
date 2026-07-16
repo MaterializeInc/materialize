@@ -25,8 +25,14 @@ mzcompose() {
 
 run_mzcompose() {
     if [ -n "${BUILDKITE_PLUGIN_MZCOMPOSE_RUN_TIMEOUT:-}" ]; then
-        timeout --signal=TERM --kill-after=30s "$BUILDKITE_PLUGIN_MZCOMPOSE_RUN_TIMEOUT" \
-            stdbuf --output=L --error=L bin/ci-builder run "$builder" bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
+        # NOTE: The timeout must run inside the container. Wrapping the
+        # `docker run` in host-side timeout(1) moves the docker CLI into a new
+        # process group, and under the Buildkite agent the CLI then reliably
+        # fails to exit after the container is done, so every run hangs from
+        # workflow completion until the timeout expires and counts as failed.
+        stdbuf --output=L --error=L bin/ci-builder run "$builder" \
+            timeout --signal=TERM --kill-after=30s "$BUILDKITE_PLUGIN_MZCOMPOSE_RUN_TIMEOUT" \
+            bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
     else
         mzcompose "$@"
     fi

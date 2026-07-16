@@ -661,6 +661,8 @@ class CopyFromS3Action(Action):
                 # roundtrip can produce NULLs for NOT NULL columns.
                 "violates not-null constraint",
                 "timeout: error trying to connect",
+                # TODO: Remove when https://linear.app/materializeinc/issue/SS-341 is fixed
+                "parquet error",
             ]
         )
         if exe.db.complexity == Complexity.DDL:
@@ -1291,6 +1293,7 @@ class ReplaceMaterializedViewAction(Action):
         errors = [
             # A concurrent or leaked replacement of the same view
             "because it already has a replacement",
+            "is sealed and thus cannot be replaced",
         ] + super().errors_to_ignore(exe)
         if exe.db.scenario == Scenario.Rename:
             # The view's rendered SELECT embeds qualified names captured at

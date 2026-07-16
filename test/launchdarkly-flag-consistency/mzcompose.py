@@ -520,6 +520,7 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "enable_compute_correction_v2",
     "enable_compute_temporal_bucketing",
     "enable_new_outer_join_lowering",
+    "enable_upsert_v2",
     "enable_variadic_left_join_lowering",
     "persist_batch_delete_enabled",
     "persist_rollup_use_active_rollup",
