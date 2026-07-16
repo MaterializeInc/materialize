@@ -151,6 +151,23 @@ describe("RegionNode toggle", () => {
     );
     expect(screen.getByTestId("region-toggle").textContent).not.toBe(collapsed);
   });
+
+  it("lets clicks pass through the expanded container's body to inner nodes, but not through its header", async () => {
+    await renderComponent(
+      <RegionNode {...nodeProps(regionData({ expanded: true }))} />,
+    );
+    // The header (toggle + label) must stay clickable so the disclosure
+    // triangle and double-click-to-navigate keep working; the body must not
+    // intercept clicks, or nodes/edges nested inside the expanded container
+    // (rendered as later siblings on the canvas, not children of this
+    // component) would never receive them.
+    const header = screen.getByTestId("region-toggle").parentElement;
+    expect(header).not.toBeNull();
+    expect(header).toHaveStyle({ pointerEvents: "auto" });
+    const body = header!.parentElement;
+    expect(body).not.toBeNull();
+    expect(body).toHaveStyle({ pointerEvents: "none" });
+  });
 });
 
 describe("PortNode", () => {
