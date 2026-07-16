@@ -19,13 +19,8 @@
 //!
 //! The interface is **pull-based**: a tick fetches only the signals it actually
 //! examines (no eager all-clusters-all-replicas snapshot is pushed in), and the
-//! controller drives what is fetched. The two whole-tick reads
-//! (`managed_cluster_ids`, `cluster_states`) are batched across all clusters; the
-//! live signals (`hydrated_replicas`, `has_hydratable_objects`) are pulled per
-//! cluster, on demand, only where a strategy needs them. A tick therefore costs
-//! the two batched round-trips plus one per cluster needing a live signal,
-//! bounded by the managed-cluster count, not constant. Batching the per-cluster
-//! pulls is left for when the controller actually moves off-process.
+//! controller drives what is fetched. Read methods are batched so a separate-task
+//! deployment can bound its round-trips to the Coordinator.
 
 use std::collections::BTreeSet;
 
@@ -68,8 +63,6 @@ pub struct ClusterState {
     pub replication_factor: u32,
     pub availability_zones: Vec<String>,
     pub logging: ComputeReplicaLogging,
-    /// The user-configured autoscaling policy, if any. Drives the hydration-burst
-    /// strategy.
     pub auto_scaling_policy: Option<AutoScalingPolicy>,
     /// Latest graceful reconfiguration record, if one has been written.
     pub reconfiguration: Option<ReconfigurationRecord>,
@@ -241,11 +234,7 @@ pub enum ApplyOutcome {
 /// channel from the controller's own task, hence the `Send` bound).
 #[async_trait]
 pub trait ClusterControllerCtx: Send {
-    /// The wall-clock time the strategies and reconcile kernel should treat as
-    /// "now". An implementation must keep this stable across a reconcile phase
-    /// (in practice by latching it at the [`Self::cluster_states`] read), so every
-    /// strategy and the kernel decide against one consistent time, not a clock
-    /// that drifts between calls within a tick.
+    /// Current wall-clock time, as the controller's strategies should see it.
     fn now(&self) -> Timestamp;
 
     /// A consistent durable view of the given managed clusters and their
@@ -260,29 +249,21 @@ pub trait ClusterControllerCtx: Send {
     /// collections on the cluster hydrated. The returned set is a subset of
     /// `replicas`.
     ///
-    /// Callers should request only replicas their strategy examines this tick.
-    /// The graceful and hydration-burst strategies call this only while their
-    /// transient work is active.
+    /// Callers should request only replicas their strategy currently needs. This
+    /// keeps live-signal dependencies local to the strategies that consume them.
     async fn hydrated_replicas(
         &mut self,
         cluster_id: ClusterId,
         replicas: &[ReplicaId],
     ) -> BTreeSet<ReplicaId>;
 
-    /// Whether `cluster_id` has at least one hydratable object bound to it (an
-    /// index, materialized view, ingestion source, or sink, the
-    /// dataflow-backed items).
+    /// Whether `cluster_id` has at least one hydratable (dataflow-backed) object
+    /// bound to it: an index, materialized view, ingestion source, or sink.
     ///
-    /// This is a catalog-level approximation of "the hydration check has
-    /// something to count": the per-replica hydration signal treats some item
-    /// classes as trivially hydrated, so the two sets can disagree at the
-    /// margin. The mismatch is self-healing. If this reports objects but the
-    /// hydration check counts none of them, a steady replica reads hydrated
-    /// as soon as its (near-instant) introspection-log dataflows do, and the
-    /// burst record's linger clears it.
-    ///
-    /// Pulled on demand like [`Self::hydrated_replicas`]: the controller asks
-    /// only for clusters where the burst strategy could arm this tick.
+    /// A catalog-level approximation of "the hydration check has something to
+    /// count". Where the two disagree at the margin, the mismatch is
+    /// self-healing: a replica with nothing to hydrate reads hydrated, and the
+    /// burst winds down via its linger.
     async fn has_hydratable_objects(&mut self, cluster_id: ClusterId) -> bool;
 
     /// Apply a tick's batch of decisions under their compare-and-append guards.

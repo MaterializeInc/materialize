@@ -125,12 +125,7 @@ impl SignalRequest {
 
 /// Environment-wide configuration the strategies consult, latched by the kernel
 /// once per tick from the controller's dyncfgs so every strategy decides against
-/// one consistent config.
-///
-/// Config signals are the third input category next to durable [`ClusterState`]
-/// and per-cluster [`LiveSignals`]: not durable cluster state (so never witness
-/// material, a flip does not need to reject an in-flight decision) and not
-/// per-cluster observations.
+/// one consistent config. Not durable cluster state, so never witness material.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ConfigSignals {
     /// Whether the hydration-burst strategy is enabled environment-wide (the
@@ -372,13 +367,7 @@ impl Strategy for GracefulReconfigurationStrategy {
 }
 
 /// A millisecond [`Duration`] as a [`Timestamp`], saturating at [`Timestamp::MAX`]
-/// on overflow.
-///
-/// The input (the burst linger duration) is validated to fit during planning,
-/// so the saturation is not expected to trigger. Saturating rather than
-/// panicking is deliberate: this is a pure strategy kernel, and clamping an
-/// out-of-range duration to the largest representable value degrades to "keep
-/// the replica on" rather than crashing the controller on a bad input.
+/// on overflow rather than panicking the controller on a bad input.
 ///
 /// [`Duration`]: std::time::Duration
 fn duration_to_ts(duration: std::time::Duration) -> Timestamp {
@@ -442,11 +431,8 @@ impl HydrationBurstStrategy {
     }
 
     /// Whether at least one steady-state (realized-config) replica reports all
-    /// current objects hydrated. On a cluster with zero user objects a replica
-    /// reads hydrated once its (near-instant) introspection-log dataflows
-    /// hydrate. The hydration signal counts those too; false when no steady
-    /// replica reports at all (absent, or not yet registered with the compute
-    /// controller).
+    /// current objects hydrated. `false` when no steady replica reports at all
+    /// (absent, or not yet registered with the compute controller).
     fn steady_hydrated(&self, state: &ClusterState, signals: &LiveSignals) -> bool {
         let steady_shape = state.realized_shape();
         state
@@ -463,13 +449,8 @@ impl Strategy for HydrationBurstStrategy {
     }
 
     fn signal_request(&self, state: &ClusterState, config: &ConfigSignals) -> SignalRequest {
-        // Hydration is consulted whenever the policy is active: by the arm
-        // check with no record, and by the linger lifecycle with one. Object
+        // Hydration drives both the arm check and the linger lifecycle. Object
         // existence only gates arming, so it is requested only record-less.
-        // The requests are independent, so an object-less cluster with a
-        // policy still gets its replicas probed each tick. The probe is
-        // in-memory controller state, an accepted cost for keeping requests
-        // pure over durable state.
         let active = self.active_policy(state, config).is_some();
         SignalRequest {
             hydration: active,
@@ -512,16 +493,12 @@ impl Strategy for HydrationBurstStrategy {
 
         match &state.burst {
             // No record: arm a burst only while some object exists that the
-            // steady set has not hydrated. The object gate is what keeps an
-            // object-less cluster from bursting: without it, an absent or
-            // not-yet-registered steady replica reads as un-hydrated and a
-            // brand-new cluster would burst at creation with nothing to
-            // accelerate. It also makes `steady_hydrated`'s zero-object
-            // ambiguity (true once a reporting replica's log dataflows hydrate,
-            // false for an absent one) irrelevant here. The record-present arms
-            // below deliberately do not consult the gate: if all objects are
-            // dropped mid-burst, the steady set reads hydrated as soon as a
-            // replica's log dataflows do and the linger clears the record.
+            // steady set has not hydrated. Without the object gate, a brand-new
+            // cluster would burst at creation with nothing to accelerate (an
+            // absent steady replica reads as un-hydrated). The record-present
+            // arms below do not consult the gate: if all objects are dropped
+            // mid-burst, the steady set reads hydrated and the linger clears
+            // the record.
             None => {
                 if steady_hydrated || !signals.has_hydratable_objects {
                     StateWrite::default()
@@ -546,9 +523,8 @@ impl Strategy for HydrationBurstStrategy {
             Some(record) => {
                 match (record.steady_hydrated_at, steady_hydrated) {
                     // Steady set hydrated and the linger has elapsed: tear down.
-                    // A linger so large it overflows the timestamp space reads as
-                    // never-elapsed (hold the burst), matching `duration_to_ts`'s
-                    // degrade-to-keep-on intent and keeping the kernel panic-free.
+                    // A linger that overflows the timestamp space reads as
+                    // never-elapsed.
                     (Some(hydrated_at), true)
                         if now
                             > hydrated_at
@@ -600,13 +576,10 @@ impl Strategy for HydrationBurstStrategy {
         _config: &ConfigSignals,
         _now: Timestamp,
     ) -> Vec<DesiredReplica> {
-        // Keying on record presence is sound even on a phase-2 re-read
-        // snapshot: catalog writes retire records they invalidate in the same
-        // transaction, so a snapshot never pairs a record with a config that
-        // does not warrant it. And the burst dyncfg is latched once per tick,
-        // so a switch-off is handled by phase 1's cleanup before this runs.
-        // One replica at the burst size, with the cluster's AZ pool and
-        // logging (only the size differs from steady).
+        // A present record is never stale: catalog writes retire records they
+        // invalidate in the same transaction, and a dyncfg switch-off is
+        // handled by phase 1's cleanup (config signals are latched per tick).
+        // One replica at the burst size (only the size differs from steady).
         let Some(record) = &state.burst else {
             return Vec::new();
         };

@@ -414,10 +414,9 @@ impl Cluster {
                 replication_factor,
                 optimizer_feature_overrides,
                 schedule,
-                // The user-configured policy is surfaced in the create plan (so
-                // `SHOW CREATE CLUSTER` renders it). The in-flight runtime records
-                // are controller-managed and not part of the create statement.
                 auto_scaling_strategy,
+                // In-flight runtime records, controller-managed and not part of
+                // the create statement.
                 reconfiguration: _,
                 burst: _,
             }) => {

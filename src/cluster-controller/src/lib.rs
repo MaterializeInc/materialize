@@ -58,8 +58,7 @@ use crate::strategy::{
 pub struct ClusterController {
     strategies: Vec<Box<dyn Strategy>>,
     /// The dyncfgs the config signals are latched from each tick. A shared
-    /// handle: updates made by the config system are visible here without any
-    /// push, so a flipped flag takes effect on the next tick.
+    /// handle, so a flipped flag takes effect on the next tick.
     dyncfgs: ConfigSet,
 }
 

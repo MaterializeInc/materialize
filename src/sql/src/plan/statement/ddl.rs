@@ -4890,11 +4890,8 @@ pub fn plan_create_cluster_inner(
             ..Default::default()
         };
 
-        // Plan the autoscaling strategy. Gated by a `feature_flags!` flag (not a
-        // dyncfg), matching the other cluster-DDL gates like SCHEDULE. The gate
-        // applies to new DDL only: clusters are stored structurally, not as SQL,
-        // so existing configs survive a flag rollback and keep rendering in
-        // SHOW CREATE CLUSTER.
+        // The gate applies to new DDL only: clusters are stored structurally,
+        // not as SQL, so existing configs survive a flag rollback.
         let auto_scaling_strategy = match auto_scaling_strategy {
             Some(value) => {
                 scx.require_feature_flag(&ENABLE_AUTO_SCALING_STRATEGY)?;
@@ -5300,13 +5297,8 @@ fn unplan_cluster_schedule(schedule: ClusterSchedule) -> ClusterScheduleOptionVa
 /// Convert a [`ClusterAutoScalingStrategyOptionValue`] into an
 /// [`AutoScalingStrategy`]. An empty block (no sub-policies) maps to `None`
 /// (autoscaling disabled), so an empty `AUTO SCALING STRATEGY = ()` behaves like
-/// a reset.
-///
-/// This is a pure conversion. The cross-config invariants (`HYDRATION SIZE` vs.
-/// the cluster `SIZE`, and incompatibility with a non-MANUAL `SCHEDULE`) are
-/// checked separately by [`validate_auto_scaling_strategy`] against the cluster's
-/// *effective* config, so that they hold no matter which side of the constraint
-/// an `ALTER` changes.
+/// a reset. Cross-config invariants are checked separately by
+/// [`validate_auto_scaling_strategy`].
 ///
 /// The reverse of [`unplan_auto_scaling_strategy`].
 fn plan_auto_scaling_strategy(
@@ -5333,19 +5325,14 @@ fn plan_auto_scaling_strategy(
     }))
 }
 
-/// Validate an effective [`AutoScalingStrategy`] against the cluster's effective
-/// `SIZE` and `SCHEDULE`. Rejects a burst `HYDRATION SIZE` equal to the cluster
-/// `SIZE` (a no-op burst) and the `AUTO SCALING STRATEGY` + non-MANUAL `SCHEDULE`
+/// Validate an [`AutoScalingStrategy`] against the cluster's effective `SIZE`
+/// and `SCHEDULE`. Rejects a burst `HYDRATION SIZE` equal to the cluster `SIZE`
+/// (a no-op burst) and the `AUTO SCALING STRATEGY` + non-MANUAL `SCHEDULE`
 /// combination.
-///
-/// Called on both `CREATE` and `ALTER` with the *effective* config (the values an
-/// `ALTER` sets, else the cluster's current ones), so the invariants cannot be
-/// established by changing either side of the constraint independently.
 ///
 /// `cluster_size` is `None` only when the effective size is unknown at plan time
 /// (an unmanaged→managed `ALTER` that does not set `SIZE`, which fails later for
-/// the missing size); the size equality check is then skipped, but the
-/// schedule-incompatibility check still runs.
+/// the missing size); the size equality check is then skipped.
 fn validate_auto_scaling_strategy(
     strategy: &AutoScalingStrategy,
     cluster_size: Option<&str>,
@@ -6440,13 +6427,9 @@ pub fn plan_alter_cluster(
                         options.auto_scaling_strategy = AlterOptionParameter::Set(strategy);
                     }
 
-                    // Validate the two `AUTO SCALING STRATEGY` invariants against the
-                    // cluster's *effective* config (the values this `ALTER` sets, else
-                    // the cluster's current ones). Doing this here (rather than only
-                    // when the strategy option itself is present) catches the case
-                    // where the constraint is established by changing the *other* side:
-                    // setting `SIZE` to equal an existing `HYDRATION SIZE`, or setting a
-                    // non-MANUAL `SCHEDULE` on a cluster that already has a strategy.
+                    // Validate against the *effective* config (the values this `ALTER`
+                    // sets, else the cluster's current ones), so an invariant cannot be
+                    // broken by changing the other side of its constraint.
                     let effective_strategy = match &options.auto_scaling_strategy {
                         AlterOptionParameter::Set(s) => s.clone(),
                         AlterOptionParameter::Reset => None,

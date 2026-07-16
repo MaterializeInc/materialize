@@ -2144,10 +2144,6 @@ feature_flags!(
     },
     {
         name: enable_auto_scaling_strategy,
-        // `enable_for_item_parsing: true` matches the other cluster-DDL gates
-        // (e.g. `enable_cluster_schedule_refresh`). It is defensive here:
-        // clusters are stored structurally, not as SQL, so nothing re-parses
-        // `AUTO SCALING STRATEGY` at catalog open.
         desc: "`AUTO SCALING STRATEGY` cluster option",
         default: false,
         enable_for_item_parsing: true,
