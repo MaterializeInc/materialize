@@ -22,7 +22,6 @@ pub mod builder;
 pub mod builder_input;
 pub mod chunk;
 pub mod consolidate;
-pub mod merge_batcher;
 pub mod unload;
 
 use std::hash::Hash;
@@ -50,19 +49,6 @@ use crate::columnation::ColInternalMerger;
 pub type Col2ValBatcher<K, V, T, R> = MergeBatcher<ColInternalMerger<(K, V), T, R>>;
 /// A batcher for columnar storage with unit values.
 pub type Col2KeyBatcher<K, T, R> = Col2ValBatcher<K, (), T, R>;
-
-/// Pageable counterpart to [`Col2ValBatcher`]. Routes every chunk produced
-/// by chunking, merging, or extract through a [`crate::column_pager::ColumnPager`],
-/// so memory pressure can spill chains to a backing store without touching
-/// the merge / extract bodies.
-///
-/// Drop-in shape at the type level: both aliases take `(K, V, T, R)` and
-/// produce a `Batcher<Input = Column<((K, V), T, R)>, Output = Column<((K,
-/// V), T, R)>>`. Call sites can swap with `cargo fix`–style renaming once
-/// downstream `Trace`/`Builder` impls have been wired up. The pager itself
-/// defaults to [`crate::column_pager::ColumnPager::disabled`]; inject a
-/// real one via [`merge_batcher::ColumnMergeBatcher::set_pager`].
-pub type Col2ValPagedBatcher<K, V, T, R> = merge_batcher::ColumnMergeBatcher<(K, V), T, R>;
 
 /// A container based on a columnar store, encoded in aligned bytes.
 ///
