@@ -35,12 +35,15 @@ from materialize.invariants.framework import (
 )
 
 # Reads racing concurrent DDL legitimately error, e.g. when a peek planned
-# against an index that the DDL churn dropped mid-flight. The data is never
-# wrong, the checker round is just skipped.
+# against an index that the DDL churn dropped mid-flight, or when the second
+# statement of a read-only transaction plans against an index created after
+# the transaction pinned its timedomain. The data is never wrong, the
+# checker round is just skipped.
 CONCURRENT_DDL_ERROR_SNIPPETS = [
     "was dropped",
     "unknown catalog item",
     "is not readable at any timestamp",
+    "same timedomain",
 ]
 
 # Substrings of psycopg error messages that indicate the connection (not the
@@ -52,6 +55,7 @@ CONNECTION_ERROR_SNIPPETS = [
     "connection timeout expired",
     "the connection is lost",
     "connection is closed",
+    "connection closed",
     "EOF detected",
     "connection failed",
     "consuming input failed",
@@ -253,6 +257,13 @@ class MzClient:
             if isinstance(e, QueryCanceled) or "canceling statement due to" in str(e):
                 return Outcome.UNKNOWN
             if _is_connection_error(e):
+                return Outcome.UNKNOWN
+            if not isinstance(e, psycopg.Error):
+                # psycopg's COPY teardown surfaces client-side artifacts
+                # (e.g. ValueError "too many values to unpack") when the
+                # watchdog cancels mid-COPY. No success reply arrived, so
+                # the outcome is unknown. Only definite server rejections
+                # (psycopg.Error with an error response) stay fatal.
                 return Outcome.UNKNOWN
             raise UnexpectedQueryError(f"copy in rejected: {sql[:200]}: {e}") from e
         finally:
