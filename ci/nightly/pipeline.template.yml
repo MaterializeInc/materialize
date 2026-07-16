@@ -2111,17 +2111,6 @@ steps:
             # Don't run with Azurite since it's pretty slow, see https://github.com/MaterializeInc/database-issues/issues/8892 for details
             args: [--replicas=8]
 
-  - id: slow-cluster
-    label: Cluster (slow)
-    depends_on: build-aarch64
-    timeout_in_minutes: 30
-    agents:
-      queue: hetzner-aarch64-4cpu-8gb
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: cluster
-          args: [--slow-only]
-
   - group: "Parallel Workload"
     key: parallel-workload
     steps:

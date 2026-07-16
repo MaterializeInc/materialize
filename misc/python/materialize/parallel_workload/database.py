@@ -95,8 +95,11 @@ MAX_NETWORK_POLICIES = 30
 # How many committed table states correctness mode keeps per table. A
 # concurrent read must match one of the states between the versions before
 # and after the read. If more commits than this land during a single read,
-# the window has been evicted and that comparison is skipped.
-MAX_TABLE_HISTORY = 40
+# the window has been evicted and that comparison is skipped. Sized so that
+# a full verification transaction (base read, seven shadow reads, surface
+# oracles) rarely gets outrun: states are at most MAX_ROWS rows, so the
+# memory cost is negligible.
+MAX_TABLE_HISTORY = 150
 
 MAX_INITIAL_DBS = 1
 MAX_INITIAL_SCHEMAS = 1
@@ -303,41 +306,71 @@ class Table(DBObject):
         the table read at the same timestamp."""
         return f"{self.schema}.{identifier(naughtify(f'mv-agg-{self.table_id}'))}"
 
-    def create(self, exe: Executor) -> None:
+    def shadow_view(self) -> str:
+        """Correctness mode: non-materialized view mirroring this table, with
+        a default index on it (arrangement-maintained read path, distinct from
+        both the table's own index and the materialized views)."""
+        return f"{self.schema}.{identifier(naughtify(f'vw-{self.table_id}'))}"
+
+    def shadow_refresh_mv(self) -> str:
+        """Correctness mode: REFRESH EVERY materialized view. Between
+        refreshes it serves the table as of the last refresh tick, which must
+        equal some committed (tracked) state."""
+        return f"{self.schema}.{identifier(naughtify(f'mv-refresh-{self.table_id}'))}"
+
+    def create_table_sql(self) -> str:
+        """The bare CREATE TABLE statement, without the shadow objects, for
+        callers that must run exactly one DDL statement (DDLTransactionAction).
+        Correctness mode needs create_shadow_objects afterwards."""
         query = "CREATE "
         if self.temp:
             query += "TEMP "
         query += f"TABLE {self}("
         query += ",\n    ".join(column.create() for column in self.columns)
         query += ")"
-        exe.execute(query)
+        return query
+
+    def create(self, exe: Executor) -> None:
+        exe.execute(self.create_table_sql())
         if correctness() and not self.temp:
-            # Shadow objects that must always contain the same data as the
-            # table, verified by SelectAction: an index (arrangement read
-            # path) and materialized views (dataflow producing a persist
-            # shard, must be rehydrated correctly after restarts). Pinned to
-            # the quickstart cluster because the workload never drops it, so
-            # the shadow objects live exactly as long as the table.
-            exe.execute(f"CREATE DEFAULT INDEX IN CLUSTER quickstart ON {self}")
-            exe.execute(
-                f"CREATE MATERIALIZED VIEW {self.shadow_mv()} IN CLUSTER quickstart"
-                f" AS SELECT * FROM {self}"
-            )
-            exe.execute(
-                f"CREATE MATERIALIZED VIEW {self.shadow_cnt_mv()} IN CLUSTER quickstart"
-                f" AS SELECT count(*) AS cnt FROM {self}"
-            )
-            nokey = ", ".join(column.name(True) for column in self.columns[1:])
-            exe.execute(
-                f"CREATE MATERIALIZED VIEW {self.shadow_nokey_mv()} IN CLUSTER"
-                f" quickstart AS SELECT {nokey} FROM {self}"
-            )
-            key = self.columns[0].name(True)
-            exe.execute(
-                f"CREATE MATERIALIZED VIEW {self.shadow_agg_mv()} IN CLUSTER"
-                f" quickstart AS SELECT count(*) AS cnt, min({key}) AS mn,"
-                f" max({key}) AS mx, sum({key}) AS sm FROM {self}"
-            )
+            self.create_shadow_objects(exe)
+
+    def create_shadow_objects(self, exe: Executor) -> None:
+        # Shadow objects that must always contain the same data as the
+        # table, verified by SelectAction: an index (arrangement read
+        # path) and materialized views (dataflow producing a persist
+        # shard, must be rehydrated correctly after restarts). Pinned to
+        # the quickstart cluster because the workload never drops it, so
+        # the shadow objects live exactly as long as the table.
+        exe.execute(f"CREATE DEFAULT INDEX IN CLUSTER quickstart ON {self}")
+        exe.execute(
+            f"CREATE MATERIALIZED VIEW {self.shadow_mv()} IN CLUSTER quickstart"
+            f" AS SELECT * FROM {self}"
+        )
+        exe.execute(
+            f"CREATE MATERIALIZED VIEW {self.shadow_cnt_mv()} IN CLUSTER quickstart"
+            f" AS SELECT count(*) AS cnt FROM {self}"
+        )
+        nokey = ", ".join(column.name(True) for column in self.columns[1:])
+        exe.execute(
+            f"CREATE MATERIALIZED VIEW {self.shadow_nokey_mv()} IN CLUSTER"
+            f" quickstart AS SELECT {nokey} FROM {self}"
+        )
+        key = self.columns[0].name(True)
+        exe.execute(
+            f"CREATE MATERIALIZED VIEW {self.shadow_agg_mv()} IN CLUSTER"
+            f" quickstart AS SELECT count(*) AS cnt, min({key}) AS mn,"
+            f" max({key}) AS mx, sum({key}) AS sm FROM {self}"
+        )
+        exe.execute(f"CREATE VIEW {self.shadow_view()} AS SELECT * FROM {self}")
+        exe.execute(
+            f"CREATE DEFAULT INDEX IN CLUSTER quickstart ON {self.shadow_view()}"
+        )
+        exe.execute(
+            f"CREATE MATERIALIZED VIEW {self.shadow_refresh_mv()} IN CLUSTER"
+            f" quickstart WITH (REFRESH EVERY '5 seconds')"
+            f" AS SELECT * FROM {self}"
+        )
 
 
 class View(DBObject):
