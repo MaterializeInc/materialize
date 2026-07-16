@@ -37,7 +37,8 @@ use differential_dataflow::Data;
 use differential_dataflow::consolidation::{consolidate_from, consolidate_updates};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
-use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
+use differential_dataflow::trace::cursor::{BatchCursor, BatchKey, BatchVal, CursorList};
+use differential_dataflow::trace::{BatchReader, Cursor, Navigable, TraceReader};
 use mz_ore::future::yield_now;
 use mz_repr::Diff;
 use timely::container::{CapacityContainerBuilder, PushInto, SizableContainer};
@@ -61,9 +62,11 @@ pub(super) fn mz_join_core<'scope, T, Tr1, Tr2, L, I, YFn, C>(
 ) -> Stream<'scope, T, C>
 where
     T: timely::progress::Timestamp + Lattice,
-    Tr1: TraceReader<Time = T, Diff = Diff> + Clone + 'static,
-    Tr2: for<'a> TraceReader<Key<'a> = Tr1::Key<'a>, Time = T, Diff = Diff> + Clone + 'static,
-    L: FnMut(Tr1::Key<'_>, Tr1::Val<'_>, Tr2::Val<'_>) -> I + 'static,
+    Tr1: TraceReader<Batch: Navigable, Time = T> + Clone + 'static,
+    Tr2: TraceReader<Batch: Navigable, Time = T> + Clone + 'static,
+    BatchCursor<Tr1>: Cursor<Time = T, Diff = Diff>,
+    for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = BatchKey<'a, Tr1>, Time = T, Diff = Diff>,
+    L: FnMut(BatchKey<'_, Tr1>, BatchVal<'_, Tr1>, BatchVal<'_, Tr2>) -> I + 'static,
     I: IntoIterator<Item: Data> + 'static,
     YFn: Fn(Instant, usize) -> bool + 'static,
     C: Container + SizableContainer + PushInto<(I::Item, T, Diff)> + Data,
@@ -99,11 +102,14 @@ where
 
             // deferred work of batches from each input.
             let result_fn = Rc::new(RefCell::new(result));
-            let mut todo1 = Work::<<Tr1::Batch as BatchReader>::Cursor, Tr2::Cursor, _, _>::new(
+            // A trace hands out a `CursorList` over its batches' cursors, while an individual
+            // batch hands out a single `BatchCursor`. Input 1's per-batch work joins one batch1
+            // cursor against trace2's merged cursor, and vice versa for input 2.
+            let mut todo1 = Work::<BatchCursor<Tr1>, CursorList<BatchCursor<Tr2>>, _, _>::new(
                 Rc::clone(&result_fn),
             );
             let mut todo2 =
-                Work::<Tr1::Cursor, <Tr2::Batch as BatchReader>::Cursor, _, _>::new(result_fn);
+                Work::<CursorList<BatchCursor<Tr1>>, BatchCursor<Tr2>, _, _>::new(result_fn);
 
             // We'll unload the initial batches here, to put ourselves in a less non-deterministic state to start.
             trace1.map_batches(|batch1| {
@@ -164,6 +170,19 @@ where
                 &acknowledged2.borrow()
             ));
 
+            // Batches wholly at or before these frontiers were joined by the start-up loading
+            // above, and arriving input batches are ignored up to them. Beyond them, every
+            // non-empty arriving batch must be joined, even once `acknowledged` has advanced past
+            // it. `advance_upper` consults the shared trace, whose merges may have consolidated an
+            // in-flight batch's updates away once logical compaction equates an add/remove pair's
+            // times. The trace's emptiness there is valid only for readers at or beyond the
+            // compaction frontier, while our consumers may read finer times, so the raw batch still
+            // owes them its updates. Testing against these fixed boundaries rather than the mutable
+            // `acknowledged` frontiers keeps such batches from being dropped. See
+            // TimelyDataflow/differential-dataflow#801.
+            let preload_upper1 = acknowledged1.clone();
+            let preload_upper2 = acknowledged2.clone();
+
             // Load up deferred work using trace2 cursors and batches captured just above.
             for (batch2_cursor, batch2) in batch2_cursors.into_iter() {
                 trace!(
@@ -221,8 +240,11 @@ where
                         .expect("we only drop a trace in response to the other input emptying");
                     let capability = capability.retain(0);
                     for batch1 in data.drain(..) {
-                        // Ignore any pre-loaded data.
-                        if PartialOrder::less_equal(&acknowledged1, batch1.lower()) {
+                        // Ignore any pre-loaded data, which was joined at start-up. This tests the
+                        // fixed preload boundary, not `acknowledged1`, which `advance_upper` can
+                        // move past an in-flight batch whose updates trace merges consolidated away.
+                        // Such a batch must still be joined.
+                        if !PartialOrder::less_equal(batch1.upper(), &preload_upper1) {
                             trace!(
                                 operator_id,
                                 input = 1,
@@ -256,9 +278,17 @@ where
 
                             // To update `acknowledged1` we might presume that `batch1.lower` should equal it, but we
                             // may have skipped over empty batches. Still, the batches are in-order, and we should be
-                            // able to just assume the most recent `batch1.upper`
-                            debug_assert!(PartialOrder::less_equal(&acknowledged1, batch1.upper()));
-                            acknowledged1.clone_from(batch1.upper());
+                            // able to just assume the most recent `batch1.upper`, unless `advance_upper` already moved
+                            // `acknowledged1` past this batch, in which case we keep the further frontier.
+                            if PartialOrder::less_equal(&acknowledged1, batch1.lower()) {
+                                mz_ore::soft_assert_or_log!(
+                                    PartialOrder::less_equal(&acknowledged1, batch1.upper()),
+                                    "acknowledged1 {:?} regressed past batch1 upper {:?}",
+                                    acknowledged1.elements(),
+                                    batch1.upper().elements(),
+                                );
+                                acknowledged1.clone_from(batch1.upper());
+                            }
 
                             trace!(
                                 operator_id,
@@ -277,8 +307,11 @@ where
                         .expect("we only drop a trace in response to the other input emptying");
                     let capability = capability.retain(0);
                     for batch2 in data.drain(..) {
-                        // Ignore any pre-loaded data.
-                        if PartialOrder::less_equal(&acknowledged2, batch2.lower()) {
+                        // Ignore any pre-loaded data, which was joined at start-up. This tests the
+                        // fixed preload boundary, not `acknowledged2`, which `advance_upper` can
+                        // move past an in-flight batch whose updates trace merges consolidated away.
+                        // Such a batch must still be joined.
+                        if !PartialOrder::less_equal(batch2.upper(), &preload_upper2) {
                             trace!(
                                 operator_id,
                                 input = 2,
@@ -312,9 +345,17 @@ where
 
                             // To update `acknowledged2` we might presume that `batch2.lower` should equal it, but we
                             // may have skipped over empty batches. Still, the batches are in-order, and we should be
-                            // able to just assume the most recent `batch2.upper`
-                            debug_assert!(PartialOrder::less_equal(&acknowledged2, batch2.upper()));
-                            acknowledged2.clone_from(batch2.upper());
+                            // able to just assume the most recent `batch2.upper`, unless `advance_upper` already moved
+                            // `acknowledged2` past this batch, in which case we keep the further frontier.
+                            if PartialOrder::less_equal(&acknowledged2, batch2.lower()) {
+                                mz_ore::soft_assert_or_log!(
+                                    PartialOrder::less_equal(&acknowledged2, batch2.upper()),
+                                    "acknowledged2 {:?} regressed past batch2 upper {:?}",
+                                    acknowledged2.elements(),
+                                    batch2.upper().elements(),
+                                );
+                                acknowledged2.clone_from(batch2.upper());
+                            }
 
                             trace!(
                                 operator_id,

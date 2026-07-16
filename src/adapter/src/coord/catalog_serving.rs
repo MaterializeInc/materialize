@@ -20,7 +20,6 @@
 
 use mz_expr::CollectionPlan;
 use mz_repr::GlobalId;
-use mz_repr::namespaces::is_system_schema;
 use mz_sql::catalog::SessionCatalog;
 use mz_sql::plan::{
     ExplainPlanPlan, ExplainTimestampPlan, Explainee, ExplaineeStatement, Plan, SubscribeFrom,
@@ -255,12 +254,17 @@ pub fn check_cluster_restrictions(
     };
 
     // Collect any items that are not allowed to be run on the catalog server cluster.
+    //
+    // Note: We decide whether an item is a system item by the identity of its
+    // schema, not the schema's name. A user-created schema can shadow a system
+    // schema name (`information_schema`) and must not bypass the restriction.
     let unallowed_dependents: SmallVec<[String; 2]> = depends_on
         .filter_map(|id| {
             let item = catalog.get_item_by_global_id(&id);
-            let full_name = catalog.resolve_full_name(item.name());
+            let schema_spec = item.name().qualifiers.schema_spec;
 
-            if !is_system_schema(&full_name.schema) {
+            if !catalog.is_system_schema_specifier(schema_spec) {
+                let full_name = catalog.resolve_full_name(item.name());
                 Some(full_name.to_string())
             } else {
                 None

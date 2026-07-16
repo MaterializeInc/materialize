@@ -20,7 +20,7 @@ use futures::{Future, StreamExt, future};
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
-use mz_adapter_types::dyncfgs::ENABLE_PASSWORD_AUTH;
+use mz_adapter_types::dyncfgs::{ENABLE_PASSWORD_AUTH, READ_THEN_WRITE_MAX_DEPENDENCIES};
 use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{
     CatalogItem, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
@@ -2803,12 +2803,19 @@ impl Coordinator {
         }
 
         // Ensure all objects `selection` depends on are valid for `ReadThenWrite` operations.
-        for gid in selection.depends_on() {
-            let item_id = self.catalog().resolve_item_id(&gid);
-            if let Err(err) = validate_read_then_write_dependencies(self.catalog(), &item_id) {
-                ctx.retire(Err(err));
-                return;
-            }
+        let dependency_ids = selection
+            .depends_on()
+            .into_iter()
+            .map(|gid| self.catalog().resolve_item_id(&gid));
+        let max_rw_dependencies =
+            READ_THEN_WRITE_MAX_DEPENDENCIES.get(self.catalog().system_config().dyncfgs());
+        if let Err(err) = validate_read_then_write_dependencies(
+            self.catalog(),
+            dependency_ids,
+            max_rw_dependencies,
+        ) {
+            ctx.retire(Err(err));
+            return;
         }
 
         let (peek_tx, peek_rx) = oneshot::channel();

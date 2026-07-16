@@ -178,6 +178,41 @@ CREATE ROLE mz_system
 statement error role name "mz_foo" is reserved
 CREATE ROLE mz_foo
 
+# No creating roles named like PostgreSQL role specifications, whether quoted
+# or not, since such roles would be ambiguous in statements like
+# GRANT ... TO CURRENT_USER.
+statement error role name "current_user" is reserved
+CREATE ROLE CURRENT_USER
+
+statement error role name "current_user" is reserved
+CREATE ROLE "current_user"
+
+statement error role name "current_role" is reserved
+CREATE ROLE CURRENT_ROLE
+
+statement error role name "session_user" is reserved
+CREATE ROLE SESSION_USER
+
+statement error role name "user" is reserved
+CREATE ROLE USER
+
+statement error role name "none" is reserved
+CREATE ROLE NONE
+
+statement error role name "public" is reserved
+CREATE ROLE PUBLIC
+
+statement error role name "public" is reserved
+CREATE ROLE "public"
+
+# Quoted names that don't normalize to a reserved lowercase spelling are
+# allowed, matching PostgreSQL.
+statement ok
+CREATE ROLE "CURRENT_USER"
+
+statement ok
+DROP ROLE "CURRENT_USER"
+
 # Create role
 statement ok
 CREATE ROLE foo
@@ -268,7 +303,7 @@ DROP ROLE foo
 simple conn=foo,user=foo
 SELECT current_user();
 ----
-db error: ERROR: role u4 was concurrently dropped
+db error: ERROR: role u5 was concurrently dropped
 DETAIL: Please disconnect and re-connect with a valid role.
 
 simple conn=mz_system,user=mz_system

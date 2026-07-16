@@ -10,7 +10,7 @@ menu:
     weight: 30
 ---
 
-{{< private-preview />}}
+{{< public-preview />}}
 
 {{< source-versioning-disambiguation is_new=true
 other_ref="[old reference page](/sql/create-source/sql-server/)" include_blurb=true >}}

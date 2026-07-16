@@ -526,11 +526,24 @@ SET CLUSTER TO foo;
 statement ok
 CREATE TABLE bar ( key text, val bigint );
 
+# The system check must decide by the schema's identity, not its bare name. A
+# user-created `information_schema` (the one system schema name not blocked by
+# the `mz_`/`pg_` prefix rule) must not bypass the restriction, so a user table
+# in it is rejected exactly like `materialize.public.bar` below.
+statement ok
+CREATE SCHEMA information_schema;
+
+statement ok
+CREATE TABLE materialize.information_schema.spoof ( key text );
+
 statement ok
 SET CLUSTER TO mz_catalog_server;
 
 statement error querying the following items "materialize\.public\.bar" is not allowed from the "mz_catalog_server" cluster
 SELECT key FROM bar;
+
+statement error querying the following items "materialize\.information_schema\.spoof" is not allowed from the "mz_catalog_server" cluster
+SELECT key FROM materialize.information_schema.spoof;
 
 # INSERT ... SELECT with a non-constant body is internally a read-then-write
 # whose SELECT half peeks on the active cluster, so reading a user object this

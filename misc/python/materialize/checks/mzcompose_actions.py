@@ -100,6 +100,13 @@ class StartMz(MzcomposeAction):
             self.tag or MzVersion.parse_cargo(), config_name
         )
 
+        # Scenario-level parameters come from the command line
+        # (--system-param) and win over action-specific ones.
+        additional_system_parameter_defaults = {
+            **self.additional_system_parameter_defaults,
+            **self.scenario.additional_system_parameter_defaults,
+        }
+
         mz = Materialized(
             name=self.mz_service,
             image=image,
@@ -111,7 +118,7 @@ class StartMz(MzcomposeAction):
             blob_store_is_azure=self.scenario.features.azurite_enabled(),
             environment_extra=self.environment_extra,
             system_parameter_defaults=self.system_parameter_defaults,
-            additional_system_parameter_defaults=self.additional_system_parameter_defaults,
+            additional_system_parameter_defaults=additional_system_parameter_defaults,
             system_parameter_version=self.system_parameter_version,
             soft_assertions=self.soft_assertions,
             sanity_restart=False,
@@ -121,7 +128,7 @@ class StartMz(MzcomposeAction):
             restart=self.restart,
             force_migrations=self.force_migrations,
             publish=self.publish,
-            default_replication_factor=2,
+            default_replication_factor=self.scenario.default_replication_factor,
             support_external_clusterd=True,
             builtin_system_cluster_replication_factor=self.builtin_system_cluster_replication_factor,
             builtin_probe_cluster_replication_factor=self.builtin_probe_cluster_replication_factor,
@@ -214,10 +221,13 @@ class ConfigureMz(MzcomposeAction):
             """)
 
         self.handle = e.testdrive(input=input, mz_service=self.mz_service)
-        e.system_settings.update(system_settings)
+        self.applied_settings = system_settings
 
     def join(self, e: Executor) -> None:
         e.join(self.handle)
+        # Only record the settings as applied once the testdrive fragment that
+        # applies them has actually succeeded.
+        e.system_settings.update(self.applied_settings)
 
 
 class SetupSqlServerTesting(MzcomposeAction):
@@ -303,10 +313,23 @@ class UseClusterdCompute(MzcomposeAction):
             port=6877,
             user="mz_system",
         )
+
+        # Drop all existing replicas so that quickstart runs solely on
+        # clusterd_compute_1. A leftover orchestrated replica would keep
+        # serving queries and mask failures of the unorchestrated one.
+        replica_names = [row[0] for row in c.sql_query("""
+                SELECT mz_cluster_replicas.name
+                FROM mz_cluster_replicas
+                JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id
+                WHERE mz_clusters.name = 'quickstart'
+                """)]
+        drop_replicas = "\n".join(
+            f"DROP CLUSTER REPLICA quickstart.{name};" for name in replica_names
+        )
         c.sql(
-            """
+            f"""
             ALTER CLUSTER quickstart SET (MANAGED = false);
-            DROP CLUSTER REPLICA quickstart.r1;
+            {drop_replicas}
             CREATE CLUSTER REPLICA quickstart.r1
                 STORAGECTL ADDRESSES ['clusterd_compute_1:2100'],
                 STORAGE ADDRESSES ['clusterd_compute_1:2103'],

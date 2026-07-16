@@ -965,6 +965,11 @@ pub struct ReconfigurationState {
 }
 
 /// The lifecycle status of the latest graceful reconfiguration.
+///
+/// NOTE: the serde serialization of these variant names is what the
+/// `mz_internal.mz_cluster_reconfigurations` builtin view matches on. When
+/// adding a variant, extend that view's `status` CASE mapping, or the new
+/// variant surfaces verbatim (`SomeNewStatus`) instead of snake_case.
 #[derive(
     Clone,
     Copy,
@@ -987,6 +992,9 @@ pub enum ReconfigurationStatus {
 
 /// The action a graceful reconfiguration applies if its deadline passes before
 /// the target replicas hydrate. Mirrors `mz_sql::plan::OnTimeoutAction`.
+///
+/// NOTE: like `ReconfigurationStatus`, the serde variant names feed the
+/// `on_timeout` CASE mapping in `mz_internal.mz_cluster_reconfigurations`.
 #[derive(
     Clone,
     Copy,

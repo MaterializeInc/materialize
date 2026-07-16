@@ -80,7 +80,7 @@ updates:
         - minor
         - patch
 - package-ecosystem: docker
-  directory: /misc/images/ubuntu-base
+  directory: /misc/images/debian-base
   schedule:
     interval: weekly
     day: sunday

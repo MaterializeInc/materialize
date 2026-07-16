@@ -2285,18 +2285,42 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_glue_avro_option(&mut self) -> Result<GlueAvroOption<Raw>, ParserError> {
-        self.expect_keywords(&[SCHEMA, NAME])?;
-        // The value is parsed as optional even though SCHEMA NAME requires one currently.
-        // Enforcing it here wouldn't let us drop the purification-layer check:
-        // the whole option list is optional, so `CONNECTION glue_conn` and
-        // `(...)` with no SCHEMA NAME bypass this function entirely. This also allows
-        // us to provide more detailed errors.
-        //
-        // Future work may add mutually exclusive options (or interpret a lack of schema name).
-        // For example, a lack of schema name may fall back to the default AWS Glue naming strategy:
-        // See <https://github.com/awslabs/aws-glue-schema-registry/blob/4b9cac477d6876a883e2a8893738a30c072694dc/common/src/main/java/com/amazonaws/services/schemaregistry/common/AWSSchemaNamingStrategyDefaultImpl.java#L18>
+        // The singular `SCHEMA NAME` is used by sources; the `KEY`/`VALUE`-prefixed
+        // options mirror the CSR clause and are used by sinks. Which options are
+        // valid in which context is enforced in the planner and purifier, not
+        // here. Values are parsed as optional so a missing value surfaces a clear
+        // planner error rather than a parse error.
+        let name = match self.expect_one_of_keywords(&[SCHEMA, KEY, VALUE])? {
+            SCHEMA => {
+                self.expect_keyword(NAME)?;
+                GlueAvroOptionName::SchemaName
+            }
+            KEY => match self.expect_one_of_keywords(&[SCHEMA, COMPATIBILITY])? {
+                SCHEMA => {
+                    self.expect_keyword(NAME)?;
+                    GlueAvroOptionName::KeySchemaName
+                }
+                COMPATIBILITY => {
+                    self.expect_keyword(LEVEL)?;
+                    GlueAvroOptionName::KeyCompatibilityLevel
+                }
+                _ => unreachable!(),
+            },
+            VALUE => match self.expect_one_of_keywords(&[SCHEMA, COMPATIBILITY])? {
+                SCHEMA => {
+                    self.expect_keyword(NAME)?;
+                    GlueAvroOptionName::ValueSchemaName
+                }
+                COMPATIBILITY => {
+                    self.expect_keyword(LEVEL)?;
+                    GlueAvroOptionName::ValueCompatibilityLevel
+                }
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        };
         Ok(GlueAvroOption {
-            name: GlueAvroOptionName::SchemaName,
+            name,
             value: self.parse_optional_option_value()?,
         })
     }

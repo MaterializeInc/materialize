@@ -31,6 +31,9 @@ and support the MCP `initialize`, `tools/list`, and `tools/call` methods.
 
 ## See also
 
+- [Use an ontology table](/architecture-patterns/ontology/) to curate join
+  relationships that agents query through the `query` tool before writing
+  multi-table SQL.
 - [MCP Server
   Troubleshooting](/integrations/mcp-server/mcp-server-troubleshooting/)
 - [Appendix: MCP Server (Python)](/integrations/mcp-server/llm) for locally-run,

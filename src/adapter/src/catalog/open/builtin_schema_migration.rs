@@ -268,6 +268,39 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_CATALOG_SCHEMA,
             "mz_audit_events",
         ),
+        // Required because we added the `mz_cluster_reconfigurations_ind` and
+        // `mz_cluster_auto_scaling_strategies_ind` builtin indexes without
+        // bumping mz_indexes. make_mz_indexes inlines the builtin-index set as
+        // VALUES, so any add/remove changes its SQL fingerprint and requires an
+        // explicit replacement step.
+        //
+        // NOTE: this version must stay at the workspace's current dev version
+        // until this change ships in a release. A dev version orders below its
+        // release, so a step pinned to an older dev version is skipped when
+        // upgrading from that release onward, and the fingerprint check then
+        // panics at catalog open.
+        MigrationStep::replacement(
+            "26.34.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_indexes",
+        ),
+        // Converting mz_postgres_sources / mz_kafka_sources from builtin tables
+        // to materialized views changes their catalog fingerprint, so both need
+        // an explicit replacement step. See the NOTE above: this version must
+        // stay at the workspace's current dev version until the change ships.
+        MigrationStep::replacement(
+            "26.34.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_postgres_sources",
+        ),
+        MigrationStep::replacement(
+            "26.34.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_kafka_sources",
+        ),
     ]
 });
 

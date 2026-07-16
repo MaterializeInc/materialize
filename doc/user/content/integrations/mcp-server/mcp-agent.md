@@ -781,14 +781,6 @@ curl -X POST <baseURL>/api/mcp/agent \
 
 ## Start querying
 
-Once connected to the MCP server, you can query your curated data products using
-either natural language or SQL:
-
-- *Via `materialize-agent`: What data products can I query?*
-- *SELECT * FROM mcp_product_performance LIMIT 5;*
-- *What's the `total_revenue` for product 42?*
-- *Perform a Pareto analysis on my products.*
-
 {{< warning >}}
 
 By default, the [`query` tool](/integrations/mcp-server/mcp-agent-tools/#query)
@@ -803,9 +795,24 @@ configuration](/integrations/mcp-server/mcp-agent-config/).
 
 {{< /warning >}}
 
+{{< tip >}}
+Because the `query` tool can join across objects, consider maintaining an
+[ontology table](/architecture-patterns/ontology/): a curated catalog of the
+join relationships in your schema that the agent can query to confirm exact join
+keys before writing multi-table SQL.
+{{< /tip >}}
+
+Once connected to the MCP server, you can query your curated data products using
+either natural language or SQL:
+
+- *Via `materialize-agent`: What data products can I query?*
+- *SELECT * FROM mcp_product_performance LIMIT 5;*
+- *What's the `total_revenue` for product 42?*
+- *Perform a Pareto analysis on my products.*
 
 ## Related pages
 
+- [Use an ontology table](/architecture-patterns/ontology/)
 - [`materialize-agent` MCP Server available
   tools](/integrations/mcp-server/mcp-agent-tools/)
 - [`materialize-agent` MCP Server

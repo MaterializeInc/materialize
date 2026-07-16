@@ -16,7 +16,7 @@ RUN apt-get update \
     && patch -p1 < /no_fsync.patch \
     && go build -o /out/minio .
 
-MZFROM ubuntu-base
+MZFROM debian-base
 COPY --from=builder /out/minio /usr/local/bin/minio
 RUN useradd -m minio \
     && apt-get update \

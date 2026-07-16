@@ -123,6 +123,16 @@ type  text  `on-refresh`,␠or␠`manual`.␠Default:␠`manual`
 refresh_hydration_time_estimate  interval  The␠interval␠given␠in␠the␠`HYDRATION␠TIME␠ESTIMATE`␠option.
 
 query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_reconfigurations' ORDER BY position
+----
+cluster_id  text  The␠ID␠of␠the␠cluster.␠Corresponds␠to␠`mz_clusters.id`.
+status  text  The␠lifecycle␠status␠of␠the␠reconfiguration:␠`in-progress`␠while␠the␠controller␠converges␠on␠the␠target,␠then␠a␠terminal␠`finalized`,␠`timed-out`,␠`cancelled`,␠or␠`resource-exhausted`.␠The␠record␠is␠retained␠after␠it␠settles,␠so␠the␠latest␠outcome␠stays␠inspectable␠until␠a␠later␠reconfiguration␠overwrites␠it.
+deadline  mz_timestamp  The␠deadline␠by␠which␠the␠reconfiguration␠must␠complete.␠After␠it␠passes,␠the␠`on_timeout`␠action␠applies.
+on_timeout  text  The␠action␠applied␠if␠`deadline`␠passes␠before␠the␠target␠hydrates:␠`commit`␠(cut␠over␠to␠the␠not-yet-hydrated␠target)␠or␠`rollback`␠(revert␠to␠the␠pre-reconfiguration␠shape).
+target  jsonb  The␠config␠shape␠the␠cluster␠is␠reconfiguring␠to,␠as␠JSON:␠`size`,␠`replication_factor`,␠`availability_zones`,␠and␠`logging`.␠The␠realized␠(current)␠shape␠is␠in␠`mz_clusters`.
+changes  jsonb  The␠dimensions␠in␠which␠`target`␠differs␠from␠the␠cluster's␠realized␠configuration,␠as␠a␠JSON␠object␠holding␠the␠target␠value␠per␠changed␠dimension.␠Empty␠(`{}`)␠once␠a␠record␠settles␠with␠its␠target␠applied.␠A␠rolled-back␠record␠keeps␠the␠abandoned␠diff.
+
+query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_metrics' ORDER BY position
 ----
 replica_id  text  The␠ID␠of␠a␠cluster␠replica.
@@ -764,7 +774,9 @@ mz_aws_privatelink_connection_statuses
 mz_builtin_materialized_views
 mz_builtin_sources
 mz_catalog_raw
+mz_cluster_auto_scaling_strategies
 mz_cluster_deployment_lineage
+mz_cluster_reconfigurations
 mz_cluster_replica_history
 mz_cluster_replica_metrics
 mz_cluster_replica_metrics_history

@@ -352,7 +352,11 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         return args + self.extra_args
 
     def env_vars(self) -> list[V1EnvVar]:
-        system_parameter_defaults = get_default_system_parameters()
+        # cloudtest runs environmentd against CockroachDB, so
+        # `persist_pg_consensus_read_committed` must stay off.
+        system_parameter_defaults = get_default_system_parameters(
+            metadata_store="cockroach"
+        )
 
         if self.log_filter:
             system_parameter_defaults["log_filter"] = self.log_filter

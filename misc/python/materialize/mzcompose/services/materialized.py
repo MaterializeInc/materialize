@@ -188,7 +188,8 @@ class Materialized(Service):
 
         if system_parameter_defaults is None:
             system_parameter_defaults = get_default_system_parameters(
-                system_parameter_version or image_version
+                system_parameter_version or image_version,
+                metadata_store=metadata_store,
             )
         else:
             # Copy so the writes below don't leak into the caller's dict,
@@ -200,6 +201,13 @@ class Materialized(Service):
         )
         if additional_system_parameter_defaults is not None:
             system_parameter_defaults.update(additional_system_parameter_defaults)
+
+        # `persist_pg_consensus_read_committed` panics persist on CockroachDB.
+        # Force it off there regardless of how the defaults were produced, since
+        # a caller may have derived them for the default Postgres backend and
+        # handed them to a CRDB-backed environmentd.
+        if metadata_store == "cockroach":
+            system_parameter_defaults["persist_pg_consensus_read_committed"] = "false"
 
         if len(system_parameter_defaults) > 0:
             environment += [

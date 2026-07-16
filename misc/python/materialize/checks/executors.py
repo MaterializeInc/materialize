@@ -26,10 +26,13 @@ class Executor:
     # scenarios which are still in development and not available a few versions
     # back already.
     current_mz_version: MzVersion
-    # All the system settings we have already set in previous Mz versions. No
-    # need to set them again in a future version since they should be
-    # persisted.
-    system_settings: set[str] = set()
+
+    def __init__(self) -> None:
+        # All the system settings we have already set in previous Mz versions.
+        # No need to set them again in a future version since they should be
+        # persisted. Per instance so that a fresh environment (and its fresh
+        # executor) starts with a clean slate.
+        self.system_settings: set[str] = set()
 
     def testdrive(
         self, input: str, caller: Traceback | None = None, mz_service: str | None = None
@@ -55,6 +58,7 @@ class Executor:
 
 class MzcomposeExecutor(Executor):
     def __init__(self, composition: Composition) -> None:
+        super().__init__()
         self.composition = composition
 
     def mzcompose_composition(self) -> Composition:
@@ -85,7 +89,7 @@ class MzcomposeExecutor(Executor):
 
 class MzcomposeExecutorParallel(MzcomposeExecutor):
     def __init__(self, composition: Composition) -> None:
-        self.composition = composition
+        super().__init__(composition)
         self.exception: BaseException | None = None
 
     def testdrive(
@@ -148,6 +152,7 @@ class MzcomposeExecutorParallel(MzcomposeExecutor):
 
 class CloudtestExecutor(Executor):
     def __init__(self, application: MaterializeApplication, version: MzVersion) -> None:
+        super().__init__()
         self.application = application
         self.seed = random.getrandbits(32)
         self.current_mz_version = version

@@ -324,9 +324,15 @@ def main() -> int:
                     update_sqlite_repo()
                     break
 
+            # Local sqllogictest points its embedded environmentd at
+            # `args.postgres`, which defaults to a local CockroachDB. Keep
+            # `persist_pg_consensus_read_committed` off, as it requires a
+            # Postgres consensus backend.
             formatted_params = [
                 f"{key}={value}"
-                for key, value in get_default_system_parameters().items()
+                for key, value in get_default_system_parameters(
+                    metadata_store="cockroach"
+                ).items()
             ]
 
             system_parameter_default = ";".join(formatted_params)

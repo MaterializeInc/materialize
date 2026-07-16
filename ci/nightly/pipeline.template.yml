@@ -306,6 +306,7 @@ steps:
               run: benchmark
               args:
                 - --factor-initial-data=0.01
+                - --skip-large
                 - --compare-against
                 - common-ancestor
         agents:
@@ -1260,7 +1261,7 @@ steps:
         label: "Checks 0dt restart of the entire Mz with forced migrations"
         depends_on: build-x86_64
         timeout_in_minutes: 60
-        parallelism: 2
+        parallelism: 4
         agents:
           queue: hetzner-x86-64-12cpu-24gb
         plugins:

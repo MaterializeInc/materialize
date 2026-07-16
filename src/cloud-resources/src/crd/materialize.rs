@@ -3221,6 +3221,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `sha256_compress` on OS `linux`
     fn convert_full_v1alpha1_to_v1_derives_fields() {
         let mz = Materialize {
             metadata: ObjectMeta {
@@ -3275,6 +3276,7 @@ mod tests {
     // still not add defaults or nulls for fields the subset did not carry.
     // Field managers must not gain ownership of fields they never set.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `sha256_compress` on OS `linux`
     fn convert_faithful_output_for_required_field_subsets() {
         let subset = serde_json::json!({
             "apiVersion": "materialize.cloud/v1alpha1",
@@ -3307,6 +3309,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `sha256_compress` on OS `linux`
     fn convert_full_v1_to_v1alpha1_derives_request_rollout() {
         let mz = super::v1::Materialize {
             metadata: ObjectMeta {

@@ -14,6 +14,7 @@ import random
 import threading
 import time
 import urllib.parse
+import zlib
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -44,6 +45,7 @@ from materialize.mzcompose.services.minio import minio_blob_uri
 from materialize.parallel_workload.database import (
     DATA_TYPES,
     DB,
+    MAX_CLUSTER_REPLICAS,
     MAX_CLUSTERS,
     MAX_COLUMNS,
     MAX_DBS,
@@ -87,6 +89,7 @@ from materialize.parallel_workload.negative_accumulation_errors import (
 )
 from materialize.parallel_workload.settings import (
     ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS,
+    COCKROACH_SCENARIOS,
     Complexity,
     Scenario,
 )
@@ -150,6 +153,14 @@ class Action:
     def run(self, exe: Executor) -> bool:
         raise NotImplementedError
 
+    def applicable(self, exe: Executor) -> bool:
+        """Whether this action can run at all in the current configuration.
+
+        Inapplicable actions (e.g. wrong scenario) are skipped by the worker
+        without counting as attempts, which keeps the end-of-run action
+        coverage check meaningful."""
+        return True
+
     def create_system_connection(
         self, exe: Executor, num_attempts: int = 10
     ) -> Connection:
@@ -184,6 +195,11 @@ class Action:
             "is only defined for finite arguments",
             "Window function performance issue",  # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9644 is fixed
             "unknown cluster 'dont_exist'",  # Set intentionally to find panics
+            # A persistent object (sink, non-temp view) referencing a temporary
+            # one is correctly rejected. We still let the workload attempt it,
+            # a path that wrongly accepts it instead panics the coordinator on
+            # catalog apply, which surfaces as an unexpected failure.
+            "non-temporary items cannot depend on temporary item",
         ]
         if exe.db.complexity in (Complexity.DDL, Complexity.DDLOnly):
             result.extend(
@@ -193,7 +209,9 @@ class Action:
                     "violates not-null constraint",
                     "unknown catalog item",  # Expected, see database-issues#6124
                     "was concurrently dropped",  # role was dropped
-                    "unknown cluster",  # cluster was dropped
+                    # cluster was dropped. The trailing quote keeps this from
+                    # matching "unknown cluster replica size" errors.
+                    "unknown cluster '",
                     "unknown schema",  # schema was dropped
                     "the transaction's active cluster has been dropped",  # cluster was dropped
                     "was removed",  # dependency was removed, started with moving optimization off main thread, see database-issues#7285
@@ -232,6 +250,7 @@ class Action:
                     "Can't create a connection to host",
                     "Connection refused",
                     "Cursor closed",
+                    "the connection is lost",
                     # websockets
                     "Connection to remote host was lost.",
                     "socket is already closed.",
@@ -245,10 +264,23 @@ class Action:
                     "Connection broken: IncompleteRead",
                 ]
             )
-        if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
-            # Expected, see database-issues#6156
+        if exe.db.scenario in (
+            Scenario.Kill,
+            Scenario.ZeroDowntimeDeploy,
+            Scenario.BackupRestore,
+        ):
+            # Expected, see database-issues#6156. For BackupRestore the
+            # restore rolls the catalog back to the backup point, so objects
+            # created after the backup vanish while still being tracked.
+            # "invalid database" is the CREATE SCHEMA wording for a database
+            # that vanished the same way (CreateSchemaAction does not lock it).
             result.extend(
-                ["unknown catalog item", "unknown schema", "unknown database"]
+                [
+                    "unknown catalog item",
+                    "unknown schema",
+                    "unknown database",
+                    "invalid database",
+                ]
             )
         if exe.db.scenario == Scenario.Rename:
             result.extend(["unknown schema", "ambiguous reference to schema name"])
@@ -465,11 +497,20 @@ class SelectAction(Action):
         rtr = self.rng.choice([True, False])
         if rtr:
             exe.execute("SET REAL_TIME_RECENCY TO TRUE", explainable=False)
+        # The SET only applies to the pg session, so the RTR query has to run
+        # there too (http=Http.NO). If the query fails, the staged SET is
+        # discarded along with the worker's subsequent rollback, so no reset
+        # is needed on the error path.
         if self.rng.choice([True, False]):
             self.stmt_id += 1
             self.exe_prepared(query, f"select{self.stmt_id}", exe)
         else:
-            exe.execute(query, explainable=True, http=Http.RANDOM, fetch=True)
+            exe.execute(
+                query,
+                explainable=True,
+                http=Http.NO if rtr else Http.RANDOM,
+                fetch=True,
+            )
         if rtr:
             exe.execute("SET REAL_TIME_RECENCY TO FALSE", explainable=False)
         return True
@@ -585,7 +626,7 @@ class CopyToS3Action(Action):
             location = exe.db.s3_path
             exe.db.s3_path += 1
         format = "csv" if self.rng.choice([True, False]) else "parquet"
-        s3_obj = S3Object(str(location), "copytos3", format)
+        s3_obj = None
         if self.rng.random() < 0.9:
             dts = [
                 self.rng.choice(list(DATA_TYPES))
@@ -594,38 +635,68 @@ class CopyToS3Action(Action):
             expressions = ", ".join(
                 [expression(dt, obj.columns, self.rng) for dt in dts]
             )
-            cols = [Column(self.rng, i, dt, s3_obj) for i, dt in enumerate(dts)]
         else:
             expressions = "*"
-            cols = [
-                Column(self.rng, i, column.data_type, s3_obj)
-                for i, column in enumerate(obj.columns)
-            ]
-        s3_obj.columns = cols
+            # A verbatim dump of a table can later be loaded back into it by
+            # CopyFromS3Action: the file's column names and types match the
+            # table's exactly. Temp tables are session-scoped, so other
+            # workers could not COPY INTO them.
+            if isinstance(obj, Table) and not obj.temp:
+                s3_obj = S3Object(str(location), "copytos3", format, obj)
         to_query = f"COPY (SELECT {expressions} FROM {obj_name} WHERE {expression(Boolean, obj.columns, self.rng)} LIMIT {self.rng.randint(0, 100)}) TO 's3://copytos3/{location}' WITH (AWS CONNECTION = aws_conn, FORMAT = '{format}')"
 
         exe.execute(to_query, explainable=False, http=Http.NO, fetch=False)
+        if s3_obj is not None:
+            with exe.db.lock:
+                exe.db.s3_objects.append(s3_obj)
         return True
 
 
 class CopyFromS3Action(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = super().errors_to_ignore(exe)
+        result.extend(
+            [
+                # CSV cannot distinguish NULL from the empty string, so the
+                # roundtrip can produce NULLs for NOT NULL columns.
+                "violates not-null constraint",
+                # COPY TO can write types (e.g. arrays) that COPY FROM's
+                # parquet reader cannot decode yet.
+                # TODO: Remove when https://linear.app/materializeinc/issue/SS-341 is fixed
+                "parquet error",
+                "timeout: error trying to connect",
+            ]
+        )
         if exe.db.complexity == Complexity.DDL:
             result.extend(
                 [
                     "COPY FROM's target table",
+                    "does not exist",
+                    # A concurrent drop of the target table or the cluster
+                    # retires an in-flight COPY FROM as canceled, see
+                    # cancel_pending_copy
+                    "canceling statement due to user request",
                 ]
             )
         return result
 
     def run(self, exe: Executor) -> bool:
-        if not exe.db.s3_objects:
-            return False
-        s3_obj = self.rng.choice(exe.db.s3_objects)
-        from_query = f"COPY INTO t1 FROM 's3://{s3_obj.bucket}/{s3_obj.key}' (FORMAT {format.upper()}, AWS CONNECTION = aws_conn)"
-        s3_obj.create(exe)
+        with exe.db.lock:
+            # Prune entries whose source table was dropped concurrently.
+            exe.db.s3_objects[:] = [
+                o for o in exe.db.s3_objects if o.table in exe.db.tables
+            ]
+            candidates = [o for o in exe.db.s3_objects if o.table.num_rows < MAX_ROWS]
+            if not candidates:
+                return False
+            s3_obj = self.rng.choice(candidates)
+        table = s3_obj.table
+        from_query = f"COPY INTO {table} FROM 's3://{s3_obj.bucket}/{s3_obj.key}' (FORMAT {s3_obj.format.upper()}, AWS CONNECTION = aws_conn)"
         exe.execute(from_query, explainable=False, http=Http.NO, fetch=False)
+        # We don't know how many rows the file contained, resync the estimate
+        # from the table itself.
+        exe.execute(f"SELECT count(*) FROM {table}", http=Http.NO)
+        table.num_rows = exe.cur.fetchall()[0][0]
         return True
 
 
@@ -657,7 +728,13 @@ class InsertAction(Action):
             else:
                 exe.commit() if self.rng.choice([True, False]) else exe.rollback()
         if not table:
-            tables = [table for table in exe.db.tables if table.num_rows < MAX_ROWS]
+            # Temp tables can only be written by their creating session
+            tables = [
+                table
+                for table in exe.db.tables
+                if table.num_rows < MAX_ROWS
+                and (not table.temp or table in exe.temp_objects)
+            ]
             if not tables:
                 return False
             table = self.rng.choice(tables)
@@ -710,7 +787,13 @@ class CopyFromStdinAction(Action):
             else:
                 exe.commit() if self.rng.choice([True, False]) else exe.rollback()
         if not table:
-            tables = [table for table in exe.db.tables if table.num_rows < MAX_ROWS]
+            # Temp tables can only be written by their creating session
+            tables = [
+                table
+                for table in exe.db.tables
+                if table.num_rows < MAX_ROWS
+                and (not table.temp or table in exe.temp_objects)
+            ]
             if not tables:
                 return False
             table = self.rng.choice(tables)
@@ -744,7 +827,13 @@ class InsertReturningAction(Action):
             else:
                 exe.commit() if self.rng.choice([True, False]) else exe.rollback()
         if not table:
-            tables = [table for table in exe.db.tables if table.num_rows < MAX_ROWS]
+            # Temp tables can only be written by their creating session
+            tables = [
+                table
+                for table in exe.db.tables
+                if table.num_rows < MAX_ROWS
+                and (not table.temp or table in exe.temp_objects)
+            ]
             if not tables:
                 return False
             table = self.rng.choice(tables)
@@ -824,6 +913,13 @@ class UpdateAction(Action):
         result.extend(
             [
                 "canceling statement due to statement timeout",
+                # A random SET expression can evaluate to NULL (e.g. a map-key
+                # miss) even for a NOT NULL column. That is a legitimate
+                # rejection, not a bug, and the column type can't be coerced
+                # away without breaking bare-literal casts (e.g. text->bytea).
+                # The base list ignores this only for DDL complexity, UPDATE
+                # can hit it in any complexity.
+                "violates not-null constraint",
             ]
         )
 
@@ -843,9 +939,16 @@ class UpdateAction(Action):
                     table = t
                     break
         if not table:
-            table = self.rng.choice(exe.db.tables)
+            # Temp tables can only be written by their creating session
+            tables = [
+                table
+                for table in exe.db.tables
+                if not table.temp or table in exe.temp_objects
+            ]
+            if not tables:
+                return False
+            table = self.rng.choice(tables)
 
-        table.columns[0]
         column2 = self.rng.choice(table.columns)
         query = f"UPDATE {table} SET {column2.name(True)} = {expression(column2.data_type, table.columns, self.rng, kind=ExprKind.WRITE)} WHERE {expression(Boolean, table.columns, self.rng, kind=ExprKind.WRITE)}"
         if self.rng.choice([True, False]):
@@ -867,7 +970,15 @@ class DeleteAction(Action):
         return errors
 
     def run(self, exe: Executor) -> bool:
-        table = self.rng.choice(exe.db.tables)
+        # Temp tables can only be written by their creating session
+        tables = [
+            table
+            for table in exe.db.tables
+            if not table.temp or table in exe.temp_objects
+        ]
+        if not tables:
+            return False
+        table = self.rng.choice(tables)
         query = f"DELETE FROM {table}"
         if self.rng.random() < 0.95:
             query += f" WHERE {expression(Boolean, table.columns, self.rng, kind=ExprKind.WRITE)}"
@@ -877,8 +988,12 @@ class DeleteAction(Action):
         else:
             exe.execute(query, http=Http.RANDOM)
         exe.commit()
-        result = exe.cur.rowcount
-        table.num_rows -= result
+        # The DELETE may have run over HTTP/WS or as a prepared statement, in
+        # which case the pg cursor's rowcount is meaningless. Resync the row
+        # count estimate from the table itself. It only gates insert-type
+        # actions, so races with concurrent writers are fine.
+        exe.execute(f"SELECT count(*) FROM {table}", http=Http.NO)
+        table.num_rows = exe.cur.fetchall()[0][0]
         return True
 
 
@@ -909,14 +1024,20 @@ class CreateIndexAction(Action):
         obj = self.rng.choice(exe.db.db_objects())
         columns = self.rng.sample(obj.columns, len(obj.columns))
         columns_str = "_".join(column.name() for column in columns)
-        # columns_str may exceed 255 characters, so it is converted to a positive number with hash
-        index = Index(f"idx_{obj.name()}_{abs(hash(columns_str))}")
+        # columns_str may exceed 255 characters, so it is shortened to a
+        # number. crc32 rather than hash() so index names are stable across
+        # runs with the same seed (hash() of a str is salted per process).
+        index = Index(
+            f"idx_{obj.name()}_{zlib.crc32(columns_str.encode())}", obj.schema
+        )
         index_elems = []
         for column in columns:
             order = self.rng.choice(["ASC", "DESC"])
             index_elems.append(f"{column.name(True)} {order}")
         index_str = ", ".join(index_elems)
-        query = f"CREATE INDEX {index} ON {obj} ({index_str})"
+        # The index name must be unqualified in CREATE INDEX, the index always
+        # lands in the indexed object's schema.
+        query = f"CREATE INDEX {identifier(index.name())} ON {obj} ({index_str})"
         exe.execute(query, http=Http.RANDOM)
         with exe.db.lock:
             exe.db.indexes.add(index)
@@ -934,7 +1055,15 @@ class DropIndexAction(Action):
                 return False
 
             query = f"DROP INDEX {index}"
-            exe.execute(query, http=Http.RANDOM)
+            try:
+                exe.execute(query, http=Http.RANDOM)
+            except QueryError:
+                # The indexed object or its schema may have been dropped
+                # concurrently, taking the index with it. Untrack the index
+                # either way so stale entries don't fill up the set and choke
+                # off CreateIndexAction.
+                exe.db.indexes.remove(index)
+                raise
             exe.db.indexes.remove(index)
             return True
 
@@ -968,6 +1097,8 @@ class CreateTableAction(Action):
                 table = Table(self.rng, table_id, schema)
                 table.create(exe)
         exe.db.tables.append(table)
+        if temp:
+            exe.temp_objects.append(table)
         return True
 
 
@@ -1008,9 +1139,10 @@ class RenameTableAction(Action):
         # and the item-rename check treats a non-3-part reference as ambiguous.
         return ["potentially used ambiguously"] + super().errors_to_ignore(exe)
 
+    def applicable(self, exe: Executor) -> bool:
+        return exe.db.scenario == Scenario.Rename
+
     def run(self, exe: Executor) -> bool:
-        if exe.db.scenario != Scenario.Rename:
-            return False
         with exe.db.lock:
             if not exe.db.tables:
                 return False
@@ -1067,9 +1199,10 @@ class RenameViewAction(Action):
         # and the item-rename check treats a non-3-part reference as ambiguous.
         return ["potentially used ambiguously"] + super().errors_to_ignore(exe)
 
+    def applicable(self, exe: Executor) -> bool:
+        return exe.db.scenario == Scenario.Rename
+
     def run(self, exe: Executor) -> bool:
-        if exe.db.scenario != Scenario.Rename:
-            return False
         with exe.db.lock:
             if not exe.db.views:
                 return False
@@ -1092,9 +1225,10 @@ class RenameViewAction(Action):
 
 
 class RenameIcebergSinkAction(Action):
+    def applicable(self, exe: Executor) -> bool:
+        return exe.db.scenario == Scenario.Rename
+
     def run(self, exe: Executor) -> bool:
-        if exe.db.scenario != Scenario.Rename:
-            return False
         with exe.db.lock:
             if not exe.db.iceberg_sinks:
                 return False
@@ -1124,9 +1258,10 @@ class RenameIcebergSinkAction(Action):
 
 
 class RenameKafkaSinkAction(Action):
+    def applicable(self, exe: Executor) -> bool:
+        return exe.db.scenario == Scenario.Rename
+
     def run(self, exe: Executor) -> bool:
-        if exe.db.scenario != Scenario.Rename:
-            return False
         with exe.db.lock:
             if not exe.db.kafka_sinks:
                 return False
@@ -1156,6 +1291,17 @@ class RenameKafkaSinkAction(Action):
 
 
 class ReplaceMaterializedViewAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        errors = [
+            # A concurrent or leaked replacement of the same view
+            "because it already has a replacement",
+        ] + super().errors_to_ignore(exe)
+        if exe.db.scenario == Scenario.Rename:
+            # The view's rendered SELECT embeds qualified names captured at
+            # creation time, renames invalidate them
+            errors += ["does not exist"]
+        return errors
+
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             mvs = [v for v in exe.db.views if v.materialized]
@@ -1163,25 +1309,41 @@ class ReplaceMaterializedViewAction(Action):
                 return False
             view = self.rng.choice(mvs)
 
-        tmp_mv = identifier(view.name() + "_" + threading.current_thread().getName())
+        # Views live in random schemas of random databases, so all names have
+        # to be fully qualified. The replacement goes into the same schema as
+        # the view it replaces.
+        self.stmt_id += 1
+        tmp_name = (
+            f"{view.name()}_{threading.current_thread().getName()}_{self.stmt_id}"
+        )
+        tmp_mv = f"{view.schema}.{identifier(tmp_name)}"
         exe.execute(
-            f"CREATE REPLACEMENT MATERIALIZED VIEW {tmp_mv} FOR {identifier(view.name())} AS {view.get_select()}",
+            f"CREATE REPLACEMENT MATERIALIZED VIEW {tmp_mv} FOR {view} AS {view.get_select()}",
         )
         time.sleep(self.rng.random())
-        if self.rng.choice([True, False]):
-            exe.execute(
-                f"ALTER MATERIALIZED VIEW {identifier(view.name())} APPLY REPLACEMENT {tmp_mv}",
-            )
-        else:
+        try:
+            # Also run ALTER MATERIALIZED VIEW {view} APPLY REPLACEMENT
+            # {tmp_mv} here, applying while the target has a temporary
+            # dependent panics the coordinator's consistency check.
+            # TODO: Reenable when https://linear.app/materializeinc/issue/SQL-504 is fixed
             exe.execute(f"DROP MATERIALIZED VIEW {tmp_mv}")
+        except QueryError:
+            # Clean up, a leaked replacement blocks all future replacements
+            # of this view.
+            try:
+                exe.execute(f"DROP MATERIALIZED VIEW IF EXISTS {tmp_mv}")
+            except QueryError:
+                pass
+            raise
         return True
 
 
 class AlterIcebergSinkFromAction(Action):
+    def applicable(self, exe: Executor) -> bool:
+        # Does not work reliably with kills, see database-issues#8421
+        return exe.db.scenario not in (Scenario.Kill, Scenario.ZeroDowntimeDeploy)
+
     def run(self, exe: Executor) -> bool:
-        if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
-            # Does not work reliably with kills, see database-issues#8421
-            return False
         with exe.db.lock:
             if not exe.db.iceberg_sinks:
                 return False
@@ -1198,33 +1360,27 @@ class AlterIcebergSinkFromAction(Action):
                 return False
 
             old_object = sink.base_object
-            if sink.key != "":
-                # key requires same column names, low chance of even having that
-                return False
-            else:
-                # Avro schema migration checking can be quite strict, and we need to be not only
-                # compatible with the latest object's schema but all previous schemas.
-                # Only allow a conservative case for now: where all names, types,
-                # and nullabilities match. Nullability matters because it flips an
-                # Avro field between a `["null", T]` union and a bare `T`, which the
-                # schema registry rejects as an incompatible change for an existing
-                # subject (the topic, hence subject, is unchanged by SET FROM).
-                # TODO: Switch back when SS-324 is fixed to make sure it errors
-                # instead of causing a stall
-                objs = []
-                old_cols = {
-                    c.name(True): (c.data_type, c.nullable) for c in old_object.columns
-                }
-                for o in exe.db.db_objects_without_views():
-                    if isinstance(old_object, WebhookSource):
-                        continue
-                    if isinstance(o, WebhookSource):
-                        continue
-                    new_cols = {
-                        c.name(True): (c.data_type, c.nullable) for c in o.columns
-                    }
-                    if old_cols == new_cols:
-                        objs.append(o)
+            # Iceberg sinks always have a key, so only allow a conservative
+            # case: all names, types, and nullabilities match, which also
+            # guarantees the key columns exist in the new object.
+            # TODO: Switch back when SS-324 is fixed to make sure it errors
+            # instead of causing a stall
+            objs = []
+            old_cols = {
+                c.name(True): (c.data_type, c.nullable) for c in old_object.columns
+            }
+            for o in exe.db.db_objects_without_views():
+                if isinstance(old_object, WebhookSource):
+                    continue
+                if isinstance(o, WebhookSource):
+                    continue
+                new_cols = {c.name(True): (c.data_type, c.nullable) for c in o.columns}
+                if old_cols == new_cols:
+                    objs.append(o)
+            # ALTER SINK ... SET FROM a temporary object panics the coordinator
+            # (uncatchable) because the UpdateItem catalog path skips the
+            # temp-dependency check that CREATE enforces. Exclude temp objects.
+            objs = [o for o in objs if not getattr(o, "temp", False)]
             if not objs:
                 return False
             sink.base_object = self.rng.choice(objs)
@@ -1241,10 +1397,11 @@ class AlterIcebergSinkFromAction(Action):
 
 
 class AlterKafkaSinkFromAction(Action):
+    def applicable(self, exe: Executor) -> bool:
+        # Does not work reliably with kills, see database-issues#8421
+        return exe.db.scenario not in (Scenario.Kill, Scenario.ZeroDowntimeDeploy)
+
     def run(self, exe: Executor) -> bool:
-        if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
-            # Does not work reliably with kills, see database-issues#8421
-            return False
         with exe.db.lock:
             if not exe.db.kafka_sinks:
                 return False
@@ -1298,6 +1455,10 @@ class AlterKafkaSinkFromAction(Action):
                     }
                     if old_cols == new_cols:
                         objs.append(o)
+            # ALTER SINK ... SET FROM a temporary object panics the coordinator
+            # (uncatchable) because the UpdateItem catalog path skips the
+            # temp-dependency check that CREATE enforces. Exclude temp objects.
+            objs = [o for o in objs if not getattr(o, "temp", False)]
             if not objs:
                 return False
             sink.base_object = self.rng.choice(objs)
@@ -1414,9 +1575,10 @@ class RenameSchemaAction(Action):
             "ambiguous reference to schema named"  # see https://github.com/MaterializeInc/materialize/pull/22551#pullrequestreview-1691876923
         ] + super().errors_to_ignore(exe)
 
+    def applicable(self, exe: Executor) -> bool:
+        return exe.db.scenario == Scenario.Rename
+
     def run(self, exe: Executor) -> bool:
-        if exe.db.scenario != Scenario.Rename:
-            return False
         with exe.db.lock:
             try:
                 schema = self.rng.choice(exe.db.schemas)
@@ -1448,9 +1610,10 @@ class SwapSchemaAction(Action):
             "object state changed while transaction was in progress",
         ] + super().errors_to_ignore(exe)
 
+    def applicable(self, exe: Executor) -> bool:
+        return exe.db.scenario == Scenario.Rename
+
     def run(self, exe: Executor) -> bool:
-        if exe.db.scenario != Scenario.Rename:
-            return False
         with exe.db.lock:
             try:
                 db = self.rng.choice(exe.db.dbs)
@@ -1478,14 +1641,19 @@ class SwapSchemaAction(Action):
                     f"ALTER SCHEMA {schema1} SWAP WITH {identifier(schema2.name())}"
                 )
             else:
+                # Both schemas belong to the same database, the concurrent
+                # swap of a disjoint pair uses a different tmp name.
+                tmp_name = f"tmp_schema_{schema1.schema_id}_{schema2.schema_id}"
                 exe.cur.connection.autocommit = False
                 try:
-                    exe.execute(f"ALTER SCHEMA {schema1} RENAME TO tmp_schema")
+                    exe.execute(
+                        f"ALTER SCHEMA {schema1} RENAME TO {identifier(tmp_name)}"
+                    )
                     exe.execute(
                         f"ALTER SCHEMA {schema2} RENAME TO {identifier(schema1.name())}"
                     )
                     exe.execute(
-                        f"ALTER SCHEMA tmp_schema RENAME TO {identifier(schema1.name())}"
+                        f"ALTER SCHEMA {schema1.db}.{identifier(tmp_name)} RENAME TO {identifier(schema2.name())}"
                     )
                     exe.commit()
                 finally:
@@ -1940,6 +2108,10 @@ class FlipFlagsAction(Action):
             "cluster_controller_tick_interval",
             "enable_background_alter_cluster",
             "default_cluster_reconfiguration_timeout",
+            # A safety bound on read-then-write dependency validation. Flipping
+            # it low would make ordinary DELETE/UPDATE/INSERT ... SELECT fail,
+            # which the workload does not expect.
+            "read_then_write_max_dependencies",
         ]
 
     def run(self, exe: Executor) -> bool:
@@ -1948,6 +2120,15 @@ class FlipFlagsAction(Action):
         # TODO: Remove when https://linear.app/materializeinc/issue/DB-138 is fixed
         if exe.db.scenario == Scenario.ZeroDowntimeDeploy and flag_name.startswith(
             "persist_use_critical_since_"
+        ):
+            return False
+
+        # `persist_pg_consensus_read_committed` requires a Postgres consensus
+        # backend. The external scenarios run against CockroachDB, where it
+        # panics persist, so never flip it on there.
+        if (
+            flag_name == "persist_pg_consensus_read_committed"
+            and exe.db.scenario in COCKROACH_SCENARIOS
         ):
             return False
 
@@ -1961,13 +2142,13 @@ class FlipFlagsAction(Action):
             exe.db.flags[flag_name] = flag_value
             return True
         except OperationalError:
-            if conn is not None:
-                conn.close()
-
             # ignore it
             return False
         except Exception as e:
             raise QueryError(str(e), "FlipFlags")
+        finally:
+            if conn is not None:
+                conn.close()
 
     def flip_flag(self, conn: Connection, flag_name: str, flag_value: str) -> None:
         with conn.cursor() as cur:
@@ -2051,6 +2232,8 @@ class CreateViewAction(Action):
                         view.target_replica = self.rng.choice(cluster.replicas)
                 view.create(exe)
         exe.db.views.append(view)
+        if temp:
+            exe.temp_objects.append(view)
         return True
 
 
@@ -2134,7 +2317,9 @@ class CreateClusterAction(Action):
         cluster = Cluster(
             cluster_id,
             managed=self.rng.choice([True, False]),
-            size=self.rng.choice(["1", "2"]),
+            size=self.rng.choice(
+                ["scale=1,workers=1", "scale=1,workers=4", "scale=2,workers=2"]
+            ),
             replication_factor=self.rng.choice([1, 2]),
             introspection_interval="1s",
         )
@@ -2154,16 +2339,8 @@ class DropClusterAction(Action):
         with exe.db.lock:
             if len(exe.db.clusters) <= 1:
                 return False
-            # Keep cluster 0 with 1 replica for sources/sinks
-            self.rng.randrange(1, len(exe.db.clusters))
-            try:
-                cluster = self.rng.choice(exe.db.clusters)
-            except IndexError:
-                # We mostly prevent index errors, but we don't want to lock too
-                # much since that would reduce our chance of finding race
-                # conditions in production code, so ignore the rare case where
-                # we accidentally removed all objects.
-                return False
+            # Keep the first cluster with 1 replica for sources/sinks
+            cluster = self.rng.choice(exe.db.clusters[1:])
         with cluster.lock:
             # Was dropped while we were acquiring lock
             if cluster not in exe.db.clusters:
@@ -2193,9 +2370,10 @@ class SwapClusterAction(Action):
             "object state changed while transaction was in progress",
         ] + super().errors_to_ignore(exe)
 
+    def applicable(self, exe: Executor) -> bool:
+        return exe.db.scenario == Scenario.Rename
+
     def run(self, exe: Executor) -> bool:
-        if exe.db.scenario != Scenario.Rename:
-            return False
         with exe.db.lock:
             if len(exe.db.clusters) < 2:
                 return False
@@ -2214,14 +2392,19 @@ class SwapClusterAction(Action):
                     # http=Http.RANDOM,  # Fails, see https://buildkite.com/materialize/nightly/builds/7362#018ecc56-787f-4cc2-ac54-1c8437af164b
                 )
             else:
+                # A concurrent swap of a disjoint pair uses a different tmp
+                # name.
+                tmp_name = f"tmp_cluster_{cluster1.cluster_id}_{cluster2.cluster_id}"
                 exe.cur.connection.autocommit = False
                 try:
-                    exe.execute(f"ALTER SCHEMA {cluster1} RENAME TO tmp_cluster")
                     exe.execute(
-                        f"ALTER SCHEMA {cluster2} RENAME TO {identifier(cluster1.name())}"
+                        f"ALTER CLUSTER {cluster1} RENAME TO {identifier(tmp_name)}"
                     )
                     exe.execute(
-                        f"ALTER SCHEMA tmp_cluster RENAME TO {identifier(cluster1.name())}"
+                        f"ALTER CLUSTER {cluster2} RENAME TO {identifier(cluster1.name())}"
+                    )
+                    exe.execute(
+                        f"ALTER CLUSTER {identifier(tmp_name)} RENAME TO {identifier(cluster2.name())}"
                     )
                     exe.commit()
                 finally:
@@ -2268,19 +2451,29 @@ class SetClusterAction(Action):
 class CreateClusterReplicaAction(Action):
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
-            # Keep cluster 0 with 1 replica for sources/sinks
-            unmanaged_clusters = [c for c in exe.db.clusters[1:] if not c.managed]
+            # Keep cluster 0 with 1 replica for sources/sinks. Only unmanaged
+            # clusters support CREATE CLUSTER REPLICA. Without the
+            # MAX_CLUSTER_REPLICAS cap the replica count random-walks upward
+            # (drops skip at <= 1 replica) into max_replicas_per_cluster.
+            unmanaged_clusters = [
+                c
+                for c in exe.db.clusters[1:]
+                if not c.managed and len(c.replicas) < MAX_CLUSTER_REPLICAS
+            ]
             if not unmanaged_clusters:
                 return False
             cluster = self.rng.choice(unmanaged_clusters)
+            replica_id = cluster.replica_id
             cluster.replica_id += 1
         with cluster.lock:
-            if cluster not in exe.db.clusters or not cluster.managed:
+            if cluster not in exe.db.clusters or cluster.managed:
                 return False
 
             replica = ClusterReplica(
-                cluster.replica_id,
-                size=self.rng.choice(["1", "2"]),
+                replica_id,
+                size=self.rng.choice(
+                    ["scale=1,workers=1", "scale=1,workers=4", "scale=2,workers=2"]
+                ),
                 cluster=cluster,
             )
             replica.create(exe)
@@ -2350,7 +2543,6 @@ class GrantPrivilegesAction(Action):
                     or "unknown role" not in e.msg
                 ):
                     raise e
-            exe.db.roles.remove(role)
         return True
 
 
@@ -2379,7 +2571,6 @@ class RevokePrivilegesAction(Action):
                     or "unknown role" not in e.msg
                 ):
                     raise e
-            exe.db.roles.remove(role)
         return True
 
 
@@ -2397,15 +2588,36 @@ class ReconnectAction(Action):
     def run(self, exe: Executor) -> bool:
         exe.mz_service = "materialized"
         exe.log("reconnecting")
+        # The connection's temp objects die with it, drop them from the
+        # tracked state so other workers stop querying them.
+        if exe.temp_objects:
+            with exe.db.lock:
+                exe.db.tables[:] = [
+                    t for t in exe.db.tables if t not in exe.temp_objects
+                ]
+                exe.db.views[:] = [v for v in exe.db.views if v not in exe.temp_objects]
+            exe.temp_objects.clear()
         host = exe.db.host
-        port = exe.db.ports[exe.mz_service]
+
+        def pg_port() -> int:
+            # System workers (e.g. the Cancel worker) live on the internal
+            # port, everyone else on the external one of the current service.
+            if exe.user == "mz_system":
+                return exe.db.ports[
+                    "mz_system" if exe.mz_service == "materialized" else "mz_system2"
+                ]
+            return exe.db.ports[exe.mz_service]
+
         with exe.db.lock:
             if self.random_role and exe.db.roles:
                 user = self.rng.choice(
                     ["materialize", str(self.rng.choice(exe.db.roles))]
                 )
             else:
-                user = "materialize"
+                # Keep the executor's original user, e.g. the Cancel worker
+                # must stay mz_system or its cancels fail with "must be a
+                # member of"
+                user = exe.user
             conn = exe.cur.connection
 
         if exe.ws and exe.use_ws:
@@ -2460,13 +2672,18 @@ class ReconnectAction(Action):
             NUM_ATTEMPTS if exe.db.scenario != Scenario.ZeroDowntimeDeploy else 1000000
         ):
             try:
+                # Recompute the port each attempt, mz_service flips between
+                # the services during zero-downtime deploys.
                 conn = psycopg.connect(
-                    host=host, port=port, user=user, dbname="materialize"
+                    host=host, port=pg_port(), user=user, dbname="materialize"
                 )
                 conn.autocommit = exe.autocommit
                 cur = conn.cursor()
                 exe.cur = cur
                 exe.set_isolation("SERIALIZABLE")
+                # Reapply the session settings from Worker.run, they don't
+                # survive the reconnect.
+                cur.execute("SET auto_route_catalog_queries TO false")
                 cur.execute("SELECT pg_backend_pid()")
                 if not exe.use_ws:
                     exe.pg_pid = cur.fetchall()[0][0]
@@ -2813,11 +3030,11 @@ class DropKafkaSourceAction(Action):
 
 
 class CreateMySqlSourceAction(Action):
-    def run(self, exe: Executor) -> bool:
+    def applicable(self, exe: Executor) -> bool:
         # See database-issues#6881, not expected to work
-        if exe.db.scenario == Scenario.BackupRestore:
-            return False
+        return exe.db.scenario != Scenario.BackupRestore
 
+    def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if len(exe.db.mysql_sources) >= MAX_MYSQL_SOURCES:
                 return False
@@ -2849,6 +3066,18 @@ class CreateMySqlSourceAction(Action):
                 source.create(exe)
                 exe.db.mysql_sources.append(source)
             except:
+                # Creation can fail after CREATE CONNECTION but before the
+                # source is appended, orphaning the connection (the mypass
+                # secret is shared). Best-effort drop by name so it doesn't
+                # accumulate toward max_mysql_connections.
+                for stmt in (
+                    f"DROP SOURCE IF EXISTS {schema}.{identifier(f'mysql_source{source_id}')} CASCADE",
+                    f"DROP CONNECTION IF EXISTS mysql{source_id}",
+                ):
+                    try:
+                        exe.execute(stmt, http=Http.NO)
+                    except QueryError:
+                        pass
                 if exe.db.scenario not in (
                     Scenario.Kill,
                     Scenario.ZeroDowntimeDeploy,
@@ -2880,19 +3109,32 @@ class DropMySqlSourceAction(Action):
             if source not in exe.db.mysql_sources:
                 return False
 
-            query = f"DROP SOURCE {source.executor.source}"
+            # The source's table (CREATE TABLE ... FROM SOURCE) depends on
+            # it, drop the table first, it fails with "still depended upon
+            # by" while other objects reference it. The CASCADE only sweeps
+            # the source's own progress subsource.
+            exe.execute(f"DROP TABLE IF EXISTS {source}", http=Http.RANDOM)
+            query = f"DROP SOURCE {source.schema}.{identifier(source.executor.source)} CASCADE"
             exe.execute(query, http=Http.RANDOM)
             exe.db.mysql_sources.remove(source)
             source.executor.mz_conn.close()
+            source.executor.mysql_conn.close()
+            # The executor's per-source connection would otherwise accumulate
+            # in materialize.public until max_objects_per_schema is hit (its
+            # secret mypass is shared between sources)
+            exe.execute(
+                f"DROP CONNECTION IF EXISTS mysql{source.executor.num}",
+                http=Http.RANDOM,
+            )
         return True
 
 
 class CreatePostgresSourceAction(Action):
-    def run(self, exe: Executor) -> bool:
+    def applicable(self, exe: Executor) -> bool:
         # See database-issues#6881, not expected to work
-        if exe.db.scenario == Scenario.BackupRestore:
-            return False
+        return exe.db.scenario != Scenario.BackupRestore
 
+    def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if len(exe.db.postgres_sources) >= MAX_POSTGRES_SOURCES:
                 return False
@@ -2924,6 +3166,20 @@ class CreatePostgresSourceAction(Action):
                 source.create(exe)
                 exe.db.postgres_sources.append(source)
             except:
+                # Creation can fail after CREATE SECRET/CONNECTION but before
+                # the source is appended, so DropPostgresSourceAction never
+                # reclaims them and they accumulate toward
+                # max_postgres_connections / max_objects_per_schema. Best-effort
+                # drop what this source id would have created, by name.
+                for stmt in (
+                    f"DROP SOURCE IF EXISTS {schema}.{identifier(f'postgres_source{source_id}')} CASCADE",
+                    f"DROP CONNECTION IF EXISTS pg{source_id}",
+                    f"DROP SECRET IF EXISTS pgpass{source_id}",
+                ):
+                    try:
+                        exe.execute(stmt, http=Http.NO)
+                    except QueryError:
+                        pass
                 if exe.db.scenario not in (
                     Scenario.Kill,
                     Scenario.ZeroDowntimeDeploy,
@@ -2955,19 +3211,36 @@ class DropPostgresSourceAction(Action):
             if source not in exe.db.postgres_sources:
                 return False
 
-            query = f"DROP SOURCE {source.executor.source}"
+            # The source's table (CREATE TABLE ... FROM SOURCE) depends on
+            # it, drop the table first, it fails with "still depended upon
+            # by" while other objects reference it. The CASCADE only sweeps
+            # the source's own progress subsource.
+            exe.execute(f"DROP TABLE IF EXISTS {source}", http=Http.RANDOM)
+            query = f"DROP SOURCE {source.schema}.{identifier(source.executor.source)} CASCADE"
             exe.execute(query, http=Http.RANDOM)
             exe.db.postgres_sources.remove(source)
             source.executor.mz_conn.close()
+            source.executor.pg_conn.close()
+            # The executor's per-source connection and secret would otherwise
+            # accumulate in materialize.public until max_objects_per_schema
+            # is hit
+            exe.execute(
+                f"DROP CONNECTION IF EXISTS pg{source.executor.num}",
+                http=Http.RANDOM,
+            )
+            exe.execute(
+                f"DROP SECRET IF EXISTS pgpass{source.executor.num}",
+                http=Http.RANDOM,
+            )
         return True
 
 
 class CreateSqlServerSourceAction(Action):
-    def run(self, exe: Executor) -> bool:
+    def applicable(self, exe: Executor) -> bool:
         # See database-issues#6881, not expected to work
-        if exe.db.scenario == Scenario.BackupRestore:
-            return False
+        return exe.db.scenario != Scenario.BackupRestore
 
+    def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if len(exe.db.sql_server_sources) >= MAX_SQL_SERVER_SOURCES:
                 return False
@@ -3001,6 +3274,18 @@ class CreateSqlServerSourceAction(Action):
                 source.create(exe)
                 exe.db.sql_server_sources.append(source)
             except:
+                # Creation can fail after CREATE CONNECTION but before the
+                # source is appended, orphaning the connection (the
+                # sql_server_pass secret is shared). Best-effort drop by name
+                # so it doesn't accumulate toward max_sql_server_connections.
+                for stmt in (
+                    f"DROP SOURCE IF EXISTS {schema}.{identifier(f'sql_server_source{source_id}')} CASCADE",
+                    f"DROP CONNECTION IF EXISTS sql_server{source_id}",
+                ):
+                    try:
+                        exe.execute(stmt, http=Http.NO)
+                    except QueryError:
+                        pass
                 if exe.db.scenario not in (
                     Scenario.Kill,
                     Scenario.ZeroDowntimeDeploy,
@@ -3032,10 +3317,22 @@ class DropSqlServerSourceAction(Action):
             if source not in exe.db.sql_server_sources:
                 return False
 
-            query = f"DROP SOURCE {source.executor.source}"
+            # The source's table (CREATE TABLE ... FROM SOURCE) depends on
+            # it, drop the table first, it fails with "still depended upon
+            # by" while other objects reference it. The CASCADE only sweeps
+            # the source's own progress subsource.
+            exe.execute(f"DROP TABLE IF EXISTS {source}", http=Http.RANDOM)
+            query = f"DROP SOURCE {source.schema}.{identifier(source.executor.source)} CASCADE"
             exe.execute(query, http=Http.RANDOM)
             exe.db.sql_server_sources.remove(source)
             source.executor.mz_conn.close()
+            # The executor's per-source connection would otherwise accumulate
+            # in materialize.public until max_objects_per_schema is hit (its
+            # secret sql_server_pass is shared between sources)
+            exe.execute(
+                f"DROP CONNECTION IF EXISTS sql_server{source.executor.num}",
+                http=Http.RANDOM,
+            )
         return True
 
 
@@ -3076,35 +3373,6 @@ class CreateIcebergSinkAction(Action):
             )
             sink.create(exe)
             exe.db.iceberg_sinks.append(sink)
-        return True
-
-
-class CheckSinkAction(Action):
-    def run(self, exe: Executor) -> bool:
-        try:
-            conn = self.create_system_connection(exe)
-            try:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "SELECT name, type, last_status_change_at, status, error, details FROM mz_internal.mz_sink_statuses WHERE status not in ('running', 'starting', NULL)"
-                    )
-                    results = cur.fetchall()
-                if results:
-                    results_str = "\n".join(
-                        [
-                            f"{name} ({sink_type}) changed status at {last_status_change_at} to {status}: {error} (details: {details})"
-                            for name, sink_type, last_status_change_at, status, error, details in results
-                        ]
-                    )
-                    raise ValueError(f"Sinks are in a bad state:\n{results_str}")
-            finally:
-                conn.close()
-        except:
-            if exe.db.scenario not in (
-                Scenario.Kill,
-                Scenario.ZeroDowntimeDeploy,
-            ):
-                raise
         return True
 
 
@@ -3234,7 +3502,8 @@ class HttpPostAction(Action):
 
             payload = source.body_format.to_data_type().random_value(self.rng)
 
-            header_fields = source.explicit_include_headers
+            # Copy, extending the source's list would grow it on every post.
+            header_fields = list(source.explicit_include_headers)
             if source.include_headers:
                 header_fields.extend(["x-event-type", "signature", "x-mz-api-key"])
 
@@ -3274,14 +3543,14 @@ class HttpPostAction(Action):
 
 
 class SourceSinkStallCheckAction(Action):
-    def run(self, exe: Executor) -> bool:
-        if exe.db.scenario in (
+    def applicable(self, exe: Executor) -> bool:
+        return exe.db.scenario not in (
             Scenario.Kill,
             Scenario.ZeroDowntimeDeploy,
             Scenario.BackupRestore,
-        ):
-            return False
+        )
 
+    def run(self, exe: Executor) -> bool:
         exe.execute(
             "SELECT name, error FROM mz_internal.mz_sink_statuses WHERE status = 'stalled'"
         )
@@ -3343,7 +3612,6 @@ read_action_list = ActionList(
             CopyToS3Action,
             100,
         ),
-        (CopyFromS3Action, 100),
         (SetClusterAction, 1),
         (CommitRollbackAction, 30),
         (ReconnectAction, 1),
@@ -3382,6 +3650,8 @@ dml_nontrans_action_list = ActionList(
         (DeleteAction, 10),
         (UpdateAction, 10),
         (InsertReturningAction, 10),
+        # COPY FROM is oneshot ingestion, it can't run inside a transaction
+        (CopyFromS3Action, 10),
         (CommentAction, 5),
         (SetClusterAction, 1),
         (ReconnectAction, 1),
@@ -3417,7 +3687,6 @@ ddl_action_list = ActionList(
         (DropIcebergSinkAction, 4),
         (CreateKafkaSourceAction, 4),
         (DropKafkaSourceAction, 4),
-        (CheckSinkAction, 1),
         # TODO: Reenable when https://linear.app/materializeinc/issue/SS-307 is fixed
         # (CreateMySqlSourceAction, 4),
         # (DropMySqlSourceAction, 4),

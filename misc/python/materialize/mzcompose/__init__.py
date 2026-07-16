@@ -130,10 +130,24 @@ class VariableSystemParameter:
 def get_variable_system_parameters(
     version: MzVersion,
     force_source_table_syntax: bool,
+    metadata_store: str,
 ) -> list[VariableSystemParameter]:
     """Note: Only the default is tested unless we explicitly select "System Parameters: Random" in trigger-ci.
     These defaults are applied _after_ applying the settings from `get_minimal_system_parameters`.
     """
+
+    # `persist_pg_consensus_read_committed` must stay off on CockroachDB, where
+    # the lockless CRDB_* consensus queries are only linearizable under
+    # SERIALIZABLE and persist asserts on the connection's isolation level. On
+    # Postgres-backed consensus the query family is linearizable under READ
+    # COMMITTED, so default it on and let it vary. FoundationDB does not use the
+    # Postgres consensus, so leaving it off there is a harmless no-op.
+    read_committed_safe = metadata_store in ("postgres-metadata", "alloydb")
+    persist_pg_consensus_read_committed = VariableSystemParameter(
+        "persist_pg_consensus_read_committed",
+        "true" if read_committed_safe else "false",
+        ["true", "false"] if read_committed_safe else ["false"],
+    )
 
     return [
         # -----
@@ -421,11 +435,7 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "persist_blob_cache_scale_with_threads", "true", ["true", "false"]
         ),
-        VariableSystemParameter(
-            "persist_pg_consensus_read_committed",
-            "false",
-            ["true", "false"],
-        ),
+        persist_pg_consensus_read_committed,
         VariableSystemParameter(
             "persist_state_update_lease_timeout", "1s", ["0s", "1s", "10s"]
         ),
@@ -485,18 +495,30 @@ def get_variable_system_parameters(
 def get_default_system_parameters(
     version: MzVersion | None = None,
     force_source_table_syntax: bool = False,
+    metadata_store: str | None = None,
 ) -> dict[str, str]:
     """For upgrade tests we only want parameters set when all environmentd /
     clusterd processes have reached a specific version (or higher)
+
+    `metadata_store` selects backend-specific defaults. It defaults to the
+    globally configured metadata store, but callers that target a different
+    backend than the global (e.g. a local CockroachDB) must pass their own.
     """
 
     if not version:
         version = MzVersion.parse_cargo()
 
+    if metadata_store is None:
+        from materialize.mzcompose.services.metadata_store import METADATA_STORE
+
+        metadata_store = METADATA_STORE
+
     params = get_minimal_system_parameters(version)
 
     system_param_setting = os.getenv("CI_SYSTEM_PARAMETERS", "")
-    variable_params = get_variable_system_parameters(version, force_source_table_syntax)
+    variable_params = get_variable_system_parameters(
+        version, force_source_table_syntax, metadata_store
+    )
 
     if system_param_setting == "":
         for param in variable_params:
@@ -717,6 +739,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "cluster_controller_tick_interval",
     "enable_background_alter_cluster",
     "default_cluster_reconfiguration_timeout",
+    "read_then_write_max_dependencies",
 ]
 
 

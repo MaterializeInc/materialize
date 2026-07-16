@@ -16,8 +16,6 @@
 # Sqllogictest has no AWS credentials, so every CREATE CONNECTION here uses
 # `WITH (VALIDATE = false)`. End-to-end validation coverage lives in the
 # LocalStack-backed mzcompose tests.
-#
-# See doc/developer/design/20260512_aws_glue_schema_registry.md.
 
 reset-server
 
@@ -125,6 +123,180 @@ CREATE CONNECTION glue_conn TO AWS GLUE SCHEMA REGISTRY (
     AWS CONNECTION = aws_conn,
     REGISTRY = 'my-registry'
 ) WITH (VALIDATE = false)
+
+statement ok
+DROP CONNECTION glue_conn
+
+statement ok
+DROP CONNECTION aws_conn
+
+# --- Sink planner (Glue AVRO clause) ---
+#
+# `EXPLAIN KEY/VALUE SCHEMA FOR CREATE SINK` runs the sink planner (schema
+# generation, option extraction, compatibility validation) without a Kafka
+# broker, so it exercises the Glue sink clause end to end at plan time.
+#
+# The Glue sink clause mirrors the CSR clause: per-side `KEY`/`VALUE SCHEMA NAME`
+# and `KEY`/`VALUE COMPATIBILITY LEVEL`, all optional.
+#
+# Rejection of the sink-only options on a *source* requires purifying a real
+# Kafka source, so that coverage lives in the mzcompose e2e tests.
+
+statement ok
+CREATE CONNECTION aws_conn TO AWS (
+    ASSUME ROLE ARN 'arn:aws:iam::123456789000:role/my-role'
+) WITH (VALIDATE = false)
+
+statement ok
+CREATE CONNECTION glue_conn TO AWS GLUE SCHEMA REGISTRY (
+    AWS CONNECTION = aws_conn,
+    REGISTRY = 'my-registry'
+) WITH (VALIDATE = false)
+
+statement ok
+CREATE CONNECTION kafka_conn TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false)
+
+statement ok
+CREATE TABLE t (a int)
+
+# Happy path: value schema with per-side name and compatibility level.
+query T multiline
+EXPLAIN VALUE SCHEMA FOR CREATE SINK snk FROM t INTO KAFKA CONNECTION kafka_conn (TOPIC 'topic') FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (VALUE SCHEMA NAME = 'v', VALUE COMPATIBILITY LEVEL = 'FULL') ENVELOPE DEBEZIUM
+----
+{
+  "type": "record",
+  "name": "envelope",
+  "fields": [
+    {
+      "name": "before",
+      "type": [
+        "null",
+        {
+          "type": "record",
+          "name": "row",
+          "fields": [
+            {
+              "name": "a",
+              "type": [
+                "null",
+                "int"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "after",
+      "type": [
+        "null",
+        "row"
+      ]
+    }
+  ]
+}
+EOF
+
+# Happy path: no options at all. Schema names default to topic-derived; the
+# clause plans without any per-side options.
+query T multiline
+EXPLAIN VALUE SCHEMA FOR CREATE SINK snk FROM t INTO KAFKA CONNECTION kafka_conn (TOPIC 'topic') FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn ENVELOPE DEBEZIUM
+----
+{
+  "type": "record",
+  "name": "envelope",
+  "fields": [
+    {
+      "name": "before",
+      "type": [
+        "null",
+        {
+          "type": "record",
+          "name": "row",
+          "fields": [
+            {
+              "name": "a",
+              "type": [
+                "null",
+                "int"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "after",
+      "type": [
+        "null",
+        "row"
+      ]
+    }
+  ]
+}
+EOF
+
+# Happy path: key schema with per-side name and compatibility level.
+query T multiline
+EXPLAIN KEY SCHEMA FOR CREATE SINK snk FROM t INTO KAFKA CONNECTION kafka_conn (TOPIC 'topic') KEY (a) NOT ENFORCED FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (KEY SCHEMA NAME = 'k', KEY COMPATIBILITY LEVEL = 'BACKWARD') ENVELOPE UPSERT
+----
+{
+  "type": "record",
+  "name": "row",
+  "fields": [
+    {
+      "name": "a",
+      "type": [
+        "null",
+        "int"
+      ]
+    }
+  ]
+}
+EOF
+
+# Bare SCHEMA NAME is source-only; rejected on sinks with a pointer to the
+# per-side options.
+statement error SCHEMA NAME is not supported for AWS Glue Schema Registry sinks, use KEY SCHEMA NAME and VALUE SCHEMA NAME instead
+EXPLAIN VALUE SCHEMA FOR CREATE SINK snk FROM t INTO KAFKA CONNECTION kafka_conn (TOPIC 'topic') FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (SCHEMA NAME = 'x') ENVELOPE DEBEZIUM
+
+# DISABLED has no CSR analogue and is rejected via the CSR-typed level (value).
+statement error invalid compatibility level: DISABLED
+EXPLAIN VALUE SCHEMA FOR CREATE SINK snk FROM t INTO KAFKA CONNECTION kafka_conn (TOPIC 'topic') FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (VALUE COMPATIBILITY LEVEL = 'DISABLED') ENVELOPE DEBEZIUM
+
+# Same rejection on the key side.
+statement error invalid compatibility level: DISABLED
+EXPLAIN KEY SCHEMA FOR CREATE SINK snk FROM t INTO KAFKA CONNECTION kafka_conn (TOPIC 'topic') KEY (a) NOT ENFORCED FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (KEY COMPATIBILITY LEVEL = 'DISABLED') ENVELOPE UPSERT
+
+# An unrecognized compatibility level is rejected.
+statement error invalid compatibility level: NOPE
+EXPLAIN VALUE SCHEMA FOR CREATE SINK snk FROM t INTO KAFKA CONNECTION kafka_conn (TOPIC 'topic') FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (VALUE COMPATIBILITY LEVEL = 'NOPE') ENVELOPE DEBEZIUM
+
+# SEED is a source-only construct; rejected on sinks.
+statement error SEED option does not make sense with sinks
+EXPLAIN VALUE SCHEMA FOR CREATE SINK snk FROM t INTO KAFKA CONNECTION kafka_conn (TOPIC 'topic') FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (VALUE SCHEMA NAME = 'v') SEED VALUE SCHEMA '{}' ENVELOPE DEBEZIUM
+
+# A non-Glue connection in the Glue clause is rejected.
+statement error is not an AWS Glue Schema Registry connection
+EXPLAIN VALUE SCHEMA FOR CREATE SINK snk FROM t INTO KAFKA CONNECTION kafka_conn (TOPIC 'topic') FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION kafka_conn ENVELOPE DEBEZIUM
+
+# A repeated option is rejected by the extractor.
+statement error VALUE SCHEMA NAME specified more than once
+EXPLAIN VALUE SCHEMA FOR CREATE SINK snk FROM t INTO KAFKA CONNECTION kafka_conn (TOPIC 'topic') FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (VALUE SCHEMA NAME = 'a', VALUE SCHEMA NAME = 'b') ENVELOPE DEBEZIUM
+
+# Key-side options without a corresponding KEY field are rejected rather than
+# silently ignored.
+statement error KEY SCHEMA NAME and KEY COMPATIBILITY LEVEL require a corresponding KEY field
+EXPLAIN VALUE SCHEMA FOR CREATE SINK snk FROM t INTO KAFKA CONNECTION kafka_conn (TOPIC 'topic') FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (KEY SCHEMA NAME = 'k') ENVELOPE DEBEZIUM
+
+statement error KEY SCHEMA NAME and KEY COMPATIBILITY LEVEL require a corresponding KEY field
+EXPLAIN VALUE SCHEMA FOR CREATE SINK snk FROM t INTO KAFKA CONNECTION kafka_conn (TOPIC 'topic') FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (KEY COMPATIBILITY LEVEL = 'BACKWARD') ENVELOPE DEBEZIUM
+
+statement ok
+DROP TABLE t
+
+statement ok
+DROP CONNECTION kafka_conn
 
 statement ok
 DROP CONNECTION glue_conn
