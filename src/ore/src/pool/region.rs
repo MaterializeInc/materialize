@@ -159,8 +159,23 @@ impl Region {
     /// the huge page and advised `MADV_HUGEPAGE`: their slots tile huge-page
     /// boundaries exactly, so populating a slot is one huge-page fault rather
     /// than one fault per 4 KiB, and a whole-slot [`dontneed`] frees whole
-    /// huge pages without splitting any.
+    /// huge pages without splitting any. Regions whose class is below the
+    /// huge page are advised `MADV_NOHUGEPAGE` instead, so reclaim over a
+    /// single slot stays page-exact.
     pub(crate) fn new(class_size: usize, capacity_bytes: usize) -> io::Result<Region> {
+        Region::with_huge_pages(class_size, capacity_bytes, class_size >= HUGE_PAGE)
+    }
+
+    /// As [`Region::new`], but the region opts out of transparent huge pages
+    /// regardless of class size. For regions whose slots are reclaimed with
+    /// `MADV_PAGEOUT` under observed residency: reclaiming a range a large
+    /// folio covers only partially needs a folio split, and a failed split
+    /// silently leaves pages resident.
+    pub(crate) fn new_nohuge(class_size: usize, capacity_bytes: usize) -> io::Result<Region> {
+        Region::with_huge_pages(class_size, capacity_bytes, false)
+    }
+
+    fn with_huge_pages(class_size: usize, capacity_bytes: usize, huge: bool) -> io::Result<Region> {
         let page = sys::page_size();
         assert!(class_size > 0 && class_size % page == 0);
         let capacity = capacity_bytes - capacity_bytes % class_size;
@@ -177,12 +192,27 @@ impl Region {
             });
         }
         let max_slots = u32::try_from(capacity / class_size).expect("slot count fits u32");
-        let align = if cfg!(target_os = "linux") && class_size >= HUGE_PAGE {
+        let align = if cfg!(target_os = "linux") && huge {
             HUGE_PAGE
         } else {
             page
         };
         let base = sys::map(capacity, align)?;
+        if !huge {
+            // Opt the whole region out of transparent huge pages before any
+            // slot is touched. Production hosts run
+            // `transparent_hugepage=madvise`, where an unadvised region gets
+            // no fault-time folios anyway, so this is defense in depth for
+            // hosts running `always`: there, fault-time folios would straddle
+            // sub-huge-page slot boundaries, and khugepaged (which tolerates
+            // up to `max_ptes_none` empty entries) re-collapses ranges a
+            // slot-granular [`dontneed`] just reclaimed, resurrecting the
+            // released memory.
+            nohugepage(base, capacity);
+        }
+        // Pool contents are recreatable spill data: keep the (potentially
+        // huge) anonymous reservation out of core dumps.
+        dontdump(base, capacity);
         Ok(Region {
             base,
             capacity,
@@ -221,6 +251,30 @@ impl Region {
             .lock()
             .expect("region allocator poisoned")
             .free(slot, warm);
+    }
+
+    /// Moves warm free slots to the cold list, releasing their physical
+    /// pages, until at least `want_bytes` have been cooled or no warm slot
+    /// remains. Returns the bytes cooled. The caller owns the warm-bytes
+    /// accounting that bounds the warm side.
+    pub(crate) fn cool_warm_slots(&self, want_bytes: usize) -> usize {
+        let mut slots = self.slots.lock().expect("region allocator poisoned");
+        let mut cooled = 0;
+        while cooled < want_bytes {
+            let Some(slot) = slots.free_warm.pop() else {
+                break;
+            };
+            let offset = usize::cast_from(slot) * self.class_size;
+            // SAFETY: the slot is on a free list and the allocator mutex is
+            // held, so no chunk owns it and no allocation can race; the
+            // range stays within the region's mapping.
+            unsafe {
+                dontneed(self.base.add(offset), self.class_size);
+            }
+            slots.free_cold.push(slot);
+            cooled += self.class_size;
+        }
+        cooled
     }
 
     /// Test hook: overwrites every free slot with `0xDE` so stale contents
@@ -268,7 +322,7 @@ impl Drop for Region {
 /// The transparent-huge-page size assumed for region alignment. Linux x86-64
 /// and aarch64 (4 KiB base pages) both use 2 MiB; if a platform differs, the
 /// alignment is merely unhelpful, never wrong.
-const HUGE_PAGE: usize = 2 << 20;
+pub(crate) const HUGE_PAGE: usize = 2 << 20;
 
 /// Releases the physical pages of the page-aligned subrange of
 /// `[ptr, ptr + len)`, keeping the virtual range mapped.
@@ -311,6 +365,19 @@ pub(crate) fn nohugepage(ptr: *mut u8, len: usize) {
     // SAFETY: as in `pageout`, a contents-preserving hint over a live
     // mapping.
     unsafe { sys::advise(ptr, len, sys::Advice::NoHugePage) }
+}
+
+/// Excludes the page-aligned subrange of `[ptr, ptr + len)` from core dumps.
+/// Contents are preserved. No-op outside Linux.
+pub(crate) fn dontdump(ptr: *mut u8, len: usize) {
+    // SAFETY: as in `pageout`, a contents-preserving hint over a live
+    // mapping.
+    unsafe { sys::advise(ptr, len, sys::Advice::DontDump) }
+}
+
+/// The system page size.
+pub(crate) fn page_size() -> usize {
+    sys::page_size()
 }
 
 /// Whether every page of the page-aligned subrange of `[ptr, ptr + len)` is
@@ -424,6 +491,8 @@ mod sys {
         WillNeed,
         /// Exclude from transparent huge pages; contents preserved.
         NoHugePage,
+        /// Exclude from core dumps; contents preserved.
+        DontDump,
     }
 
     /// Maps `len` bytes of anonymous memory with the base aligned to
@@ -529,9 +598,12 @@ mod sys {
             Advice::WillNeed => libc::MADV_WILLNEED,
             #[cfg(target_os = "linux")]
             Advice::NoHugePage => libc::MADV_NOHUGEPAGE,
-            // Reclaim, prefetch, and THP hints have no portable equivalent.
+            #[cfg(target_os = "linux")]
+            Advice::DontDump => libc::MADV_DONTDUMP,
+            // Reclaim, prefetch, THP, and dump hints have no portable
+            // equivalent.
             #[cfg(not(target_os = "linux"))]
-            Advice::PageOut | Advice::WillNeed | Advice::NoHugePage => return,
+            Advice::PageOut | Advice::WillNeed | Advice::NoHugePage | Advice::DontDump => return,
         };
         let Some((offset, sub_len)) = aligned_subrange(ptr.addr(), len, page_size()) else {
             return;
@@ -606,6 +678,7 @@ mod sys {
         PageOut,
         WillNeed,
         NoHugePage,
+        DontDump,
     }
 
     pub(super) fn map(len: usize, align: usize) -> io::Result<*mut u8> {

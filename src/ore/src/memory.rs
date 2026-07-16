@@ -15,9 +15,20 @@
 
 //! Physical memory introspection.
 
+// Only this probe uses the cgroup helpers, so the module lives here rather
+// than at the crate root. The file carries more surface than the probe
+// needs, hence the dead-code allowance.
+#[cfg(target_os = "linux")]
+#[path = "cgroup.rs"]
+#[allow(dead_code)]
+mod cgroup;
+
 /// Returns the physical memory available to this process in bytes: the
-/// host's RAM, clamped by the cgroup (v2) memory limit when one is set.
-/// `None` if detection fails.
+/// host's RAM, clamped by the cgroup memory limit when one is set. Both
+/// cgroup v1 and v2 are honored, resolved through `/proc/self/mountinfo`
+/// and `/proc/self/cgroup` rather than an assumed mount path, so containers
+/// (including host-namespace cgroup mounts) do not derive budgets from host
+/// RAM. `None` if detection fails.
 ///
 /// Deliberately distinct from any *announced* memory limit: on nodes whose
 /// disk is provisioned as swap, the announced limit includes swap so the
@@ -67,12 +78,10 @@ fn host_memory_bytes() -> Option<usize> {
     None
 }
 
-/// The cgroup v2 memory limit, if this process runs under one. The file
-/// holds `max` (no limit) or a byte count; non-numeric content yields `None`.
+/// The RAM limit of the cgroup governing this process, if any.
 #[cfg(target_os = "linux")]
 fn cgroup_memory_max() -> Option<usize> {
-    let raw = std::fs::read_to_string("/sys/fs/cgroup/memory.max").ok()?;
-    raw.trim().parse().ok()
+    cgroup::detect_memory_limit()?.max
 }
 
 #[cfg(not(target_os = "linux"))]
