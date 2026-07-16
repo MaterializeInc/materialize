@@ -511,6 +511,106 @@ metrics:
   help: Pager decisions that kept the chunk resident.
   source: src/timely-util/src/column_pager/metrics.rs
   visibility: internal
+- name: mz_column_pool_admissions_budget_total
+  help: Evicted chunks re-admitted to compressed-but-resident by an admitting read out of free budget headroom.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_admissions_denied_total
+  help: Admitting reads that found neither budget headroom nor a clean victim and were served as a plain decompress instead.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_admissions_steal_total
+  help: Evicted chunks re-admitted by an admitting read stealing the slot of a clean backed victim of the same size class.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_eager_backs_total
+  help: Chunks eagerly compressed to compressed-but-resident by idle spill threads; their later eviction is a pure page release.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_evictions_cheap_total
+  help: 'Evictions of already-backed chunks: physical pages released with no compression or extent write.'
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_evictions_compress_total
+  help: Evictions that compressed a chunk into a new swap-backed extent.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_arena_fallbacks_total
+  help: Extent writes that fell back to the heap because their extent-arena class had no free slot. Heap-backed extents are never paged out.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_bytes_written_total
+  help: Compressed bytes written into swap-backed extents.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_pageout_incomplete_total
+  help: Pageout passes whose residency observation found pages still resident. Climbing steadily means pages cannot reach the swap device.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_pageouts_total
+  help: Extents pushed to the swap device by RSS-target enforcement.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_resident_bytes
+  help: Allocation bytes of compressed extents currently resident (the compressed-but-resident tier), bounded by the pool RSS target.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_unreclaimable_bytes
+  help: Allocation bytes of resident extents the RSS target cannot push out (retry-capped and heap-fallback extents). Climbing steadily means pages cannot reach the swap device.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_frees_total
+  help: Chunks freed from the buffer pool.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_inserts_total
+  help: Chunks inserted into the buffer pool.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_live_chunks
+  help: 'Live pool chunks, whatever their residency: for backlog-shaped consumers, the un-drained backlog in chunks.'
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_oversize_bytes
+  help: Bytes held by oversize chunks that bypass pool paging.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_oversize_payloads_total
+  help: Inserts that went to unpageable heap chunks because the payload was larger than the largest size class.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_resident_bytes
+  help: Uncompressed bytes resident in the buffer pool.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_slot_exhausted_fallbacks_total
+  help: Inserts that fell back to unpageable heap chunks because their size class had no free slot.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_spill_cancelled_total
+  help: Compressions cancelled by a concurrent free, whatever their origin (budget eviction or eager backing), so this can exceed the scheduled count.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_spill_in_flight
+  help: Spill entries queued or being processed.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_spill_scheduled_total
+  help: Evictions handed to buffer-pool spill threads.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_warm_bytes
+  help: Class bytes of free slots kept warm for fault-free reuse; RSS exceeds resident bytes by up to this bounded amount.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_warm_reuses_total
+  help: 'Slot allocations served from the warm list: no page faults, no kernel page zeroing.'
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_writes_elided_total
+  help: 'Backing writes elided: chunks freed while unbacked or while queued for a spill thread, dead before their compression completed.'
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
 - name: mz_compute_collection_count
   help: The number and hydration status of maintained compute collections.
   labels:
