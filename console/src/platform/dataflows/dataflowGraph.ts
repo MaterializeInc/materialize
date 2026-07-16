@@ -180,6 +180,14 @@ export interface VisibleNode {
   // drawn in-view is downstream), an "output" port's peers are downstream
   // (the connected edge is upstream).
   direction: "input" | "output" | null;
+  // Set on a region whose children this derivation materialized (in-place
+  // expansion). Drives RegionNode's expanded rendering and elk's container
+  // layout. Absent on a collapsed region and on every non-region node.
+  expanded?: boolean;
+  // The enclosing expanded scope's id when this node is nested inside one,
+  // driving React Flow / elk nesting. Absent for viewRoot's own direct
+  // children, which sit at the top level.
+  parentId?: NodeId;
 }
 
 /**
@@ -637,7 +645,8 @@ export function deriveVisibleGraph(
   const viewRootNode = mustGet(structure.nodes, viewRoot);
   const viewRootAddress = viewRootNode.address;
   const expanded = new Set<NodeId>([viewRoot, ...expandedScopes]);
-  const nodes: VisibleNode[] = viewRootNode.children.map((id) => {
+  const nodes: VisibleNode[] = [];
+  const makeNode = (id: NodeId, parentScope: NodeId): VisibleNode => {
     const node = mustGet(structure.nodes, id);
     const kind = node.children.length === 0 ? "operator" : "region";
     return {
@@ -656,8 +665,20 @@ export function deriveVisibleGraph(
       operatorId: node.operatorId,
       peers: [],
       direction: null,
+      expanded: kind === "region" && expandedScopes.has(id),
+      // viewRoot's own children stay top-level (no parentId).
+      parentId: parentScope === viewRoot ? undefined : parentScope,
     };
-  });
+  };
+  // Emit each scope's children, pushing a container before descending into
+  // it, so React Flow's parent-before-child array order holds at any depth.
+  const emitChildren = (scope: NodeId) => {
+    for (const childId of mustGet(structure.nodes, scope).children) {
+      nodes.push(makeNode(childId, scope));
+      if (expandedScopes.has(childId)) emitChildren(childId);
+    }
+  };
+  emitChildren(viewRoot);
   const visibleIds = new Set(nodes.map((n) => n.id));
 
   // sourceLandings/targetLandings are computed separately (see
