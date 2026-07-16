@@ -45,8 +45,8 @@ This example provisions the following infrastructure:
 | Resource | Description |
 |----------|-------------|
 | GKE Cluster | Regional cluster with Workload Identity enabled |
-| Generic Node Pool | e2-standard-8 machines, autoscaling 2-5 nodes, 50GB disk, for general workloads |
-| Materialize Node Pool | n2-highmem-8 machines, autoscaling 2-5 nodes, 100GB disk, 1 local SSD, swap enabled, dedicated taints for Materialize workloads |
+| Generic Node Pool | c4-standard-8 machines, autoscaling 2-5 nodes, 50GB disk, for general workloads |
+| Materialize Node Pool | c4a-highmem-8-lssd machines (Arm-based), autoscaling 2-5 nodes, 100GB disk, 2 bundled local SSDs, swap enabled, dedicated taints for Materialize workloads |
 | Service Account | GKE service account with workload identity binding |
 
 ### Database
@@ -54,7 +54,7 @@ This example provisions the following infrastructure:
 | Resource | Description |
 |----------|-------------|
 | Cloud SQL PostgreSQL | Private IP only (no public IP) |
-| Tier | db-custom-2-4096 (2 vCPUs, 4GB memory) |
+| Tier | db-custom-N4-2-4096 (N4 series, 2 vCPUs, 4GB memory) |
 | Database | `materialize` database with UTF8 charset |
 | User | `materialize` user with auto-generated password |
 | Network | Connected via VPC peering for private access |
