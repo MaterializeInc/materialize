@@ -182,7 +182,9 @@ export interface VisibleNode {
   direction: "input" | "output" | null;
   // Set on a region whose children this derivation materialized (in-place
   // expansion). Drives RegionNode's expanded rendering and elk's container
-  // layout. Absent on a collapsed region and on every non-region node.
+  // layout. True on an expanded region, false on other structural nodes
+  // (operators and collapsed regions); absent only on synthetic port nodes,
+  // which have no expand/collapse state of their own.
   expanded?: boolean;
   // The enclosing expanded scope's id when this node is nested inside one,
   // driving React Flow / elk nesting. Absent for viewRoot's own direct
@@ -609,8 +611,6 @@ function endpointId(
   address: Address,
   port: number,
   side: "from" | "to",
-  localRoot: NodeId,
-  localRootAddress: Address,
   expanded: Set<NodeId>,
 ): {
   id: string;
@@ -653,8 +653,6 @@ export function deriveVisibleGraph(
   viewRoot: NodeId,
   expandedScopes: Set<NodeId> = new Set(),
 ): VisibleGraph {
-  const viewRootNode = mustGet(structure.nodes, viewRoot);
-  const viewRootAddress = viewRootNode.address;
   const expanded = new Set<NodeId>([viewRoot, ...expandedScopes]);
   const nodes: VisibleNode[] = [];
   const makeNode = (id: NodeId, parentScope: NodeId): VisibleNode => {
@@ -756,8 +754,6 @@ export function deriveVisibleGraph(
         peerAddress,
         peerPort,
         peerSide,
-        peerId,
-        resolvedAddress,
         new Set([peerId]),
       );
       port.peers.push({
@@ -821,19 +817,9 @@ export function deriveVisibleGraph(
       ch.fromAddress,
       ch.fromPort,
       "from",
-      viewRoot,
-      viewRootAddress,
       expanded,
     );
-    const to = endpointId(
-      structure,
-      ch.toAddress,
-      ch.toPort,
-      "to",
-      viewRoot,
-      viewRootAddress,
-      expanded,
-    );
+    const to = endpointId(structure, ch.toAddress, ch.toPort, "to", expanded);
     // A port node is registered whenever either side resolves to one, even
     // if the edge itself is about to be dropped: viewRoot's own boundary can
     // have traffic to a sibling entirely outside this view (nothing on the
@@ -857,6 +843,7 @@ export function deriveVisibleGraph(
           operatorId: null,
           peers: [],
           direction: p.direction,
+          parentId: p.scope === viewRoot ? undefined : p.scope,
         });
       }
     }
@@ -914,8 +901,6 @@ export function deriveVisibleGraph(
           ch.fromAddress,
           ch.fromPort,
           "from",
-          from.id,
-          box.address,
           new Set([from.id]),
         );
         if (inner.port) {
@@ -940,8 +925,6 @@ export function deriveVisibleGraph(
           ch.toAddress,
           ch.toPort,
           "to",
-          to.id,
-          box.address,
           new Set([to.id]),
         );
         if (inner.port) {
