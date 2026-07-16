@@ -1273,6 +1273,7 @@ describe("rerouteHiddenNodes", () => {
     address: null,
     operatorId: null,
     peers: [],
+    direction: null,
   });
   const edge = (
     id: string,
@@ -1410,6 +1411,7 @@ describe("groupByLir", () => {
     address: null,
     operatorId: BigInt(operatorId),
     peers: [],
+    direction: null,
   });
   const port = (id: string): VisibleNode => ({
     id,
@@ -1426,6 +1428,7 @@ describe("groupByLir", () => {
     address: null,
     operatorId: null,
     peers: [],
+    direction: null,
   });
   const span = (
     exportId: string,

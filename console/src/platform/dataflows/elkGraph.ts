@@ -24,8 +24,8 @@ export const NODE_DIMENSIONS: Record<
   VisibleNode["kind"],
   { width: number; height: number }
 > = {
-  operator: { width: 240, height: 72 },
-  region: { width: 260, height: 96 },
+  operator: { width: 240, height: 96 },
+  region: { width: 260, height: 120 },
   port: { width: 90, height: 24 },
 };
 
