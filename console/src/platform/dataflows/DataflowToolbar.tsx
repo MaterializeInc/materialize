@@ -38,6 +38,11 @@ export interface DataflowToolbarProps {
   // no color at all, indistinguishable from being off. Disabling the option
   // instead of shipping a heatmap mode that quietly does nothing.
   workerCount: number;
+  // Whether any region is currently expanded in place. LIR grouping and
+  // in-place expansion are mutually exclusive (enforced in DataflowGraphView's
+  // own grouping memo); disabling the switch here is just the affordance so
+  // the toggle doesn't look clickable when it can't take effect.
+  regionExpanded: boolean;
 }
 
 export const DataflowToolbar = ({
@@ -47,6 +52,7 @@ export const DataflowToolbar = ({
   matchIndex,
   onJump,
   workerCount,
+  regionExpanded,
 }: DataflowToolbarProps) => {
   const skewDisabled = workerCount <= 1;
   const [search, setSearch] = React.useState(filters.search);
@@ -108,6 +114,7 @@ export const DataflowToolbar = ({
         <Switch
           size="sm"
           isChecked={filters.showLirGroups}
+          isDisabled={regionExpanded}
           onChange={(e) =>
             onFiltersChange({ ...filters, showLirGroups: e.target.checked })
           }
