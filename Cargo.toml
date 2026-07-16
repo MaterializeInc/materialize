@@ -487,6 +487,7 @@ rlimit = "0.11.0"
 rocksdb = { version = "0.24.0", default-features = false, features = ["lz4", "snappy", "zstd"] }
 ropey = "1.6.1"
 rustls = { version = "0.23.38", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
+rustls-native-certs = "0.8.3"
 rustls-pki-types = { version = "1", features = ["std"] }
 rpassword = "7.5.1"
 rusqlite = { version = "0.32.1", features = ["bundled"] }
@@ -571,6 +572,7 @@ uuid = "1.19.0"
 version-compare = "0.2.1"
 walkdir = "2.5.0"
 which = "8"
+x509-cert = "0.2.5"
 yansi = "1.0.1"
 zeroize = { version = "1.8.2", features = ["derive", "serde"] }
 zip = { version = "6.0.0", default-features = false, features = ["deflate-flate2"] }

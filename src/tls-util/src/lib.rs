@@ -130,6 +130,19 @@ pub fn make_tls_rustls(config: &tokio_postgres::Config) -> Result<MakeRustlsConn
         _ => panic!("unexpected sslmode {:?}", config.get_ssl_mode()),
     };
 
+    // When verifying, seed the trust store with the platform's native roots.
+    // This matches the openssl connector, whose builder trusts the system
+    // default CA paths. Without it, verify modes with no explicit sslrootcert
+    // would reject every server certificate.
+    if verify_mode {
+        let native = rustls_native_certs::load_native_certs();
+        for error in &native.errors {
+            tracing::warn!("failed to load native root certs: {error}");
+        }
+        let (added, ignored) = root_store.add_parsable_certificates(native.certs);
+        tracing::debug!("loaded {added} native root certs, ignored {ignored}");
+    }
+
     // Load root certificates if verification is needed.
     if let Some(ssl_root_cert) = config.get_ssl_root_cert() {
         let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(ssl_root_cert)
@@ -218,7 +231,55 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AsyncWrite for RustlsTlsStream<S> {
 
 impl<S: AsyncRead + AsyncWrite + Unpin> tokio_postgres::tls::TlsStream for RustlsTlsStream<S> {
     fn channel_binding(&self) -> ChannelBinding {
-        ChannelBinding::none()
+        let (_, session) = self.0.get_ref();
+        match session
+            .peer_certificates()
+            .and_then(|certs| certs.first())
+            .and_then(tls_server_end_point)
+        {
+            Some(hash) => ChannelBinding::tls_server_end_point(hash),
+            None => ChannelBinding::none(),
+        }
+    }
+}
+
+/// Computes the RFC 5929 `tls-server-end-point` channel binding data for a
+/// server certificate: a hash of the DER certificate using the hash function
+/// of its signature algorithm, with MD5 and SHA-1 upgraded to SHA-256.
+///
+/// Returns `None` when the signature algorithm has no well-defined hash
+/// function (e.g. Ed25519, RSASSA-PSS). The openssl connector also reports no
+/// channel binding for those, so this preserves parity.
+fn tls_server_end_point(cert: &CertificateDer<'_>) -> Option<Vec<u8>> {
+    use sha2::{Digest, Sha256, Sha384, Sha512};
+    use x509_cert::der::Decode;
+    use x509_cert::der::oid::ObjectIdentifier;
+
+    const MD5_RSA: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.4");
+    const SHA1_RSA: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.5");
+    const SHA256_RSA: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.11");
+    const SHA384_RSA: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.12");
+    const SHA512_RSA: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.13");
+    const SHA1_ECDSA: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.4.1");
+    const SHA256_ECDSA: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.2");
+    const SHA384_ECDSA: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.3");
+    const SHA512_ECDSA: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.4");
+
+    let parsed = x509_cert::Certificate::from_der(cert.as_ref()).ok()?;
+    let oid = parsed.signature_algorithm.oid;
+    if oid == MD5_RSA
+        || oid == SHA1_RSA
+        || oid == SHA256_RSA
+        || oid == SHA1_ECDSA
+        || oid == SHA256_ECDSA
+    {
+        Some(Sha256::digest(cert.as_ref()).to_vec())
+    } else if oid == SHA384_RSA || oid == SHA384_ECDSA {
+        Some(Sha384::digest(cert.as_ref()).to_vec())
+    } else if oid == SHA512_RSA || oid == SHA512_ECDSA {
+        Some(Sha512::digest(cert.as_ref()).to_vec())
+    } else {
+        None
     }
 }
 
@@ -399,7 +460,74 @@ pub fn pkcs12der_from_pem(
 
 #[cfg(test)]
 mod tests {
+    use openssl::asn1::Asn1Time;
+    use openssl::ec::{EcGroup, EcKey};
+    use openssl::hash::MessageDigest;
+    use openssl::nid::Nid;
+    use openssl::pkey::Private;
+    use openssl::rsa::Rsa;
+    use openssl::x509::X509NameBuilder;
+
     use super::*;
+
+    fn self_signed_der(key: &PKey<Private>, digest: MessageDigest) -> Vec<u8> {
+        let mut name = X509NameBuilder::new().unwrap();
+        name.append_entry_by_text("CN", "localhost").unwrap();
+        let name = name.build();
+        let mut builder = X509::builder().unwrap();
+        builder.set_version(2).unwrap();
+        builder.set_subject_name(&name).unwrap();
+        builder.set_issuer_name(&name).unwrap();
+        builder.set_pubkey(key).unwrap();
+        builder
+            .set_not_before(&Asn1Time::days_from_now(0).unwrap())
+            .unwrap();
+        builder
+            .set_not_after(&Asn1Time::days_from_now(1).unwrap())
+            .unwrap();
+        builder.sign(key, digest).unwrap();
+        builder.build().to_der().unwrap()
+    }
+
+    /// Asserts that our `tls-server-end-point` hash of a cert signed with
+    /// `sign_digest` matches openssl's `X509_digest` with `expected`, which is
+    /// what postgres-openssl uses. `None` expects no channel binding.
+    fn check_end_point_parity(
+        key: &PKey<Private>,
+        sign_digest: MessageDigest,
+        expected: Option<MessageDigest>,
+    ) {
+        let der = self_signed_der(key, sign_digest);
+        let computed = tls_server_end_point(&CertificateDer::from(der.clone()));
+        let expected =
+            expected.map(|md| X509::from_der(&der).unwrap().digest(md).unwrap().to_vec());
+        assert_eq!(computed, expected);
+    }
+
+    #[mz_ore::test]
+    fn tls_server_end_point_digests() {
+        let rsa = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
+        check_end_point_parity(&rsa, MessageDigest::sha256(), Some(MessageDigest::sha256()));
+        check_end_point_parity(&rsa, MessageDigest::sha384(), Some(MessageDigest::sha384()));
+        check_end_point_parity(&rsa, MessageDigest::sha512(), Some(MessageDigest::sha512()));
+        // RFC 5929 upgrades SHA-1 to SHA-256.
+        check_end_point_parity(&rsa, MessageDigest::sha1(), Some(MessageDigest::sha256()));
+
+        let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
+        let ec = PKey::from_ec_key(EcKey::generate(&group).unwrap()).unwrap();
+        check_end_point_parity(&ec, MessageDigest::sha256(), Some(MessageDigest::sha256()));
+
+        // Ed25519 has no hash in its signature algorithm, so no channel
+        // binding, matching openssl.
+        let ed = PKey::generate_ed25519().unwrap();
+        check_end_point_parity(&ed, MessageDigest::null(), None);
+    }
+
+    #[mz_ore::test]
+    fn tls_server_end_point_rejects_garbage() {
+        let garbage = CertificateDer::from(vec![0x30, 0x00]);
+        assert_eq!(tls_server_end_point(&garbage), None);
+    }
 
     #[mz_ore::test]
     fn pkcs12_archive_needs_drop() {
