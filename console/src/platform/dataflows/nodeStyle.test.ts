@@ -10,17 +10,37 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  formatCount,
   formatSkew,
   hashString,
+  hexToRgba,
   lirGroupColor,
   nodeFillColor,
   operatorColor,
   prettyPrintChannelType,
+  statLines,
   textColorFor,
 } from "./nodeStyle";
 
 const PALETTE = ["#111111", "#222222", "#333333", "#444444"];
 const ACCENT = { arranged: "#aaaaaa", notArranged: "#bbbbbb" };
+
+const baseNode = {
+  id: "1",
+  label: "Reduce",
+  stats: null,
+  transitive: null,
+  own: null,
+  ownSkew: null,
+  transitiveSkew: null,
+  overheadNs: null,
+  childCount: 0,
+  lir: [],
+  address: null,
+  operatorId: null,
+  peers: [],
+  direction: null,
+};
 
 describe("hashString", () => {
   it("is deterministic for the same string", () => {
@@ -72,22 +92,6 @@ describe("operatorColor", () => {
 });
 
 describe("nodeFillColor", () => {
-  const baseNode = {
-    id: "1",
-    label: "Reduce",
-    stats: null,
-    transitive: null,
-    own: null,
-    ownSkew: null,
-    transitiveSkew: null,
-    overheadNs: null,
-    childCount: 0,
-    lir: [],
-    address: null,
-    operatorId: null,
-    peers: [],
-  };
-
   it("colors an operator by its name, not by whether it's arranged", () => {
     const unarranged = nodeFillColor(
       { ...baseNode, kind: "operator" },
@@ -145,6 +149,69 @@ describe("formatSkew", () => {
 
   it("labels the no-data sentinel (0) distinctly from a real ratio", () => {
     expect(formatSkew(0)).toEqual("no data");
+  });
+});
+
+describe("formatCount", () => {
+  it("groups digits so a large count reads at a glance", () => {
+    expect(formatCount(221245721n)).toEqual("221,245,721");
+  });
+
+  it("leaves a small count unchanged", () => {
+    expect(formatCount(42n)).toEqual("42");
+  });
+});
+
+describe("statLines", () => {
+  const node = { ...baseNode, kind: "operator" as const };
+
+  it("returns nothing when the node has no stats", () => {
+    expect(statLines(node)).toEqual([]);
+  });
+
+  it("merges duration, records, and size onto one line, in that order", () => {
+    const withStats = {
+      ...node,
+      stats: {
+        arrangementRecords: 221245721n,
+        arrangementSize: 4096n,
+        elapsedNs: 3_000_000_000n,
+        scheduleCount: 0n,
+      },
+    };
+    expect(statLines(withStats)).toEqual(["3s · 221,245,721 r · 4 KB"]);
+  });
+
+  it("omits records and size when there are none, keeping duration alone", () => {
+    const withStats = {
+      ...node,
+      stats: {
+        arrangementRecords: 0n,
+        arrangementSize: 0n,
+        elapsedNs: 3_000_000_000n,
+        scheduleCount: 0n,
+      },
+    };
+    expect(statLines(withStats)).toEqual(["3s"]);
+  });
+
+  it("omits duration when there is none, keeping records and size", () => {
+    const withStats = {
+      ...node,
+      stats: {
+        arrangementRecords: 100n,
+        arrangementSize: 1024n,
+        elapsedNs: 0n,
+        scheduleCount: 0n,
+      },
+    };
+    expect(statLines(withStats)).toEqual(["100 r · 1 KB"]);
+  });
+});
+
+describe("hexToRgba", () => {
+  it("converts a hex color to rgba with the given alpha", () => {
+    expect(hexToRgba("#391D7E", 0.15)).toEqual("rgba(57, 29, 126, 0.15)");
   });
 });
 

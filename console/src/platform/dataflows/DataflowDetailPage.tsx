@@ -387,17 +387,13 @@ const DataflowDetailPage = () => {
     [visibleGraph],
   );
 
-  // Re-derived from the current graph on every render rather than trusted
-  // verbatim, the same tolerance focusedScope gets above: a stale link, or
-  // a dataflow whose shape changed, just fails to resolve and this reads
-  // back as null instead of crashing.
-  const selection = React.useMemo<Selection | null>(() => {
-    if (!data || !visibleGraph || !selectParam) return null;
-    const sep = selectParam.indexOf(":");
-    if (sep === -1) return null;
-    const kind = selectParam.slice(0, sep);
-    const id = selectParam.slice(sep + 1);
-    if (kind === "node") {
+  // Shared by the URL-driven `selection` below and by onSelectNode (a
+  // click on an in-view edge's Source/Target link): both need the same
+  // connectedEdges attached for a port, so it can still open the panel's
+  // port view rather than the generic node view.
+  const resolveNodeSelection = React.useCallback(
+    (id: string): Selection | null => {
+      if (!visibleGraph) return null;
       const node = visibleGraph.nodes.find((n) => n.id === id);
       if (!node) return null;
       const connectedEdges =
@@ -411,6 +407,30 @@ const DataflowDetailPage = () => {
               }))
           : undefined;
       return { kind: "node", node, connectedEdges };
+    },
+    [visibleGraph, labelById],
+  );
+
+  const onSelectNode = React.useCallback(
+    (id: string) => {
+      const next = resolveNodeSelection(id);
+      if (next) setSelection(next);
+    },
+    [resolveNodeSelection, setSelection],
+  );
+
+  // Re-derived from the current graph on every render rather than trusted
+  // verbatim, the same tolerance focusedScope gets above: a stale link, or
+  // a dataflow whose shape changed, just fails to resolve and this reads
+  // back as null instead of crashing.
+  const selection = React.useMemo<Selection | null>(() => {
+    if (!data || !visibleGraph || !selectParam) return null;
+    const sep = selectParam.indexOf(":");
+    if (sep === -1) return null;
+    const kind = selectParam.slice(0, sep);
+    const id = selectParam.slice(sep + 1);
+    if (kind === "node") {
+      return resolveNodeSelection(id);
     }
     if (kind === "edge") {
       const edge = visibleGraph.edges.find((e) => e.id === id);
@@ -439,7 +459,7 @@ const DataflowDetailPage = () => {
       };
     }
     return null;
-  }, [data, visibleGraph, selectParam, labelById]);
+  }, [data, visibleGraph, selectParam, labelById, resolveNodeSelection]);
 
   // Back/forward (and opening a shared link directly, which react-router
   // also reports as "POP") can restore a selection the current viewport
@@ -685,9 +705,10 @@ const DataflowDetailPage = () => {
                   onToggleCollapsed={() =>
                     setDetailPanelCollapsed((prev) => !prev)
                   }
-                  onClose={() => setSelection(null)}
                   onJumpTo={onJumpToPeer}
                   onSelectLir={onSelectLir}
+                  onSelectNode={onSelectNode}
+                  workerCount={data.workerCount}
                 />
               )}
             </HStack>

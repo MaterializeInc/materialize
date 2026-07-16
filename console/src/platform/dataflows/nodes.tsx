@@ -12,31 +12,14 @@ import { Handle, type NodeProps, Position } from "@xyflow/react";
 import React from "react";
 
 import { MaterializeTheme } from "~/theme";
-import { formatBytesShort } from "~/utils/format";
 
-import type { VisibleNode } from "./dataflowGraph";
 import {
   type FlowGroupData,
   type FlowNodeData,
-  formatElapsed,
   HIGHLIGHT_COLORS,
+  statLines,
   textColorFor,
 } from "./nodeStyle";
-
-// Records and size share one line, not two: the fixed node height only has
-// room for name + a couple of stat lines before text spills out of the box.
-const statLines = (node: VisibleNode) => {
-  const lines: string[] = [];
-  const stats = node.stats;
-  if (!stats) return lines;
-  if (stats.arrangementRecords > 0n) {
-    lines.push(
-      `${stats.arrangementRecords} rec · ${formatBytesShort(stats.arrangementSize)}`,
-    );
-  }
-  if (stats.elapsedNs > 0n) lines.push(formatElapsed(stats.elapsedNs));
-  return lines;
-};
 
 // Selection (clicked) wins over the active search match when both apply to
 // the same node; both are visually distinct from ordinary dimming.
@@ -53,29 +36,39 @@ const RESTING_SHADOW = "0px 0.5px 2.5px 0 rgba(0, 0, 0, 0.08)";
 
 const CardShell = ({
   data,
+  filled = true,
   children,
 }: {
   data: FlowNodeData;
+  // A region is a collapsed subtree, not a single operator, so it reads as
+  // an outlined container (border-only, like LirGroupNode's dashed box)
+  // rather than a filled chip, to tell the two kinds apart at a glance.
+  filled?: boolean;
   children: React.ReactNode;
-}) => (
-  <Box
-    borderWidth="1px"
-    borderRadius="8px"
-    px={2}
-    py={1}
-    width="100%"
-    height="100%"
-    overflow="hidden"
-    background={data.color}
-    color={textColorFor(data.color)}
-    opacity={data.dimmed ? 0.25 : 1}
-    boxShadow={highlightShadow(data) ?? RESTING_SHADOW}
-  >
-    {children}
-    <Handle type="target" position={Position.Top} />
-    <Handle type="source" position={Position.Bottom} />
-  </Box>
-);
+}) => {
+  const { colors } = useTheme<MaterializeTheme>();
+  return (
+    <Box
+      data-testid="node-shell"
+      borderWidth={filled ? "1px" : "2px"}
+      borderColor={filled ? undefined : data.color}
+      borderRadius="8px"
+      px={2}
+      py={1}
+      width="100%"
+      height="100%"
+      overflow="hidden"
+      background={filled ? data.color : colors.background.secondary}
+      color={filled ? textColorFor(data.color) : colors.foreground.primary}
+      opacity={data.dimmed ? 0.25 : 1}
+      boxShadow={highlightShadow(data) ?? RESTING_SHADOW}
+    >
+      {children}
+      <Handle type="target" position={Position.Top} />
+      <Handle type="source" position={Position.Bottom} />
+    </Box>
+  );
+};
 
 export const OperatorNode = ({ data }: NodeProps & { data: FlowNodeData }) => (
   <CardShell data={data}>
@@ -86,7 +79,7 @@ export const OperatorNode = ({ data }: NodeProps & { data: FlowNodeData }) => (
       isDisabled={data.node.lir.length === 0}
     >
       <Box>
-        <Text textStyle="text-ui-med" noOfLines={1}>
+        <Text textStyle="text-ui-med" noOfLines={2}>
           {data.node.label}
         </Text>
         {statLines(data.node).map((line) => (
@@ -102,9 +95,9 @@ export const OperatorNode = ({ data }: NodeProps & { data: FlowNodeData }) => (
 // Always shown collapsed (a scope is never expanded in place); double-click
 // navigates into it instead of unfolding it here.
 export const RegionNode = ({ data }: NodeProps & { data: FlowNodeData }) => (
-  <CardShell data={data}>
-    <HStack justifyContent="space-between" spacing={1}>
-      <Text textStyle="text-ui-med" noOfLines={1}>
+  <CardShell data={data} filled={false}>
+    <HStack justifyContent="space-between" alignItems="flex-start" spacing={1}>
+      <Text textStyle="text-ui-med" noOfLines={2}>
         {data.node.label}
       </Text>
       <Badge fontSize="2xs" flexShrink={0}>
