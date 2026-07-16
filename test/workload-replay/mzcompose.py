@@ -196,7 +196,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         except Exception:
             pass
         c.rm(*service_names, destroy_volumes=True)
-        c.rm_volumes("mzdata")
+        c.rm_volumes("mzdata", force=True)
 
         # When scale_data is false, use 100% initial data
         factor_initial_data = args.factor_initial_data

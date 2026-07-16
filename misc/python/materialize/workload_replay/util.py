@@ -199,7 +199,7 @@ def resolve_tag(tag: str) -> str | None:
 def update_captured_workloads_repo() -> None:
     """Clone the captured-workloads repository and check out the pinned commit."""
     path = pathlib.Path(MZ_ROOT / "test" / "workload-replay" / "captured-workloads")
-    commit = "21e555470fe4bd6b16ed388d8c45770492f03787"
+    commit = "1e28eef6b6d37277058ed45d80782902ea3c7f05"
     public_url = "https://github.com/MaterializeInc/captured-workloads"
 
     used_token = False
