@@ -84,6 +84,9 @@ class Executor:
         self.use_ws = self.rng.choice([True, False]) if self.ws else False
         self.autocommit = cur.connection.autocommit
         self.mz_service = "materialized"
+        # Set once SetSessionVariableAction configured a statement_timeout on
+        # this session, statement timeouts are expected errors from then on.
+        self.statement_timeout_set = False
 
     def set_isolation(self, level: str) -> None:
         self.execute(f"SET TRANSACTION_ISOLATION TO '{level}'")
@@ -195,6 +198,22 @@ class Executor:
         finally:
             self.last_status = "finished"
 
+    def copy_to_stdout(self, query: str) -> None:
+        query += ";"
+        self.log(query)
+        self.last_status = "running"
+        try:
+            try:
+                with self.cur.copy(query.encode()) as copy:
+                    for _ in copy:
+                        pass
+            except Exception as e:
+                raise QueryError(str(e), query)
+
+            self.action_run_since_last_commit_rollback = True
+        finally:
+            self.last_status = "finished"
+
     def execute(
         self,
         query: str,
@@ -202,12 +221,42 @@ class Executor:
         explainable: bool = False,
         http: Http = Http.NO,
         fetch: bool = False,
-    ) -> None:
+    ) -> None | list[Any]:
         is_http = (
             http == Http.RANDOM and self.rng.choice([True, False])
         ) or http == Http.YES
         if explainable and self.rng.choice([True, False]):
-            query = f"EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR {query}"
+            if self.rng.random() < 0.1:
+                as_json = " AS JSON" if self.rng.choice([True, False]) else ""
+                query = f"EXPLAIN TIMESTAMP{as_json} FOR {query}"
+            else:
+                stage = self.rng.choice(
+                    [
+                        "RAW PLAN",
+                        "DECORRELATED PLAN",
+                        "LOCALLY OPTIMIZED PLAN",
+                        "OPTIMIZED PLAN",
+                        "OPTIMIZED PLAN",
+                        "OPTIMIZED PLAN",
+                        "PHYSICAL PLAN",
+                    ]
+                )
+                modifiers = ""
+                if stage == "OPTIMIZED PLAN" and self.rng.random() < 0.3:
+                    mods = self.rng.sample(
+                        [
+                            "arity",
+                            "join implementations",
+                            "keys",
+                            "types",
+                            "humanized expressions",
+                            "redacted",
+                        ],
+                        self.rng.randint(1, 3),
+                    )
+                    modifiers = f" WITH ({', '.join(mods)})"
+                format = self.rng.choice(["VERBOSE TEXT", "TEXT", "JSON"])
+                query = f"EXPLAIN {stage}{modifiers} AS {format} FOR {query}"
         query += ";"
         extra_info_str = f" ({extra_info})" if extra_info else ""
         use_ws = self.use_ws and http != Http.NO
@@ -228,12 +277,13 @@ class Executor:
 
                 if fetch and not use_ws:
                     try:
-                        self.cur.fetchall()
-                    except psycopg.DataError:
+                        return self.cur.fetchall()
+                    except (psycopg.DataError, OverflowError):
                         # We don't care about psycopg being unable to parse, examples:
                         # date too large (after year 10K): '97940-08-25'
                         # timestamp too large (after year 10K): '10876-06-20 00:00:00'
                         # can't parse interval '-178956970 years -8 months -2147483648 days -2562047788:00:54.775808': days=1252674755; must have magnitude <= 999999999
+                        # a huge interval overflows psycopg's timedelta as OverflowError
                         pass
 
                 return

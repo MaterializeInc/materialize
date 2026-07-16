@@ -31,6 +31,9 @@ NEGATIVE_ACCUMULATION_ERRORS: list[str] = [
     "Negative multiplicities in TopK",
     # Reduce
     "Net-zero records with non-zero accumulation in ReduceAccumulable",
+    # Client-facing variant of the above (reduce.rs:1514, EvalError), distinct
+    # from the internal ReduceAccumulable log text. Seen in repeat_row (#8106).
+    "with non-zero accumulation in accumulable aggregate",
     "Non-positive multiplicity in DistinctBy",
     "Non-positive accumulation",
     "Invalid negative unsigned aggregation in ReduceAccumulable",
@@ -43,6 +46,9 @@ NEGATIVE_ACCUMULATION_ERRORS: list[str] = [
     "S3 oneshot sink encountered negative multiplicities",
     # Constant folding
     "Negative multiplicity in constant result",
+    # Constant folding a DISTINCT/INTERSECT/reduce over a repeat_row collection
+    # with negative diffs. Seen in repeat_row (builds 17205, 17214).
+    "constant folding encountered reduce on collection with non-positive multiplicities",
     # Scalar subquery guard
     "negative number of rows produced in subquery",
 ]

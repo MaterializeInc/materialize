@@ -379,11 +379,11 @@ class KafkaExecutor(Executor):
                 f.name: (
                     rng.randint(-1000, 1000)
                     if f.name in narrowable
-                    else f.data_type.random_value(rng)
+                    else f.data_type.random_value(rng).value
                 )
                 for f in value_fields
             }
-            key = {f.name: f.data_type.random_value(rng) for f in key_fields}
+            key = {f.name: f.data_type.random_value(rng).value for f in key_fields}
             self.producer.produce(
                 topic=self.topic,
                 key=self.key_avro_serializer(key, self.key_serialization_context),
