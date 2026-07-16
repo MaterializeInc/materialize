@@ -6717,6 +6717,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-stream",
+ "bytemuck",
  "bytesize",
  "columnar",
  "columnation",
@@ -8982,7 +8983,6 @@ dependencies = [
  "proptest",
  "rand 0.9.4",
  "serde",
- "tempfile",
  "timely",
  "tokio",
  "tracing",
