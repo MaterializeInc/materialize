@@ -38,7 +38,7 @@ active BYOC subscription.
 
 Your environment runs entirely in your AWS account. Materialize provisions and
 operates it across your account boundary using an IAM role you create, scoped by
-a permission boundary you control. Only operational telemetry (logs and metrics,
+permission boundaries you control. Only operational telemetry (logs and metrics,
 with sensitive values redacted) leaves your account so Materialize can monitor
 and support the deployment.
 
@@ -49,6 +49,14 @@ and support the deployment.
 - An AWS account, and the AWS region you want to run in.
 - Permission to run CloudFormation and create IAM roles in that account.
 - An active Materialize BYOC subscription.
+
+{{< tip >}}
+**Recommended: a dedicated AWS account.** We recommend running BYOC in a
+dedicated AWS account rather than an account shared with your core
+infrastructure. This gives the deployment a clean blast radius, makes auditing
+(CloudTrail) and cost tracking straightforward, and is easy to revisit as your
+usage matures.
+{{< /tip >}}
 
 ## Step 1: Share setup details
 
@@ -63,15 +71,22 @@ provisioning.
 
 Open the quick-create link while signed in to the AWS account and region where
 you want Materialize to run. The CloudFormation form is already populated, so you
-review it and launch the stack (about 5 to 10 minutes). It creates exactly two
+review it and launch the stack (about 5 to 10 minutes). It creates exactly three
 objects:
 
-- **An IAM role** that Materialize assumes to manage your environment.
-- **A permission boundary** that caps what that role can ever do.
+- **An IAM role** that Materialize assumes to provision and manage your
+  environment.
+- **A deployer permission boundary** that caps that role. It permits
+  infrastructure provisioning only, with explicit denies on every path to your
+  data (S3 objects, RDS contents), on modifying its own boundary, and on
+  assuming other roles in your account.
+- **A workload permission boundary** that is stamped on every role the
+  provisioning process creates. It defines the data-plane surface for workloads
+  that legitimately need S3/RDS access, and cannot create further IAM roles.
 
-Both are created with the name prefix supplied in the link, so you do not choose
-their names. When the stack finishes, return the role ARN and permission boundary
-ARN to Materialize.
+All three are created with the name prefix supplied in the link, so you do not
+choose their names. When the stack finishes, return the role ARN and both
+permission boundary ARNs to Materialize.
 
 {{< note >}}
 The quick-create link only works when you are signed in to the intended AWS
@@ -96,9 +111,19 @@ privately.
 - **No standing credentials.** Materialize assumes the role you create using
   short-lived STS credentials with an external ID for confused-deputy
   protection. No long-lived keys are stored.
-- **A permission ceiling.** A transitive permission boundary prevents Materialize
-  from acting beyond the agreed scope, creating roles outside it, or removing its
-  own boundary.
+- **No standing access to your data.** The role Materialize uses to provision
+  and operate infrastructure is explicitly denied access to your data: no
+  `s3:GetObject`/`s3:PutObject` and no RDS data access. Data-plane access exists
+  only for the workloads running in your account, under a separate workload
+  boundary.
+- **A permission ceiling.** Transitive permission boundaries prevent Materialize
+  from acting beyond the agreed scope, creating roles outside the workload
+  boundary, or removing its own boundary. S3 permissions are additionally pinned
+  to your account (`aws:ResourceAccount`), and a VPC endpoint policy restricts
+  S3 access to traffic originating inside your VPC.
+- **Reviewable by design.** The policies avoid wildcards and keep a clear deny
+  section, so your security team can review exactly what Materialize can and
+  cannot do.
 - **Single-tenant isolation.** Dedicated EKS, VPC, RDS, and S3 in your account.
   Data at rest is encrypted with your own KMS keys.
 - **You hold the kill switch.** Revoke the role's trust policy at any time to cut
