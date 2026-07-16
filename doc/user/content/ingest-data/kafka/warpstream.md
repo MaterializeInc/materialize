@@ -114,13 +114,13 @@ Ensure you have the following:
     source will be created in the active cluster; to use a different cluster,
     use the `IN CLUSTER` clause.
 
-    ```mzsql
-    CREATE SOURCE warpstream_click_stream_source
-        FROM KAFKA CONNECTION warpstream_kafka (TOPIC 'materialize_click_streams')
-        FORMAT JSON;
-    ```
+    {{< include-headless-with file="/headless/kafka-create-source-syntax"
+    source="warpstream_click_stream_source" connection="warpstream_kafka"
+    topic="materialize_click_streams" table="warpstream_click_stream"
+    format="FORMAT JSON" >}}
 
-    d. Verify the ingestion and query the data in Materialize:
+    d. Verify the ingestion and query the data in Materialize. With the legacy
+    syntax, query the source; with the new syntax, query the table:
 
     ```mzsql
     SELECT * FROM warpstream_click_stream_source LIMIT 10;

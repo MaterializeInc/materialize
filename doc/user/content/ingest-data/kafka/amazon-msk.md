@@ -131,14 +131,12 @@ multiple [`CREATE SOURCE`](/sql/create-source/kafka/) statements. By default,
 the source will be created in the active cluster; to use a different cluster,
 use the `IN CLUSTER` clause.
 
-```mzsql
-CREATE SOURCE json_source
-  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
-  FORMAT JSON;
-```
+{{< include-headless-with file="/headless/kafka-create-source-syntax"
+source="json_source" connection="kafka_connection" topic="test_topic"
+table="json_table" format="FORMAT JSON" >}}
 
-If the command executes without an error and outputs _CREATE SOURCE_, it means
-that you have successfully connected Materialize to your cluster.
+If the command executes without an error, it means that you have successfully
+connected Materialize to your cluster.
 
 ## Related pages
 

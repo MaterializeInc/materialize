@@ -178,9 +178,7 @@ Once `staging.orders` has finished snapshotting and its views are hydrated,
 atomically swap the `staging` schema into `prod`:
 
 ```mzsql
-BEGIN;
 ALTER SCHEMA prod SWAP WITH staging;
-COMMIT;
 ```
 
 After the swap, `prod.orders` and `prod.orders_by_item` serve the evolved schema.

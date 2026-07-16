@@ -190,6 +190,9 @@ downtime](/ingest-data/mysql/source-versioning/)
 - [SQL Server: Handling upstream schema changes with zero
 downtime](/ingest-data/sql-server/source-versioning/)
 
+- [Kafka: Handling upstream schema changes with zero
+downtime](/ingest-data/kafka/source-versioning/)
+
 #### Incompatible schema changes
 
 {{% include-from-yaml data="postgres_source_details"
