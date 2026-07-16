@@ -24,6 +24,14 @@
 //! `MADV_WILLNEED` ahead of the decompress (and makes the pages resident
 //! again); "free" is a plain deallocation, with any swapped copy discarded
 //! for free. Nothing is ever both uncompressed and on the device.
+//!
+//! Pageout is observed, never assumed: `MADV_PAGEOUT` may decline any page
+//! and still return success (a transient extra reference fails isolation,
+//! the swap device may be full or absent), so after the advice `mincore`
+//! decides whether the extent left memory, and the extent stays fully
+//! resident for accounting until its entire range is nonresident. Extents
+//! are advised `MADV_NOHUGEPAGE` at creation so the reclaim never needs to
+//! split a large folio the extent covers only partially.
 
 use std::alloc::Layout;
 
@@ -38,6 +46,16 @@ const EXTENT_ALIGN: usize = 4096;
 /// `lz4_flex::block::compress_prepend_size` framing.
 const SIZE_PREFIX: usize = 4;
 
+/// Consecutive incomplete pageout passes after which an extent stops being
+/// advised out until a read faults it back in. Transient declines (a racing
+/// read holding an extra page reference, a momentary swap-slot allocation
+/// failure) clear as soon as the racing operation finishes, so a retry or
+/// two recovers them. Persistent declines (no swap device, an exhausted or
+/// unswappable cgroup) never clear, and further advice is pure page-table
+/// walking. Three passes covers the transient causes while bounding the
+/// wasted advice at two extra passes per extent.
+pub(crate) const PAGEOUT_RETRY_CAP: u8 = 3;
+
 /// One chunk's compressed backing copy.
 #[derive(Debug)]
 pub(crate) struct SwapExtent {
@@ -45,10 +63,15 @@ pub(crate) struct SwapExtent {
     layout: Layout,
     comp_len: usize,
     /// Whether the extent's pages are (engine-)resident: set at write and by
-    /// [`SwapExtent::read_into`], cleared by [`SwapExtent::pageout`]. Drives
-    /// the pool's `extent_resident_bytes` accounting; mutated only under the
-    /// owning chunk's state mutex.
+    /// [`SwapExtent::read_into`], cleared by a [`SwapExtent::pageout`] whose
+    /// residency observation found the whole range gone. Drives the pool's
+    /// `extent_resident_bytes` accounting; mutated only under the owning
+    /// chunk's state mutex.
     resident: bool,
+    /// Consecutive pageout passes whose observation found pages still
+    /// resident. Reset by [`SwapExtent::read_into`]. At
+    /// [`PAGEOUT_RETRY_CAP`] the extent stops being advised out.
+    incomplete_passes: u8,
 }
 
 // SAFETY: the extent exclusively owns its allocation; nothing else holds a
@@ -92,6 +115,13 @@ impl SwapExtent {
             if ptr.is_null() {
                 std::alloc::handle_alloc_error(layout);
             }
+            // Opt out of transparent huge pages before first touch:
+            // `MADV_PAGEOUT` must split any large folio the advised range
+            // covers only partially, and a failed split silently leaves
+            // those pages resident. Page-rounded extents routinely cover
+            // multi-size THP folios partially, so base pages keep the
+            // reclaim page-exact.
+            region::nohugepage(ptr, layout.size());
             // SAFETY: `ptr` is a fresh allocation of at least `comp_len`
             // bytes (`extent_layout`'s contract) exclusively owned here; the
             // copy plus the tail zeroing below initialize every byte, so
@@ -107,6 +137,7 @@ impl SwapExtent {
                 layout,
                 comp_len,
                 resident: true,
+                incomplete_passes: 0,
             }
         })
     }
@@ -123,13 +154,34 @@ impl SwapExtent {
         self.resident
     }
 
+    /// Whether the extent's pageout retry budget is exhausted: consecutive
+    /// incomplete passes reached [`PAGEOUT_RETRY_CAP`], so callers stop
+    /// calling [`SwapExtent::pageout`] until a read resets the budget.
+    pub(crate) fn pageout_capped(&self) -> bool {
+        self.incomplete_passes >= PAGEOUT_RETRY_CAP
+    }
+
     /// Hints the kernel to push the extent's pages to the swap device and
-    /// marks the extent non-resident. Cheap: the compression is already
-    /// paid, the madvise is microseconds, and the device write happens on
-    /// the kernel's asynchronous writeback path.
-    pub(crate) fn pageout(&mut self) {
+    /// observes the result: returns `true`, marking the extent non-resident,
+    /// only when the observation finds the whole range out of memory. An
+    /// incomplete pass leaves the extent fully resident for accounting and
+    /// spends one unit of the retry budget. Cheap: the compression is
+    /// already paid, the madvise and mincore are microseconds, and the
+    /// device write happens on the kernel's asynchronous writeback path.
+    ///
+    /// Callers must not invoke this on a [`SwapExtent::pageout_capped`]
+    /// extent.
+    pub(crate) fn pageout(&mut self) -> bool {
+        debug_assert!(!self.pageout_capped());
         region::pageout(self.ptr, self.layout.size());
-        self.resident = false;
+        if region::nonresident(self.ptr, self.layout.size()) {
+            self.resident = false;
+            self.incomplete_passes = 0;
+            true
+        } else {
+            self.incomplete_passes += 1;
+            false
+        }
     }
 
     /// Compressed size in bytes, including the size prefix.
@@ -148,6 +200,10 @@ impl SwapExtent {
     /// transition (the pool re-counts and re-enqueues it for the RSS target).
     pub(crate) fn read_into(&mut self, dst: &mut [u8]) {
         self.resident = true;
+        // The decompress faults every page back in, so prior incomplete
+        // pageout passes no longer describe the mapping and the retry
+        // budget starts over.
+        self.incomplete_passes = 0;
         self.prefetch();
         // SAFETY: the extent exclusively owns `[ptr, ptr + layout.size())`
         // and `comp_len <= layout.size()` by construction in `write`.
@@ -259,5 +315,42 @@ mod tests {
         let mut extent = SwapExtent::write(&data);
         let mut out = vec![0u64; 8];
         extent.read_into(bytemuck::cast_slice_mut(&mut out));
+    }
+
+    /// Residency follows the observation, not the advice: a declined pass
+    /// leaves the extent resident, an accepted one marks it gone.
+    #[mz_ore::test]
+    fn pageout_is_observed_not_trusted() {
+        let data = vec![9u64; 10_000];
+        let mut extent = SwapExtent::write(&data);
+        assert!(extent.is_resident());
+        region::fake_residency::decline_next(1);
+        assert!(!extent.pageout(), "declined pass reports incomplete");
+        assert!(extent.is_resident(), "declined pass leaves it resident");
+        assert!(!extent.pageout_capped());
+        assert!(extent.pageout(), "accepted pass reports reclaimed");
+        assert!(!extent.is_resident());
+    }
+
+    /// Consecutive declined passes exhaust the retry budget. A read faults
+    /// the pages back in and restores it.
+    #[mz_ore::test]
+    fn pageout_retry_cap_and_read_reset() {
+        let data: Vec<u64> = (0..10_000).collect();
+        let mut extent = SwapExtent::write(&data);
+        region::fake_residency::decline_next(u64::MAX);
+        let mut passes = 0u8;
+        while !extent.pageout_capped() {
+            assert!(!extent.pageout());
+            passes += 1;
+        }
+        assert_eq!(passes, PAGEOUT_RETRY_CAP, "capped after exactly the cap");
+        assert!(extent.is_resident(), "capped extent stays resident");
+        region::fake_residency::decline_next(0);
+        let mut out = vec![0u64; data.len()];
+        extent.read_into(bytemuck::cast_slice_mut(&mut out));
+        assert_eq!(out, data);
+        assert!(!extent.pageout_capped(), "a read resets the retry budget");
+        assert!(extent.pageout());
     }
 }

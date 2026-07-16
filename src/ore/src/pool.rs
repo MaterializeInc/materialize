@@ -44,7 +44,11 @@
 //! where `compressed cap = rss_target - budget - warm cap`, makes every
 //! resident byte's ceiling nameable; a zero RSS target collapses the
 //! compressed tier and extents page out as soon as they are written.
-//! Nothing is ever both uncompressed and on the device.
+//! Nothing is ever both uncompressed and on the device. Pageout is observed
+//! rather than assumed: an extent counts against the compressed tier until
+//! `mincore` reports its whole range nonresident, so reclaim the kernel
+//! declines surfaces as `extent_pageout_incomplete` (and a tier settled
+//! above its capacity) instead of as RSS the ledger cannot see.
 //!
 //! Residency is a state, not a type, and it only descends: a chunk starts
 //! resident and, once evicted, serves reads from its extent for the rest of
@@ -185,8 +189,16 @@ pub struct PoolStats {
     /// compressed-but-resident middle tier. Bounded by the RSS target;
     /// exceeding it pages the oldest extents out to the swap device.
     pub extent_resident_bytes: u64,
-    /// Extents pushed to the swap device by RSS-target enforcement.
+    /// Extents pushed to the swap device by RSS-target enforcement, with
+    /// the whole range observed nonresident afterwards.
     pub extent_pageouts: u64,
+    /// Pageout passes whose residency observation found some of the
+    /// extent's pages still in memory: `MADV_PAGEOUT` may decline pages and
+    /// still succeed, so `mincore` decides. The extent keeps its full
+    /// resident accounting and is retried until its per-extent retry cap.
+    /// Climbing steadily on a loaded pool means pages cannot actually reach
+    /// the swap device (no swap, or a cgroup that cannot reclaim).
+    pub extent_pageout_incomplete: u64,
 }
 
 #[derive(Debug, Default)]
@@ -208,6 +220,7 @@ struct Counters {
     eager_backs: AtomicU64,
     extent_resident_bytes: AtomicU64,
     extent_pageouts: AtomicU64,
+    extent_pageout_incomplete: AtomicU64,
 }
 
 /// A buffer pool over swap-backed extents. Cheap to clone; all clones share
@@ -558,6 +571,7 @@ impl Pool {
             eager_backs: c.eager_backs.load(Ordering::Relaxed),
             extent_resident_bytes: c.extent_resident_bytes.load(Ordering::Relaxed),
             extent_pageouts: c.extent_pageouts.load(Ordering::Relaxed),
+            extent_pageout_incomplete: c.extent_pageout_incomplete.load(Ordering::Relaxed),
             spill_scheduled: c.spill_scheduled.load(Ordering::Relaxed),
             spill_cancelled: c.spill_cancelled.load(Ordering::Relaxed),
             spill_in_flight: self.0.spill.in_flight.load(Ordering::Relaxed),
@@ -676,6 +690,13 @@ impl Pool {
     #[cfg(test)]
     fn enforce_budget(&self) {
         self.0.enforce_budget();
+    }
+
+    /// Test hook: runs one compressed-cap enforcement pass inline on the
+    /// calling thread, where the fake residency observation applies.
+    #[cfg(test)]
+    fn enforce_rss_target(&self) {
+        self.0.enforce_compressed_cap();
     }
 
     /// Retunes the resident-bytes budget in place and enforces it. Live
@@ -1296,12 +1317,14 @@ impl PoolInner {
     /// Pages out the oldest resident extents until the compressed tier falls
     /// to its capacity. The compression is already paid and the device write
     /// is the kernel's async writeback, so each pageout is one bounded
-    /// madvise; spill threads run this between jobs, and other threads only
-    /// when no spill threads exist (see
+    /// madvise plus a mincore observation; spill threads run this between
+    /// jobs, and other threads only when no spill threads exist (see
     /// [`PoolInner::enforce_or_defer_compressed_cap`]). Not single-flighted:
     /// concurrent passes pop disjoint victims. Visits are bounded by the
     /// queue's length at entry; stale entries (extent paged out, dropped, or
-    /// chunk dead) are dropped.
+    /// chunk dead) are dropped, while incomplete and retry-capped extents
+    /// are requeued with their accounting intact, so the tier may settle
+    /// above its capacity by the bytes the kernel declined to reclaim.
     fn enforce_compressed_cap(&self) {
         let cap = self.compressed_cap();
         let resident = |c: &Counters| c.extent_resident_bytes.load(Ordering::Relaxed);
@@ -1328,12 +1351,30 @@ impl PoolInner {
             };
             match &mut state.extent {
                 Some(extent) if extent.is_resident() => {
-                    // Uncount before the flag flips.
-                    self.note_extent_released(extent);
-                    extent.pageout();
-                    self.counters
-                        .extent_pageouts
-                        .fetch_add(1, Ordering::Relaxed);
+                    if extent.pageout_capped() {
+                        // Retry-capped: the extent stays fully counted and
+                        // is not advised again until a read resets its
+                        // budget. The requeued entry is what lets a
+                        // post-read pass find the extent, since a read of a
+                        // still-resident extent does not re-enqueue it.
+                        self.extent_queue().push_back(weak);
+                    } else if extent.pageout() {
+                        self.counters
+                            .extent_resident_bytes
+                            .fetch_sub(u64::cast_from(extent.alloc_size()), Ordering::Relaxed);
+                        self.counters
+                            .extent_pageouts
+                            .fetch_add(1, Ordering::Relaxed);
+                    } else {
+                        // The advice left pages resident. The extent keeps
+                        // its full accounting (the ledger may over-count
+                        // RSS, the safe direction) and its queue slot, so
+                        // later passes retry it up to the cap.
+                        self.counters
+                            .extent_pageout_incomplete
+                            .fetch_add(1, Ordering::Relaxed);
+                        self.extent_queue().push_back(weak);
+                    }
                 }
                 // Paged out already or dropped: the entry is stale. A later
                 // resident event re-enqueues.
@@ -1615,6 +1656,116 @@ mod tests {
         let stats = pool.stats();
         assert_eq!(stats.extent_resident_bytes, 0);
         assert_eq!(stats.extent_pageouts, 1);
+    }
+
+    /// A pageout pass whose residency observation finds the whole range
+    /// gone uncounts exactly the extent's allocation bytes.
+    #[mz_ore::test]
+    fn full_pageout_uncounts_exactly_the_extent() {
+        let pool = test_pool(256 << 20);
+        pool.set_rss_target(1 << 30);
+        let handle = insert(&pool, &mut payload(SMALL, 50));
+        pool.evict(&handle);
+        let counted = pool.stats().extent_resident_bytes;
+        assert!(counted > 0, "under the target, the extent stays counted");
+        pool.set_rss_target(0);
+        let stats = pool.stats();
+        assert_eq!(stats.extent_resident_bytes, 0, "exactly `counted` left");
+        assert_eq!(stats.extent_pageouts, 1);
+        assert_eq!(stats.extent_pageout_incomplete, 0);
+    }
+
+    /// A pageout pass the kernel declines leaves the extent fully counted
+    /// and queued, and increments the incomplete counter. The next pass
+    /// (advice now accepted) pages it out.
+    #[mz_ore::test]
+    fn incomplete_pageout_keeps_accounting_and_queue_position() {
+        let pool = test_pool(256 << 20);
+        pool.set_rss_target(1 << 30);
+        let handle = insert(&pool, &mut payload(SMALL, 51));
+        pool.evict(&handle);
+        let counted = pool.stats().extent_resident_bytes;
+        assert!(counted > 0);
+        region::fake_residency::decline_next(1);
+        pool.set_rss_target(0);
+        let stats = pool.stats();
+        assert_eq!(
+            stats.extent_resident_bytes, counted,
+            "full accounting stays"
+        );
+        assert_eq!(stats.extent_pageouts, 0);
+        assert_eq!(stats.extent_pageout_incomplete, 1);
+        assert_eq!(handle.residency(), Residency::Evicted);
+        // The requeued entry is retried by the next enforcement pass.
+        pool.enforce_rss_target();
+        let stats = pool.stats();
+        assert_eq!(stats.extent_resident_bytes, 0);
+        assert_eq!(stats.extent_pageouts, 1);
+        assert_eq!(stats.extent_pageout_incomplete, 1);
+    }
+
+    /// A never-reclaimable extent stops being advised after the retry cap:
+    /// the incomplete counter stops climbing, the bytes stay counted
+    /// resident, and the tier keeps paging other extents out around it.
+    #[mz_ore::test]
+    fn pageout_retry_cap_stops_advising() {
+        let pool = test_pool(256 << 20);
+        let handle = insert(&pool, &mut payload(SMALL, 52));
+        region::fake_residency::decline_next(u64::MAX);
+        // RSS target zero: the eviction's enforcement pass advises at once.
+        pool.evict(&handle);
+        for _ in 0..5 {
+            pool.enforce_rss_target();
+        }
+        let stats = pool.stats();
+        assert_eq!(
+            stats.extent_pageout_incomplete,
+            u64::from(extent::PAGEOUT_RETRY_CAP),
+            "advised exactly retry-cap times, then left alone",
+        );
+        assert_eq!(stats.extent_pageouts, 0);
+        let counted = stats.extent_resident_bytes;
+        assert!(counted > 0, "capped extent stays counted resident");
+        // The tier functions around the capped extent: a fresh extent still
+        // pages out.
+        region::fake_residency::decline_next(0);
+        let other = insert(&pool, &mut payload(SMALL, 53));
+        pool.evict(&other);
+        let stats = pool.stats();
+        assert_eq!(stats.extent_pageouts, 1);
+        assert_eq!(
+            stats.extent_resident_bytes, counted,
+            "only the capped extent remains counted",
+        );
+        assert_eq!(read(&handle).len(), SMALL, "capped extent stays readable");
+    }
+
+    /// Reading a retry-capped extent faults its pages back in and resets
+    /// the retry budget, so a later pass can page it out.
+    #[mz_ore::test]
+    fn read_resets_pageout_retry_budget() {
+        let pool = test_pool(256 << 20);
+        let orig = payload(SMALL, 54);
+        let handle = insert(&pool, &mut orig.clone());
+        region::fake_residency::decline_next(u64::MAX);
+        pool.evict(&handle);
+        for _ in 0..4 {
+            pool.enforce_rss_target();
+        }
+        assert_eq!(
+            pool.stats().extent_pageout_incomplete,
+            u64::from(extent::PAGEOUT_RETRY_CAP),
+            "capped",
+        );
+        assert!(pool.stats().extent_resident_bytes > 0);
+        region::fake_residency::decline_next(0);
+        assert_eq!(read(&handle), orig);
+        pool.enforce_rss_target();
+        let stats = pool.stats();
+        assert_eq!(stats.extent_pageouts, 1, "the budget reset re-advised it");
+        assert_eq!(stats.extent_resident_bytes, 0);
+        // The paged-out extent still round-trips.
+        assert_eq!(read(&handle), orig);
     }
 
     /// Eager backing compresses a chunk to `BackedResident` while it stays

@@ -304,6 +304,63 @@ pub(crate) fn willneed(ptr: *mut u8, len: usize) {
     unsafe { sys::advise(ptr, len, sys::Advice::WillNeed) }
 }
 
+/// Opts the page-aligned subrange of `[ptr, ptr + len)` out of transparent
+/// huge pages, so reclaim advice over the range operates on base pages and
+/// never needs a folio split. Contents are preserved. No-op outside Linux.
+pub(crate) fn nohugepage(ptr: *mut u8, len: usize) {
+    // SAFETY: as in `pageout`, a contents-preserving hint over a live
+    // mapping.
+    unsafe { sys::advise(ptr, len, sys::Advice::NoHugePage) }
+}
+
+/// Whether every page of the page-aligned subrange of `[ptr, ptr + len)` is
+/// out of memory, per `mincore(2)`: the observation the pageout ledger
+/// trusts instead of the reclaim advice's return value. Errs toward `false`
+/// (resident) when the observation is unavailable. In test builds the
+/// answer comes from [`fake_residency`] instead of the platform.
+pub(crate) fn nonresident(ptr: *mut u8, len: usize) -> bool {
+    #[cfg(test)]
+    {
+        let _ = (ptr, len);
+        fake_residency::observe()
+    }
+    #[cfg(not(test))]
+    sys::nonresident(ptr, len)
+}
+
+/// Test seam over the pageout residency observation. The decline queue is
+/// thread-local because observation runs on whichever thread enforces the
+/// compressed cap, so tests drive enforcement inline on their own thread.
+#[cfg(test)]
+pub(crate) mod fake_residency {
+    use std::cell::Cell;
+
+    thread_local! {
+        static DECLINES: Cell<u64> = const { Cell::new(0) };
+    }
+
+    /// Makes the next `n` observations on this thread report pages still
+    /// resident, modeling a kernel that declined the reclaim advice.
+    /// Replaces any previously queued declines.
+    pub(crate) fn decline_next(n: u64) {
+        DECLINES.with(|d| d.set(n));
+    }
+
+    /// One observation: consumes a queued decline (reporting the range
+    /// still resident), or reports it fully nonresident.
+    pub(super) fn observe() -> bool {
+        DECLINES.with(|d| {
+            let n = d.get();
+            if n > 0 {
+                d.set(n - 1);
+                false
+            } else {
+                true
+            }
+        })
+    }
+}
+
 /// The largest `page`-aligned subrange of `[addr, addr + len)`, as a
 /// `(byte offset from addr, subrange length)` pair, or `None` when the range
 /// covers no whole page (including on address-space overflow). `page` must
@@ -365,6 +422,8 @@ mod sys {
         PageOut,
         /// Fault back in ahead of need; contents preserved.
         WillNeed,
+        /// Exclude from transparent huge pages; contents preserved.
+        NoHugePage,
     }
 
     /// Maps `len` bytes of anonymous memory with the base aligned to
@@ -468,9 +527,11 @@ mod sys {
             Advice::PageOut => libc::MADV_PAGEOUT,
             #[cfg(target_os = "linux")]
             Advice::WillNeed => libc::MADV_WILLNEED,
-            // Reclaim and prefetch hints have no portable equivalent.
+            #[cfg(target_os = "linux")]
+            Advice::NoHugePage => libc::MADV_NOHUGEPAGE,
+            // Reclaim, prefetch, and THP hints have no portable equivalent.
             #[cfg(not(target_os = "linux"))]
-            Advice::PageOut | Advice::WillNeed => return,
+            Advice::PageOut | Advice::WillNeed | Advice::NoHugePage => return,
         };
         let Some((offset, sub_len)) = aligned_subrange(ptr.addr(), len, page_size()) else {
             return;
@@ -483,6 +544,44 @@ mod sys {
         // function contract.
         unsafe {
             libc::madvise(aligned, sub_len, advice);
+        }
+    }
+
+    /// Whether every page of the page-aligned subrange of `[ptr, ptr + len)`
+    /// is nonresident, per `mincore(2)`. A failed observation reports
+    /// `false`: the ledger keeps counting pages it cannot prove gone.
+    ///
+    /// Only Linux answers from the kernel. Elsewhere the reclaim advice is
+    /// compiled out, so there is no reclaim to observe and the answer is
+    /// `true`, keeping the compressed tier cycling on development platforms.
+    #[cfg_attr(test, allow(dead_code))]
+    pub(super) fn nonresident(ptr: *mut u8, len: usize) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            let page = page_size();
+            let Some((offset, sub_len)) = aligned_subrange(ptr.addr(), len, page) else {
+                // No whole page to observe: vacuously nonresident.
+                return true;
+            };
+            // SAFETY: `offset <= len` (`aligned_subrange`'s contract), so the
+            // add stays within the caller's range and preserves provenance.
+            let aligned = unsafe { ptr.byte_add(offset) }.cast::<libc::c_void>();
+            // `sub_len` is a whole number of pages (`aligned_subrange`'s
+            // contract), one status byte each.
+            let mut status = vec![0u8; sub_len / page];
+            // SAFETY: pointer and length describe a fully page-aligned
+            // subrange of the caller's live mapping, and `status` holds one
+            // byte per page of it.
+            let rc = unsafe { libc::mincore(aligned, sub_len, status.as_mut_ptr().cast()) };
+            if rc != 0 {
+                return false;
+            }
+            status.iter().all(|&page_status| page_status & 1 == 0)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (ptr, len);
+            true
         }
     }
 
@@ -506,6 +605,7 @@ mod sys {
         DontNeed,
         PageOut,
         WillNeed,
+        NoHugePage,
     }
 
     pub(super) fn map(len: usize, align: usize) -> io::Result<*mut u8> {
@@ -531,6 +631,13 @@ mod sys {
     /// contracts allow (`DontNeed` leaves contents undefined, and "old bytes
     /// kept" is one of the permitted outcomes, as on macOS).
     pub(super) unsafe fn advise(_ptr: *mut u8, _len: usize, _advice: Advice) {}
+
+    /// The heap backing has no residency to observe, so reclaim advice is
+    /// treated as fully effective, mirroring the non-Linux answer.
+    #[cfg_attr(test, allow(dead_code))]
+    pub(super) fn nonresident(_ptr: *mut u8, _len: usize) -> bool {
+        true
+    }
 
     pub(super) fn page_size() -> usize {
         4096
