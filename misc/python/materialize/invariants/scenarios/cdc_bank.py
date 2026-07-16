@@ -51,6 +51,15 @@ BALANCE_PER_ACCOUNT = 1000
 # Negative so the per-worker reconciliation and count bounds never see them.
 RTR_MARKER_WORKER = -2
 
+# Purification of CREATE TABLE .. FROM SOURCE connects to the upstream database
+# over the (possibly disrupted) source leg to validate the reference. These
+# plan-time connect failures are expected chaos, not a rejected write.
+UPSTREAM_CONNECT_ERROR_SNIPPETS = (
+    "failed to connect to PostgreSQL database",
+    "failed to connect to MySQL database",
+    "failed to connect to SQL Server database",
+)
+
 
 class UpstreamTransfer(Action):
     """One upstream transaction: debit, credit, and a transfers-log row.
@@ -155,10 +164,17 @@ class SourceTableChurn(Action):
             self.client.write(f"DROP TABLE IF EXISTS accounts_v{self.nonce}")
         self.nonce += 1
         name = f"accounts_v{self.nonce}"
-        outcome = self.client.write(
-            f"CREATE TABLE {name} FROM SOURCE bank_source"
-            f" (REFERENCE {self.scenario.accounts_reference})"
-        )
+        try:
+            outcome = self.client.write(
+                f"CREATE TABLE {name} FROM SOURCE bank_source"
+                f" (REFERENCE {self.scenario.accounts_reference})"
+            )
+        except UnexpectedQueryError as e:
+            # Purification reaches the upstream over the disrupted source leg,
+            # so a plan-time connect failure is expected chaos, not a bug.
+            if any(s in str(e) for s in UPSTREAM_CONNECT_ERROR_SNIPPETS):
+                raise TransientError(str(e)) from e
+            raise
         if outcome != Outcome.COMMITTED:
             return outcome
         deadline = time.monotonic() + 120.0

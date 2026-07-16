@@ -1241,10 +1241,13 @@ class TableBank(Scenario):
         Executed as a direct statement, not a cursor: UP TO makes the
         subscription finite, so the statement completing at all is the
         termination check. NOTE: deliberately run without PROGRESS, since
-        with UP TO no progress message is ever emitted (see
-        FINDINGS-BUGS.md), the fold is validated against a direct read
-        instead. The workload is quiesced and end_ts postdates it, so the
-        folded count must equal the current one.
+        with UP TO no progress message is ever emitted, the fold is
+        validated against a direct read instead.
+        TODO: Reenable when SQL-528 is fixed: run the history audit's
+        per-boundary validation WITH (PROGRESS) UP TO instead of this
+        end-state fold.
+        The workload is quiesced and end_ts postdates it, so the folded
+        count must equal the current one.
         """
         client = MzClient(self.ctx, "up-to-replay")
         try:

@@ -123,7 +123,10 @@ class ToxiproxyApi:
         r = self.session.delete(
             f"{self.base_url}/proxies/{proxy_name}/toxics/{name}", timeout=30
         )
-        assert r.status_code in (200, 204), f"deleting toxic {name}: {r} {r.text}"
+        # 404 means already deleted: heals must be idempotent, since a
+        # disruptor cycle that outlived the join deadline re-heals toxics
+        # that stop_and_heal's heal-everything already removed.
+        assert r.status_code in (200, 204, 404), f"deleting toxic {name}: {r} {r.text}"
 
     def reset(self) -> None:
         """Re-enable all proxies and remove all toxics."""
@@ -274,15 +277,21 @@ class Disruptor(threading.Thread):
             key = (f"process:{victim.name}", "kill")
             self.coverage[key] = self.coverage.get(key, 0) + 1
             self.stop_event.wait(duration / 2)
-            try:
-                victim.heal()
-            except Exception as e:
-                self._record(f"heal of {victim.name} failed ({e}), continuing")
         else:
             self.stop_event.wait(duration)
         self.active.clear()
         for leg, kind in applied:
             self._heal(leg, kind)
+        if victim is not None:
+            # Heal the victim only after the legs: its heal blocks until the
+            # process serves again (docker compose --wait), which can never
+            # happen while e.g. its metadata leg is still cut, and a
+            # disruptor stuck here would leave the toxics applied through
+            # the converge phase (nightly 17376).
+            try:
+                victim.heal()
+            except Exception as e:
+                self._record(f"heal of {victim.name} failed ({e}), continuing")
         self.cycles += 1
         self._record(
             "healed " + ", ".join(f"{kind} on {leg.name}" for leg, kind in applied)
@@ -402,7 +411,16 @@ class Disruptor(threading.Thread):
         self.stop_event.set()
         self.join(timeout=60)
         if self.is_alive():
-            self.log.log("disrupt", "disruptor thread failed to stop in time")
+            # The disruptor is stuck, e.g. inside a process heal that waits
+            # for a container to serve again. Its toxics may still be
+            # applied, so heal from this thread: the converge phase must
+            # start from a clean network no matter what. The stuck thread
+            # is blocked in a subprocess call, not in the admin API, so
+            # sharing the API session here is safe in practice.
+            self.log.log(
+                "disrupt", "disruptor thread failed to stop in time, healing anyway"
+            )
+            self._heal_all_with_retries()
         else:
             # run() already healed in its finally block, but verify.
             try:
