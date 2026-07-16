@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 import type { NodeProps } from "@xyflow/react";
 import React from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -52,6 +52,7 @@ const baseData: FlowNodeData = {
   color: "#391D7E",
   selected: false,
   activeMatch: false,
+  expanded: false,
 };
 
 // NodeProps carries a lot of @xyflow/react-internal fields (id, dragging,
@@ -116,6 +117,39 @@ describe("RegionNode", () => {
     const regionShell = screen.getByTestId("node-shell");
     expect(regionShell).toHaveStyle({ borderColor: baseData.color });
     expect(regionShell).not.toHaveStyle({ background: baseData.color });
+  });
+});
+
+describe("RegionNode toggle", () => {
+  const regionData = (over: Partial<FlowNodeData> = {}): FlowNodeData => ({
+    ...baseData,
+    node: { ...baseNode, kind: "region" as const, childCount: 2 },
+    ...over,
+  });
+
+  it("fires onToggleExpand and stops propagation on the toggle", async () => {
+    const onToggleExpand = vi.fn();
+    const onNodeClick = vi.fn();
+    await renderComponent(
+      <div onClick={onNodeClick}>
+        <RegionNode {...nodeProps(regionData({ onToggleExpand }))} />
+      </div>,
+    );
+    fireEvent.click(screen.getByTestId("region-toggle"));
+    expect(onToggleExpand).toHaveBeenCalledWith("n1");
+    expect(onNodeClick).not.toHaveBeenCalled();
+  });
+
+  it("renders distinctly when expanded", async () => {
+    const { unmount } = await renderComponent(
+      <RegionNode {...nodeProps(regionData({ expanded: false }))} />,
+    );
+    const collapsed = screen.getByTestId("region-toggle").textContent;
+    unmount();
+    await renderComponent(
+      <RegionNode {...nodeProps(regionData({ expanded: true }))} />,
+    );
+    expect(screen.getByTestId("region-toggle").textContent).not.toBe(collapsed);
   });
 });
 
