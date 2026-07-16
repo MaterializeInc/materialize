@@ -428,6 +428,13 @@ impl ComputeState {
                     warn!("chunk spill: buffer pool unavailable; chunks stay resident");
                 }
             }
+
+            // Compute's leg of the chunk-world spill gate: committed chunk
+            // bodies from the chunk-API batchers spill to the buffer pool
+            // while either subsystem's gate is set — storage's leg comes from
+            // `enable_upsert_paged_spill` — so each side writes only its own
+            // bit and the flags compose as an OR.
+            mz_timely_util::columnar::chunk::set_compute_spill_enabled(enabled);
         }
 
         // Remember the maintenance interval locally to avoid reading it from the config set on
