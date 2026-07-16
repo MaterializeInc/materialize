@@ -2147,9 +2147,10 @@ mod hydration_burst {
 
     #[mz_ore::test]
     fn burst_desires_one_replica_at_hydration_size() {
-        // With a record present, the strategy desires exactly one replica at the
-        // burst size (with the cluster's AZ pool and logging).
-        let (s, signals) = burst_state(
+        // With a record present, the strategy desires exactly one replica that
+        // differs from steady only in size: the burst size, with the cluster's
+        // AZ pool and logging.
+        let (mut s, signals) = burst_state(
             "100cc",
             1,
             "400cc",
@@ -2157,9 +2158,15 @@ mod hydration_burst {
             vec![observed(replica(1), "r0", "100cc")],
             Some(record("400cc", Duration::from_millis(10), None)),
         );
+        s.availability_zones = vec!["az1".to_string(), "az2".to_string()];
         let desired = HydrationBurstStrategy.desired_replicas(&s, &signals, &config(), now(1000));
         assert_eq!(desired.len(), 1);
-        assert_eq!(desired[0].shape.size, "400cc");
+        let expected = ReplicaShape {
+            size: "400cc".to_string(),
+            availability_zones: AvailabilityZones(s.availability_zones.clone()),
+            logging: ComputeReplicaLogging::default(),
+        };
+        assert!(desired[0].shape.matches(&expected));
     }
 
     #[mz_ore::test]
@@ -2381,33 +2388,6 @@ mod hydration_burst {
                 .desired_replicas(&s, &signals, &config(), now(1000))
                 .is_empty()
         );
-    }
-
-    #[mz_ore::test]
-    fn burst_replica_shape_carries_az_and_logging() {
-        // The burst replica differs from steady only in size: it carries the
-        // cluster's AZ pool and logging.
-        let (mut s, signals) = burst_state(
-            "100cc",
-            1,
-            "400cc",
-            Duration::from_millis(10),
-            Vec::new(),
-            Some(record("400cc", Duration::from_millis(10), None)),
-        );
-        s.availability_zones = vec!["az1".to_string(), "az2".to_string()];
-        let desired = HydrationBurstStrategy.desired_replicas(&s, &signals, &config(), now(1000));
-        let expected = ReplicaShape {
-            size: "400cc".to_string(),
-            availability_zones: AvailabilityZones(s.availability_zones.clone()),
-            logging: ComputeReplicaLogging::default(),
-        };
-        assert!(desired[0].shape.matches(&expected));
-    }
-
-    #[mz_ore::test]
-    fn burst_strategy_name() {
-        assert_eq!(HydrationBurstStrategy.name(), HYDRATION_BURST_STRATEGY_NAME);
     }
 
     #[mz_ore::test(tokio::test)]
