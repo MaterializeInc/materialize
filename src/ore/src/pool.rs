@@ -50,9 +50,13 @@
 //! declines surfaces as `extent_pageout_incomplete` (and a tier settled
 //! above its capacity) instead of as RSS the ledger cannot see.
 //!
-//! Residency is a state, not a type, and it only descends: a chunk starts
-//! resident and, once evicted, serves reads from its extent for the rest of
-//! its life. Eviction I/O runs on spill threads when enabled —
+//! Residency is a state, not a type. It descends through eviction and
+//! ascends through exactly one transition: an admitting read
+//! ([`ChunkHandle::read_into_admit`]) lifts an evicted chunk back to
+//! `BackedResident` when a slot is free within the budget or stealable from
+//! a clean backed victim of the same class, never by evicting or
+//! compressing anything. Plain reads ([`ChunkHandle::read_into`]) leave
+//! residency untouched. Eviction I/O runs on spill threads when enabled —
 //! `WriteInFlight` marks a chunk whose compression a spill thread owns — and
 //! inline on the evicting caller otherwise. Chunks are immutable after
 //! [`Pool::insert_with`], which is what makes a `BackedResident` slot always
@@ -128,7 +132,8 @@ enum Residency {
     /// Extent copy only; the chunk holds no slot. The extent itself may
     /// still be RAM-resident (the compressed tier) or paged out to the swap
     /// device. Reads decompress the extent straight into the caller's
-    /// buffer; the chunk allocates no slot and stays evicted.
+    /// buffer and leave the chunk evicted, except that an admitting read
+    /// may lift it back to [`Residency::BackedResident`].
     Evicted,
     /// Larger than the largest size class; held as a plain heap allocation,
     /// always resident. A prototype limitation, not a design state.
@@ -185,6 +190,16 @@ pub struct PoolStats {
     /// (write-behind): still readable in their slots, with eviction
     /// pre-paid.
     pub eager_backs: u64,
+    /// Evicted chunks re-admitted to `BackedResident` by an admitting read
+    /// out of free budget headroom.
+    pub admissions_budget: u64,
+    /// Evicted chunks re-admitted to `BackedResident` by an admitting read
+    /// stealing the slot of a clean backed victim of the same size class.
+    /// The victim becomes `Evicted` with zero I/O and its extent intact.
+    pub admissions_steal: u64,
+    /// Admitting reads of evicted chunks that found neither budget headroom
+    /// nor a clean victim and were served as a plain decompress instead.
+    pub admissions_denied: u64,
     /// Allocation bytes of compressed extents currently resident — the
     /// compressed-but-resident middle tier. Bounded by the RSS target;
     /// exceeding it pages the oldest extents out to the swap device.
@@ -218,6 +233,9 @@ struct Counters {
     warm_bytes: AtomicU64,
     warm_reuses: AtomicU64,
     eager_backs: AtomicU64,
+    admissions_budget: AtomicU64,
+    admissions_steal: AtomicU64,
+    admissions_denied: AtomicU64,
     extent_resident_bytes: AtomicU64,
     extent_pageouts: AtomicU64,
     extent_pageout_incomplete: AtomicU64,
@@ -239,9 +257,13 @@ pub struct Pool(Arc<PoolInner>);
 /// and the region slot allocators — but never the reverse. The enforcement
 /// and backing scans additionally drop the queue guard before trying a
 /// chunk's state lock (and only ever `try_lock` it), so no path holds a
-/// queue lock while waiting on chunk state. Reads copy out under the chunk's
-/// state lock — the same lock eviction takes — so there is no reader-side
-/// count and no reader the evictor must account for.
+/// queue lock while waiting on chunk state. The admitting read's victim
+/// steal is the one place a chunk's state lock is held while probing
+/// another chunk's, and the victim is only ever `try_lock`ed, so two
+/// admitters stealing toward each other skip instead of deadlocking. Reads
+/// copy out under the chunk's state lock — the same lock eviction takes —
+/// so there is no reader-side count and no reader the evictor must account
+/// for.
 #[derive(Debug)]
 struct PoolInner {
     /// Resident-bytes target. Atomic so a running pool can be retuned in
@@ -257,9 +279,9 @@ struct PoolInner {
     /// One region per entry of [`SIZE_CLASSES`], same order.
     regions: Vec<Region>,
     /// Second-chance FIFOs of eviction candidates, one per depth band; a
-    /// chunk joins the band of its [`ChunkHints`] depth at insert. Entries
-    /// for freed chunks go stale in place and are dropped by
-    /// [`PoolInner::prune_queues`].
+    /// chunk joins the band of its [`ChunkHints`] depth at insert and again
+    /// on re-admission. Entries for freed chunks go stale in place and are
+    /// dropped by [`PoolInner::prune_queues`].
     ///
     /// Two scanners walk them with different obligations, both visiting the
     /// deepest band first. Budget enforcement is the one that ages chunks:
@@ -569,6 +591,9 @@ impl Pool {
             warm_bytes: c.warm_bytes.load(Ordering::Relaxed),
             warm_reuses: c.warm_reuses.load(Ordering::Relaxed),
             eager_backs: c.eager_backs.load(Ordering::Relaxed),
+            admissions_budget: c.admissions_budget.load(Ordering::Relaxed),
+            admissions_steal: c.admissions_steal.load(Ordering::Relaxed),
+            admissions_denied: c.admissions_denied.load(Ordering::Relaxed),
             extent_resident_bytes: c.extent_resident_bytes.load(Ordering::Relaxed),
             extent_pageouts: c.extent_pageouts.load(Ordering::Relaxed),
             extent_pageout_incomplete: c.extent_pageout_incomplete.load(Ordering::Relaxed),
@@ -895,10 +920,11 @@ impl PoolInner {
                 if state.freed {
                     false
                 } else if matches!(state.residency, Residency::Evicted | Residency::Oversize) {
-                    // Nothing to evict: drop the entry. Evicted chunks never
-                    // rejoin the queue (reads are copy-out and leave them
-                    // evicted), so it stays proportional to the resident set
-                    // rather than accumulating every chunk ever evicted.
+                    // Nothing to evict: drop the entry. A chunk re-enters
+                    // the queue only when it becomes resident again (insert
+                    // or re-admission), so the queue stays proportional to
+                    // the resident set rather than accumulating every chunk
+                    // ever evicted.
                     false
                 } else if state.touched {
                     state.touched = false;
@@ -1199,24 +1225,30 @@ impl PoolInner {
             .is_ok()
     }
 
-    /// Allocates a slot in `class`: a warm allocation is counted as a reuse,
-    /// an exhausted class as a heap fallback for a `len_bytes` payload
-    /// (warned about once). `None` means the caller must degrade to the
-    /// heap.
+    /// Allocates a slot in `class` with warm-pool accounting (a warm
+    /// allocation is counted as a reuse), or `None` when the class has no
+    /// free slot.
+    fn try_alloc_slot(&self, class: usize) -> Option<u32> {
+        let (index, warm) = self.regions[class].alloc()?;
+        if warm {
+            // The allocation faulted no pages; its bytes leave the warm
+            // pool.
+            let class_bytes = u64::cast_from(self.regions[class].class_size());
+            self.counters
+                .warm_bytes
+                .fetch_sub(class_bytes, Ordering::Relaxed);
+            self.counters.warm_reuses.fetch_add(1, Ordering::Relaxed);
+        }
+        Some(index)
+    }
+
+    /// Allocates a slot in `class` for an insert: as
+    /// [`PoolInner::try_alloc_slot`], with an exhausted class counted as a
+    /// heap fallback for a `len_bytes` payload (warned about once). `None`
+    /// means the caller must degrade to the heap.
     fn alloc_slot(&self, class: usize, len_bytes: usize) -> Option<u32> {
-        match self.regions[class].alloc() {
-            Some((index, warm)) => {
-                if warm {
-                    // The allocation faulted no pages; its bytes leave the
-                    // warm pool.
-                    let class_bytes = u64::cast_from(self.regions[class].class_size());
-                    self.counters
-                        .warm_bytes
-                        .fetch_sub(class_bytes, Ordering::Relaxed);
-                    self.counters.warm_reuses.fetch_add(1, Ordering::Relaxed);
-                }
-                Some(index)
-            }
+        match self.try_alloc_slot(class) {
+            Some(index) => Some(index),
             None => {
                 self.counters
                     .slot_exhausted_fallbacks
@@ -1232,6 +1264,129 @@ impl PoolInner {
                 None
             }
         }
+    }
+
+    /// Acquires a slot for re-admitting an evicted chunk, from free budget
+    /// headroom or by stealing a clean backed victim's slot, never by
+    /// evicting or compressing anything. `None` counts a denied admission.
+    /// On success the admitted chunk's resident-bytes accounting and the
+    /// admission counter are settled, and the caller (who holds the chunk's
+    /// state lock) owns the slot: its contents are unspecified (fresh,
+    /// warm, or the victim's stale bytes) and must be fully overwritten.
+    fn admit_slot(&self, meta: &ChunkMeta) -> Option<u32> {
+        let class = meta.class.expect("evicted chunk has a class");
+        let len_bytes = u64::cast_from(meta.len_bytes());
+        // Free budget first: reserve the bytes, then a slot. The
+        // reservation never pushes resident bytes past the budget, and a
+        // class with no free slot hands the reservation back rather than
+        // evicting anything to make room.
+        let reserved = self
+            .counters
+            .resident_bytes
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
+                let next = cur.checked_add(len_bytes)?;
+                (next <= self.budget_bytes.load(Ordering::Relaxed)).then_some(next)
+            })
+            .is_ok();
+        if reserved {
+            if let Some(slot) = self.try_alloc_slot(class) {
+                self.counters
+                    .admissions_budget
+                    .fetch_add(1, Ordering::Relaxed);
+                return Some(slot);
+            }
+            self.counters
+                .resident_bytes
+                .fetch_sub(len_bytes, Ordering::Relaxed);
+        }
+        if let Some(slot) = self.steal_clean_victim(class) {
+            // The victim's bytes left the ledger inside the steal and the
+            // admitted chunk's enter here. The slot's physical pages
+            // transfer untouched, so residency moves only by the
+            // intra-class length difference between the two chunks.
+            self.counters
+                .resident_bytes
+                .fetch_add(len_bytes, Ordering::Relaxed);
+            self.counters
+                .admissions_steal
+                .fetch_add(1, Ordering::Relaxed);
+            return Some(slot);
+        }
+        self.counters
+            .admissions_denied
+            .fetch_add(1, Ordering::Relaxed);
+        None
+    }
+
+    /// Takes the slot of a clean victim in `class`: a `BackedResident`
+    /// chunk with a clear touched bit, whose extent already duplicates its
+    /// slot, so the victim transitions to `Evicted` with zero I/O, its
+    /// extent intact, and its queue entry dropped. The returned slot keeps
+    /// its physical pages (no `dontneed`, no free-list round trip). They
+    /// hold the victim's stale bytes, and the victim's resident bytes have
+    /// left the ledger. `None` when the bounded scan finds no such victim.
+    ///
+    /// The caller holds its own chunk's state lock. The scan follows the
+    /// enforcement discipline (deepest band first, queue guard dropped
+    /// before any chunk lock, victims only ever `try_lock`ed), which is
+    /// what keeps the chunk-lock-while-probing-chunk-lock window
+    /// deadlock-free: two admitters stealing toward each other both fail
+    /// the `try_lock` and skip.
+    fn steal_clean_victim(&self, class: usize) -> Option<u32> {
+        // Bound on entries examined per band before moving to the next.
+        // The budget is per band, not shared across the scan: a deep band
+        // densely populated with touched resident chunks (a probe-heavy
+        // arrangement whose reads refresh every bit) would otherwise spend
+        // the entire scan on hopeless candidates and starve the shallower
+        // bands where the clean-victim stock actually sits (eager backing
+        // stocks young backed chunks in band zero). Eight visits per band
+        // absorb a handful of lock-busy or freshly touched entries without
+        // degrading a hopeless scan into a full queue walk, and cap the
+        // whole scan at eight times the band count.
+        const VISITS_PER_BAND: usize = 8;
+        for band in (0..DEPTH_BANDS).rev() {
+            let mut visits = VISITS_PER_BAND;
+            while visits > 0 {
+                let popped = self.queue(band).pop_front();
+                let Some(weak) = popped else {
+                    // Band exhausted; the next band has its own budget.
+                    break;
+                };
+                let Some(meta) = weak.upgrade() else {
+                    // Stale entries drop for free and do not spend a visit.
+                    continue;
+                };
+                visits -= 1;
+                let Ok(mut state) = meta.state.try_lock() else {
+                    self.queue(band).push_back(weak);
+                    continue;
+                };
+                if state.freed {
+                    continue;
+                }
+                match state.residency {
+                    // Entries for non-resident chunks drop, as in
+                    // enforcement.
+                    Residency::Evicted | Residency::Oversize => continue,
+                    Residency::UnbackedResident | Residency::WriteInFlight => {
+                        self.queue(band).push_back(weak);
+                        continue;
+                    }
+                    Residency::BackedResident => {}
+                }
+                if state.touched || meta.class != Some(class) {
+                    self.queue(band).push_back(weak);
+                    continue;
+                }
+                let slot = state.slot.take().expect("backed chunk has a slot");
+                state.residency = Residency::Evicted;
+                self.counters
+                    .resident_bytes
+                    .fetch_sub(u64::cast_from(meta.len_bytes()), Ordering::Relaxed);
+                return Some(slot);
+            }
+        }
+        None
     }
 
     /// Capacity of the compressed-resident tier: the RSS target's headroom
@@ -1414,8 +1569,27 @@ impl ChunkHandle {
     ///
     /// The copy runs under the chunk's state lock, which is what makes the
     /// no-reference contract cheap: eviction takes the same lock, so there
-    /// is no reader it could race.
+    /// is no reader it could race. The admitting variant is
+    /// [`ChunkHandle::read_into_admit`].
     pub fn read_into(&self, dst: &mut Vec<u64>) {
+        self.read_impl(dst, false);
+    }
+
+    /// As [`ChunkHandle::read_into`], except that an evicted chunk is
+    /// re-admitted to `BackedResident` (its extent kept, its touched bit
+    /// set) when a slot is available from free budget headroom or by
+    /// stealing from a clean backed victim of the same size class, never by
+    /// evicting or compressing anything. When neither source yields a slot
+    /// the read is served as a plain decompress and the chunk stays
+    /// evicted.
+    pub fn read_into_admit(&self, dst: &mut Vec<u64>) {
+        self.read_impl(dst, true);
+    }
+
+    /// Shared body of the copy-out reads: fills `dst` under the chunk's
+    /// state lock, re-admitting an evicted chunk when `admit` is set and a
+    /// slot is available.
+    fn read_impl(&self, dst: &mut Vec<u64>, admit: bool) {
         dst.clear();
         let meta = &*self.meta;
         if meta.len == 0 {
@@ -1430,22 +1604,62 @@ impl ChunkHandle {
                 dst.extend_from_slice(payload);
             }
             Residency::Evicted => {
-                // The zero-fill ahead of the decompress is deliberate waste
-                // (~a tenth of the decompress cost): the extent read takes an
-                // initialized `&mut [u8]`, so skipping the fill would mean
-                // exposing uninitialized memory through a safe reference.
-                // Callers that read repeatedly amortize it by reusing `dst`'s
-                // capacity.
-                dst.resize(meta.len, 0);
-                let bytes: &mut [u8] = bytemuck::cast_slice_mut(dst.as_mut_slice());
+                let slot = if admit {
+                    meta.pool.admit_slot(meta)
+                } else {
+                    None
+                };
                 let extent = state.extent.as_mut().expect("evicted chunk has an extent");
-                // Reading faults the extent's pages back in; re-count it
-                // against the compressed tier.
+                // Reading faults the extent's pages back in either way, so
+                // it is re-counted against the compressed tier below.
                 let was_resident = extent.is_resident();
-                extent.read_into(bytes);
+                let extent_alloc = extent.alloc_size();
+                match slot {
+                    Some(slot) => {
+                        // Admission: the extent decompresses straight into
+                        // the acquired slot, fully overwriting its
+                        // unspecified prior contents, and the caller's
+                        // buffer is filled from the slot.
+                        let region = meta.pool.region_of(meta);
+                        // SAFETY: the slot was acquired for this chunk
+                        // under its held state lock (freshly allocated, or
+                        // transferred from the victim under the victim's
+                        // lock), so it is exclusively owned with no other
+                        // reference into it, and `len_bytes` fits the
+                        // class.
+                        let slot_bytes = unsafe {
+                            std::slice::from_raw_parts_mut(region.slot_ptr(slot), meta.len_bytes())
+                        };
+                        extent.read_into(slot_bytes);
+                        state.slot = Some(slot);
+                        state.residency = Residency::BackedResident;
+                        // SAFETY: the slot belongs to this chunk while the
+                        // state lock is held (eviction and free both take
+                        // it).
+                        let src = unsafe { meta.pool.slot_data(meta, slot) };
+                        dst.extend_from_slice(src);
+                        // Resident again: rejoin the eviction candidates.
+                        // A leftover entry from before the chunk's eviction
+                        // is a harmless duplicate, since each entry is
+                        // validated against the chunk's state on visit.
+                        meta.pool
+                            .queue(band(meta.depth))
+                            .push_back(Arc::downgrade(&self.meta));
+                    }
+                    None => {
+                        // The zero-fill ahead of the decompress is deliberate
+                        // waste (~a tenth of the decompress cost): the extent
+                        // read takes an initialized `&mut [u8]`, so skipping
+                        // the fill would mean exposing uninitialized memory
+                        // through a safe reference. Callers that read
+                        // repeatedly amortize it by reusing `dst`'s capacity.
+                        dst.resize(meta.len, 0);
+                        let bytes: &mut [u8] = bytemuck::cast_slice_mut(dst.as_mut_slice());
+                        extent.read_into(bytes);
+                    }
+                }
                 if !was_resident {
-                    let alloc = extent.alloc_size();
-                    meta.pool.note_extent_resident(&self.meta, alloc);
+                    meta.pool.note_extent_resident(&self.meta, extent_alloc);
                     extent_revived = true;
                 }
             }
@@ -1466,8 +1680,9 @@ impl ChunkHandle {
         }
     }
 
-    /// Copies the whole contents into `dst` (per [`ChunkHandle::read_into`])
-    /// and frees the chunk, cancelling any in-flight backing write.
+    /// Copies the whole contents into `dst` (per [`ChunkHandle::read_into`],
+    /// never admitting) and frees the chunk, cancelling any in-flight
+    /// backing write.
     pub fn take(self, dst: &mut Vec<u64>) {
         self.read_into(dst);
     }
@@ -1593,6 +1808,14 @@ mod tests {
     fn read(handle: &ChunkHandle) -> Vec<u64> {
         let mut out = Vec::new();
         handle.read_into(&mut out);
+        out
+    }
+
+    /// Copies a chunk's contents out into a fresh buffer via the admitting
+    /// read.
+    fn read_admit(handle: &ChunkHandle) -> Vec<u64> {
+        let mut out = Vec::new();
+        handle.read_into_admit(&mut out);
         out
     }
 
@@ -1931,6 +2154,259 @@ mod tests {
         assert_eq!(read(&handle), orig);
         assert_eq!(handle.residency(), Residency::Evicted);
         assert_eq!(pool.stats().resident_bytes, 0, "reads copy out");
+    }
+
+    /// An admitting read of an evicted chunk with budget headroom re-admits
+    /// it: contents round-trip, the chunk lands `BackedResident` with its
+    /// extent kept, and later reads serve from the slot without touching
+    /// the extent.
+    #[mz_ore::test]
+    fn admit_from_free_budget_backs_the_chunk() {
+        let pool = test_pool(256 << 20);
+        let orig = payload(SMALL, 70);
+        let handle = insert(&pool, &mut orig.clone());
+        pool.evict(&handle);
+        assert_eq!(handle.residency(), Residency::Evicted);
+        assert_eq!(pool.stats().resident_bytes, 0);
+
+        pool.poison_free_slots();
+        assert_eq!(read_admit(&handle), orig);
+        assert_eq!(handle.residency(), Residency::BackedResident);
+        let stats = pool.stats();
+        assert_eq!(stats.admissions_budget, 1);
+        assert_eq!(stats.admissions_steal, 0);
+        assert_eq!(stats.admissions_denied, 0);
+        assert_eq!(stats.resident_bytes, 64 << 10);
+
+        // Later reads serve from the slot and never touch the extent: a
+        // decompress would revive its pages and move the revival and
+        // pageout counters.
+        let pageouts = stats.extent_pageouts;
+        let extent_resident = stats.extent_resident_bytes;
+        assert_eq!(read(&handle), orig);
+        assert_eq!(handle.residency(), Residency::BackedResident);
+        let stats = pool.stats();
+        assert_eq!(stats.extent_pageouts, pageouts);
+        assert_eq!(stats.extent_resident_bytes, extent_resident);
+
+        // The kept extent pre-pays the next eviction, and round-trips.
+        pool.evict(&handle);
+        assert_eq!(handle.residency(), Residency::Evicted);
+        let stats = pool.stats();
+        assert_eq!(stats.evictions_cheap, 1);
+        assert_eq!(stats.evictions_compress, 1, "admission wrote no extent");
+        pool.poison_free_slots();
+        assert_eq!(read(&handle), orig);
+        drop(handle);
+        assert_eq!(pool.stats().resident_bytes, 0);
+    }
+
+    /// With the budget pinned full and a clean backed victim of the same
+    /// class, an admitting read steals the victim's slot: the victim is
+    /// evicted with zero I/O and its extent intact, the admitted chunk
+    /// lands `BackedResident`, and resident bytes, warm bytes, and the
+    /// compression and pageout counters are all unchanged.
+    #[mz_ore::test]
+    fn admit_steals_clean_victim_slot() {
+        let pool = test_pool(256 << 20);
+        pool.set_rss_target(1 << 30);
+        let victim_orig = payload(SMALL, 71);
+        let target_orig = payload(SMALL, 72);
+        let victim = insert(&pool, &mut victim_orig.clone());
+        let target = insert(&pool, &mut target_orig.clone());
+        pool.evict(&target);
+        assert!(pool.back_step(), "victim is backable");
+        assert_eq!(victim.residency(), Residency::BackedResident);
+        // The budget now holds exactly the victim: no admission headroom.
+        pool.set_budget(64 << 10);
+        assert_eq!(victim.residency(), Residency::BackedResident);
+        let before = pool.stats();
+
+        assert_eq!(read_admit(&target), target_orig);
+        assert_eq!(target.residency(), Residency::BackedResident);
+        assert_eq!(victim.residency(), Residency::Evicted);
+        let after = pool.stats();
+        assert_eq!(after.admissions_steal, 1);
+        assert_eq!(after.admissions_budget, 0);
+        assert_eq!(after.admissions_denied, 0);
+        assert_eq!(
+            after.resident_bytes, before.resident_bytes,
+            "same class, same bytes",
+        );
+        assert_eq!(
+            after.evictions_compress, before.evictions_compress,
+            "no compression",
+        );
+        assert_eq!(
+            after.evictions_cheap, before.evictions_cheap,
+            "a steal is not an enforcement eviction",
+        );
+        assert_eq!(after.extent_bytes_written, before.extent_bytes_written);
+        assert_eq!(after.extent_pageouts, 0, "no pageout");
+        assert_eq!(
+            after.warm_bytes, before.warm_bytes,
+            "the stolen slot skipped the free list",
+        );
+        assert_eq!(after.warm_reuses, before.warm_reuses);
+
+        // The victim's extent is intact: its old slot now holds the
+        // admitted chunk's bytes, so a correct read must come from the
+        // extent.
+        assert_eq!(read(&victim), victim_orig);
+        assert_eq!(victim.residency(), Residency::Evicted);
+
+        drop(victim);
+        drop(target);
+        let stats = pool.stats();
+        assert_eq!(stats.resident_bytes, 0);
+        assert_eq!(stats.extent_resident_bytes, 0);
+    }
+
+    /// With the budget full and every candidate touched, the admitting read
+    /// still returns correct data, the chunk stays evicted, and the denial
+    /// counter increments.
+    #[mz_ore::test]
+    fn admit_denied_when_victims_touched() {
+        let pool = test_pool(256 << 20);
+        let victim_orig = payload(SMALL, 73);
+        let target_orig = payload(SMALL, 74);
+        let victim = insert(&pool, &mut victim_orig.clone());
+        let target = insert(&pool, &mut target_orig.clone());
+        pool.evict(&target);
+        assert!(pool.back_step());
+        // Reading the victim sets its second-chance bit, disqualifying it.
+        assert_eq!(read(&victim), victim_orig);
+        pool.set_budget(64 << 10);
+        let resident = pool.stats().resident_bytes;
+
+        assert_eq!(read_admit(&target), target_orig);
+        assert_eq!(target.residency(), Residency::Evicted);
+        assert_eq!(victim.residency(), Residency::BackedResident);
+        let stats = pool.stats();
+        assert_eq!(stats.admissions_denied, 1);
+        assert_eq!(stats.admissions_budget, 0);
+        assert_eq!(stats.admissions_steal, 0);
+        assert_eq!(stats.resident_bytes, resident);
+    }
+
+    /// An unbacked resident candidate is never stolen from: evicting it
+    /// would require the compression that admission forbids.
+    #[mz_ore::test]
+    fn admit_denied_when_victims_unbacked() {
+        let pool = test_pool(256 << 20);
+        let victim = insert(&pool, &mut payload(SMALL, 75));
+        let target_orig = payload(SMALL, 76);
+        let target = insert(&pool, &mut target_orig.clone());
+        pool.evict(&target);
+        pool.set_budget(64 << 10);
+        assert_eq!(read_admit(&target), target_orig);
+        assert_eq!(target.residency(), Residency::Evicted);
+        assert_eq!(victim.residency(), Residency::UnbackedResident);
+        assert_eq!(pool.stats().admissions_denied, 1);
+    }
+
+    /// A clean backed victim of a different size class is never stolen
+    /// from: slot reuse in place requires the classes to match.
+    #[mz_ore::test]
+    fn admit_denied_when_victims_wrong_class() {
+        let pool = test_pool(256 << 20);
+        // The victim fills the 128 KiB class; the target lives in the
+        // 64 KiB one.
+        let victim = insert(&pool, &mut payload(2 * SMALL, 77));
+        let target_orig = payload(SMALL, 78);
+        let target = insert(&pool, &mut target_orig.clone());
+        pool.evict(&target);
+        assert!(pool.back_step());
+        assert_eq!(victim.residency(), Residency::BackedResident);
+        // The budget holds exactly the victim: no headroom for the target.
+        pool.set_budget(128 << 10);
+        assert_eq!(read_admit(&target), target_orig);
+        assert_eq!(target.residency(), Residency::Evicted);
+        assert_eq!(victim.residency(), Residency::BackedResident);
+        assert_eq!(pool.stats().admissions_denied, 1);
+    }
+
+    /// Plain reads and `take` never admit: an evicted chunk with plenty of
+    /// budget headroom stays evicted through both, and neither counts a
+    /// denial.
+    #[mz_ore::test]
+    fn plain_read_and_take_never_admit() {
+        let pool = test_pool(256 << 20);
+        let orig = payload(SMALL, 79);
+        let handle = insert(&pool, &mut orig.clone());
+        pool.evict(&handle);
+        assert_eq!(read(&handle), orig);
+        assert_eq!(handle.residency(), Residency::Evicted);
+        assert_eq!(pool.stats().resident_bytes, 0);
+        let mut out = Vec::new();
+        handle.take(&mut out);
+        assert_eq!(out, orig);
+        let stats = pool.stats();
+        assert_eq!(stats.admissions_budget, 0);
+        assert_eq!(stats.admissions_steal, 0);
+        assert_eq!(stats.admissions_denied, 0);
+        assert_eq!(stats.resident_bytes, 0);
+        assert_eq!(stats.frees, 1);
+    }
+
+    /// A re-admitted chunk keeps its insert-time depth: under budget
+    /// pressure it is evicted from its own deeper band before a younger
+    /// band-0 chunk, which a re-admission into band 0 would have inverted.
+    #[mz_ore::test]
+    fn admitted_chunk_keeps_its_depth() {
+        let pool = test_pool(256 << 20);
+        let deep_orig = payload(SMALL, 80);
+        let deep = insert_at_depth(&pool, 2, &mut deep_orig.clone());
+        let young = insert(&pool, &mut payload(SMALL, 81));
+        pool.evict(&deep);
+        assert_eq!(read_admit(&deep), deep_orig);
+        assert_eq!(deep.residency(), Residency::BackedResident);
+        assert_eq!(pool.stats().admissions_budget, 1);
+
+        // Budget of one chunk: enforcement visits the deep band first.
+        pool.set_budget(64 << 10);
+        assert_eq!(deep.residency(), Residency::Evicted);
+        assert_eq!(young.residency(), Residency::UnbackedResident);
+        assert_eq!(
+            pool.stats().evictions_cheap,
+            1,
+            "the extent kept through admission pre-paid the eviction",
+        );
+    }
+
+    /// Admitting reads racing enforcement, opposing steals, and frees:
+    /// contents stay correct, contended steals degrade to skips, and the
+    /// accounting identity settles to zero.
+    #[mz_ore::test]
+    fn concurrent_admits_race_cleanly() {
+        let pool = test_pool(64 << 10);
+        let per_thread = rounds(50, 3);
+        let threads: Vec<_> = (0..4u64)
+            .map(|t| {
+                let pool = pool.clone();
+                std::thread::spawn(move || {
+                    let mut out = Vec::new();
+                    for round in 0..per_thread {
+                        let orig = payload(SMALL, t * 1000 + round);
+                        let handle = insert(&pool, &mut orig.clone());
+                        pool.evict(&handle);
+                        handle.read_into_admit(&mut out);
+                        assert_eq!(out, orig);
+                        handle.read_into_admit(&mut out);
+                        assert_eq!(out, orig);
+                        assert_eq!(read(&handle), orig);
+                    }
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().expect("worker thread panicked");
+        }
+        let stats = pool.stats();
+        assert_eq!(stats.inserts, 4 * per_thread);
+        assert_eq!(stats.frees, 4 * per_thread);
+        assert_eq!(stats.resident_bytes, 0);
+        assert_eq!(stats.extent_resident_bytes, 0);
     }
 
     /// Slots are scoped to residency: eviction releases the slot, so a
