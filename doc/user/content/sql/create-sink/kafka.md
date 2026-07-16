@@ -134,6 +134,47 @@ When using a Confluent Schema Registry:
 
   * You can [add `doc` fields](#avro-schema-documentation) to the Avro schemas.
 
+  * You can set the compatibility level for a subject with the `KEY COMPATIBILITY
+    LEVEL` and `VALUE COMPATIBILITY LEVEL` [options](#schema-compatibility-levels).
+    The level is applied only when the subject has no compatibility level yet. If
+    the subject already has one, it is left unchanged.
+
+When using an [AWS Glue Schema Registry](/sql/create-connection/#aws-glue-schema-registry):
+
+  * Materialize registers Avro schemas for the key, if present, and the value in
+    the registry named by the connection. The registry must already exist.
+
+  * By default, each schema is named after the topic (`<topic>-value`, and
+    `<topic>-key` when a key is present). You can override these with the
+    `KEY SCHEMA NAME` and `VALUE SCHEMA NAME` options.
+
+  * You can set the compatibility level applied to a newly created schema with
+    the `KEY COMPATIBILITY LEVEL` and `VALUE COMPATIBILITY LEVEL`
+    [options](#syntax), defaulting to `BACKWARD` when omitted. The level is set
+    only when Materialize creates the schema. If the schema already exists, the
+    sink adds a new version to it and leaves its compatibility level unchanged.
+
+  * The `AVRO ... FULLNAME`, `NULL DEFAULTS`, and `doc` options are not supported.
+
+Compatibility levels use the Confluent spelling and map to their AWS Glue
+equivalent. Glue's `DISABLED` level is not supported.
+
+Compatibility level | AWS Glue equivalent
+--------------------|--------------------
+`BACKWARD`          | `BACKWARD`
+`BACKWARD_TRANSITIVE` | `BACKWARD_ALL`
+`FORWARD`           | `FORWARD`
+`FORWARD_TRANSITIVE` | `FORWARD_ALL`
+`FULL`              | `FULL`
+`FULL_TRANSITIVE`   | `FULL_ALL`
+`NONE`              | `NONE`
+
+With either registry, Materialize publishes the schemas when the sink starts
+running, not when you run `CREATE SINK`. The schema names and definitions are not
+validated against the registry at `CREATE SINK` time, so registry errors (for
+example a name that collides with an incompatible existing schema) surface once
+the sink starts publishing rather than at creation.
+
 SQL types are converted to Avro types according to the following conversion
 table:
 
@@ -392,8 +433,8 @@ By default, Materialize assigns a partition to each message using the following
 strategy:
 
   1. Encode the message's key in the specified format.
-  2. If the format uses a Confluent Schema Registry, strip out the
-     schema ID from the encoded bytes.
+  2. If the format uses a schema registry (Confluent or AWS Glue), strip out
+     the header carrying the schema ID from the encoded bytes.
   3. Hash the remaining encoded bytes using [SeaHash].
   4. Divide the hash value by the topic's partition count and assign the
      remainder as the message's partition.
@@ -637,6 +678,45 @@ CREATE CONNECTION csr_basic_http
 
 {{< /tab >}}
 {{< /tabs >}}
+
+#### AWS Glue Schema Registry
+
+{{< private-preview />}}
+
+```mzsql
+CREATE CONNECTION aws_conn TO AWS (
+    ASSUME ROLE ARN = 'arn:aws:iam::123456789000:role/MaterializeGlue'
+);
+
+CREATE CONNECTION glue_conn TO AWS GLUE SCHEMA REGISTRY (
+    AWS CONNECTION = aws_conn,
+    REGISTRY = 'my-registry'
+);
+```
+
+The registry named by the connection must already exist. The IAM role assumed
+by the AWS connection must have the schema-write permissions listed under [AWS
+Glue Schema Registry](/sql/create-connection/#aws-glue-schema-registry).
+
+```mzsql
+CREATE SINK glue_sink
+  IN CLUSTER my_io_cluster
+  FROM <source, table or mview>
+  INTO KAFKA CONNECTION kafka_connection (
+    TOPIC 'test_avro_topic',
+  )
+  KEY (key_col)
+  FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (
+    KEY SCHEMA NAME = 'my_key_schema',
+    VALUE SCHEMA NAME = 'my_value_schema',
+    KEY COMPATIBILITY LEVEL = 'FORWARD',
+    VALUE COMPATIBILITY LEVEL = 'FULL'
+  )
+  ENVELOPE UPSERT;
+```
+
+See [Avro](#avro) for the schema-name defaults and how compatibility levels map
+to their AWS Glue equivalents.
 
 ### Creating a sink
 

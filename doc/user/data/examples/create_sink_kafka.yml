@@ -15,16 +15,25 @@
     )
     [KEY ( <key_col1> [, ...] ) [NOT ENFORCED]]
     [HEADERS <headers_column>]
-    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name> [
-      (
-        [AVRO KEY FULLNAME '<avro_key_fullname>']
-        [, AVRO VALUE FULLNAME '<avro_value_fullname>']
-        [, NULL DEFAULTS <null_defaults>]
-        [, DOC ON <doc_on_option> [, ...]]
-        [, KEY COMPATIBILITY LEVEL '<key_compatibility_level>']
-        [, VALUE COMPATIBILITY LEVEL '<value_compatibility_level>']
-      )
-    ]
+    FORMAT AVRO
+        USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name> [
+          (
+            [AVRO KEY FULLNAME '<avro_key_fullname>']
+            [, AVRO VALUE FULLNAME '<avro_value_fullname>']
+            [, NULL DEFAULTS <null_defaults>]
+            [, DOC ON <doc_on_option> [, ...]]
+            [, KEY COMPATIBILITY LEVEL '<key_compatibility_level>']
+            [, VALUE COMPATIBILITY LEVEL '<value_compatibility_level>']
+          )
+        ]
+      | USING AWS GLUE SCHEMA REGISTRY CONNECTION <glue_connection_name> [
+          (
+            [KEY SCHEMA NAME '<key_schema_name>']
+            [, VALUE SCHEMA NAME '<value_schema_name>']
+            [, KEY COMPATIBILITY LEVEL '<key_compatibility_level>']
+            [, VALUE COMPATIBILITY LEVEL '<value_compatibility_level>']
+          )
+        ]
     [ENVELOPE DEBEZIUM | UPSERT]
     [WITH (SNAPSHOT = <snapshot>)]
   syntax_elements:
@@ -76,15 +85,31 @@
     - name: "**FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION** `<csr_connection_name>`"
       description: |
         Encode messages using Avro format with schemas published to the Confluent Schema Registry.
+    - name: "**FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION** `<glue_connection_name>`"
+      description: |
+        ***Private preview.** This feature is under active development.*
+
+        Encode messages using Avro format with schemas registered in the AWS
+        Glue Schema Registry named by the [AWS Glue Schema Registry
+        connection](/sql/create-connection/#aws-glue-schema-registry). The
+        registry must already exist. Only the `KEY SCHEMA NAME`, `VALUE SCHEMA
+        NAME`, `KEY COMPATIBILITY LEVEL`, and `VALUE COMPATIBILITY LEVEL`
+        options are supported. See [Avro](#avro) for details.
     - name: "**AVRO KEY FULLNAME** `'<avro_key_fullname>'`"
       description: |
-        Optional. Default: `row`. Sets the Avro fullname on the generated key schema, if a `KEY` is specified. When used, a value must be specified for `AVRO VALUE FULLNAME`.
+        Optional, Confluent Schema Registry only. Default: `row`. Sets the Avro fullname on the generated key schema, if a `KEY` is specified. When used, a value must be specified for `AVRO VALUE FULLNAME`.
     - name: "**AVRO VALUE FULLNAME** `'<avro_value_fullname>'`"
       description: |
-        Optional. Default: `envelope`. Sets the Avro fullname on the generated value schema. When `KEY` is specified, `AVRO KEY FULLNAME` must additionally be specified.
+        Optional, Confluent Schema Registry only. Default: `envelope`. Sets the Avro fullname on the generated value schema. When `KEY` is specified, `AVRO KEY FULLNAME` must additionally be specified.
     - name: "**NULL DEFAULTS** `<null_defaults>`"
       description: |
-        Optional. Default: `false`. Whether to automatically default nullable fields to `null` in the generated schemas.
+        Optional, Confluent Schema Registry only. Default: `false`. Whether to automatically default nullable fields to `null` in the generated schemas.
+    - name: "**KEY SCHEMA NAME** `'<key_schema_name>'`"
+      description: |
+        Optional, AWS Glue Schema Registry only. The name under which the key schema is registered, if a `KEY` is specified. Default: `<topic>-key`.
+    - name: "**VALUE SCHEMA NAME** `'<value_schema_name>'`"
+      description: |
+        Optional, AWS Glue Schema Registry only. The name under which the value schema is registered. Default: `<topic>-value`.
     - name: "**DOC ON** `<doc_on_option>` [, ...]"
       description: |
         Optional. Add a documentation comment to the generated Avro schemas.
@@ -102,10 +127,10 @@
         on how documentation comments are added to the generated Avro schemas.
     - name: "**KEY COMPATIBILITY LEVEL** `'<key_compatibility_level>'`"
       description: |
-        Optional. If specified, set the [Compatibility Level](https://docs.confluent.io/platform/7.6/schema-registry/fundamentals/schema-evolution.html#schema-evolution-and-compatibility) for the generated key schema to one of: `BACKWARD`, `BACKWARD_TRANSITIVE`, `FORWARD`, `FORWARD_TRANSITIVE`, `FULL`, `FULL_TRANSITIVE`, `NONE`.
+        Optional. If specified, set the [Compatibility Level](https://docs.confluent.io/platform/7.6/schema-registry/fundamentals/schema-evolution.html#schema-evolution-and-compatibility) for the generated key schema to one of: `BACKWARD`, `BACKWARD_TRANSITIVE`, `FORWARD`, `FORWARD_TRANSITIVE`, `FULL`, `FULL_TRANSITIVE`, `NONE`. With AWS Glue, the level is applied only when the sink creates the schema and maps to the [Glue equivalent](#avro).
     - name: "**VALUE COMPATIBILITY LEVEL** `'<value_compatibility_level>'`"
       description: |
-        Optional. If specified, set the [Compatibility Level](https://docs.confluent.io/platform/7.6/schema-registry/fundamentals/schema-evolution.html#schema-evolution-and-compatibility) for the generated value schema to one of: `BACKWARD`, `BACKWARD_TRANSITIVE`, `FORWARD`, `FORWARD_TRANSITIVE`, `FULL`, `FULL_TRANSITIVE`, `NONE`.
+        Optional. If specified, set the [Compatibility Level](https://docs.confluent.io/platform/7.6/schema-registry/fundamentals/schema-evolution.html#schema-evolution-and-compatibility) for the generated value schema to one of: `BACKWARD`, `BACKWARD_TRANSITIVE`, `FORWARD`, `FORWARD_TRANSITIVE`, `FULL`, `FULL_TRANSITIVE`, `NONE`. With AWS Glue, the level is applied only when the sink creates the schema and maps to the [Glue equivalent](#avro).
     - name: "**ENVELOPE** `<envelope>`"
       description: |
         Optional. Specifies how changes to the sink's upstream relation are mapped to Kafka messages. Valid envelope types:
@@ -316,6 +341,14 @@
     --       [, VALUE COMPATIBILITY LEVEL '<value_compatibility_level>']
     --     )
     -- ]
+    -- | AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION <glue_connection_name> [
+    --     (
+    --       [KEY SCHEMA NAME '<key_schema_name>']
+    --       [, VALUE SCHEMA NAME '<value_schema_name>']
+    --       [, KEY COMPATIBILITY LEVEL '<key_compatibility_level>']
+    --       [, VALUE COMPATIBILITY LEVEL '<value_compatibility_level>']
+    --     )
+    -- ]
     -- | JSON | TEXT | BYTES
     [ENVELOPE DEBEZIUM | UPSERT]
     [WITH (SNAPSHOT = <snapshot>)]
@@ -367,10 +400,10 @@
         Optional. A column containing headers to add to each Kafka message emitted by the sink. The column must be of type `map[text => text]` or `map[text => bytea]`. See [Headers](#headers) for details.
     - name: "**KEY FORMAT** `<key_format>`"
       description: |
-        Set the key encoding explicitly. Supported formats: `AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name>`, `JSON`, `TEXT`, `BYTES`.
+        Set the key encoding explicitly. Supported formats: `AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name>`, `AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION <glue_connection_name>`, `JSON`, `TEXT`, `BYTES`.
     - name: "**VALUE FORMAT** `<value_format>`"
       description: |
-        Set the value encoding explicitly. Supported formats: `AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name>`, `JSON`, `TEXT`, `BYTES`.
+        Set the value encoding explicitly. Supported formats: `AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name>`, `AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION <glue_connection_name>`, `JSON`, `TEXT`, `BYTES`.
     - name: "**ENVELOPE** `<envelope>`"
       description: |
         Optional. Specifies how changes to the sink's upstream relation are mapped to Kafka messages. Valid envelope types:
