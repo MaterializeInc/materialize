@@ -183,6 +183,11 @@ export type FlowNodeData = {
   color: string;
   selected: boolean;
   activeMatch: boolean;
+  // In-place expansion: true when this region's children are rendered inside
+  // it. Always false for non-region nodes.
+  expanded: boolean;
+  // Toggles this region's in-place expansion. Undefined for non-region nodes.
+  onToggleExpand?: (id: string) => void;
 };
 
 export type FlowGroupData = {
