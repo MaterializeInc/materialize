@@ -82,12 +82,27 @@ impl DecodedDescriptors {
     }
 }
 
+/// Message decoding takes the plain stack when the message's relation type
+/// nests at most this deep, which holds for any realistic schema. Deeper
+/// messages get a dedicated stack sized by their nesting depth, see
+/// [`Decoder::decode`].
+const MAX_PLAIN_STACK_MESSAGE_DEPTH: usize = 128;
+
+/// Stack bytes reserved per nesting level when decoding a deeply nested
+/// message: a generous upper bound on the stack that prost-reflect's
+/// recursive decoding and the message tree's drop glue use per level,
+/// including in debug builds.
+const DECODE_STACK_BYTES_PER_LEVEL: usize = 4096;
+
 /// Decodes a particular Protobuf message from its wire format.
 #[derive(Debug)]
 pub struct Decoder {
     descriptors: DecodedDescriptors,
     row: Row,
     confluent_wire_format: bool,
+    /// The nesting depth of the message's relation type, used to size the
+    /// decoding stack for deeply nested schemas.
+    nesting_depth: usize,
 }
 
 impl Decoder {
@@ -97,6 +112,7 @@ impl Decoder {
         confluent_wire_format: bool,
     ) -> Result<Self, anyhow::Error> {
         Ok(Decoder {
+            nesting_depth: type_nesting_depth(descriptors.columns()),
             descriptors,
             row: Row::default(),
             confluent_wire_format,
@@ -125,11 +141,57 @@ impl Decoder {
             let (_schema_id, adjusted_bytes) = crate::confluent::extract_protobuf_header(bytes)?;
             bytes = adjusted_bytes;
         }
+        // `DynamicMessage::decode`, and the drop of the decoded message tree,
+        // recurse once per nesting level inside prost-reflect, which we
+        // cannot instrument with `maybe_grow`. A message nests only as deeply
+        // as its schema, so schemas nested deeper than the plain stack safely
+        // handles get a dedicated stack sized by their depth. The message
+        // must also drop within that scope, so the whole decode runs there.
+        if self.nesting_depth > MAX_PLAIN_STACK_MESSAGE_DEPTH {
+            let stack_size = self.nesting_depth * DECODE_STACK_BYTES_PER_LEVEL;
+            mz_ore::stack::grow(stack_size, || self.decode_message(bytes))
+        } else {
+            self.decode_message(bytes)
+        }
+    }
+
+    fn decode_message(&mut self, bytes: &[u8]) -> Result<Option<Row>, anyhow::Error> {
         let message = DynamicMessage::decode(self.descriptors.message_descriptor.clone(), bytes)?;
         let mut packer = self.row.packer();
         pack_message(&mut packer, &message)?;
         Ok(Some(self.row.clone()))
     }
+}
+
+/// Returns the maximum nesting depth of the given column types.
+///
+/// Iterative, so safe to call on arbitrarily deeply nested types.
+fn type_nesting_depth(columns: &[(ColumnName, SqlColumnType)]) -> usize {
+    let mut max_depth = 1;
+    let mut todo: Vec<(&SqlScalarType, usize)> = columns
+        .iter()
+        .map(|(_name, ty)| (&ty.scalar_type, 1))
+        .collect();
+    while let Some((ty, depth)) = todo.pop() {
+        max_depth = max_depth.max(depth);
+        match ty {
+            SqlScalarType::Array(ty)
+            | SqlScalarType::List {
+                element_type: ty, ..
+            }
+            | SqlScalarType::Map { value_type: ty, .. }
+            | SqlScalarType::Range { element_type: ty } => todo.push((ty, depth + 1)),
+            SqlScalarType::Record { fields, .. } => {
+                todo.extend(
+                    fields
+                        .iter()
+                        .map(|(_name, ty)| (&ty.scalar_type, depth + 1)),
+                );
+            }
+            _ => {}
+        }
+    }
+    max_depth
 }
 
 fn derive_column_type(
@@ -496,49 +558,54 @@ fn pack_value(
     field_desc: &FieldDescriptor,
     value: &Value,
 ) -> Result<(), anyhow::Error> {
-    match value {
-        Value::Bool(false) => packer.push(Datum::False),
-        Value::Bool(true) => packer.push(Datum::True),
-        Value::I32(i) => packer.push(Datum::Int32(*i)),
-        Value::I64(i) => packer.push(Datum::Int64(*i)),
-        Value::U32(i) => packer.push(Datum::UInt32(*i)),
-        Value::U64(i) => packer.push(Datum::UInt64(*i)),
-        Value::F32(f) => packer.push(Datum::Float32((*f).into())),
-        Value::F64(f) => packer.push(Datum::Float64((*f).into())),
-        Value::String(s) => packer.push(Datum::String(s)),
-        Value::Bytes(s) => packer.push(Datum::Bytes(s)),
-        Value::EnumNumber(i) => {
-            let kind = field_desc.kind();
-            let enum_desc = kind.as_enum().ok_or_else(|| {
-                anyhow!(
-                    "internal error: decoding protobuf: field {} missing enum descriptor",
-                    field_desc.name()
-                )
-            })?;
-            let value = enum_desc.get_value(*i).ok_or_else(|| {
-                anyhow!(
-                    "error decoding protobuf: unknown enum value {} while decoding field {}",
-                    i,
-                    field_desc.name()
-                )
-            })?;
-            packer.push(Datum::String(value.name()));
+    // A value nests as deeply as its message type, which can be arbitrarily
+    // deep, so grow the stack on demand. Every packing recursion cycle
+    // (including the one through `pack_message`) passes through here.
+    mz_ore::stack::maybe_grow(|| {
+        match value {
+            Value::Bool(false) => packer.push(Datum::False),
+            Value::Bool(true) => packer.push(Datum::True),
+            Value::I32(i) => packer.push(Datum::Int32(*i)),
+            Value::I64(i) => packer.push(Datum::Int64(*i)),
+            Value::U32(i) => packer.push(Datum::UInt32(*i)),
+            Value::U64(i) => packer.push(Datum::UInt64(*i)),
+            Value::F32(f) => packer.push(Datum::Float32((*f).into())),
+            Value::F64(f) => packer.push(Datum::Float64((*f).into())),
+            Value::String(s) => packer.push(Datum::String(s)),
+            Value::Bytes(s) => packer.push(Datum::Bytes(s)),
+            Value::EnumNumber(i) => {
+                let kind = field_desc.kind();
+                let enum_desc = kind.as_enum().ok_or_else(|| {
+                    anyhow!(
+                        "internal error: decoding protobuf: field {} missing enum descriptor",
+                        field_desc.name()
+                    )
+                })?;
+                let value = enum_desc.get_value(*i).ok_or_else(|| {
+                    anyhow!(
+                        "error decoding protobuf: unknown enum value {} while decoding field {}",
+                        i,
+                        field_desc.name()
+                    )
+                })?;
+                packer.push(Datum::String(value.name()));
+            }
+            Value::Message(m) => packer.push_list_with(|packer| pack_message(packer, m))?,
+            Value::List(values) => {
+                packer.push_list_with(|packer| {
+                    for value in values {
+                        pack_value(packer, field_desc, value)?;
+                    }
+                    Ok::<_, anyhow::Error>(())
+                })?;
+            }
+            Value::Map(_) => bail!(
+                "internal error: unexpected value while decoding protobuf message: {:?}",
+                value
+            ),
         }
-        Value::Message(m) => packer.push_list_with(|packer| pack_message(packer, m))?,
-        Value::List(values) => {
-            packer.push_list_with(|packer| {
-                for value in values {
-                    pack_value(packer, field_desc, value)?;
-                }
-                Ok::<_, anyhow::Error>(())
-            })?;
-        }
-        Value::Map(_) => bail!(
-            "internal error: unexpected value while decoding protobuf message: {:?}",
-            value
-        ),
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 #[cfg(test)]
@@ -555,7 +622,7 @@ mod stack_overflow_verification {
         DescriptorProto, FieldDescriptorProto, FileDescriptorProto, FileDescriptorSet, FileOptions,
     };
 
-    use super::{DecodedDescriptors, MAX_DESCRIPTOR_WIRE_NESTING_DEPTH};
+    use super::{DecodedDescriptors, Decoder, MAX_DESCRIPTOR_WIRE_NESTING_DEPTH};
 
     fn deep_chain_fds(n: usize) -> Vec<u8> {
         let message_type = (0..n)
@@ -595,20 +662,60 @@ mod stack_overflow_verification {
         FileDescriptorSet { file: vec![file] }.encode_to_vec()
     }
 
+    /// Returns the wire encoding of a message of the type derived from
+    /// `deep_chain_fds(n)`: `n - 1` nested length-delimited frames of field 1,
+    /// with an empty innermost message.
+    fn deep_chain_payload(n: usize) -> Vec<u8> {
+        use prost::encoding::{WireType, encode_key, encode_varint, encoded_len_varint};
+
+        let key_len = {
+            let mut probe = vec![];
+            encode_key(1, WireType::LengthDelimited, &mut probe);
+            probe.len()
+        };
+        let mut lens = vec![0usize; n];
+        for k in 1..n {
+            let inner = lens[k - 1];
+            lens[k] = key_len + encoded_len_varint(u64::try_from(inner).unwrap()) + inner;
+        }
+        let mut payload = Vec::with_capacity(lens[n - 1]);
+        for k in (1..n).rev() {
+            encode_key(1, WireType::LengthDelimited, &mut payload);
+            encode_varint(u64::try_from(lens[k - 1]).unwrap(), &mut payload);
+        }
+        payload
+    }
+
     #[mz_ore::test]
     fn deep_chain_does_not_overflow() {
-        // A chain far deeper than a fixed stack could recurse over, but shallow
-        // enough that the resulting nested record type is itself well-behaved.
-        // Before the fix `derive_inner_type` recursed once per message on a
-        // fixed stack and aborted the process here; it now grows the stack on
-        // demand, so the chain resolves to a nested record type.
-        let bytes = deep_chain_fds(1_000);
-        let res = DecodedDescriptors::from_bytes(&bytes, ".test.m0".to_string());
-        assert!(
-            res.is_ok(),
-            "expected a deep message chain to decode, got: {:?}",
-            res.err()
-        );
+        // A chain far deeper than a fixed stack could recurse over. Before the
+        // fix `derive_inner_type` recursed once per message on a fixed stack
+        // and aborted the process here; it now grows the stack on demand, so
+        // the chain resolves to a nested record type. Everything downstream of
+        // the derivation that recurses over the resulting type (clone, message
+        // decoding, drop) grows its stack as well, which this test exercises
+        // end to end.
+        const DEPTH: usize = 50_000;
+        let bytes = deep_chain_fds(DEPTH);
+        let descriptors = DecodedDescriptors::from_bytes(&bytes, ".test.m0".to_string())
+            .expect("deep message chain must decode");
+        assert_eq!(super::type_nesting_depth(descriptors.columns()), DEPTH);
+
+        // Cloning the derived type recurses once per nesting level.
+        let cloned_columns = descriptors.columns().to_vec();
+
+        // Decoding a conforming (deeply nested) message recurses once per
+        // nesting level, both in `DynamicMessage::decode` and while packing
+        // the decoded values into a row.
+        let payload = deep_chain_payload(DEPTH);
+        let mut decoder = Decoder::new(descriptors, false).expect("valid descriptors");
+        let row = decoder.decode(&payload).expect("deep message must decode");
+        assert!(row.is_some());
+
+        // Dropping the derived type (and its clone) also recurses once per
+        // nesting level, via the manual `Drop` impls.
+        drop(cloned_columns);
+        drop(decoder);
     }
 
     /// The `type_name` reference chain above is flat on the wire, so it stresses

@@ -5469,8 +5469,8 @@ fn array_to_string(
     ecx: &ExprContext,
     exprs: Vec<HirScalarExpr>,
 ) -> Result<HirScalarExpr, PlanError> {
-    let elem_type = match ecx.scalar_type(&exprs[0]) {
-        SqlScalarType::Array(elem_type) => *elem_type,
+    let elem_type = match &ecx.scalar_type(&exprs[0]) {
+        SqlScalarType::Array(elem_type) => (**elem_type).clone(),
         _ => unreachable!("array_to_string is guaranteed to receive array as first argument"),
     };
     Ok(HirScalarExpr::call_variadic(

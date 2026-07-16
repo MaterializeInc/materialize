@@ -107,6 +107,23 @@ where
     stacker::maybe_grow(STACK_RED_ZONE, STACK_SIZE, f)
 }
 
+/// Runs `f` on a stack with at least `stack_size` bytes of available space,
+/// allocating a new stack of that size if the current one is smaller.
+///
+/// Unlike [`maybe_grow`], which is called at each level of a recursion and
+/// grows the stack in fixed increments on demand, this function is for
+/// delegating into recursive code that cannot be instrumented per level (e.g.
+/// generated Protobuf encode/decode, or dropping a deeply nested foreign
+/// type). The callee gets a single stack allocation, so `stack_size` must be
+/// chosen large enough for the deepest recursion the delegated code can
+/// reach. The allocation is virtual memory; pages are only backed once used.
+pub fn grow<F, R>(stack_size: usize, f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    stacker::maybe_grow(stack_size, stack_size, f)
+}
+
 /// A trait for types which support bounded recursion to prevent stack overflow.
 ///
 /// The rather odd design of this trait allows checked recursion to be added to

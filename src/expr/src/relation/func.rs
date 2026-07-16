@@ -2749,7 +2749,7 @@ impl AggregateFunc {
         let nullable = match self {
             AggregateFunc::Count => false,
             // Use the nullability of the underlying column being aggregated, not the Records wrapping it
-            AggregateFunc::StringAgg { .. } => match input_type.scalar_type {
+            AggregateFunc::StringAgg { .. } => match &input_type.scalar_type {
                 // The outer Record wraps the input in the first position, and any ORDER BY expressions afterwards
                 SqlScalarType::Record { fields, .. } => match &fields[0].1.scalar_type {
                     // The inner Record is a (value, separator) tuple
