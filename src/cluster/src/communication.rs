@@ -164,7 +164,7 @@ where
     }
 
     // Choose the intra-process allocator flavor up front.
-    // TODO(CLU-99): wire our zero-copy pager into the timely spill policy
+    // TODO(CLU-99): wire our buffer pool into the timely spill policy
     // instead of passing `None` here.
     let process_allocators = if enable_zero_copy_binary {
         ProcessBuilder::new_bytes_vector(workers, refill.clone(), None)
