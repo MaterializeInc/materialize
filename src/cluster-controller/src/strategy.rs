@@ -227,7 +227,7 @@ impl GracefulReconfigurationStrategy {
         let hydrated_target_replicas = state
             .replicas
             .iter()
-            .filter(|r| r.shape.matches(&target_shape))
+            .filter(|r| r.owned_shape().is_some_and(|s| s.matches(&target_shape)))
             .filter(|r| signals.hydrated_replicas.contains(&r.replica_id))
             .count();
         let target_rf = usize::try_from(record.target.replication_factor).unwrap_or(usize::MAX);
@@ -438,7 +438,7 @@ impl HydrationBurstStrategy {
         state
             .replicas
             .iter()
-            .filter(|r| r.shape.matches(&steady_shape))
+            .filter(|r| r.owned_shape().is_some_and(|s| s.matches(&steady_shape)))
             .any(|r| signals.hydrated_replicas.contains(&r.replica_id))
     }
 }

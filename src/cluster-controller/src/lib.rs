@@ -337,7 +337,12 @@ impl ClusterController {
                 live.has_hydratable_objects = ctx.has_hydratable_objects(state.cluster_id).await;
             }
             if request.hydration {
-                let replica_ids: Vec<_> = state.replicas.iter().map(|r| r.replica_id).collect();
+                let replica_ids: Vec<_> = state
+                    .replicas
+                    .iter()
+                    .filter(|r| r.owned_shape().is_some())
+                    .map(|r| r.replica_id)
+                    .collect();
                 if !replica_ids.is_empty() {
                     live.hydrated_replicas =
                         ctx.hydrated_replicas(state.cluster_id, &replica_ids).await;
@@ -448,28 +453,25 @@ fn reconcile_replicas(
         }
     }
 
-    // Bucket the actual replicas by shape.
+    // Bucket the controller-owned replicas by shape. Replicas the controller
+    // does not own (see `ObservedReplica::owned_shape`) are invisible to the
+    // desired/actual diff: neither counted toward a shape nor dropped.
     let mut actual_by_shape: Vec<(ReplicaShape, Vec<&ObservedReplica>)> = Vec::new();
     for replica in &state.replicas {
-        match actual_by_shape
-            .iter_mut()
-            .find(|(s, _)| s.matches(&replica.shape))
-        {
+        let Some(shape) = replica.owned_shape() else {
+            continue;
+        };
+        match actual_by_shape.iter_mut().find(|(s, _)| s.matches(shape)) {
             Some((_, replicas)) => replicas.push(replica),
-            None => actual_by_shape.push((replica.shape.clone(), vec![replica])),
+            None => actual_by_shape.push((shape.clone(), vec![replica])),
         }
     }
 
     let mut decisions = Vec::new();
 
-    // Track existing names, owned and reserved, so a generated name never
-    // collides with a replica already on the cluster.
-    let used_names: Vec<&str> = state
-        .replicas
-        .iter()
-        .map(|r| r.name.as_str())
-        .chain(state.reserved_replica_names.iter().map(String::as_str))
-        .collect();
+    // Every observed replica occupies a name, owned or not, so a generated
+    // name never collides with a replica already on the cluster.
+    let used_names: Vec<&str> = state.replicas.iter().map(|r| r.name.as_str()).collect();
     let mut name_gen = ReplicaNameGen::new(&used_names);
 
     // The compare-and-append witness for every create/drop this tick emits for

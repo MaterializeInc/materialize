@@ -342,39 +342,19 @@ impl Coordinator {
         // apply path checks against cannot drift.
         let expected = crate::catalog::cluster_state::project_expected(managed);
 
-        let mut replicas = Vec::new();
-        let mut reserved_replica_names = Vec::new();
-        for replica in cluster.replicas() {
-            // INTERNAL / BILLED AS replicas are manually managed and live outside
-            // the controller's replication-factor domain: a user can attach one to
-            // any managed cluster, and the legacy scheduler and reconfiguration
-            // paths never create or drop them. A `-pending` replica is the
-            // in-flight target of a graceful reconfiguration, created at the new
-            // shape while the durable config still reads the old one until
-            // finalize. It is owned by the reconfiguration path, not the
-            // controller. Keep all of these out of the observed set so the
-            // controller neither counts one toward a desired shape (letting it
-            // stand in for a managed replica) nor drops it as excess. Retiring a
-            // pending replica would defeat the zero-downtime resize that created
-            // it. Reserve their names so a controller-created replica cannot
-            // collide with one that happens to use an `rN` name.
-            let shape = if replica.config.location.internal()
-                || replica.config.location.billed_as().is_some()
-                || replica.config.location.pending()
-            {
-                None
-            } else {
-                replica_shape(&replica.config)
-            };
-            match shape {
-                Some(shape) => replicas.push(ObservedReplica {
-                    replica_id: replica.replica_id,
-                    name: replica.name.clone(),
-                    shape,
-                }),
-                None => reserved_replica_names.push(replica.name.clone()),
-            }
-        }
+        // All replicas, with the raw traits the controller's ownership test
+        // (`ObservedReplica::owned_shape`) classifies on.
+        let replicas = cluster
+            .replicas()
+            .map(|replica| ObservedReplica {
+                replica_id: replica.replica_id,
+                name: replica.name.clone(),
+                shape: replica_shape(&replica.config),
+                internal: replica.config.location.internal(),
+                billed_as: replica.config.location.billed_as().is_some(),
+                pending: replica.config.location.pending(),
+            })
+            .collect();
 
         Some(ClusterState {
             cluster_id,
@@ -386,7 +366,6 @@ impl Coordinator {
             reconfiguration: expected.reconfiguration,
             burst: expected.burst,
             replicas,
-            reserved_replica_names,
         })
     }
 

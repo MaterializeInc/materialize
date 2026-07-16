@@ -69,7 +69,22 @@ fn observed(replica_id: ReplicaId, name: &str, size: &str) -> ObservedReplica {
     ObservedReplica {
         replica_id,
         name: name.to_string(),
-        shape: shape(size),
+        shape: Some(shape(size)),
+        internal: false,
+        billed_as: false,
+        pending: false,
+    }
+}
+
+/// A replica the controller does not own (e.g. INTERNAL or BILLED AS).
+fn foreign(replica_id: ReplicaId, name: &str, size: &str) -> ObservedReplica {
+    ObservedReplica {
+        replica_id,
+        name: name.to_string(),
+        shape: Some(shape(size)),
+        internal: true,
+        billed_as: false,
+        pending: false,
     }
 }
 
@@ -92,7 +107,6 @@ fn state(
         reconfiguration: None,
         burst: None,
         replicas,
-        reserved_replica_names: Vec::new(),
     }
 }
 
@@ -334,7 +348,10 @@ impl FakeCtx {
                     state.replicas.push(ObservedReplica {
                         replica_id: replica(next_id),
                         name: name.clone(),
-                        shape: shape.clone(),
+                        shape: Some(shape.clone()),
+                        internal: false,
+                        billed_as: false,
+                        pending: false,
                     });
                 }
             }
@@ -376,13 +393,12 @@ async fn steady_state_is_a_noop() {
 }
 
 #[mz_ore::test(tokio::test)]
-async fn create_skips_reserved_replica_names() {
-    // A non-owned (INTERNAL / BILLED AS) replica already occupies "r1": it is
-    // reserved but not part of the controller-owned set, so the baseline's create
-    // must skip that name rather than collide with it.
+async fn create_skips_foreign_replica_names() {
+    // A non-owned (INTERNAL) replica already occupies "r1": it is invisible to
+    // the desired/actual diff (neither counted nor dropped), but its name is
+    // taken, so the baseline's create must skip it rather than collide.
     let c = cluster(1);
-    let mut s = state(c, "100cc", 1, vec![]);
-    s.reserved_replica_names = vec!["r1".to_string()];
+    let s = state(c, "100cc", 1, vec![foreign(replica(9), "r1", "100cc")]);
     let mut ctx = FakeCtx::new(vec![s]);
 
     controller().reconcile(&mut ctx).await;
@@ -399,7 +415,14 @@ async fn create_skips_reserved_replica_names() {
     assert_eq!(
         created,
         vec!["r2"],
-        "the created replica should skip the reserved name r1"
+        "the created replica should skip the occupied name r1"
+    );
+    assert!(
+        !ctx.applied
+            .iter()
+            .flatten()
+            .any(|d| matches!(d, Decision::DropReplica { .. })),
+        "the foreign replica must not be dropped as excess"
     );
 }
 
@@ -1084,7 +1107,6 @@ fn reconfiguring_state(
         reconfiguration: Some(rec),
         burst: None,
         replicas,
-        reserved_replica_names: Vec::new(),
     };
     let signals = LiveSignals {
         hydrated_replicas: hydrated,
@@ -1535,13 +1557,15 @@ fn graceful_az_only_reconfiguration_is_a_shape_change() {
         replicas: vec![ObservedReplica {
             replica_id: replica(1),
             name: "r0".to_string(),
-            shape: ReplicaShape {
+            shape: Some(ReplicaShape {
                 size: "100cc".to_string(),
                 availability_zones: AvailabilityZones(vec!["az1".to_string()]),
                 logging: ComputeReplicaLogging::default(),
-            },
+            }),
+            internal: false,
+            billed_as: false,
+            pending: false,
         }],
-        reserved_replica_names: Vec::new(),
     };
     let mut signals = LiveSignals::default();
     let now = Timestamp::from(1000u64);
@@ -1554,7 +1578,11 @@ fn graceful_az_only_reconfiguration_is_a_shape_change() {
         vec!["az2".to_string()]
     );
     // The desired AZ shape does not match the realized replica's AZ shape.
-    assert!(!desired[0].shape.matches(&state.replicas[0].shape));
+    assert!(
+        !desired[0]
+            .shape
+            .matches(state.replicas[0].shape.as_ref().unwrap())
+    );
 
     // Mark the realized replica hydrated: it is NOT a target replica (wrong AZ),
     // so this must not trigger a cut-over.
@@ -1594,7 +1622,7 @@ async fn graceful_full_flow_overlap_then_cutover() {
     let target_ids: BTreeSet<_> = ctx.states[&c]
         .replicas
         .iter()
-        .filter(|r| r.shape.size == "200cc")
+        .filter(|r| r.shape.as_ref().is_some_and(|s| s.size == "200cc"))
         .map(|r| r.replica_id)
         .collect();
     assert_eq!(target_ids.len(), 2);
@@ -1615,7 +1643,7 @@ async fn graceful_full_flow_overlap_then_cutover() {
         ctx.states[&c]
             .replicas
             .iter()
-            .all(|r| r.shape.size == "200cc"),
+            .all(|r| r.shape.as_ref().is_some_and(|s| s.size == "200cc")),
         "only the target replicas remain"
     );
 
@@ -1744,7 +1772,10 @@ async fn graceful_rollback_at_timeout_drops_target_through_seam() {
     // strategy is disengaged and the baseline alone shapes the cluster.
     assert_eq!(ctx.states[&c].size, "100cc", "realized config unchanged");
     assert_eq!(ctx.states[&c].replicas.len(), 1);
-    assert_eq!(ctx.states[&c].replicas[0].shape.size, "100cc");
+    assert_eq!(
+        ctx.states[&c].replicas[0].shape.as_ref().unwrap().size,
+        "100cc"
+    );
     assert_eq!(
         reconfiguration_status(&ctx.states[&c]),
         Some(ReconfigurationStatus::TimedOut),
@@ -1808,7 +1839,8 @@ async fn graceful_commit_at_timeout_cuts_over_through_seam() {
     assert_eq!(drops.len(), 1, "the old 100cc replica is dropped");
     assert_eq!(ctx.states[&c].replicas.len(), 1);
     assert_eq!(
-        ctx.states[&c].replicas[0].shape.size, "200cc",
+        ctx.states[&c].replicas[0].shape.as_ref().unwrap().size,
+        "200cc",
         "only the target replica remains"
     );
 
@@ -2432,7 +2464,7 @@ mod hydration_burst {
             !ctx.states[&c]
                 .replicas
                 .iter()
-                .any(|r| r.shape.size == "400cc"),
+                .any(|r| r.shape.as_ref().is_some_and(|s| s.size == "400cc")),
             "the burst replica is torn down"
         );
     }
@@ -2577,7 +2609,7 @@ mod hydration_burst {
             !ctx.states[&c]
                 .replicas
                 .iter()
-                .any(|r| r.shape.size == "400cc"),
+                .any(|r| r.shape.as_ref().is_some_and(|s| s.size == "400cc")),
             "no burst replica was created under the rejected witness"
         );
         assert!(
@@ -2617,7 +2649,7 @@ mod hydration_burst {
             ctx.states[&c]
                 .replicas
                 .iter()
-                .any(|r| r.shape.size == "400cc"),
+                .any(|r| r.shape.as_ref().is_some_and(|s| s.size == "400cc")),
             "the burst replica was created under a matching witness"
         );
     }

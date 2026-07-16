@@ -40,11 +40,39 @@ pub use mz_adapter_types::cluster_state::{
 };
 
 /// A replica that actually exists on a cluster, as observed through the ctx.
+/// Every replica physically on the cluster appears here, whether or not the
+/// controller owns it; [`Self::owned_shape`] is the ownership test.
 #[derive(Clone, Debug)]
 pub struct ObservedReplica {
     pub replica_id: ReplicaId,
     pub name: String,
-    pub shape: ReplicaShape,
+    /// `None` for a replica with an unmanaged location, which has no managed
+    /// shape to reconcile against.
+    pub shape: Option<ReplicaShape>,
+    /// Created with `INTERNAL`.
+    pub internal: bool,
+    /// Carries a `BILLED AS` override.
+    pub billed_as: bool,
+    /// The `-pending` target of an in-flight graceful reconfiguration.
+    pub pending: bool,
+}
+
+impl ObservedReplica {
+    /// The replica's shape if the controller owns it, `None` otherwise.
+    ///
+    /// INTERNAL / BILLED AS replicas are manually managed: a user can attach
+    /// one to any managed cluster, outside the replication-factor domain. A
+    /// pending replica is owned by the reconfiguration sequencer path until
+    /// finalize (retiring it would defeat the zero-downtime resize creating
+    /// it). The controller must neither count such a replica toward a desired
+    /// shape nor drop it as excess, but their names still block the name
+    /// generator, since every replica observed here occupies a name.
+    pub fn owned_shape(&self) -> Option<&ReplicaShape> {
+        if self.internal || self.billed_as || self.pending {
+            return None;
+        }
+        self.shape.as_ref()
+    }
 }
 
 /// The durable state of a single managed cluster plus its observed replicas, as
@@ -68,15 +96,8 @@ pub struct ClusterState {
     pub reconfiguration: Option<ReconfigurationRecord>,
     /// In-flight hydration burst, if any.
     pub burst: Option<BurstRecord>,
-    /// The replicas that actually exist on the cluster.
+    /// The replicas that actually exist on the cluster, owned or not.
     pub replicas: Vec<ObservedReplica>,
-    /// Names of replicas physically on the cluster that the controller does *not*
-    /// own (INTERNAL / BILLED AS): excluded from [`Self::replicas`] so the kernel
-    /// neither counts nor drops them, but still off-limits as names for replicas
-    /// the controller creates. The name generator avoids these too, so a generated
-    /// `rN` can never collide with a user-attached replica that happens to use an
-    /// `rN` name.
-    pub reserved_replica_names: Vec<String>,
 }
 
 impl ClusterState {
