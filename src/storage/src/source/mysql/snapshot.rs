@@ -87,6 +87,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use differential_dataflow::AsCollection;
 use futures::TryStreamExt;
@@ -94,7 +95,7 @@ use itertools::Itertools;
 use mysql_async::prelude::Queryable;
 use mysql_async::{IsolationLevel, Row as MySqlRow, TxOpts};
 use mz_mysql_util::{
-    ER_NO_SUCH_TABLE, MySqlError, pack_mysql_row, query_sys_var, quote_identifier,
+    ER_NO_SUCH_TABLE, MySqlConn, MySqlError, pack_mysql_row, query_sys_var, quote_identifier,
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
@@ -231,39 +232,21 @@ pub(crate) fn render<'scope>(
                         &config.config.connection_context.ssh_tunnel_manager,
                     )
                     .await?;
-                if let Some(timeout) = config
-                    .config
-                    .parameters
-                    .mysql_source_timeouts
-                    .snapshot_lock_wait_timeout
-                {
-                    // Interpolating a `Duration` integer; not parameterizable in MySQL `SET`.
-                    #[allow(clippy::disallowed_methods)]
-                    lock_conn
-                        .query_drop(format!(
-                            "SET @@session.lock_wait_timeout = {}",
-                            timeout.as_secs()
-                        ))
-                        .await?;
-                }
 
                 trace!(%id, "timely-{worker_id} acquiring table locks: {lock_clauses}");
-                // `lock_clauses` is built from `MySqlTableName::Display`, which
-                // escapes both schema and table via `quote_identifier`.
-                #[allow(clippy::disallowed_methods)]
-                let lock_result = lock_conn
-                    .query_drop(format!("LOCK TABLES {lock_clauses}"))
-                    .await;
-                match lock_result {
-                    // Handle the case where a table we are snapshotting has been dropped or renamed.
-                    Err(mysql_async::Error::Server(mysql_async::ServerError {
-                        code,
-                        message,
-                        ..
-                    })) if code == ER_NO_SUCH_TABLE => {
-                        trace!(%id, "timely-{worker_id} received unknown table error from \
-                                     lock query");
-                        let err = DefiniteError::TableDropped(message);
+                let snapshot_gtid_set = match lock_tables_and_read_gtid_set(
+                    &mut lock_conn,
+                    &lock_clauses,
+                    config
+                        .config
+                        .parameters
+                        .mysql_source_timeouts
+                        .snapshot_lock_wait_timeout,
+                )
+                .await
+                {
+                    Ok(gtid_set) => gtid_set,
+                    Err(SnapshotSetupError::Definite(err)) => {
                         return Ok(return_definite_error(
                             err,
                             &all_outputs,
@@ -274,21 +257,15 @@ pub(crate) fn render<'scope>(
                         )
                         .await);
                     }
-                    e => e?,
+                    Err(SnapshotSetupError::Transient(err)) => return Err(err),
                 };
-
-                // Record the frontier of future GTIDs based on the executed GTID set at the start
-                // of the snapshot
-                let snapshot_gtid_set =
-                    query_sys_var(&mut lock_conn, "global.gtid_executed").await?;
                 let snapshot_gtid_frontier = match gtid_set_frontier(&snapshot_gtid_set) {
                     Ok(frontier) => frontier,
                     Err(err) => {
-                        let err = DefiniteError::UnsupportedGtidState(err.to_string());
                         // If we received a GTID Set with non-consecutive intervals this breaks all
                         // our assumptions, so there is nothing else we can do.
                         return Ok(return_definite_error(
-                            err,
+                            DefiniteError::UnsupportedGtidState(err.to_string()),
                             &all_outputs,
                             &raw_handle,
                             data_cap_set,
@@ -534,6 +511,62 @@ where
         total += stats.count * u64::cast_from(num_outputs);
     }
     Ok(total)
+}
+
+enum SnapshotSetupError {
+    Definite(DefiniteError),
+    Transient(TransientError),
+}
+
+impl From<mysql_async::Error> for SnapshotSetupError {
+    fn from(e: mysql_async::Error) -> Self {
+        SnapshotSetupError::Transient(e.into())
+    }
+}
+
+impl From<MySqlError> for SnapshotSetupError {
+    fn from(e: MySqlError) -> Self {
+        SnapshotSetupError::Transient(e.into())
+    }
+}
+
+fn classify_query_error(e: mysql_async::Error) -> SnapshotSetupError {
+    match e {
+        mysql_async::Error::Server(mysql_async::ServerError { code, message, .. })
+            if code == ER_NO_SUCH_TABLE =>
+        {
+            SnapshotSetupError::Definite(DefiniteError::TableDropped(message))
+        }
+        e => SnapshotSetupError::Transient(e.into()),
+    }
+}
+
+async fn lock_tables_and_read_gtid_set(
+    lock_conn: &mut MySqlConn,
+    lock_clauses: &str,
+    lock_wait_timeout: Option<Duration>,
+) -> Result<String, SnapshotSetupError> {
+    if let Some(timeout) = lock_wait_timeout {
+        // Interpolating a `Duration` integer; not parameterizable in MySQL `SET`.
+        #[allow(clippy::disallowed_methods)]
+        lock_conn
+            .query_drop(format!(
+                "SET @@session.lock_wait_timeout = {}",
+                timeout.as_secs()
+            ))
+            .await?;
+    }
+
+    // `lock_clauses` is built from `MySqlTableName::Display`, which escapes both
+    // schema and table via `quote_identifier`.
+    #[allow(clippy::disallowed_methods)]
+    lock_conn
+        .query_drop(format!("LOCK TABLES {lock_clauses}"))
+        .await
+        .map_err(classify_query_error)?;
+
+    let snapshot_gtid_set = query_sys_var(lock_conn, "global.gtid_executed").await?;
+    Ok(snapshot_gtid_set)
 }
 
 /// Builds the SQL query to be used for creating the snapshot using the first entry in outputs.
