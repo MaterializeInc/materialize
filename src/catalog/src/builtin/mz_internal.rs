@@ -5929,7 +5929,7 @@ pub static MZ_MCP_DATA_PRODUCTS: LazyLock<BuiltinView> = LazyLock::new(|| Builti
         ),
         (
             "cluster",
-            "Cluster hosting the object's index or compute, shown only when your role has USAGE on it (otherwise null). Reads still work from any cluster you can use, but only reads on this cluster benefit from the index.",
+            "Cluster hosting the object's index or compute. Reads still work from any cluster you can use, but only reads on this cluster benefit from the index. Shown only when your role has USAGE on it (otherwise null).",
         ),
         (
             "description",
@@ -5938,9 +5938,12 @@ pub static MZ_MCP_DATA_PRODUCTS: LazyLock<BuiltinView> = LazyLock::new(|| Builti
     ]),
     // The `cluster` column is null unless the role has USAGE on the object's
     // index/compute cluster, so a data product never advertises a cluster the
-    // role cannot actually run reads on (DEX-66). The object stays listed
-    // regardless, because it remains readable from any cluster the role can
-    // use (materialized views serve from persist; views recompute).
+    // role cannot actually run reads on (DEX-66). Materialized views stay
+    // listed regardless because they serve from persist, so a read on any
+    // cluster the role can use is safe. Plain indexed views require at least
+    // one index cluster the role can use: without one, the default fallback
+    // to the session cluster would recompute the view, which we deliberately
+    // avoid (same reason non-indexed views are excluded above).
     sql: r#"
 SELECT DISTINCT
     '"' || op.database || '"."' || op.schema || '"."' || op.name || '"' AS object_name,
@@ -5958,7 +5961,8 @@ LEFT JOIN mz_internal.mz_show_my_cluster_privileges cp
 LEFT JOIN mz_internal.mz_comments cts_idx ON cts_idx.id = i.id AND cts_idx.object_sub_id IS NULL
 LEFT JOIN mz_internal.mz_comments cts_obj ON cts_obj.id = o.id AND cts_obj.object_sub_id IS NULL
 WHERE op.privilege_type = 'SELECT'
-  AND (o.type = 'materialized-view' OR (o.type = 'view' AND i.id IS NOT NULL))
+  AND (o.type = 'materialized-view'
+       OR (o.type = 'view' AND i.id IS NOT NULL AND cp.name IS NOT NULL))
   AND s.name NOT IN ('mz_catalog', 'mz_internal', 'pg_catalog', 'information_schema', 'mz_introspection')
 "#,
     access: vec![PUBLIC_SELECT],
@@ -5997,7 +6001,7 @@ pub static MZ_MCP_DATA_PRODUCT_DETAILS: LazyLock<BuiltinView> = LazyLock::new(||
         ),
         (
             "cluster",
-            "Cluster hosting the object's index or compute, shown only when your role has USAGE on it (otherwise null). Reads still work from any cluster you can use, but only reads on this cluster benefit from the index.",
+            "Cluster hosting the object's index or compute. Reads still work from any cluster you can use, but only reads on this cluster benefit from the index. Shown only when your role has USAGE on it (otherwise null).",
         ),
         (
             "description",
@@ -6082,11 +6086,14 @@ LEFT JOIN mz_indexes i ON i.on_id = o.id
 LEFT JOIN mz_index_columns ic ON i.id = ic.index_id
 LEFT JOIN mz_clusters c_idx ON c_idx.id = i.cluster_id
 LEFT JOIN mz_clusters c_obj ON c_obj.id = o.cluster_id
+LEFT JOIN mz_internal.mz_show_my_cluster_privileges cp
+    ON cp.name = COALESCE(c_idx.name, c_obj.name) AND cp.privilege_type = 'USAGE'
 LEFT JOIN mz_internal.mz_comments cts_idx ON cts_idx.id = i.id AND cts_idx.object_sub_id IS NULL
 LEFT JOIN mz_internal.mz_comments cts_obj ON cts_obj.id = o.id AND cts_obj.object_sub_id IS NULL
 LEFT JOIN mz_internal.mz_comments cts_col ON cts_col.id = o.id AND cts_col.object_sub_id = ccol.position
 WHERE op.privilege_type = 'SELECT'
-  AND (o.type = 'materialized-view' OR (o.type = 'view' AND i.id IS NOT NULL))
+  AND (o.type = 'materialized-view'
+       OR (o.type = 'view' AND i.id IS NOT NULL AND cp.name IS NOT NULL))
   AND s.name NOT IN ('mz_catalog', 'mz_internal', 'pg_catalog', 'information_schema', 'mz_introspection')
 GROUP BY 1, 2, 3
 ),

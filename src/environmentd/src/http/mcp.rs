@@ -702,11 +702,18 @@ fn endpoint_instructions(
                     "`read_data_product` automatically routes the \
                      read to the cluster recorded in the data product catalog so indexes are used; \
                      you only need to set the `cluster` parameter if you intentionally want the \
-                     read to run on a different cluster (e.g. one with larger or more replicas). "
+                     read to run on a different cluster (e.g. one with larger or more replicas). \
+                     A null `cluster` in discovery means your role lacks USAGE on the object's \
+                     index/compute cluster; `read_data_product` without an override then reads on \
+                     your session's default cluster (safe: only materialized views appear this way, \
+                     and they serve from persist). "
                 }
                 (false, true) => {
                     "Use the `query` tool to read data products, passing the cluster from \
-                     `get_data_product_details` so indexed reads hit the arrangement. "
+                     `get_data_product_details` so indexed reads hit the arrangement. If \
+                     `get_data_product_details` returns a null `cluster`, your role lacks USAGE on \
+                     the object's index/compute cluster; run the `query` against any cluster your \
+                     role can use (the read still works, just without the index arrangement). "
                 }
                 (false, false) => {
                     "This server is configured for discovery only: no read tool is exposed. \
@@ -838,7 +845,7 @@ async fn handle_tools_list(
                             },
                             "cluster": {
                                 "type": "string",
-                                "description": "Optional override. By default, the read runs on the cluster recorded in the data product catalog (where the index or materialized view dataflow lives), so indexed reads actually hit their arrangement. Set this only to intentionally run the same read on a different cluster — e.g. one with more or larger replicas, or to compare cost/latency."
+                                "description": "Optional override. By default, the read runs on the cluster recorded in the data product catalog (where the index or materialized view dataflow lives), so indexed reads actually hit their arrangement. A null `cluster` in discovery means your role lacks USAGE on the object's index/compute cluster; without an override, the read then runs on your session's default cluster (safe: only materialized views appear this way, and they serve from persist). Set this only to intentionally run the same read on a different cluster — e.g. one with more or larger replicas, or to compare cost/latency."
                             }
                         },
                         "required": ["name"]
@@ -1154,9 +1161,11 @@ fn safe_data_product_name(name: &str) -> Result<String, McpRequestError> {
 /// when the role has USAGE on it, so reads of indexed objects hit the index's
 /// in-memory arrangement. That column is null when the role lacks USAGE on the
 /// object's cluster (DEX-66); in that case, and absent an override, the read
-/// runs on the session's default (serving) cluster instead. That still works
-/// because materialized views serve from persist and views recompute, just
-/// without index benefit.
+/// runs on the session's default (serving) cluster instead. Only materialized
+/// views can appear this way, since plain views without at least one usable
+/// index cluster are excluded from `mz_mcp_data_products` entirely; the
+/// fallback is therefore safe (materialized views serve from persist without
+/// recompute).
 ///
 /// `cluster_override` forces the read onto a named cluster instead — useful for
 /// a differently-sized or differently-replicated cluster.
