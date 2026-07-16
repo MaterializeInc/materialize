@@ -33,6 +33,7 @@ harness = false
 ahash.workspace = true
 bincode.workspace = true
 bytemuck.workspace = true
+lz4_flex.workspace = true
 columnar.workspace = true
 columnation.workspace = true
 differential-dataflow.workspace = true
