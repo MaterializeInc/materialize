@@ -26,6 +26,7 @@ function renderToolbar(workerCount: number) {
         matchIndex={0}
         onJump={() => {}}
         workerCount={workerCount}
+        regionExpanded={false}
       />
     </ThemeProvider>,
   );
