@@ -926,6 +926,24 @@ describe("commonAncestorScope / representativeInView", () => {
   });
 });
 
+describe("representativeInView with expansion", () => {
+  it("maps to the nested node when its container is expanded", () => {
+    // [5,1,1] under viewRoot [5]: collapses to [5,1] normally, but with
+    // [5,1] expanded it resolves to itself.
+    const view = [5];
+    expect(representativeInView([5, 1, 1], view)).toBe(nodeIdOf([5, 1]));
+    expect(
+      representativeInView([5, 1, 1], view, new Set([nodeIdOf([5, 1])])),
+    ).toBe(nodeIdOf([5, 1, 1]));
+  });
+
+  it("still returns null outside the subtree", () => {
+    expect(representativeInView([9, 9], [5], new Set([nodeIdOf([5, 1])]))).toBe(
+      null,
+    );
+  });
+});
+
 describe("allSearchMatches / subtreeSearchMatches", () => {
   const s = buildDataflowStructure(OPS, CHANNELS, LIR_SPANS);
   const regionId = nodeIdOf([5, 1]);

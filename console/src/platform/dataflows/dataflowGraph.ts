@@ -547,12 +547,23 @@ export function buildDataflowStructure(
 export function representativeInView(
   address: Address,
   viewRootAddress: Address,
+  expandedScopes: Set<NodeId> = new Set(),
 ): NodeId | null {
   if (
     address.length > viewRootAddress.length &&
     viewRootAddress.every((v, i) => address[i] === v)
   ) {
-    return nodeIdOf(address.slice(0, viewRootAddress.length + 1));
+    // Deepen past any expanded scope that strictly contains `address`, so a
+    // match inside an expanded region maps to the nested node rather than the
+    // outer box. Never shallower than viewRoot's direct-child level.
+    let len = viewRootAddress.length;
+    while (
+      len < address.length - 1 &&
+      expandedScopes.has(nodeIdOf(address.slice(0, len + 1)))
+    ) {
+      len++;
+    }
+    return nodeIdOf(address.slice(0, len + 1));
   }
   return null;
 }
