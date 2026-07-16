@@ -387,26 +387,50 @@ When saving your credentials or other sensitive information in a config file, do
 
 {{< tab "Claude Desktop" >}}
 
+Claude Desktop's `claude_desktop_config.json` does not connect to a remote MCP
+server directly. Use the
+[`mcp-remote`](https://www.npmjs.com/package/mcp-remote) bridge, which runs
+locally and forwards requests to the `materialize-developer` MCP server over
+HTTP. `mcp-remote` is invoked with `npx` and requires
+[Node.js](https://nodejs.org/).
+
+{{< note >}}
+[`mcp-remote`](https://github.com/geelen/mcp-remote) is a third-party,
+community-maintained tool. It is not maintained by Anthropic or Materialize.
+Your MCP token is passed to it on each launch. The configuration below pins a
+specific version rather than pulling the latest release. Review the tool and
+update the pinned version as appropriate for your environment.
+{{< /note >}}
+
 1. Add the `materialize-developer` MCP server entry to your Claude Desktop
    configuration (`claude_desktop_config.json`).
    - When merging into an existing `mcpServers` object, remember to add commas
      between entries.
    - If the `mcpServers` field does not already exist, add it as well.
-   - For older Claude Desktop versions, you may need to include the transport
-     `"type": "http",` as well as part of the `materialize-developer` entry.
 
-   ```json {hl_lines="3-8"}
+   ```json {hl_lines="3-14"}
    {
      "mcpServers": {
        "materialize-developer": {
-         "url": "<baseURL>/api/mcp/developer",
-         "headers": {
-           "Authorization": "Basic <mcp-token>"
+         "command": "npx",
+         "args": [
+           "-y", "mcp-remote@0.1.38",
+           "<baseURL>/api/mcp/developer",
+           "--header", "Authorization:${AUTH_HEADER}"
+         ],
+         "env": {
+           "AUTH_HEADER": "Basic <mcp-token>"
          }
        }
      }
    }
    ```
+
+   The `Authorization` header value is passed through the `AUTH_HEADER`
+   environment variable. This avoids a known `mcp-remote` issue where a space in
+   a `--header` argument (such as the space in `Basic <mcp-token>`) is
+   mishandled on some platforms. The colon in `"Authorization:${AUTH_HEADER}"`
+   has no trailing space.
 
    {{% include-headless "/headless/mcp-endpoint-config-replacements" %}}
 
