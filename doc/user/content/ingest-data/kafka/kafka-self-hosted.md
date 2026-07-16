@@ -175,16 +175,13 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 ## Creating a source
 
 The Kafka connection created in the previous section can then be reused across
-multiple [`CREATE SOURCE`](/sql/create-source/kafka/) statements:
+multiple [`CREATE SOURCE`](/sql/create-source/kafka/) statements. By default, the
+source will be created in the active cluster; to use a different cluster, use the
+`IN CLUSTER` clause.
 
-```mzsql
-CREATE SOURCE json_source
-  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
-  FORMAT JSON;
-```
-
-By default, the source will be created in the active cluster; to use a different
-cluster, use the `IN CLUSTER` clause.
+{{< include-headless-with file="/headless/kafka-create-source-syntax"
+source="json_source" connection="kafka_connection" topic="test_topic"
+table="json_table" format="FORMAT JSON" >}}
 
 ## Related pages
 
