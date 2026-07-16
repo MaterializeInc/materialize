@@ -846,17 +846,27 @@ impl<'w> Worker<'w> {
                     STORAGE_SERVER_MAINTENANCE_INTERVAL
                         .get(self.storage_state.storage_configuration.config_set());
 
-                // Gate the upsert source-stash's use of the column pager. The
-                // pager's budget pool, backend, and codec are the shared ones
+                // Set storage's leg of the process-wide chunk spill gate.
+                // The buffer pool and its budget are the shared ones
                 // configured by compute's `apply_worker_config` (compute and
-                // storage run in the same process); storage only decides whether
-                // its stash participates, via its own dyncfg.
+                // storage run in the same process). The gate ORs this leg
+                // with compute's, so chunks spill while either subsystem's
+                // flag is set.
+                //
+                // The flag is replica-scoped: the storage controller merges
+                // per-replica overrides into the `UpdateConfiguration`
+                // commands it sends, so reading this worker's `ConfigSet`
+                // here observes them.
                 {
                     use mz_storage_types::dyncfgs::ENABLE_UPSERT_PAGED_SPILL;
 
                     let enabled = ENABLE_UPSERT_PAGED_SPILL
                         .get(self.storage_state.storage_configuration.config_set());
-                    crate::upsert::upsert_stash_pager::set_enabled(enabled);
+                    info!(
+                        worker = self.timely_worker.index(),
+                        enabled, "upsert stash spill: applying gate",
+                    );
+                    crate::upsert::upsert_stash_spill::set_enabled(enabled);
                 }
             }
             InternalStorageCommand::StatisticsUpdate { sources, sinks } => self

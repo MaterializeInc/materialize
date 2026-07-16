@@ -301,6 +301,11 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
+            "enable_upsert_paged_spill",
+            "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
             "enable_upsert_v2",
             "false",
             ["true", "false"],
@@ -599,7 +604,6 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "column_paged_batcher_spill_worker_count",
     "column_paged_batcher_eager_backing",
     "column_paged_batcher_pool_rss_target_fraction",
-    "enable_upsert_paged_spill",
     "enable_lgalloc_eager_reclamation",
     "lgalloc_background_interval",
     "lgalloc_file_growth_dampener",
