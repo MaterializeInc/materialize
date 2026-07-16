@@ -74,15 +74,14 @@ const McpConnectInstructions = ({
 
   if (!envAddress) return null;
 
-  const balancerdHost =
-    appConfig.mode === "self-managed"
-      ? appConfig.balancerdDnsNames?.[0]
-      : undefined;
+  // MCP is served on the HTTP endpoint, so build its URL from the HTTP host.
+  // `envAddress` is `currentEnvironment.httpAddress`, the same address the
+  // console uses for its own HTTP API calls (for self-managed, the console's
+  // own host, which nginx proxies to environmentd). The pgwire host advertised
+  // in `balancerdDnsNames` does not serve MCP.
   const baseUrl = isCloud
     ? `https://${envAddress.split(":")[0]}`
-    : balancerdHost
-      ? `https://${balancerdHost}`
-      : "<your-materialize-host>";
+    : `${appConfig.environmentdScheme}://${envAddress}`;
 
   const user = userStr || "<user>";
   const base64Command = `printf '${user}:<password>' | base64 -w0`;
