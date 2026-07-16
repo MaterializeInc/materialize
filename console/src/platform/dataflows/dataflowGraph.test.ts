@@ -826,6 +826,29 @@ describe("deriveVisibleGraph", () => {
   });
 });
 
+describe("deriveVisibleGraph resolution refactor", () => {
+  const structure = buildDataflowStructure(OPS, CHANNELS, [], []);
+
+  it("preserves collapsed-region landings with no expansion", () => {
+    // channel 3 crosses region [5,1]'s boundary to leaf [5,2]. At the root
+    // view the region is collapsed, so the edge must still name the inner
+    // port it lands on (the regression the naive global-set substitution
+    // would erase).
+    const g = deriveVisibleGraph(structure, structure.root);
+    const edge = g.edges.find(
+      (e) => e.source === nodeIdOf([5, 1]) && e.target === nodeIdOf([5, 2]),
+    );
+    expect(edge).toBeDefined();
+    expect(edge!.sourceLandings.length).toBeGreaterThan(0);
+  });
+
+  it("accepts an empty expandedScopes and behaves identically", () => {
+    const a = deriveVisibleGraph(structure, structure.root);
+    const b = deriveVisibleGraph(structure, structure.root, new Set());
+    expect(b).toEqual(a);
+  });
+});
+
 describe("commonAncestorScope / representativeInView", () => {
   const s = buildDataflowStructure(OPS, CHANNELS, LIR_SPANS);
   const regionId = nodeIdOf([5, 1]);
