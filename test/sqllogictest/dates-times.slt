@@ -1608,6 +1608,30 @@ SELECT timestamp(0) without time zone '95143-12-31 23:59:59.123456789+06';
 ----
 95143-12-31 23:59:59
 
+# Regression: a 6-digit year with explicit `-` separators must be read as a
+# full year, not a compact `YYMMDD` date. Such values are producible by our own
+# text formatting, so casting them back must round-trip.
+query T
+SELECT '118852-02-05 00:00:00+00'::timestamptz;
+----
+118852-02-05 00:00:00+00
+
+query T
+SELECT '118852-02-05 00:00:00'::timestamp;
+----
+118852-02-05 00:00:00
+
+query T
+SELECT '118852-02-05'::date;
+----
+118852-02-05
+
+# A standalone number with no separators is still a compact `YYYYMMDD` date.
+query T
+SELECT '20000102'::date;
+----
+2000-01-02
+
 query T
 SELECT timestamptz '95141-12-31 23:59:59.123456789+06';
 ----

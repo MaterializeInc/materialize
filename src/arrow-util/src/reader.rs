@@ -18,8 +18,9 @@ use arrow::array::{
     Int16Array, Int32Array, Int64Array, IntervalDayTimeArray, IntervalMonthDayNanoArray,
     IntervalYearMonthArray, LargeBinaryArray, LargeListArray, LargeStringArray, ListArray,
     MapArray, StringArray, StringViewArray, StructArray, Time32MillisecondArray, Time32SecondArray,
-    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-    TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
+    Time64MicrosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray, TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array,
+    UInt64Array,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
@@ -168,11 +169,15 @@ fn scalar_type_and_array_to_reader(
         (SqlScalarType::UInt16, DataType::UInt16) => {
             Ok(ColReader::UInt16(downcast_array::<UInt16Array>(array)))
         }
-        (SqlScalarType::UInt32, DataType::UInt32) => {
+        // `oid` shares `Datum::UInt32`'s representation, so it decodes identically.
+        (SqlScalarType::UInt32 | SqlScalarType::Oid, DataType::UInt32) => {
             Ok(ColReader::UInt32(downcast_array::<UInt32Array>(array)))
         }
         (SqlScalarType::UInt64, DataType::UInt64) => {
             Ok(ColReader::UInt64(downcast_array::<UInt64Array>(array)))
+        }
+        (SqlScalarType::MzTimestamp, DataType::UInt64) => {
+            Ok(ColReader::MzTimestamp(downcast_array::<UInt64Array>(array)))
         }
         (SqlScalarType::Float32 | SqlScalarType::Float64, DataType::Float16) => {
             let array = downcast_array::<Float16Array>(array);
@@ -261,14 +266,23 @@ fn scalar_type_and_array_to_reader(
                 .context("uuid reader")?;
             Ok(ColReader::Uuid(Box::new(reader)))
         }
-        (SqlScalarType::String, DataType::Utf8) => {
-            Ok(ColReader::String(downcast_array::<StringArray>(array)))
-        }
-        (SqlScalarType::String, DataType::LargeUtf8) => {
+        // `char` and `varchar` store `Datum::String`, so they decode as strings.
+        // The writer emits them as Utf8/LargeUtf8 depending on length.
+        (
+            SqlScalarType::String | SqlScalarType::Char { .. } | SqlScalarType::VarChar { .. },
+            DataType::Utf8,
+        ) => Ok(ColReader::String(downcast_array::<StringArray>(array))),
+        (
+            SqlScalarType::String | SqlScalarType::Char { .. } | SqlScalarType::VarChar { .. },
+            DataType::LargeUtf8,
+        ) => {
             let array = downcast_array::<LargeStringArray>(array);
             Ok(ColReader::LargeString(array))
         }
-        (SqlScalarType::String, DataType::Utf8View) => {
+        (
+            SqlScalarType::String | SqlScalarType::Char { .. } | SqlScalarType::VarChar { .. },
+            DataType::Utf8View,
+        ) => {
             let array = downcast_array::<StringViewArray>(array);
             Ok(ColReader::StringView(array))
         }
@@ -293,6 +307,15 @@ fn scalar_type_and_array_to_reader(
             let array = downcast_array::<TimestampNanosecondArray>(array);
             Ok(ColReader::TimestampNanosecond(array))
         }
+        // A tz-aware timestamp array stores UTC-normalized instants, so the tz
+        // string is metadata we can ignore. The writer always emits microseconds.
+        (
+            SqlScalarType::TimestampTz { .. },
+            DataType::Timestamp(TimeUnit::Microsecond, Some(_)),
+        ) => {
+            let array = downcast_array::<TimestampMicrosecondArray>(array);
+            Ok(ColReader::TimestampTzMicrosecond(array))
+        }
         (SqlScalarType::Date, DataType::Date32) => {
             let array = downcast_array::<Date32Array>(array);
             Ok(ColReader::Date32(array))
@@ -308,6 +331,10 @@ fn scalar_type_and_array_to_reader(
         (SqlScalarType::Time, DataType::Time32(TimeUnit::Millisecond)) => {
             let array = downcast_array::<Time32MillisecondArray>(array);
             Ok(ColReader::Time32Milliseconds(array))
+        }
+        (SqlScalarType::Time, DataType::Time64(TimeUnit::Microsecond)) => {
+            let array = downcast_array::<Time64MicrosecondArray>(array);
+            Ok(ColReader::Time64Microseconds(array))
         }
         (
             SqlScalarType::List {
@@ -572,12 +599,16 @@ enum ColReader {
     TimestampMillisecond(arrow::array::TimestampMillisecondArray),
     TimestampMicrosecond(arrow::array::TimestampMicrosecondArray),
     TimestampNanosecond(arrow::array::TimestampNanosecondArray),
+    TimestampTzMicrosecond(arrow::array::TimestampMicrosecondArray),
+
+    MzTimestamp(arrow::array::UInt64Array),
 
     Date32(Date32Array),
     Date64(Date64Array),
 
     Time32Seconds(Time32SecondArray),
     Time32Milliseconds(arrow::array::Time32MillisecondArray),
+    Time64Microseconds(arrow::array::Time64MicrosecondArray),
 
     List {
         offsets: OffsetBuffer<i32>,
@@ -838,6 +869,22 @@ impl ColReader {
                     Ok::<_, anyhow::Error>(Datum::Timestamp(dt))
                 })
                 .transpose()?,
+            ColReader::TimestampTzMicrosecond(array) => array
+                .is_valid(idx)
+                .then(|| array.value(idx))
+                .map(|micros| {
+                    let dt = DateTime::from_timestamp_micros(micros).ok_or_else(|| {
+                        anyhow::anyhow!("invalid timestamptz microseconds {micros}")
+                    })?;
+                    let dt =
+                        CheckedTimestamp::from_timestamplike(dt).context("TimestampTzMicros")?;
+                    Ok::<_, anyhow::Error>(Datum::TimestampTz(dt))
+                })
+                .transpose()?,
+            ColReader::MzTimestamp(array) => array
+                .is_valid(idx)
+                .then(|| array.value(idx))
+                .map(|v| Datum::MzTimestamp(mz_repr::Timestamp::from(v))),
             ColReader::Date32(array) => array
                 .is_valid(idx)
                 .then(|| array.value(idx))
@@ -880,6 +927,21 @@ impl ColReader {
                     let unanos = (umillis % 1000).saturating_mul(1_000_000);
                     let time = NaiveTime::from_num_seconds_from_midnight_opt(usecs, unanos)
                         .ok_or_else(|| anyhow::anyhow!("invalid Time32 Milliseconds {umillis}"))?;
+                    Ok::<_, anyhow::Error>(Datum::Time(time))
+                })
+                .transpose()?,
+            ColReader::Time64Microseconds(array) => array
+                .is_valid(idx)
+                .then(|| array.value(idx))
+                .map(|micros| {
+                    // Inverse of the builder's `secs * 1_000_000 + nanos / 1_000`.
+                    let secs: u32 = (micros / 1_000_000).try_into().context("time64 seconds")?;
+                    let nanos: u32 = (micros % 1_000_000)
+                        .try_into()
+                        .map(|us: u32| us.saturating_mul(1_000))
+                        .context("time64 microseconds")?;
+                    let time = NaiveTime::from_num_seconds_from_midnight_opt(secs, nanos)
+                        .ok_or_else(|| anyhow::anyhow!("invalid Time64 Microseconds {micros}"))?;
                     Ok::<_, anyhow::Error>(Datum::Time(time))
                 })
                 .transpose()?,
@@ -1214,6 +1276,60 @@ mod tests {
 
         reader.read(1, &mut rnd_row).unwrap();
         assert_eq!(&null_row, &rnd_row);
+    }
+
+    /// Regression for SS-341: `COPY TO PARQUET` can write these scalar types,
+    /// so `COPY FROM PARQUET` must read them back. Each must survive a
+    /// builder -> reader round-trip.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+    fn smoketest_extra_scalar_types() {
+        let desc = RelationDesc::builder()
+            .with_column("oid", SqlScalarType::Oid.nullable(true))
+            .with_column("time", SqlScalarType::Time.nullable(true))
+            .with_column(
+                "timestamptz",
+                SqlScalarType::TimestampTz { precision: None }.nullable(true),
+            )
+            .with_column("char", SqlScalarType::Char { length: None }.nullable(true))
+            .with_column(
+                "varchar",
+                SqlScalarType::VarChar { max_length: None }.nullable(true),
+            )
+            .with_column("mz_timestamp", SqlScalarType::MzTimestamp.nullable(true))
+            .finish();
+
+        let tstz = CheckedTimestamp::from_timestamplike(
+            DateTime::from_timestamp(1_600_000_000, 0).expect("valid timestamp"),
+        )
+        .expect("valid CheckedTimestamp");
+
+        let og_row = Row::pack(vec![
+            Datum::UInt32(42),
+            // Sub-second component at microsecond resolution: the writer stores
+            // Time64 microseconds, so nanoseconds would not round-trip.
+            Datum::Time(NaiveTime::from_hms_micro_opt(12, 34, 56, 789_012).unwrap()),
+            Datum::TimestampTz(tstz),
+            Datum::String("abc"),
+            Datum::String("hello world"),
+            Datum::MzTimestamp(mz_repr::Timestamp::from(123_456_u64)),
+        ]);
+        let null_row = Row::pack(vec![Datum::Null; 6]);
+
+        let mut builder = crate::builder::ArrowBuilder::new(&desc, 2, 64).unwrap();
+        builder.add_row(&og_row).unwrap();
+        builder.add_row(&null_row).unwrap();
+        let record_batch = builder.to_record_batch().unwrap();
+
+        let reader = ArrowReader::new(&desc, StructArray::from(record_batch)).unwrap();
+
+        let mut got = Row::default();
+        reader.read(0, &mut got).unwrap();
+        assert_eq!(&og_row, &got, "values did not round-trip");
+
+        got.packer();
+        reader.read(1, &mut got).unwrap();
+        assert_eq!(&null_row, &got, "NULLs did not round-trip");
     }
 
     /// Regression: an array column must survive a builder -> reader round-trip.
