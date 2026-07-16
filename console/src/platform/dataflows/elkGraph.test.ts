@@ -15,6 +15,7 @@ import {
   deriveVisibleGraph,
   groupByLir,
   nodeIdOf,
+  type VisibleNode,
 } from "./dataflowGraph";
 import { CHANNELS, LIR_SPANS, OPS } from "./dataflowGraph.test";
 import {
@@ -163,6 +164,53 @@ describe("toElkGraph with a LIR grouping", () => {
     // Pinning this exact position discriminates the option's presence in production.
     const a3 = groupAInner.children!.find((c) => c.id === "a3")!;
     expect(a3).toMatchObject({ x: 8, y: 94 });
+  });
+});
+
+// Minimal VisibleNode fixture: fills every required field with a null/zero
+// placeholder, and lets a test override only the fields it cares about
+// (kind, expanded, parentId, ...).
+const makeVisibleNode = (
+  id: string,
+  kind: VisibleNode["kind"],
+  overrides: Partial<VisibleNode> = {},
+): VisibleNode => ({
+  id,
+  kind,
+  label: id,
+  stats: null,
+  transitive: null,
+  own: null,
+  ownSkew: null,
+  transitiveSkew: null,
+  overheadNs: null,
+  childCount: 0,
+  lir: [],
+  address: null,
+  operatorId: null,
+  peers: [],
+  direction: null,
+  ...overrides,
+});
+
+describe("toElkGraph with an expanded region", () => {
+  it("nests an expanded region's children under a sized container", () => {
+    const region = makeVisibleNode(nodeIdOf([5, 1]), "region", {
+      expanded: true,
+    });
+    const child = makeVisibleNode(nodeIdOf([5, 1, 1]), "operator", {
+      parentId: nodeIdOf([5, 1]),
+    });
+    const elk = toElkGraph({ nodes: [region, child], edges: [] });
+    const container = elk.children!.find((c) => c.id === nodeIdOf([5, 1]));
+    expect(container).toBeDefined();
+    // A container has children and no fixed width (elk auto-sizes it), unlike a
+    // collapsed leaf which carries NODE_DIMENSIONS.
+    expect(container!.children!.map((c) => c.id)).toEqual([
+      nodeIdOf([5, 1, 1]),
+    ]);
+    expect(container!.width).toBeUndefined();
+    expect(container!.layoutOptions).toBeDefined();
   });
 });
 
