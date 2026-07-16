@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/extensions/reduce.rs
-revision: b0fa98e931
+revision: 1c55de49eb
 ---
 
 # mz-compute::extensions::reduce

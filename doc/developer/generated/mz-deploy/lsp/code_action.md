@@ -1,6 +1,6 @@
 ---
 source: src/mz-deploy/src/lsp/code_action.rs
-revision: a647094cc4
+revision: c3db2feba9
 ---
 
 # mz-deploy::lsp::code_action

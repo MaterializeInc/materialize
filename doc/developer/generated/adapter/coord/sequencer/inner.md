@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/sequencer/inner.rs
-revision: e6fbabee58
+revision: 3713eed996
 ---
 
 # adapter::coord::sequencer::inner
@@ -14,6 +14,7 @@ Also defines the `sequence_staged` generic driver and `Staged` / `StagedContext`
 Connection secret content is validated through `check_connection_secret_content_guards`, which iterates `details.secret_content_guards()` for a connection and reads each referenced secret via `caching_secrets_reader`. This is called for both `CREATE CONNECTION` and `ALTER CONNECTION` before the catalog entry is installed. The symmetric helper `check_secret_content_guards_of_dependents` validates proposed new secret contents against every connection that references the secret, and is called from `sequence_alter_secret` before the new value is persisted.
 Privilege grant/revoke operations (`sequence_grant_privileges`) group all grantee changes for the same target object into a single `Op::UpdatePrivilege` with a `privileges: Vec<MzAclItem>` field, so a bulk grant/revoke touching one object is a single durable write rather than one per grantee. `sequence_revoke_role` applies the same grouping: privilege revokes are collected by target into a `BTreeMap` before emitting ops.
 Write operations (`sequence_insert`, `sequence_read_then_write`) reject sessions using the bounded staleness isolation level with `AdapterError::BoundedStalenessReadOnly`. `sequence_set_variable` rejects combinations of `transaction_isolation = 'bounded staleness'` and `real_time_recency = on` with `AdapterError::BoundedStalenessRealTimeRecencyConflict`.
+`sequence_read_then_write` validates all transitive dependencies of the selection in a single call to `validate_read_then_write_dependencies`, passing the full set of dependency `CatalogItemId`s and a bound read from the `READ_THEN_WRITE_MAX_DEPENDENCIES` dyncfg; exceeding the bound returns `AdapterError::ReadThenWriteDependencyLimitExceeded`.
 `await_real_time_recent_timestamp` and the private `real_time_recent_timestamp_error` helper convert `StorageError::RtrTimeout` and `StorageError::RtrDropFailure` to the dedicated `AdapterError::RtrTimeout` / `AdapterError::RtrDropFailure` variants (with humanized collection names) before propagating; these helpers are called from the RTR-awaiting tasks in `peek`, `explain_timestamp`, and `command_handler`.
 `sequence_side_effecting_func` handles `PgCancelBackend` with a `NULL` connection-id argument by returning `NULL` immediately (matching PostgreSQL semantics), before attempting to look up or cancel any connection.
 `execute_side_effecting_func` (used by the frontend peek path) performs no RBAC check itself; RBAC is pre-checked by the caller via `rbac::check_plan` before `Command::ExecuteSideEffectingFunc` is sent. The caller retains the target connection's `ConnectionId` handle until the command completes so that the connection found in `active_conns` during execution is the same one the check was performed against.
