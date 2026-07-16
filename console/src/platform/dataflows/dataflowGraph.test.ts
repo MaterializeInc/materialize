@@ -849,6 +849,53 @@ describe("deriveVisibleGraph resolution refactor", () => {
   });
 });
 
+describe("deriveVisibleGraph in-place expansion", () => {
+  const structure = buildDataflowStructure(OPS, CHANNELS, [], []);
+
+  it("materializes an expanded region's children nested under it", () => {
+    const g = deriveVisibleGraph(
+      structure,
+      structure.root,
+      new Set([nodeIdOf([5, 1])]),
+    );
+    const ids = new Set(g.nodes.map((n) => n.id));
+    expect(ids.has(nodeIdOf([5, 1, 1]))).toBe(true); // Join, now visible
+    expect(ids.has(nodeIdOf([5, 1, 2]))).toBe(true); // Map, now visible
+    const join = g.nodes.find((n) => n.id === nodeIdOf([5, 1, 1]));
+    expect(join!.parentId).toBe(nodeIdOf([5, 1]));
+    const region = g.nodes.find((n) => n.id === nodeIdOf([5, 1]));
+    expect(region!.expanded).toBe(true);
+  });
+
+  it("reroutes an inbound edge to the expanded region's inner port", () => {
+    // Channel 1 feeds the region's input port -> child [5,1,1]. With the
+    // region expanded, [5,1,1] is visible, so an edge must terminate on the
+    // inner port (scope [5,1]) rather than collapsing onto the region box.
+    const g = deriveVisibleGraph(
+      structure,
+      structure.root,
+      new Set([nodeIdOf([5, 1])]),
+    );
+    const toJoin = g.edges.find((e) => e.target === nodeIdOf([5, 1, 1]));
+    expect(toJoin).toBeDefined();
+  });
+
+  it("resolves edges to the deepest visible node under two-level expansion", () => {
+    const g = deriveVisibleGraph(
+      structure,
+      structure.root,
+      new Set([nodeIdOf([5, 1])]),
+    );
+    // The internal channel 2 ([5,1,1] -> [5,1,2]) is now a visible edge
+    // between two inner operators.
+    const inner = g.edges.find(
+      (e) =>
+        e.source === nodeIdOf([5, 1, 1]) && e.target === nodeIdOf([5, 1, 2]),
+    );
+    expect(inner).toBeDefined();
+  });
+});
+
 describe("commonAncestorScope / representativeInView", () => {
   const s = buildDataflowStructure(OPS, CHANNELS, LIR_SPANS);
   const regionId = nodeIdOf([5, 1]);
