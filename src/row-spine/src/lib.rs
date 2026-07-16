@@ -52,13 +52,13 @@ mod spines {
     pub type RowRowBatcher<T, R> = KeyValBatcher<Row, Row, T, R>;
     pub type RowRowBuilder<T, R> = RcBuilder<crate::dictionary::builders::RowRowBuilder<T, R>>;
 
-    /// `RowRowBuilder` variant that consumes [`Column`] chunks. Pairs with
-    /// [`Col2ValPagedBatcher`] for the spillable arrange path. Installs a
-    /// dictionary codec at seal time, gathering statistics from the sealed
-    /// `Column` chain, so paged arrangements compress on the same footing as the
-    /// columnation-fed [`RowRowBuilder`].
+    /// `RowRowBuilder` variant that consumes [`Column`] chunks: the inner
+    /// builder behind `mz_timely_util::columnar::chunk::UnchunkBuilder` on
+    /// the spillable arrange path. Installs a dictionary codec at seal time,
+    /// gathering statistics from the sealed `Column` chain, so spillable
+    /// arrangements compress on the same footing as the columnation-fed
+    /// [`RowRowBuilder`].
     ///
-    /// [`Col2ValPagedBatcher`]: mz_timely_util::columnar::Col2ValPagedBatcher
     /// [`Column`]: mz_timely_util::columnar::Column
     pub type RowRowColPagedBuilder<T, R> =
         RcBuilder<crate::dictionary::builders::RowRowColPagedBuilder<T, R>>;
@@ -77,12 +77,12 @@ mod spines {
     pub type ValRowBuilder<K, T, R> =
         RcBuilder<crate::dictionary::builders::ValRowBuilder<K, T, R>>;
 
-    /// `ValRowBuilder` variant that consumes [`Column`] chunks. Pairs with
-    /// `Col2ValPagedBatcher<K, Row, T, R>` for the spillable arrange path where
-    /// keys are arbitrary `Columnar` values (e.g. `UpsertKey`) and values are
-    /// packed `Row` bytes. Installs a dictionary codec on the value container at
-    /// seal time, gathering statistics from the sealed `Column` chain; keys are
-    /// not `Row`-shaped and so are left uncompressed.
+    /// `ValRowBuilder` variant that consumes [`Column`] chunks: the inner
+    /// builder behind `mz_timely_util::columnar::chunk::UnchunkBuilder` on
+    /// the spillable arrange path where keys are arbitrary `Columnar` values
+    /// and values are packed `Row` bytes. Installs a dictionary codec on the
+    /// value container at seal time, gathering statistics from the sealed
+    /// `Column` chain; keys are not `Row`-shaped and so are left uncompressed.
     ///
     /// [`Column`]: mz_timely_util::columnar::Column
     pub type ValRowColPagedBuilder<K, T, R> =
