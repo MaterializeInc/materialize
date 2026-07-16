@@ -553,8 +553,19 @@ function addressesEqual(a: Address, b: Address): boolean {
   return a.length === b.length && a.every((v, i) => v === b[i]);
 }
 
-function representative(address: Address, viewRootAddress: Address): NodeId {
-  return representativeInView(address, viewRootAddress) ?? nodeIdOf(address);
+// The box that represents `address` given the set of scopes expanded around
+// it: the child one level below the deepest expanded scope that strictly
+// contains `address`. With `expanded = {viewRoot}` this is exactly
+// representativeInView's viewRootAddress.length + 1 rule. Falls back to the
+// address's own id when no expanded scope contains it (addresses outside the
+// subtree, which appear in structure.channels).
+function representative(address: Address, expanded: Set<NodeId>): NodeId {
+  for (let len = address.length - 1; len >= 0; len--) {
+    if (expanded.has(nodeIdOf(address.slice(0, len)))) {
+      return nodeIdOf(address.slice(0, len + 1));
+    }
+  }
+  return nodeIdOf(address);
 }
 
 // A scope boundary crossing is logged as two channels that share a port
@@ -579,8 +590,9 @@ function endpointId(
   address: Address,
   port: number,
   side: "from" | "to",
-  viewRoot: NodeId,
-  viewRootAddress: Address,
+  localRoot: NodeId,
+  localRootAddress: Address,
+  expanded: Set<NodeId>,
 ): {
   id: string;
   port?: { scope: NodeId; direction: "input" | "output"; port: number };
@@ -588,9 +600,8 @@ function endpointId(
   if (address[address.length - 1] === 0) {
     const scope = address.slice(0, -1);
     const scopeId = nodeIdOf(scope);
-    const rep =
-      scope.length === 0 ? scopeId : representative(scope, viewRootAddress);
-    if (rep !== scopeId || scopeId !== viewRoot) return { id: rep };
+    const rep = scope.length === 0 ? scopeId : representative(scope, expanded);
+    if (rep !== scopeId || !expanded.has(scopeId)) return { id: rep };
     const direction = side === "from" ? "input" : "output";
     return {
       id: `${scopeId}:${direction === "input" ? "in" : "out"}:${port}`,
@@ -600,8 +611,8 @@ function endpointId(
   const scopeId = nodeIdOf(address);
   const scopeNode = structure.nodes.get(scopeId);
   if (scopeNode && scopeNode.children.length > 0) {
-    const rep = representative(address, viewRootAddress);
-    if (rep === scopeId && scopeId === viewRoot) {
+    const rep = representative(address, expanded);
+    if (rep === scopeId && expanded.has(scopeId)) {
       const direction = side === "to" ? "input" : "output";
       return {
         id: `${scopeId}:${direction === "input" ? "in" : "out"}:${port}`,
@@ -610,7 +621,7 @@ function endpointId(
     }
     return { id: rep };
   }
-  return { id: representative(address, viewRootAddress) };
+  return { id: representative(address, expanded) };
 }
 
 /**
@@ -621,9 +632,11 @@ function endpointId(
 export function deriveVisibleGraph(
   structure: DataflowStructure,
   viewRoot: NodeId,
+  expandedScopes: Set<NodeId> = new Set(),
 ): VisibleGraph {
   const viewRootNode = mustGet(structure.nodes, viewRoot);
   const viewRootAddress = viewRootNode.address;
+  const expanded = new Set<NodeId>([viewRoot, ...expandedScopes]);
   const nodes: VisibleNode[] = viewRootNode.children.map((id) => {
     const node = mustGet(structure.nodes, id);
     const kind = node.children.length === 0 ? "operator" : "region";
@@ -713,6 +726,7 @@ export function deriveVisibleGraph(
         peerSide,
         peerId,
         resolvedAddress,
+        new Set([peerId]),
       );
       port.peers.push({
         address: resolvedAddress,
@@ -777,6 +791,7 @@ export function deriveVisibleGraph(
       "from",
       viewRoot,
       viewRootAddress,
+      expanded,
     );
     const to = endpointId(
       structure,
@@ -785,6 +800,7 @@ export function deriveVisibleGraph(
       "to",
       viewRoot,
       viewRootAddress,
+      expanded,
     );
     // A port node is registered whenever either side resolves to one, even
     // if the edge itself is about to be dropped: viewRoot's own boundary can
@@ -868,6 +884,7 @@ export function deriveVisibleGraph(
           "from",
           from.id,
           box.address,
+          new Set([from.id]),
         );
         if (inner.port) {
           addLanding(
@@ -893,6 +910,7 @@ export function deriveVisibleGraph(
           "to",
           to.id,
           box.address,
+          new Set([to.id]),
         );
         if (inner.port) {
           addLanding(
