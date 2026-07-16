@@ -26,9 +26,8 @@ instead.
 ## Before you begin
 
 - Make sure Change Data Capture (CDC) is available on your Azure SQL Database.
-  CDC has compute requirements and is not supported on lower service tiers. CDC
-  must also be enabled per database and per table. See [Azure SQL documentation](
-  https://learn.microsoft.com/en-us/azure/azure-sql/database/change-data-capture-overview?view=azuresql)
+  CDC has compute requirements and is not supported on lower service tiers. See
+  [Azure SQL documentation](https://learn.microsoft.com/en-us/azure/azure-sql/database/change-data-capture-overview?view=azuresql)
   for details on service tiers and CDC configuration.
 
 - Ensure you have access to your database via the [`sqlcmd` client](https://learn.microsoft.com/en-us/sql/tools/sqlcmd/sqlcmd-utility),
