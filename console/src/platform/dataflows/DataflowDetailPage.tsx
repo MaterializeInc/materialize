@@ -12,6 +12,7 @@ import { interpolateYlOrRd } from "d3-scale-chromatic";
 import React from "react";
 import {
   Link,
+  type NavigateOptions,
   useNavigate,
   useNavigationType,
   useParams,
@@ -104,19 +105,53 @@ const DataflowDetailPage = () => {
       ? rawFocusedScope
       : data.structure.root
     : null;
+  // The regions expanded in place, same URL-lives-the-state reasoning as
+  // scope and selection above. Re-derived (not trusted verbatim) for the
+  // same tolerance: an id from a stale link, a data refresh that removed a
+  // region, or a link bookmarked in a different scope, is dropped rather
+  // than fed downstream, since deriveVisibleGraph and representativeInView
+  // both assume every entry names a real region inside the current view.
+  const expandParam = searchParams.get("expand");
+  const expandedScopes = React.useMemo(() => {
+    const set = new Set<NodeId>();
+    if (!data || !focusedScope) return set;
+    const focusedAddress = data.structure.nodes.get(focusedScope)?.address;
+    if (!focusedAddress) return set;
+    for (const token of expandParam ? expandParam.split(",") : []) {
+      const id = nodeIdOf(token.split(".").map(Number));
+      const node = data.structure.nodes.get(id);
+      // Keep only real regions inside the current view, dropping stale ids
+      // left after a data refresh or a navigate to a different scope.
+      if (
+        node &&
+        node.children.length > 0 &&
+        node.address.length > focusedAddress.length &&
+        focusedAddress.every((v, i) => node.address[i] === v)
+      ) {
+        set.add(id);
+      }
+    }
+    return set;
+  }, [data, focusedScope, expandParam]);
   // Every URL-param write funnels through here: calling setSearchParams
   // more than once in the same synchronous handler is unsafe (the second
   // call's `prev` doesn't see the first call's pending change, so it wins
   // and silently discards the first), so anything that needs to touch more
   // than one param at once (see focusOn, onSelectLir below) must do it in a
-  // single mutate callback rather than composing two setters.
+  // single mutate callback rather than composing two setters. `options`
+  // passes straight through to setSearchParams (e.g. onToggleExpand below
+  // passes `{ replace: true }`, since a scope navigation is worth a back
+  // button stop but an expand/collapse click isn't).
   const updateSearchParams = React.useCallback(
-    (mutate: (urlParams: URLSearchParams) => void) => {
+    (
+      mutate: (urlParams: URLSearchParams) => void,
+      options?: NavigateOptions,
+    ) => {
       setSearchParams((prev) => {
         const next = new URLSearchParams(prev);
         mutate(next);
         return next;
-      });
+      }, options);
     },
     [setSearchParams],
   );
@@ -137,10 +172,15 @@ const DataflowDetailPage = () => {
       // one for the region just navigated into, which won't be a listed
       // child of itself). focusOn and onSelectLir bypass this by writing
       // scope and selection together in their own updateSearchParams call,
-      // so a real "navigate to X and select Y" still lands intact.
+      // so a real "navigate to X and select Y" still lands intact. Expanded
+      // regions don't carry over either: expand's own subtree filter (see
+      // expandedScopes above) would drop most of them anyway once the scope
+      // moves, so clearing here just makes that explicit instead of leaving
+      // whatever survives to chance.
       updateSearchParams((urlParams) => {
         applyScope(urlParams, address);
         urlParams.delete("select");
+        urlParams.delete("expand");
       });
     },
     [data, updateSearchParams],
@@ -182,6 +222,40 @@ const DataflowDetailPage = () => {
   // should keep the panel out of the way across subsequent clicks too.
   const [lirPanelCollapsed, setLirPanelCollapsed] = React.useState(false);
   const [detailPanelCollapsed, setDetailPanelCollapsed] = React.useState(false);
+
+  // Toggling doesn't move the focused scope, so it's worth a lot less as a
+  // back-button stop than an actual navigation: replace rather than push, so
+  // clicking a few regions open and shut doesn't bury the real navigation
+  // history under them.
+  const onToggleExpand = React.useCallback(
+    (id: NodeId) => {
+      if (!data) return;
+      const address = data.structure.nodes.get(id)?.address;
+      if (!address) return;
+      const next = new Set(expandedScopes);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      updateSearchParams(
+        (urlParams) => {
+          const tokens = [...next].map((scopeId) =>
+            mustGet(data.structure.nodes, scopeId).address.join("."),
+          );
+          if (tokens.length > 0) urlParams.set("expand", tokens.join(","));
+          else urlParams.delete("expand");
+        },
+        { replace: true },
+      );
+      // Nothing else refits on a toggle (ViewportGuard only fires on a
+      // focusedScope change), so an expansion that grows off-screen would
+      // otherwise stay off-screen. Fit to the region and its now-visible
+      // children once the new layout lands; a collapse needs no such fit,
+      // since it can only shrink what's already onscreen.
+      if (!next.has(id)) return;
+      const childIds = mustGet(data.structure.nodes, id).children;
+      setPendingFitIds([id, ...childIds]);
+    },
+    [data, expandedScopes, updateSearchParams],
+  );
 
   // The route only remounts on a clusterId change, so switching dataflow or
   // replica in place (via the dropdowns) keeps this component instance, its
@@ -375,9 +449,9 @@ const DataflowDetailPage = () => {
   const visibleGraph = React.useMemo(
     () =>
       data && focusedScope
-        ? deriveVisibleGraph(data.structure, focusedScope)
+        ? deriveVisibleGraph(data.structure, focusedScope, expandedScopes)
         : null,
-    [data, focusedScope],
+    [data, focusedScope, expandedScopes],
   );
 
   // Mirrors DataflowGraphView's own labelById: restoring a URL-driven
@@ -501,7 +575,8 @@ const DataflowDetailPage = () => {
       for (const id of lirHighlight) {
         const address = data.structure.nodes.get(id)?.address;
         const rep =
-          address && representativeInView(address, focusedScopeAddress);
+          address &&
+          representativeInView(address, focusedScopeAddress, expandedScopes);
         if (rep) highlighted.add(rep);
       }
       for (const n of visible.nodes) {
@@ -509,7 +584,7 @@ const DataflowDetailPage = () => {
       }
     }
     return d;
-  }, [data, focusedScope, visibleGraph, filters, lirHighlight]);
+  }, [data, focusedScope, visibleGraph, filters, lirHighlight, expandedScopes]);
 
   React.useEffect(() => {
     setMatchIndex(0);
@@ -633,6 +708,7 @@ const DataflowDetailPage = () => {
                 matchIndex={activeMatchIndex}
                 onJump={onJump}
                 workerCount={data.workerCount}
+                regionExpanded={expandedScopes.size > 0}
               />
               {filters.heatmap !== "off" && (
                 <HStack spacing={1} flexShrink={0}>
@@ -697,6 +773,8 @@ const DataflowDetailPage = () => {
                 onPaneClick={() => setSelection(null)}
                 onJumpToPeer={onJumpToPeer}
                 onLirGroupClick={onLirGroupClick}
+                expandedScopes={expandedScopes}
+                onToggleExpand={onToggleExpand}
               />
               {selection && (
                 <NodeDetailPanel
