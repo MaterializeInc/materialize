@@ -151,7 +151,10 @@ export const csp = {
     "https://*.frontegg.com",
     "https://vercel.live",
   ],
-  "worker-src": ["'none'"],
+  // Allow same-origin Web Workers. elkjs runs dataflow-graph layout in a
+  // worker, emitted by Vite as a hashed same-origin asset
+  // (/assets/elk-worker.min-*.js) and started via `new Worker(url)`.
+  "worker-src": ["'self'"],
 };
 
 /**
