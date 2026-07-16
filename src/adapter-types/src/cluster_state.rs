@@ -63,6 +63,7 @@ pub struct ReplicaShape {
     pub size: String,
     pub availability_zones: AvailabilityZones,
     pub logging: ComputeReplicaLogging,
+    pub arrangement_compression: bool,
 }
 
 impl ReplicaShape {
@@ -73,6 +74,7 @@ impl ReplicaShape {
     pub fn matches(&self, other: &ReplicaShape) -> bool {
         self.size == other.size
             && self.logging == other.logging
+            && self.arrangement_compression == other.arrangement_compression
             && self.availability_zones.pool() == other.availability_zones.pool()
     }
 }
@@ -86,6 +88,7 @@ pub struct ExpectedClusterState {
     pub replication_factor: u32,
     pub availability_zones: AvailabilityZones,
     pub logging: ComputeReplicaLogging,
+    pub arrangement_compression: bool,
     /// The autoscaling policy. Part of the witness because it determines whether,
     /// and at what size, a burst is warranted.
     pub auto_scaling_policy: Option<AutoScalingPolicy>,
@@ -191,6 +194,7 @@ pub struct ReconfigurationTarget {
     pub replication_factor: u32,
     pub availability_zones: AvailabilityZones,
     pub logging: ComputeReplicaLogging,
+    pub arrangement_compression: bool,
 }
 
 impl ReconfigurationTarget {
@@ -200,6 +204,7 @@ impl ReconfigurationTarget {
             size: self.size.clone(),
             availability_zones: self.availability_zones.clone(),
             logging: self.logging.clone(),
+            arrangement_compression: self.arrangement_compression,
         }
     }
 }
@@ -262,6 +267,7 @@ mod tests {
             size: "small".to_string(),
             availability_zones: azs(zones),
             logging: ComputeReplicaLogging::default(),
+            arrangement_compression: false,
         }
     }
 

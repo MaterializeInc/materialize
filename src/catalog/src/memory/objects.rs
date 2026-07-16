@@ -411,6 +411,7 @@ impl Cluster {
                 size,
                 availability_zones,
                 logging,
+                arrangement_compression,
                 replication_factor,
                 optimizer_feature_overrides,
                 schedule,
@@ -433,7 +434,10 @@ impl Cluster {
                         interval: None,
                     } => None,
                 };
-                let compute = ComputeReplicaConfig { introspection };
+                let compute = ComputeReplicaConfig {
+                    introspection,
+                    arrangement_compression: *arrangement_compression,
+                };
                 CreateClusterVariant::Managed(CreateClusterManagedPlan {
                     replication_factor: replication_factor.clone(),
                     size: size.clone(),
@@ -3344,6 +3348,8 @@ pub struct ClusterVariantManaged {
     pub size: String,
     pub availability_zones: Vec<String>,
     pub logging: ReplicaLogging,
+    /// Whether arrangements on this cluster's replicas request dictionary compression.
+    pub arrangement_compression: bool,
     pub replication_factor: u32,
     pub optimizer_feature_overrides: OptimizerFeatureOverrides,
     pub schedule: ClusterSchedule,
@@ -3362,6 +3368,7 @@ pub struct ManagedReplicaConfigShape<'a> {
     pub size: &'a str,
     pub availability_zones: &'a [String],
     pub logging: &'a ReplicaLogging,
+    pub arrangement_compression: bool,
 }
 
 impl<'a> ManagedReplicaConfigShape<'a> {
@@ -3370,11 +3377,13 @@ impl<'a> ManagedReplicaConfigShape<'a> {
         size: &'a str,
         availability_zones: &'a [String],
         logging: &'a ReplicaLogging,
+        arrangement_compression: bool,
     ) -> Self {
         Self {
             size,
             availability_zones,
             logging,
+            arrangement_compression,
         }
     }
 }
@@ -3386,6 +3395,7 @@ impl ClusterVariantManaged {
             size,
             availability_zones,
             logging,
+            arrangement_compression,
             replication_factor: _,
             optimizer_feature_overrides: _,
             schedule: _,
@@ -3393,7 +3403,7 @@ impl ClusterVariantManaged {
             reconfiguration: _,
             burst: _,
         } = self;
-        ManagedReplicaConfigShape::new(size, availability_zones, logging)
+        ManagedReplicaConfigShape::new(size, availability_zones, logging, *arrangement_compression)
     }
 
     /// Returns this managed cluster's realized shape as a reconfiguration target.
@@ -3402,6 +3412,7 @@ impl ClusterVariantManaged {
             size,
             availability_zones,
             logging,
+            arrangement_compression,
             replication_factor,
             optimizer_feature_overrides: _,
             schedule: _,
@@ -3414,6 +3425,7 @@ impl ClusterVariantManaged {
             replication_factor: *replication_factor,
             availability_zones: availability_zones.clone(),
             logging: logging.clone(),
+            arrangement_compression: *arrangement_compression,
         }
     }
 
@@ -3446,6 +3458,7 @@ impl From<ClusterVariantManaged> for durable::ClusterVariantManaged {
             size,
             availability_zones,
             logging,
+            arrangement_compression,
             replication_factor,
             optimizer_feature_overrides,
             schedule,
@@ -3457,6 +3470,7 @@ impl From<ClusterVariantManaged> for durable::ClusterVariantManaged {
             size,
             availability_zones,
             logging,
+            arrangement_compression,
             replication_factor,
             optimizer_feature_overrides: optimizer_feature_overrides.into(),
             schedule,
@@ -3475,6 +3489,7 @@ impl From<durable::ClusterVariantManaged> for ClusterVariantManaged {
             size,
             availability_zones,
             logging,
+            arrangement_compression,
             replication_factor,
             optimizer_feature_overrides,
             schedule,
@@ -3486,6 +3501,7 @@ impl From<durable::ClusterVariantManaged> for ClusterVariantManaged {
             size,
             availability_zones,
             logging,
+            arrangement_compression,
             replication_factor,
             optimizer_feature_overrides: optimizer_feature_overrides.into(),
             schedule,
@@ -3626,6 +3642,7 @@ pub struct ReconfigurationTarget {
     pub replication_factor: u32,
     pub availability_zones: Vec<String>,
     pub logging: ReplicaLogging,
+    pub arrangement_compression: bool,
 }
 
 impl ReconfigurationTarget {
@@ -3644,12 +3661,14 @@ impl From<ReconfigurationTarget> for durable::ReconfigurationTarget {
             replication_factor,
             availability_zones,
             logging,
+            arrangement_compression,
         } = target;
         Self {
             size,
             replication_factor,
             availability_zones,
             logging,
+            arrangement_compression,
         }
     }
 }
@@ -3663,12 +3682,14 @@ impl From<durable::ReconfigurationTarget> for ReconfigurationTarget {
             replication_factor,
             availability_zones,
             logging,
+            arrangement_compression,
         } = target;
         Self {
             size,
             replication_factor,
             availability_zones,
             logging,
+            arrangement_compression,
         }
     }
 }

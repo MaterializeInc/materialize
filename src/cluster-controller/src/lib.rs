@@ -285,6 +285,11 @@ impl ClusterController {
                 writes.iter().map(|w| w.new_logging.clone()),
                 &mut conflicts,
             ),
+            new_arrangement_compression: join(
+                "arrangement_compression",
+                writes.iter().map(|w| w.new_arrangement_compression),
+                &mut conflicts,
+            ),
             reconfiguration: join(
                 "reconfiguration",
                 writes.iter().map(|w| w.reconfiguration.clone()),

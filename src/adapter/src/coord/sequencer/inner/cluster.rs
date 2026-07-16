@@ -199,6 +199,7 @@ impl Coordinator {
                     size,
                     availability_zones: Default::default(),
                     logging,
+                    arrangement_compression: false,
                     replication_factor: 1,
                     optimizer_feature_overrides: Default::default(),
                     schedule: Default::default(),
@@ -214,6 +215,7 @@ impl Coordinator {
                 size,
                 availability_zones,
                 logging,
+                arrangement_compression,
                 replication_factor,
                 optimizer_feature_overrides: _,
                 schedule,
@@ -239,6 +241,11 @@ impl Coordinator {
                 match &options.introspection_interval {
                     Set(ii) => logging.interval = ii.0,
                     Reset => logging.interval = Some(DEFAULT_REPLICA_LOGGING_INTERVAL),
+                    Unchanged => {}
+                }
+                match &options.arrangement_compression {
+                    Set(ac) => *arrangement_compression = *ac,
+                    Reset => *arrangement_compression = false,
                     Unchanged => {}
                 }
                 match &options.replication_factor {
@@ -280,6 +287,11 @@ impl Coordinator {
                 }
                 if !matches!(options.introspection_interval, Unchanged) {
                     coord_bail!("Cannot change INTROSPECTION INTERVAL of unmanaged clusters");
+                }
+                if !matches!(options.arrangement_compression, Unchanged) {
+                    coord_bail!(
+                        "Cannot change EXPERIMENTAL ARRANGEMENT COMPRESSION of unmanaged clusters"
+                    );
                 }
                 if !matches!(options.replication_factor, Unchanged) {
                     coord_bail!("Cannot change REPLICATION FACTOR of unmanaged clusters");
@@ -632,6 +644,7 @@ impl Coordinator {
             replication_factor: new_managed.replication_factor,
             availability_zones: new_managed.availability_zones.clone(),
             logging: new_managed.logging.clone(),
+            arrangement_compression: new_managed.arrangement_compression,
         };
         let unchanged = ReconfigurationDimensionsUnchanged {
             size: matches!(options.size, Unchanged),
@@ -641,6 +654,7 @@ impl Coordinator {
             // `ALTER` cannot revert an in-flight interval change (or vice versa).
             log_logging: matches!(options.introspection_debugging, Unchanged),
             interval: matches!(options.introspection_interval, Unchanged),
+            arrangement_compression: matches!(options.arrangement_compression, Unchanged),
         };
         let target = fold_reconfiguration_target(
             in_flight.as_ref().map(|r| &r.target),
@@ -1154,6 +1168,7 @@ impl Coordinator {
                     size: plan.size.clone(),
                     availability_zones: plan.availability_zones.clone(),
                     logging,
+                    arrangement_compression: plan.compute.arrangement_compression,
                     replication_factor: plan.replication_factor,
                     optimizer_feature_overrides: plan.optimizer_feature_overrides.clone(),
                     schedule: plan.schedule.clone(),
@@ -1363,7 +1378,10 @@ impl Coordinator {
                 azs,
                 false,
             )?,
-            compute: ComputeReplicaConfig { logging },
+            compute: ComputeReplicaConfig {
+                logging,
+                arrangement_compression: compute.arrangement_compression,
+            },
         };
 
         // The caller pre-allocates `replica_id` out-of-band via the durable
@@ -1525,7 +1543,10 @@ impl Coordinator {
                     None,
                     false,
                 )?,
-                compute: ComputeReplicaConfig { logging },
+                compute: ComputeReplicaConfig {
+                    logging,
+                    arrangement_compression: compute.arrangement_compression,
+                },
             };
 
             // Only orchestrated (managed-location) replicas have a size and size
@@ -1643,7 +1664,10 @@ impl Coordinator {
                 None,
                 false,
             )?,
-            compute: ComputeReplicaConfig { logging },
+            compute: ComputeReplicaConfig {
+                logging,
+                arrangement_compression: compute.arrangement_compression,
+            },
         };
 
         let cluster = self.catalog().get_cluster(cluster_id);
@@ -1763,6 +1787,7 @@ impl Coordinator {
             size,
             availability_zones,
             logging,
+            arrangement_compression,
             replication_factor,
             optimizer_feature_overrides: _,
             schedule: _,
@@ -1779,6 +1804,7 @@ impl Coordinator {
         let size = size.clone();
         let availability_zones = availability_zones.clone();
         let logging = logging.clone();
+        let arrangement_compression = *arrangement_compression;
         let replication_factor = *replication_factor;
         let ClusterVariant::Managed(new_managed) = &new_config.variant else {
             panic!("expected new managed cluster config");
@@ -1788,6 +1814,7 @@ impl Coordinator {
             replication_factor: new_replication_factor,
             availability_zones: new_availability_zones,
             logging: new_logging,
+            arrangement_compression: new_arrangement_compression,
             optimizer_feature_overrides: _,
             schedule: _,
             auto_scaling_strategy: new_auto_scaling_strategy,
@@ -1853,6 +1880,7 @@ impl Coordinator {
                     debugging: new_logging.log_logging,
                     interval,
                 }),
+            arrangement_compression: *new_arrangement_compression,
         };
 
         // Eagerly validate the `max_replicas_per_cluster` limit.
@@ -1894,7 +1922,12 @@ impl Coordinator {
         // there burns those ids durably and throws them away. The controller
         // allocates its own when it materializes the change.
         let config_changed = new_managed.replica_config_shape()
-            != ManagedReplicaConfigShape::new(&size, &availability_zones, &logging);
+            != ManagedReplicaConfigShape::new(
+                &size,
+                &availability_zones,
+                &logging,
+                arrangement_compression,
+            );
         let needed_replica_ids = if controller_owns {
             0
         } else if config_changed {
@@ -2148,6 +2181,7 @@ impl Coordinator {
             replication_factor: new_replication_factor,
             availability_zones: new_availability_zones,
             logging: _,
+            arrangement_compression: _,
             optimizer_feature_overrides: _,
             schedule: _,
             auto_scaling_strategy: _,
@@ -2452,6 +2486,7 @@ struct ReconfigurationDimensionsUnchanged {
     availability_zones: bool,
     log_logging: bool,
     interval: bool,
+    arrangement_compression: bool,
 }
 
 /// Retains a stale in-progress reconfiguration record carried by a legacy-path
@@ -2491,6 +2526,7 @@ fn alter_changes_replica_shape(options: &PlanClusterOption) -> bool {
         availability_zones,
         introspection_debugging,
         introspection_interval,
+        arrangement_compression,
         managed: _,
         replicas: _,
         replication_factor: _,
@@ -2503,6 +2539,7 @@ fn alter_changes_replica_shape(options: &PlanClusterOption) -> bool {
         || !matches!(availability_zones, Unchanged)
         || !matches!(introspection_debugging, Unchanged)
         || !matches!(introspection_interval, Unchanged)
+        || !matches!(arrangement_compression, Unchanged)
 }
 
 /// Fold a new `ALTER` onto an in-flight reconfiguration target.
@@ -2558,6 +2595,11 @@ fn fold_reconfiguration_target(
                 new_target.logging.interval
             },
         },
+        arrangement_compression: if unchanged.arrangement_compression {
+            prev.arrangement_compression
+        } else {
+            new_target.arrangement_compression
+        },
     }
 }
 
@@ -2586,6 +2628,7 @@ mod tests {
                 log_logging,
                 interval: Some(DEFAULT_REPLICA_LOGGING_INTERVAL),
             },
+            arrangement_compression: false,
         }
     }
 
@@ -2596,6 +2639,7 @@ mod tests {
             availability_zones: false,
             log_logging: false,
             interval: false,
+            arrangement_compression: false,
         }
     }
 
@@ -2606,6 +2650,7 @@ mod tests {
             availability_zones: true,
             log_logging: true,
             interval: true,
+            arrangement_compression: true,
         }
     }
 
@@ -2632,6 +2677,7 @@ mod tests {
             availability_zones: true,
             log_logging: true,
             interval: true,
+            arrangement_compression: true,
         };
         let folded = fold_reconfiguration_target(Some(&in_flight), new, unchanged);
         // The in-flight size/AZ/logging survive. Only rf is re-targeted.
@@ -2675,6 +2721,7 @@ mod tests {
             availability_zones: true,
             log_logging: false,
             interval: true,
+            arrangement_compression: true,
         };
         let folded = fold_reconfiguration_target(Some(&in_flight), new, unchanged);
         assert_eq!(

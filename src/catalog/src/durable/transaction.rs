@@ -4376,6 +4376,7 @@ mod tests {
                 log_logging: false,
                 interval: Some(Duration::from_secs(1)),
             },
+            arrangement_compression: false,
         };
 
         // Step 1: allocate one user replica id out-of-band via the durable allocator.
