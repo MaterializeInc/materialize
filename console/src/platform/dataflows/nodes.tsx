@@ -92,25 +92,79 @@ export const OperatorNode = ({ data }: NodeProps & { data: FlowNodeData }) => (
   </CardShell>
 );
 
-// Always shown collapsed (a scope is never expanded in place); double-click
-// navigates into it instead of unfolding it here.
-export const RegionNode = ({ data }: NodeProps & { data: FlowNodeData }) => (
-  <CardShell data={data} filled={false}>
-    <HStack justifyContent="space-between" alignItems="flex-start" spacing={1}>
-      <Text textStyle="text-ui-med" noOfLines={2}>
-        {data.node.label}
-      </Text>
-      <Badge fontSize="2xs" flexShrink={0}>
-        {data.node.childCount}
-      </Badge>
-    </HStack>
-    {statLines(data.node).map((line) => (
-      <Text key={line} textStyle="text-small" noOfLines={1}>
-        {line}
-      </Text>
-    ))}
-  </CardShell>
-);
+// A region is a collapsed subtree by default; the disclosure triangle expands
+// it in place (children rendered nested inside), while double-click still
+// navigates into it. When expanded it becomes an outlined container with a
+// transparent body so inner nodes and edges receive clicks, the same
+// click-through contract LirGroupNode documents.
+export const RegionNode = ({ data }: NodeProps & { data: FlowNodeData }) => {
+  const toggle = (
+    <Box
+      as="button"
+      data-testid="region-toggle"
+      flexShrink={0}
+      lineHeight="1"
+      onClick={(e) => {
+        e.stopPropagation();
+        data.onToggleExpand?.(data.node.id);
+      }}
+    >
+      {data.expanded ? "▾" : "▸"}
+    </Box>
+  );
+  if (data.expanded) {
+    return (
+      <Box width="100%" height="100%" position="relative" pointerEvents="none">
+        <Box
+          position="absolute"
+          inset={0}
+          borderWidth="2px"
+          borderRadius="8px"
+          borderColor={data.color}
+        />
+        <HStack
+          position="absolute"
+          top={0}
+          left={0}
+          right={0}
+          px={2}
+          py={1}
+          pointerEvents="auto"
+          spacing={1}
+        >
+          {toggle}
+          <Text textStyle="text-ui-med" noOfLines={1}>
+            {data.node.label}
+          </Text>
+        </HStack>
+      </Box>
+    );
+  }
+  return (
+    <CardShell data={data} filled={false}>
+      <HStack
+        justifyContent="space-between"
+        alignItems="flex-start"
+        spacing={1}
+      >
+        <HStack spacing={1} alignItems="flex-start">
+          {toggle}
+          <Text textStyle="text-ui-med" noOfLines={2}>
+            {data.node.label}
+          </Text>
+        </HStack>
+        <Badge fontSize="2xs" flexShrink={0}>
+          {data.node.childCount}
+        </Badge>
+      </HStack>
+      {statLines(data.node).map((line) => (
+        <Text key={line} textStyle="text-small" noOfLines={1}>
+          {line}
+        </Text>
+      ))}
+    </CardShell>
+  );
+};
 
 export const PortNode = ({ data }: NodeProps & { data: FlowNodeData }) => {
   const { colors } = useTheme<MaterializeTheme>();
