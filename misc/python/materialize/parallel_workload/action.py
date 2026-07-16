@@ -660,10 +660,6 @@ class CopyFromS3Action(Action):
                 # CSV cannot distinguish NULL from the empty string, so the
                 # roundtrip can produce NULLs for NOT NULL columns.
                 "violates not-null constraint",
-                # COPY TO can write types (e.g. arrays) that COPY FROM's
-                # parquet reader cannot decode yet.
-                # TODO: Remove when https://linear.app/materializeinc/issue/SS-341 is fixed
-                "parquet error",
                 "timeout: error trying to connect",
             ]
         )
@@ -1322,11 +1318,7 @@ class ReplaceMaterializedViewAction(Action):
         )
         time.sleep(self.rng.random())
         try:
-            # Also run ALTER MATERIALIZED VIEW {view} APPLY REPLACEMENT
-            # {tmp_mv} here, applying while the target has a temporary
-            # dependent panics the coordinator's consistency check.
-            # TODO: Reenable when https://linear.app/materializeinc/issue/SQL-504 is fixed
-            exe.execute(f"DROP MATERIALIZED VIEW {tmp_mv}")
+            exe.execute(f"ALTER MATERIALIZED VIEW {view} APPLY REPLACEMENT {tmp_mv}")
         except QueryError:
             # Clean up, a leaked replacement blocks all future replacements
             # of this view.
