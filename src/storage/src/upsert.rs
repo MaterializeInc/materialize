@@ -296,37 +296,22 @@ macro_rules! upsert_source_time_unit {
 }
 upsert_source_time_unit!(GtidPartition, Lsn);
 
-/// Pager for the upsert-v2 source stash.
+/// Storage's leg of the process-wide chunk spill gate.
 ///
-/// This draws from the same process-wide [`TieredPolicy`] budget pool as the
-/// compute column-paged batcher — there is one budget and one underlying
-/// `mz_ore::pager` — but whether the stash *uses* it is gated by storage's own
-/// `enable_upsert_paged_spill` flag, independently of compute's
-/// `enable_column_paged_batcher_spill`. The shared pool's budget / backend /
-/// codec are configured by compute's `apply_tiered_config` (storage and compute
-/// run in the same `clusterd` process).
+/// The upsert-v2 source stash and feedback arrangement spill through the
+/// process buffer pool ([`mz_timely_util::columnar::chunk`]): committed chunk
+/// bodies land in the pool once compute's config handler has installed and
+/// budgeted it (storage and compute run in the same `clusterd` process).
 ///
-/// [`TieredPolicy`]: mz_timely_util::column_pager::policy::TieredPolicy
-pub mod upsert_stash_pager {
-    use std::sync::{LazyLock, RwLock};
-
-    use mz_timely_util::column_pager::{ColumnPager, shared_pager};
-
-    /// Active pager handed to upsert source-stash batchers. Defaults to
-    /// disabled (every chunk resident) until [`set_enabled`] turns it on.
-    static PAGER: LazyLock<RwLock<ColumnPager>> =
-        LazyLock::new(|| RwLock::new(ColumnPager::disabled()));
-
-    /// Enable or disable the stash's use of the shared column pager. When
-    /// enabled, the stash spills through the shared budget pool; when disabled
-    /// it keeps every chunk resident.
+/// The gate is process-wide with one leg per subsystem, and chunks spill
+/// while either leg is set. Storage sets its leg from
+/// `enable_upsert_paged_spill`, so that flag alone cannot veto spilling
+/// enabled by compute's leg. The gate is consulted at every chunk commit, so
+/// flips apply to running dataflows.
+pub mod upsert_stash_spill {
+    /// Enable or disable spilling of upsert chunk bodies to the buffer pool.
     pub fn set_enabled(enabled: bool) {
-        *PAGER.write().expect("upsert stash pager poisoned") = shared_pager(enabled);
-    }
-
-    /// The current upsert-stash pager. Cheap: clones the inner `Arc`.
-    pub fn pager() -> ColumnPager {
-        PAGER.read().expect("upsert stash pager poisoned").clone()
+        mz_timely_util::columnar::chunk::set_storage_spill_enabled(enabled);
     }
 }
 
