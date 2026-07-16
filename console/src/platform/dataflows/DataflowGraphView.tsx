@@ -109,6 +109,10 @@ export interface DataflowGraphViewProps {
   // member.
   showLirGroups?: boolean;
   onLirGroupClick?: (group: LirGroupNodeData) => void;
+  // The scopes expanded in place; drives nested node emission (via the
+  // caller's deriveVisibleGraph) and the layout cache key.
+  expandedScopes: Set<NodeId>;
+  onToggleExpand: (id: NodeId) => void;
 }
 
 // Exposes centering/fitting callbacks through refs once React Flow context
@@ -223,6 +227,8 @@ export const DataflowGraphView = ({
   onFit,
   showLirGroups,
   onLirGroupClick,
+  expandedScopes,
+  onToggleExpand,
 }: DataflowGraphViewProps) => {
   const { colors, shadows } = useTheme<MaterializeTheme>();
 
@@ -242,9 +248,17 @@ export const DataflowGraphView = ({
     };
   }, [rawVisible, decorations?.hiddenNodeIds, decorations?.hiddenEdgeIds]);
 
+  // Grouping and in-place expansion are mutually exclusive: a LIR group can
+  // straddle scope boundaries in ways the ELK container layout (which nests
+  // by scope) can't represent, so any expansion turns grouping off regardless
+  // of the toolbar toggle. This also protects a bookmarked ?expand= link from
+  // restoring grouping and expansion together.
   const grouping = React.useMemo(
-    () => (showLirGroups ? groupByLir(visible.nodes) : null),
-    [showLirGroups, visible.nodes],
+    () =>
+      showLirGroups && expandedScopes.size === 0
+        ? groupByLir(visible.nodes)
+        : null,
+    [showLirGroups, expandedScopes, visible.nodes],
   );
 
   const layoutKey = `${cacheKey}|${focusedScope}|${showLirGroups ?? false}|${
@@ -255,22 +269,32 @@ export const DataflowGraphView = ({
     decorations?.hiddenEdgeIds
       ? [...decorations.hiddenEdgeIds].sort().join(",")
       : ""
-  }`;
+  }|${[...expandedScopes].sort().join(",")}`;
   const { positions, layouting, error, retry } = useElkLayout(
     visible,
     layoutKey,
     grouping ?? undefined,
   );
 
+  // Unified parent map for both React Flow's parentId (member nodes below)
+  // and resolveAbsolutePositions: LIR grouping and scope nesting are mutually
+  // exclusive (see the grouping memo above), but this merges them into one
+  // map anyway rather than picking a source conditionally, so both consumers
+  // stay correct regardless of which one is populated.
+  const parentOf = React.useMemo(() => {
+    const m = new Map<string, string>(grouping?.parentOf ?? []);
+    // Scope nesting is structural; it wins over the grouping overlay if both
+    // ever populate an entry (they never do under the interlock).
+    for (const n of visible.nodes) if (n.parentId) m.set(n.id, n.parentId);
+    return m;
+  }, [grouping, visible.nodes]);
+
   // Only ViewportGuard needs this: everything else either reads positions
   // relative to parentId (React Flow's own convention, matching elk's) or
   // resolves absolute position through React Flow's internal APIs.
   const absolutePositions = React.useMemo(
-    () =>
-      positions
-        ? resolveAbsolutePositions(positions, grouping?.parentOf)
-        : null,
-    [positions, grouping],
+    () => (positions ? resolveAbsolutePositions(positions, parentOf) : null),
+    [positions, parentOf],
   );
 
   React.useEffect(() => {
@@ -299,14 +323,14 @@ export const DataflowGraphView = ({
 
   const nodes: Node[] = React.useMemo(() => {
     if (!positions) return [];
-    const parentOf = grouping?.parentOf;
+    const groupParentOf = grouping?.parentOf;
     const groupNodes: Node[] = (grouping?.groups ?? []).map((g) => {
       const pos = positions[g.id] ?? { x: 0, y: 0, width: 0, height: 0 };
       return {
         id: g.id,
         type: "lirGroup",
         position: { x: pos.x, y: pos.y },
-        parentId: parentOf?.get(g.id),
+        parentId: groupParentOf?.get(g.id),
         width: pos.width,
         height: pos.height,
         // pointerEvents: "none" on React Flow's own node wrapper (not just
@@ -340,7 +364,7 @@ export const DataflowGraphView = ({
         id: n.id,
         type: n.kind,
         position: { x: pos.x, y: pos.y },
-        parentId: grouping?.parentOf.get(n.id),
+        parentId: parentOf.get(n.id),
         // Match the Top/Bottom handles so bezier control points meet the
         // node edges. Without this the edge curves toward the default
         // Bottom/Top and appears detached across region boundaries.
@@ -351,7 +375,17 @@ export const DataflowGraphView = ({
         // known size without waiting for DOM measurement.
         width: pos.width,
         height: pos.height,
-        style: { width: pos.width, height: pos.height },
+        style: {
+          width: pos.width,
+          height: pos.height,
+          // An expanded region renders its children as its own React Flow
+          // children (via parentId above) rather than drawing its own body,
+          // so its wrapper must let clicks fall through to them, matching
+          // the group-node click-through contract above.
+          ...(n.kind === "region" && n.expanded
+            ? { pointerEvents: "none" as const }
+            : {}),
+        },
         draggable: false,
         connectable: false,
         data: {
@@ -365,6 +399,8 @@ export const DataflowGraphView = ({
             }),
           selected: n.id === selectedId,
           activeMatch: n.id === activeMatchId,
+          expanded: n.kind === "region" && (n.expanded ?? false),
+          onToggleExpand,
         },
       };
     });
@@ -373,11 +409,13 @@ export const DataflowGraphView = ({
     visible,
     positions,
     grouping,
+    parentOf,
     decorations?.dimmedNodeIds,
     decorations?.nodeColors,
     selectedId,
     activeMatchId,
     colors,
+    onToggleExpand,
   ]);
 
   const edges: Edge[] = React.useMemo(
