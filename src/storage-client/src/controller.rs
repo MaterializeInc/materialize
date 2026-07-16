@@ -331,6 +331,11 @@ pub trait StorageController: Debug {
     /// Returns `true` if each non-transient, non-excluded collection is
     /// hydrated on at least one of the provided replicas.
     ///
+    /// Collections that are not scheduled on any of the provided replicas do
+    /// not count against hydration: a single-replica source keeps running on
+    /// its current replica and can never hydrate on a replica it is not
+    /// scheduled on.
+    ///
     /// If no replicas are provided, this checks for hydration on _any_ replica.
     ///
     /// This also returns `true` in case this cluster does not have any

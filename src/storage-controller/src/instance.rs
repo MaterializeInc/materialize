@@ -739,7 +739,6 @@ impl Instance {
     /// object (ingestion, ingestion export (aka. subsource), or export).
     pub fn get_active_replicas_for_object(&self, id: &GlobalId) -> BTreeSet<ReplicaId> {
         if let Some(ingestion_id) = self.ingestion_exports.get(id) {
-            // Right now, only ingestions can have per-replica scheduling decisions.
             match self.active_ingestions.get(ingestion_id) {
                 Some(ingestion) => ingestion.active_replicas.clone(),
                 None => {
@@ -747,8 +746,15 @@ impl Instance {
                     BTreeSet::new()
                 }
             }
+        } else if let Some(ingestion) = self.active_ingestions.get(id) {
+            // A new-syntax source lists only its tables in `source_exports`, so
+            // the primary ingestion id is not in `ingestion_exports`.
+            ingestion.active_replicas.clone()
+        } else if let Some(export) = self.active_exports.get(id) {
+            export.active_replicas.clone()
         } else {
-            // For non-ingestion objects, all replicas are active
+            // For objects that have no per-replica scheduling (e.g. tables and
+            // webhooks), all replicas are active.
             self.replicas.keys().copied().collect()
         }
     }
