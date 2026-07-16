@@ -217,7 +217,7 @@ impl Coordinator {
                 replication_factor,
                 optimizer_feature_overrides: _,
                 schedule,
-                auto_scaling_strategy: _,
+                auto_scaling_strategy,
                 reconfiguration: _,
                 burst: _,
             }) => {
@@ -258,6 +258,12 @@ impl Coordinator {
                     Reset => *schedule = Default::default(),
                     Unchanged => {}
                 }
+                match &options.auto_scaling_strategy {
+                    Set(new_strategy) => auto_scaling_strategy.clone_from(new_strategy),
+                    // The default is autoscaling disabled.
+                    Reset => *auto_scaling_strategy = None,
+                    Unchanged => {}
+                }
                 if !matches!(options.replicas, Unchanged) {
                     coord_bail!("Cannot change REPLICAS of managed clusters");
                 }
@@ -277,6 +283,9 @@ impl Coordinator {
                 }
                 if !matches!(options.replication_factor, Unchanged) {
                     coord_bail!("Cannot change REPLICATION FACTOR of unmanaged clusters");
+                }
+                if !matches!(options.auto_scaling_strategy, Unchanged) {
+                    coord_bail!("Cannot change AUTO SCALING STRATEGY of unmanaged clusters");
                 }
             }
         }
@@ -1134,7 +1143,7 @@ impl Coordinator {
                     replication_factor: plan.replication_factor,
                     optimizer_feature_overrides: plan.optimizer_feature_overrides.clone(),
                     schedule: plan.schedule.clone(),
-                    auto_scaling_strategy: None,
+                    auto_scaling_strategy: plan.auto_scaling_strategy.clone(),
                     reconfiguration: None,
                     burst: None,
                 })
@@ -1176,6 +1185,7 @@ impl Coordinator {
             size,
             optimizer_feature_overrides: _,
             schedule: _,
+            auto_scaling_strategy,
         }: CreateClusterManagedPlan,
         cluster_id: ClusterId,
         cluster_name: String,
@@ -1193,6 +1203,23 @@ impl Coordinator {
             &size,
             false,
         )?;
+        // A HYDRATION SIZE is validated like SIZE itself: it must name a real
+        // replica size the session role may use. Without this, a typo would
+        // fail invisibly at burst-arm time (the controller retrying every
+        // tick), and a size-restricted role could burst at a size it may not
+        // CREATE with.
+        if let Some(on_hydration) = auto_scaling_strategy
+            .as_ref()
+            .and_then(|strategy| strategy.on_hydration.as_ref())
+        {
+            self.catalog.ensure_valid_replica_size(
+                &self
+                    .catalog()
+                    .get_role_allowed_cluster_sizes(&Some(role_id)),
+                &on_hydration.hydration_size,
+                false,
+            )?;
+        }
 
         // Eagerly validate the `max_replicas_per_cluster` limit.
         // `catalog_transact` will do this validation too, but allocating
@@ -1725,8 +1752,8 @@ impl Coordinator {
             replication_factor,
             optimizer_feature_overrides: _,
             schedule: _,
-            auto_scaling_strategy: _,
-            reconfiguration: _,
+            auto_scaling_strategy,
+            reconfiguration,
             burst: _,
         }) = &cluster.config.variant
         else {
@@ -1749,7 +1776,7 @@ impl Coordinator {
             logging: new_logging,
             optimizer_feature_overrides: _,
             schedule: _,
-            auto_scaling_strategy: _,
+            auto_scaling_strategy: new_auto_scaling_strategy,
             reconfiguration: _,
             burst: _,
         } = new_managed;
@@ -1760,6 +1787,38 @@ impl Coordinator {
             new_size,
             false,
         )?;
+        // A newly set (or changed) AUTO SCALING STRATEGY gets its HYDRATION
+        // SIZE validated like SIZE itself: it must name a real replica size the
+        // session role may use. Only a changed strategy is checked, so an
+        // existing policy does not block unrelated ALTERs if the size
+        // allow-list later shrinks (matching how SIZE itself behaves).
+        if new_auto_scaling_strategy != auto_scaling_strategy {
+            if let Some(on_hydration) = new_auto_scaling_strategy
+                .as_ref()
+                .and_then(|strategy| strategy.on_hydration.as_ref())
+            {
+                self.catalog.ensure_valid_replica_size(
+                    &self.catalog().get_role_allowed_cluster_sizes(&role_id),
+                    &on_hydration.hydration_size,
+                    false,
+                )?;
+                // The planner validated the hydration size against the
+                // *realized* SIZE only. An in-flight reconfiguration will cut
+                // the realized SIZE over to its target, so also reject equality
+                // with that target. Letting it through would end the reshape
+                // with a no-op burst shape and a stored statement that fails
+                // its own re-plan.
+                if reconfiguration.as_ref().is_some_and(|record| {
+                    record.is_in_progress() && record.target.size == on_hydration.hydration_size
+                }) {
+                    coord_bail!(
+                        "HYDRATION SIZE must differ from the target SIZE \
+                         ('{}') of the in-progress cluster resize",
+                        on_hydration.hydration_size
+                    );
+                }
+            }
+        }
 
         // check for active updates
         if cluster.replicas().any(|r| r.config.location.pending()) {
@@ -2214,6 +2273,15 @@ impl Coordinator {
             {
                 return Err(AdapterError::AlterClusterUnmanagedWhileReconfiguring);
             }
+            // Same hazard for an in-flight burst: the unmanaged variant has no
+            // burst field either, so converting would drop the record with no
+            // `Finished` audit event and strand the billed burst replica as an
+            // ordinary unmanaged replica nothing ever tears down. Absence of a
+            // record means the burst has settled, so no in-progress check is
+            // needed.
+            if managed.burst.is_some() {
+                return Err(AdapterError::AlterClusterUnmanagedWhileBursting);
+            }
         }
 
         let ops = vec![catalog::Op::UpdateClusterConfig {
@@ -2415,6 +2483,7 @@ fn alter_changes_replica_shape(options: &PlanClusterOption) -> bool {
         size,
         schedule: _,
         workload_class: _,
+        auto_scaling_strategy: _,
     } = options;
     !matches!(size, Unchanged)
         || !matches!(availability_zones, Unchanged)

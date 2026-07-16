@@ -56,6 +56,7 @@ Assume
 At
 Auction
 Authority
+Auto
 Availability
 Avro
 Aws
@@ -157,6 +158,7 @@ Doc
 Dot
 Double
 Drop
+Duration
 Eager
 Element
 Else
@@ -272,6 +274,7 @@ Level
 Like
 Limit
 Linear
+Linger
 List
 Load
 Local
@@ -423,6 +426,7 @@ Rows
 Rules
 Sasl
 Scale
+Scaling
 Schedule
 Schema
 Schemas

@@ -280,6 +280,9 @@ pub enum AdapterError {
     /// Attempt to convert a cluster to unmanaged while a graceful
     /// reconfiguration is in progress.
     AlterClusterUnmanagedWhileReconfiguring,
+    /// Attempt to convert a cluster to unmanaged while a hydration burst is in
+    /// flight.
+    AlterClusterUnmanagedWhileBursting,
     /// Attempt to change a cluster's replication factor while a graceful
     /// reconfiguration is in progress.
     AlterClusterReplicationFactorWhileReconfiguring,
@@ -731,6 +734,11 @@ impl AdapterError {
                 configuration, or wait for it to settle, then convert."
                     .to_string(),
             ),
+            AdapterError::AlterClusterUnmanagedWhileBursting => Some(
+                "Remove the strategy with ALTER CLUSTER ... RESET (AUTO SCALING STRATEGY), \
+                or wait for the burst to wind down, then convert."
+                    .to_string(),
+            ),
             AdapterError::AlterClusterReplicationFactorWhileReconfiguring => Some(
                 "Cancel the reconfiguration by altering the cluster back to its current \
                 configuration, or wait for it to settle, then change the replication factor."
@@ -975,6 +983,7 @@ impl AdapterError {
             AdapterError::AlterClusterTimeout => SqlState::QUERY_CANCELED,
             AdapterError::AlterClusterWhilePendingReplicas => SqlState::OBJECT_IN_USE,
             AdapterError::AlterClusterUnmanagedWhileReconfiguring => SqlState::OBJECT_IN_USE,
+            AdapterError::AlterClusterUnmanagedWhileBursting => SqlState::OBJECT_IN_USE,
             AdapterError::AlterClusterReplicationFactorWhileReconfiguring => {
                 SqlState::OBJECT_IN_USE
             }
@@ -1427,6 +1436,12 @@ impl fmt::Display for AdapterError {
                 write!(
                     f,
                     "cannot convert cluster to unmanaged while a reconfiguration is in progress"
+                )
+            }
+            AdapterError::AlterClusterUnmanagedWhileBursting => {
+                write!(
+                    f,
+                    "cannot convert cluster to unmanaged while a hydration burst is in progress"
                 )
             }
             AdapterError::AlterClusterReplicationFactorWhileReconfiguring => {

@@ -228,12 +228,14 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     crdb_keepalives_retries
     crdb_tcp_user_timeout
     default_cluster_reconfiguration_timeout
+    default_hydration_burst_linger
     default_timestamp_interval
     disallow_unmaterializable_functions_as_of
     enable_0dt_caught_up_replica_status_check
     enable_0dt_caught_up_stability_check
     enable_0dt_deployment_panic_after_timeout
     enable_alter_table_add_column
+    enable_auto_scaling_strategy
     enable_background_alter_cluster
     enable_statement_arrival_logging
     enable_binary_date_bin
@@ -250,6 +252,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_eq_classes_withholding_errors
     enable_fixed_correlated_cte_lowering
     enable_frontend_subscribes
+    enable_hydration_burst
     enable_introspection_subscribes
     enable_less_reduce_in_eqprop
     enable_list_length_max
