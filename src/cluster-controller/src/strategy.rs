@@ -426,8 +426,18 @@ impl HydrationBurstStrategy {
         config: &ConfigSignals,
     ) -> Option<&'a BurstRecord> {
         let record = state.burst.as_ref()?;
-        let policy = self.active_policy(state, config)?;
-        (record.burst_size == policy.hydration_size).then_some(record)
+        // `active_policy` already folds in `replication_factor != 0`, so the
+        // shared predicate's own check is redundant here, but passing the real
+        // value keeps this a faithful call of the one warrant definition.
+        let hydration_size = self
+            .active_policy(state, config)
+            .map(|policy| policy.hydration_size.as_str());
+        mz_adapter_types::cluster_state::burst_record_warranted(
+            &record.burst_size,
+            state.replication_factor,
+            hydration_size,
+        )
+        .then_some(record)
     }
 
     /// Whether at least one steady-state (realized-config) replica reports all

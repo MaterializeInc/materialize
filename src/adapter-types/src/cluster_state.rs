@@ -212,6 +212,20 @@ pub struct BurstRecord {
     pub steady_hydrated_at: Option<Timestamp>,
 }
 
+/// The single definition of when an in-flight burst record of `record_size` is
+/// warranted: the cluster is on and the `ON HYDRATION` policy in force (if any)
+/// bursts at the record's size. `hydration_size` is `None` when no policy is in
+/// force. The catalog and the cluster controller wrap this over their own
+/// config representations, so the two sides of the burst lifecycle cannot
+/// drift.
+pub fn burst_record_warranted(
+    record_size: &str,
+    replication_factor: u32,
+    hydration_size: Option<&str>,
+) -> bool {
+    replication_factor != 0 && hydration_size == Some(record_size)
+}
+
 /// The user-configured autoscaling policy of a managed cluster, mirrored from
 /// durable state. A plain-data mirror of `mz_sql::plan::AutoScalingStrategy`,
 /// free of a dependency on the SQL layer.

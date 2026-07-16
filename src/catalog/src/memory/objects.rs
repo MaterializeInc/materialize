@@ -3425,14 +3425,16 @@ impl ClusterVariantManaged {
         let Some(record) = &self.burst else {
             return false;
         };
-        let Some(policy) = self
+        let hydration_size = self
             .auto_scaling_strategy
             .as_ref()
             .and_then(|strategy| strategy.on_hydration.as_ref())
-        else {
-            return true;
-        };
-        self.replication_factor == 0 || record.burst_size != policy.hydration_size
+            .map(|policy| policy.hydration_size.as_str());
+        !mz_adapter_types::cluster_state::burst_record_warranted(
+            &record.burst_size,
+            self.replication_factor,
+            hydration_size,
+        )
     }
 }
 
