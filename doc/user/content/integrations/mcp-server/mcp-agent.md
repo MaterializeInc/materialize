@@ -20,7 +20,7 @@ external server is required.
 
 The `materialize-agent` MCP server lets AI agents query business-facing data
 products over HTTP. You can connect an MCP-compatible client (such as Claude
-Code, Claude Desktop, or Cursor) to the MCP server and ask the agent to discover
+Code, Claude Cowork, or Cursor) to the MCP server and ask the agent to discover
 and query your data products using either natural language or SQL:
 
 - *SELECT * FROM mcp_product_performance LIMIT 5;*
@@ -365,9 +365,9 @@ In the following, replace `<baseURL>` with the MCP server URL from [Step
 
 {{< /tab >}}
 
-{{< tab "Claude Desktop/Chrome" >}}
+{{< tab "Claude Cowork/Chrome" >}}
 
-To configure Claude Desktop/Chrome, add a custom connector. The exact steps
+To configure Claude Cowork/Chrome, add a custom connector. The exact steps
 depend on your Claude plan; for example:
 
 - **Organization settings** → **Connectors** → **Add** → **Custom** → **Web**,
@@ -703,9 +703,9 @@ When saving your credentials or other sensitive information in a config file, do
 
 {{< /tab >}}
 
-{{< tab "Claude Desktop" >}}
+{{< tab "Claude Cowork" >}}
 
-Claude Desktop's `claude_desktop_config.json` does not connect to a remote MCP
+Claude Cowork's `claude_desktop_config.json` does not connect to a remote MCP
 server directly. Use the
 [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) bridge, which runs
 locally and forwards requests to the `materialize-agent` MCP server over HTTP.
@@ -719,7 +719,7 @@ specific version rather than pulling the latest release. Review the tool and
 update the pinned version as appropriate for your environment.
 {{< /note >}}
 
-1. Add the `materialize-agent` MCP server entry to your Claude Desktop
+1. Add the `materialize-agent` MCP server entry to your Claude Cowork
    configuration (`claude_desktop_config.json`).
    - When merging into an existing `mcpServers` object, remember to add commas
      between entries.
@@ -751,7 +751,7 @@ update the pinned version as appropriate for your environment.
 
    {{% include-headless "/headless/mcp-endpoint-config-replacements" %}}
 
-1. Restart Claude Desktop to pick up the new setting.
+1. Restart Claude Cowork to pick up the new setting.
 
 {{< /tab >}}
 
