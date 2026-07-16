@@ -711,6 +711,14 @@ server directly. Use the
 locally and forwards requests to the `materialize-agent` MCP server over HTTP.
 `mcp-remote` is invoked with `npx` and requires [Node.js](https://nodejs.org/).
 
+{{< note >}}
+[`mcp-remote`](https://github.com/geelen/mcp-remote) is a third-party,
+community-maintained tool. It is not maintained by Anthropic or Materialize.
+Your MCP token is passed to it on each launch. The configuration below pins a
+specific version rather than pulling the latest release. Review the tool and
+update the pinned version as appropriate for your environment.
+{{< /note >}}
+
 1. Add the `materialize-agent` MCP server entry to your Claude Desktop
    configuration (`claude_desktop_config.json`).
    - When merging into an existing `mcpServers` object, remember to add commas
@@ -723,7 +731,7 @@ locally and forwards requests to the `materialize-agent` MCP server over HTTP.
        "materialize-agent": {
          "command": "npx",
          "args": [
-           "-y", "mcp-remote",
+           "-y", "mcp-remote@0.1.38",
            "<baseURL>/api/mcp/agent",
            "--header", "Authorization:${AUTH_HEADER}"
          ],
