@@ -348,9 +348,12 @@ pub const ENABLE_SCOPED_SYSTEM_PARAMETERS: Config<bool> = Config::new(
 /// managed-cluster replica set and the legacy paths (the graceful 3-stage
 /// machine and `cluster_scheduling.rs`) are bypassed. The replica set cannot
 /// have two writers, so this is a clean switch, not a per-strategy toggle.
+///
+/// Defaults on. This is the break-glass switch to fall back to the legacy
+/// paths if the controller misbehaves.
 pub const ENABLE_CLUSTER_CONTROLLER: Config<bool> = Config::new(
     "enable_cluster_controller",
-    false,
+    true,
     "Whether the cluster controller owns the managed-cluster replica set. When false, the legacy scheduling and graceful-reconfiguration paths run instead.",
 );
 
@@ -370,9 +373,12 @@ pub const CLUSTER_CONTROLLER_TICK_INTERVAL: Config<Duration> = Config::new(
 ///
 /// Only consulted while [`ENABLE_CLUSTER_CONTROLLER`] is on, when the
 /// controller owns the reconfiguration.
+///
+/// Defaults on. This is the break-glass switch back to the blocking wait-shim
+/// if returning immediately causes trouble.
 pub const ENABLE_BACKGROUND_ALTER_CLUSTER: Config<bool> = Config::new(
     "enable_background_alter_cluster",
-    false,
+    true,
     "Whether a config-shape ALTER CLUSTER returns immediately (true) or the session blocks on a wait-shim over the durable reconfiguration record (false).",
 );
 
