@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import colors from "~/theme/colors";
+import { formatBytesShort } from "~/utils/format";
 
 import type { LirGroupNode, VisibleNode } from "./dataflowGraph";
 
@@ -82,6 +83,17 @@ export function textColorFor(background: string): string {
   return contrastWithBlack > contrastWithWhite ? colors.black : colors.white;
 }
 
+// A theme color used as an overlay (e.g. the minimap's outside-viewport
+// mask) needs to stay translucent so whatever's underneath still shows
+// through; theme tokens are opaque "#RRGGBB" hex, so this punches an alpha
+// channel into one.
+export function hexToRgba(hex: string, alpha: number): string {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
 export function nodeFillColor(
   node: VisibleNode,
   palette: readonly string[],
@@ -101,8 +113,35 @@ export function formatSkew(ratio: number): string {
 }
 
 export function formatElapsed(ns: bigint): string {
-  return `scheduled ${Math.round(Number(ns) / 1e9)}s`;
+  return `${Math.round(Number(ns) / 1e9)}s`;
 }
+
+const countFormatter = new Intl.NumberFormat("default");
+
+// A raw bigint quantity (records, schedules, messages) renders as an
+// unbroken digit string, e.g. "221245721": grouped digits read far faster.
+// Not for identifiers (operator ids, addresses), which aren't quantities.
+export function formatCount(n: bigint): string {
+  return countFormatter.format(n);
+}
+
+// Duration, records, and size share one line, not three: a canvas node's
+// fixed height only has room for name plus one stat line before text spills
+// out of the box. Kept as short as the labels allow ("r" not "rec", no
+// "scheduled" prefix) since this is the tightest-width text in the app.
+export const statLines = (node: VisibleNode) => {
+  const lines: string[] = [];
+  const stats = node.stats;
+  if (!stats) return lines;
+  const parts: string[] = [];
+  if (stats.elapsedNs > 0n) parts.push(formatElapsed(stats.elapsedNs));
+  if (stats.arrangementRecords > 0n) {
+    parts.push(`${formatCount(stats.arrangementRecords)} r`);
+    parts.push(formatBytesShort(stats.arrangementSize));
+  }
+  if (parts.length > 0) lines.push(parts.join(" · "));
+  return lines;
+};
 
 // A channel's `type` column is the raw monomorphized Rust container type
 // (e.g. "alloc::vec::Vec<(mz_repr::row::Row, mz_repr::timestamp::Timestamp,

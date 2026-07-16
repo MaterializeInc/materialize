@@ -245,10 +245,19 @@ const WorkflowGraphSidebar = ({
   );
 };
 
-export const SidebarHeaderContainer = (props: React.PropsWithChildren) => {
+export const SidebarHeaderContainer = ({
+  children,
+  ...rest
+}: React.PropsWithChildren<FlexProps>) => {
   return (
-    <Flex px="4" py="2" alignItems="center" justifyContent="space-between">
-      {props.children}
+    <Flex
+      px="4"
+      py="2"
+      alignItems="center"
+      justifyContent="space-between"
+      {...rest}
+    >
+      {children}
     </Flex>
   );
 };
@@ -268,6 +277,10 @@ export const SidebarHeading = (props: SidebarHeadingProps) => {
 export interface SidebarSectionProps {
   title: string;
   children: React.ReactNode | React.ReactNode[];
+  // Passed through to the header's Flex, for a host whose own outer padding
+  // differs from this sidebar's (e.g. NodeDetailPanel, which already insets
+  // its whole panel and would otherwise double up with the header's own).
+  headerProps?: FlexProps;
 }
 
 export const SidebarSection = (props: SidebarSectionProps) => {
@@ -279,7 +292,7 @@ export const SidebarSection = (props: SidebarSectionProps) => {
       borderColor={colors.border.primary}
       mb={collapsed ? 0 : 1}
     >
-      <SidebarHeaderContainer>
+      <SidebarHeaderContainer {...props.headerProps}>
         <SidebarHeading title={props.title} />
         <Button
           height="4"

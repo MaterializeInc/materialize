@@ -175,6 +175,11 @@ export interface VisibleNode {
   // Non-empty only for ports: the out-of-view side of every crossing that
   // resolved to this port and wasn't already reachable some other way.
   peers: PortPeer[];
+  // Null for operators/regions. For a port, which side of the crossing it
+  // sits on: an "input" port's peers are upstream of it (the connected edge
+  // drawn in-view is downstream), an "output" port's peers are downstream
+  // (the connected edge is upstream).
+  direction: "input" | "output" | null;
 }
 
 /**
@@ -637,6 +642,7 @@ export function deriveVisibleGraph(
       address: node.address,
       operatorId: node.operatorId,
       peers: [],
+      direction: null,
     };
   });
   const visibleIds = new Set(nodes.map((n) => n.id));
@@ -802,6 +808,7 @@ export function deriveVisibleGraph(
           address: null,
           operatorId: null,
           peers: [],
+          direction: p.direction,
         });
       }
     }

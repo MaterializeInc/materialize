@@ -331,7 +331,7 @@ describe("DataflowDetailPage", () => {
     expect(screen.queryByTestId("react-flow")).toBeNull();
   });
 
-  // A port's "Jump" button should work the same regardless of which
+  // A port's peer jump link should work the same regardless of which
   // direction it represents: this drills into RegionA, whose only channel
   // is its own output feeding sibling RegionB's input, and checks that
   // jumping from the resulting "out" port's peer actually navigates.
@@ -364,8 +364,8 @@ describe("DataflowDetailPage", () => {
     // Select the port to open its detail panel, then jump its peer.
     await userEvent.click(outPortNode);
     expect(await screen.findByText(/RegionB/)).toBeVisible();
-    const jumpButton = await screen.findByRole("button", { name: "Jump" });
-    await userEvent.click(jumpButton);
+    const jumpLink = await screen.findByRole("button", { name: /RegionB/ });
+    await userEvent.click(jumpLink);
 
     // RegionB is itself a region, so jumping drills straight into it and
     // selects the matching "in" port there (port 0, matching the channel's

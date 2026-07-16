@@ -49,7 +49,7 @@ import {
   PortNode,
   RegionNode,
 } from "./nodes";
-import { lirGroupColor, nodeFillColor } from "./nodeStyle";
+import { hexToRgba, lirGroupColor, nodeFillColor } from "./nodeStyle";
 import { useElkLayout } from "./useElkLayout";
 
 const edgeTypes = { channel: ChannelEdge };
@@ -444,7 +444,14 @@ export const DataflowGraphView = ({
           "--xy-background-color": colors.background.primary,
           "--xy-background-pattern-color": colors.border.secondary,
           "--xy-minimap-background-color": colors.background.secondary,
-          "--xy-minimap-mask-background-color": colors.background.tertiary,
+          // Must stay translucent: this masks everything outside the
+          // current viewport, and an opaque fill here hides every node dot
+          // under it, leaving the minimap looking like it only ever drew
+          // the visible viewport.
+          "--xy-minimap-mask-background-color": hexToRgba(
+            colors.foreground.primary,
+            0.15,
+          ),
           "--xy-controls-button-background-color": colors.background.primary,
           "--xy-controls-button-background-color-hover":
             colors.background.tertiary,
