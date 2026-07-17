@@ -1362,7 +1362,7 @@ impl StorageCollections for StorageCollectionsImpl {
             // Collection metadata is authoritative. Removing these entries in
             // the initialization transaction keeps them out of the finalizer
             // queue.
-            txn.mark_shards_as_finalized(referenced_shards);
+            txn.remove_unfinalized_shards(referenced_shards);
         }
 
         info!(?unfinalized_shards, "initializing finalizable_shards");
@@ -1711,7 +1711,7 @@ impl StorageCollections for StorageCollectionsImpl {
         // Reconcile any shards we've successfully finalized with the shard
         // finalization collection.
         let finalized_shards = self.finalized_shards.lock().iter().copied().collect();
-        txn.mark_shards_as_finalized(finalized_shards);
+        txn.remove_unfinalized_shards(finalized_shards);
 
         Ok(())
     }

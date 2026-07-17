@@ -2637,6 +2637,11 @@ impl Coordinator {
                 }
                 CatalogItem::View(_) => (),
                 CatalogItem::MaterializedView(mview) => {
+                    // Each version receives a read policy when it is created. Bootstrap
+                    // must restore every policy because the oldest version owns the shared
+                    // Persist shard and capability changes reach it through each newer
+                    // version's primary link. A `NoPolicy` version would block that
+                    // propagation and pin compaction.
                     policies_to_set
                         .entry(policy.expect("materialized views have a compaction window"))
                         .or_insert_with(Default::default)
