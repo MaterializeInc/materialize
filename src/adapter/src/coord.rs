@@ -2059,6 +2059,11 @@ pub struct Coordinator {
     /// the `write_ts` result of that same commit.
     last_seen_oracle_write_ts: Timestamp,
 
+    /// How many consecutive ticks of `advance_timelines_interval` were
+    /// skipped because no SQL connections existed. See
+    /// [`mz_adapter_types::dyncfgs::COORD_IDLE_ADVANCE_TIMELINES_MULTIPLIER`].
+    idle_advance_timelines_ticks_skipped: usize,
+
     /// Serialized DDL. DDL must be serialized because:
     /// - Many of them do off-thread work and need to verify the catalog is in a valid state, but
     ///   [`PlanValidity`] does not currently support tracking all changes. Doing that correctly
@@ -3968,7 +3973,22 @@ impl Coordinator {
                                 epoch_ms_read_ts: None,
                             });
                         } else {
-                            messages.push(Message::GroupCommitInitiate(span, None));
+                            // While no SQL connections exist, only run the
+                            // table-advancement group commit on every Nth
+                            // tick. Nothing observes the skipped
+                            // advancements: a new connection's mz_sessions
+                            // write forces an immediate group commit, and the
+                            // first query of that connection waits for it.
+                            use mz_adapter_types::dyncfgs::COORD_IDLE_ADVANCE_TIMELINES_MULTIPLIER;
+                            let idle_multiplier = COORD_IDLE_ADVANCE_TIMELINES_MULTIPLIER
+                                .get(self.catalog().system_config().dyncfgs());
+                            let skipped = self.idle_advance_timelines_ticks_skipped;
+                            if self.active_conns.is_empty() && skipped + 1 < idle_multiplier {
+                                self.idle_advance_timelines_ticks_skipped += 1;
+                            } else {
+                                self.idle_advance_timelines_ticks_skipped = 0;
+                                messages.push(Message::GroupCommitInitiate(span, None));
+                            }
                         }
                     },
                     // Re-check pending strict serializable reads. Deliberately
@@ -5050,6 +5070,7 @@ pub fn serve(
                     pending_writes: Vec::new(),
                     advance_timelines_interval,
                     last_seen_oracle_write_ts: Timestamp::MIN,
+                    idle_advance_timelines_ticks_skipped: 0,
                     secrets_controller,
                     caching_secrets_reader,
                     cloud_resource_controller,

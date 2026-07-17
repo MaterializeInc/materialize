@@ -139,6 +139,21 @@ pub const READ_THEN_WRITE_MAX_DEPENDENCIES: Config<usize> = Config::new(
      statement before it is rejected.",
 );
 
+/// While no SQL connections exist, only every Nth tick of the periodic
+/// table-advancement interval runs a group commit. Each such group commit
+/// costs timestamp oracle queries and a persist append, so this multiplier
+/// directly divides the steady-state load an idle environment puts on the
+/// metadata store. The freshness cost is bounded: connection startup writes
+/// to mz_sessions, which forces an immediate group commit, and the first
+/// query of a new connection waits for that write.
+pub const COORD_IDLE_ADVANCE_TIMELINES_MULTIPLIER: Config<usize> = Config::new(
+    "coord_idle_advance_timelines_multiplier",
+    1,
+    "The multiple of default_timestamp_interval at which to run the periodic \
+     table-advancement group commit while no SQL connections exist \
+     (1 = advance on every tick).",
+);
+
 /// OIDC issuer URL.
 pub const OIDC_ISSUER: Config<Option<&'static str>> =
     Config::new("oidc_issuer", None, "OIDC issuer URL.");
@@ -433,6 +448,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_EXPRESSION_CACHE)
         .add(&ENABLE_PASSWORD_AUTH)
         .add(&READ_THEN_WRITE_MAX_DEPENDENCIES)
+        .add(&COORD_IDLE_ADVANCE_TIMELINES_MULTIPLIER)
         .add(&OIDC_ISSUER)
         .add(&OIDC_AUDIENCE)
         .add(&OIDC_AUTHENTICATION_CLAIM)
