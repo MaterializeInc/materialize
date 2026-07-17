@@ -519,7 +519,6 @@ mz_egress_ips                  ""
 mz_functions                   ""
 mz_iceberg_sinks               ""
 mz_index_columns               ""
-mz_kafka_connections           ""
 mz_kafka_sinks                 ""
 mz_list_types                  ""
 mz_map_types                   ""
@@ -527,7 +526,6 @@ mz_operators                   ""
 mz_pseudo_types                ""
 mz_role_auth                   ""
 mz_sinks                       ""
-mz_ssh_tunnel_connections      ""
 mz_tables                      ""
 mz_types                       ""
 mz_views                       ""
@@ -552,6 +550,7 @@ mz_connections        mz_catalog_server   ""
 mz_databases          mz_catalog_server   ""
 mz_default_privileges mz_catalog_server   ""
 mz_indexes            mz_catalog_server   ""
+mz_kafka_connections  mz_catalog_server   ""
 mz_kafka_sources      mz_catalog_server   ""
 mz_role_members       mz_catalog_server   ""
 mz_role_parameters    mz_catalog_server   ""
@@ -559,6 +558,7 @@ mz_roles              mz_catalog_server   ""
 mz_schemas            mz_catalog_server   ""
 mz_secrets            mz_catalog_server   ""
 mz_sources            mz_catalog_server   ""
+mz_ssh_tunnel_connections mz_catalog_server ""
 mz_system_privileges  mz_catalog_server   ""
 mz_materialized_views mz_catalog_server   ""
 
@@ -830,7 +830,7 @@ test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-38
+36
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

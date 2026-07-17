@@ -19,9 +19,10 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{ArrayRustType, Datum, Row, RowPacker, SqlColumnType, SqlScalarType, strconv};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    AstInfo, AvroSchema, CreateSubsourceOptionName, Format, FormatSpecifier,
-    KafkaSourceConfigOptionName, PgConfigOptionName, ProtobufSchema, RawClusterName, RawItemName,
-    SourceEnvelope, SourceErrorPolicy, Value, WithOptionValue,
+    AstInfo, AvroSchema, ConnectionOption, ConnectionOptionName, CreateConnectionType,
+    CreateSubsourceOptionName, Format, FormatSpecifier, KafkaSourceConfigOptionName,
+    PgConfigOptionName, ProtobufSchema, RawClusterName, RawItemName, SourceEnvelope,
+    SourceErrorPolicy, Value, WithOptionValue,
 };
 use prost::Message as _;
 use serde::{Deserialize, Serialize};
@@ -891,6 +892,101 @@ fn parse_source_export_details<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
     Ok(jsonb)
 }
 
+/// Extracts connection-detail metadata from a catalog `create_sql`.
+///
+/// Returns a per-connection-type object with the fields that the
+/// `mz_kafka_connections`, `mz_ssh_tunnel_connections`, `mz_aws_connections`,
+/// and `mz_aws_privatelink_connections` builtin views need. For everything
+/// else (other connection types, non-connection statements) it returns jsonb
+/// `null`, so callers filter on `IS NOT NULL` and gate on the connection type
+/// separately (via `parse_catalog_create_sql(...)->>'connection_type'`, the way
+/// `mz_connections` already does).
+///
+/// The shape per type:
+///
+/// ```json
+/// // kafka
+/// { "brokers": ["host:port", ...], "progress_topic": <text | null> }
+/// // ssh-tunnel
+/// { "public_key_1": "<text>", "public_key_2": "<text>" }
+/// ```
+///
+/// `progress_topic` is null when the connection does not set an explicit
+/// `PROGRESS TOPIC`. The default (`_materialize-progress-<env>-<conn_id>`) is
+/// reconstructed by the view, not here, because it needs the environment id and
+/// the connection's own id. Values derived only from environment context
+/// (AWS principal, external id, trust policy, privatelink principal) are also
+/// left to the view. This keeps the helper a pure function of the `create_sql`.
+///
+/// Errors if the statement fails to parse.
+#[sqlfunc]
+fn parse_connection_details<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
+    // The persisted `create_sql` stores an inline broker as a single `BROKER`
+    // option and a broker list as a `BROKERS (...)` sequence. Either way we
+    // only need the addresses, which are present regardless of the tunnel
+    // (direct, SSH, or PrivateLink).
+    fn broker_addresses<T: AstInfo>(values: &[ConnectionOption<T>]) -> Vec<String> {
+        let mut brokers = Vec::new();
+        for opt in values {
+            match (&opt.name, &opt.value) {
+                (ConnectionOptionName::Broker, Some(WithOptionValue::ConnectionKafkaBroker(b))) => {
+                    brokers.push(b.address.clone());
+                }
+                (ConnectionOptionName::Brokers, Some(WithOptionValue::Sequence(seq))) => {
+                    for v in seq {
+                        if let WithOptionValue::ConnectionKafkaBroker(b) = v {
+                            brokers.push(b.address.clone());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        brokers
+    }
+
+    fn string_option<T: AstInfo>(
+        values: &[ConnectionOption<T>],
+        name: ConnectionOptionName,
+    ) -> Option<String> {
+        values.iter().find_map(|o| match &o.value {
+            Some(WithOptionValue::Value(Value::String(s))) if o.name == name => Some(s.clone()),
+            _ => None,
+        })
+    }
+
+    let parse = || -> Result<serde_json::Value, String> {
+        let mut stmts = mz_sql_parser::parser::parse_statements(a)
+            .map_err(|e| format!("failed to parse create_sql: {e}"))?;
+        let stmt = match stmts.len() {
+            1 => stmts.remove(0).ast,
+            n => return Err(format!("expected a single statement, found {n}")),
+        };
+
+        use mz_sql_parser::ast::Statement::CreateConnection;
+        let stmt = match stmt {
+            CreateConnection(stmt) => stmt,
+            _ => return Ok(serde_json::Value::Null),
+        };
+
+        match stmt.connection_type {
+            CreateConnectionType::Kafka => Ok(json!({
+                "brokers": broker_addresses(&stmt.values),
+                "progress_topic": string_option(&stmt.values, ConnectionOptionName::ProgressTopic),
+            })),
+            CreateConnectionType::Ssh => Ok(json!({
+                "public_key_1": string_option(&stmt.values, ConnectionOptionName::PublicKey1),
+                "public_key_2": string_option(&stmt.values, ConnectionOptionName::PublicKey2),
+            })),
+            _ => Ok(serde_json::Value::Null),
+        }
+    };
+
+    let val = parse().map_err(|e| EvalError::InvalidCatalogJson(e.into()))?;
+    let jsonb = Jsonb::from_serde_json(val).expect("valid JSONB");
+    Ok(jsonb)
+}
+
 #[cfg(test)]
 mod tests {
     use mz_repr::adt::jsonb::Jsonb;
@@ -1238,5 +1334,84 @@ mod tests {
             matches!(err, EvalError::InvalidCatalogJson(msg) if msg.contains("unresolved item name")),
             "wrong error variant/message"
         );
+    }
+
+    // --- parse_connection_details --------------------------------------------
+
+    #[mz_ore::test]
+    fn connection_kafka_single_broker_default_progress() {
+        // No explicit PROGRESS TOPIC: the helper leaves it null and the view
+        // reconstructs the default.
+        let sql = "CREATE CONNECTION \"materialize\".\"public\".\"c\" TO KAFKA \
+             (BROKER = 'localhost:9092', SECURITY PROTOCOL = plaintext)";
+        let out = super::parse_connection_details(sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "brokers": ["localhost:9092"],
+                "progress_topic": null,
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    fn connection_kafka_explicit_progress_topic() {
+        let sql = "CREATE CONNECTION \"materialize\".\"public\".\"c\" TO KAFKA \
+             (BROKER = 'localhost:9092', PROGRESS TOPIC = 'override', \
+              SECURITY PROTOCOL = plaintext)";
+        let out = super::parse_connection_details(sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "brokers": ["localhost:9092"],
+                "progress_topic": "override",
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    fn connection_kafka_broker_list() {
+        let sql = "CREATE CONNECTION \"materialize\".\"public\".\"c\" TO KAFKA \
+             (BROKERS ('b1:9092', 'b2:9092'), SECURITY PROTOCOL = plaintext)";
+        let out = super::parse_connection_details(sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "brokers": ["b1:9092", "b2:9092"],
+                "progress_topic": null,
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    fn connection_ssh_public_keys() {
+        let sql = "CREATE CONNECTION \"materialize\".\"public\".\"c\" TO SSH TUNNEL \
+             (HOST = 'ssh.example.com', PORT = 22, USER = 'mz', \
+              PUBLIC KEY 1 = 'ssh-ed25519 AAAA', PUBLIC KEY 2 = 'ssh-ed25519 BBBB')";
+        let out = super::parse_connection_details(sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "public_key_1": "ssh-ed25519 AAAA",
+                "public_key_2": "ssh-ed25519 BBBB",
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    fn connection_other_type_returns_null_jsonb() {
+        // A connection type without a detail view (postgres) yields null.
+        let sql = "CREATE CONNECTION \"materialize\".\"public\".\"c\" TO POSTGRES \
+             (HOST = 'db', DATABASE = 'postgres', USER = 'mz')";
+        let out = super::parse_connection_details(sql).expect("ok");
+        assert_eq!(as_serde(out), serde_json::Value::Null);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn connection_non_connection_returns_null_jsonb() {
+        let sql = "CREATE VIEW v AS SELECT 1";
+        let out = super::parse_connection_details(sql).expect("ok");
+        assert_eq!(as_serde(out), serde_json::Value::Null);
     }
 }

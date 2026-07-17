@@ -4872,6 +4872,70 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_kafka_connections";
+----
+mz_catalog.mz_kafka_connections:
+  →With
+    cte l0 =
+      →Read mz_internal.mz_catalog_raw
+    cte l1 =
+      →Distinct GroupAggregate
+        →Fused with Child Map/Filter/Project
+          Project: #1
+            →Read l0
+    cte l2 =
+      →Non-incremental GroupAggregate
+        Aggregation: array_agg[order_by=[#0 asc nulls_last]](row(array[#1], #2))
+        Key:
+          Project: #0
+        →Table Function jsonb_array_elements_text[with_ordinality]((#0{details} -> "brokers"))
+          →Arranged l1
+    cte l3 =
+      →Union
+        →Unarranged Raw Stream
+          →Arranged l2
+        →Map/Filter/Project
+          Project: #0, #1
+          Map: null
+            →Consolidating Union
+              →Negate Diffs
+                →Fused with Child Map/Filter/Project
+                  Project: #0
+                    →Arranged l2
+                      Key: (#0)
+              →Unarranged Raw Stream
+                →Arranged l1
+  →Return
+    →Differential Join %1[#0] » %0:l0[#1]
+      after %0:
+        Project: #3..=#5
+        Map: parse_catalog_id(((#2{data} -> "key") -> "gid")), (#1 || {}), coalesce((#0{details} ->> "progress_topic"), ("_materialize-progress-local-az1-<ENV_ID>-" || #3))
+      →Arrange (#1)
+        →Stream l0
+      →Arrange (#0)
+        →Union
+          →Stream l3
+          →Map/Filter/Project
+            Project: #0, #1
+            Map: null
+              →Consolidating Union
+                →Negate Diffs
+                  →Fused with Child Map/Filter/Project
+                    Project: #0
+                      →Read l3
+                →Unarranged Raw Stream
+                  →Arranged l1
+
+Source mz_internal.mz_catalog_raw
+  project=(#0, #2)
+  filter=(("Item" = (#0{data} ->> "kind")) AND ("kafka" = (parse_catalog_create_sql(#1) ->> "connection_type")))
+  map=(((((#0{data} -> "value") -> "definition") -> "V1") ->> "create_sql"), parse_connection_details(#1))
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
 EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_kafka_sources";
 ----
 mz_catalog.mz_kafka_sources:
@@ -4923,7 +4987,7 @@ mz_catalog.mz_materialized_views:
           Project: #4, #0, #5, #1, #6, #2, #9, #8, #3, #7
           Map: {=r/s1, s1=r/s1}, "s1"
       →Arrange (#1{schema_name}, #2{name})
-        →Constant (33 rows)
+        →Constant (35 rows)
       →Arrange (empty key) (#0{schema_name}) (#0{schema_name}, #1{name})
         →Fused with Child Map/Filter/Project
           Project: #4, #3, #5
@@ -5193,6 +5257,21 @@ Source mz_internal.mz_catalog_raw
 
 Used Indexes:
   - mz_catalog.mz_schemas_ind (*** full scan ***)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_ssh_tunnel_connections";
+----
+mz_catalog.mz_ssh_tunnel_connections:
+  →Read mz_internal.mz_catalog_raw
+
+Source mz_internal.mz_catalog_raw
+  project=(#3..=#5)
+  filter=(("Item" = (#0{data} ->> "kind")) AND ("ssh-tunnel" = (parse_catalog_create_sql(#1) ->> "connection_type")))
+  map=(((((#0{data} -> "value") -> "definition") -> "V1") ->> "create_sql"), parse_connection_details(#1), parse_catalog_id(((#0{data} -> "key") -> "gid")), (#2{details} ->> "public_key_1"), (#2{details} ->> "public_key_2"))
 
 Target cluster: mz_catalog_server
 
@@ -7858,7 +7937,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_materialized_views";
 ----
 Explained Query (fast path):
-  →Constant (33 rows)
+  →Constant (35 rows)
 
 Target cluster: mz_catalog_server
 

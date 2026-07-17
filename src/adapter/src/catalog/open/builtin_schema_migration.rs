@@ -328,6 +328,21 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_INTERNAL_SCHEMA,
             "mz_kafka_source_tables",
         ),
+        // Converting the connection-detail builtin tables to materialized views
+        // changes their catalog fingerprint, so each needs an explicit
+        // replacement step.
+        MigrationStep::replacement(
+            "26.34.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_kafka_connections",
+        ),
+        MigrationStep::replacement(
+            "26.34.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_ssh_tunnel_connections",
+        ),
     ]
 });
 

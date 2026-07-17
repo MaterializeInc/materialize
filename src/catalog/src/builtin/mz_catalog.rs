@@ -262,43 +262,86 @@ pub static MZ_KAFKA_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTabl
         column_semantic_types: &[("id", SemanticType::CatalogItemId)],
     }),
 });
-pub static MZ_KAFKA_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_kafka_connections",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_KAFKA_CONNECTIONS_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column(
-            "brokers",
-            SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false),
-        )
-        .with_column("sink_progress_topic", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("id", "The ID of the connection."),
-        (
-            "brokers",
-            "The addresses of the Kafka brokers to connect to.",
-        ),
-        (
-            "sink_progress_topic",
-            "The name of the Kafka topic where any sinks associated with this connection will track their progress information and other metadata. The contents of this topic are unspecified.",
-        ),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "kafka_connection",
-        description: "Kafka-specific connection configuration (brokers, progress topic)",
-        links: &const {
-            [OntologyLink {
-                name: "details_of",
-                target: "connection",
-                properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
-            }]
-        },
-        column_semantic_types: &[("id", SemanticType::CatalogItemId)],
-    }),
+// Reads Item rows from `mz_catalog_raw`, pulls the broker addresses and any
+// explicit progress topic out of the persisted `create_sql` via
+// `parse_connection_details`, and keeps only kafka connections (the connection
+// type is derived the same way `mz_connections` derives it). The default
+// progress topic is reconstructed here rather than in the helper because it
+// needs the environment id and the connection's own id.
+pub static MZ_KAFKA_CONNECTIONS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_kafka_connections",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_KAFKA_CONNECTIONS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column(
+                "brokers",
+                SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false),
+            )
+            .with_column("sink_progress_topic", SqlScalarType::String.nullable(false))
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "The ID of the connection."),
+            (
+                "brokers",
+                "The addresses of the Kafka brokers to connect to.",
+            ),
+            (
+                "sink_progress_topic",
+                "The name of the Kafka topic where any sinks associated with this connection will track their progress information and other metadata. The contents of this topic are unspecified.",
+            ),
+        ]),
+        // The `sink_progress_topic` default must match
+        // `KafkaConnection::progress_topic` in
+        // src/storage-types/src/connections.rs. Keep the two in sync.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL brokers,
+    ASSERT NOT NULL sink_progress_topic
+) AS
+SELECT
+    mz_internal.parse_catalog_id(r.data->'key'->'gid') AS id,
+    ARRAY(
+        SELECT b.value
+        FROM jsonb_array_elements_text(details->'brokers')
+             WITH ORDINALITY AS b(value, ord)
+        ORDER BY b.ord
+    ) AS brokers,
+    COALESCE(
+        details->>'progress_topic',
+        '_materialize-progress-' || mz_environment_id() || '-'
+            || mz_internal.parse_catalog_id(r.data->'key'->'gid')
+    ) AS sink_progress_topic
+FROM
+    mz_internal.mz_catalog_raw r,
+    LATERAL (
+        SELECT mz_internal.parse_connection_details(
+            r.data->'value'->'definition'->'V1'->>'create_sql')
+    ) AS d(details)
+WHERE
+    r.data->>'kind' = 'Item' AND
+    details IS NOT NULL AND
+    mz_internal.parse_catalog_create_sql(
+        r.data->'value'->'definition'->'V1'->>'create_sql')->>'connection_type' = 'kafka'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "kafka_connection",
+            description: "Kafka-specific connection configuration (brokers, progress topic)",
+            links: &const {
+                [OntologyLink {
+                    name: "details_of",
+                    target: "connection",
+                    properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+                }]
+            },
+            column_semantic_types: &[("id", SemanticType::CatalogItemId)],
+        }),
+    }
 });
 pub static MZ_KAFKA_SOURCES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
     BuiltinMaterializedView {
@@ -1112,41 +1155,69 @@ WHERE
     }
 });
 
-pub static MZ_SSH_TUNNEL_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_ssh_tunnel_connections",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_SSH_TUNNEL_CONNECTIONS_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("public_key_1", SqlScalarType::String.nullable(false))
-        .with_column("public_key_2", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("id", "The ID of the connection."),
-        (
-            "public_key_1",
-            "The first public key associated with the SSH tunnel.",
-        ),
-        (
-            "public_key_2",
-            "The second public key associated with the SSH tunnel.",
-        ),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "ssh_tunnel_connection",
-        description: "SSH tunnel connection with public keys",
-        links: &const {
-            [OntologyLink {
-                name: "details_of",
-                target: "connection",
-                properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
-            }]
-        },
-        column_semantic_types: &[("id", SemanticType::CatalogItemId)],
-    }),
-});
+// The two SSH public keys are stored verbatim in the persisted `create_sql`
+// (they are generated, not user-supplied, and explicitly not redacted), so the
+// view reads them straight out via `parse_connection_details` and keeps only
+// ssh-tunnel connections.
+pub static MZ_SSH_TUNNEL_CONNECTIONS: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_ssh_tunnel_connections",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_SSH_TUNNEL_CONNECTIONS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("public_key_1", SqlScalarType::String.nullable(false))
+            .with_column("public_key_2", SqlScalarType::String.nullable(false))
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "The ID of the connection."),
+            (
+                "public_key_1",
+                "The first public key associated with the SSH tunnel.",
+            ),
+            (
+                "public_key_2",
+                "The second public key associated with the SSH tunnel.",
+            ),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL public_key_1,
+    ASSERT NOT NULL public_key_2
+) AS
+SELECT
+    mz_internal.parse_catalog_id(r.data->'key'->'gid') AS id,
+    details->>'public_key_1' AS public_key_1,
+    details->>'public_key_2' AS public_key_2
+FROM
+    mz_internal.mz_catalog_raw r,
+    LATERAL (
+        SELECT mz_internal.parse_connection_details(
+            r.data->'value'->'definition'->'V1'->>'create_sql')
+    ) AS d(details)
+WHERE
+    r.data->>'kind' = 'Item' AND
+    details IS NOT NULL AND
+    mz_internal.parse_catalog_create_sql(
+        r.data->'value'->'definition'->'V1'->>'create_sql')->>'connection_type' = 'ssh-tunnel'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "ssh_tunnel_connection",
+            description: "SSH tunnel connection with public keys",
+            links: &const {
+                [OntologyLink {
+                    name: "details_of",
+                    target: "connection",
+                    properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+                }]
+            },
+            column_semantic_types: &[("id", SemanticType::CatalogItemId)],
+        }),
+    });
 // mz_sources is generated dynamically in BUILTINS_STATIC via builtin::make_mz_sources()
 // with builtin source/log entries inlined as VALUES. See builtin/builtin.rs.
 pub static MZ_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| {
