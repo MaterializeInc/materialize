@@ -47,6 +47,7 @@ from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.parallel_workload.column import (
     Column,
     KafkaColumn,
+    LoadGeneratorColumn,
     MySqlColumn,
     PostgresColumn,
     SqlServerColumn,
@@ -58,24 +59,33 @@ from materialize.parallel_workload.executor import Executor
 from materialize.parallel_workload.expression import ExprKind, expression
 from materialize.parallel_workload.settings import Complexity, Scenario
 
-MAX_COLUMNS = 5
+MAX_COLUMNS = 50
 MAX_INCLUDE_HEADERS = 5
-MAX_ROWS = 50
+# Kept small on purpose. Views can nest (a view's inputs may themselves be
+# views), so a peek flattens into a deep join whose intermediate row count
+# scales as MAX_ROWS ** join_depth. On the 24 GiB CI agent this let a single
+# quickstart clusterd balloon past the cgroup and get OOM-killed (SIGKILL). A
+# stress test that hunts panics and unexpected errors cares about query shapes,
+# not data volume, so a small bound keeps coverage while capping the blow-up.
+MAX_ROWS = 10
 MAX_CLUSTERS = 4
 MAX_CLUSTER_REPLICAS = 2
-MAX_DBS = 5
-MAX_SCHEMAS = 5
-MAX_TABLES = 5
-MAX_VIEWS = 15
-MAX_INDEXES = 15
-MAX_ROLES = 15
-MAX_WEBHOOK_SOURCES = 5
-MAX_KAFKA_SOURCES = 5
-MAX_MYSQL_SOURCES = 5
-MAX_SQL_SERVER_SOURCES = 5
-MAX_POSTGRES_SOURCES = 5
-MAX_KAFKA_SINKS = 5
-MAX_ICEBERG_SINKS = 5
+MAX_DBS = 50
+MAX_SCHEMAS = 50
+MAX_TABLES = 50
+MAX_VIEWS = 150
+MAX_INDEXES = 150
+MAX_ROLES = 150
+MAX_WEBHOOK_SOURCES = 50
+MAX_KAFKA_SOURCES = 50
+MAX_MYSQL_SOURCES = 50
+MAX_SQL_SERVER_SOURCES = 50
+MAX_POSTGRES_SOURCES = 50
+MAX_LOADGEN_SOURCES = 50
+MAX_KAFKA_SINKS = 50
+MAX_ICEBERG_SINKS = 50
+MAX_TYPES = 50
+MAX_NETWORK_POLICIES = 30
 
 MAX_INITIAL_DBS = 1
 MAX_INITIAL_SCHEMAS = 1
@@ -88,6 +98,7 @@ MAX_INITIAL_KAFKA_SOURCES = 1
 MAX_INITIAL_MYSQL_SOURCES = 1
 MAX_INITIAL_SQL_SERVER_SOURCES = 1
 MAX_INITIAL_POSTGRES_SOURCES = 1
+MAX_INITIAL_LOADGEN_SOURCES = 1
 
 
 class BodyFormat(Enum):
@@ -369,8 +380,12 @@ class View(DBObject):
 
         return query
 
-    def create(self, exe: Executor) -> None:
+    def create(self, exe: Executor, or_replace: bool = False) -> None:
         query = "CREATE "
+        # OR REPLACE keeps the same catalog item, swapping its definition and
+        # rebuilding the dataflow. It is incompatible with TEMP.
+        if or_replace and not self.temp:
+            query += "OR REPLACE "
         if self.temp:
             query += "TEMP "
         if self.materialized:
@@ -575,14 +590,19 @@ class IcebergSink(DBObject):
         self.cluster = cluster
         self.schema = schema
         self.base_object = base_object
-        key_cols = [
-            column
-            for column in rng.sample(
-                base_object.columns, k=rng.randint(1, len(base_object.columns))
-            )
-        ]
-        key_col_names = [column.name(True) for column in key_cols]
-        self.key = f"KEY ({', '.join(key_col_names)}) NOT ENFORCED"
+        self.mode = rng.choice(["UPSERT", "APPEND"])
+        if self.mode == "UPSERT":
+            key_cols = [
+                column
+                for column in rng.sample(
+                    base_object.columns, k=rng.randint(1, len(base_object.columns))
+                )
+            ]
+            key_col_names = [column.name(True) for column in key_cols]
+            self.key = f"KEY ({', '.join(key_col_names)}) NOT ENFORCED"
+        else:
+            # APPEND mode does not permit a KEY.
+            self.key = ""
         self.table_name = f"icesink_topic{self.sink_id}_{uuid.uuid4().hex[:8]}"
         self.rename = 0
 
@@ -595,7 +615,7 @@ class IcebergSink(DBObject):
         return f"{self.schema}.{identifier(self.name())}"
 
     def create(self, exe: Executor) -> None:
-        query = f"CREATE SINK {self} IN CLUSTER {self.cluster} FROM {self.base_object} INTO ICEBERG CATALOG CONNECTION polaris_conn (NAMESPACE 'default_namespace', TABLE '{self.table_name}') USING AWS CONNECTION aws_conn {self.key} MODE UPSERT WITH (COMMIT INTERVAL '1s')"
+        query = f"CREATE SINK {self} IN CLUSTER {self.cluster} FROM {self.base_object} INTO ICEBERG CATALOG CONNECTION polaris_conn (NAMESPACE 'default_namespace', TABLE '{self.table_name}') USING AWS CONNECTION aws_conn {self.key} MODE {self.mode} WITH (COMMIT INTERVAL '1s')"
         exe.execute(query)
 
 
@@ -607,6 +627,8 @@ class KafkaSink(DBObject):
     base_object: DBObject
     envelope: str
     key: str
+    connection_options: list[str]
+    no_snapshot: bool
 
     def __init__(
         self,
@@ -621,6 +643,19 @@ class KafkaSink(DBObject):
         self.cluster = cluster
         self.schema = schema
         self.base_object = base_object
+        self.connection_options = []
+        if rng.random() < 0.3:
+            compression = rng.choice(["none", "gzip", "lz4", "zstd", "snappy"])
+            self.connection_options.append(f"COMPRESSION TYPE = '{compression}'")
+        if rng.random() < 0.2:
+            self.connection_options.append(
+                f"TRANSACTIONAL ID PREFIX 'pw-txn-{self.sink_id}'"
+            )
+        if rng.random() < 0.2:
+            self.connection_options.append(
+                f"PROGRESS GROUP ID PREFIX 'pw-progress-{self.sink_id}'"
+            )
+        self.no_snapshot = rng.random() < 0.2
         universal_formats = [
             "FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn",
             "FORMAT JSON",
@@ -680,7 +715,10 @@ class KafkaSink(DBObject):
             if self.partition_count
             else ""
         )
-        query = f"CREATE SINK {self} IN CLUSTER {self.cluster} FROM {self.base_object} INTO KAFKA CONNECTION kafka_conn (TOPIC {topic}{maybe_partition}) {self.key} {self.format} ENVELOPE {self.envelope}"
+        options = "".join(f", {option}" for option in self.connection_options)
+        query = f"CREATE SINK {self} IN CLUSTER {self.cluster} FROM {self.base_object} INTO KAFKA CONNECTION kafka_conn (TOPIC {topic}{maybe_partition}{options}) {self.key} {self.format} ENVELOPE {self.envelope}"
+        if self.no_snapshot:
+            query += " WITH (SNAPSHOT = false)"
         exe.execute(query)
 
 
@@ -851,6 +889,106 @@ class SqlServerSource(DBObject):
         self.executor.create(logging_exe=exe)
 
 
+class LoadGeneratorSource(DBObject):
+    """A COUNTER load generator source. Always bounded by UP TO so it cannot
+    grow without limit, which also exercises the finished-source lifecycle
+    state. The readable object (str(self)) is the table created from the
+    source, matching the source-table model the other sources use."""
+
+    source_id: int
+    cluster: "Cluster"
+    schema: Schema
+    columns: list[LoadGeneratorColumn]
+    tick_interval: str
+    up_to: int
+
+    def __init__(
+        self,
+        source_id: int,
+        cluster: "Cluster",
+        schema: Schema,
+        rng: random.Random,
+    ):
+        super().__init__()
+        self.source_id = source_id
+        self.cluster = cluster
+        self.schema = schema
+        self.tick_interval = rng.choice(["10ms", "100ms", "1s"])
+        # Bounded near MAX_ROWS: this source-table is a readable relation that
+        # views/MVs join over, and unlike user tables it is not capped by
+        # MAX_ROWS. A large counter feeding a maintained join is a clusterd
+        # memory risk, so keep it in the same size class as the other data.
+        self.up_to = rng.randint(1, MAX_ROWS)
+        self.columns = [LoadGeneratorColumn("counter", Long, False, self)]
+
+    def name(self) -> str:
+        return naughtify(f"lg-{self.source_id}")
+
+    def source_name(self) -> str:
+        return naughtify(f"lg-src-{self.source_id}")
+
+    def __str__(self) -> str:
+        return f"{self.schema}.{identifier(self.name())}"
+
+    def create(self, exe: Executor) -> None:
+        source = f"{self.schema}.{identifier(self.source_name())}"
+        exe.execute(
+            f"CREATE SOURCE {source} IN CLUSTER {self.cluster} FROM LOAD GENERATOR COUNTER (TICK INTERVAL '{self.tick_interval}', UP TO {self.up_to})"
+        )
+        exe.execute(f"CREATE TABLE {self} FROM SOURCE {source}")
+
+
+class MultiLoadGeneratorSource:
+    """A multi-subsource load generator (AUCTION / TPCH / MARKETING) created
+    with FOR ALL TABLES. Tracked create/drop-only, not as a readable relation:
+    its subsources have fixed names and hardcoded schemas, so wiring them into
+    the general read/expression machinery is out of scope. The value is the
+    multi-subsource source lifecycle and CASCADE teardown under concurrency.
+
+    At most one source per generator type exists at a time, because FOR ALL
+    TABLES names its subsources fixedly (a second AUCTION would collide on
+    `auctions`, `bids`, ...)."""
+
+    source_id: int
+    cluster: "Cluster"
+    schema: Schema
+    generator: str
+    tick_interval: str
+    lock: threading.Lock
+
+    def __init__(
+        self,
+        source_id: int,
+        cluster: "Cluster",
+        schema: Schema,
+        generator: str,
+        rng: random.Random,
+    ):
+        self.source_id = source_id
+        self.cluster = cluster
+        self.schema = schema
+        self.generator = generator
+        self.tick_interval = rng.choice(["100ms", "1s"])
+        self.lock = threading.Lock()
+
+    def name(self) -> str:
+        return naughtify(f"mlg-{self.source_id}")
+
+    def __str__(self) -> str:
+        return f"{self.schema}.{identifier(self.name())}"
+
+    def create(self, exe: Executor) -> None:
+        options = [f"TICK INTERVAL '{self.tick_interval}'"]
+        if self.generator == "TPCH":
+            options.append("SCALE FACTOR 0.0001")
+        query = (
+            f"CREATE SOURCE {self} IN CLUSTER {self.cluster} "
+            f"FROM LOAD GENERATOR {self.generator} ({', '.join(options)}) "
+            f"FOR ALL TABLES"
+        )
+        exe.execute(query)
+
+
 class S3Object(DBObject):
     """A COPY TO dump of `table` that CopyFromS3Action can load back into it.
 
@@ -916,6 +1054,11 @@ class Role:
 
     def create(self, exe: Executor) -> None:
         exe.execute(f"CREATE ROLE {self}")
+        # Make the workload's own user (materialize) a member, so it can
+        # manage the role, e.g. transfer object ownership to it: ALTER ..
+        # OWNER TO <role> requires the executor to be a member of <role>.
+        # The creating session has admin on the role it just created.
+        exe.execute(f"GRANT {self} TO materialize")
 
 
 class ClusterReplica:
@@ -997,6 +1140,77 @@ class Cluster:
         exe.execute(query)
 
 
+class Type:
+    """A user-defined type (row, list, or map). Schema-scoped."""
+
+    type_id: int
+    schema: Schema
+    kind: str
+    lock: threading.Lock
+
+    def __init__(self, type_id: int, schema: Schema, rng: random.Random):
+        self.type_id = type_id
+        self.schema = schema
+        self.kind = rng.choice(["row", "list", "map"])
+        self.rng = rng
+        self.lock = threading.Lock()
+
+    def name(self) -> str:
+        return naughtify(f"type-{self.type_id}")
+
+    def __str__(self) -> str:
+        return f"{self.schema}.{identifier(self.name())}"
+
+    def create(self, exe: Executor) -> None:
+        if self.kind == "row":
+            scalar_types = ["int4", "text", "bool", "float8", "timestamp"]
+            fields = ", ".join(
+                f"f{i} {self.rng.choice(scalar_types)}"
+                for i in range(self.rng.randint(1, 4))
+            )
+            query = f"CREATE TYPE {self} AS ({fields})"
+        elif self.kind == "list":
+            element = self.rng.choice(["int4", "text", "float8"])
+            query = f"CREATE TYPE {self} AS LIST (ELEMENT TYPE = {element})"
+        else:
+            value = self.rng.choice(["int4", "text", "float8"])
+            query = f"CREATE TYPE {self} AS MAP (KEY TYPE = text, VALUE TYPE = {value})"
+        exe.execute(query)
+
+
+class NetworkPolicy:
+    """A network policy. Top-level (not schema-scoped), like clusters.
+
+    Rules are always allow-all so the workload can never lock itself out of
+    its own connections. The policy is never installed as the active
+    `network_policy` system parameter for the same reason."""
+
+    policy_id: int
+    num_rules: int
+    lock: threading.Lock
+
+    def __init__(self, policy_id: int, rng: random.Random):
+        self.policy_id = policy_id
+        self.num_rules = rng.randint(1, 3)
+        self.lock = threading.Lock()
+
+    def name(self) -> str:
+        return naughtify(f"netpol-{self.policy_id}")
+
+    def __str__(self) -> str:
+        return identifier(self.name())
+
+    def rules_clause(self) -> str:
+        rules = ", ".join(
+            f"r{i} (action='allow', direction='ingress', address='0.0.0.0/0')"
+            for i in range(self.num_rules)
+        )
+        return f"RULES ({rules})"
+
+    def create(self, exe: Executor) -> None:
+        exe.execute(f"CREATE NETWORK POLICY {self} ({self.rules_clause()})")
+
+
 # TODO: Can access both databases from same connection!
 class Database:
     complexity: Complexity
@@ -1026,10 +1240,18 @@ class Database:
     postgres_source_id: int
     sql_server_sources: list[SqlServerSource]
     sql_server_source_id: int
+    loadgen_sources: list[LoadGeneratorSource]
+    loadgen_source_id: int
+    multi_loadgen_sources: list[MultiLoadGeneratorSource]
+    multi_loadgen_source_id: int
     iceberg_sinks: list[IcebergSink]
     iceberg_sink_id: int
     kafka_sinks: list[KafkaSink]
     kafka_sink_id: int
+    types: list[Type]
+    type_id: int
+    network_policies: list[NetworkPolicy]
+    network_policy_id: int
     s3_path: int
     s3_objects: list[S3Object]
     lock: threading.Lock
@@ -1092,9 +1314,7 @@ class Database:
             Cluster(
                 i,
                 managed=rng.choice([True, False]),
-                size=rng.choice(
-                    ["scale=1,workers=1", "scale=1,workers=4", "scale=2,workers=2"]
-                ),
+                size=rng.choice(["scale=1,workers=1", "scale=1,workers=2"]),
                 replication_factor=1,
                 introspection_interval="1s",
             )
@@ -1111,6 +1331,12 @@ class Database:
         self.mysql_sources = []
         self.postgres_sources = []
         self.sql_server_sources = []
+        self.loadgen_sources = [
+            LoadGeneratorSource(
+                i, rng.choice(self.clusters), rng.choice(self.schemas), rng
+            )
+            for i in range(rng.randint(0, MAX_INITIAL_LOADGEN_SOURCES))
+        ]
         self.iceberg_sinks = []
         self.kafka_sinks = []
         self.s3_objects = []
@@ -1118,8 +1344,15 @@ class Database:
         self.mysql_source_id = len(self.mysql_sources)
         self.postgres_source_id = len(self.postgres_sources)
         self.sql_server_source_id = len(self.sql_server_sources)
+        self.loadgen_source_id = len(self.loadgen_sources)
+        self.multi_loadgen_sources = []
+        self.multi_loadgen_source_id = 0
         self.iceberg_sink_id = len(self.iceberg_sinks)
         self.kafka_sink_id = len(self.kafka_sinks)
+        self.types = []
+        self.type_id = 0
+        self.network_policies = []
+        self.network_policy_id = 0
         self.lock = threading.Lock()
         self.sqlsmith_state = ""
         self.flags = {}
@@ -1132,6 +1365,7 @@ class Database:
         | PostgresSource
         | SqlServerSource
         | KafkaSource
+        | LoadGeneratorSource
         | View
         | Table
     ]:
@@ -1148,6 +1382,7 @@ class Database:
             + self.mysql_sources
             + self.postgres_sources
             + self.sql_server_sources
+            + self.loadgen_sources
             + self.webhook_sources
         )
 
@@ -1159,11 +1394,33 @@ class Database:
         | PostgresSource
         | SqlServerSource
         | KafkaSource
+        | LoadGeneratorSource
         | View
         | Table
     ]:
         return [
             obj for obj in self.db_objects() if type(obj) != View or obj.materialized
+        ]
+
+    def db_objects_for_sinks(
+        self,
+    ) -> list[
+        WebhookSource
+        | MySqlSource
+        | PostgresSource
+        | SqlServerSource
+        | KafkaSource
+        | View
+        | Table
+    ]:
+        """Objects usable as a sink's input (base object or ALTER SINK SET
+        FROM target). Load generator source tables are excluded: an
+        ALTER SINK .. SET FROM one can trigger the SS-344 sink stall (see
+        FINDINGS-BUGS.md), which is worse for a continuously-producing input."""
+        return [
+            obj
+            for obj in self.db_objects_without_views()
+            if not isinstance(obj, LoadGeneratorSource)
         ]
 
     def __iter__(self):
@@ -1189,6 +1446,13 @@ class Database:
         exe.execute("SELECT name FROM mz_roles WHERE name LIKE 'r%'")
         for row in exe.cur.fetchall():
             exe.execute(f"DROP ROLE {identifier(row[0])}")
+
+        # Network policies survive restarts and are top-level, so leftovers
+        # from a killed run have to be swept before recreating.
+        exe.execute("SELECT name FROM mz_internal.mz_network_policies")
+        for row in exe.cur.fetchall():
+            if row[0].startswith("netpol-"):
+                exe.execute(f"DROP NETWORK POLICY {identifier(row[0])}")
 
         print("Creating connections")
 

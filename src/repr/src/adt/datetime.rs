@@ -1083,9 +1083,14 @@ fn fill_pdt_date(
 ) -> Result<(), String> {
     use TimeStrToken::*;
 
-    // Check for one number that represents YYYYMMDDD.
+    // Check for one number that represents YYYYMMDDD. A following `Dash` means
+    // the date uses explicit `Y-M-D` separators, so the leading number is a
+    // full year (which can be 6 digits, e.g. `118852-02-05`), not a compact
+    // date. Only treat it as compact when it is a standalone number.
     match actual.front() {
-        Some(&Num(mut val, ref digits)) if 6 <= *digits && *digits <= 8 => {
+        Some(&Num(mut val, ref digits))
+            if 6 <= *digits && *digits <= 8 && !matches!(actual.get(1), Some(Dash)) =>
+        {
             let unit = i64::try_from(val % 100)
                 .expect("modulo between u64 and constant 100 should fit signed 64-bit integer");
             pdt.day = Some(DateTimeFieldValue::new(unit, 0));
@@ -2805,6 +2810,32 @@ mod tests {
                 hour: Some(DateTimeFieldValue::new(3, 0)),
                 minute: Some(DateTimeFieldValue::new(4, 0)),
                 second: Some(DateTimeFieldValue::new(5, 600_000_000)),
+                ..Default::default()
+            },
+        );
+        // A 6-digit year with explicit `-` separators must be read as a full
+        // year, not a compact `YYMMDD` date. This value is producible by our own
+        // timestamp formatting, so parsing it back must round-trip.
+        run_test_build_parsed_datetime_timestamp(
+            "118852-02-05 00:00:00",
+            ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(118852, 0)),
+                month: Some(DateTimeFieldValue::new(2, 0)),
+                day: Some(DateTimeFieldValue::new(5, 0)),
+                hour: Some(DateTimeFieldValue::new(0, 0)),
+                minute: Some(DateTimeFieldValue::new(0, 0)),
+                second: Some(DateTimeFieldValue::new(0, 0)),
+                ..Default::default()
+            },
+        );
+        // A standalone number with no separators is still parsed as a compact
+        // date (`YYYYMMDD`).
+        run_test_build_parsed_datetime_timestamp(
+            "20000102",
+            ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(2000, 0)),
+                month: Some(DateTimeFieldValue::new(1, 0)),
+                day: Some(DateTimeFieldValue::new(2, 0)),
                 ..Default::default()
             },
         );

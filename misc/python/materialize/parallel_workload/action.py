@@ -28,9 +28,20 @@ from psycopg.errors import OperationalError
 import materialize.parallel_workload.column
 from materialize.data_ingest.data_type import (
     NUMBER_TYPES,
+    RANGE_TYPES,
+    UUID,
     Boolean,
+    Bytea,
+    Char,
+    IntArray,
+    IntList,
+    Jsonb,
+    Oid,
     Text,
     TextTextMap,
+    Timestamp,
+    TimestampTz,
+    VarChar,
 )
 from materialize.data_ingest.query_error import QueryError
 from materialize.data_ingest.row import Operation
@@ -42,6 +53,8 @@ from materialize.mzcompose.services.materialized import (
     Materialized,
 )
 from materialize.mzcompose.services.minio import minio_blob_uri
+from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.parallel_workload.database import (
     DATA_TYPES,
     DB,
@@ -53,13 +66,16 @@ from materialize.parallel_workload.database import (
     MAX_INDEXES,
     MAX_KAFKA_SINKS,
     MAX_KAFKA_SOURCES,
+    MAX_LOADGEN_SOURCES,
     MAX_MYSQL_SOURCES,
+    MAX_NETWORK_POLICIES,
     MAX_POSTGRES_SOURCES,
     MAX_ROLES,
     MAX_ROWS,
     MAX_SCHEMAS,
     MAX_SQL_SERVER_SOURCES,
     MAX_TABLES,
+    MAX_TYPES,
     MAX_VIEWS,
     MAX_WEBHOOK_SOURCES,
     Cluster,
@@ -71,14 +87,18 @@ from materialize.parallel_workload.database import (
     Index,
     KafkaSink,
     KafkaSource,
+    LoadGeneratorSource,
+    MultiLoadGeneratorSource,
     MySqlSource,
     MzTempSchema,
+    NetworkPolicy,
     PostgresSource,
     Role,
     S3Object,
     Schema,
     SqlServerSource,
     Table,
+    Type,
     View,
     WebhookSource,
 )
@@ -137,6 +157,61 @@ def ws_connect(ws: websocket.WebSocket, host, port, user: str) -> tuple[int, int
             raise RuntimeError(f"Unexpected result type: {result_type} in: {result}")
     assert ws_ready
     return (ws_conn_id, ws_secret_key)
+
+
+def untrack_objects_in_schemas(exe: Executor, schemas: set[Schema]) -> None:
+    """Remove every tracked object living in one of the given schemas.
+
+    Called after a CASCADE drop of a schema or database. Source executor
+    connections are closed. Cross-schema dependents are cascade-dropped
+    server-side but not pruned here, they later surface as "does not exist",
+    which is why the CASCADE actions only run in DDL complexity."""
+    with exe.db.lock:
+        exe.db.tables[:] = [t for t in exe.db.tables if t.schema not in schemas]
+        exe.db.views[:] = [v for v in exe.db.views if v.schema not in schemas]
+        exe.db.indexes = {i for i in exe.db.indexes if i.schema not in schemas}
+        # Close the executor connections of the ingestion sources being
+        # untracked so they don't leak.
+        connected_sources = (
+            exe.db.kafka_sources
+            + exe.db.postgres_sources
+            + exe.db.mysql_sources
+            + exe.db.sql_server_sources
+        )
+        for src in connected_sources:
+            if src.schema in schemas:
+                try:
+                    src.executor.mz_conn.close()
+                except Exception:
+                    pass
+        exe.db.kafka_sources[:] = [
+            s for s in exe.db.kafka_sources if s.schema not in schemas
+        ]
+        exe.db.postgres_sources[:] = [
+            s for s in exe.db.postgres_sources if s.schema not in schemas
+        ]
+        exe.db.mysql_sources[:] = [
+            s for s in exe.db.mysql_sources if s.schema not in schemas
+        ]
+        exe.db.sql_server_sources[:] = [
+            s for s in exe.db.sql_server_sources if s.schema not in schemas
+        ]
+        exe.db.loadgen_sources[:] = [
+            s for s in exe.db.loadgen_sources if s.schema not in schemas
+        ]
+        exe.db.multi_loadgen_sources[:] = [
+            s for s in exe.db.multi_loadgen_sources if s.schema not in schemas
+        ]
+        exe.db.webhook_sources[:] = [
+            s for s in exe.db.webhook_sources if s.schema not in schemas
+        ]
+        exe.db.kafka_sinks[:] = [
+            s for s in exe.db.kafka_sinks if s.schema not in schemas
+        ]
+        exe.db.iceberg_sinks[:] = [
+            s for s in exe.db.iceberg_sinks if s.schema not in schemas
+        ]
+        exe.db.types[:] = [t for t in exe.db.types if t.schema not in schemas]
 
 
 # TODO: CASCADE in DROPs, keep track of what will be deleted
@@ -200,7 +275,14 @@ class Action:
             # a path that wrongly accepts it instead panics the coordinator on
             # catalog apply, which surfaces as an unexpected failure.
             "non-temporary items cannot depend on temporary item",
+            # generate_select_query occasionally emits a WITH MUTUALLY
+            # RECURSIVE body with ERROR AT RECURSION LIMIT, which errors on
+            # purpose when the iteration outruns the limit. Only our generated
+            # queries produce this, so ignoring it globally is safe.
+            "exceeded the recursion limit",
         ]
+        if exe.statement_timeout_set:
+            result.append("canceling statement due to statement timeout")
         if exe.db.complexity in (Complexity.DDL, Complexity.DDLOnly):
             result.extend(
                 [
@@ -213,6 +295,16 @@ class Action:
                     # matching "unknown cluster replica size" errors.
                     "unknown cluster '",
                     "unknown schema",  # schema was dropped
+                    # database was dropped by DropDatabaseCascadeAction. Before
+                    # that action, DROP DATABASE used RESTRICT and never
+                    # removed a non-empty database, so this could not arise.
+                    "unknown database",
+                    "invalid database",  # CREATE SCHEMA wording for a vanished database
+                    # The Pg/MySql/SqlServer source executor connects to the
+                    # source's target database. A concurrent DropDatabaseCascade
+                    # leaves that session with no schema, so the unqualified
+                    # CREATE SECRET/CONNECTION it runs fails to resolve one.
+                    "no valid schema selected",
                     "the transaction's active cluster has been dropped",  # cluster was dropped
                     "was removed",  # dependency was removed, started with moving optimization off main thread, see database-issues#7285
                     "real-time source dropped before ingesting the upstream system's visible frontier",  # Expected, see https://buildkite.com/materialize/nightly/builds/9399#0191be17-1f4c-4321-9b51-edc4b08b71c5
@@ -284,21 +376,85 @@ class Action:
             )
         if exe.db.scenario == Scenario.Rename:
             result.extend(["unknown schema", "ambiguous reference to schema name"])
-        if exe.db.scenario == Scenario.RepeatRow:
-            # Views that use `repeat_row` with a negative count can surface
-            # negative-accumulation errors both at DDL time (constant folding)
-            # and at read time (various operators checking multiplicities).
-            # The central list lives in `negative_accumulation_errors.py` so
-            # we can update it in one place when the error messages change.
+        # Negative multiplicities arise two ways: `repeat_row` with a negative
+        # count (RepeatRow scenario), and `DELETE .. USING`, which lowers to a
+        # semijoin whose DistinctBy can leave a table with a net-negative row
+        # (database-issues#9308). DELETE .. USING runs in the DML and DDL
+        # complexities, and the corruption it leaves is then observed by any
+        # later reader of that table (e.g. a COPY of a SELECT over it), not just
+        # by the DELETE itself. So tolerate the whole class wherever either
+        # source is active. Read and DDLOnly run neither, so a negative-
+        # accumulation error there is still a genuine finding. The central list
+        # lives in `negative_accumulation_errors.py`.
+        if exe.db.scenario == Scenario.RepeatRow or exe.db.complexity in (
+            Complexity.DML,
+            Complexity.DDL,
+        ):
             result.extend(NEGATIVE_ACCUMULATION_ERRORS)
         if materialize.parallel_workload.column.NAUGHTY_IDENTIFIERS:
             result.extend(["identifier length exceeds 255 bytes"])
         return result
 
+    # MIN/MAX exist for every type except these (bytea, jsonb, map, list,
+    # array, uuid, oid, and the range types).
+    _MINMAX_EXCLUDED = (
+        Bytea,
+        Jsonb,
+        TextTextMap,
+        IntList,
+        IntArray,
+        UUID,
+        Oid,
+    ) + tuple(RANGE_TYPES)
+
+    def aggregate_fns(self, column: Column) -> list[str]:
+        """Aggregate function templates valid for the column's type.
+
+        Used both in window position (OVER ..) and in GROUP BY position. The
+        collection aggregates (array_agg/list_agg/jsonb_agg/string_agg)
+        exercise the "collection" reduce rendering, distinct from the
+        accumulable sum/count path. Type exclusions are empirically derived,
+        e.g. array_agg rejects char and cannot nest map/list/array."""
+        dt = column.data_type
+        fns = ["COUNT({})"]
+        if dt in NUMBER_TYPES:
+            fns.extend(
+                [
+                    "SUM({})",
+                    "AVG({})",
+                    "STDDEV({})",
+                    "STDDEV_POP({})",
+                    "STDDEV_SAMP({})",
+                    "VAR_SAMP({})",
+                    "VAR_POP({})",
+                ]
+            )
+        if dt == Boolean:
+            fns.extend(["BOOL_AND({})", "BOOL_OR({})"])
+        if dt not in self._MINMAX_EXCLUDED:
+            fns.extend(["MAX({})", "MIN({})"])
+        # Collection aggregates.
+        fns.append("jsonb_agg({})")
+        if dt != Char:
+            fns.append("list_agg({})")
+        if dt not in (Char, TextTextMap, IntList, IntArray):
+            fns.append("array_agg({})")
+        if dt in (Text, VarChar, Char):
+            fns.append("string_agg({}, ',')")
+        return fns
+
     def generate_select_query(self, exe: Executor, expr_kind: ExprKind) -> str:
-        obj = self.rng.choice(exe.db.db_objects())
+        objects = exe.db.db_objects()
+        if not objects:
+            # A concurrent CASCADE drop removed every object. Nothing to query.
+            return "SELECT 1"
+        obj = self.rng.choice(objects)
         column = self.rng.choice(obj.columns)
-        obj2 = self.rng.choice(exe.db.db_objects_without_views())
+        # db_objects_without_views() can momentarily be empty if a CASCADE drop
+        # removed the last table/source/MV, leaving only plain views. Fall back
+        # to obj (only used for an optional join, which is skipped for views).
+        objs_without_views = exe.db.db_objects_without_views()
+        obj2 = self.rng.choice(objs_without_views) if objs_without_views else obj
         obj_name = str(obj)
         obj2_name = str(obj2)
         columns = [
@@ -314,74 +470,214 @@ class Action:
         else:
             all_columns = obj.columns
 
-        if self.rng.random() < 0.9:
-            expressions = ", ".join(
-                [
-                    expression(
-                        self.rng.choice(list(DATA_TYPES)),
-                        all_columns,
-                        self.rng,
-                        expr_kind,
-                    )
-                    for i in range(self.rng.randint(1, 10))
-                ]
+        # Self-contained iterative dataflow, cross joined with a real object.
+        # The iteration bound and the recursion limit are drawn independently,
+        # so the limit sometimes fires, exercising the RETURN/ERROR AT paths
+        # on purpose ("exceeded the recursion limit" is an expected error).
+        if self.rng.random() < 0.05:
+            limit_kind = self.rng.choice(["RETURN AT", "ERROR AT"])
+            expr = expression(
+                self.rng.choice(list(DATA_TYPES)), obj.columns, self.rng, expr_kind
+            )
+            return (
+                f"WITH MUTUALLY RECURSIVE ({limit_kind} RECURSION LIMIT {self.rng.randint(2, 200)}) "
+                f"cnt (i int8) AS ("
+                f"SELECT 1 UNION ALL SELECT i + 1 FROM cnt WHERE i < {self.rng.randint(1, 100)}"
+                f") SELECT i, {expr} FROM cnt, {obj_name}"
+                f" LIMIT {self.rng.randint(0, 100)}"
+            )
+
+        # Explicit LATERAL derived table correlated on a matching-type column.
+        # Exercises correlated-subquery decorrelation.
+        if self.rng.random() < 0.08:
+            outer_col = self.rng.choice(obj.columns)
+            inner_obj = self.rng.choice(exe.db.db_objects_without_views())
+            match_cols = [
+                c
+                for c in inner_obj.columns
+                if c.data_type == outer_col.data_type and c.data_type != TextTextMap
+            ]
+            corr = ""
+            if match_cols:
+                corr = f" WHERE {self.rng.choice(match_cols)} = {outer_col}"
+            expr = expression(
+                self.rng.choice(list(DATA_TYPES)), obj.columns, self.rng, expr_kind
+            )
+            return (
+                f"SELECT {expr} FROM {obj_name}, LATERAL ("
+                f"SELECT count(*) AS cnt FROM {inner_obj}{corr}"
+                f") AS lat LIMIT {self.rng.randint(0, 100)}"
+            )
+
+        # Table function in FROM. unnest of a column reference is an
+        # implicitly lateral call.
+        if self.rng.random() < 0.1:
+            int_list_columns = [c for c in obj.columns if c.data_type == IntList]
+            if int_list_columns and self.rng.choice([True, False]):
+                func = f"unnest({self.rng.choice(int_list_columns)})"
+            else:
+                func = f"generate_series(1, {self.rng.randint(1, 100)})"
+            expr = expression(
+                self.rng.choice(list(DATA_TYPES)), obj.columns, self.rng, expr_kind
             )
             if self.rng.choice([True, False]):
+                tf = f"{func} WITH ORDINALITY AS tf(x, ord)"
+            else:
+                tf = f"{func} AS tf(x)"
+            return (
+                f"SELECT tf.x, {expr} FROM {obj_name}, {tf}"
+                f" LIMIT {self.rng.randint(0, 100)}"
+            )
+
+        star = self.rng.random() >= 0.9
+        exprs: list[tuple[type, str]] = []
+        if not star:
+            for i in range(self.rng.randint(1, 10)):
+                dt = self.rng.choice(list(DATA_TYPES))
+                exprs.append((dt, expression(dt, all_columns, self.rng, expr_kind)))
+
+        if join:
+            join_kind = self.rng.choice(
+                ["JOIN", "JOIN", "JOIN", "LEFT JOIN", "RIGHT JOIN", "FULL JOIN"]
+            )
+            column2 = self.rng.choice(columns)
+            join_clause = f" {join_kind} {obj2_name} ON {column} = {column2}"
+            if self.rng.random() < 0.2:
+                join_clause += (
+                    f" AND {expression(Boolean, all_columns, self.rng, expr_kind)}"
+                )
+        else:
+            join_clause = ""
+
+        def where_clause() -> str:
+            parts = []
+            if self.rng.choice([True, False]):
+                parts.append(expression(Boolean, all_columns, self.rng, expr_kind))
+            if self.rng.random() < 0.2:
+                obj3 = self.rng.choice(exe.db.db_objects_without_views())
+                sub_columns = [
+                    c
+                    for c in obj3.columns
+                    if c.data_type == column.data_type and c.data_type != TextTextMap
+                ]
+                sub_kind = self.rng.choice(["exists", "not exists", "in", "scalar"])
+                if sub_kind in ("exists", "not exists"):
+                    cond = expression(Boolean, obj3.columns, self.rng, expr_kind)
+                    parts.append(
+                        f"{'NOT ' if sub_kind == 'not exists' else ''}EXISTS (SELECT 1 FROM {obj3} WHERE {cond})"
+                    )
+                elif sub_columns:
+                    sub_column = self.rng.choice(sub_columns)
+                    if sub_kind == "in":
+                        parts.append(f"{column} IN (SELECT {sub_column} FROM {obj3})")
+                    else:
+                        parts.append(
+                            f"{column} = (SELECT {sub_column} FROM {obj3} LIMIT 1)"
+                        )
+            # Deliberate temporal filter, mz_now() has to be a top-level
+            # conjunct for the temporal filter machinery to apply.
+            ts_columns = [
+                c for c in all_columns if c.data_type in (Timestamp, TimestampTz)
+            ]
+            if ts_columns and expr_kind != ExprKind.WRITE and self.rng.random() < 0.2:
+                ts_column = self.rng.choice(ts_columns)
+                op = self.rng.choice(["<=", ">="])
+                parts.append(
+                    f"mz_now() {op} {ts_column} + INTERVAL '{self.rng.randint(0, 100000)} seconds'"
+                )
+            if not parts:
+                return ""
+            # Generated Boolean expressions can contain OR, so parenthesize
+            # each part to keep every part as a top-level conjunct.
+            return " WHERE " + " AND ".join(f"({part})" for part in parts)
+
+        distinct_on_expr = None
+        group_by = bool(exprs) and self.rng.random() < 0.2
+        if group_by:
+            num_group = self.rng.randint(1, len(exprs))
+            select_list = [expr for _, expr in exprs[:num_group]]
+            for i in range(self.rng.randint(1, 3)):
+                agg_column = self.rng.choice(all_columns)
+                fn = self.rng.choice(self.aggregate_fns(agg_column))
+                select_list.append(fn.format(agg_column))
+            group_clause = (
+                f" GROUP BY {', '.join(str(i + 1) for i in range(num_group))}"
+            )
+            # Clause order is fixed: HAVING before OPTIONS.
+            if self.rng.random() < 0.3:
+                group_clause += f" HAVING count(*) >= {self.rng.randint(0, 10)}"
+            if self.rng.random() < 0.3:
+                group_clause += f" OPTIONS (AGGREGATE INPUT GROUP SIZE = {self.rng.randint(1, 1000)})"
+            arity = len(select_list)
+            distinct_clause = ""
+        else:
+            select_list = [expr for _, expr in exprs] if exprs else ["*"]
+            group_clause = ""
+            distinct_clause = ""
+            distinct_on_expr = None
+            if exprs and self.rng.random() < 0.15:
+                if exprs[0][0] == TextTextMap or self.rng.choice([True, False]):
+                    distinct_clause = "DISTINCT "
+                else:
+                    # The DISTINCT ON expressions must be a prefix of the
+                    # ORDER BY expressions. The leading ORDER BY item repeats
+                    # this expression verbatim (not its ordinal) so the match
+                    # holds even for bare literals.
+                    distinct_on_expr = exprs[0][1]
+                    distinct_clause = f"DISTINCT ON ({distinct_on_expr}) "
+            if exprs and self.rng.choice([True, False]):
                 column1 = self.rng.choice(all_columns)
                 column2 = self.rng.choice(all_columns)
                 column3 = self.rng.choice(all_columns)
-                fns = [
-                    "COUNT({})",
-                    # "LIST_AGG({})",
-                    # "JSONB_AGG({})",
-                ]
-                # if column1.data_type == Text:
-                #     fns.extend(["STRING_AGG({}, ',')"])
-                # if column1.data_type not in [TextTextMap, IntArray, IntList]:
-                #     fns.extend(["ARRAY_AGG({})"])
-                if column1.data_type in NUMBER_TYPES:
-                    fns.extend(
-                        [
-                            "SUM({})",
-                            "AVG({})",
-                            "MAX({})",
-                            "MIN({})",
-                            "STDDEV({})",
-                            "STDDEV_POP({})",
-                            "STDDEV_SAMP({})",
-                            "VAR_SAMP({})",
-                            "VAR_POP({})",
-                        ]
-                    )
-                elif column1.data_type == Boolean:
-                    fns.extend(["BOOL_AND({})", "BOOL_OR({})"])
-                window_fn = self.rng.choice(fns)
-                expressions += f", {window_fn.format(column1)} OVER (PARTITION BY {column2} ORDER BY {column3})"
-        else:
-            expressions = "*"
-
-        query = f"SELECT {expressions} FROM {obj_name}"
-
-        if join:
-            column2 = self.rng.choice(columns)
-            query += f" JOIN {obj2_name} ON {column} = {column2}"
-
-        if self.rng.choice([True, False]):
-            query += f" WHERE {expression(Boolean, all_columns, self.rng, expr_kind)}"
-
-        if self.rng.choice([True, False]):
-            query += f" UNION ALL SELECT {expressions} FROM {obj_name}"
-
-            if join:
-                column2 = self.rng.choice(columns)
-                query += f" JOIN {obj2_name} ON {column} = {column2}"
-
-            if self.rng.choice([True, False]):
-                query += (
-                    f" WHERE {expression(Boolean, all_columns, self.rng, expr_kind)}"
+                window_fn = self.rng.choice(self.aggregate_fns(column1))
+                select_list.append(
+                    f"{window_fn.format(column1)} OVER (PARTITION BY {column2} ORDER BY {column3})"
                 )
+            arity = len(select_list) if exprs else len(all_columns)
+
+        expressions = ", ".join(select_list)
+        query = f"SELECT {distinct_clause}{expressions} FROM {obj_name}"
+        query += join_clause
+        query += where_clause()
+        query += group_clause
+
+        if not distinct_clause and self.rng.choice([True, False]):
+            set_op = self.rng.choice(
+                ["UNION ALL"] * 4
+                + ["UNION", "INTERSECT", "INTERSECT ALL", "EXCEPT", "EXCEPT ALL"]
+            )
+            query += f" {set_op} SELECT {expressions} FROM {obj_name}"
+            query += join_clause
+            query += where_clause()
+            query += group_clause
+
+        # Ordinals keep ORDER BY valid across set operations. Map-typed
+        # output columns are skipped, same as in the join column selection.
+        orderable = [
+            i + 1
+            for i in range(arity)
+            if not exprs or i >= len(exprs) or exprs[i][0] != TextTextMap
+        ]
+        if distinct_on_expr is not None:
+            order_by = [distinct_on_expr]
+            for i in self.rng.sample(orderable, self.rng.randint(0, len(orderable))):
+                if i != 1:
+                    order_by.append(str(i))
+            query += f" ORDER BY {', '.join(order_by)}"
+        elif exprs and orderable and self.rng.random() < 0.3:
+            order_by = []
+            for i in self.rng.sample(orderable, self.rng.randint(1, len(orderable))):
+                direction = self.rng.choice(["", " ASC", " DESC"])
+                nulls = self.rng.choice(["", " NULLS FIRST", " NULLS LAST"])
+                order_by.append(f"{i}{direction}{nulls}")
+            query += f" ORDER BY {', '.join(order_by)}"
 
         query += f" LIMIT {self.rng.randint(0, 100)}"
+        if self.rng.random() < 0.2:
+            query += f" OFFSET {self.rng.randint(0, 100)}"
+
+        if self.rng.random() < 0.15:
+            query = f"WITH cte0 AS ({query}) SELECT * FROM cte0"
         return query
 
     def exe_prepared(self, query: str, stmt_name: str, exe: Executor) -> None:
@@ -431,7 +727,12 @@ class FetchAction(Action):
             if self.rng.choice([True, False])
             else exe.commit(http=Http.NO)
         )
+        # NOTE: A bounded SUBSCRIBE (UP TO) over an object whose as_of has
+        # advanced to the end of time (e.g. a finished bounded load generator
+        # source) soft-panics the optimizer (CLU-169). See FINDINGS-BUGS.md. Left out
+        # until that is fixed. AS OF AT LEAST 0 below is safe (empty until).
         query = "SUBSCRIBE "
+        envelope_used = False
         if self.rng.choice([True, False]):
             obj = self.rng.choice(exe.db.db_objects())
             query += f"{obj}"
@@ -441,11 +742,20 @@ class FetchAction(Action):
                 columns = self.rng.sample(obj.columns, len(obj.columns))
                 key = ", ".join(column.name(True) for column in columns)
                 query += f" ENVELOPE {envelope} (KEY ({key}))"
-
-            if self.rng.choice([True, False]):
-                query += " WITH (SNAPSHOT = false)"
+                envelope_used = True
         else:
             query += f"({self.generate_select_query(exe, ExprKind.MATERIALIZABLE)})"
+
+        options = []
+        if self.rng.choice([True, False]):
+            options.append("SNAPSHOT = false")
+        if not envelope_used and self.rng.random() < 0.3:
+            options.append("PROGRESS")
+        if options:
+            query += f" WITH ({', '.join(options)})"
+        if self.rng.random() < 0.2:
+            # AT LEAST always plans, no matter how far the since advanced.
+            query += " AS OF AT LEAST 0"
 
         exe.execute(f"DECLARE c{self.i} CURSOR FOR {query}", http=Http.NO)
         while True:
@@ -663,6 +973,13 @@ class CopyFromS3Action(Action):
                 "timeout: error trying to connect",
                 # TODO: Remove when https://linear.app/materializeinc/issue/SS-341 is fixed
                 "parquet error",
+                # Same SS-341 class via the arrow record-batch path: COPY TO
+                # writes a type (e.g. a daterange) that COPY FROM cannot decode.
+                "failed to decode Row from a record batch",
+                # COPY TO CSV writes a large-year date that COPY FROM CSV then
+                # fails to parse back (SS-345). See FINDINGS-BUGS.md ("COPY FROM CSV
+                # cannot decode a large-year date written by COPY TO").
+                "expected_dur_like_tokens can only be called with",
             ]
         )
         if exe.db.complexity == Complexity.DDL:
@@ -808,6 +1125,17 @@ class CopyFromStdinAction(Action):
 
 
 class InsertReturningAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        result = super().errors_to_ignore(exe)
+        # The RETURNING expressions re-render the fully-qualified table and
+        # column names, so a concurrent schema or table rename landing between
+        # the INSERT target and the RETURNING clause leaves the two referring to
+        # different names and the query fails with "does not exist". Same class
+        # as UpdateAction/DeleteAction.
+        if exe.db.complexity == Complexity.DDL or exe.db.scenario == Scenario.Rename:
+            result.extend(["does not exist"])
+        return result
+
     def run(self, exe: Executor) -> bool:
         table = None
         if exe.insert_table is not None:
@@ -868,6 +1196,98 @@ class InsertReturningAction(Action):
             exe.execute(query, http=Http.RANDOM)
         table.num_rows += len(column_values)
         exe.insert_table = table.table_id
+        return True
+
+
+class InsertSelectAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        result = super().errors_to_ignore(exe)
+        result.extend(
+            [
+                # A random source expression can evaluate to NULL even for a
+                # NOT NULL target column, a legitimate rejection.
+                "violates not-null constraint",
+                "canceling statement due to statement timeout",
+            ]
+        )
+        if exe.db.complexity == Complexity.DDL:
+            result.extend(
+                [
+                    "does not exist",
+                ]
+            )
+        return result
+
+    def run(self, exe: Executor) -> bool:
+        # Temp tables can only be written by their creating session, and
+        # other sessions' temp tables cannot be read either.
+        tables = [
+            table
+            for table in exe.db.tables
+            if not table.temp or table in exe.temp_objects
+        ]
+        writable = [table for table in tables if table.num_rows < MAX_ROWS]
+        if not writable:
+            return False
+        table = self.rng.choice(writable)
+        source_table = self.rng.choice(tables)
+        limit = self.rng.randint(0, min(100, MAX_ROWS - table.num_rows))
+        column_names = ", ".join(column.name(True) for column in table.columns)
+        # Cast each projection to its target column's type. INSERT .. SELECT
+        # requires the projection to assignment-cast to the target, and a few
+        # types (notably bytea) come back from expression() as a bare text
+        # literal that has no text->target assignment cast.
+        select_exprs = ", ".join(
+            "({})::{}".format(
+                expression(
+                    column.data_type,
+                    source_table.columns,
+                    self.rng,
+                    kind=ExprKind.WRITE,
+                ),
+                column.data_type.name(),
+            )
+            for column in table.columns
+        )
+        query = f"INSERT INTO {table} ({column_names}) SELECT {select_exprs} FROM {source_table} LIMIT {limit}"
+        exe.execute(query, http=Http.RANDOM)
+        # The actual count depends on the source table's size, LIMIT is an
+        # upper bound. Overestimating num_rows is fine, it only gates further
+        # inserts.
+        table.num_rows += limit
+        return True
+
+
+class CopyToStdoutAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        result = super().errors_to_ignore(exe)
+        result.extend(
+            [
+                "in the same timedomain",
+                # A prior statement in the read transaction routed it to
+                # mz_catalog_server, where this COPY of a user object is
+                # rejected.
+                'is not allowed from the "mz_catalog_server" cluster',
+                # BINARY format is deliberately kept in the mix even though
+                # some types (e.g. map) have no binary output function.
+                "no binary output function available for type",
+            ]
+        )
+        if exe.db.complexity == Complexity.DDL:
+            result.extend(
+                [
+                    "does not exist",
+                ]
+            )
+        return result
+
+    def run(self, exe: Executor) -> bool:
+        obj = self.rng.choice(exe.db.db_objects())
+        query = f"COPY (SELECT * FROM {obj} LIMIT {self.rng.randint(0, 100)}) TO STDOUT"
+        if self.rng.choice([True, False]):
+            format = self.rng.choice(["TEXT", "CSV", "BINARY"])
+            query += f" WITH (FORMAT {format})"
+        exe.copy_to_stdout(query)
         return True
 
 
@@ -947,8 +1367,14 @@ class UpdateAction(Action):
                 return False
             table = self.rng.choice(tables)
 
-        column2 = self.rng.choice(table.columns)
-        query = f"UPDATE {table} SET {column2.name(True)} = {expression(column2.data_type, table.columns, self.rng, kind=ExprKind.WRITE)} WHERE {expression(Boolean, table.columns, self.rng, kind=ExprKind.WRITE)}"
+        set_columns = self.rng.sample(
+            table.columns, self.rng.randint(1, len(table.columns))
+        )
+        set_clause = ", ".join(
+            f"{c.name(True)} = {expression(c.data_type, table.columns, self.rng, kind=ExprKind.WRITE)}"
+            for c in set_columns
+        )
+        query = f"UPDATE {table} SET {set_clause} WHERE {expression(Boolean, table.columns, self.rng, kind=ExprKind.WRITE)}"
         if self.rng.choice([True, False]):
             self.stmt_id += 1
             self.exe_prepared(query, f"update{self.stmt_id}", exe)
@@ -960,9 +1386,18 @@ class UpdateAction(Action):
 
 class DeleteAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
-        errors = [
-            "canceling statement due to statement timeout",
-        ] + super().errors_to_ignore(exe)
+        errors = (
+            [
+                "canceling statement due to statement timeout",
+                # DELETE .. USING lowers to a semijoin whose DistinctBy can surface
+                # negative-accumulation errors for some generated WHERE clauses,
+                # outside the RepeatRow scenario. This is the known class tracked in
+                # database-issues#9308. See FINDINGS-BUGS.md ("DELETE .. USING
+                # surfaces a negative-accumulation error").
+            ]
+            + NEGATIVE_ACCUMULATION_ERRORS
+            + super().errors_to_ignore(exe)
+        )
         if exe.db.scenario == Scenario.Rename:
             errors += ["does not exist"]
         return errors
@@ -978,7 +1413,17 @@ class DeleteAction(Action):
             return False
         table = self.rng.choice(tables)
         query = f"DELETE FROM {table}"
-        if self.rng.random() < 0.95:
+        using_tables = [
+            t
+            for t in exe.db.tables
+            if t != table and (not t.temp or t in exe.temp_objects)
+        ]
+        if using_tables and self.rng.random() < 0.2:
+            using_table = self.rng.choice(using_tables)
+            all_columns = list(table.columns) + list(using_table.columns)
+            query += f" USING {using_table}"
+            query += f" WHERE {expression(Boolean, all_columns, self.rng, kind=ExprKind.WRITE)}"
+        elif self.rng.random() < 0.95:
             query += f" WHERE {expression(Boolean, table.columns, self.rng, kind=ExprKind.WRITE)}"
         if self.rng.choice([True, False]):
             self.stmt_id += 1
@@ -996,15 +1441,66 @@ class DeleteAction(Action):
 
 
 class CommentAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            "unknown role",
+        ] + super().errors_to_ignore(exe)
+
     def run(self, exe: Executor) -> bool:
-        table = self.rng.choice(exe.db.tables)
+        with exe.db.lock:
+            candidates: list[tuple[str, str]] = []
+            for table in exe.db.tables:
+                candidates.append(("TABLE", str(table)))
+                candidates.append(("COLUMN", str(self.rng.choice(table.columns))))
+            for view in exe.db.views:
+                candidates.append(
+                    (
+                        "MATERIALIZED VIEW" if view.materialized else "VIEW",
+                        str(view),
+                    )
+                )
+            # Kafka and webhook source objects are readable directly, the
+            # others follow the source-table model: str(obj) names the table,
+            # the ingestion source is a separate catalog item.
+            for source in exe.db.kafka_sources + exe.db.webhook_sources:
+                candidates.append(("SOURCE", str(source)))
+            for source in (
+                exe.db.postgres_sources
+                + exe.db.mysql_sources
+                + exe.db.sql_server_sources
+            ):
+                candidates.append(("TABLE", str(source)))
+                candidates.append(
+                    (
+                        "SOURCE",
+                        f"{source.schema}.{identifier(source.executor.source)}",
+                    )
+                )
+            for source in exe.db.loadgen_sources:
+                candidates.append(("TABLE", str(source)))
+                candidates.append(
+                    ("SOURCE", f"{source.schema}.{identifier(source.source_name())}")
+                )
+            for sink in exe.db.kafka_sinks + exe.db.iceberg_sinks:
+                candidates.append(("SINK", str(sink)))
+            for index in exe.db.indexes:
+                candidates.append(("INDEX", str(index)))
+            for schema in exe.db.schemas:
+                candidates.append(("SCHEMA", str(schema)))
+            for db in exe.db.dbs:
+                candidates.append(("DATABASE", str(db)))
+            for cluster in exe.db.clusters:
+                candidates.append(("CLUSTER", str(cluster)))
+            for role in exe.db.roles:
+                candidates.append(("ROLE", str(role)))
+            candidates.append(("SECRET", "materialize.public.pgpass"))
+            candidates.append(("CONNECTION", "materialize.public.kafka_conn"))
+            if not candidates:
+                return False
+            kind, name = self.rng.choice(candidates)
 
-        if self.rng.choice([True, False]):
-            column = self.rng.choice(table.columns)
-            query = f"COMMENT ON COLUMN {column} IS '{Text.random_value(self.rng)}'"
-        else:
-            query = f"COMMENT ON TABLE {table} IS '{Text.random_value(self.rng)}'"
-
+        comment = self.rng.choice([f"'{Text.random_value(self.rng)}'", "NULL"])
+        query = f"COMMENT ON {kind} {name} IS {comment}"
         exe.execute(query, http=Http.RANDOM)
         return True
 
@@ -1059,10 +1555,12 @@ class DropIndexAction(Action):
                 # The indexed object or its schema may have been dropped
                 # concurrently, taking the index with it. Untrack the index
                 # either way so stale entries don't fill up the set and choke
-                # off CreateIndexAction.
-                exe.db.indexes.remove(index)
+                # off CreateIndexAction. Use discard, not remove: a concurrent
+                # CASCADE drop's untrack_objects_in_schemas may have already
+                # removed it, and remove would raise KeyError.
+                exe.db.indexes.discard(index)
                 raise
-            exe.db.indexes.remove(index)
+            exe.db.indexes.discard(index)
             return True
 
 
@@ -1126,7 +1624,12 @@ class DropTableAction(Action):
 
             query = f"DROP TABLE {table}"
             exe.execute(query, http=Http.RANDOM)
-            exe.db.tables.remove(table)
+            # A concurrent CASCADE drop's untrack_objects_in_schemas may have
+            # already filtered this table out of the list; tolerate that.
+            try:
+                exe.db.tables.remove(table)
+            except ValueError:
+                pass
         return True
 
 
@@ -1288,12 +1791,24 @@ class RenameKafkaSinkAction(Action):
         return True
 
 
-class ReplaceMaterializedViewAction(Action):
+class CreateReplacementMaterializedViewAction(Action):
+    """CREATE REPLACEMENT MATERIALIZED VIEW for a random materialized view.
+
+    Deliberately only creates. The replacement stays alive until an
+    ApplyReplacementMaterializedViewAction or
+    DropReplacementMaterializedViewAction finds it in the catalog, from any
+    worker and possibly only after a kill or 0dt deploy. Resolving the
+    replacement on the creating connection would tie its lifetime to that
+    connection, so it could never span an envd restart. Incident 1136
+    (bootstrap loses the replacement collection's primary link to the
+    target's shard, a post-restart DROP of the replacement then finalizes the
+    target's live shard) lives exactly in that gap.
+    """
+
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         errors = [
-            # A concurrent or leaked replacement of the same view
+            # A concurrent replacement of the same view
             "because it already has a replacement",
-            "is sealed and thus cannot be replaced",
         ] + super().errors_to_ignore(exe)
         if exe.db.scenario == Scenario.Rename:
             # The view's rendered SELECT embeds qualified names captured at
@@ -1303,7 +1818,18 @@ class ReplaceMaterializedViewAction(Action):
 
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
-            mvs = [v for v in exe.db.views if v.materialized]
+            # Skip views whose shard can seal legitimately: REFRESH AT views
+            # seal after their last refresh, repeat_row constant views seal
+            # on hydration. Never replacing those keeps "is sealed" errors
+            # and empty write frontiers of the remaining views hard failure
+            # signals, see SealedMaterializedViewCheckAction.
+            mvs = [
+                v
+                for v in exe.db.views
+                if v.materialized
+                and not (v.refresh or "").startswith("AT")
+                and not v.repeat_row_const
+            ]
             if not mvs:
                 return False
             view = self.rng.choice(mvs)
@@ -1319,17 +1845,144 @@ class ReplaceMaterializedViewAction(Action):
         exe.execute(
             f"CREATE REPLACEMENT MATERIALIZED VIEW {tmp_mv} FOR {view} AS {view.get_select()}",
         )
-        time.sleep(self.rng.random())
+        return True
+
+
+class ResolveReplacementMaterializedViewAction(Action):
+    """Base for actions resolving live replacements.
+
+    Replacements are picked from the catalog instead of tracked state so that
+    replacements created by other workers or left behind by dead connections,
+    kills, and 0dt deploys are found too.
+    """
+
+    def pick_replacement(self, exe: Executor) -> tuple[str, str] | None:
+        exe.execute(
+            "SELECT rd.name, rs.name, r_mv.name, td.name, ts.name, t_mv.name"
+            " FROM mz_internal.mz_replacements r"
+            " JOIN mz_catalog.mz_materialized_views r_mv ON r_mv.id = r.id"
+            " JOIN mz_catalog.mz_schemas rs ON rs.id = r_mv.schema_id"
+            " JOIN mz_catalog.mz_databases rd ON rd.id = rs.database_id"
+            " JOIN mz_catalog.mz_materialized_views t_mv ON t_mv.id = r.target_id"
+            " JOIN mz_catalog.mz_schemas ts ON ts.id = t_mv.schema_id"
+            " JOIN mz_catalog.mz_databases td ON td.id = ts.database_id",
+            http=Http.NO,
+        )
+        rows = exe.cur.fetchall()
+        if not rows:
+            return None
+        r_db, r_schema, r_name, t_db, t_schema, t_name = self.rng.choice(rows)
+        replacement = f"{identifier(r_db)}.{identifier(r_schema)}.{identifier(r_name)}"
+        target = f"{identifier(t_db)}.{identifier(t_schema)}.{identifier(t_name)}"
+        return replacement, target
+
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            # Reading catalog relations inside a txn that already touched
+            # user objects crosses timedomains.
+            "in the same timedomain",
+        ] + super().errors_to_ignore(exe)
+
+
+class ApplyReplacementMaterializedViewAction(ResolveReplacementMaterializedViewAction):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        # NOTE: "is sealed and thus cannot be replaced" is deliberately not
+        # ignored. Replacements are only created for views whose shard never
+        # seals legitimately, so hitting it means the target's shard was
+        # wrongly finalized (incident 1136).
+        errors = [
+            # A concurrent apply or drop won the race for this replacement
+            "replacement materialized view does not exist",
+        ] + super().errors_to_ignore(exe)
+        if exe.db.scenario == Scenario.Rename:
+            # The target was renamed between picking and applying
+            errors += ["does not exist"]
+        return errors
+
+    def run(self, exe: Executor) -> bool:
+        picked = self.pick_replacement(exe)
+        if picked is None:
+            return False
+        replacement, target = picked
+        # APPLY REPLACEMENT waits for the target's write frontier to catch up
+        # to the replacement's. The wait never finishes if the target is
+        # concurrently cascade-dropped (database-issues#9820), so bound it
+        # with a statement timeout.
+        exe.execute("SET statement_timeout = '60s'")
+        # Statement timeouts on this session are expected from here on, an
+        # in-flight statement can still hit the old timeout after RESET.
+        exe.statement_timeout_set = True
         try:
-            exe.execute(f"ALTER MATERIALIZED VIEW {view} APPLY REPLACEMENT {tmp_mv}")
-        except QueryError:
-            # Clean up, a leaked replacement blocks all future replacements
-            # of this view.
+            exe.execute(
+                f"ALTER MATERIALIZED VIEW {target} APPLY REPLACEMENT {replacement}"
+            )
+        finally:
             try:
-                exe.execute(f"DROP MATERIALIZED VIEW IF EXISTS {tmp_mv}")
+                exe.execute("RESET statement_timeout")
             except QueryError:
                 pass
-            raise
+        return True
+
+
+class DropReplacementMaterializedViewAction(ResolveReplacementMaterializedViewAction):
+    """Drop a live replacement without applying it.
+
+    This is the incident 1136 trigger statement when it runs after an envd
+    restart: bootstrap loses the replacement collection's primary link, so
+    the drop wrongly finalizes the target's live shard.
+    SealedMaterializedViewCheckAction detects the resulting damage.
+    """
+
+    def run(self, exe: Executor) -> bool:
+        picked = self.pick_replacement(exe)
+        if picked is None:
+            return False
+        replacement, _ = picked
+        # IF EXISTS, a concurrent apply or drop may have resolved it already.
+        exe.execute(f"DROP MATERIALIZED VIEW IF EXISTS {replacement}")
+        return True
+
+
+class SealedMaterializedViewCheckAction(Action):
+    """Client-side data-loss oracle for wrongly finalized MV shards.
+
+    A shard's upper only becomes empty when the shard is sealed, in normal
+    operation only during shard finalization after its collection was
+    dropped. A live materialized view with an empty write frontier therefore
+    means its shard was finalized out from under it. Incident 1136 is the
+    known trigger: dropping a replacement after an envd restart finalizes the
+    target's shard because bootstrap dropped the replacement collection's
+    primary link. REFRESH AT views seal legitimately after their last refresh
+    and are excluded.
+    """
+
+    def applicable(self, exe: Executor) -> bool:
+        # repeat_row constant views seal legitimately on hydration and are
+        # indistinguishable from damage in the catalog.
+        return exe.db.scenario != Scenario.RepeatRow
+
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            "in the same timedomain",
+        ] + super().errors_to_ignore(exe)
+
+    def run(self, exe: Executor) -> bool:
+        exe.execute(
+            "SELECT mv.id, mv.name"
+            " FROM mz_catalog.mz_materialized_views mv"
+            " JOIN mz_internal.mz_frontiers f ON f.object_id = mv.id"
+            " WHERE f.write_frontier IS NULL"
+            " AND NOT EXISTS ("
+            "SELECT 1 FROM mz_internal.mz_materialized_view_refresh_strategies rs"
+            " WHERE rs.materialized_view_id = mv.id AND rs.type = 'at')",
+            http=Http.NO,
+        )
+        sealed = exe.cur.fetchall()
+        if sealed:
+            raise ValueError(
+                "Materialized views with wrongly sealed persist shards"
+                f" (incident 1136 class): {sealed}"
+            )
         return True
 
 
@@ -1358,13 +2011,13 @@ class AlterIcebergSinkFromAction(Action):
             # Iceberg sinks always have a key, so only allow a conservative
             # case: all names, types, and nullabilities match, which also
             # guarantees the key columns exist in the new object.
-            # TODO: Switch back when SS-324 is fixed to make sure it errors
+            # TODO: Switch back when SS-344 is fixed to make sure it errors
             # instead of causing a stall
             objs = []
             old_cols = {
                 c.name(True): (c.data_type, c.nullable) for c in old_object.columns
             }
-            for o in exe.db.db_objects_without_views():
+            for o in exe.db.db_objects_for_sinks():
                 if isinstance(old_object, WebhookSource):
                     continue
                 if isinstance(o, WebhookSource):
@@ -1420,14 +2073,14 @@ class AlterKafkaSinkFromAction(Action):
                 # single column formats
                 objs = [
                     o
-                    for o in exe.db.db_objects_without_views()
+                    for o in exe.db.db_objects_for_sinks()
                     if len(o.columns) == 1
                     and o.columns[0].data_type == old_object.columns[0].data_type
                 ]
             elif sink.format in ["FORMAT JSON"]:
                 # We should be able to format all data types as JSON, and they have no
                 # particular backwards-compatiblility requirements.
-                objs = [o for o in exe.db.db_objects_without_views()]
+                objs = [o for o in exe.db.db_objects_for_sinks()]
             else:
                 # Avro schema migration checking can be quite strict, and we need to be not only
                 # compatible with the latest object's schema but all previous schemas.
@@ -1440,7 +2093,7 @@ class AlterKafkaSinkFromAction(Action):
                 old_cols = {
                     c.name(True): (c.data_type, c.nullable) for c in old_object.columns
                 }
-                for o in exe.db.db_objects_without_views():
+                for o in exe.db.db_objects_for_sinks():
                     if isinstance(old_object, WebhookSource):
                         continue
                     if isinstance(o, WebhookSource):
@@ -1668,6 +2321,177 @@ class TransactionIsolationAction(Action):
         return True
 
 
+class ParameterizedQueryAction(Action):
+    """PREPARE a query with $1..$n placeholders, then EXECUTE it with values.
+
+    Exercises the parameter-type-inference and bind/assignment-cast path that
+    the workload's other prepared statements (no parameters) never reach."""
+
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        result = super().errors_to_ignore(exe)
+        result.extend(
+            [
+                "in the same timedomain",
+                'is not allowed from the "mz_catalog_server" cluster',
+            ]
+        )
+        if exe.db.complexity == Complexity.DDL:
+            result.extend(["does not exist"])
+        return result
+
+    def run(self, exe: Executor) -> bool:
+        obj = self.rng.choice(exe.db.db_objects())
+        n = self.rng.randint(1, 4)
+        param_types = [self.rng.choice(list(DATA_TYPES)) for _ in range(n)]
+        projection = ", ".join(
+            f"${i + 1}::{t.name()}" for i, t in enumerate(param_types)
+        )
+        self.stmt_id += 1
+        name = f"pq{self.stmt_id}"
+        query = f"SELECT {projection} FROM {obj} LIMIT {self.rng.randint(0, 10)}"
+        # Each argument is cast to its parameter's declared type so the
+        # assignment cast on EXECUTE always succeeds (e.g. a bytea parameter
+        # rejects a bare text literal).
+        values = ", ".join(
+            f"({t.random_value(self.rng, in_query=True)})::{t.name()}"
+            for t in param_types
+        )
+        # Run sequentially, not in a try/finally: if EXECUTE fails it aborts
+        # the transaction, and a DEALLOCATE in a finally would then fail with
+        # "current transaction is aborted", masking the real error. On failure
+        # the worker rolls back, which discards the prepared statement anyway.
+        exe.execute(f"PREPARE {name} AS {query}", http=Http.NO)
+        exe.execute(f"EXECUTE {name} ({values})", http=Http.NO, fetch=True)
+        exe.execute(f"DEALLOCATE {name}", http=Http.NO)
+        return True
+
+
+class BoundedStalenessReadAction(Action):
+    """A read under `bounded staleness` isolation, a distinct timestamp-
+    selection path that never blocks and returns 40001 when the freshness
+    bound cannot be met. The isolation is set transiently around the read and
+    reset, since bounded staleness is read-only and would break writes."""
+
+    def applicable(self, exe: Executor) -> bool:
+        return exe.db.flags.get("enable_bounded_staleness_isolation", "FALSE") == "TRUE"
+
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        result = super().errors_to_ignore(exe)
+        result.extend(
+            [
+                # The flag was flipped off between applicable() and run().
+                "is not available",
+                # The freshness bound could not be met. Bounded staleness
+                # never blocks, it errors instead.
+                "not been materialized",
+                "could not find a valid timestamp for the query",
+                "cannot serve query under bounded staleness",
+                # A leaked real_time_recency SET on the session (its own reset
+                # was discarded on a prior query's error path) conflicts with
+                # bounded staleness.
+                "cannot be combined with bounded staleness",
+                "in the same timedomain",
+                'is not allowed from the "mz_catalog_server" cluster',
+            ]
+        )
+        if exe.db.complexity == Complexity.DDL:
+            result.extend(["does not exist"])
+        return result
+
+    def run(self, exe: Executor) -> bool:
+        bound = self.rng.choice(["1s", "5s", "30s"])
+        exe.execute(
+            f"SET TRANSACTION_ISOLATION TO 'bounded staleness {bound}'",
+            explainable=False,
+        )
+        try:
+            query = self.generate_select_query(exe, ExprKind.ALL)
+            exe.execute(query, http=Http.NO, fetch=True)
+        finally:
+            exe.execute(
+                "SET TRANSACTION_ISOLATION TO 'strict serializable'",
+                explainable=False,
+            )
+        return True
+
+
+class ReadOnlyTransactionAction(Action):
+    """A multi-statement `BEGIN READ ONLY` transaction. All reads run at one
+    pinned timestamp (one timedomain), and holding the read pins compaction
+    for the transaction's lifetime."""
+
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        result = super().errors_to_ignore(exe)
+        result.extend(
+            [
+                "in the same timedomain",
+                'is not allowed from the "mz_catalog_server" cluster',
+            ]
+        )
+        if exe.db.complexity == Complexity.DDL:
+            result.extend(["does not exist"])
+        return result
+
+    def run(self, exe: Executor) -> bool:
+        isolation = self.rng.choice(
+            [
+                "",
+                " ISOLATION LEVEL SERIALIZABLE",
+                " ISOLATION LEVEL STRICT SERIALIZABLE",
+            ]
+        )
+        exe.execute(f"BEGIN{isolation} READ ONLY", http=Http.NO)
+        try:
+            for _ in range(self.rng.randint(1, 3)):
+                query = self.generate_select_query(exe, ExprKind.ALL)
+                exe.execute(query, http=Http.NO, fetch=True)
+        finally:
+            end = "COMMIT" if self.rng.choice([True, False]) else "ROLLBACK"
+            exe.execute(end, http=Http.NO)
+        return True
+
+
+class DDLTransactionAction(Action):
+    """A DDL statement inside an explicit `BEGIN`/`COMMIT`. Materialize allows
+    only a single statement in a DDL transaction, so the value over autocommit
+    DDL is the open commit window: racing concurrent DDL against it exercises
+    the "another session modified the catalog while this DDL transaction was
+    open" serialization path."""
+
+    def applicable(self, exe: Executor) -> bool:
+        return exe.db.complexity in (Complexity.DDL, Complexity.DDLOnly)
+
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            "another session modified the catalog",
+            "unknown schema",
+        ] + super().errors_to_ignore(exe)
+
+    def run(self, exe: Executor) -> bool:
+        if len([t for t in exe.db.tables if not t.temp]) >= MAX_TABLES:
+            return False
+        try:
+            schema = self.rng.choice(exe.db.schemas)
+        except IndexError:
+            return False
+        table_id = exe.db.table_id
+        exe.db.table_id += 1
+        table = Table(self.rng, table_id, schema)
+        exe.execute("BEGIN", http=Http.NO)
+        try:
+            table.create(exe)
+            exe.execute("COMMIT", http=Http.NO)
+        except QueryError:
+            try:
+                exe.execute("ROLLBACK", http=Http.NO)
+            except QueryError:
+                pass
+            raise
+        with exe.db.lock:
+            exe.db.tables.append(table)
+        return True
+
+
 class CommitRollbackAction(Action):
     def run(self, exe: Executor) -> bool:
         if not exe.action_run_since_last_commit_rollback:
@@ -1818,6 +2642,9 @@ class FlipFlagsAction(Action):
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["enable_alter_table_add_column"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_bounded_staleness_isolation"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["enable_arrangement_dictionary_compression_alpha"] = (
             BOOLEAN_FLAG_VALUES
         )
@@ -1833,10 +2660,10 @@ class FlipFlagsAction(Action):
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["cluster"] = ["quickstart", "dont_exist"]
-        self.flags_with_values["enable_frontend_peek_sequencing"] = [
-            "true",
-            "false",
-        ]
+        # NOTE: enable_frontend_peek_sequencing is pinned off in
+        # ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS (frontend-peek read-hold vs
+        # compaction race, SQL-520, see FINDINGS-BUGS.md), so it is not flipped
+        # here.
         self.flags_with_values["enable_frontend_subscribes"] = [
             "true",
             "false",
@@ -2130,13 +2957,22 @@ class FlipFlagsAction(Action):
             return False
 
         flag_value = self.rng.choice(self.flags_with_values[flag_name])
+        # Occasionally restore the default instead, a distinct path from
+        # SET-to-value.
+        reset = self.rng.random() < 0.1
 
         conn = None
 
         try:
             conn = self.create_system_connection(exe)
-            self.flip_flag(conn, flag_name, flag_value)
-            exe.db.flags[flag_name] = flag_value
+            if reset:
+                self.reset_flag(conn, flag_name)
+                # Gates reading exe.db.flags fall back to their conservative
+                # default when the key is absent.
+                exe.db.flags.pop(flag_name, None)
+            else:
+                self.flip_flag(conn, flag_name, flag_value)
+                exe.db.flags[flag_name] = flag_value
             return True
         except OperationalError:
             # ignore it
@@ -2151,6 +2987,12 @@ class FlipFlagsAction(Action):
         with conn.cursor() as cur:
             cur.execute(
                 f"ALTER SYSTEM SET {flag_name} = {flag_value};".encode(),
+            )
+
+    def reset_flag(self, conn: Connection, flag_name: str) -> None:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"ALTER SYSTEM RESET {flag_name};".encode(),
             )
 
 
@@ -2256,7 +3098,46 @@ class DropViewAction(Action):
             else:
                 query = f"DROP VIEW {view}"
             exe.execute(query, http=Http.RANDOM)
-            exe.db.views.remove(view)
+            # A concurrent CASCADE drop's untrack_objects_in_schemas may have
+            # already filtered this view out of the list; tolerate that.
+            try:
+                exe.db.views.remove(view)
+            except ValueError:
+                pass
+        return True
+
+
+class CreateOrReplaceViewAction(Action):
+    """In-place swap of an existing view's definition via CREATE OR REPLACE.
+
+    The body is unchanged, so dependents stay valid, but the coordinator still
+    tears down and rebuilds the item (and the dataflow, for a materialized
+    view). Racing that swap against reads and concurrent DDL is the point."""
+
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        errors = [
+            # A dependent references a column the replacement would drop. The
+            # body is unchanged here, but a concurrent replacement may have
+            # changed it.
+            "still depended upon by",
+            "replica-targeted materialized views is not supported",
+            "unknown cluster replica",
+        ] + super().errors_to_ignore(exe)
+        if exe.db.scenario == Scenario.Rename:
+            # A base object was renamed, invalidating the captured body.
+            errors += ["does not exist", "ambiguous reference to schema name"]
+        return errors
+
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            views = [view for view in exe.db.views if not view.temp]
+            if not views:
+                return False
+            view = self.rng.choice(views)
+        with view.lock:
+            if view not in exe.db.views:
+                return False
+            view.create(exe, or_replace=True)
         return True
 
 
@@ -2304,6 +3185,48 @@ class DropRoleAction(Action):
         return True
 
 
+class AlterRoleAction(Action):
+    """ALTER ROLE ... SET / RESET a default session variable.
+
+    Exercises the per-role session-default path (applied at session init) and
+    role-name resolution on the ALTER path, neither of which CREATE/DROP ROLE
+    touch. Part of broadening ALTER coverage (the ALTER paths are where several
+    catalog bugs have hidden vs the well-worn CREATE/DROP)."""
+
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            if not exe.db.roles:
+                return False
+            role = self.rng.choice(exe.db.roles)
+        with role.lock:
+            # Was dropped while we were acquiring the lock.
+            if role not in exe.db.roles:
+                return False
+            var, value = self.rng.choice(
+                [
+                    ("cluster", "'quickstart'"),
+                    ("transaction_isolation", "'serializable'"),
+                    ("statement_timeout", "'120s'"),
+                    ("search_path", "public"),
+                ]
+            )
+            query = (
+                f"ALTER ROLE {role} RESET {var}"
+                if self.rng.choice([True, False])
+                else f"ALTER ROLE {role} SET {var} = {value}"
+            )
+            try:
+                exe.execute(query, http=Http.RANDOM)
+            except QueryError as e:
+                # Concurrent DROP ROLE, expected as with DropRoleAction.
+                if (
+                    exe.db.scenario not in (Scenario.Kill, Scenario.ZeroDowntimeDeploy)
+                    or "unknown role" not in e.msg
+                ):
+                    raise e
+        return True
+
+
 class CreateClusterAction(Action):
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
@@ -2314,9 +3237,7 @@ class CreateClusterAction(Action):
         cluster = Cluster(
             cluster_id,
             managed=self.rng.choice([True, False]),
-            size=self.rng.choice(
-                ["scale=1,workers=1", "scale=1,workers=4", "scale=2,workers=2"]
-            ),
+            size=self.rng.choice(["scale=1,workers=1", "scale=1,workers=2"]),
             replication_factor=self.rng.choice([1, 2]),
             introspection_interval="1s",
         )
@@ -2468,9 +3389,7 @@ class CreateClusterReplicaAction(Action):
 
             replica = ClusterReplica(
                 replica_id,
-                size=self.rng.choice(
-                    ["scale=1,workers=1", "scale=1,workers=4", "scale=2,workers=2"]
-                ),
+                size=self.rng.choice(["scale=1,workers=1", "scale=1,workers=2"]),
                 cluster=cluster,
             )
             replica.create(exe)
@@ -2521,7 +3440,7 @@ class GrantPrivilegesAction(Action):
             if not exe.db.roles:
                 return False
             role = self.rng.choice(exe.db.roles)
-            privilege = self.rng.choice(["SELECT", "INSERT", "UPDATE", "ALL"])
+            privilege = self.rng.choice(["SELECT", "INSERT", "UPDATE", "DELETE", "ALL"])
             tables_views: list[DBObject] = [*exe.db.tables, *exe.db.views]
             table = self.rng.choice(tables_views)
         with table.lock, role.lock:
@@ -2549,7 +3468,7 @@ class RevokePrivilegesAction(Action):
             if not exe.db.roles:
                 return False
             role = self.rng.choice(exe.db.roles)
-            privilege = self.rng.choice(["SELECT", "INSERT", "UPDATE", "ALL"])
+            privilege = self.rng.choice(["SELECT", "INSERT", "UPDATE", "DELETE", "ALL"])
             tables_views: list[DBObject] = [*exe.db.tables, *exe.db.views]
             table = self.rng.choice(tables_views)
         with table.lock, role.lock:
@@ -2568,6 +3487,493 @@ class RevokePrivilegesAction(Action):
                     or "unknown role" not in e.msg
                 ):
                     raise e
+        return True
+
+
+class GrantRoleAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            "unknown role",
+            # Concurrent memberships can close a cycle, which is rejected.
+            "is a member of role",
+        ] + super().errors_to_ignore(exe)
+
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            if len(exe.db.roles) < 2:
+                return False
+            role1, role2 = self.rng.sample(exe.db.roles, 2)
+        with role1.lock, role2.lock:
+            if role1 not in exe.db.roles or role2 not in exe.db.roles:
+                return False
+            exe.execute(f"GRANT {role1} TO {role2}", http=Http.RANDOM)
+        return True
+
+
+class RevokeRoleAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            "unknown role",
+        ] + super().errors_to_ignore(exe)
+
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            if len(exe.db.roles) < 2:
+                return False
+            role1, role2 = self.rng.sample(exe.db.roles, 2)
+        with role1.lock, role2.lock:
+            if role1 not in exe.db.roles or role2 not in exe.db.roles:
+                return False
+            exe.execute(f"REVOKE {role1} FROM {role2}", http=Http.RANDOM)
+        return True
+
+
+class AlterOwnerAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        result = [
+            "unknown role",
+            "must be a member of",
+        ] + super().errors_to_ignore(exe)
+        if exe.db.complexity in (Complexity.DDL, Complexity.DDLOnly):
+            result.extend(["does not exist"])
+        return result
+
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            if not exe.db.roles:
+                return False
+            role = self.rng.choice(exe.db.roles)
+            candidates: list[tuple[str, str]] = []
+            # Temp objects cannot change owner, they die with the session.
+            for table in exe.db.tables:
+                if not table.temp:
+                    candidates.append(("TABLE", str(table)))
+            for view in exe.db.views:
+                if not view.temp:
+                    candidates.append(
+                        (
+                            "MATERIALIZED VIEW" if view.materialized else "VIEW",
+                            str(view),
+                        )
+                    )
+            # Kafka and webhook source objects are readable directly, the
+            # others follow the source-table model: str(obj) names the table,
+            # the ingestion source is a separate catalog item.
+            for source in exe.db.kafka_sources + exe.db.webhook_sources:
+                candidates.append(("SOURCE", str(source)))
+            for source in (
+                exe.db.postgres_sources
+                + exe.db.mysql_sources
+                + exe.db.sql_server_sources
+            ):
+                candidates.append(("TABLE", str(source)))
+                candidates.append(
+                    (
+                        "SOURCE",
+                        f"{source.schema}.{identifier(source.executor.source)}",
+                    )
+                )
+            for source in exe.db.loadgen_sources:
+                candidates.append(("TABLE", str(source)))
+                candidates.append(
+                    ("SOURCE", f"{source.schema}.{identifier(source.source_name())}")
+                )
+            for sink in exe.db.kafka_sinks + exe.db.iceberg_sinks:
+                candidates.append(("SINK", str(sink)))
+            for schema in exe.db.schemas:
+                candidates.append(("SCHEMA", str(schema)))
+            for db in exe.db.dbs:
+                candidates.append(("DATABASE", str(db)))
+            for cluster in exe.db.clusters:
+                candidates.append(("CLUSTER", str(cluster)))
+            candidates.append(("SECRET", "materialize.public.pgpass"))
+            # NOTE: No CONNECTION target. Changing a connection's owner emits a
+            # Connection(Altered) implication, which re-alters every dependent
+            # sink's export connection; that re-alter can fail with InvalidAlter
+            # and panic the coordinator (SQL-517). See FINDINGS-BUGS.md ("Coordinator
+            # panic re-altering a dependent sink's export connection").
+            kind, name = self.rng.choice(candidates)
+        with role.lock:
+            if role not in exe.db.roles:
+                return False
+            exe.execute(f"ALTER {kind} {name} OWNER TO {role}", http=Http.RANDOM)
+        return True
+
+
+class AlterDefaultPrivilegesAction(Action):
+    # Privileges per object type. The bool pair is (allows IN SCHEMA, allows IN
+    # DATABASE): schema-scoped objects accept both, SCHEMAS only IN DATABASE,
+    # DATABASES and CLUSTERS neither. Mixing e.g. ON DATABASES with IN DATABASE
+    # is a plan error, not a race, so it is generated out.
+    OBJECT_TYPES = {
+        "TABLES": (["SELECT", "INSERT", "UPDATE", "DELETE", "ALL"], True, True),
+        "TYPES": (["USAGE", "ALL"], True, True),
+        "SECRETS": (["USAGE", "ALL"], True, True),
+        "CONNECTIONS": (["USAGE", "ALL"], True, True),
+        "SCHEMAS": (["USAGE", "CREATE", "ALL"], False, True),
+        "DATABASES": (["USAGE", "CREATE", "ALL"], False, False),
+        "CLUSTERS": (["USAGE", "CREATE", "ALL"], False, False),
+    }
+
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        result = [
+            "unknown role",
+            "unknown schema",
+            "unknown database",
+            "must be a member of",
+            # FOR ALL ROLES and system-adjacent grants require privileges the
+            # (possibly reconnected-as-a-random-role) session may lack.
+            "permission denied to",
+        ] + super().errors_to_ignore(exe)
+        return result
+
+    def run(self, exe: Executor) -> bool:
+        object_type = self.rng.choice(list(self.OBJECT_TYPES.keys()))
+        privileges, allows_in_schema, allows_in_database = self.OBJECT_TYPES[
+            object_type
+        ]
+        privilege = self.rng.choice(privileges)
+        with exe.db.lock:
+            if not exe.db.roles:
+                return False
+            role = self.rng.choice(exe.db.roles)
+            for_clause = self.rng.choice(
+                ["FOR ALL ROLES"]
+                + [f"FOR ROLE {r}" for r in self.rng.sample(exe.db.roles, 1)]
+            )
+            in_clause = ""
+            if allows_in_schema and exe.db.schemas and self.rng.random() < 0.3:
+                in_clause = f" IN SCHEMA {self.rng.choice(exe.db.schemas)}"
+            elif allows_in_database and exe.db.dbs and self.rng.random() < 0.3:
+                in_clause = f" IN DATABASE {self.rng.choice(exe.db.dbs)}"
+        with role.lock:
+            if role not in exe.db.roles:
+                return False
+            if self.rng.choice([True, False]):
+                query = f"ALTER DEFAULT PRIVILEGES {for_clause}{in_clause} GRANT {privilege} ON {object_type} TO {role}"
+            else:
+                query = f"ALTER DEFAULT PRIVILEGES {for_clause}{in_clause} REVOKE {privilege} ON {object_type} FROM {role}"
+            exe.execute(query, http=Http.RANDOM)
+        return True
+
+
+class BroadPrivilegesAction(Action):
+    """GRANT/REVOKE on object classes beyond the tables and views covered by
+    Grant/RevokePrivilegesAction."""
+
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            "unknown role",
+            "unknown schema",
+            "unknown database",
+            "unknown cluster",
+            # System privileges require superuser, which a session reconnected
+            # as a random role does not have.
+            "permission denied to",
+        ] + super().errors_to_ignore(exe)
+
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            if not exe.db.roles:
+                return False
+            role = self.rng.choice(exe.db.roles)
+            targets: list[tuple[str, list[str]]] = [
+                ("SYSTEM", ["CREATEDB", "CREATECLUSTER", "CREATEROLE", "ALL"]),
+                ("SECRET materialize.public.pgpass", ["USAGE", "ALL"]),
+                # NOTE: No CONNECTION target. GRANT/REVOKE on a connection emits
+                # a Connection(Altered) implication, which re-alters every
+                # dependent sink's export connection; that re-alter can fail
+                # with InvalidAlter and panic the coordinator (SQL-517). See
+                # FINDINGS-BUGS.md ("Coordinator panic re-altering a dependent
+                # sink's export connection").
+            ]
+            if exe.db.schemas:
+                targets.append(
+                    (
+                        f"SCHEMA {self.rng.choice(exe.db.schemas)}",
+                        ["USAGE", "CREATE", "ALL"],
+                    )
+                )
+            if exe.db.dbs:
+                targets.append(
+                    (
+                        f"DATABASE {self.rng.choice(exe.db.dbs)}",
+                        ["USAGE", "CREATE", "ALL"],
+                    )
+                )
+            if exe.db.clusters:
+                targets.append(
+                    (
+                        f"CLUSTER {self.rng.choice(exe.db.clusters)}",
+                        ["USAGE", "CREATE", "ALL"],
+                    )
+                )
+            target, privileges = self.rng.choice(targets)
+            privilege = self.rng.choice(privileges)
+        with role.lock:
+            if role not in exe.db.roles:
+                return False
+            if self.rng.choice([True, False]):
+                exe.execute(
+                    f"GRANT {privilege} ON {target} TO {role}", http=Http.RANDOM
+                )
+            else:
+                exe.execute(
+                    f"REVOKE {privilege} ON {target} FROM {role}", http=Http.RANDOM
+                )
+        return True
+
+
+class ShowAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        result = super().errors_to_ignore(exe)
+        result.extend(
+            [
+                # SHOW CREATE CLUSTER only works for managed clusters. We only
+                # target managed ones, this covers a managed->unmanaged race.
+                "SHOW CREATE for unmanaged clusters not yet supported",
+                # With auto_route_catalog_queries off, SHOW compiles to a
+                # catalog query on the active cluster, so it shares the read
+                # transaction's timedomain.
+                "in the same timedomain",
+                'is not allowed from the "mz_catalog_server" cluster',
+            ]
+        )
+        if exe.db.complexity in (Complexity.DDL, Complexity.DDLOnly):
+            result.extend(["does not exist"])
+        return result
+
+    def run(self, exe: Executor) -> bool:
+        if self.rng.choice([True, False]):
+            schema_scoped = [
+                "SHOW TABLES",
+                "SHOW VIEWS",
+                "SHOW MATERIALIZED VIEWS",
+                "SHOW SOURCES",
+                "SHOW SINKS",
+                "SHOW INDEXES",
+                "SHOW OBJECTS",
+                "SHOW SECRETS",
+                "SHOW CONNECTIONS",
+                "SHOW TYPES",
+            ]
+            other = [
+                "SHOW CLUSTERS",
+                "SHOW CLUSTER REPLICAS",
+                "SHOW DATABASES",
+                "SHOW SCHEMAS",
+                "SHOW ROLES",
+                "SHOW PRIVILEGES",
+                "SHOW DEFAULT PRIVILEGES",
+                "SHOW ROLE MEMBERSHIP",
+                "SHOW ALL",
+            ]
+            if self.rng.choice([True, False]):
+                query = self.rng.choice(schema_scoped)
+                with exe.db.lock:
+                    if exe.db.schemas and self.rng.choice([True, False]):
+                        query += f" FROM {self.rng.choice(exe.db.schemas)}"
+                if self.rng.random() < 0.2:
+                    query += " LIKE '%1%'"
+            else:
+                query = self.rng.choice(other)
+        else:
+            with exe.db.lock:
+                candidates: list[tuple[str, str]] = [
+                    ("CONNECTION", "materialize.public.kafka_conn"),
+                    ("CONNECTION", "materialize.public.csr_conn"),
+                ]
+                for table in exe.db.tables:
+                    candidates.append(("TABLE", str(table)))
+                for view in exe.db.views:
+                    candidates.append(
+                        (
+                            "MATERIALIZED VIEW" if view.materialized else "VIEW",
+                            str(view),
+                        )
+                    )
+                # Kafka and webhook sources are readable directly; the others
+                # follow the source-table model where str() is the table and
+                # the ingestion source is a separate catalog item.
+                for source in exe.db.kafka_sources + exe.db.webhook_sources:
+                    candidates.append(("SOURCE", str(source)))
+                for source in (
+                    exe.db.postgres_sources
+                    + exe.db.mysql_sources
+                    + exe.db.sql_server_sources
+                ):
+                    candidates.append(("TABLE", str(source)))
+                    candidates.append(
+                        (
+                            "SOURCE",
+                            f"{source.schema}.{identifier(source.executor.source)}",
+                        )
+                    )
+                for source in exe.db.loadgen_sources:
+                    candidates.append(("TABLE", str(source)))
+                    candidates.append(
+                        (
+                            "SOURCE",
+                            f"{source.schema}.{identifier(source.source_name())}",
+                        )
+                    )
+                for sink in exe.db.kafka_sinks + exe.db.iceberg_sinks:
+                    candidates.append(("SINK", str(sink)))
+                for index in exe.db.indexes:
+                    candidates.append(("INDEX", str(index)))
+                for cluster in exe.db.clusters:
+                    # SHOW CREATE CLUSTER is not supported for unmanaged
+                    # clusters.
+                    if cluster.managed:
+                        candidates.append(("CLUSTER", str(cluster)))
+                kind, name = self.rng.choice(candidates)
+            # SHOW REDACTED CREATE CLUSTER is not supported
+            redacted = (
+                "REDACTED "
+                if kind != "CLUSTER" and self.rng.choice([True, False])
+                else ""
+            )
+            query = f"SHOW {redacted}CREATE {kind} {name}"
+        exe.execute(query, http=Http.RANDOM, fetch=True)
+        return True
+
+
+class SetSessionVariableAction(Action):
+    def __init__(self, rng: random.Random, composition: Composition | None):
+        super().__init__(rng, composition)
+        self.vars_with_values: dict[str, list[str]] = {
+            "statement_timeout": ["'30s'", "'60s'", "'0s'"],
+            "application_name": ["'parallel-workload'", "''"],
+            "client_min_messages": ["debug1", "info", "notice", "warning", "error"],
+            "max_query_result_size": ["100000", "1000000", "1000000000"],
+            "emit_timestamp_notice": ["true", "false"],
+            "emit_trace_id_notice": ["true", "false"],
+            # Only UTC is accepted, the rejection of other time zones is
+            # deliberate error path coverage.
+            "timezone": ["'UTC'", "'America/New_York'"],
+        }
+
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            "invalid value for parameter",
+            "cannot have value",
+            "unrecognized configuration parameter",
+        ] + super().errors_to_ignore(exe)
+
+    def run(self, exe: Executor) -> bool:
+        var = self.rng.choice(list(self.vars_with_values.keys()))
+        if self.rng.random() < 0.2:
+            exe.execute(f"RESET {var}", http=Http.RANDOM)
+            return True
+        value = self.rng.choice(self.vars_with_values[var])
+        local = "LOCAL " if self.rng.random() < 0.1 else ""
+        exe.execute(f"SET {local}{var} = {value}", http=Http.RANDOM)
+        if var == "statement_timeout":
+            # Statement timeouts on this session are expected from here on.
+            # Kept sticky even across RESET, an in-flight statement can still
+            # hit the old timeout.
+            exe.statement_timeout_set = True
+        return True
+
+
+class DiscardAction(Action):
+    def run(self, exe: Executor) -> bool:
+        # The session's temp objects die with DISCARD, drop them from the
+        # tracked state so other workers stop querying them, mirroring
+        # ReconnectAction.
+        if exe.temp_objects:
+            with exe.db.lock:
+                exe.db.tables[:] = [
+                    t for t in exe.db.tables if t not in exe.temp_objects
+                ]
+                exe.db.views[:] = [v for v in exe.db.views if v not in exe.temp_objects]
+            exe.temp_objects.clear()
+        # Only DISCARD TEMP, not DISCARD ALL. DISCARD ALL (like DEALLOCATE ALL)
+        # deallocates every prepared statement, including the ones psycopg
+        # transparently auto-prepares. psycopg's client-side cache would then
+        # be stale and the next reuse of such a statement fails with
+        # "prepared statement ... does not exist". DISCARD TEMP still exercises
+        # the temp-object teardown, which is the interesting path here.
+        exe.execute("DISCARD TEMP", http=Http.NO)
+        return True
+
+
+class ValidateConnectionAction(Action):
+    # aws_conn is excluded, MinIO's STS support for validation is unclear.
+    CONNECTIONS = [
+        "kafka_conn",
+        "csr_conn",
+        "postgres_conn",
+        "mysql_conn",
+        "sql_server_conn",
+        "polaris_conn",
+    ]
+
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            "timeout: error trying to connect",
+            # A concurrent ALTER SECRET rotation (the workload only rotates a
+            # secret to its own value) can transiently expose an empty secret,
+            # so VALIDATE CONNECTION sends an empty password and Postgres
+            # rejects it (secret-rotation atomicity). See FINDINGS-BUGS.md.
+            # TODO: Remove when SS-347 is fixed.
+            "empty password returned by client",
+        ] + super().errors_to_ignore(exe)
+
+    def run(self, exe: Executor) -> bool:
+        name = self.rng.choice(self.CONNECTIONS)
+        exe.execute(f"VALIDATE CONNECTION materialize.public.{name}", http=Http.NO)
+        return True
+
+
+class AlterConnectionAction(Action):
+    # The SET clause per connection, setting the option to the value the
+    # connection already has. That still exercises the full reconfiguration
+    # path (restarting dependent sources and sinks) without breaking them.
+    # NOTE: BROKER takes no `=` (it is parsed specially), HOST/URL do.
+    SET_CLAUSES = {
+        "kafka_conn": "BROKER 'kafka:9092'",
+        "csr_conn": "URL = 'http://schema-registry:8081'",
+        "postgres_conn": "HOST = 'postgres'",
+        "mysql_conn": "HOST = 'mysql'",
+        "sql_server_conn": "HOST = 'sql-server'",
+    }
+
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            "timeout: error trying to connect",
+            # The storage controller can refuse an in-place connection change
+            # depending on the connection's current state or dependents.
+            "cannot be altered in the requested way",
+        ] + super().errors_to_ignore(exe)
+
+    def run(self, exe: Executor) -> bool:
+        name = self.rng.choice(list(self.SET_CLAUSES.keys()))
+        set_clause = self.SET_CLAUSES[name]
+        query = f"ALTER CONNECTION materialize.public.{name} SET ({set_clause})"
+        if self.rng.choice([True, False]):
+            validate = self.rng.choice(["true", "false"])
+            query += f" WITH (VALIDATE = {validate})"
+        exe.execute(query, http=Http.RANDOM)
+        return True
+
+
+class AlterSecretAction(Action):
+    def run(self, exe: Executor) -> bool:
+        # Rotate to the same value, exercising the rotation path (including
+        # dependent connections picking up the new secret version) without
+        # breaking the credentials.
+        name, value = self.rng.choice(
+            [
+                ("pgpass", "postgres"),
+                ("mypass", MySql.DEFAULT_ROOT_PASSWORD),
+                ("sql_server_pass", SqlServer.DEFAULT_SA_PASSWORD),
+                ("minio", "minioadmin"),
+            ]
+        )
+        exe.execute(
+            f"ALTER SECRET materialize.public.{name} AS '{value}'", http=Http.RANDOM
+        )
         return True
 
 
@@ -2725,7 +4131,11 @@ class CancelAction(Action):
 
     def run(self, exe: Executor) -> bool:
         pid = self.rng.choice(
-            [worker.exe.pg_pid for worker in self.workers if worker.exe and worker.exe.pg_pid != -1]  # type: ignore
+            [
+                worker.exe.pg_pid
+                for worker in self.workers
+                if worker.exe and worker.exe.pg_pid != -1
+            ]  # type: ignore
         )
         worker = None
         for i in range(len(self.workers)):
@@ -2952,6 +4362,121 @@ class DropWebhookSourceAction(Action):
             query = f"DROP SOURCE {source}"
             exe.execute(query, http=Http.RANDOM)
             exe.db.webhook_sources.remove(source)
+        return True
+
+
+class CreateLoadGeneratorSourceAction(Action):
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            if len(exe.db.loadgen_sources) >= MAX_LOADGEN_SOURCES:
+                return False
+            source_id = exe.db.loadgen_source_id
+            exe.db.loadgen_source_id += 1
+            try:
+                cluster = self.rng.choice(exe.db.clusters)
+                schema = self.rng.choice(exe.db.schemas)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
+        with schema.lock, cluster.lock:
+            if schema not in exe.db.schemas:
+                return False
+            if cluster not in exe.db.clusters:
+                return False
+
+            source = LoadGeneratorSource(source_id, cluster, schema, self.rng)
+            source.create(exe)
+            exe.db.loadgen_sources.append(source)
+        return True
+
+
+class DropLoadGeneratorSourceAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            "still depended upon by",
+        ] + super().errors_to_ignore(exe)
+
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            if not exe.db.loadgen_sources:
+                return False
+            try:
+                source = self.rng.choice(exe.db.loadgen_sources)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
+        with source.lock:
+            # Was dropped while we were acquiring lock
+            if source not in exe.db.loadgen_sources:
+                return False
+
+            exe.execute(f"DROP TABLE IF EXISTS {source}")
+            exe.execute(
+                f"DROP SOURCE {source.schema}.{identifier(source.source_name())} CASCADE",
+                http=Http.RANDOM,
+            )
+            exe.db.loadgen_sources.remove(source)
+        return True
+
+
+class CreateMultiLoadGeneratorSourceAction(Action):
+    GENERATORS = ["AUCTION", "TPCH", "MARKETING"]
+
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        # A rare cross-type subsource-name collision, or a concurrent create of
+        # the same generator type.
+        return ["already exists"] + super().errors_to_ignore(exe)
+
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            present = {s.generator for s in exe.db.multi_loadgen_sources}
+            available = [g for g in self.GENERATORS if g not in present]
+            if not available:
+                return False
+            generator = self.rng.choice(available)
+            source_id = exe.db.multi_loadgen_source_id
+            exe.db.multi_loadgen_source_id += 1
+            try:
+                cluster = self.rng.choice(exe.db.clusters)
+                schema = self.rng.choice(exe.db.schemas)
+            except IndexError:
+                return False
+        with schema.lock, cluster.lock:
+            if schema not in exe.db.schemas:
+                return False
+            if cluster not in exe.db.clusters:
+                return False
+            source = MultiLoadGeneratorSource(
+                source_id, cluster, schema, generator, self.rng
+            )
+            source.create(exe)
+            with exe.db.lock:
+                exe.db.multi_loadgen_sources.append(source)
+        return True
+
+
+class DropMultiLoadGeneratorSourceAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            "still depended upon by",
+        ] + super().errors_to_ignore(exe)
+
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            if not exe.db.multi_loadgen_sources:
+                return False
+            source = self.rng.choice(exe.db.multi_loadgen_sources)
+        with source.lock:
+            if source not in exe.db.multi_loadgen_sources:
+                return False
+            exe.execute(f"DROP SOURCE {source} CASCADE", http=Http.RANDOM)
+            exe.db.multi_loadgen_sources.remove(source)
         return True
 
 
@@ -3365,7 +4890,7 @@ class CreateIcebergSinkAction(Action):
                 sink_id,
                 cluster,
                 schema,
-                self.rng.choice(exe.db.db_objects_without_views()),
+                self.rng.choice(exe.db.db_objects_for_sinks()),
                 self.rng,
             )
             sink.create(exe)
@@ -3433,7 +4958,7 @@ class CreateKafkaSinkAction(Action):
                 sink_id,
                 cluster,
                 schema,
-                self.rng.choice(exe.db.db_objects_without_views()),
+                self.rng.choice(exe.db.db_objects_for_sinks()),
                 self.rng,
             )
             sink.create(exe)
@@ -3474,6 +4999,11 @@ class HttpPostAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = super().errors_to_ignore(exe)
         if exe.db.scenario == Scenario.Rename:
+            result.extend(["404: no object was found at the path"])
+        # DropSchemaCascadeAction / DropDatabaseCascadeAction can drop a
+        # webhook source concurrently without taking its per-object lock, so a
+        # POST that already picked the source can 404.
+        if exe.db.complexity in (Complexity.DDL, Complexity.DDLOnly):
             result.extend(["404: no object was found at the path"])
         return result
 
@@ -3539,6 +5069,380 @@ class HttpPostAction(Action):
         return True
 
 
+class AlterClusterSetAction(Action):
+    """Live reconfigure of a managed cluster (SIZE / REPLICATION FACTOR).
+
+    Resizing or changing the replica count of a cluster hosting indexes, MVs,
+    sources, and sinks forces rehydration and replica teardown/spin-up under
+    concurrent DDL and DML."""
+
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            # A concurrent graceful reconfiguration of the same cluster.
+            "cannot be modified while a reconfiguration is in progress",
+        ] + super().errors_to_ignore(exe)
+
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            # Cluster 0 stays fixed, it hosts sources and sinks.
+            managed = [c for c in exe.db.clusters[1:] if c.managed]
+            if not managed:
+                return False
+            cluster = self.rng.choice(managed)
+        with cluster.lock:
+            if cluster not in exe.db.clusters or not cluster.managed:
+                return False
+            choice = self.rng.choice(["size", "replication_factor", "reset_rf"])
+            if choice == "size":
+                new_size = self.rng.choice(["scale=1,workers=1", "scale=1,workers=2"])
+                exe.execute(
+                    f"ALTER CLUSTER {cluster} SET (SIZE = '{new_size}')",
+                    http=Http.RANDOM,
+                )
+                cluster.size = new_size
+                for replica in cluster.replicas:
+                    replica.size = new_size
+            elif choice == "replication_factor":
+                rf = self.rng.choice([1, 2])
+                exe.execute(
+                    f"ALTER CLUSTER {cluster} SET (REPLICATION FACTOR = {rf})",
+                    http=Http.RANDOM,
+                )
+                self._resize_replicas(cluster, rf)
+            else:
+                exe.execute(
+                    f"ALTER CLUSTER {cluster} RESET (REPLICATION FACTOR)",
+                    http=Http.RANDOM,
+                )
+                self._resize_replicas(cluster, 1)
+        return True
+
+    def _resize_replicas(self, cluster: Cluster, count: int) -> None:
+        # Managed cluster replicas are server-named (r1..rN). We keep the
+        # tracked list at the right length only so the replica-targeted-MV
+        # picker sees the right count.
+        cluster.replicas = [
+            ClusterReplica(i, cluster.size, cluster) for i in range(count)
+        ]
+        cluster.replica_id = count
+
+
+class DropSchemaCascadeAction(Action):
+    """DROP SCHEMA .. CASCADE, an atomic multi-object catalog mutation.
+
+    Only enabled in DDL complexity: cross-schema dependents are cascade-dropped
+    server-side but stay tracked until they surface as "does not exist", which
+    DDL complexity ignores."""
+
+    def applicable(self, exe: Executor) -> bool:
+        return exe.db.complexity in (Complexity.DDL, Complexity.DDLOnly)
+
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            if len(exe.db.schemas) <= 1:
+                return False
+            schema = self.rng.choice(exe.db.schemas)
+            # Keep at least two non-temp tables alive outside the dropped
+            # schema. Query generation picks from the non-view objects, and a
+            # CASCADE that emptied that set would crash it. This mirrors
+            # DropTableAction's minimum.
+            if (
+                len([t for t in exe.db.tables if not t.temp and t.schema is not schema])
+                < 2
+            ):
+                return False
+        with schema.lock:
+            if schema not in exe.db.schemas:
+                return False
+            if len(exe.db.schemas) <= 1:
+                return False
+            exe.execute(f"DROP SCHEMA {schema} CASCADE", http=Http.RANDOM)
+            exe.db.schemas.remove(schema)
+        untrack_objects_in_schemas(exe, {schema})
+        return True
+
+
+class DropDatabaseCascadeAction(Action):
+    """DROP DATABASE .. CASCADE, an atomic multi-object catalog mutation.
+
+    DDL-complexity only, for the same reason as DropSchemaCascadeAction."""
+
+    def applicable(self, exe: Executor) -> bool:
+        return exe.db.complexity in (Complexity.DDL, Complexity.DDLOnly)
+
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            if len(exe.db.dbs) <= 1:
+                return False
+            db = self.rng.choice(exe.db.dbs)
+            # Keep at least two non-temp tables alive outside the dropped
+            # database, so query generation always has a non-view object.
+            if (
+                len([t for t in exe.db.tables if not t.temp and t.schema.db is not db])
+                < 2
+            ):
+                return False
+        with db.lock:
+            if db not in exe.db.dbs:
+                return False
+            if len(exe.db.dbs) <= 1:
+                return False
+            exe.execute(f"DROP DATABASE {db} CASCADE", http=Http.RANDOM)
+            exe.db.dbs.remove(db)
+        with exe.db.lock:
+            dropped = {s for s in exe.db.schemas if s.db is db}
+            exe.db.schemas[:] = [s for s in exe.db.schemas if s.db is not db]
+        untrack_objects_in_schemas(exe, dropped)
+        return True
+
+
+class CreateTypeAction(Action):
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            if len(exe.db.types) >= MAX_TYPES:
+                return False
+            type_id = exe.db.type_id
+            exe.db.type_id += 1
+            try:
+                schema = self.rng.choice(exe.db.schemas)
+            except IndexError:
+                return False
+        with schema.lock:
+            if schema not in exe.db.schemas:
+                return False
+            typ = Type(type_id, schema, self.rng)
+            typ.create(exe)
+            exe.db.types.append(typ)
+        return True
+
+
+class DropTypeAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            "still depended upon by",
+            "cannot be dropped",
+            # Another worker (or a CASCADE drop of the schema/database) can
+            # drop the type first.
+            "does not exist",
+        ] + super().errors_to_ignore(exe)
+
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            if not exe.db.types:
+                return False
+            typ = self.rng.choice(exe.db.types)
+        with typ.lock:
+            if typ not in exe.db.types:
+                return False
+            exe.execute(f"DROP TYPE {typ}", http=Http.RANDOM)
+            exe.db.types.remove(typ)
+        return True
+
+
+class CreateNetworkPolicyAction(Action):
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            if len(exe.db.network_policies) >= MAX_NETWORK_POLICIES:
+                return False
+            policy_id = exe.db.network_policy_id
+            exe.db.network_policy_id += 1
+        policy = NetworkPolicy(policy_id, self.rng)
+        policy.create(exe)
+        with exe.db.lock:
+            exe.db.network_policies.append(policy)
+        return True
+
+
+class AlterNetworkPolicyAction(Action):
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            if not exe.db.network_policies:
+                return False
+            policy = self.rng.choice(exe.db.network_policies)
+        with policy.lock:
+            if policy not in exe.db.network_policies:
+                return False
+            policy.num_rules = self.rng.randint(1, 3)
+            exe.execute(
+                f"ALTER NETWORK POLICY {policy} SET ({policy.rules_clause()})",
+                http=Http.RANDOM,
+            )
+        return True
+
+
+class DropNetworkPolicyAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            # The policy is installed as a default somewhere (should not happen,
+            # we never install ours, but be safe).
+            "cannot be dropped",
+            # Another worker dropped the same policy first. The error carries
+            # the raw name ('netpol-N', not the quoted form), so DROP resolves
+            # the name correctly; this is a concurrency race, not the ALTER
+            # NETWORK POLICY quoted-name bug.
+            "unknown network policy",
+        ] + super().errors_to_ignore(exe)
+
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            if not exe.db.network_policies:
+                return False
+            policy = self.rng.choice(exe.db.network_policies)
+        with policy.lock:
+            if policy not in exe.db.network_policies:
+                return False
+            exe.execute(f"DROP NETWORK POLICY {policy}", http=Http.RANDOM)
+            exe.db.network_policies.remove(policy)
+        return True
+
+
+class SystemCatalogReadAction(Action):
+    """Read a random system-catalog / introspection relation while DDL churns.
+
+    Exercises catalog-read-vs-write consistency and the auto-route path.
+    Relations that the `materialize` user cannot read (mz_notices,
+    mz_recent_activity_log_redacted) are left out."""
+
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            # An introspection view over many objects can outrun
+            # statement_timeout, never a real bug in a stress run.
+            "canceling statement due to statement timeout",
+            # Reading a system-catalog relation inside a read transaction that
+            # already touched user objects crosses timedomains.
+            "in the same timedomain",
+            'is not allowed from the "mz_catalog_server" cluster',
+        ] + super().errors_to_ignore(exe)
+
+    RELATIONS = [
+        "mz_catalog.mz_objects",
+        "mz_catalog.mz_columns",
+        "mz_catalog.mz_indexes",
+        "mz_catalog.mz_sources",
+        "mz_catalog.mz_sinks",
+        "mz_catalog.mz_materialized_views",
+        "mz_catalog.mz_views",
+        "mz_catalog.mz_tables",
+        "mz_catalog.mz_audit_events",
+        "mz_catalog.mz_databases",
+        "mz_catalog.mz_schemas",
+        "mz_catalog.mz_roles",
+        "mz_catalog.mz_clusters",
+        "mz_catalog.mz_cluster_replicas",
+        "mz_internal.mz_frontiers",
+        "mz_internal.mz_hydration_statuses",
+        "mz_internal.mz_compute_dependencies",
+        "mz_internal.mz_source_statuses",
+        "mz_internal.mz_sink_statuses",
+        "mz_internal.mz_materialization_lag",
+        "mz_internal.mz_wallclock_global_lag_recent_history",
+        "mz_internal.mz_cluster_replica_statuses",
+        "mz_internal.mz_object_dependencies",
+        "mz_internal.mz_object_transitive_dependencies",
+        "mz_internal.mz_show_all_objects",
+        "mz_internal.mz_comments",
+    ]
+
+    def run(self, exe: Executor) -> bool:
+        relation = self.rng.choice(self.RELATIONS)
+        exe.execute(
+            f"SELECT * FROM {relation} LIMIT {self.rng.randint(1, 100)}",
+            http=Http.RANDOM,
+            fetch=True,
+        )
+        return True
+
+
+class ExplainAnalyzeAction(Action):
+    """EXPLAIN ANALYZE against a live materialized view or index dataflow.
+
+    Runs generated introspection queries on the active cluster. Racing it
+    against drop/replace of the target probes the introspection path."""
+
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            # The active cluster has more than one replica.
+            "log source reads must target a replica",
+            "does not exist",
+            "not been hydrated",
+            "not been materialized",
+            # A concurrent DROP/reconfigure of the targeted replica retires the
+            # introspection query. No panic in services.log, just a race.
+            "target replica failed or was dropped",
+            # Introspection over a large dataflow can outrun statement_timeout.
+            "canceling statement due to statement timeout",
+            # The generated introspection queries can cross timedomains or be
+            # routed to mz_catalog_server.
+            "in the same timedomain",
+            'is not allowed from the "mz_catalog_server" cluster',
+        ] + super().errors_to_ignore(exe)
+
+    def run(self, exe: Executor) -> bool:
+        mvs = [v for v in exe.db.views if v.materialized]
+        with exe.db.lock:
+            indexes = list(exe.db.indexes)
+        candidates: list[tuple[str, DBObject | Index]] = []
+        for v in mvs:
+            candidates.append(("MATERIALIZED VIEW", v))
+        for i in indexes:
+            candidates.append(("INDEX", i))
+        if not candidates:
+            return False
+        kind, obj = self.rng.choice(candidates)
+        analysis = self.rng.choice(
+            ["MEMORY", "CPU", "MEMORY WITH SKEW", "CPU WITH SKEW", "HINTS"]
+        )
+        with obj.lock:
+            if kind == "MATERIALIZED VIEW" and obj not in exe.db.views:
+                return False
+            if kind == "INDEX" and obj not in exe.db.indexes:
+                return False
+            exe.execute(
+                f"EXPLAIN ANALYZE {analysis} FOR {kind} {obj}",
+                http=Http.NO,
+                fetch=True,
+            )
+        return True
+
+
+class ExplainFilterPushdownAction(Action):
+    """EXPLAIN FILTER PUSHDOWN, which inspects durable persist state to compute
+    which parts a query's filters would read."""
+
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        result = super().errors_to_ignore(exe)
+        result.extend(
+            [
+                "in the same timedomain",
+                'is not allowed from the "mz_catalog_server" cluster',
+                # Scanning persist part stats can outrun statement_timeout.
+                "canceling statement due to statement timeout",
+            ]
+        )
+        if exe.db.complexity == Complexity.DDL:
+            result.extend(["does not exist"])
+        return result
+
+    def run(self, exe: Executor) -> bool:
+        mvs = [v for v in exe.db.views if v.materialized]
+        if mvs and self.rng.choice([True, False]):
+            view = self.rng.choice(mvs)
+            with view.lock:
+                if view not in exe.db.views:
+                    return False
+                exe.execute(
+                    f"EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW {view}",
+                    http=Http.NO,
+                    fetch=True,
+                )
+        else:
+            query = self.generate_select_query(exe, ExprKind.ALL)
+            exe.execute(
+                f"EXPLAIN FILTER PUSHDOWN FOR {query}", http=Http.NO, fetch=True
+            )
+        return True
+
+
 class SourceSinkStallCheckAction(Action):
     def applicable(self, exe: Executor) -> bool:
         return exe.db.scenario not in (
@@ -3576,6 +5480,7 @@ class StatisticsAction(Action):
             ("postgres_sources", exe.db.postgres_sources),
             ("mysql_sources", exe.db.mysql_sources),
             ("sql_server_sources", exe.db.sql_server_sources),
+            ("loadgen_sources", exe.db.loadgen_sources),
             ("webhook_sources", exe.db.webhook_sources),
         ]:
             counts = []
@@ -3584,6 +5489,85 @@ class StatisticsAction(Action):
                 counts.append(str(exe.cur.fetchall()[0][0]))
             print(f"{typ}: {' '.join(counts)}")
             time.sleep(10)
+        return True
+
+
+class DependencyConsistencyAction(Action):
+    """Client-side catalog dependency oracle: flag any dependency edge whose
+    endpoints are not both live objects (a dangling uses/used_by edge).
+
+    PREPARED BUT DISABLED (commented out of read_action_list). This targets the
+    SQL-521 class: a sink left pointing at a materialized view that was dropped
+    under cancel, i.e. the same MissingUses inconsistency the coordinator's own
+    check_consistency asserts on. While SQL-521 is open the workload
+    legitimately produces such danglers, so enabling this now would re-detect
+    the known corruption rather than find new bugs.
+    TODO: enable in read_action_list once SQL-521 is fixed. Verify the
+    mz_internal.mz_object_dependencies column names (object_id,
+    referenced_object_id) still hold when enabling."""
+
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            # Reading a catalog relation inside a read txn that already touched
+            # user objects crosses timedomains.
+            "in the same timedomain",
+        ] + super().errors_to_ignore(exe)
+
+    def run(self, exe: Executor) -> bool:
+        exe.execute(
+            "SELECT d.object_id, d.referenced_object_id "
+            "FROM mz_internal.mz_object_dependencies d "
+            "LEFT JOIN mz_objects o1 ON d.object_id = o1.id "
+            "LEFT JOIN mz_objects o2 ON d.referenced_object_id = o2.id "
+            "WHERE o1.id IS NULL OR o2.id IS NULL",
+            http=Http.NO,
+        )
+        dangling = exe.cur.fetchall()
+        if dangling:
+            raise ValueError(
+                f"dangling catalog dependency edges (SQL-521 class): {dangling[:5]}"
+            )
+        return True
+
+
+class SourceReadHoldSweepAction(Action):
+    """Read a source-backed relation to force read-hold acquisition on the
+    source's remap shard.
+
+    PREPARED BUT DISABLED (commented out of read_action_list). Intended for the
+    kill scenario, where racing envd/clusterd restarts stresses read-hold
+    reinstatement: the SS-346 class (a dependent's read hold on a source's remap
+    shard not upheld across a restart, so its since advances past the
+    dependent's upper) and PER-49 (a compute import as_of behind the compacted
+    since after ALTER TABLE ADD COLUMN + kill). Enabling it now just re-triggers
+    those known coordinator/compute panics.
+    TODO: enable in read_action_list once SS-346 and PER-49 are fixed."""
+
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            "in the same timedomain",
+        ] + super().errors_to_ignore(exe)
+
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            sources = [
+                o
+                for o in exe.db.db_objects()
+                if isinstance(
+                    o,
+                    LoadGeneratorSource
+                    | KafkaSource
+                    | PostgresSource
+                    | MySqlSource
+                    | SqlServerSource
+                    | WebhookSource,
+                )
+            ]
+            if not sources:
+                return False
+            obj = self.rng.choice(sources)
+        exe.execute(f"SELECT count(*) FROM {obj}", http=Http.RANDOM)
+        exe.cur.fetchall()
         return True
 
 
@@ -3604,15 +5588,31 @@ read_action_list = ActionList(
     [
         (SelectAction, 100),
         (SelectOneAction, 1),
+        (ParameterizedQueryAction, 20),
         # (SQLsmithAction, 30),  # Questionable use
         (
             CopyToS3Action,
             100,
         ),
+        (CopyToStdoutAction, 20),
+        (ShowAction, 10),
+        (SystemCatalogReadAction, 10),
+        # TODO: Reenable once EXPLAIN FILTER PUSHDOWN can no longer panic the
+        # coordinator when a referenced compute collection is concurrently
+        # dropped. sequence_explain_pushdown -> acquire_read_holds().expect(
+        # "missing compute collection") at read_policy.rs:389 (normal peeks and
+        # EXPLAIN ANALYZE handle the drop gracefully). See SQL-519 /
+        # FINDINGS-BUGS.md.
+        # (ExplainFilterPushdownAction, 5),
+        # PREPARED BUT DISABLED (see class docstrings): enabling these now just
+        # re-detects known-unfixed coordinator bugs rather than finding new ones.
+        # (DependencyConsistencyAction, 5),  # TODO: enable once SQL-521 fixed
+        # (SourceReadHoldSweepAction, 5),  # TODO: enable once SS-346 & PER-49 fixed
         (SetClusterAction, 1),
         (CommitRollbackAction, 30),
         (ReconnectAction, 1),
         (FlipFlagsAction, 2),
+        (SetSessionVariableAction, 2),
     ],
     autocommit=False,
 )
@@ -3647,12 +5647,17 @@ dml_nontrans_action_list = ActionList(
         (DeleteAction, 10),
         (UpdateAction, 10),
         (InsertReturningAction, 10),
+        # INSERT INTO .. SELECT runs as a read-then-write transaction, it
+        # can't run inside a transaction block
+        (InsertSelectAction, 10),
         # COPY FROM is oneshot ingestion, it can't run inside a transaction
         (CopyFromS3Action, 10),
         (CommentAction, 5),
         (SetClusterAction, 1),
         (ReconnectAction, 1),
         (FlipFlagsAction, 2),
+        (SetSessionVariableAction, 2),
+        (DiscardAction, 2),
         # TODO: Reenable when SS-193 and SS-325 are fixed
         # (SourceSinkStallCheckAction, 4),
         # (TransactionIsolationAction, 1),
@@ -3668,10 +5673,13 @@ ddl_action_list = ActionList(
         (DropTableAction, 2),
         (CreateViewAction, 8),
         (DropViewAction, 8),
+        (CreateOrReplaceViewAction, 4),
         (CreateRoleAction, 2),
         (DropRoleAction, 2),
+        (AlterRoleAction, 2),
         (CreateClusterAction, 1),
         (DropClusterAction, 1),
+        (AlterClusterSetAction, 3),
         (SwapClusterAction, 10),
         (CreateClusterReplicaAction, 2),
         (DropClusterReplicaAction, 2),
@@ -3684,6 +5692,10 @@ ddl_action_list = ActionList(
         (DropIcebergSinkAction, 4),
         (CreateKafkaSourceAction, 4),
         (DropKafkaSourceAction, 4),
+        (CreateLoadGeneratorSourceAction, 4),
+        (DropLoadGeneratorSourceAction, 4),
+        (CreateMultiLoadGeneratorSourceAction, 2),
+        (DropMultiLoadGeneratorSourceAction, 2),
         # TODO: Reenable when https://linear.app/materializeinc/issue/SS-307 is fixed
         # (CreateMySqlSourceAction, 4),
         # (DropMySqlSourceAction, 4),
@@ -3694,18 +5706,65 @@ ddl_action_list = ActionList(
         # (DropSqlServerSourceAction, 4),
         (GrantPrivilegesAction, 4),
         (RevokePrivilegesAction, 1),
+        (GrantRoleAction, 2),
+        (RevokeRoleAction, 1),
+        (AlterOwnerAction, 2),
+        (AlterDefaultPrivilegesAction, 2),
+        (BroadPrivilegesAction, 2),
+        (ShowAction, 4),
+        (ValidateConnectionAction, 2),
+        # TODO: Reenable once altering a connection that sinks or sources depend
+        # on can no longer panic the coordinator. Re-altering a dependent sink's
+        # export connection after the txn fails with InvalidAlter, which
+        # unwrap_or_terminate turns into a panic (SQL-517). See FINDINGS-BUGS.md
+        # ("Coordinator panic re-altering a dependent sink's export
+        # connection").
+        # (AlterConnectionAction, 2),
+        (AlterSecretAction, 2),
         (ReconnectAction, 1),
         (CreateDatabaseAction, 1),
         (DropDatabaseAction, 1),
+        # TODO: Reenable once a concurrent DROP DATABASE CASCADE can no longer
+        # panic the coordinator. A staged create (e.g. the source executor's
+        # CREATE SECRET) whose target database is dropped between staging and
+        # finish hits resolve_full_name -> get_database (panicking OrdMap index)
+        # in catalog transact_op. Only CASCADE can drop a non-empty database,
+        # so this is the precise trigger (SQL-518). See FINDINGS-BUGS.md ("Coordinator
+        # panic resolving a name whose database was concurrently dropped").
+        # (DropDatabaseCascadeAction, 1),
         (CreateSchemaAction, 1),
         (DropSchemaAction, 1),
+        (DropSchemaCascadeAction, 1),
+        (CreateTypeAction, 2),
+        (DropTypeAction, 2),
+        (CreateNetworkPolicyAction, 1),
+        # TODO: Reenable once ALTER NETWORK POLICY resolves quoted (e.g.
+        # hyphenated) names. It looks the policy up by its quoted display form,
+        # so it fails with "unknown network policy" for any name that requires
+        # quoting, even though CREATE and DROP work (CLO-143). See FINDINGS-BUGS.md
+        # ("ALTER NETWORK POLICY cannot resolve a quoted (hyphenated) name").
+        # (AlterNetworkPolicyAction, 1),
+        (DropNetworkPolicyAction, 1),
         (RenameSchemaAction, 10),
         (RenameTableAction, 10),
         (RenameViewAction, 10),
         (RenameKafkaSinkAction, 10),
         (RenameIcebergSinkAction, 10),
         (SwapSchemaAction, 10),
-        (ReplaceMaterializedViewAction, 20),
+        (CreateReplacementMaterializedViewAction, 10),
+        (ApplyReplacementMaterializedViewAction, 5),
+        (DropReplacementMaterializedViewAction, 5),
+        (SealedMaterializedViewCheckAction, 2),
+        (TransactionIsolationAction, 1),
+        (BoundedStalenessReadAction, 2),
+        (ReadOnlyTransactionAction, 3),
+        (DDLTransactionAction, 2),
+        (SystemCatalogReadAction, 4),
+        (ExplainAnalyzeAction, 4),
+        # TODO: Reenable with EXPLAIN FILTER PUSHDOWN's coordinator panic on a
+        # concurrently-dropped compute collection (read_policy.rs:389,
+        # SQL-519). See FINDINGS-BUGS.md.
+        # (ExplainFilterPushdownAction, 2),
         (FlipFlagsAction, 2),
         # TODO: Reenable when https://linear.app/materializeinc/issue/SQL-405 is fixed.
         # (AlterTableAddColumnAction, 10),

@@ -122,6 +122,23 @@ class KafkaColumn(Column):
         return identifier(self.raw_name) if in_query else self.raw_name
 
 
+class LoadGeneratorColumn(Column):
+    def __init__(
+        self,
+        name: str,
+        data_type: type[DataType],
+        nullable: bool,
+        db_object: "DBObject",
+    ):
+        self.raw_name = name
+        self.data_type = data_type
+        self.nullable = nullable
+        self.db_object = db_object
+
+    def name(self, in_query: bool = False) -> str:
+        return identifier(self.raw_name) if in_query else self.raw_name
+
+
 class MySqlColumn(Column):
     def __init__(
         self,
