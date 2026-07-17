@@ -19,6 +19,14 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-07-16* <br>
 *Released to Materialize Self-Managed: 2026-07-17* <br>
 
+### Upgraded Cloud Cluster Hardware {#v26.33-upgraded-cloud-hardware}
+Over the past two weeks, we've rolled out upgraded cluster hardware for all
+Materialize Cloud clients. The new hardware speeds up compute-intensive
+operations, and we've observed a 10–66% reduction in hydration time across
+production environments. This upgrade is already live across all Cloud
+environments and was applied automatically, with no configuration changes,
+cluster resizing, or other action needed.
+
 ### Improvements {#v26.33-improvements}
 - **`EXPLAIN ANALYZE` on multi-replica clusters via MCP**: The Materialize MCP developer endpoint's `query` tool now accepts an optional cluster replica, so `EXPLAIN ANALYZE` can target a specific replica and run on clusters with more than one replica.
 - **Faster queries on busy environments**: Query latency on query-heavy or overloaded clusters is reduced by caching the catalog snapshot for the duration of a session.
