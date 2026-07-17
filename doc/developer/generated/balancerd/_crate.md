@@ -1,6 +1,6 @@
 ---
 source: src/balancerd/src/lib.rs
-revision: afcc2e5b56
+revision: d381007629
 ---
 
 # balancerd

@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/statement/ddl.rs
-revision: 7363cb98d0
+revision: 74f18a3354
 ---
 
 # mz-sql::plan::statement::ddl
@@ -18,6 +18,7 @@ The `iceberg_sink_builder` function accepts an optional `storage_connection: Opt
 `SourceExportStatementDetails::Postgres` carries a `cast_oid_full_range: bool` field; `plan_create_subsource` passes it through to `generate_column_casts` to control whether OID-based casts cover the full range.
 `plan_alter_cluster` rejects `ALTER CLUSTER ... WITH (...)` on unmanaged clusters: when the cluster is not managed, any non-empty `with_options` list produces the error `"ALTER... WITH not supported for unmanaged clusters"`.
 `plan_alter_cluster` rejects a `WAIT` clause when no shape dimension (`SIZE`, `AVAILABILITY ZONES`, or `INTROSPECTION`) is being changed: there is no hydrate-overlap to wait on, so accepting it would silently be a no-op.
+`plan_auto_scaling_strategy` converts a `ClusterAutoScalingStrategyOptionValue` into an `Option<AutoScalingStrategy>`: an empty block (no sub-policies) maps to `None` (autoscaling disabled). `validate_auto_scaling_strategy` checks cross-config invariants: it rejects a `HYDRATION SIZE` equal to the cluster `SIZE` (producing `PlanError::HydrationSizeEqualsClusterSize`), and rejects combining `AUTO SCALING STRATEGY` with a non-`MANUAL` `SCHEDULE`. `unplan_auto_scaling_strategy` is the reverse, converting an `AutoScalingStrategy` back to a `ClusterAutoScalingStrategyOptionValue` for `SHOW CREATE CLUSTER`. `AUTO SCALING STRATEGY` is gated by the `ENABLE_AUTO_SCALING_STRATEGY` feature flag for new DDL, but `RESET (AUTO SCALING STRATEGY)` is intentionally not gated so a cluster can shed an autoscaling policy after a flag rollback. `AUTO SCALING STRATEGY` is rejected for unmanaged clusters.
 `plan_alter_sink` handles `AlterSinkAction::SetOptions` and `AlterSinkAction::ResetOptions`, currently restricted to the `CommitInterval` option name. A `SET` that is identical to the current with-options returns `Plan::AlterNoop`. A `RESET` of an option that is not set is rejected. The refactored path reconstructs the original `CREATE SINK` statement and applies all edits before re-planning, for both `ChangeRelation` and option-edit paths.
 `iceberg_sink_builder` enforces a minimum `COMMIT INTERVAL` of 1 second; intervals shorter than 1 second produce the error `"COMMIT INTERVAL must be at least 1 second"`.
 `plan_role_variable` (used by `plan_alter_role`) accepts a `StatementContext` and calls `vars::check_transaction_isolation_feature_flag` on any `SET` assignment, enforcing the same feature-flag gate as the `SET` and connection-option paths.

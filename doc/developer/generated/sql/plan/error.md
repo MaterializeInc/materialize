@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/error.rs
-revision: 460108c80d
+revision: 74f18a3354
 ---
 
 # mz-sql::plan::error
@@ -11,3 +11,4 @@ Defines `PlanError`, the central error type for all planning failures, with vari
 `IcebergSinkUnsupportedKeyType` is produced when a column with a non-primitive or floating-point type is used as an Iceberg equality delete key; its hint directs the user to use primitive, non-floating-point columns.
 `DuplicateKeyColumnInSubscribeEnvelope { column_name }` is produced when a column appears more than once in a `SUBSCRIBE ENVELOPE` KEY clause; its hint directs the user to list each KEY column at most once.
 `GluePurification(GluePurificationError)` wraps errors from `pure::error::GluePurificationError` (AWS Glue Schema Registry validation failures); its `Display` renders as `AWS GLUE SCHEMA REGISTRY validation: <cause>`.
+`HydrationSizeEqualsClusterSize { size }` is produced when the `HYDRATION SIZE` in an `AUTO SCALING STRATEGY` equals the cluster `SIZE`; its display reads `"HYDRATION SIZE must differ from the cluster SIZE ('<size>')"` and its detail explains that a burst replica at the same size as the steady replicas would not accelerate hydration.

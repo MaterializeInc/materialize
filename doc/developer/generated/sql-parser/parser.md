@@ -1,6 +1,6 @@
 ---
 source: src/sql-parser/src/parser.rs
-revision: 7363cb98d0
+revision: 74f18a3354
 ---
 
 # mz-sql-parser::parser
@@ -23,4 +23,5 @@ Iceberg sink parsing reads the catalog connection name, then optionally parses `
 When parsing `FORMAT AVRO USING`, if the next tokens are `AWS GLUE SCHEMA REGISTRY`, the parser expects `CONNECTION <name>` followed by an optional parenthesized list of `GlueAvroOption`s parsed by `parse_glue_avro_option`. `parse_glue_avro_option` dispatches on the leading keyword (`SCHEMA`, `KEY`, or `VALUE`) to produce `GlueAvroOptionName::SchemaName`, `GlueAvroOptionName::KeySchemaName`, `GlueAvroOptionName::KeyCompatibilityLevel`, `GlueAvroOptionName::ValueSchemaName`, or `GlueAvroOptionName::ValueCompatibilityLevel`, followed by an optional value. Which options are valid for sources versus sinks is enforced in the planner and purifier, not in the parser. After the option list, if the keyword `SEED` is present the parser expects `VALUE SCHEMA '<string>'` and populates `GlueAvroSeed { value_schema }`; otherwise `seed` is `None`.
 The `Precedence` enum is `pub(crate)` and serves as the single source of truth for both parser precedence and output parenthesization; the `prec` module in `ast::defs::expr` derives its constants from it via `as u8`.
 `parse_rows_from` uses `parse_windowless_function` (a private method) for each function inside `ROWS FROM (...)`. `parse_windowless_function` parses a function name and argument list without consuming `DISTINCT`, `FILTER`, or `OVER`, ensuring that table functions in `ROWS FROM` never carry those clauses.
+`parse_cluster_option_name` recognizes `AUTO SCALING STRATEGY` as a cluster option, dispatching to `parse_cluster_option_auto_scaling_strategy`. That method parses a paren-enclosed list of strategy sub-policies; the only supported sub-policy in v1 is `ON HYDRATION (HYDRATION SIZE = '...' [, LINGER DURATION = '...'])`. An empty list `()` disables autoscaling. Each sub-policy may appear at most once; a duplicate `ON HYDRATION` entry is a parse error. The result is a `ClusterOption` with value `WithOptionValue::ClusterAutoScalingStrategyOptionValue`.
 `GRANT/REVOKE ON ALL` parsing recognizes `NETWORK POLICY` as an object type in addition to the other supported types.

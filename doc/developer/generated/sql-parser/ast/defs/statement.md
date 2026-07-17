@@ -1,6 +1,6 @@
 ---
 source: src/sql-parser/src/ast/defs/statement.rs
-revision: 3d7eb1c1da
+revision: 74f18a3354
 ---
 
 # mz-sql-parser::ast::defs::statement
@@ -13,6 +13,14 @@ Each statement variant has a corresponding struct with its specific fields.
 `MockViewDef<T>` represents a single `MOCK <name>(<cols>) AS (<query>)` clause within an `EXECUTE UNIT TEST` statement. Fields: `name: T::ItemName`, `columns: Vec<ColumnDef<T>>`, `query: Query<T>`.
 
 `ExpectedResultDef<T>` represents the `EXPECTED (<cols>) AS (<query>)` clause of an `EXECUTE UNIT TEST` statement. Fields: `columns: Vec<ColumnDef<T>>`, `query: Query<T>`.
+
+`ClusterOptionName` includes an `AutoScalingStrategy` variant for the `AUTO SCALING STRATEGY [[=] (...)]` cluster option. Its `AstDisplay` impl prints `AUTO SCALING STRATEGY`. `redact_value()` returns `false` for this variant (along with most other cluster option names).
+
+`ClusterAutoScalingStrategyOptionValue` represents the value of the `AUTO SCALING STRATEGY` option: a parenthesized autoscaling policy block with an optional `on_hydration: Option<OnHydrationOptionValue>` field. An empty block (all sub-policies absent) disables autoscaling, equivalent to `RESET (AUTO SCALING STRATEGY)`. The struct derives `Serialize`/`Deserialize` and implements `AstDisplay`, which prints `(` followed by the optional sub-policy and `)`.
+
+`OnHydrationOptionValue` represents the `ON HYDRATION (HYDRATION SIZE = '...' [, LINGER DURATION = '...'])` autoscaling sub-policy. Fields: `hydration_size: Value` (required) and `linger_duration: Option<Value>` (optional). While un-hydrated objects exist, an extra replica at `hydration_size` is run to accelerate hydration, lingering for `linger_duration` after the steady-state replicas hydrate. Its `AstDisplay` impl prints the full `ON HYDRATION (...)` clause.
+
+`WithOptionValue` includes a `ClusterAutoScalingStrategyOptionValue(ClusterAutoScalingStrategyOptionValue)` variant. This variant is not redacted in `AstDisplay` output.
 
 `ConnectionRulePattern` represents a parsed broker-matching pattern with optional leading and trailing `*` wildcards. Fields: `prefix_wildcard: bool`, `literal_match: String`, `suffix_wildcard: bool`. Its `AstDisplay` impl prints the pattern as a single-quoted string with `*` where wildcards are enabled. Derives `Serialize`/`Deserialize`.
 
