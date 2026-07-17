@@ -1612,11 +1612,12 @@ impl fmt::Display for Datum<'_> {
 /// There is an indirect correspondence between `Datum` variants and `SqlScalarType`
 /// variants: every `Datum` variant belongs to one or more `SqlScalarType` variants.
 ///
-/// `Clone`, `Drop`, `Serialize`, and `Deserialize` are implemented manually
-/// because values can be nested arbitrarily deeply (e.g. record types derived
-/// from Protobuf schemas), and the derived impls recurse once per nesting
-/// level on a fixed stack. The manual impls grow the stack on demand instead.
-#[derive(Debug, PartialEq, Eq, Ord, PartialOrd, Hash, EnumKind, MzReflect)]
+/// `Clone`, `Drop`, `Serialize`, `Deserialize`, the comparison and hashing
+/// traits, and `Debug` are implemented manually because values can be nested
+/// arbitrarily deeply (e.g. record types derived from Protobuf schemas), and
+/// the derived impls recurse once per nesting level on a fixed stack. The
+/// manual impls grow the stack on demand instead.
+#[derive(EnumKind, MzReflect)]
 #[enum_kind(SqlScalarBaseType, derive(PartialOrd, Ord, Hash))]
 pub enum SqlScalarType {
     /// The type of [`Datum::True`] and [`Datum::False`].
@@ -1951,6 +1952,246 @@ impl Drop for SqlScalarType {
                 mz_ore::stack::maybe_grow(|| drop(fields));
             }
             _ => (),
+        }
+    }
+}
+
+// The comparison, hashing, and formatting traits are implemented by hand rather
+// than derived because a `SqlScalarType` derived from a deep Protobuf message
+// chain can nest arbitrarily deep, and the derived impls would recurse once per
+// nesting level on a fixed stack and overflow. Each recursive arm grows the
+// stack on demand, matching the `Clone`/serde treatment above. The recursion
+// always passes through one of these methods exactly once per level, so
+// downstream types that merely contain a `SqlScalarType` (`SqlColumnType`,
+// `SqlRelationType`, `RelationDesc`) can keep their derived impls.
+
+impl fmt::Debug for SqlScalarType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use SqlScalarType::*;
+        match self {
+            Array(element_type) => {
+                mz_ore::stack::maybe_grow(|| f.debug_tuple("Array").field(element_type).finish())
+            }
+            List {
+                element_type,
+                custom_id,
+            } => mz_ore::stack::maybe_grow(|| {
+                f.debug_struct("List")
+                    .field("element_type", element_type)
+                    .field("custom_id", custom_id)
+                    .finish()
+            }),
+            Record { fields, custom_id } => mz_ore::stack::maybe_grow(|| {
+                f.debug_struct("Record")
+                    .field("fields", fields)
+                    .field("custom_id", custom_id)
+                    .finish()
+            }),
+            Map {
+                value_type,
+                custom_id,
+            } => mz_ore::stack::maybe_grow(|| {
+                f.debug_struct("Map")
+                    .field("value_type", value_type)
+                    .field("custom_id", custom_id)
+                    .finish()
+            }),
+            Range { element_type } => mz_ore::stack::maybe_grow(|| {
+                f.debug_struct("Range")
+                    .field("element_type", element_type)
+                    .finish()
+            }),
+            Bool => f.write_str("Bool"),
+            Int16 => f.write_str("Int16"),
+            Int32 => f.write_str("Int32"),
+            Int64 => f.write_str("Int64"),
+            UInt16 => f.write_str("UInt16"),
+            UInt32 => f.write_str("UInt32"),
+            UInt64 => f.write_str("UInt64"),
+            Float32 => f.write_str("Float32"),
+            Float64 => f.write_str("Float64"),
+            Numeric { max_scale } => f
+                .debug_struct("Numeric")
+                .field("max_scale", max_scale)
+                .finish(),
+            Date => f.write_str("Date"),
+            Time => f.write_str("Time"),
+            Timestamp { precision } => f
+                .debug_struct("Timestamp")
+                .field("precision", precision)
+                .finish(),
+            TimestampTz { precision } => f
+                .debug_struct("TimestampTz")
+                .field("precision", precision)
+                .finish(),
+            Interval => f.write_str("Interval"),
+            PgLegacyChar => f.write_str("PgLegacyChar"),
+            PgLegacyName => f.write_str("PgLegacyName"),
+            Bytes => f.write_str("Bytes"),
+            String => f.write_str("String"),
+            Char { length } => f.debug_struct("Char").field("length", length).finish(),
+            VarChar { max_length } => f
+                .debug_struct("VarChar")
+                .field("max_length", max_length)
+                .finish(),
+            Jsonb => f.write_str("Jsonb"),
+            Uuid => f.write_str("Uuid"),
+            Oid => f.write_str("Oid"),
+            RegProc => f.write_str("RegProc"),
+            RegType => f.write_str("RegType"),
+            RegClass => f.write_str("RegClass"),
+            Int2Vector => f.write_str("Int2Vector"),
+            MzTimestamp => f.write_str("MzTimestamp"),
+            MzAclItem => f.write_str("MzAclItem"),
+            AclItem => f.write_str("AclItem"),
+        }
+    }
+}
+
+impl PartialEq for SqlScalarType {
+    fn eq(&self, other: &Self) -> bool {
+        use SqlScalarType::*;
+        match (self, other) {
+            (Array(a), Array(b)) => mz_ore::stack::maybe_grow(|| a == b),
+            (
+                List {
+                    element_type: a,
+                    custom_id: a_id,
+                },
+                List {
+                    element_type: b,
+                    custom_id: b_id,
+                },
+            ) => a_id == b_id && mz_ore::stack::maybe_grow(|| a == b),
+            (
+                Record {
+                    fields: a,
+                    custom_id: a_id,
+                },
+                Record {
+                    fields: b,
+                    custom_id: b_id,
+                },
+            ) => a_id == b_id && mz_ore::stack::maybe_grow(|| a == b),
+            (
+                Map {
+                    value_type: a,
+                    custom_id: a_id,
+                },
+                Map {
+                    value_type: b,
+                    custom_id: b_id,
+                },
+            ) => a_id == b_id && mz_ore::stack::maybe_grow(|| a == b),
+            (Range { element_type: a }, Range { element_type: b }) => {
+                mz_ore::stack::maybe_grow(|| a == b)
+            }
+            // Non-recursive variants that carry data compare that data directly.
+            (Numeric { max_scale: a }, Numeric { max_scale: b }) => a == b,
+            (Timestamp { precision: a }, Timestamp { precision: b }) => a == b,
+            (TimestampTz { precision: a }, TimestampTz { precision: b }) => a == b,
+            (Char { length: a }, Char { length: b }) => a == b,
+            (VarChar { max_length: a }, VarChar { max_length: b }) => a == b,
+            // Any remaining pair is equal exactly when the discriminants match.
+            // A new data-carrying variant must be given its own arm above, or
+            // its payload would be silently ignored here.
+            _ => SqlScalarBaseType::from(self) == SqlScalarBaseType::from(other),
+        }
+    }
+}
+impl Eq for SqlScalarType {}
+
+impl PartialOrd for SqlScalarType {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for SqlScalarType {
+    fn cmp(&self, other: &Self) -> Ordering {
+        use SqlScalarType::*;
+        // Fields are compared in declaration order, matching a derived `Ord`.
+        match (self, other) {
+            (Array(a), Array(b)) => mz_ore::stack::maybe_grow(|| a.cmp(b)),
+            (
+                List {
+                    element_type: a,
+                    custom_id: a_id,
+                },
+                List {
+                    element_type: b,
+                    custom_id: b_id,
+                },
+            ) => mz_ore::stack::maybe_grow(|| a.cmp(b)).then_with(|| a_id.cmp(b_id)),
+            (
+                Record {
+                    fields: a,
+                    custom_id: a_id,
+                },
+                Record {
+                    fields: b,
+                    custom_id: b_id,
+                },
+            ) => mz_ore::stack::maybe_grow(|| a.cmp(b)).then_with(|| a_id.cmp(b_id)),
+            (
+                Map {
+                    value_type: a,
+                    custom_id: a_id,
+                },
+                Map {
+                    value_type: b,
+                    custom_id: b_id,
+                },
+            ) => mz_ore::stack::maybe_grow(|| a.cmp(b)).then_with(|| a_id.cmp(b_id)),
+            (Range { element_type: a }, Range { element_type: b }) => {
+                mz_ore::stack::maybe_grow(|| a.cmp(b))
+            }
+            (Numeric { max_scale: a }, Numeric { max_scale: b }) => a.cmp(b),
+            (Timestamp { precision: a }, Timestamp { precision: b }) => a.cmp(b),
+            (TimestampTz { precision: a }, TimestampTz { precision: b }) => a.cmp(b),
+            (Char { length: a }, Char { length: b }) => a.cmp(b),
+            (VarChar { max_length: a }, VarChar { max_length: b }) => a.cmp(b),
+            // Any remaining pair orders by discriminant. As with `PartialEq`, a
+            // new data-carrying variant must be given its own arm above.
+            _ => SqlScalarBaseType::from(self).cmp(&SqlScalarBaseType::from(other)),
+        }
+    }
+}
+
+impl Hash for SqlScalarType {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        use SqlScalarType::*;
+        // Hash the discriminant, then the payload, so that distinct variants
+        // rarely collide. Only the payload can recurse, so only it grows.
+        SqlScalarBaseType::from(self).hash(state);
+        match self {
+            Array(a) => mz_ore::stack::maybe_grow(|| a.hash(state)),
+            List {
+                element_type,
+                custom_id,
+            } => {
+                mz_ore::stack::maybe_grow(|| element_type.hash(state));
+                custom_id.hash(state);
+            }
+            Record { fields, custom_id } => {
+                mz_ore::stack::maybe_grow(|| fields.hash(state));
+                custom_id.hash(state);
+            }
+            Map {
+                value_type,
+                custom_id,
+            } => {
+                mz_ore::stack::maybe_grow(|| value_type.hash(state));
+                custom_id.hash(state);
+            }
+            Range { element_type } => mz_ore::stack::maybe_grow(|| element_type.hash(state)),
+            Numeric { max_scale } => max_scale.hash(state),
+            Timestamp { precision } => precision.hash(state),
+            TimestampTz { precision } => precision.hash(state),
+            Char { length } => length.hash(state),
+            VarChar { max_length } => max_length.hash(state),
+            // Fieldless variants are fully described by the discriminant.
+            _ => {}
         }
     }
 }
@@ -4940,10 +5181,10 @@ impl Arbitrary for ReprScalarType {
 /// It is important that any new variants for this enum be added to the `Arbitrary` instance
 /// and the `union` method.
 ///
-/// `Clone`, `Drop`, `Serialize`, and `Deserialize` are implemented manually
-/// because values can be nested arbitrarily deeply, see the
-/// [`SqlScalarType`] docs.
-#[derive(Debug, EnumKind, MzReflect)]
+/// `Clone`, `Drop`, `Serialize`, `Deserialize`, the comparison and hashing
+/// traits, `Debug`, and `Display` are implemented manually because values can
+/// be nested arbitrarily deeply, see the [`SqlScalarType`] docs.
+#[derive(EnumKind, MzReflect)]
 #[enum_kind(ReprScalarBaseType, derive(PartialOrd, Ord, Hash))]
 pub enum ReprScalarType {
     Bool,
@@ -5115,25 +5356,31 @@ impl Drop for ReprScalarType {
 
 impl PartialEq for ReprScalarType {
     fn eq(&self, other: &Self) -> bool {
+        // Comparing a nested variant recurses once per nesting level, so grow
+        // the stack on demand.
         match (self, other) {
-            (ReprScalarType::Array(a), ReprScalarType::Array(b)) => a.eq(b),
+            (ReprScalarType::Array(a), ReprScalarType::Array(b)) => {
+                mz_ore::stack::maybe_grow(|| a.eq(b))
+            }
             (
                 ReprScalarType::List { element_type: a },
                 ReprScalarType::List { element_type: b },
-            ) => a.eq(b),
+            ) => mz_ore::stack::maybe_grow(|| a.eq(b)),
             (ReprScalarType::Record { fields: a }, ReprScalarType::Record { fields: b }) => {
                 a.len() == b.len()
-                    && a.iter()
-                        .zip_eq(b.iter())
-                        .all(|(af, bf)| af.scalar_type.eq(&bf.scalar_type))
+                    && mz_ore::stack::maybe_grow(|| {
+                        a.iter()
+                            .zip_eq(b.iter())
+                            .all(|(af, bf)| af.scalar_type.eq(&bf.scalar_type))
+                    })
             }
             (ReprScalarType::Map { value_type: a }, ReprScalarType::Map { value_type: b }) => {
-                a.eq(b)
+                mz_ore::stack::maybe_grow(|| a.eq(b))
             }
             (
                 ReprScalarType::Range { element_type: a },
                 ReprScalarType::Range { element_type: b },
-            ) => a.eq(b),
+            ) => mz_ore::stack::maybe_grow(|| a.eq(b)),
             _ => ReprScalarBaseType::from(self) == ReprScalarBaseType::from(other),
         }
     }
@@ -5142,16 +5389,20 @@ impl Eq for ReprScalarType {}
 
 impl Hash for ReprScalarType {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // Hashing a nested variant recurses once per nesting level, so grow the
+        // stack on demand.
         match self {
-            ReprScalarType::Array(a) => a.hash(state),
-            ReprScalarType::List { element_type: a } => a.hash(state),
-            ReprScalarType::Record { fields: a } => {
+            ReprScalarType::Array(a) => mz_ore::stack::maybe_grow(|| a.hash(state)),
+            ReprScalarType::List { element_type: a } => mz_ore::stack::maybe_grow(|| a.hash(state)),
+            ReprScalarType::Record { fields: a } => mz_ore::stack::maybe_grow(|| {
                 for field in a {
                     field.scalar_type.hash(state);
                 }
+            }),
+            ReprScalarType::Map { value_type: a } => mz_ore::stack::maybe_grow(|| a.hash(state)),
+            ReprScalarType::Range { element_type: a } => {
+                mz_ore::stack::maybe_grow(|| a.hash(state))
             }
-            ReprScalarType::Map { value_type: a } => a.hash(state),
-            ReprScalarType::Range { element_type: a } => a.hash(state),
             _ => ReprScalarBaseType::from(self).hash(state),
         }
     }
@@ -5165,42 +5416,105 @@ impl PartialOrd for ReprScalarType {
 
 impl Ord for ReprScalarType {
     fn cmp(&self, other: &Self) -> Ordering {
+        // Comparing a nested variant recurses once per nesting level, so grow
+        // the stack on demand.
         match (self, other) {
-            (ReprScalarType::Array(a), ReprScalarType::Array(b)) => a.cmp(b),
+            (ReprScalarType::Array(a), ReprScalarType::Array(b)) => {
+                mz_ore::stack::maybe_grow(|| a.cmp(b))
+            }
             (
                 ReprScalarType::List { element_type: a },
                 ReprScalarType::List { element_type: b },
-            ) => a.cmp(b),
+            ) => mz_ore::stack::maybe_grow(|| a.cmp(b)),
             (ReprScalarType::Record { fields: a }, ReprScalarType::Record { fields: b }) => {
                 let len_ordering = a.len().cmp(&b.len());
                 if len_ordering != Ordering::Equal {
                     return len_ordering;
                 }
 
-                // NB ignoring nullability
-                for (af, bf) in a.iter().zip_eq(b.iter()) {
-                    let scalar_type_ordering = af.scalar_type.cmp(&bf.scalar_type);
-                    if scalar_type_ordering != Ordering::Equal {
-                        return scalar_type_ordering;
+                mz_ore::stack::maybe_grow(|| {
+                    // NB ignoring nullability
+                    for (af, bf) in a.iter().zip_eq(b.iter()) {
+                        let scalar_type_ordering = af.scalar_type.cmp(&bf.scalar_type);
+                        if scalar_type_ordering != Ordering::Equal {
+                            return scalar_type_ordering;
+                        }
                     }
-                }
 
-                Ordering::Equal
+                    Ordering::Equal
+                })
             }
             (ReprScalarType::Map { value_type: a }, ReprScalarType::Map { value_type: b }) => {
-                a.cmp(b)
+                mz_ore::stack::maybe_grow(|| a.cmp(b))
             }
             (
                 ReprScalarType::Range { element_type: a },
                 ReprScalarType::Range { element_type: b },
-            ) => a.cmp(b),
+            ) => mz_ore::stack::maybe_grow(|| a.cmp(b)),
             _ => ReprScalarBaseType::from(self).cmp(&ReprScalarBaseType::from(other)),
+        }
+    }
+}
+
+impl fmt::Debug for ReprScalarType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use ReprScalarType::*;
+        // Formatting a nested variant recurses once per nesting level, so grow
+        // the stack on demand.
+        match self {
+            Array(element_type) => {
+                mz_ore::stack::maybe_grow(|| f.debug_tuple("Array").field(element_type).finish())
+            }
+            List { element_type } => mz_ore::stack::maybe_grow(|| {
+                f.debug_struct("List")
+                    .field("element_type", element_type)
+                    .finish()
+            }),
+            Record { fields } => mz_ore::stack::maybe_grow(|| {
+                f.debug_struct("Record").field("fields", fields).finish()
+            }),
+            Map { value_type } => mz_ore::stack::maybe_grow(|| {
+                f.debug_struct("Map")
+                    .field("value_type", value_type)
+                    .finish()
+            }),
+            Range { element_type } => mz_ore::stack::maybe_grow(|| {
+                f.debug_struct("Range")
+                    .field("element_type", element_type)
+                    .finish()
+            }),
+            Bool => f.write_str("Bool"),
+            Int16 => f.write_str("Int16"),
+            Int32 => f.write_str("Int32"),
+            Int64 => f.write_str("Int64"),
+            UInt8 => f.write_str("UInt8"),
+            UInt16 => f.write_str("UInt16"),
+            UInt32 => f.write_str("UInt32"),
+            UInt64 => f.write_str("UInt64"),
+            Float32 => f.write_str("Float32"),
+            Float64 => f.write_str("Float64"),
+            Numeric => f.write_str("Numeric"),
+            Date => f.write_str("Date"),
+            Time => f.write_str("Time"),
+            Timestamp => f.write_str("Timestamp"),
+            TimestampTz => f.write_str("TimestampTz"),
+            MzTimestamp => f.write_str("MzTimestamp"),
+            Interval => f.write_str("Interval"),
+            Bytes => f.write_str("Bytes"),
+            Jsonb => f.write_str("Jsonb"),
+            String => f.write_str("String"),
+            Uuid => f.write_str("Uuid"),
+            Int2Vector => f.write_str("Int2Vector"),
+            MzAclItem => f.write_str("MzAclItem"),
+            AclItem => f.write_str("AclItem"),
         }
     }
 }
 
 impl std::fmt::Display for ReprScalarType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Formatting a nested variant recurses once per nesting level, so grow
+        // the stack on demand.
         match self {
             ReprScalarType::Bool => write!(f, "r_bool"),
             ReprScalarType::Int16 => write!(f, "r_int16"),
@@ -5223,15 +5537,23 @@ impl std::fmt::Display for ReprScalarType {
             ReprScalarType::Jsonb => write!(f, "r_jsonb"),
             ReprScalarType::String => write!(f, "r_string"),
             ReprScalarType::Uuid => write!(f, "r_uuid"),
-            ReprScalarType::Array(element_type) => write!(f, "r_array({element_type})"),
+            ReprScalarType::Array(element_type) => {
+                mz_ore::stack::maybe_grow(|| write!(f, "r_array({element_type})"))
+            }
             ReprScalarType::Int2Vector => write!(f, "r_int2vector"),
-            ReprScalarType::List { element_type } => write!(f, "r_list({element_type})"),
-            ReprScalarType::Record { fields } => {
+            ReprScalarType::List { element_type } => {
+                mz_ore::stack::maybe_grow(|| write!(f, "r_list({element_type})"))
+            }
+            ReprScalarType::Record { fields } => mz_ore::stack::maybe_grow(|| {
                 let fields = separated(", ", fields.iter());
                 write!(f, "r_record({fields})")
+            }),
+            ReprScalarType::Map { value_type } => {
+                mz_ore::stack::maybe_grow(|| write!(f, "r_map({value_type})"))
             }
-            ReprScalarType::Map { value_type } => write!(f, "r_map({value_type})"),
-            ReprScalarType::Range { element_type } => write!(f, "r_range({element_type})"),
+            ReprScalarType::Range { element_type } => {
+                mz_ore::stack::maybe_grow(|| write!(f, "r_range({element_type})"))
+            }
             ReprScalarType::MzAclItem => write!(f, "r_mz_acl_item"),
             ReprScalarType::AclItem => write!(f, "r_acl_item"),
         }
@@ -6296,8 +6618,9 @@ mod tests {
 
     // Regression: operations on a deeply nested type (e.g. a record type
     // derived from a Protobuf schema) must not overflow the stack. Clone,
-    // drop, the proto conversions, and the SQL<->repr conversions each
-    // recurse once per nesting level and grow the stack on demand.
+    // drop, the proto conversions, the SQL<->repr conversions, and the
+    // comparison, hashing, and formatting traits each recurse once per nesting
+    // level and grow the stack on demand.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
     fn deeply_nested_type_ops_do_not_overflow() {
@@ -6312,9 +6635,7 @@ mod tests {
             };
         }
 
-        // Iterative depth measurement, likewise. The derived `PartialEq` still
-        // recurses on a fixed stack, so equality assertions are off limits
-        // here.
+        // Iterative depth measurement, likewise.
         fn depth(mut ty: &SqlScalarType) -> usize {
             let mut depth = 0;
             while let SqlScalarType::Record { fields, .. } = ty {
@@ -6324,12 +6645,31 @@ mod tests {
             depth
         }
 
+        fn hash_of<T: Hash>(t: &T) -> u64 {
+            use std::hash::Hasher;
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            t.hash(&mut hasher);
+            hasher.finish()
+        }
+
         let clone = ty.clone();
         assert_eq!(depth(&clone), DEPTH);
+
+        // Comparison, hashing, and formatting recurse over every level. The
+        // equal case recurses all the way to the leaf, so it is the deepest.
+        assert!(ty == clone);
+        assert_eq!(ty.cmp(&clone), Ordering::Equal);
+        assert_eq!(hash_of(&ty), hash_of(&clone));
+        assert!(!format!("{ty:?}").is_empty());
         drop(clone);
 
         let repr = ReprScalarType::from(&ty);
         let repr_clone = repr.clone();
+        assert!(repr == repr_clone);
+        assert_eq!(repr.cmp(&repr_clone), Ordering::Equal);
+        assert_eq!(hash_of(&repr), hash_of(&repr_clone));
+        assert!(!format!("{repr:?}").is_empty());
+        assert!(!format!("{repr}").is_empty());
         drop(repr_clone);
         let sql = SqlScalarType::from_repr(&repr);
         assert_eq!(depth(&sql), DEPTH);
@@ -6352,6 +6692,33 @@ mod tests {
             SqlScalarType::from_proto(proto).expect("valid proto")
         });
         assert_eq!(depth(&roundtripped), DEPTH);
+    }
+
+    // The hand-written `Debug` impls must reproduce the format a
+    // `#[derive(Debug)]` would produce, one shape per variant kind.
+    #[mz_ore::test]
+    fn manual_debug_matches_derived_format() {
+        // Unit, tuple, and struct variants of `SqlScalarType`.
+        assert_eq!(format!("{:?}", SqlScalarType::Int32), "Int32");
+        assert_eq!(
+            format!("{:?}", SqlScalarType::Array(Box::new(SqlScalarType::Int32))),
+            "Array(Int32)"
+        );
+        assert_eq!(
+            format!("{:?}", SqlScalarType::Numeric { max_scale: None }),
+            "Numeric { max_scale: None }"
+        );
+        // Unit and struct variants of `ReprScalarType`.
+        assert_eq!(format!("{:?}", ReprScalarType::Bool), "Bool");
+        assert_eq!(
+            format!(
+                "{:?}",
+                ReprScalarType::List {
+                    element_type: Box::new(ReprScalarType::Bool)
+                }
+            ),
+            "List { element_type: Bool }"
+        );
     }
 
     proptest! {
