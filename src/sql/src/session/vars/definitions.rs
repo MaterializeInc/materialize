@@ -2145,7 +2145,7 @@ feature_flags!(
     {
         name: enable_auto_scaling_strategy,
         desc: "`AUTO SCALING STRATEGY` cluster option",
-        default: false,
+        default: true,
         enable_for_item_parsing: true,
     },
     {
