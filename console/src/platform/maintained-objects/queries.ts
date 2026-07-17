@@ -37,6 +37,10 @@ import {
   buildLagAggregateQuery,
   LagAggregateRow,
 } from "~/api/materialize/maintained-objects/lagAggregate";
+import {
+  fetchOperatorCpuPerWorker,
+  OperatorCpuPerWorkerParams,
+} from "~/api/materialize/maintained-objects/operatorCpuPerWorker";
 import { fetchSourceStatistics } from "~/api/materialize/source/sourceStatistics";
 import {
   buildSubscribeQuery,
@@ -410,3 +414,40 @@ export const useClusterBucketsInWindow = ({
     refetchInterval: isLive ? 30_000 : false,
   });
 };
+
+/**
+ * Per-operator x per-worker CPU breakdown for one maintained object's
+ * dataflow on a specific replica. Disabled until all of (objectId,
+ * clusterName, replicaName) are present.
+ */
+export function useOperatorCpuPerWorker(
+  params: Partial<OperatorCpuPerWorkerParams>,
+) {
+  const enabled = Boolean(
+    params.objectId && params.clusterName && params.replicaName,
+  );
+  return useQuery({
+    refetchInterval: 30_000,
+    enabled,
+    queryKey: [
+      ...buildRegionQueryKey("maintainedObjects"),
+      buildQueryKeyPart("operatorCpuPerWorker", {
+        objectId: params.objectId ?? "",
+        clusterName: params.clusterName ?? "",
+        replicaName: params.replicaName ?? "",
+      }),
+    ],
+    queryFn: ({ queryKey, signal }) => {
+      return fetchOperatorCpuPerWorker({
+        queryKey,
+        params: {
+          objectId: params.objectId ?? "",
+          clusterName: params.clusterName ?? "",
+          replicaName: params.replicaName ?? "",
+        },
+        requestOptions: { signal },
+      });
+    },
+    select: (data) => data?.rows ?? [],
+  });
+}
