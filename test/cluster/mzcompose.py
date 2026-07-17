@@ -7318,7 +7318,7 @@ def workflow_test_replacement_mv_drop_after_restart(c: Composition) -> None:
     def data_shard(collection_state: str) -> str:
         match = re.search(r"data_shard: ShardId\(([^)]+)\)", collection_state)
         assert match is not None, collection_state
-        return match.group(1)
+        return f"s{match.group(1)}"
 
     c.down(destroy_volumes=True)
     c.up("materialized")
@@ -7376,7 +7376,7 @@ def workflow_test_replacement_mv_drop_after_restart(c: Composition) -> None:
     unfinalized = storage_metadata()["unfinalized_shards"]
     assert mv_shard not in unfinalized, (
         f"dropping the replacement marked the target's shard {mv_shard} for"
-        " finalization"
+        f" finalization. Unfinalized shards: {unfinalized}"
     )
 
     # A plain MV still owns its shard after bootstrap, so dropping it must
@@ -7385,7 +7385,7 @@ def workflow_test_replacement_mv_drop_after_restart(c: Composition) -> None:
     unfinalized = storage_metadata()["unfinalized_shards"]
     assert plain_mv_shard in unfinalized, (
         f"dropping a plain MV did not mark its shard {plain_mv_shard} for"
-        " finalization"
+        f" finalization. Unfinalized shards: {unfinalized}"
     )
 
     c.sql(
