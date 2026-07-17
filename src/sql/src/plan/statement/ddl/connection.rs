@@ -416,8 +416,6 @@ impl ConnectionOptionExtracted {
                 })
             }
             CreateConnectionType::GlueSchemaRegistry => {
-                scx.require_feature_flag(&vars::ENABLE_GLUE_SCHEMA_REGISTRY)?;
-
                 let aws_connection = get_aws_connection_reference(scx, &self)?
                     .ok_or_else(|| sql_err!("AWS CONNECTION option is required"))?;
                 let registry_name = self

@@ -456,6 +456,7 @@ KNOWN_STALE_LD_FLAGS: set[str] = set("""
     enable_copy_from_remote
     enable_copy_to_expr
     enable_explain_broken
+    enable_glue_schema_registry
     enable_iceberg_sink
     enable_kafka_sink_partition_by
     enable_multi_replica_sources

@@ -45,9 +45,6 @@
 # is exercised by the nested schema below: `inner_t` is defined once and
 # reused by name in the `inner2` field.
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_glue_schema_registry = true;
-
 # ---------------------------------------------------------------------------
 # Schema names
 # ---------------------------------------------------------------------------

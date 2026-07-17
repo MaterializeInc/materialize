@@ -9,8 +9,7 @@
 
 # Tests for AWS Glue Schema Registry connections.
 #
-# Covers parsing, planning, catalog round-trip, ALTER compatibility, and the
-# `enable_glue_schema_registry` feature flag.
+# Covers parsing, planning, catalog round-trip, and ALTER compatibility.
 #
 # `validate()` performs a real `GetRegistry` call against AWS.
 # Sqllogictest has no AWS credentials, so every CREATE CONNECTION here uses
@@ -21,13 +20,6 @@ reset-server
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_connection_validation_syntax TO true;
-----
-COMPLETE 0
-
-# The feature flag is off by default; enable it for the happy-path tests.
-# A dedicated flag-off section toggles it back below.
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_glue_schema_registry TO true;
 ----
 COMPLETE 0
 
@@ -99,33 +91,6 @@ CREATE CONNECTION bad_glue TO AWS GLUE SCHEMA REGISTRY (
     REGISTRY = 'my-registry',
     PORT = 8080
 )
-
-# Feature flag gating.
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_glue_schema_registry TO false;
-----
-COMPLETE 0
-
-statement error CREATE CONNECTION \.\.\. TO AWS GLUE SCHEMA REGISTRY is not available
-CREATE CONNECTION gated_glue TO AWS GLUE SCHEMA REGISTRY (
-    AWS CONNECTION = aws_conn,
-    REGISTRY = 'my-registry'
-) WITH (VALIDATE = false)
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_glue_schema_registry TO true;
-----
-COMPLETE 0
-
-# Re-enable: works again.
-statement ok
-CREATE CONNECTION glue_conn TO AWS GLUE SCHEMA REGISTRY (
-    AWS CONNECTION = aws_conn,
-    REGISTRY = 'my-registry'
-) WITH (VALIDATE = false)
-
-statement ok
-DROP CONNECTION glue_conn
 
 statement ok
 DROP CONNECTION aws_conn
