@@ -2809,7 +2809,7 @@ impl StorageTxn for Transaction<'_> {
         Ok(())
     }
 
-    fn mark_shards_as_finalized(&mut self, shards: BTreeSet<ShardId>) {
+    fn remove_unfinalized_shards(&mut self, shards: BTreeSet<ShardId>) {
         let ks: Vec<_> = shards
             .into_iter()
             .map(|shard| UnfinalizedShardKey { shard })

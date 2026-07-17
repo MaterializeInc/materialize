@@ -2622,11 +2622,16 @@ impl Coordinator {
                 }
                 CatalogItem::View(_) => (),
                 CatalogItem::MaterializedView(mview) => {
+                    // Each version receives a read policy when it is created. Bootstrap
+                    // must restore every policy because the oldest version owns the shared
+                    // Persist shard and capability changes reach it through each newer
+                    // version's primary link. A `NoPolicy` version would block that
+                    // propagation and pin compaction.
                     policies_to_set
                         .entry(policy.expect("materialized views have a compaction window"))
                         .or_insert_with(Default::default)
                         .storage_ids
-                        .insert(mview.global_id_writes());
+                        .extend(mview.global_ids());
 
                     let mut df_desc = self
                         .catalog()
@@ -3212,9 +3217,21 @@ impl Coordinator {
                     };
                 }
                 CatalogItem::MaterializedView(mv) => {
+                    // Applying a replacement preserves the ownership link established when the
+                    // replacement was created. The oldest collection owns the shard, each applied
+                    // replacement points to its predecessor, and a pending replacement starts by
+                    // pointing to its target's latest collection.
+                    //
+                    // NOTE: Versioned tables chain in the opposite direction because their latest
+                    // version owns the shard. Each chain matches its runtime replacement path.
+                    let mut primary = mv
+                        .replacement_target
+                        .map(|target_id| catalog.get_entry(&target_id).latest_global_id());
                     let collection_descs = mv.collection_descs().map(|(gid, _version, desc)| {
-                        let collection_desc =
+                        let mut collection_desc =
                             CollectionDescription::for_other(desc, mv.initial_as_of.clone());
+                        collection_desc.primary = primary;
+                        primary = Some(gid);
                         (gid, collection_desc)
                     });
 
