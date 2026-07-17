@@ -32,7 +32,7 @@
 
 **Note:** This function is [side-effecting](#side-effecting-functions).{{ end }}{{ $versionAdded := index . "version-added" }}{{ if $versionAdded }}{{ $releasePage := index $releasedVersions $versionAdded }}{{ if not $releasePage.Params.released }}
 
-**Unreleased:** This function will be released in [**{{ $versionAdded }}**]({{ printf "%s/releases#release-notes" $parentPath | relURL }}). It may not be available in your region yet. The release is scheduled to complete by **{{ dateFormat "January 2, 2006" $releasePage.Params.date }}**.{{ end }}{{ end }}
+**Unreleased:** This function will be released in [**{{ $versionAdded }}**]({{ printf "%s/releases/" $parentPath | relURL }}). It may not be available in your region yet. The release is scheduled to complete by **{{ dateFormat "January 2, 2006" $releasePage.Params.date }}**.{{ end }}{{ end }}
 
 {{- end -}}
 
