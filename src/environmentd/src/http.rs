@@ -1439,6 +1439,9 @@ async fn get_authenticator(
             }
             _ => Authenticator::Oidc(oidc_rx.clone().await.expect("sender not dropped")),
         },
+        // Talos HTTP listeners are rejected at startup config validation, so
+        // this arm is unreachable; fall back to no-op auth rather than panic.
+        listeners::AuthenticatorKind::Talos => Authenticator::None,
         listeners::AuthenticatorKind::None => Authenticator::None,
     }
 }
@@ -1543,6 +1546,14 @@ async fn auth(
             // We shouldn't ever end up here as the configuration is validated at startup.
             // If we do, it's a server misconfiguration.
             // Just in case, we return a 401 rather than panic.
+            return Err(AuthError::MissingHttpAuthentication {
+                challenges: challenges.clone(),
+            });
+        }
+        Authenticator::Talos(_) => {
+            // Talos auth is wired for pgwire only so far; HTTP Talos listeners
+            // are rejected at startup config validation, so this is
+            // unreachable. Return a 401 rather than panic if misconfigured.
             return Err(AuthError::MissingHttpAuthentication {
                 challenges: challenges.clone(),
             });
