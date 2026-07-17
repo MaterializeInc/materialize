@@ -19,17 +19,14 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-07-16* <br>
 *Released to Materialize Self-Managed: 2026-07-17* <br>
 
-### Upgraded Cloud Cluster Hardware {#v26.33-upgraded-cloud-hardware}
-Over the past two weeks, we've rolled out upgraded cluster hardware for all
-Materialize Cloud clients. The new hardware speeds up compute-intensive
-operations, and we've observed a 10–66% reduction in hydration time across
-production environments. This upgrade is already live across all Cloud
-environments and was applied automatically, with no configuration changes,
-cluster resizing, or other action needed.
+### Improved hydration times on Materialize Cloud {#v26.33-upgraded-cloud-hardware}
+We've upgraded cluster hardware for all Materialize Cloud environments. The new hardware speeds up compute-intensive
+operations. We've observed a 10%–66% reduction in hydration times. You don't need to take any actions. The improvement is live across all Materialize Cloud
+environments, on all new and existing clusters. 
 
 ### Improvements {#v26.33-improvements}
-- **`EXPLAIN ANALYZE` on multi-replica clusters via MCP**: The Materialize MCP developer endpoint's `query` tool now accepts an optional cluster replica, so `EXPLAIN ANALYZE` can target a specific replica and run on clusters with more than one replica.
-- **Faster queries on busy environments**: Query latency on query-heavy or overloaded clusters is reduced by caching the catalog snapshot for the duration of a session.
+- **`EXPLAIN ANALYZE` on multi-replica clusters via MCP**: The Materialize MCP developer endpoint's `query` tool now accepts an optional cluster replica parameter, so `EXPLAIN ANALYZE` can target a specific replica.
+- **Faster queries on busy environments**: We've improved query latency on query-heavy clusters. We've reduced by caching the catalog snapshot for the duration of a session. In our tests, we've seen QPS improvements of up to 13%.
 - **Improved responsiveness under load**: A slow timestamp oracle no longer stalls unrelated sessions that are running `EXPLAIN TIMESTAMP` or `SUBSCRIBE`.
 
 ### Bug Fixes {#v26.33-bug-fixes}
@@ -59,7 +56,6 @@ cluster resizing, or other action needed.
 - Closed a resource-isolation gap that allowed `INSERT ... SELECT` and `COPY ... TO <url>` reads of user objects to run on the reserved `mz_catalog_server` cluster.
 - Fixed inline credentials in `CREATE CONNECTION` options being written in clear text to redacted SQL and telemetry.
 - Error messages that include connection URLs now redact embedded credentials instead of exposing the username and password.
-
 
 ## v26.32.0
 *Released to Materialize Cloud: 2026-07-09* <br>
