@@ -206,6 +206,8 @@ impl Optimize<SubscribePlan> for Optimizer {
                     non_null_assertions: vec![],
                     // No `REFRESH` for subscribes
                     refresh_schedule: None,
+                    // Populated during LIR lowering.
+                    from_key: None,
                 };
                 df_desc.export_sink(self.sink_id, sink_description);
             }
@@ -250,6 +252,8 @@ impl Optimize<SubscribePlan> for Optimizer {
                     non_null_assertions: vec![],
                     // No `REFRESH` for subscribes
                     refresh_schedule: None,
+                    // Populated during LIR lowering.
+                    from_key: None,
                 };
                 df_desc.export_sink(self.sink_id, sink_description);
             }

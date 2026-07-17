@@ -282,6 +282,8 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             non_null_assertions: Vec::new(),
             // No `REFRESH` for copy_to.
             refresh_schedule: None,
+            // Populated during LIR lowering.
+            from_key: None,
         };
         df_desc.export_sink(self.select_id, sink_description);
 
