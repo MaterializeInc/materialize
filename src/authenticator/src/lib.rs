@@ -8,11 +8,15 @@
 // by the Apache License, Version 2.0.
 
 pub mod oidc;
+pub mod talos;
 
 use mz_adapter::Client as AdapterClient;
 use mz_frontegg_auth::Authenticator as FronteggAuthenticator;
 
 pub use oidc::{GenericOidcAuthenticator, OidcClaims, OidcError, ValidatedClaims};
+pub use talos::{
+    DeriveCredential, TalosAuthenticator, TalosConfig, TalosError, ValidatedTalosClaims,
+};
 
 use mz_auth::AuthenticatorKind;
 
