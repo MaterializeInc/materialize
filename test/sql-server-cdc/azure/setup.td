@@ -14,7 +14,10 @@
 # provided account must be a member of db_owner so it can enable CDC and manage
 # the test objects.
 
-$ sql-server-connect name=sql-server
+# A serverless database that has auto-paused reports error 40613 ("not
+# currently available") on the first connection while it resumes, which takes
+# up to a few minutes. Retry steadily until it comes online.
+$ sql-server-connect name=sql-server retry-initial-backoff=10 retry-clamp-backoff=30 retry-max-duration=240
 server=tcp:${arg.azure-sql-host},${arg.azure-sql-port};Encrypt=true;TrustServerCertificate=true;User ID={${arg.azure-sql-user}};Password={${arg.azure-sql-password}};Database=${arg.azure-sql-database}
 
 # Drop objects left over from a previous run so the workflow is idempotent
