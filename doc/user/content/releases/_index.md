@@ -15,6 +15,30 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.33.0
+*Released to Materialize Cloud: 2026-07-16* <br>
+*Released to Materialize Self-Managed: 2026-07-17* <br>
+
+### READ COMMITTED isolation for PostgreSQL metadata databases {#v26.33-pg-consensus-read-committed}
+
+*Materialize Self-Managed only*
+
+Starting in v26.33, self-managed deployments that use a PostgreSQL metadata
+database can configure Materialize to run its internal consensus queries under
+`READ COMMITTED` transaction isolation instead of `SERIALIZABLE`. The consensus
+queries are linearizable under `READ COMMITTED`, while avoiding the
+serialization-failure retries that `SERIALIZABLE` incurs under contention,
+improving metadata write throughput. To use `READ COMMITTED`, Materialize
+introduces the `persist_pg_consensus_read_committed` system parameter.
+
+{{< note >}}
+The parameter applies only to PostgreSQL metadata databases. Only enable it
+after you have upgraded your self-managed deployment to v26.33 or later.
+{{< /note >}}
+
+For details, see the [Self-Managed upgrade
+notes](/self-managed-deployments/upgrading/version-notes/).
+
 ## v26.32.0
 *Released to Materialize Cloud: 2026-07-09* <br>
 *Released to Materialize Self-Managed: 2026-07-10* <br>
