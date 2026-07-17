@@ -309,6 +309,16 @@ impl ComputeState {
             std::sync::atomic::Ordering::Relaxed,
         );
 
+        // Per-column arrangement compression is replica-scoped (see
+        // `ENABLE_ARRANGEMENT_COLUMN_COMPRESSION_ALPHA`), so its per-replica-resolved value
+        // arrives in `worker_config`; mirror it into the process-global flag row-spine reads at
+        // seal time. Safe to re-apply on every tick: each batch records its own codec, so a flip
+        // only affects batches sealed afterwards.
+        mz_row_spine::COLUMN_COMPRESSION.store(
+            ENABLE_ARRANGEMENT_COLUMN_COMPRESSION_ALPHA.get(config),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+
         // NB: arrangement dictionary compression is deliberately NOT applied here. Unlike the
         // settings above, it is captured once at replica creation (see `handle_create_instance`
         // and `InstanceConfig::arrangement_dictionary_compression`) and held fixed, so that
@@ -498,6 +508,8 @@ impl<'a> ActiveComputeState<'a> {
             config.arrangement_dictionary_compression,
             std::sync::atomic::Ordering::Relaxed,
         );
+        // NB: per-column compression is replica-scoped and applied in `apply_worker_config`
+        // (called just above), not captured on `InstanceConfig`.
 
         if let Some(offset) = config.expiration_offset {
             self.compute_state.apply_expiration_offset(offset);

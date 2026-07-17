@@ -399,6 +399,18 @@ pub const ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA: Config<bool> = Config
     "Enable arrangement dictionary compression (alpha; not yet production-ready).",
 );
 
+/// Whether to enable per-column arrangement compression (the `RowCodec`
+/// framework). Independent of, and not combined with, dictionary compression.
+///
+/// Replica-scoped: the per-replica-resolved value is applied to the process-global
+/// `mz_row_spine::COLUMN_COMPRESSION` flag in the compute replica's `apply_worker_config`.
+pub const ENABLE_ARRANGEMENT_COLUMN_COMPRESSION_ALPHA: Config<bool> = Config::new(
+    "enable_arrangement_column_compression_alpha",
+    false,
+    "Enable per-column arrangement compression (alpha; not yet production-ready).",
+)
+.scoped(ParameterScope::Replica);
+
 /// Whether to enable the peek response stash, for sending back large peek
 /// responses. The response stash will only be used for results that exceed
 /// `compute_peek_response_stash_threshold_bytes`.
@@ -525,6 +537,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES)
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK)
         .add(&ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA)
+        .add(&ENABLE_ARRANGEMENT_COLUMN_COMPRESSION_ALPHA)
         .add(&ENABLE_PEEK_RESPONSE_STASH)
         .add(&PEEK_RESPONSE_STASH_THRESHOLD_BYTES)
         .add(&PEEK_RESPONSE_STASH_BATCH_MAX_RUNS)
