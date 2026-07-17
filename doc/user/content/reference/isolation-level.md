@@ -18,7 +18,8 @@ visible to a transaction during its execution.
 
 ## Supported isolation levels
 
-Materialize accepts the following isolation levels:
+Materialize accepts the following isolation levels for your SQL transactions
+against Materialize:
 
 {{< if-unreleased "v26.29" >}}
 | Isolation level | Behavior in Materialize |
