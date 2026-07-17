@@ -32,7 +32,7 @@ improving metadata write throughput. To use `READ COMMITTED`, Materialize
 introduces the `persist_pg_consensus_read_committed` system parameter.
 
 {{< note >}}
-The parameter applies only to PostgreSQL metadata databases. Only enable it 
+The parameter applies only to PostgreSQL metadata databases. Only enable it
 after you have upgraded your self-managed deployment to v26.33 or later.
 {{< /note >}}
 
