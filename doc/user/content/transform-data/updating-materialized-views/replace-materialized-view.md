@@ -209,8 +209,6 @@ updated materialized view defintion:
    differs from target schema`.
    {{< /note >}}
 
-   {{< note >}}
-
    ```mzsql
    -- Create a replacement for the winning bids view
    CREATE REPLACEMENT MATERIALIZED VIEW auction_house.mv_winning_bids_v2
@@ -248,7 +246,8 @@ updated materialized view defintion:
      statement.
    - Computes results independently while the original continues serving
      queries.
-
+   
+   {{< note >}}
    {{% include-headless "/headless/replacement-views/querying-replacement-view" %}}
    {{< /note >}}
 1. Before applying the replacement materialized view, wait for it to fully hydrate. To query
