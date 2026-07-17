@@ -342,7 +342,12 @@ pub enum Message {
     /// Initiates a group commit.
     GroupCommitInitiate(Span, Option<GroupCommitPermit>),
     DeferredStatementReady,
-    AdvanceTimelines,
+    AdvanceTimelines {
+        /// The oracle read timestamp that resulted from the `apply_write` of
+        /// the group commit that triggered this message, if any. Used to
+        /// downgrade read holds without another oracle round trip.
+        epoch_ms_read_ts: Option<Timestamp>,
+    },
     ClusterEvent(ClusterEvent),
     CancelPendingPeeks {
         conn_id: ConnectionId,
@@ -499,7 +504,7 @@ impl Message {
             Message::CreateConnectionValidationReady(_) => "create_connection_validation_ready",
             Message::TryDeferred { .. } => "try_deferred",
             Message::GroupCommitInitiate(..) => "group_commit_initiate",
-            Message::AdvanceTimelines => "advance_timelines",
+            Message::AdvanceTimelines { .. } => "advance_timelines",
             Message::ClusterEvent(_) => "cluster_event",
             Message::CancelPendingPeeks { .. } => "cancel_pending_peeks",
             Message::LinearizeReads => "linearize_reads",
@@ -2998,11 +3003,9 @@ impl Coordinator {
             .append_table(write_ts.clone(), advance_to, appends)
             .expect("invalid updates");
 
-        self.apply_local_write(write_ts).await;
-
         // Add builtin table updates the clear the contents of all system tables
         debug!("coordinator init: resetting system tables");
-        let read_ts = self.get_local_read_ts().await;
+        let read_ts = self.apply_local_write(write_ts).await;
 
         // Filter out the 'mz_storage_usage_by_shard' table since we need to retain that info for
         // billing purposes.
@@ -3949,7 +3952,9 @@ impl Coordinator {
                         // read-only mode we send this message directly because
                         // we're not doing group commits.
                         if self.controller.read_only() {
-                            messages.push(Message::AdvanceTimelines);
+                            messages.push(Message::AdvanceTimelines {
+                                epoch_ms_read_ts: None,
+                            });
                         } else {
                             messages.push(Message::GroupCommitInitiate(span, None));
                         }

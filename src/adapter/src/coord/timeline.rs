@@ -138,10 +138,13 @@ impl Coordinator {
     }
 
     /// Marks a write at `timestamp` as completed, using a [`TimestampOracle`].
+    ///
+    /// The returned future resolves to the oracle read timestamp that resulted
+    /// from applying the write, see [`TimestampOracle::apply_write`].
     pub(crate) fn apply_local_write(
         &self,
         timestamp: Timestamp,
-    ) -> impl Future<Output = ()> + Send + 'static {
+    ) -> impl Future<Output = Timestamp> + Send + 'static {
         let now = self.now().into();
 
         let upper_bound = upper_bound(&now);
@@ -279,8 +282,15 @@ impl Coordinator {
         became_empty
     }
 
+    /// Advances the timestamp oracles of all timelines and downgrades the
+    /// per-timeline read holds to the current oracle read timestamp.
+    ///
+    /// `epoch_ms_read_ts` is the oracle read timestamp that resulted from the
+    /// `apply_write` of the group commit that triggered this call, if any. It
+    /// is used to downgrade the [`Timeline::EpochMilliseconds`] read holds
+    /// without another oracle round trip.
     #[instrument(level = "debug")]
-    pub(crate) async fn advance_timelines(&mut self) {
+    pub(crate) async fn advance_timelines(&mut self, epoch_ms_read_ts: Option<Timestamp>) {
         let global_timelines = std::mem::take(&mut self.global_timelines);
         for (
             timeline,
@@ -292,7 +302,10 @@ impl Coordinator {
         {
             // Timeline::EpochMilliseconds is advanced in group commits and doesn't need to be
             // manually advanced here.
-            if timeline != Timeline::EpochMilliseconds && !self.read_only_controllers {
+            let mut known_read_ts = None;
+            if timeline == Timeline::EpochMilliseconds {
+                known_read_ts = epoch_ms_read_ts;
+            } else if !self.read_only_controllers {
                 // For non realtime sources, we define now as the largest timestamp, not in
                 // advance of any object's upper. This is the largest timestamp that is closed
                 // to writes.
@@ -304,17 +317,25 @@ impl Coordinator {
                 if !id_bundle.is_empty() {
                     let least_valid_write = self.least_valid_write(&id_bundle);
                     let now = Self::largest_not_in_advance_of_upper(&least_valid_write);
-                    oracle.apply_write(now).await;
+                    let read_ts = oracle.apply_write(now).await;
+                    known_read_ts = Some(read_ts);
                     debug!(
                         least_valid_write = ?least_valid_write,
-                        oracle_read_ts = ?oracle.read_ts().await,
+                        oracle_read_ts = ?read_ts,
                         "advanced {:?} to {}",
                         timeline,
                         now,
                     );
                 }
             };
-            let read_ts = oracle.read_ts().await;
+            // Downgrading to a read timestamp observed slightly in the past is
+            // just as valid as calling read_ts here: the oracle's read
+            // timestamp never regresses, so future queries always get
+            // timestamps >= the downgrade target.
+            let read_ts = match known_read_ts {
+                Some(read_ts) => read_ts,
+                None => oracle.read_ts().await,
+            };
             read_holds.downgrade(read_ts);
             self.global_timelines
                 .insert(timeline, TimelineState { oracle, read_holds });

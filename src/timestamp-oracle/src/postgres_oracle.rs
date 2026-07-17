@@ -861,27 +861,36 @@ where
     }
 
     #[mz_ore::instrument(name = "oracle::apply_write")]
-    async fn fallible_apply_write(&self, write_ts: Timestamp) -> Result<(), anyhow::Error> {
+    async fn fallible_apply_write(&self, write_ts: Timestamp) -> Result<Timestamp, anyhow::Error> {
         if self.read_only {
             panic!("attempting apply_write in read-only mode");
         }
 
+        // RETURNING gives us the post-update read_ts within the same
+        // (implicit) transaction, so it is a linearized read that comes for
+        // free with the round trip we pay anyway.
         let q = r#"
             UPDATE timestamp_oracle SET write_ts = GREATEST(write_ts, $2), read_ts = GREATEST(read_ts, $2)
-                WHERE timeline = $1;
+                WHERE timeline = $1
+            RETURNING read_ts;
         "#;
         let client = self.get_connection().await?;
         let statement = client.prepare_cached(q).await?;
         let write_ts = Self::ts_to_decimal(write_ts);
 
-        let _ = pg_execute_prepared(&client, &statement, &[&self.timeline, &write_ts]).await?;
+        let result =
+            pg_query_one_prepared(&client, &statement, &[&self.timeline, &write_ts]).await?;
+
+        let read_ts: Numeric = result.try_get("read_ts").expect("missing column read_ts");
+        let read_ts = Self::decimal_to_ts(read_ts);
 
         debug!(
             timeline = ?self.timeline,
             write_ts = ?write_ts,
+            read_ts = ?read_ts,
             "returning from apply_write()");
 
-        Ok(())
+        Ok(read_ts)
     }
 
     // We could add `From` impls for these but for now keep the code local to
@@ -956,7 +965,7 @@ where
     }
 
     #[instrument]
-    async fn apply_write(&self, write_ts: Timestamp) {
+    async fn apply_write(&self, write_ts: Timestamp) -> Timestamp {
         let metrics = &self.metrics.retries.apply_write;
 
         let res = retry_fallible(metrics, || {

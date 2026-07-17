@@ -86,8 +86,10 @@ fn parse_args() -> Result<Args, String> {
 
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
-        let mut value =
-            |name: &str| it.next().ok_or_else(|| format!("{} requires a value", name));
+        let mut value = |name: &str| {
+            it.next()
+                .ok_or_else(|| format!("{} requires a value", name))
+        };
         match arg.as_str() {
             "--url" => args.url = value("--url")?,
             "--mode" => args.mode = value("--mode")?,

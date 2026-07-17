@@ -474,10 +474,11 @@ impl<T: TimestampManipulation> TimestampOracle<T> for MemTimestampOracle<T> {
         read_ts.clone()
     }
 
-    async fn apply_write(&self, lower_bound: T) {
+    async fn apply_write(&self, lower_bound: T) -> T {
         let (read_ts, write_ts) = &mut *self.read_write_ts.lock().expect("lock poisoned");
         *read_ts = std::cmp::max(read_ts.clone(), lower_bound);
-        *write_ts = std::cmp::max(read_ts, write_ts).clone();
+        *write_ts = std::cmp::max(read_ts.clone(), write_ts.clone());
+        read_ts.clone()
     }
 }
 

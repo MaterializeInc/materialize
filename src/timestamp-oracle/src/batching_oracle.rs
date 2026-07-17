@@ -120,7 +120,7 @@ where
             .expect("worker task cannot stop while there are outstanding commands/requests")
     }
 
-    async fn apply_write(&self, write_ts: T) {
+    async fn apply_write(&self, write_ts: T) -> T {
         self.inner.apply_write(write_ts).await
     }
 }

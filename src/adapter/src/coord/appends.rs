@@ -599,7 +599,7 @@ impl Coordinator {
                 };
 
                 // Apply the write by marking the timestamp as complete on the timeline.
-                apply_write_fut
+                let oracle_read_ts = apply_write_fut
                     .instrument(debug_span!("group_commit_apply::append_write_fut"))
                     .await;
 
@@ -617,7 +617,9 @@ impl Coordinator {
                 drop(group_write_locks);
 
                 // Advance other timelines.
-                if let Err(e) = internal_cmd_tx.send(Message::AdvanceTimelines) {
+                if let Err(e) = internal_cmd_tx.send(Message::AdvanceTimelines {
+                    epoch_ms_read_ts: Some(oracle_read_ts),
+                }) {
                     warn!("Server closed with non-advanced timelines, {e}");
                 }
 

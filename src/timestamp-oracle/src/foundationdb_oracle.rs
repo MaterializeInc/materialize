@@ -435,7 +435,7 @@ where
         &self,
         trx: &Transaction,
         write_ts: Timestamp,
-    ) -> Result<(), FdbTransactError> {
+    ) -> Result<Timestamp, FdbTransactError> {
         // Update read_ts = GREATEST(read_ts, write_ts)
         let current_read = trx.get(&self.read_ts_key, false).await?;
         let current_read_ts: PackableTimestamp = match current_read {
@@ -447,10 +447,13 @@ where
             }
         };
 
-        if write_ts > current_read_ts.0 {
+        let new_read_ts = if write_ts > current_read_ts.0 {
             let new_ts_packed = pack(&PackableTimestamp(write_ts));
             trx.set(&self.read_ts_key, &new_ts_packed);
-        }
+            write_ts
+        } else {
+            current_read_ts.0
+        };
 
         // Update write_ts = GREATEST(write_ts, write_ts_param)
         let current_write = trx.get(&self.write_ts_key, false).await?;
@@ -468,7 +471,7 @@ where
             trx.set(&self.write_ts_key, &new_ts_packed);
         }
 
-        Ok::<_, FdbTransactError>(())
+        Ok::<_, FdbTransactError>(new_read_ts)
     }
 }
 
@@ -581,12 +584,13 @@ where
         read_ts
     }
 
-    async fn apply_write(&self, write_ts: Timestamp) {
+    async fn apply_write(&self, write_ts: Timestamp) -> Timestamp {
         if self.read_only {
             panic!("attempting apply_write in read-only mode");
         }
 
-        self.metrics
+        let read_ts = self
+            .metrics
             .oracle
             .apply_write
             .run_op(|| async {
@@ -610,8 +614,11 @@ where
         debug!(
             timeline = ?self.timeline,
             write_ts = ?write_ts,
+            read_ts = ?read_ts,
             "returning from apply_write()"
         );
+
+        read_ts
     }
 }
 

@@ -105,8 +105,8 @@ impl Coordinator {
                     .boxed_local()
                     .await
             }
-            Message::AdvanceTimelines => {
-                self.advance_timelines().boxed_local().await;
+            Message::AdvanceTimelines { epoch_ms_read_ts } => {
+                self.advance_timelines(epoch_ms_read_ts).boxed_local().await;
             }
             Message::ClusterEvent(event) => self.message_cluster_event(event).boxed_local().await,
             Message::CancelPendingPeeks { conn_id } => {
