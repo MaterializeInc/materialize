@@ -16,33 +16,32 @@
 //! # Migration model
 //!
 //! The migration is consumer-first: every Plan-node consumer learns to accept
-//! both variants before any producer emits the columnar variant. Once all
-//! consumers are ready, a single switch flips producers to columnar end-to-end.
+//! both variants before any producer emits the columnar variant. Producers can
+//! then flip to columnar one at a time.
 //!
 //! Within a Plan node, operators may freely materialize Vec collections; only
 //! the inter-node edge format is constrained. A decode from columnar to Vec at
 //! a consumer's input is acceptable only when the consumer would have decoded
 //! `Row` to [`mz_repr::Datum`] anyway. Pure passthrough consumers (Negate,
-//! Union) must round-trip the columnar variant without decoding.
+//! Union) round-trip the columnar variant without decoding.
 //!
-//! See `.claude/plans/columnar_consumer_first.md` for the staged plan.
+//! Consumers that have not yet learned the columnar form fall back to
+//! [`CollectionEdge::into_vec`], which decodes through the named
+//! `ColumnarToVec` operator. Repack seams therefore stay visible in dataflow
+//! introspection, so they can be found and retired.
 
-#![allow(dead_code)]
-// Phase A defines the type with `todo!()` arms that will be filled in when
-// producers begin emitting columnar batches.
-#![allow(clippy::todo)]
-
-use columnar::Columnar;
-use differential_dataflow::VecCollection;
+use columnar::{Columnar, Index};
+use differential_dataflow::{AsCollection, Collection, VecCollection};
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, Row};
 use mz_timely_util::columnar::Column;
+use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::operator::CollectionExt;
 use timely::ContainerBuilder;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+use timely::dataflow::operators::generic::{Operator, OutputBuilder};
 use timely::dataflow::{Scope, Stream, StreamVec};
-use timely::progress::Timestamp;
 
 use crate::render::RenderTimestamp;
 use crate::render::context::{ECB, Session};
@@ -52,35 +51,15 @@ use crate::typedefs::KeyBatcher;
 /// A columnar collection of `(D, T, R)` updates traveling on a compute
 /// dataflow edge.
 ///
-/// Mirrors differential's [`VecCollection<'scope, T, D, R>`] shape and
-/// parameters; the underlying container is [`Column<(D, T, R)>`] instead of
-/// `Vec<(D, T, R)>`.
-pub struct ColumnarCollection<'scope, T, D, R>
-where
-    T: Timestamp,
-    (D, T, R): Columnar,
-{
-    /// The underlying timely stream of columnar batches.
-    pub inner: Stream<'scope, T, Column<(D, T, R)>>,
-}
-
-impl<'scope, T, D, R> Clone for ColumnarCollection<'scope, T, D, R>
-where
-    T: Timestamp,
-    (D, T, R): Columnar,
-{
-    fn clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
-        }
-    }
-}
+/// Mirrors differential's [`VecCollection<'scope, T, D, R>`]; the underlying
+/// container is [`Column<(D, T, R)>`] instead of `Vec<(D, T, R)>`.
+pub type ColumnarCollection<'scope, T, D, R> = Collection<'scope, T, Column<(D, T, R)>>;
 
 /// A dataflow edge carrying records as either a row-based [`VecCollection`] or
 /// a [`ColumnarCollection`].
 ///
-/// Producers choose a variant; consumers must accept either. Mixing variants
-/// across a `concat` is rejected during the transition.
+/// Producers choose a variant; consumers must accept either. Variant-mixing
+/// `concat`s repack the row-based inputs and produce the columnar variant.
 #[derive(Clone)]
 pub enum CollectionEdge<'scope, T: RenderTimestamp> {
     /// Row-formatted collection. Today's default for every producer.
@@ -103,11 +82,7 @@ impl<'scope, T: RenderTimestamp> CollectionEdge<'scope, T> {
     pub fn enter_region<'inner>(self, region: Scope<'inner, T>) -> CollectionEdge<'inner, T> {
         match self {
             CollectionEdge::Vec(c) => CollectionEdge::Vec(c.enter_region(region)),
-            CollectionEdge::Columnar(_) => {
-                // Sub-region entry for columnar collections will be wired when
-                // the first producer emits this variant.
-                todo!("CollectionEdge::Columnar::enter_region")
-            }
+            CollectionEdge::Columnar(c) => CollectionEdge::Columnar(c.enter_region(region)),
         }
     }
 
@@ -115,42 +90,27 @@ impl<'scope, T: RenderTimestamp> CollectionEdge<'scope, T> {
     pub fn leave_region<'outer>(self, outer: Scope<'outer, T>) -> CollectionEdge<'outer, T> {
         match self {
             CollectionEdge::Vec(c) => CollectionEdge::Vec(c.leave_region(outer)),
-            CollectionEdge::Columnar(_) => {
-                todo!("CollectionEdge::Columnar::leave_region")
-            }
+            CollectionEdge::Columnar(c) => CollectionEdge::Columnar(c.leave_region(outer)),
         }
     }
 
-    /// Extracts the [`VecCollection`] arm, panicking on the columnar arm.
+    /// The edge as a row-based [`VecCollection`].
     ///
-    /// This is a transitional fence used at consumer sites that have not yet
-    /// been converted to handle the columnar arm natively. Each Phase-B
-    /// consumer PR removes one call.
-    pub fn expect_vec(self) -> VecCollection<'scope, T, Row, Diff> {
+    /// The Vec arm is returned as is. The columnar arm decodes through
+    /// [`columnar_to_vec`], which allocates an owned [`Row`] per record.
+    /// Consumers that can work on the columnar form directly should do so
+    /// instead of calling this.
+    pub fn into_vec(self) -> VecCollection<'scope, T, Row, Diff> {
         match self {
             CollectionEdge::Vec(c) => c,
-            CollectionEdge::Columnar(_) => panic!(
-                "CollectionEdge::expect_vec called on columnar arm; consumer must convert first"
-            ),
-        }
-    }
-
-    /// Borrows the [`VecCollection`] arm mutably, panicking on the columnar arm.
-    ///
-    /// Transitional fence; see [`Self::expect_vec`].
-    pub fn expect_vec_mut(&mut self) -> &mut VecCollection<'scope, T, Row, Diff> {
-        match self {
-            CollectionEdge::Vec(c) => c,
-            CollectionEdge::Columnar(_) => panic!(
-                "CollectionEdge::expect_vec_mut called on columnar arm; consumer must convert first"
-            ),
+            CollectionEdge::Columnar(c) => columnar_to_vec(c),
         }
     }
 
     /// Negates the diff on every record in this edge.
     ///
     /// Preserves variant. The columnar arm uses [`columnar_negate`], which
-    /// flips the diff column without decoding the data column.
+    /// negates diffs without decoding rows.
     pub fn negate(self) -> Self {
         match self {
             CollectionEdge::Vec(c) => CollectionEdge::Vec(c.negate()),
@@ -158,26 +118,30 @@ impl<'scope, T: RenderTimestamp> CollectionEdge<'scope, T> {
         }
     }
 
-    /// Concatenates a collection of edges that all share the same variant.
+    /// Concatenates a collection of edges.
     ///
-    /// Mixing variants is rejected during the transition.
+    /// Edges of one shared variant concatenate natively. Mixed inputs upgrade
+    /// the row-based edges through [`vec_to_columnar`] and produce the
+    /// columnar variant. Repacking rows into columns copies bytes but
+    /// allocates no per-record `Row`s, so upgrading is the cheap direction.
     pub fn concat_many<I>(scope: Scope<'scope, T>, edges: I) -> Self
     where
         I: IntoIterator<Item = Self>,
     {
-        let mut vec_arm = Vec::new();
+        let mut vecs = Vec::new();
+        let mut cols = Vec::new();
         for edge in edges {
             match edge {
-                CollectionEdge::Vec(c) => vec_arm.push(c),
-                CollectionEdge::Columnar(_) => {
-                    // No producer emits the columnar arm yet; once one does,
-                    // this branch must either concatenate columnar streams or
-                    // reject mixed-variant inputs explicitly.
-                    todo!("CollectionEdge::concat_many: columnar arm");
-                }
+                CollectionEdge::Vec(c) => vecs.push(c),
+                CollectionEdge::Columnar(c) => cols.push(c),
             }
         }
-        CollectionEdge::Vec(differential_dataflow::collection::concatenate(scope, vec_arm))
+        if cols.is_empty() {
+            CollectionEdge::Vec(differential_dataflow::collection::concatenate(scope, vecs))
+        } else {
+            cols.extend(vecs.into_iter().map(vec_to_columnar));
+            CollectionEdge::Columnar(differential_dataflow::collection::concatenate(scope, cols))
+        }
     }
 
     /// Applies `logic` to each record in this edge, exposing the record as a
@@ -245,11 +209,41 @@ impl<'scope, T: RenderTimestamp> CollectionEdge<'scope, T> {
                 });
                 (ok_stream, err_stream)
             }
-            CollectionEdge::Columnar(_) => {
-                // Implementation will iterate `Column<(Row, T, Diff)>::borrow()`
-                // via the `Rows<_>::Index` impl (yielding `&RowRef`) and call
-                // `DatumVec::borrow_with_limit(row_ref, max_demand)` per row.
-                todo!("CollectionEdge::flat_map_datums: columnar arm")
+            CollectionEdge::Columnar(c) => {
+                let scope = c.inner.scope();
+                let mut builder = OperatorBuilder::new("CollectionFlatMap".to_string(), scope);
+                let (ok_output, ok_stream) = builder.new_output();
+                let mut ok_output = OutputBuilder::<_, DCB>::from(ok_output);
+                let (err_output, err_stream) = builder.new_output();
+                let mut err_output = OutputBuilder::<_, ECB<T>>::from(err_output);
+                let mut input = builder.new_input(c.inner, Pipeline);
+                builder.build(move |_capabilities| {
+                    let mut datums = DatumVec::new();
+                    move |_frontiers| {
+                        let mut ok_output = ok_output.activate();
+                        let mut err_output = err_output.activate();
+                        input.for_each(|time, data| {
+                            // Retain the input capability to derive a `Capability` for each output;
+                            // the `Session` type alias is fixed to `Capability<T>`.
+                            let ok_cap = time.retain(0);
+                            let err_cap = time.retain(1);
+                            let mut ok_session = ok_output.session_with_builder(&ok_cap);
+                            let mut err_session = err_output.session_with_builder(&err_cap);
+                            // Rows are read from the borrowed column, never
+                            // materialized as owned `Row`s.
+                            for (v, t, d) in data.borrow().into_index_iter() {
+                                logic(
+                                    &mut datums.borrow_with_limit(v, max_demand),
+                                    Columnar::into_owned(t),
+                                    Columnar::into_owned(d),
+                                    &mut ok_session,
+                                    &mut err_session,
+                                );
+                            }
+                        });
+                    }
+                });
+                (ok_stream, err_stream)
             }
         }
     }
@@ -257,28 +251,112 @@ impl<'scope, T: RenderTimestamp> CollectionEdge<'scope, T> {
     /// Consolidates updates in the edge, preserving variant.
     pub fn consolidate_named(self, name: &str) -> Self {
         match self {
-            CollectionEdge::Vec(c) => {
-                CollectionEdge::Vec(CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(c, name))
-            }
-            CollectionEdge::Columnar(_) => {
-                todo!("CollectionEdge::Columnar::consolidate_named")
+            CollectionEdge::Vec(c) => CollectionEdge::Vec(CollectionExt::consolidate_named::<
+                KeyBatcher<_, _, _>,
+            >(c, name)),
+            CollectionEdge::Columnar(c) => {
+                // TODO: Consolidate natively over columns. The pieces exist
+                // (`columnar_exchange`, the columnar merge batchers), which
+                // would avoid the row round-trip below.
+                let c = columnar_to_vec(c);
+                let c = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(c, name);
+                CollectionEdge::Columnar(vec_to_columnar(c))
             }
         }
     }
 }
 
-/// Negates the diff column of every batch in a [`ColumnarCollection`] without
-/// decoding the data column.
-pub fn columnar_negate<'scope, T, D, R>(
-    collection: ColumnarCollection<'scope, T, D, R>,
-) -> ColumnarCollection<'scope, T, D, R>
+/// Negates the diff of every record in a [`ColumnarCollection`].
+///
+/// Rows and times are pushed from their borrowed forms. Only the diff is
+/// materialized, and it is `Copy`.
+pub fn columnar_negate<'scope, T>(
+    collection: ColumnarCollection<'scope, T, Row, Diff>,
+) -> ColumnarCollection<'scope, T, Row, Diff>
 where
-    T: Timestamp,
-    (D, T, R): Columnar,
+    T: RenderTimestamp,
 {
-    // Implementation is deferred until the first producer emits the
-    // [`CollectionEdge::Columnar`] variant. The signature is fixed here so
-    // consumers can target it during the consumer-first phase.
-    let _ = collection;
-    todo!("columnar_negate: flip diff column in place over Column<(D, T, R)>")
+    collection
+        .inner
+        .unary::<ColumnBuilder<(Row, T, Diff)>, _, _, _>(
+            Pipeline,
+            "ColumnarNegate",
+            |_cap, _info| {
+                move |input, output| {
+                    input.for_each(|time, data| {
+                        let mut session = output.session_with_builder(&time);
+                        for (v, t, d) in data.borrow().into_index_iter() {
+                            let d = -Diff::into_owned(d);
+                            session.give((v, t, &d));
+                        }
+                    });
+                }
+            },
+        )
+        .as_collection()
+}
+
+/// Repacks a row-based collection into columnar batches.
+///
+/// A transitional seam-healer, visible in rendered dataflows as a
+/// `VecToColumnar` operator. Repacking copies row bytes but allocates no
+/// per-record `Row`s.
+pub fn vec_to_columnar<'scope, T>(
+    collection: VecCollection<'scope, T, Row, Diff>,
+) -> ColumnarCollection<'scope, T, Row, Diff>
+where
+    T: RenderTimestamp,
+{
+    collection
+        .inner
+        .unary::<ColumnBuilder<(Row, T, Diff)>, _, _, _>(
+            Pipeline,
+            "VecToColumnar",
+            |_cap, _info| {
+                move |input, output| {
+                    input.for_each(|time, data| {
+                        let mut session = output.session_with_builder(&time);
+                        for (v, t, d) in data.drain(..) {
+                            session.give((&v, &t, &d));
+                        }
+                    });
+                }
+            },
+        )
+        .as_collection()
+}
+
+/// Decodes columnar batches into a row-based collection.
+///
+/// A transitional seam-healer, visible in rendered dataflows as a
+/// `ColumnarToVec` operator. Decoding allocates an owned [`Row`] per record,
+/// so it should only guard consumers that have not yet learned the columnar
+/// form.
+pub fn columnar_to_vec<'scope, T>(
+    collection: ColumnarCollection<'scope, T, Row, Diff>,
+) -> VecCollection<'scope, T, Row, Diff>
+where
+    T: RenderTimestamp,
+{
+    collection
+        .inner
+        .unary::<CapacityContainerBuilder<Vec<(Row, T, Diff)>>, _, _, _>(
+            Pipeline,
+            "ColumnarToVec",
+            |_cap, _info| {
+                move |input, output| {
+                    input.for_each(|time, data| {
+                        let mut session = output.session(&time);
+                        for (v, t, d) in data.borrow().into_index_iter() {
+                            session.give((
+                                Columnar::into_owned(v),
+                                Columnar::into_owned(t),
+                                Columnar::into_owned(d),
+                            ));
+                        }
+                    });
+                }
+            },
+        )
+        .as_collection()
 }

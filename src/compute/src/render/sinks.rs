@@ -68,7 +68,7 @@ impl<'g, T: RenderTimestamp> Context<'g, T> {
             .lookup_id(mz_expr::Id::Global(sink.from))
             .expect("Sink source collection not loaded");
         let (ok_collection, mut err_collection) = if let Some((oks, errs)) = &bundle.collection {
-            (oks.clone().expect_vec(), errs.clone())
+            (oks.clone().into_vec(), errs.clone())
         } else {
             let (key, _arrangement) = bundle
                 .arranged

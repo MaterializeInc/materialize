@@ -576,7 +576,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     .collection
                     .clone()
                     .expect("The unarranged collection doesn't exist.");
-                (oks.expect_vec(), errs)
+                (oks.into_vec(), errs)
             }
             Some(key) => {
                 let arranged = self.arranged.get(key).unwrap_or_else(|| {
@@ -1068,7 +1068,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     .collection
                     .take()
                     .expect("Collection constructed above");
-                let oks = oks.expect_vec();
+                let oks = oks.into_vec();
                 // Apply temporal bucketing if the collection already existed on
                 // the bundle (e.g., from an upstream temporal Mfp or Get) and we
                 // haven't bucketed yet. This is the common path for temporal-MFP

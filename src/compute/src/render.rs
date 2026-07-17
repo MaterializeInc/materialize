@@ -164,6 +164,7 @@ use crate::extensions::temporal_bucket::TemporalBucketing;
 use crate::logging::compute::{
     ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors, OperatorHydration,
 };
+use crate::render::columnar::CollectionEdge;
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
@@ -937,7 +938,7 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                 // We need to ensure that the raw collection exists, but do not have enough information
                 // here to cause that to happen.
                 let (oks, mut err) = bundle.collection.clone().unwrap();
-                let oks = oks.expect_vec();
+                let oks = oks.into_vec();
                 self.insert_id(Id::Local(id), bundle);
                 let (oks_v, err_v) = variables.remove(&Id::Local(id)).unwrap();
 
@@ -993,7 +994,7 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
             for id in rec_ids.into_iter() {
                 let bundle = self.remove_id(Id::Local(id)).unwrap();
                 let (oks, err) = bundle.collection.unwrap();
-                let oks = oks.expect_vec();
+                let oks = oks.into_vec();
                 self.insert_id(
                     Id::Local(id),
                     CollectionBundle::from_collections(
@@ -1354,21 +1355,19 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                             .get(&self.config_set)
                             .try_into()
                             .expect("must fit");
-                        let os = os.expect_vec();
-                        crate::render::columnar::CollectionEdge::Vec(
-                            T::maybe_apply_temporal_bucketing(
-                                os.inner,
-                                self.as_of_frontier.clone(),
-                                summary,
-                            ),
-                        )
+                        let os = os.into_vec();
+                        CollectionEdge::Vec(T::maybe_apply_temporal_bucketing(
+                            os.inner,
+                            self.as_of_frontier.clone(),
+                            summary,
+                        ))
                     } else {
                         os
                     };
                     oks.push(os);
                     errs.push(es);
                 }
-                let oks = crate::render::columnar::CollectionEdge::concat_many(self.scope, oks);
+                let oks = CollectionEdge::concat_many(self.scope, oks);
                 let oks = if consolidate_output {
                     oks.consolidate_named("UnionConsolidation")
                 } else {
@@ -1451,9 +1450,16 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                     .collection
                     .as_mut()
                     .expect("CollectionBundle invariant");
-                let oks_vec = oks.expect_vec_mut();
-                let stream = self.log_operator_hydration_inner(oks_vec.inner.clone(), lir_id);
-                *oks_vec = stream.as_collection();
+                match oks {
+                    CollectionEdge::Vec(c) => {
+                        let stream = self.log_operator_hydration_inner(c.inner.clone(), lir_id);
+                        *c = stream.as_collection();
+                    }
+                    CollectionEdge::Columnar(c) => {
+                        let stream = self.log_operator_hydration_inner(c.inner.clone(), lir_id);
+                        *c = stream.as_collection();
+                    }
+                }
             }
         }
     }
