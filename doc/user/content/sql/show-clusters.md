@@ -22,6 +22,23 @@ Syntax element                | Description
 **LIKE** \<pattern\>          | If specified, only show clusters that match the pattern.
 **WHERE** <condition(s)>      | If specified, only show clusters that match the condition(s).
 
+## Output
+
+`SHOW CLUSTERS` returns the following columns:
+
+Column      | Description
+------------|------------
+`name`      | The name of the cluster.
+`replicas`  | The cluster's replicas and their sizes.
+`comment`   | Any [comment](/sql/comment-on/) on the cluster.
+
+{{< if-released "v26.34" >}}
+`SHOW CLUSTERS` also returns an `activity` column: a summary of any in-flight
+[resize](/sql/alter-cluster/#monitoring-a-resize) or [hydration
+burst](/sql/alter-cluster/#speed-up-hydration-by-bursting-to-a-larger-size) on
+the cluster, or `NULL` when the cluster is steady.
+{{< /if-released >}}
+
 ## Pre-installed clusters
 
 When you enable a Materialize region, several clusters that are used to improve
@@ -127,6 +144,21 @@ SHOW CLUSTERS LIKE 'auction_%';
 --------------------- | ------------------
  auction_house        |  r1 (25cc)
 ```
+
+{{< if-released "v26.34" >}}
+While a cluster is being [resized](/sql/alter-cluster/#monitoring-a-resize) or
+is running a [hydration
+burst](/sql/alter-cluster/#speed-up-hydration-by-bursting-to-a-larger-size), the
+`activity` column summarizes the in-flight operation:
+
+```nofmt
+      name          |  replicas   |             activity
+--------------------+-------------+----------------------------------
+ auction_house      |  r1 (25cc)  | reconfiguring size to 200cc
+ billing            |  r1 (100cc) | hydration burst at 800cc
+ default            |  r1 (25cc)  |
+```
+{{< /if-released >}}
 
 
 ## Related pages

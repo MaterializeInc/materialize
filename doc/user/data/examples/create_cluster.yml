@@ -4,6 +4,12 @@
         SIZE = <text>
         [, REPLICATION FACTOR = <int>]
         [, MANAGED = <bool>]
+        [, AUTO SCALING STRATEGY = (
+            ON HYDRATION (
+                HYDRATION SIZE = <text>
+                [, LINGER DURATION = <interval>]
+            )
+        )]
     );
   syntax_elements:
     - name: "`<cluster_name>`"
@@ -39,3 +45,8 @@
         {{</ tip >}}
 
         Default: `TRUE`
+    - name: "`AUTO SCALING STRATEGY`"
+      description: |
+        Optional. Lets the cluster temporarily burst to a larger size while it
+        has un-hydrated objects, to speed up hydration. See
+        [Autoscaling](#autoscaling) for details.

@@ -2,9 +2,15 @@
   code: |
     ALTER CLUSTER <cluster_name>
     SET (
-        SIZE = <text>
+        [SIZE = <text>]
         [, REPLICATION FACTOR = <int>]
         [, MANAGED = <bool>]
+        [, AUTO SCALING STRATEGY = (
+            ON HYDRATION (
+                HYDRATION SIZE = <text>
+                [, LINGER DURATION = <interval>]
+            )
+        )]
     )
     [WITH ( <with_option>[,...])]
     ;
@@ -15,7 +21,7 @@
     - name: "`SIZE`"
       description:
         <a name="alter-cluster-size"></a>
-        The size of the resource allocations for the cluster.
+        Optional. The size of the resource allocations for the cluster.
 
         For valid size values, see [Available sizes](#available-sizes).
 
@@ -28,7 +34,7 @@
         `SIZE` value.
     - name: "`REPLICATION FACTOR`"
       description: |
-        Optional.The number of replicas to provision for the cluster. Each
+        Optional. The number of replicas to provision for the cluster. Each
         replica of the cluster provisions a new pool of compute resources to
         perform exactly the same computations on exactly the same data. For more
         information, see [Replication factor
@@ -44,20 +50,27 @@
 
         Default: `TRUE`
 
+    - name: "`AUTO SCALING STRATEGY`"
+      description: |
+        Optional. Lets the cluster temporarily burst to a larger size while it
+        has un-hydrated objects, to speed up hydration. See [Speed up hydration
+        by bursting to a larger size](#speed-up-hydration-by-bursting-to-a-larger-size)
+        for details.
+
     - name: "`WITH (<with_option>[,...])`"
       description: |
 
         The following `<with_option>`s are supported:
         | Option  | Description |
         |--------|-------------|
-        | `WAIT UNTIL READY(...)`    | ***Private preview.** This option has known performance or stability issues and is under activedevelopment.* {{< include-from-yaml data="examples/alter_cluster" name="wait-until-ready-cmd-option" >}} |
+        | `WAIT UNTIL READY(...)`    | ***Private preview.** This option has known performance or stability issues and is under active development.* {{< include-from-yaml data="examples/alter_cluster" name="wait-until-ready-cmd-option" >}} |
         | `WAIT FOR` |  ***Private preview.** This option has known performance or stability issues and is under active development.* A fixed duration to wait for the new replicas to be ready. This option can lead to downtime. As such, we recommend using the `WAIT UNTIL READY` option instead.|
 
 - name: "syntax-reset-to-default"
   code: |
     ALTER CLUSTER <cluster_name>
     RESET (
-        REPLICATION FACTOR | MANAGED,
+        REPLICATION FACTOR | MANAGED | AUTO SCALING STRATEGY,
         ...
     )
     ;
@@ -77,6 +90,11 @@
         on the configured size and replication factor.
 
         Default: `TRUE`
+    - name: "`AUTO SCALING STRATEGY`"
+      description: |
+        Optional. Resetting removes any autoscaling strategy from the cluster.
+
+        Default: no autoscaling strategy.
 
 - name: "syntax-rename"
   code: |
@@ -134,4 +152,4 @@
     | Option | Description |
     |--------|-------------|
     | `TIMEOUT` | The maximum duration to wait for the new replicas to be ready. |
-    | `ON TIMEOUT` | The action to take on timeout. <br><ul><li><code>COMMIT</code> cuts over to the new replica regardless of its hydration status, which may lead to downtime.</li><li><code>ROLLBACK</code> removes the pending replica and returns a timeout error.</li></ul>Default: <code>COMMIT</code>. |
+    | `ON TIMEOUT` | The action to take on timeout. <br><ul><li><code>COMMIT</code> cuts over to the new replica regardless of its hydration status, which may lead to downtime.</li><li><code>ROLLBACK</code> removes the pending replica and returns a timeout error.</li></ul>Default: <code>ROLLBACK</code>. |
