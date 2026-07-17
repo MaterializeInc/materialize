@@ -479,6 +479,7 @@ class Text(DataType):
                     rng.randint(-100, 100),
                 ]
             )
+            return literal(str(result)) if in_query else str(result)
         # Fails: unterminated dollar-quoted string
         # chars = string.printable
         chars = string.ascii_letters + string.digits
@@ -1190,120 +1191,23 @@ RANGE_TYPES = [Int4Range, Int8Range, NumRange, DateRange, TsRange, TsTzRange]
 # Sort to keep determinism for reproducible runs with specific seed
 DATA_TYPES = sorted(list(all_subclasses(DataType)), key=repr)
 
-# fastavro._schema_common.UnknownType: record
-# bytea requires Python bytes type instead of str
-DATA_TYPES_FOR_AVRO = sorted(
-    list(
-        set(DATA_TYPES)
-        - {
-            TextTextMap,
-            Jsonb,
-            Bytea,
-            Boolean,
-            UUID,
-            Interval,
-            IntList,
-            IntArray,
-            Time,
-            Date,
-            Timestamp,
-            TimestampTz,
-            MzTimestamp,
-            Oid,
-            Numeric,
-            Numeric383,
-            UInt2,
-            UInt4,
-            UInt8,
-            Float,
-            Double,
-            Char,
-            VarChar,
-            Int4Range,
-            Int8Range,
-            NumRange,
-            DateRange,
-            TsRange,
-            TsTzRange,
-        }
-    ),
-    key=repr,
-)
+# Explicit allowlists so that the actually exercised types are visible at a
+# glance. A type belongs in one of these lists only if it maps to a native
+# type on the backend, generated values fit the backend's ranges, and values
+# roundtrip identically for the cross-backend result comparison.
 
-DATA_TYPES_FOR_MYSQL = sorted(
-    list(
-        set(DATA_TYPES)
-        - {
-            IntList,
-            IntArray,
-            UUID,
-            TextTextMap,
-            Interval,
-            Oid,
-            Jsonb,
-            Bytea,
-            Boolean,
-            Numeric,
-            Numeric383,
-            UInt2,
-            UInt4,
-            UInt8,
-            Char,
-            VarChar,
-            Int4Range,
-            Int8Range,
-            NumRange,
-            DateRange,
-            TsRange,
-            TsTzRange,
-        }
-    ),
-    key=repr,
-)
+# Types the Kafka executor can encode in Avro directly, no records, bytes or
+# logical types.
+DATA_TYPES_FOR_AVRO = [Int, Long, SmallInt, Text]
 
-DATA_TYPES_FOR_SQL_SERVER = sorted(
-    list(
-        set(DATA_TYPES)
-        - {
-            IntList,
-            IntArray,
-            UUID,
-            TextTextMap,
-            Interval,
-            Oid,
-            Jsonb,
-            Bytea,
-            Boolean,
-            Numeric,
-            Numeric383,
-            UInt2,
-            UInt4,
-            UInt8,
-            Date,
-            Time,
-            Timestamp,
-            TimestampTz,
-            MzTimestamp,
-            Float,
-            Double,
-            Char,
-            VarChar,
-            Int4Range,
-            Int8Range,
-            NumRange,
-            DateRange,
-            TsRange,
-            TsTzRange,
-        }
-    ),
-    key=repr,
-)
+# Timestamp and Date are excluded because random_value generates years outside
+# MySQL's supported ranges. MzTimestamp and TimestampTz have no MySQL type.
+DATA_TYPES_FOR_MYSQL = [Double, Float, Int, Long, SmallInt, Text, Time]
+
+DATA_TYPES_FOR_SQL_SERVER = [Int, Long, SmallInt, Text]
 
 # MySQL doesn't support keys of unlimited size
-DATA_TYPES_FOR_KEY = sorted(
-    list(set(DATA_TYPES_FOR_AVRO) - {Text, Bytea, IntList, IntArray, Float, Double}),
-    key=repr,
-)
+DATA_TYPES_FOR_KEY = [Int, Long, SmallInt]
 
 NUMBER_TYPES = [
     SmallInt,
