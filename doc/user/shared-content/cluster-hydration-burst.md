@@ -43,6 +43,15 @@ The burst replica is an ordinary cluster replica and is billed as such for as
 long as it runs. See [Usage & billing](/administration/billing/) for details.
 {{< /note >}}
 
+Provisioning the burst replica requires enough compute capacity to run it. In
+Materialize Self-Managed, this means your Kubernetes cluster must have enough
+spare resources (for example, available nodes) to schedule the burst replica.
+
+The burst is best-effort and never blocks the cluster: if the burst replica
+cannot be provisioned, the steady-size replicas still come up and hydrate as
+usual, as long as there are enough resources for them. The burst replica is
+always cleaned up, even if it was never provisioned.
+
 To remove the autoscaling strategy from a cluster, use `ALTER CLUSTER ... RESET
 (AUTO SCALING STRATEGY)` or set an empty strategy with `AUTO SCALING STRATEGY =
 ()`.
