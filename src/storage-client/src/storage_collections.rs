@@ -1306,7 +1306,7 @@ impl StorageCollections for StorageCollectionsImpl {
         init_ids: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError> {
         let metadata = txn.get_collection_metadata();
-        let existing_metadata: BTreeSet<_> = metadata.into_iter().map(|(id, _)| id).collect();
+        let existing_metadata: BTreeSet<_> = metadata.iter().map(|(id, _)| *id).collect();
 
         // Determine which collections we do not yet have metadata for.
         let new_collections: BTreeSet<GlobalId> =
@@ -1327,7 +1327,24 @@ impl StorageCollections for StorageCollectionsImpl {
         // dropped from the catalog, but the dataflow is still running on a
         // worker, assuming the shard is safe to finalize on reboot may cause
         // the cluster to panic.
-        let unfinalized_shards = txn.get_unfinalized_shards().into_iter().collect_vec();
+        let unfinalized_shards = txn.get_unfinalized_shards();
+
+        // Defense in depth: never finalize a shard that a live collection
+        // still maps to, no matter how it ended up in the unfinalized set.
+        // See the matching guard in `prepare_state`. We also scrub such
+        // shards from the durable set, their presence there can only be the
+        // artifact of a bug.
+        let in_use: BTreeSet<_> = metadata.into_values().collect();
+        let (still_in_use, unfinalized_shards): (BTreeSet<_>, BTreeSet<_>) = unfinalized_shards
+            .into_iter()
+            .partition(|shard| in_use.contains(shard));
+        if !still_in_use.is_empty() {
+            mz_ore::soft_panic_or_log!(
+                "unfinalized shards are still mapped by live collections, refusing \
+                 to finalize them: {still_in_use:?}"
+            );
+            txn.mark_shards_as_finalized(still_in_use);
+        }
 
         info!(?unfinalized_shards, "initializing finalizable_shards");
 
@@ -1670,6 +1687,37 @@ impl StorageCollections for StorageCollectionsImpl {
                 }
             }
         }
+
+        // Defense in depth: never finalize a shard that another live
+        // collection still maps to durably, no matter what the in-memory
+        // `primary` links say. Collections share shards (replacement MVs and
+        // their targets, versions of one table or MV), and a bug that loses a
+        // `primary` link would otherwise tombstone a live shard.
+        //
+        // NOTE: This guard and the one in `drop_collections_unvalidated` are
+        // both load-bearing: this one stops the durable finalization
+        // pipeline, the other stops the shard's since from being released,
+        // which feeds finalization through a separate in-memory path.
+        if !dropped_shards.is_empty() {
+            let remaining = txn.get_collection_metadata();
+            let still_in_use: Vec<_> = remaining
+                .iter()
+                .filter(|(_id, shard)| dropped_shards.contains(*shard))
+                .collect();
+            if !still_in_use.is_empty() {
+                mz_ore::soft_panic_or_log!(
+                    "dropped collections marked shards for finalization that other \
+                     live collections still map to, refusing to finalize them: \
+                     {still_in_use:?}"
+                );
+                let in_use_shards: BTreeSet<_> = still_in_use
+                    .into_iter()
+                    .map(|(_id, shard)| *shard)
+                    .collect();
+                dropped_shards.retain(|shard| !in_use_shards.contains(shard));
+            }
+        }
+
         txn.insert_unfinalized_shards(dropped_shards)?;
 
         // Reconcile any shards we've successfully finalized with the shard
@@ -2195,6 +2243,15 @@ impl StorageCollections for StorageCollectionsImpl {
 
         let mut self_collections = self.collections.lock().expect("lock poisoned");
 
+        // Shards that live collections still map to durably. Needed below to
+        // guard against releasing a shared shard's since out from under its
+        // surviving users.
+        let shards_in_use: BTreeSet<_> = storage_metadata
+            .collection_metadata
+            .values()
+            .copied()
+            .collect();
+
         // Policies that advance the since to the empty antichain. We do still
         // honor outstanding read holds, and collections will only be dropped
         // once those are removed as well.
@@ -2210,15 +2267,33 @@ impl StorageCollections for StorageCollectionsImpl {
                 continue;
             };
 
-            // Unless the collection has a primary, its shard must have been previously removed
-            // by `StorageCollections::prepare_state`.
             if collection.primary.is_none() {
+                // Unless the collection has a primary, its shard must have been previously removed
+                // by `StorageCollections::prepare_state`.
                 let metadata = storage_metadata.get_collection_shard(id);
                 mz_ore::soft_assert_or_log!(
                     matches!(metadata, Err(StorageError::IdentifierMissing(_))),
                     "dropping {id}, but drop was not synchronized with storage \
                      controller via `prepare_state`"
                 );
+
+                // Defense in depth: a collection without a primary owns its
+                // shard and releasing its since lets persist compact the
+                // shard away. If another live collection still maps to the
+                // shard durably, the in-memory `primary` links must be wrong
+                // (a shard's owner is only ever dropped together with all
+                // collections that share the shard). We refuse to drop, which
+                // leaks the collection state until the next restart but keeps
+                // the shard's data intact. See also the matching guard in
+                // `prepare_state`.
+                let data_shard = collection.collection_metadata.data_shard;
+                if shards_in_use.contains(&data_shard) {
+                    mz_ore::soft_panic_or_log!(
+                        "dropping {id} would release the since of shard {data_shard}, \
+                         which another live collection still maps to, refusing to drop"
+                    );
+                    continue;
+                }
             }
 
             finalized_policies.push((id, ReadPolicy::ValidFrom(Antichain::new())));
