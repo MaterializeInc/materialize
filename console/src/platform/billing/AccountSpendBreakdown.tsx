@@ -164,6 +164,8 @@ const AccountSpendChartGraph = ({
     scroll: true,
   });
   const tooltipTimeoutRef = React.useRef<number>();
+  // Clear any pending dismiss on unmount so hideTooltip can't fire after.
+  React.useEffect(() => () => clearTimeout(tooltipTimeoutRef.current), []);
 
   const maxDailyTotal = useMemo(
     () =>
