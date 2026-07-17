@@ -33,7 +33,7 @@ use crate::{TimestampOracle, WriteTimestamp};
 /// can only make it so that we return later timestamps. Those later timestamps
 /// still fall within the duration of the `read_ts` call and so are linearized.
 ///
-/// Batches are processed by [`READ_TS_PIPELINE_DEPTH`] workers, so a new batch
+/// Batches are processed by `READ_TS_PIPELINE_DEPTH` workers, so a new batch
 /// can be gathered and its backing read issued while previous batches are
 /// still in flight. This pipelining is correct for the same reason batching
 /// is: each worker drains its batch _before_ issuing the backing `read_ts`, so

@@ -742,6 +742,9 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "read_then_write_max_dependencies",
     "enable_hydration_burst",
     "default_hydration_burst_linger",
+    # Only takes effect while zero SQL connections exist, which tests don't
+    # meaningfully exercise; randomizing it would only obscure timing issues.
+    "coord_idle_advance_timelines_multiplier",
 ]
 
 

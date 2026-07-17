@@ -293,13 +293,19 @@ impl PeekClient {
         // handle is dropped. A wasted read joins a batch in the batching
         // oracle, so its marginal cost on the backing store is negligible.
         let isolation_level = session.vars().transaction_isolation().clone();
-        let may_need_linearized_read_ts =
-            matches!(
-                isolation_level,
-                IsolationLevel::StrictSerializable
-                    | IsolationLevel::StrongSessionSerializable
-                    | IsolationLevel::BoundedStaleness(_)
-            ) && session.get_transaction_timestamp_determination().is_none();
+        let may_need_linearized_read_ts = matches!(
+            isolation_level,
+            IsolationLevel::StrictSerializable
+                | IsolationLevel::StrongSessionSerializable
+                | IsolationLevel::BoundedStaleness(_)
+        ) && session.get_transaction_timestamp_determination().is_none()
+            // While the session's startup builtin-table writes are pending, a
+            // query on those tables must observe them: it waits on
+            // `waiting_on_startup_appends` below and needs an oracle read
+            // taken after that wait (and thus after the writes' apply_write).
+            // A speculative read taken here would predate the writes, so a
+            // session's first query does not speculate.
+            && !session.has_builtin_table_updates();
         let early_oracle_read_ts = if may_need_linearized_read_ts {
             match self.ensure_oracle(Timeline::EpochMilliseconds).await {
                 Ok(oracle) => {
