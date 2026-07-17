@@ -246,7 +246,7 @@ updated materialized view defintion:
      statement.
    - Computes results independently while the original continues serving
      queries.
-   
+
    {{< note >}}
    {{% include-headless "/headless/replacement-views/querying-replacement-view" %}}
    {{< /note >}}
