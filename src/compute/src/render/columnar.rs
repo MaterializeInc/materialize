@@ -270,6 +270,12 @@ impl<'scope, T: RenderTimestamp> CollectionEdge<'scope, T> {
 ///
 /// Rows and times are pushed from their borrowed forms. Only the diff is
 /// materialized, and it is `Copy`.
+///
+/// TODO: Rebuild only the diff column. Borrow the input column, build one owned
+/// negated diff column from the borrowed diffs, and re-encode using the borrowed
+/// row and time columns directly, so row and time bytes are copied once rather
+/// than pushed per record. The serialized (`Align` / `Bytes`) input case needs
+/// care, since all columns share a single buffer.
 pub fn columnar_negate<'scope, T>(
     collection: ColumnarCollection<'scope, T, Row, Diff>,
 ) -> ColumnarCollection<'scope, T, Row, Diff>
