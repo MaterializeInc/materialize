@@ -1899,17 +1899,24 @@ impl StorageCollections for StorageCollectionsImpl {
                         // We don't care about the dependency since when the
                         // write frontier is empty. In that case, no-one can
                         // write down any more updates.
-                        mz_ore::soft_assert_or_log!(
-                            write_frontier.elements() == &[Timestamp::MIN]
-                                || write_frontier.is_empty()
-                                || PartialOrder::less_than(&dependency_since, write_frontier),
-                            "dependency ({dep}) since has advanced past dependent ({id}) upper \n
-                            dependent ({id}): since {:?}, upper {:?} \n
-                            dependency ({dep}): since {:?}",
-                            data_shard_since,
-                            write_frontier,
-                            dependency_since
-                        );
+                        //
+                        // The invariant is about remap shards, so `primary`
+                        // links are exempt: there the "dependency" is another
+                        // version of the same shard and its since can validly
+                        // sit at the dependent's upper.
+                        if description.primary.is_none() {
+                            mz_ore::soft_assert_or_log!(
+                                write_frontier.elements() == &[Timestamp::MIN]
+                                    || write_frontier.is_empty()
+                                    || PartialOrder::less_than(&dependency_since, write_frontier),
+                                "dependency ({dep}) since has advanced past dependent ({id}) upper \n
+                                dependent ({id}): since {:?}, upper {:?} \n
+                                dependency ({dep}): since {:?}",
+                                data_shard_since,
+                                write_frontier,
+                                dependency_since
+                            );
+                        }
 
                         dependency_since
                     } else {

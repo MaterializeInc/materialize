@@ -7333,10 +7333,15 @@ def workflow_test_replacement_mv_drop_after_restart(c: Composition) -> None:
         CREATE MATERIALIZED VIEW mv IN CLUSTER stalled AS SELECT * FROM t;
         CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv
             IN CLUSTER stalled AS SELECT * FROM t;
+        CREATE MATERIALIZED VIEW mv_plain IN CLUSTER stalled AS SELECT * FROM t;
         """)
 
     [(mv_id,)] = c.sql_query("SELECT id FROM mz_materialized_views WHERE name = 'mv'")
     mv_shard = storage_metadata()["collection_metadata"][mv_id]
+    [(mv_plain_id,)] = c.sql_query(
+        "SELECT id FROM mz_materialized_views WHERE name = 'mv_plain'"
+    )
+    mv_plain_shard = storage_metadata()["collection_metadata"][mv_plain_id]
 
     # Restart envd. Bootstrap re-creates the in-memory storage collections
     # state, including the replacement's `primary` link to its target.
@@ -7353,6 +7358,16 @@ def workflow_test_replacement_mv_drop_after_restart(c: Composition) -> None:
     unfinalized = storage_metadata()["unfinalized_shards"]
     assert mv_shard not in unfinalized, (
         f"dropping the replacement marked the target's shard {mv_shard} for"
+        " finalization"
+    )
+
+    # The inverse direction: a plain MV still owns its shard after a restart,
+    # so dropping it must mark the shard as finalizable. This guards against
+    # bootstrap over-linking collections, which would leak shards on drop.
+    c.sql("DROP MATERIALIZED VIEW mv_plain")
+    unfinalized = storage_metadata()["unfinalized_shards"]
+    assert mv_plain_shard in unfinalized, (
+        f"dropping a plain MV did not mark its shard {mv_plain_shard} for"
         " finalization"
     )
 

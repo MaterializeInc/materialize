@@ -3241,6 +3241,10 @@ impl Coordinator {
                     // versions have higher `GlobalId`s, so each link points
                     // at a lower id, which the storage layer's registration
                     // order requires.
+                    //
+                    // NOTE: Tables chain in the opposite direction, there the
+                    // latest version owns the shard, matching how each type's
+                    // runtime operations create the links.
                     let mut prev_gid = mv
                         .replacement_target
                         .map(|target_id| catalog.get_entry(&target_id).latest_global_id());
