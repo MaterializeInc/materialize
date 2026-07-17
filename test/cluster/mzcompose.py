@@ -7327,11 +7327,15 @@ def workflow_test_replacement_mv_drop_after_restart(c: Composition) -> None:
         CREATE CLUSTER stalled SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
         CREATE TABLE t (a int);
         CREATE MATERIALIZED VIEW mv IN CLUSTER stalled AS SELECT * FROM t;
+        CREATE MATERIALIZED VIEW plain_mv IN CLUSTER stalled AS SELECT * FROM t;
         CREATE REPLACEMENT MATERIALIZED VIEW rp1 FOR mv
             IN CLUSTER stalled AS SELECT * FROM t;
         """)
 
     [(mv_id,)] = c.sql_query("SELECT id FROM mz_materialized_views WHERE name = 'mv'")
+    [(plain_mv_id,)] = c.sql_query(
+        "SELECT id FROM mz_materialized_views WHERE name = 'plain_mv'"
+    )
     [(rp1_id,)] = c.sql_query("SELECT id FROM mz_materialized_views WHERE name = 'rp1'")
 
     c.sql("""
@@ -7351,14 +7355,17 @@ def workflow_test_replacement_mv_drop_after_restart(c: Composition) -> None:
     mv_state = collection_states[mv_id]
     rp1_state = collection_states[rp1_id]
     rp2_state = collection_states[rp2_id]
+    plain_mv_state = collection_states[plain_mv_id]
     mv_shard = data_shard(mv_state)
+    plain_mv_shard = data_shard(plain_mv_state)
 
     assert data_shard(rp1_state) == mv_shard
     assert data_shard(rp2_state) == mv_shard
     assert "primary: None" in mv_state, mv_state
     assert f"primary: Some({debug_global_id(mv_id)})" in rp1_state, rp1_state
     assert f"primary: Some({debug_global_id(rp1_id)})" in rp2_state, rp2_state
-    for collection_state in (mv_state, rp1_state, rp2_state):
+    assert "primary: None" in plain_mv_state, plain_mv_state
+    for collection_state in (mv_state, rp1_state, rp2_state, plain_mv_state):
         assert "read_policy: LagWriteFrontier" in collection_state, collection_state
 
     # Drop the staged replacement without applying it.
@@ -7369,6 +7376,15 @@ def workflow_test_replacement_mv_drop_after_restart(c: Composition) -> None:
     unfinalized = storage_metadata()["unfinalized_shards"]
     assert mv_shard not in unfinalized, (
         f"dropping the replacement marked the target's shard {mv_shard} for"
+        " finalization"
+    )
+
+    # A plain MV still owns its shard after bootstrap, so dropping it must
+    # enqueue that shard for finalization.
+    c.sql("DROP MATERIALIZED VIEW plain_mv")
+    unfinalized = storage_metadata()["unfinalized_shards"]
+    assert plain_mv_shard in unfinalized, (
+        f"dropping a plain MV did not mark its shard {plain_mv_shard} for"
         " finalization"
     )
 

@@ -1706,6 +1706,16 @@ impl StorageCollections for StorageCollectionsImpl {
                 }
             }
         }
+        let remaining_metadata = txn.get_collection_metadata();
+        let remaining_ids = remaining_metadata.keys().copied().collect();
+        let (referenced_shards, dropped_shards) =
+            partition_finalizable_shards(remaining_metadata, &remaining_ids, dropped_shards);
+        if !referenced_shards.is_empty() {
+            mz_ore::soft_panic_or_log!(
+                "dropped collections would finalize shards that active collections still use: \
+                 {referenced_shards:?}"
+            );
+        }
         txn.insert_unfinalized_shards(dropped_shards)?;
 
         // Reconcile any shards we've successfully finalized with the shard
@@ -1935,17 +1945,22 @@ impl StorageCollections for StorageCollectionsImpl {
                         // We don't care about the dependency since when the
                         // write frontier is empty. In that case, no-one can
                         // write down any more updates.
-                        mz_ore::soft_assert_or_log!(
-                            write_frontier.elements() == &[Timestamp::MIN]
-                                || write_frontier.is_empty()
-                                || PartialOrder::less_than(&dependency_since, write_frontier),
-                            "dependency ({dep}) since has advanced past dependent ({id}) upper \n
-                            dependent ({id}): since {:?}, upper {:?} \n
-                            dependency ({dep}): since {:?}",
-                            data_shard_since,
-                            write_frontier,
-                            dependency_since
-                        );
+                        // This invariant applies to remap dependencies. A `primary`
+                        // dependency is another version of the same shard, whose since can
+                        // validly equal the dependent's upper.
+                        if description.primary.is_none() {
+                            mz_ore::soft_assert_or_log!(
+                                write_frontier.elements() == &[Timestamp::MIN]
+                                    || write_frontier.is_empty()
+                                    || PartialOrder::less_than(&dependency_since, write_frontier),
+                                "dependency ({dep}) since has advanced past dependent ({id}) upper \n
+                                dependent ({id}): since {:?}, upper {:?} \n
+                                dependency ({dep}): since {:?}",
+                                data_shard_since,
+                                write_frontier,
+                                dependency_since
+                            );
+                        }
 
                         dependency_since
                     } else {
@@ -2223,6 +2238,11 @@ impl StorageCollections for StorageCollectionsImpl {
         debug!(?identifiers, "drop_collections_unvalidated");
 
         let mut self_collections = self.collections.lock().expect("lock poisoned");
+        let shards_in_use: BTreeSet<_> = storage_metadata
+            .collection_metadata
+            .values()
+            .copied()
+            .collect();
 
         // Policies that advance the since to the empty antichain. We do still
         // honor outstanding read holds, and collections will only be dropped
@@ -2248,6 +2268,18 @@ impl StorageCollections for StorageCollectionsImpl {
                     "dropping {id}, but drop was not synchronized with storage \
                      controller via `prepare_state`"
                 );
+
+                // Releasing the owner's since can destroy a shared shard even if the
+                // finalization WAL is guarded. Prefer leaking this collection state over
+                // destroying data when durable metadata contradicts the primary links.
+                let data_shard = collection.collection_metadata.data_shard;
+                if shards_in_use.contains(&data_shard) {
+                    mz_ore::soft_panic_or_log!(
+                        "dropping {id} would release the since of shard {data_shard}, \
+                         which an active collection still uses"
+                    );
+                    continue;
+                }
             }
 
             finalized_policies.push((id, ReadPolicy::ValidFrom(Antichain::new())));

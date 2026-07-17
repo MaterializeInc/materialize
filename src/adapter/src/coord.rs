@@ -3236,6 +3236,9 @@ impl Coordinator {
                     // replacement was created. The oldest collection owns the shard, each applied
                     // replacement points to its predecessor, and a pending replacement starts by
                     // pointing to its target's latest collection.
+                    //
+                    // NOTE: Versioned tables chain in the opposite direction because their latest
+                    // version owns the shard. Each chain matches its runtime replacement path.
                     let mut primary = mv
                         .replacement_target
                         .map(|target_id| catalog.get_entry(&target_id).latest_global_id());
