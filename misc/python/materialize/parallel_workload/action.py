@@ -1818,18 +1818,14 @@ class CreateReplacementMaterializedViewAction(Action):
 
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
-            # Skip views whose shard can seal legitimately: REFRESH AT views
-            # seal after their last refresh, repeat_row constant views seal
-            # on hydration. Never replacing those keeps "is sealed" errors
-            # and empty write frontiers of the remaining views hard failure
-            # signals, see SealedMaterializedViewCheckAction.
-            mvs = [
-                v
-                for v in exe.db.views
-                if v.materialized
-                and not (v.refresh or "").startswith("AT")
-                and not v.repeat_row_const
-            ]
+            # Skip views whose shard can seal legitimately. Sealing is
+            # transitive: REFRESH AT views seal after their last refresh,
+            # repeat_row constant views seal on hydration, and any view that
+            # reads from a sealing input seals too (View.can_seal). Never
+            # replacing those keeps "is sealed" errors and empty write
+            # frontiers of the remaining views hard failure signals, see
+            # SealedMaterializedViewCheckAction.
+            mvs = [v for v in exe.db.views if v.materialized and not v.can_seal]
             if not mvs:
                 return False
             view = self.rng.choice(mvs)
@@ -1953,7 +1949,8 @@ class SealedMaterializedViewCheckAction(Action):
     known trigger: dropping a replacement after an envd restart finalizes the
     target's shard because bootstrap dropped the replacement collection's
     primary link. REFRESH AT views seal legitimately after their last refresh
-    and are excluded.
+    and are excluded, and because sealing is transitive so is anything that
+    reads from one.
     """
 
     def applicable(self, exe: Executor) -> bool:
@@ -1967,14 +1964,28 @@ class SealedMaterializedViewCheckAction(Action):
         ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> bool:
+        # Sealing is transitive: a view reading from a REFRESH AT view seals
+        # once that input seals, even though its own refresh strategy is not
+        # 'at'. Walk the dependency graph up from every REFRESH AT view and
+        # exclude everything that transitively depends on one. repeat_row
+        # constant views also seal transitively but are not marked in the
+        # catalog, which is why this oracle is disabled in the RepeatRow
+        # scenario, see applicable.
         exe.execute(
-            "SELECT mv.id, mv.name"
+            "WITH MUTUALLY RECURSIVE"
+            " sealing(id text) AS ("
+            "SELECT rs.materialized_view_id"
+            " FROM mz_internal.mz_materialized_view_refresh_strategies rs"
+            " WHERE rs.type = 'at'"
+            " UNION"
+            " SELECT d.object_id"
+            " FROM mz_internal.mz_object_dependencies d"
+            " JOIN sealing s ON d.referenced_object_id = s.id)"
+            " SELECT mv.id, mv.name"
             " FROM mz_catalog.mz_materialized_views mv"
             " JOIN mz_internal.mz_frontiers f ON f.object_id = mv.id"
             " WHERE f.write_frontier IS NULL"
-            " AND NOT EXISTS ("
-            "SELECT 1 FROM mz_internal.mz_materialized_view_refresh_strategies rs"
-            " WHERE rs.materialized_view_id = mv.id AND rs.type = 'at')",
+            " AND mv.id NOT IN (SELECT id FROM sealing)",
             http=Http.NO,
         )
         sealed = exe.cur.fetchall()

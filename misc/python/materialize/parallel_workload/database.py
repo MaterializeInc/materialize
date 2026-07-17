@@ -176,6 +176,10 @@ class MzTempSchema(Schema):
 class DBObject:
     columns: list[Column]
     lock: threading.Lock
+    # Whether this object's backing persist shard can reach the empty (sealed)
+    # frontier in normal operation. Tables and sources never seal, so the
+    # default is False. Materialized views override it per instance.
+    can_seal: bool = False
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -301,6 +305,20 @@ class View(DBObject):
             )
             if self.materialized
             else None
+        )
+
+        # A materialized view's shard seals (its write frontier advances to the
+        # empty frontier) once it can never produce more output. That happens
+        # for REFRESH AT views after their last refresh, for repeat_row(-1)
+        # constant views on hydration, and transitively for any view that reads
+        # from an input that itself seals. The replacement and sealed-shard
+        # oracles key off this to tell legitimate seals from wrongly finalized
+        # shards.
+        self.can_seal = self.materialized and (
+            (self.refresh or "").startswith("AT")
+            or self.repeat_row_const
+            or base_object.can_seal
+            or (base_object2 is not None and base_object2.can_seal)
         )
 
         if base_object2:
