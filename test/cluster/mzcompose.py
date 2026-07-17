@@ -7319,6 +7319,113 @@ def workflow_github_11322(c: Composition) -> None:
     assert rp_id not in collection_metadata
 
 
+def workflow_test_replacement_mv_drop_after_restart(c: Composition) -> None:
+    """Dropping a replacement MV after restart must preserve the target shard."""
+
+    def storage_metadata() -> dict:
+        port = c.port("materialized", 6878)
+        resp = requests.get(f"http://localhost:{port}/api/catalog/dump")
+        resp.raise_for_status()
+        return resp.json()["storage_metadata"]
+
+    def storage_collection_states() -> dict[str, str]:
+        port = c.port("materialized", 6878)
+        resp = requests.get(f"http://localhost:{port}/api/coordinator/dump")
+        resp.raise_for_status()
+        return resp.json()["controller"]["storage_collections"]["collections"]
+
+    def debug_global_id(global_id: str) -> str:
+        assert global_id.startswith("u"), global_id
+        return f"User({global_id[1:]})"
+
+    def data_shard(collection_state: str) -> str:
+        match = re.search(r"data_shard: ShardId\(([^)]+)\)", collection_state)
+        assert match is not None, collection_state
+        return f"s{match.group(1)}"
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    c.sql("""
+        CREATE CLUSTER stalled SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
+        CREATE TABLE t (a int);
+        CREATE MATERIALIZED VIEW mv IN CLUSTER stalled AS SELECT * FROM t;
+        CREATE MATERIALIZED VIEW plain_mv IN CLUSTER stalled AS SELECT * FROM t;
+        CREATE REPLACEMENT MATERIALIZED VIEW rp1 FOR mv
+            IN CLUSTER stalled AS SELECT * FROM t;
+        """)
+
+    [(mv_id,)] = c.sql_query("SELECT id FROM mz_materialized_views WHERE name = 'mv'")
+    [(plain_mv_id,)] = c.sql_query(
+        "SELECT id FROM mz_materialized_views WHERE name = 'plain_mv'"
+    )
+    [(rp1_id,)] = c.sql_query("SELECT id FROM mz_materialized_views WHERE name = 'rp1'")
+
+    c.sql("""
+        ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp1;
+        CREATE REPLACEMENT MATERIALIZED VIEW rp2 FOR mv
+            IN CLUSTER stalled AS SELECT * FROM t;
+        ALTER CLUSTER stalled SET (REPLICATION FACTOR 0);
+        """)
+    [(rp2_id,)] = c.sql_query("SELECT id FROM mz_materialized_views WHERE name = 'rp2'")
+
+    # Without a replica, no dataflow holds a persist read lease after restart.
+    # Such a lease would delay finalization beyond the runtime of this test.
+    c.kill("materialized")
+    c.up("materialized")
+
+    collection_states = storage_collection_states()
+    mv_state = collection_states[mv_id]
+    rp1_state = collection_states[rp1_id]
+    rp2_state = collection_states[rp2_id]
+    plain_mv_state = collection_states[plain_mv_id]
+    mv_shard = data_shard(mv_state)
+    plain_mv_shard = data_shard(plain_mv_state)
+
+    assert data_shard(rp1_state) == mv_shard
+    assert data_shard(rp2_state) == mv_shard
+    assert "primary: None" in mv_state, mv_state
+    assert f"primary: Some({debug_global_id(mv_id)})" in rp1_state, rp1_state
+    assert f"primary: Some({debug_global_id(rp1_id)})" in rp2_state, rp2_state
+    assert "primary: None" in plain_mv_state, plain_mv_state
+    for collection_state in (mv_state, rp1_state, rp2_state, plain_mv_state):
+        assert "read_policy: LagWriteFrontier" in collection_state, collection_state
+
+    # Drop the staged replacement without applying it.
+    c.sql("DROP MATERIALIZED VIEW rp2")
+
+    # The finalization record is removed by the next catalog transaction after
+    # finalization completes, so inspect it immediately after the drop.
+    unfinalized = storage_metadata()["unfinalized_shards"]
+    assert mv_shard not in unfinalized, (
+        f"dropping the replacement marked the target's shard {mv_shard} for"
+        f" finalization. Unfinalized shards: {unfinalized}"
+    )
+
+    # A plain MV still owns its shard after bootstrap, so dropping it must
+    # enqueue that shard for finalization.
+    c.sql("DROP MATERIALIZED VIEW plain_mv")
+    unfinalized = storage_metadata()["unfinalized_shards"]
+    assert plain_mv_shard in unfinalized, (
+        f"dropping a plain MV did not mark its shard {plain_mv_shard} for"
+        f" finalization. Unfinalized shards: {unfinalized}"
+    )
+
+    c.sql(
+        "CREATE REPLACEMENT MATERIALIZED VIEW rp3 FOR mv"
+        " IN CLUSTER stalled AS SELECT * FROM t"
+    )
+
+    # The target's shard must not have been sealed.
+    upper_empty = c.sql_query("""
+        SELECT write_frontier IS NULL
+        FROM mz_internal.mz_frontiers
+        JOIN mz_materialized_views ON id = object_id
+        WHERE name = 'mv'
+        """)[0][0]
+    assert not upper_empty, "the target MV's shard was sealed, its data is lost"
+
+
 def workflow_test_github_10102(c: Composition) -> None:
     """
     Regression test for database-issues#10102:
