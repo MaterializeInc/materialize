@@ -287,12 +287,14 @@ mod tests {
     };
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `llvm.aarch64.neon.uaddlv.i32.v16i8` on OS `linux`
     fn suggestions_to_data_empty_returns_none() {
         let rope = Rope::from_str("SELECT 1");
         assert!(suggestions_to_data(&[], &rope).is_none());
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `llvm.aarch64.neon.uaddlv.i32.v16i8` on OS `linux`
     fn suggestions_to_data_maps_byte_range_to_line_col() {
         let source = "SELECT custoser_name FROM users";
         let rope = Rope::from_str(source);
@@ -546,6 +548,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `llvm.aarch64.neon.uaddlv.i32.v16i8` on OS `linux`
     fn harvest_candidates_none_returns_default() {
         let c = harvest_candidates(None);
         assert!(c.items.is_empty());

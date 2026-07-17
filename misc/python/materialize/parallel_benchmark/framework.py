@@ -231,6 +231,11 @@ class ReuseConnQuery(Action):
         self.query = query
         self.conn_info = conn_info
         self.strict_serializable = strict_serializable
+        # An OpenLoop dispatches a single shared action instance to the worker
+        # pool, so under backlog several threads can call _run concurrently.
+        # psycopg forbids concurrent use of one cursor/connection, so serialize
+        # access to the reused connection.
+        self.lock = threading.Lock()
         self._reconnect()
 
     def _reconnect(self) -> None:
@@ -242,7 +247,8 @@ class ReuseConnQuery(Action):
         )
 
     def _run(self, conns: queue.Queue):
-        execute_query(self.cur, self.query)
+        with self.lock:
+            execute_query(self.cur, self.query)
 
     def __str__(self) -> str:
         return f"{self.query} (reuse connection)"
@@ -255,16 +261,23 @@ class PooledQuery(Action):
 
     def _run(self, conns: queue.Queue):
         conn = conns.get()
-        with conn.cursor() as cur:
+        try:
             try:
-                execute_query(cur, self.query)
+                with conn.cursor() as cur:
+                    execute_query(cur, self.query)
             except psycopg.OperationalError as e:
                 print(f"Connection failed on query '{self.query}', reconnecting: {e}")
                 conn.close()
                 conn = self.conn_info.connect()
-                execute_query(cur, self.query)
-        conns.task_done()
-        conns.put(conn)
+                conn.autocommit = True
+                with conn.cursor() as cur:
+                    execute_query(cur, self.query)
+        finally:
+            # Always return a slot to the pool, even if the retry also failed.
+            # Otherwise repeated failures drain the pool and pooled actions
+            # block forever on conns.get().
+            conns.task_done()
+            conns.put(conn)
 
     def __str__(self) -> str:
         return f"{self.query} (pooled)"
@@ -348,7 +361,10 @@ class OpenLoop(PhaseAction):
         state: State,
     ) -> None:
         for start_time in self.dist.generate(duration, str(self.action), state):
-            jobs.put(lambda: self.action.run(start_time, conns, state))
+            # Bind start_time now. A late-bound closure would read the loop's
+            # latest value once a backlogged job finally runs, dropping the
+            # queue-wait time this open-loop benchmark exists to measure.
+            jobs.put(lambda st=start_time: self.action.run(st, conns, state))
 
 
 class ClosedLoop(PhaseAction):
@@ -430,6 +446,11 @@ def run_job(jobs: queue.Queue) -> None:
             if not job:
                 return
             job()
+        except Exception as e:
+            # Keep the worker alive on action failures. A dying worker would
+            # never consume its teardown() sentinel, so jobs.join() would
+            # deadlock and hang the run instead of failing fast.
+            print(f"Job failed, continuing: {e}")
         finally:
             jobs.task_done()
 

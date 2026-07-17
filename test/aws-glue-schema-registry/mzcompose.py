@@ -190,7 +190,13 @@ def _run_testdrive(
     # Bring up the AWS connection out-of-band so we can include SESSION TOKEN
     # only when present.
     c.testdrive(input=aws_conn_sql)
-    c.run_testdrive_files(*var_args, "glue-schema-registry.td")
+    # The sink script reuses the connections the source script creates, so both
+    # run in one testdrive invocation and in this order.
+    c.run_testdrive_files(
+        *var_args,
+        "glue-schema-registry.td",
+        "glue-schema-registry-sink.td",
+    )
 
 
 def workflow_default(c: Composition) -> None:

@@ -367,7 +367,7 @@ class ConnectRead(Scenario):
                 ),
             ],
             guarantees={
-                "SELECT * FROM t4 (pooled)": {"qps": 35, "max": 700},
+                "SELECT 1 (standalone)": {"qps": 35, "max": 700},
             },
         )
 

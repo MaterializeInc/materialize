@@ -1971,6 +1971,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: unsafe_enable_unbounded_custom_type_resolution,
+        desc: "resolving custom types without the depth and complexity limits that bound resolution work",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_within_timestamp_order_by_in_subscribe,
         desc: "`WITHIN TIMESTAMP ORDER BY ..`",
         default: false,
@@ -2134,6 +2140,12 @@ feature_flags!(
         name: enable_cluster_schedule_refresh,
         desc: "`SCHEDULE = ON REFRESH` cluster option",
         default: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_auto_scaling_strategy,
+        desc: "`AUTO SCALING STRATEGY` cluster option",
+        default: true,
         enable_for_item_parsing: true,
     },
     {

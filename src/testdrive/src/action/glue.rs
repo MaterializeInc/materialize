@@ -65,23 +65,11 @@ pub async fn run_create_schema(
         "protobuf" => DataFormat::Protobuf,
         other => bail!("unknown data-format: {}", other),
     };
-    let compatibility = match cmd
-        .args
-        .opt_string("compatibility")
-        .unwrap_or_else(|| "backward".into())
-        .to_lowercase()
-        .as_str()
-    {
-        "backward" => Compatibility::Backward,
-        "backward_all" => Compatibility::BackwardAll,
-        "forward" => Compatibility::Forward,
-        "forward_all" => Compatibility::ForwardAll,
-        "full" => Compatibility::Full,
-        "full_all" => Compatibility::FullAll,
-        "none" => Compatibility::None,
-        "disabled" => Compatibility::Disabled,
-        other => bail!("unknown compatibility: {}", other),
-    };
+    let compatibility = parse_compatibility(
+        &cmd.args
+            .opt_string("compatibility")
+            .unwrap_or_else(|| "backward".into()),
+    )?;
     cmd.args.done()?;
 
     // The schema definition comes from the `schema=` argument (typically a
@@ -143,4 +131,64 @@ pub async fn run_create_schema(
         state.cmd_vars.insert(var, version_id);
     }
     Ok(ControlFlow::Continue)
+}
+
+/// Verify that a schema in AWS Glue Schema Registry has the expected
+/// compatibility policy, looked up by name.
+///
+/// A sink applies a compatibility policy only when it first creates a schema,
+/// and never overwrites it afterward. Record decoding cannot observe that
+/// policy, so this reads it back to assert the create path applied the intended
+/// value.
+///
+/// Arguments:
+///   * `name` (required): the schema name.
+///   * `compatibility` (required): the expected compatibility, e.g. `backward`
+///     or `full`. Matched case-insensitively.
+///   * `registry` (optional): registry name. Omit to target Glue's implicit
+///     default registry.
+pub async fn run_verify_compatibility(
+    mut cmd: BuiltinCommand,
+    state: &State,
+) -> Result<ControlFlow, anyhow::Error> {
+    let name = cmd.args.string("name")?;
+    let registry = cmd.args.opt_string("registry");
+    let expected = parse_compatibility(&cmd.args.string("compatibility")?)?;
+    cmd.args.done()?;
+
+    let glue = aws_sdk_glue::Client::new(&state.aws_config);
+    let mut schema_id = SchemaId::builder().schema_name(&name);
+    if let Some(registry) = &registry {
+        schema_id = schema_id.registry_name(registry);
+    }
+    let resp = glue
+        .get_schema()
+        .schema_id(schema_id.build())
+        .send()
+        .await
+        .context("fetching Glue schema")?;
+
+    let actual = resp
+        .compatibility()
+        .ok_or_else(|| anyhow!("Glue schema {name:?} has no compatibility set"))?;
+    if *actual != expected {
+        bail!("Glue schema {name:?} has compatibility {actual:?}, expected {expected:?}");
+    }
+    Ok(ControlFlow::Continue)
+}
+
+/// Parse a Glue compatibility policy from its testdrive spelling, matched
+/// case-insensitively.
+fn parse_compatibility(s: &str) -> Result<Compatibility, anyhow::Error> {
+    Ok(match s.to_lowercase().as_str() {
+        "backward" => Compatibility::Backward,
+        "backward_all" => Compatibility::BackwardAll,
+        "forward" => Compatibility::Forward,
+        "forward_all" => Compatibility::ForwardAll,
+        "full" => Compatibility::Full,
+        "full_all" => Compatibility::FullAll,
+        "none" => Compatibility::None,
+        "disabled" => Compatibility::Disabled,
+        other => bail!("unknown compatibility: {}", other),
+    })
 }

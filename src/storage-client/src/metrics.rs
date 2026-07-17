@@ -17,10 +17,9 @@ use mz_cluster_client::metrics::{ControllerMetrics, WallclockLagMetrics};
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::{
-    CounterVec, DeleteOnDropCounter, DeleteOnDropGauge, Histogram, IntCounterVec, MetricsRegistry,
+    CounterVec, DeleteOnDropCounter, DeleteOnDropGauge, IntCounterVec, MetricsRegistry,
     UIntGaugeVec,
 };
-use mz_ore::stats::histogram_seconds_buckets;
 use mz_repr::GlobalId;
 use mz_service::transport;
 use mz_storage_types::instances::StorageInstanceId;
@@ -47,9 +46,6 @@ pub struct StorageControllerMetrics {
     connected_replica_count: UIntGaugeVec,
     replica_connects_total: IntCounterVec,
     replica_connect_wait_time_seconds_total: CounterVec,
-
-    // table writes
-    table_apply_seconds: Histogram,
 
     /// Metrics shared with the compute controller.
     shared: ControllerMetrics,
@@ -103,20 +99,9 @@ impl StorageControllerMetrics {
                 help: "The total time the storage controller spent waiting for replica (re-)connection.",
                 var_labels: ["instance_id", "replica_id"],
             )),
-            table_apply_seconds: metrics_registry.register(metric!(
-                name: "mz_storage_controller_table_apply_seconds",
-                help: "Latency of applying a durable table append to its data shards, performed off the write critical path after the append response is returned.",
-                buckets: histogram_seconds_buckets(0.128, 32.0),
-            )),
 
             shared,
         }
-    }
-
-    /// Returns the histogram tracking the latency of applying a durable table
-    /// append to its data shards.
-    pub fn table_apply_seconds(&self) -> Histogram {
-        self.table_apply_seconds.clone()
     }
 
     pub fn regressed_offset_known(

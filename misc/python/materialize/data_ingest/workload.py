@@ -162,13 +162,14 @@ class DeleteDataAtEndOfDay(Workload):
         )
         # Delete all records in a single transaction
         delete_phase = TransactionDef(
-            [
+            size=TransactionSize.HUGE,
+            operations=[
                 Delete(
                     number_of_records=Records.ALL,
                     record_size=RecordSize.SMALL,
                     num=insert.max_key(),
                 )
-            ]
+            ],
         )
         self.cycle = [
             insert_phase,
@@ -195,13 +196,14 @@ class DeleteDataAtEndOfDayDisruptions(Workload):
         )
         # Delete all records in a single transaction
         delete_phase = TransactionDef(
-            [
+            size=TransactionSize.HUGE,
+            operations=[
                 Delete(
                     number_of_records=Records.ALL,
                     record_size=RecordSize.SMALL,
                     num=insert.max_key(),
                 )
-            ]
+            ],
         )
         self.cycle = [
             insert_phase,
@@ -235,13 +237,14 @@ class DeleteDataAtEndOfDay0dtDeploys(Workload):
         )
         # Delete all records in a single transaction
         delete_phase = TransactionDef(
-            [
+            size=TransactionSize.HUGE,
+            operations=[
                 Delete(
                     number_of_records=Records.ALL,
                     record_size=RecordSize.SMALL,
                     num=insert.max_key(),
                 )
-            ]
+            ],
         )
         self.cycle = [
             insert_phase,
@@ -266,7 +269,8 @@ class DeleteDataAtEndOfDay0dtDeploys(Workload):
 #        ]
 
 
-WORKLOADS = all_subclasses(Workload)
+# Sort to keep determinism for reproducible runs with specific seed
+WORKLOADS = sorted(all_subclasses(Workload), key=repr)
 
 
 def execute_workload(

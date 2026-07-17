@@ -14,6 +14,7 @@ Initial data creation functions for workload replay.
 from __future__ import annotations
 
 import asyncio
+import multiprocessing
 import os
 import random
 import threading
@@ -31,8 +32,11 @@ from materialize.workload_replay.config import SEED_RANGE
 from materialize.workload_replay.ingest import (
     delivery_report,
     get_kafka_objects,
+    get_kafka_value_format,
     ingest,
     ingest_webhook,
+    make_kafka_producer,
+    produce_json,
 )
 from materialize.workload_replay.util import (
     get_kafka_topic,
@@ -42,6 +46,13 @@ from materialize.workload_replay.util import (
 
 _NUM_WORKERS = min(os.cpu_count() or 4, 16)
 _CHUNK_ROWS = 100_000
+
+# Pool workers must not fork-inherit this process's state. During a
+# comparison benchmark the parent holds cached confluent_kafka producers
+# (ingest.make_kafka_producer) from the previous run, and librdkafka's
+# threads don't survive fork, so produce()/flush() on such a producer in a
+# fork()ed worker hangs forever. forkserver workers import modules fresh.
+_MP_CONTEXT = multiprocessing.get_context("forkserver")
 
 
 # Subprocess workers (run in forked children, must use only picklable args)
@@ -96,6 +107,7 @@ def _kafka_chunk(
     sr_port: int,
     topic: str,
     debezium: bool,
+    value_format: str,
     column_dicts: list[dict[str, Any]],
     num_rows: int,
     rng_seed: int,
@@ -106,6 +118,10 @@ def _kafka_chunk(
         Column(c["name"], c["type"], c["nullable"], c["default"], c.get("data_shape"))
         for c in column_dicts
     ]
+
+    if value_format == "json":
+        produce_json(make_kafka_producer(kafka_port), topic, columns, rng, num_rows)
+        return num_rows
 
     producer, serializer, key_serializer, sctx, ksctx, col_names = get_kafka_objects(
         topic,
@@ -271,7 +287,7 @@ def create_initial_data_requiring_mz(
     totals: dict[str, int] = {}
     webhook_items: list[tuple[str, str, str, dict[str, Any], int]] = []
 
-    with ProcessPoolExecutor(max_workers=_NUM_WORKERS) as pool:
+    with ProcessPoolExecutor(max_workers=_NUM_WORKERS, mp_context=_MP_CONTEXT) as pool:
         for db, schemas in workload["databases"].items():
             for schema, items in schemas.items():
                 for name, table in items["tables"].items():
@@ -335,7 +351,7 @@ def create_initial_data_external(
             _ports[service] = c.default_port(service)
         return _ports[service]
 
-    with ProcessPoolExecutor(max_workers=_NUM_WORKERS) as pool:
+    with ProcessPoolExecutor(max_workers=_NUM_WORKERS, mp_context=_MP_CONTEXT) as pool:
         for db, schemas in workload["databases"].items():
             for schema, items in schemas.items():
                 for name, source in items["sources"].items():
@@ -356,9 +372,11 @@ def create_initial_data_external(
 
                         st = source["type"]
                         if st == "postgres":
-                            ref_db, ref_s, ref_t = (
-                                get_postgres_reference_db_schema_table(child)
-                            )
+                            (
+                                ref_db,
+                                ref_s,
+                                ref_t,
+                            ) = get_postgres_reference_db_schema_table(child)
                             conn = {
                                 "host": "127.0.0.1",
                                 "port": port("postgres"),
@@ -381,6 +399,7 @@ def create_initial_data_external(
                         elif st == "kafka":
                             topic = get_kafka_topic(source)
                             debezium = "ENVELOPE DEBEZIUM" in child["create_sql"]
+                            value_format = get_kafka_value_format(child["create_sql"])
                             _submit_chunks(
                                 pool,
                                 _kafka_chunk,
@@ -389,6 +408,7 @@ def create_initial_data_external(
                                     port("schema-registry"),
                                     topic,
                                     debezium,
+                                    value_format,
                                 ),
                                 child["columns"],
                                 num_rows,

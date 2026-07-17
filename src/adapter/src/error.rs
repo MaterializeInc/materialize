@@ -110,6 +110,12 @@ pub enum AdapterError {
         /// Human-readable type of the object (e.g. "source", "source-export table").
         object_type: String,
     },
+    /// A read-then-write statement's read set has more transitive dependencies
+    /// than validation is willing to walk.
+    ReadThenWriteDependencyLimitExceeded {
+        /// The configured maximum number of dependencies.
+        max_rw_dependencies: usize,
+    },
     /// Expression violated a column's constraint
     ConstraintViolation(NotNullViolation),
     /// An error occurred while decoding COPY data.
@@ -274,6 +280,9 @@ pub enum AdapterError {
     /// Attempt to convert a cluster to unmanaged while a graceful
     /// reconfiguration is in progress.
     AlterClusterUnmanagedWhileReconfiguring,
+    /// Attempt to convert a cluster to unmanaged while a hydration burst is in
+    /// flight.
+    AlterClusterUnmanagedWhileBursting,
     /// Attempt to change a cluster's replication factor while a graceful
     /// reconfiguration is in progress.
     AlterClusterReplicationFactorWhileReconfiguring,
@@ -540,6 +549,13 @@ impl AdapterError {
                      dependencies must not include sources or source-export tables",
                 object_name.quoted()
             )),
+            AdapterError::ReadThenWriteDependencyLimitExceeded {
+                max_rw_dependencies,
+            } => Some(format!(
+                "The read set transitively depends on more than {max_rw_dependencies} \
+                     objects. Reduce the number of dependencies, or raise the \
+                     read_then_write_max_dependencies system parameter."
+            )),
             AdapterError::SafeModeViolation(_) => Some(
                 "The Materialize server you are connected to is running in \
                  safe mode, which limits the features that are available."
@@ -718,6 +734,11 @@ impl AdapterError {
                 configuration, or wait for it to settle, then convert."
                     .to_string(),
             ),
+            AdapterError::AlterClusterUnmanagedWhileBursting => Some(
+                "Remove the strategy with ALTER CLUSTER ... RESET (AUTO SCALING STRATEGY), \
+                or wait for the burst to wind down, then convert."
+                    .to_string(),
+            ),
             AdapterError::AlterClusterReplicationFactorWhileReconfiguring => Some(
                 "Cancel the reconfiguration by altering the cluster back to its current \
                 configuration, or wait for it to settle, then change the replication factor."
@@ -840,6 +861,9 @@ impl AdapterError {
             AdapterError::InvalidTableMutationSelection { .. } => {
                 SqlState::INVALID_TRANSACTION_STATE
             }
+            AdapterError::ReadThenWriteDependencyLimitExceeded { .. } => {
+                SqlState::PROGRAM_LIMIT_EXCEEDED
+            }
             AdapterError::ConstraintViolation(NotNullViolation(_)) => SqlState::NOT_NULL_VIOLATION,
             AdapterError::CopyFormatError(_) => SqlState::BAD_COPY_FILE_FORMAT,
             AdapterError::ConcurrentClusterDrop => SqlState::INVALID_TRANSACTION_STATE,
@@ -861,6 +885,12 @@ impl AdapterError {
             }
             AdapterError::PlanError(PlanError::ParameterNotAllowed(_)) => {
                 SqlState::UNDEFINED_PARAMETER
+            }
+            // `PlanError::Unsupported` is raised (via `bail_unsupported!`) only for
+            // genuinely unsupported features, so it maps to PostgreSQL's
+            // feature-not-supported code rather than internal-error. See SQL-326.
+            AdapterError::PlanError(PlanError::Unsupported { .. }) => {
+                SqlState::FEATURE_NOT_SUPPORTED
             }
             AdapterError::PlanError(_) => SqlState::INTERNAL_ERROR,
             AdapterError::PreparedStatementExists(_) => SqlState::DUPLICATE_PSTATEMENT,
@@ -891,6 +921,9 @@ impl AdapterError {
                 }
                 OptimizerError::PlanError(PlanError::ParameterNotAllowed(_)) => {
                     SqlState::UNDEFINED_PARAMETER
+                }
+                OptimizerError::PlanError(PlanError::Unsupported { .. }) => {
+                    SqlState::FEATURE_NOT_SUPPORTED
                 }
                 OptimizerError::PlanError(_) => SqlState::INTERNAL_ERROR,
                 OptimizerError::RecursionLimitError(_) => RECURSION_LIMIT_ERROR_CODE,
@@ -950,6 +983,7 @@ impl AdapterError {
             AdapterError::AlterClusterTimeout => SqlState::QUERY_CANCELED,
             AdapterError::AlterClusterWhilePendingReplicas => SqlState::OBJECT_IN_USE,
             AdapterError::AlterClusterUnmanagedWhileReconfiguring => SqlState::OBJECT_IN_USE,
+            AdapterError::AlterClusterUnmanagedWhileBursting => SqlState::OBJECT_IN_USE,
             AdapterError::AlterClusterReplicationFactorWhileReconfiguring => {
                 SqlState::OBJECT_IN_USE
             }
@@ -1177,6 +1211,14 @@ impl fmt::Display for AdapterError {
                     "invalid selection: operation may only (transitively) refer to non-source, non-system tables"
                 )
             }
+            AdapterError::ReadThenWriteDependencyLimitExceeded {
+                max_rw_dependencies,
+            } => {
+                write!(
+                    f,
+                    "selection has too many transitive dependencies to validate (limit {max_rw_dependencies})"
+                )
+            }
             AdapterError::ReplaceMaterializedViewSealed { name } => {
                 write!(
                     f,
@@ -1394,6 +1436,12 @@ impl fmt::Display for AdapterError {
                 write!(
                     f,
                     "cannot convert cluster to unmanaged while a reconfiguration is in progress"
+                )
+            }
+            AdapterError::AlterClusterUnmanagedWhileBursting => {
+                write!(
+                    f,
+                    "cannot convert cluster to unmanaged while a hydration burst is in progress"
                 )
             }
             AdapterError::AlterClusterReplicationFactorWhileReconfiguring => {

@@ -1586,7 +1586,7 @@ impl StorageController for Controller {
         // If the write frontier of the sink is strictly larger than its read hold, it must have at
         // least written out its snapshot, and we can skip reading it; otherwise assume we may have
         // to replay from the beginning.
-        // TODO(database-issues#10002): unify this with run_export, if possible
+        // TODO(STG-26): unify this with run_export, if possible
         let with_snapshot = new_description.sink.with_snapshot
             && !PartialOrder::less_than(&new_description.sink.as_of, &cur_export.write_frontier);
 
@@ -2740,8 +2740,6 @@ where
             .get_txn_wal_shard()
             .expect("must call prepare initialization before creating storage controller");
 
-        let metrics = StorageControllerMetrics::new(metrics_registry, controller_metrics);
-
         let persist_table_worker = if read_only {
             let txns_write = txns_client
                 .open_writer(
@@ -2767,7 +2765,7 @@ where
             )
             .await;
             txns.upgrade_version().await;
-            persist_handles::PersistTableWriteWorker::new_txns(txns, metrics.table_apply_seconds())
+            persist_handles::PersistTableWriteWorker::new_txns(txns)
         };
         let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
 
@@ -2786,6 +2784,8 @@ where
         maintenance_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         let (instance_response_tx, instance_response_rx) = mpsc::unbounded_channel();
+
+        let metrics = StorageControllerMetrics::new(metrics_registry, controller_metrics);
 
         let now_dt = mz_ore::now::to_datetime(now());
 

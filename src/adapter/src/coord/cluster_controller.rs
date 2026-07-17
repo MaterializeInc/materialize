@@ -14,8 +14,9 @@
 //! the controller as a **separate task** and implements the ctx by marshaling
 //! each pull/apply to the Coordinator over the internal command channel, because
 //! the catalog and the live compute/storage signals are reachable only from the
-//! coordinator loop. Pulls are batched so the round-trip count per tick is
-//! bounded.
+//! coordinator loop. The two whole-tick reads are batched; the per-cluster live
+//! signals are pulled on demand, so a tick's round-trips scale with the number of
+//! managed clusters that need a live signal, not with a constant.
 //!
 //! Everything here is gated by [`ENABLE_CLUSTER_CONTROLLER`] (default off). With
 //! the gate off the task does not tick, so the legacy scheduling and graceful
@@ -34,9 +35,11 @@ use mz_cluster_controller::ClusterController;
 use mz_cluster_controller::ctx::{
     ApplyOutcome, AvailabilityZones, ClusterControllerCtx, ClusterState, Decision,
     ExpectedClusterState, ObservedReplica, OnTimeout, ReconfigurationRecord, ReconfigurationStatus,
-    ReplicaShape, StateWrite,
+    ReconfigurationTarget, ReplicaShape, StateWrite,
 };
-use mz_cluster_controller::strategy::GRACEFUL_RECONFIGURATION_STRATEGY_NAME;
+use mz_cluster_controller::strategy::{
+    GRACEFUL_RECONFIGURATION_STRATEGY_NAME, HYDRATION_BURST_STRATEGY_NAME,
+};
 use mz_compute_types::config::ComputeReplicaConfig;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::task::spawn;
@@ -71,6 +74,12 @@ pub enum ClusterControllerRequest {
         cluster_id: ClusterId,
         replicas: Vec<ReplicaId>,
         tx: oneshot::Sender<BTreeSet<ReplicaId>>,
+    },
+    /// Whether the cluster has any hydratable (dataflow-backed) objects bound to
+    /// it.
+    HasHydratableObjects {
+        cluster_id: ClusterId,
+        tx: oneshot::Sender<bool>,
     },
     /// Apply a tick's batch of decisions under their compare-and-append guards.
     Apply {
@@ -158,6 +167,14 @@ impl ClusterControllerCtx for CoordCtx {
         .unwrap_or_default()
     }
 
+    async fn has_hydratable_objects(&mut self, cluster_id: ClusterId) -> bool {
+        self.request(|tx| ClusterControllerRequest::HasHydratableObjects { cluster_id, tx })
+            .await
+            // A lost reply means shutdown; "no objects" arms nothing, which is
+            // the safe answer.
+            .unwrap_or(false)
+    }
+
     async fn apply(&mut self, decisions: Vec<Decision>) -> ApplyOutcome {
         self.request(|tx| ClusterControllerRequest::Apply { decisions, tx })
             .await
@@ -186,9 +203,12 @@ impl Coordinator {
     pub(crate) fn spawn_cluster_controller_task(&self) {
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let reconcile_now = Arc::clone(&self.reconcile_now);
+        // A shared handle: dyncfg updates land in the same underlying values, so
+        // the controller task sees flag flips without any push.
+        let dyncfgs = self.catalog().system_config().dyncfgs().clone();
 
         spawn(|| "cluster_controller", async move {
-            let controller = ClusterController::new();
+            let controller = ClusterController::new(dyncfgs);
             let mut ctx = CoordCtx {
                 internal_cmd_tx,
                 now: Timestamp::MIN,
@@ -291,6 +311,9 @@ impl Coordinator {
                     let _ = tx.send(hydrated);
                 });
             }
+            ClusterControllerRequest::HasHydratableObjects { cluster_id, tx } => {
+                let _ = tx.send(self.cluster_has_hydratable_objects(cluster_id));
+            }
             ClusterControllerRequest::Apply { decisions, tx } => {
                 let outcome = if active {
                     self.apply_cluster_decisions(decisions).await
@@ -319,34 +342,17 @@ impl Coordinator {
         // apply path checks against cannot drift.
         let expected = crate::catalog::cluster_state::project_expected(managed);
 
+        // All replicas, with the raw traits the controller's ownership test
+        // (`ObservedReplica::owned_shape`) classifies on.
         let replicas = cluster
             .replicas()
-            .filter_map(|replica| {
-                // INTERNAL / BILLED AS replicas are manually managed and live
-                // outside the controller's replication-factor domain: a user
-                // can attach one to any managed cluster, and the legacy
-                // scheduler and reconfiguration paths never create or drop
-                // them. A `-pending` replica is the in-flight target of a
-                // graceful reconfiguration, created at the new shape while the
-                // durable config still reads the old one until finalize. It is
-                // owned by the reconfiguration path, not the controller.
-                // Exclude all of these from the observed set so the controller
-                // neither counts one toward a desired shape (letting it stand
-                // in for a managed replica) nor drops it as excess. Retiring a
-                // pending replica here would defeat the zero-downtime resize
-                // that created it.
-                if replica.config.location.internal()
-                    || replica.config.location.billed_as().is_some()
-                    || replica.config.location.pending()
-                {
-                    return None;
-                }
-                let shape = replica_shape(&replica.config)?;
-                Some(ObservedReplica {
-                    replica_id: replica.replica_id,
-                    name: replica.name.clone(),
-                    shape,
-                })
+            .map(|replica| ObservedReplica {
+                replica_id: replica.replica_id,
+                name: replica.name.clone(),
+                shape: replica_shape(&replica.config),
+                internal: replica.config.location.internal(),
+                billed_as: replica.config.location.billed_as().is_some(),
+                pending: replica.config.location.pending(),
             })
             .collect();
 
@@ -356,10 +362,25 @@ impl Coordinator {
             replication_factor: expected.replication_factor,
             availability_zones: expected.availability_zones.0,
             logging: expected.logging,
+            auto_scaling_policy: expected.auto_scaling_policy,
             reconfiguration: expected.reconfiguration,
             burst: expected.burst,
             replicas,
         })
+    }
+
+    /// Whether the cluster has any hydratable objects bound to it, backing the
+    /// controller's [`ClusterControllerCtx::has_hydratable_objects`] pull (see
+    /// the trait method for the approximation contract and why mismatches with
+    /// the hydration check are self-healing).
+    fn cluster_has_hydratable_objects(&self, cluster_id: ClusterId) -> bool {
+        let Some(cluster) = self.catalog().try_get_cluster(cluster_id) else {
+            return false;
+        };
+        cluster
+            .bound_objects
+            .iter()
+            .any(|id| self.catalog().get_entry(id).item().is_hydratable())
     }
 
     /// Starts per-replica hydration checks for `cluster_id`.
@@ -582,6 +603,19 @@ impl Coordinator {
                     replica_id,
                     ..
                 } => {
+                    // The replica may have vanished since the decisions were
+                    // derived (a user DDL landed between the tick's read and
+                    // this apply). The in-transaction witness check would
+                    // reject such a stale batch, but resource-limit validation
+                    // runs before the transaction and panics on a missing
+                    // replica, so reject the batch here instead.
+                    if self
+                        .catalog()
+                        .try_get_cluster_replica(cluster_id, replica_id)
+                        .is_none()
+                    {
+                        return None;
+                    }
                     drops.push(DropObjectInfo::ClusterReplica((
                         cluster_id,
                         replica_id,
@@ -667,22 +701,35 @@ impl Coordinator {
         else {
             return None;
         };
-        if let Some(size) = &write.new_size {
+        // Exhaustive destructure of the source (no `..`): a field added to
+        // `StateWrite` is a compile error here until it's overlaid onto the
+        // managed config. We cannot destructure `managed` itself. It carries
+        // fields the controller does not model (`workload_class`,
+        // `optimizer_feature_overrides`) that this overlay must leave untouched.
+        let StateWrite {
+            new_size,
+            new_replication_factor,
+            new_availability_zones,
+            new_logging,
+            reconfiguration,
+            burst,
+        } = write;
+        if let Some(size) = new_size {
             managed.size = size.clone();
         }
-        if let Some(rf) = write.new_replication_factor {
-            managed.replication_factor = rf;
+        if let Some(rf) = new_replication_factor {
+            managed.replication_factor = *rf;
         }
-        if let Some(azs) = &write.new_availability_zones {
+        if let Some(azs) = new_availability_zones {
             managed.availability_zones = azs.clone();
         }
-        if let Some(logging) = &write.new_logging {
+        if let Some(logging) = new_logging {
             managed.logging = logging.clone();
         }
-        if let Some(reconfiguration) = &write.reconfiguration {
+        if let Some(reconfiguration) = reconfiguration {
             managed.reconfiguration = reconfiguration.record.as_ref().map(memory_reconfiguration);
         }
-        if let Some(burst) = &write.burst {
+        if let Some(burst) = burst {
             managed.burst = burst.record.as_ref().map(memory_burst);
         }
         // The audit intents travel with the write, declared by the strategy at
@@ -759,11 +806,9 @@ impl Coordinator {
 }
 
 /// Map a create decision's strategy-attribution to the audit reason carried on
-/// the create event.
-///
-/// A create the graceful strategy desired is recorded as a graceful
-/// reconfiguration. Everything else, baseline-held replicas, is `Manual`, the
-/// tag for replicas the cluster's own config calls for.
+/// the create event. Graceful wins over burst when both desired a shape (their
+/// shapes differ in practice, so this is a stable tie-break); a baseline-held
+/// replica is `Manual`, the tag for replicas the user's own config calls for.
 ///
 /// Drops never come through here: a drop happens exactly when no strategy
 /// desires the replica, so it carries no attribution and is uniformly audited
@@ -771,6 +816,8 @@ impl Coordinator {
 fn reason_from_strategies(reasons: &[&'static str]) -> ReplicaCreateDropReason {
     if reasons.contains(&GRACEFUL_RECONFIGURATION_STRATEGY_NAME) {
         ReplicaCreateDropReason::GracefulReconfiguration
+    } else if reasons.contains(&HYDRATION_BURST_STRATEGY_NAME) {
+        ReplicaCreateDropReason::HydrationBurst
     } else {
         ReplicaCreateDropReason::Manual
     }
@@ -800,16 +847,30 @@ fn on_timeout_from_controller(action: OnTimeout) -> mz_sql::plan::OnTimeoutActio
 fn memory_reconfiguration(
     record: &ReconfigurationRecord,
 ) -> mz_catalog::memory::objects::ReconfigurationState {
+    // Destructure the source (no `..`): a field added to the controller type is a
+    // compile error here until it's carried across. The target is the same.
+    let ReconfigurationRecord {
+        target,
+        deadline,
+        on_timeout,
+        status,
+    } = record;
+    let ReconfigurationTarget {
+        size,
+        replication_factor,
+        availability_zones,
+        logging,
+    } = target;
     mz_catalog::memory::objects::ReconfigurationState {
         target: mz_catalog::memory::objects::ReconfigurationTarget {
-            size: record.target.size.clone(),
-            replication_factor: record.target.replication_factor,
-            availability_zones: record.target.availability_zones.0.clone(),
-            logging: record.target.logging.clone(),
+            size: size.clone(),
+            replication_factor: *replication_factor,
+            availability_zones: availability_zones.0.clone(),
+            logging: logging.clone(),
         },
-        deadline: record.deadline,
-        on_timeout: on_timeout_from_controller(record.on_timeout),
-        status: status_from_controller(record.status),
+        deadline: *deadline,
+        on_timeout: on_timeout_from_controller(*on_timeout),
+        status: status_from_controller(*status),
     }
 }
 
@@ -838,10 +899,17 @@ fn status_from_controller(
 fn memory_burst(
     record: &mz_cluster_controller::ctx::BurstRecord,
 ) -> mz_catalog::memory::objects::BurstState {
+    // Destructure the source (no `..`): a field added to the controller type is a
+    // compile error here until it's carried across.
+    let mz_cluster_controller::ctx::BurstRecord {
+        burst_size,
+        linger_duration,
+        steady_hydrated_at,
+    } = record;
     mz_catalog::memory::objects::BurstState {
-        burst_size: record.burst_size.clone(),
-        linger_duration: record.linger_duration,
-        steady_hydrated_at: record.steady_hydrated_at,
+        burst_size: burst_size.clone(),
+        linger_duration: *linger_duration,
+        steady_hydrated_at: *steady_hydrated_at,
     }
 }
 
@@ -855,7 +923,7 @@ mod tests {
     fn test_reason_from_strategies() {
         use ReplicaCreateDropReason as Reason;
 
-        // The graceful strategy maps to its own reason; the baseline (or no
+        // Each strategy maps to its own reason; the baseline (or no
         // attribution) is `Manual`.
         assert!(matches!(
             reason_from_strategies(&[BASELINE_STRATEGY_NAME]),
@@ -866,14 +934,24 @@ mod tests {
             reason_from_strategies(&[GRACEFUL_RECONFIGURATION_STRATEGY_NAME]),
             Reason::GracefulReconfiguration
         ));
+        assert!(matches!(
+            reason_from_strategies(&[HYDRATION_BURST_STRATEGY_NAME]),
+            Reason::HydrationBurst
+        ));
 
-        // A strategy attribution beats the baseline's `Manual`.
+        // Graceful wins the tie-break when several strategies desired the
+        // shape, and any strategy attribution beats the baseline's `Manual`.
         assert!(matches!(
             reason_from_strategies(&[
                 BASELINE_STRATEGY_NAME,
+                HYDRATION_BURST_STRATEGY_NAME,
                 GRACEFUL_RECONFIGURATION_STRATEGY_NAME,
             ]),
             Reason::GracefulReconfiguration
+        ));
+        assert!(matches!(
+            reason_from_strategies(&[BASELINE_STRATEGY_NAME, HYDRATION_BURST_STRATEGY_NAME]),
+            Reason::HydrationBurst
         ));
     }
 }

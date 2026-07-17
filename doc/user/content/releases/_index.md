@@ -24,6 +24,26 @@ We've upgraded cluster hardware for all Materialize Cloud environments. The new 
 operations. We've observed a 10%–66% reduction in hydration times. You don't need to take any actions. The improvement is live across all Materialize Cloud
 environments, on all new and existing clusters. 
 
+### READ COMMITTED isolation for PostgreSQL metadata databases {#v26.33-pg-consensus-read-committed}
+
+*Materialize Self-Managed only*
+
+Starting in v26.33, self-managed deployments that use a PostgreSQL metadata
+database can configure Materialize to run its internal consensus queries under
+`READ COMMITTED` transaction isolation instead of `SERIALIZABLE`. The consensus
+queries are linearizable under `READ COMMITTED`, while avoiding the
+serialization-failure retries that `SERIALIZABLE` incurs under contention,
+improving metadata write throughput. To use `READ COMMITTED`, Materialize
+introduces the `persist_pg_consensus_read_committed` system parameter.
+
+{{< note >}}
+The parameter applies only to PostgreSQL metadata databases. Only enable it
+after you have upgraded your self-managed deployment to v26.33 or later.
+{{< /note >}}
+
+For details, see the [Self-Managed upgrade
+notes](/self-managed-deployments/upgrading/version-notes/).
+
 ### Improvements {#v26.33-improvements}
 - **`EXPLAIN ANALYZE` on multi-replica clusters via MCP**: The Materialize MCP developer endpoint's `query` tool now accepts an optional cluster replica parameter, so `EXPLAIN ANALYZE` can target a specific replica.
 - **Faster queries on busy environments**: We've improved query latency on query-heavy clusters. We've reduced by caching the catalog snapshot for the duration of a session. In our tests, we've seen QPS improvements of up to 13%.

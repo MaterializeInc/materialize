@@ -68,6 +68,18 @@ pub(crate) trait LazyBinaryFunc {
     /// ie. the arguments and the result are non-error datums.
     fn is_monotone(&self) -> (bool, bool);
 
+    /// Whether [`Self::is_monotone`]'s "map ranges to ranges by sampling the
+    /// endpoints" guarantee still holds when an operand may be infinite.
+    ///
+    /// False for multiplication and division: their indeterminate forms
+    /// (`0 * inf`, `inf / inf`) and magnitude collapse (`finite / inf = 0`)
+    /// produce results the range endpoints do not bound, so an abstract
+    /// interpreter must not narrow their output range when an operand may be
+    /// infinite.
+    fn is_infinity_monotone(&self) -> bool {
+        true
+    }
+
     /// Yep, I guess this returns true for infix operators.
     fn is_infix_op(&self) -> bool;
 }
@@ -118,6 +130,10 @@ pub(crate) trait EagerBinaryFunc {
 
     fn is_monotone(&self) -> (bool, bool) {
         (false, false)
+    }
+
+    fn is_infinity_monotone(&self) -> bool {
+        true
     }
 
     fn is_infix_op(&self) -> bool {
@@ -175,6 +191,10 @@ impl<T: EagerBinaryFunc> LazyBinaryFunc for T {
 
     fn is_monotone(&self) -> (bool, bool) {
         self.is_monotone()
+    }
+
+    fn is_infinity_monotone(&self) -> bool {
+        self.is_infinity_monotone()
     }
 
     fn is_infix_op(&self) -> bool {

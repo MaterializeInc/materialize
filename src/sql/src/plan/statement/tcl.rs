@@ -53,6 +53,17 @@ pub fn plan_set_transaction(
     _: &StatementContext,
     SetTransactionStatement { local, modes }: SetTransactionStatement,
 ) -> Result<Plan, PlanError> {
+    // The sequencer applies each mode's side effect in order and rejects access
+    // modes outright. Reject them here, before any plan is produced, so a
+    // statement that cannot fully succeed leaves no partially-applied state
+    // behind (e.g. a silently changed isolation level). This mirrors
+    // `plan_start_transaction`, which validates all modes at plan time.
+    if modes
+        .iter()
+        .any(|m| matches!(m, TransactionMode::AccessMode(_)))
+    {
+        bail_unsupported!("SET TRANSACTION <access-mode>");
+    }
     Ok(Plan::SetTransaction(SetTransactionPlan { local, modes }))
 }
 

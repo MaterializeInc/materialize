@@ -55,6 +55,10 @@ pub enum PlanError {
         feature: String,
         discussion_no: Option<usize>,
     },
+    /// A burst `HYDRATION SIZE` equal to the cluster `SIZE` (a no-op burst).
+    HydrationSizeEqualsClusterSize {
+        size: String,
+    },
     /// This feature is not supported, and will likely never be supported.
     NeverSupported {
         feature: String,
@@ -334,6 +338,11 @@ impl PlanError {
 
     pub fn detail(&self) -> Option<String> {
         match self {
+            Self::HydrationSizeEqualsClusterSize { .. } => Some(
+                "A burst replica at the same size as the steady replicas would not \
+                 accelerate hydration."
+                    .into(),
+            ),
             Self::NeverSupported { details, .. } => details.clone(),
             Self::FetchingCsrSchemaFailed { cause, .. } => Some(cause.to_string_with_causes()),
             Self::PostgresConnectionErr { cause } => Some(cause.to_string_with_causes()),
@@ -526,6 +535,9 @@ impl fmt::Display for PlanError {
                     write!(f, ", see https://github.com/MaterializeInc/materialize/discussions/{} for more details", discussion_no)?;
                 }
                 Ok(())
+            }
+            Self::HydrationSizeEqualsClusterSize { size } => {
+                write!(f, "HYDRATION SIZE must differ from the cluster SIZE ('{size}')")
             }
             Self::NeverSupported { feature, documentation_link: documentation_path,.. } => {
                 write!(f, "{feature} is not supported",)?;

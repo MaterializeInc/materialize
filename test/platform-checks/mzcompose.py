@@ -268,7 +268,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         scenarios = [globals()[args.scenario]]
     else:
         base_scenarios = {SystemVarChange}
-        scenarios = all_subclasses(Scenario) - base_scenarios
+        scenarios = sorted(
+            all_subclasses(Scenario) - base_scenarios, key=lambda s: s.__name__
+        )
 
     if args.check:
         all_checks = {check.__name__: check for check in all_subclasses(Check)}
@@ -287,9 +289,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     additional_system_parameter_defaults = {}
     for val in args.system_param or []:
-        x = val[0].split("=", maxsplit=1)
-        assert len(x) == 2, f"--system-param '{val}' should be the format <key>=<val>"
-        additional_system_parameter_defaults[x[0]] = x[1]
+        for param in val:
+            x = param.split("=", maxsplit=1)
+            assert (
+                len(x) == 2
+            ), f"--system-param '{param}' should be the format <key>=<val>"
+            additional_system_parameter_defaults[x[0]] = x[1]
 
     with c.override(
         *create_mzs(
@@ -300,7 +305,24 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             external_metadata_store=args.external_metadata_store,
         )
     ):
-        executor = MzcomposeExecutor(composition=c)
+        executor_class = (
+            MzcomposeExecutorParallel
+            if args.execution_mode is ExecutionMode.PARALLEL
+            else MzcomposeExecutor
+        )
+
+        ran_scenario = False
+
+        def reset_environment() -> None:
+            # Scenarios (and checks in oneatatime mode) expect a fresh
+            # environment, so wipe all state, including the metadata and blob
+            # stores, before every run but the first.
+            nonlocal ran_scenario
+            if ran_scenario:
+                c.down(destroy_volumes=True, sanity_restart_mz=False)
+            ran_scenario = True
+            setup(c, args.external_blob_store)
+
         for scenario_class in scenarios:
             assert issubclass(
                 scenario_class, Scenario
@@ -308,22 +330,17 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
             print(f"Testing scenario {scenario_class}...")
 
-            executor_class = (
-                MzcomposeExecutorParallel
-                if args.execution_mode is ExecutionMode.PARALLEL
-                else MzcomposeExecutor
-            )
-            executor = executor_class(composition=c)
-
             execution_mode = args.execution_mode
 
             if execution_mode in [ExecutionMode.SEQUENTIAL, ExecutionMode.PARALLEL]:
-                setup(c, args.external_blob_store)
+                reset_environment()
                 scenario = scenario_class(
                     checks=checks,
-                    executor=executor,
+                    executor=executor_class(composition=c),
                     features=features,
                     seed=args.seed,
+                    additional_system_parameter_defaults=additional_system_parameter_defaults,
+                    default_replication_factor=args.default_replication_factor,
                 )
                 scenario.run()
             elif execution_mode is ExecutionMode.ONEATATIME:
@@ -334,12 +351,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     c.override_current_testcase_name(
                         f"Check '{check}' with scenario '{scenario_class}'"
                     )
-                    setup(c, args.external_blob_store)
+                    reset_environment()
                     scenario = scenario_class(
                         checks=[check],
-                        executor=executor,
+                        executor=executor_class(composition=c),
                         features=features,
                         seed=args.seed,
+                        additional_system_parameter_defaults=additional_system_parameter_defaults,
+                        default_replication_factor=args.default_replication_factor,
                     )
                     scenario.run()
             else:

@@ -2826,7 +2826,7 @@ simple conn=mz_system,user=mz_system
 DROP OWNED BY PUBLIC;
 ----
 db error: ERROR: role name "public" is reserved
-DETAIL: The role "public" and the prefixes "mz_" and "pg_" are reserved for system roles.
+DETAIL: The role "public" and the prefixes "mz_" and "pg_" are reserved for system roles. The role specification names "current_user", "current_role", "session_user", "user", and "none" are also reserved.
 
 simple conn=mz_system,user=mz_system
 GRANT ALL PRIVILEGES ON SYSTEM TO materialize;
@@ -3066,13 +3066,13 @@ simple conn=mz_system,user=mz_system
 REASSIGN OWNED BY PUBLIC TO materialize;
 ----
 db error: ERROR: role name "public" is reserved
-DETAIL: The role "public" and the prefixes "mz_" and "pg_" are reserved for system roles.
+DETAIL: The role "public" and the prefixes "mz_" and "pg_" are reserved for system roles. The role specification names "current_user", "current_role", "session_user", "user", and "none" are also reserved.
 
 simple conn=mz_system,user=mz_system
 REASSIGN OWNED BY materialize TO PUBLIC;
 ----
 db error: ERROR: role name "public" is reserved
-DETAIL: The role "public" and the prefixes "mz_" and "pg_" are reserved for system roles.
+DETAIL: The role "public" and the prefixes "mz_" and "pg_" are reserved for system roles. The role specification names "current_user", "current_role", "session_user", "user", and "none" are also reserved.
 
 # Test DROP OWNED BY with network policies
 

@@ -11,7 +11,7 @@ use std::fmt::Debug;
 use std::time::Duration;
 use std::{cmp, str};
 
-use anyhow::{Context, bail, ensure};
+use anyhow::{Context, anyhow, bail, ensure};
 use mz_postgres_util::{Sql, query_one, sql};
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::error::KafkaError;
@@ -147,6 +147,9 @@ pub async fn run_verify_data(
     }
     let partial_search = cmd.args.opt_parse("partial-search")?;
     let debug_print_only = cmd.args.opt_bool("debug-print-only")?.unwrap_or(false);
+    // When set, decode Avro from AWS Glue framing (18-byte header) and resolve the
+    // writer schema from Glue rather than Confluent Schema Registry.
+    let glue = cmd.args.opt_bool("glue")?.unwrap_or(false);
     cmd.args.done()?;
 
     let topic: String = match &source {
@@ -241,38 +244,67 @@ pub async fn run_verify_data(
         }
     }
 
-    let key_schema = if let Format::Avro = format.key {
-        let schema = state
-            .ccsr_client
-            .get_schema_by_subject(&format!("{}-key", topic))
-            .await
-            .ok()
-            .map(|key_schema| {
-                avro::parse_schema(&key_schema.raw, &[]).context("parsing avro schema")
-            })
-            .transpose()?;
-        // for avro, we can determine if a key is required based on the presence of the key schema
-        // rather than requiring the user to specify the key=true flag
-        if schema.is_some() {
-            format.requires_key = true;
-        }
-        schema
+    let (key_schema, value_schema) = if glue {
+        // A Glue sink frames each record with an 18-byte header carrying the
+        // schema-version UUID. Resolve the writer schema for each side from Glue
+        // using the UUID on the first record of that side. All records in a
+        // verify batch share the sink's schema, so one lookup per side suffices.
+        resolve_glue_schemas(state, &actual_bytes, &mut format).await?
     } else {
-        None
-    };
-    let value_schema = if let Format::Avro = format.value {
-        let val_schema = state
-            .ccsr_client
-            .get_schema_by_subject(&format!("{}-value", topic))
-            .await
-            .context("fetching schema")?
-            .raw;
-        Some(avro::parse_schema(&val_schema, &[]).context("parsing avro schema")?)
-    } else {
-        None
+        let key_schema = if let Format::Avro = format.key {
+            let schema = state
+                .ccsr_client
+                .get_schema_by_subject(&format!("{}-key", topic))
+                .await
+                .ok()
+                .map(|key_schema| {
+                    avro::parse_schema(&key_schema.raw, &[]).context("parsing avro schema")
+                })
+                .transpose()?;
+            // for avro, we can determine if a key is required based on the presence of the key schema
+            // rather than requiring the user to specify the key=true flag
+            if schema.is_some() {
+                format.requires_key = true;
+            }
+            schema
+        } else {
+            None
+        };
+        let value_schema = if let Format::Avro = format.value {
+            let val_schema = state
+                .ccsr_client
+                .get_schema_by_subject(&format!("{}-value", topic))
+                .await
+                .context("fetching schema")?
+                .raw;
+            Some(avro::parse_schema(&val_schema, &[]).context("parsing avro schema")?)
+        } else {
+            None
+        };
+        (key_schema, value_schema)
     };
 
-    let mut actual_messages = decode_messages(actual_bytes, &key_schema, &value_schema, &format)?;
+    // The Glue path resolves schemas from the received records, so an empty batch
+    // leaves the schema unset. Parsing the (required, non-empty) expected messages
+    // would then unwrap a `None` schema and panic. Turn that into the normal
+    // "sink produced no output" diagnostic instead.
+    if glue {
+        if matches!(format.value, Format::Avro) && value_schema.is_none() {
+            bail!(
+                "kafka-verify-data glue=true: no records received to resolve the \
+                 value schema from Glue (did the sink produce no output?)"
+            );
+        }
+        if format.requires_key && matches!(format.key, Format::Avro) && key_schema.is_none() {
+            bail!(
+                "kafka-verify-data glue=true: no keyed records received to resolve \
+                 the key schema from Glue (did the sink produce no output?)"
+            );
+        }
+    }
+
+    let mut actual_messages =
+        decode_messages(actual_bytes, &key_schema, &value_schema, &format, glue)?;
 
     if sort_messages {
         actual_messages.sort_by_key(|r| format!("{:?}", r));
@@ -308,6 +340,59 @@ pub async fn run_verify_data(
     Ok(ControlFlow::Continue)
 }
 
+/// Resolve the writer schema for each record side from AWS Glue.
+///
+/// Reads the schema-version UUID from the Glue header of the first record on each
+/// side and fetches that version's definition from Glue. Returns
+/// `(key_schema, value_schema)`, mirroring the Confluent resolution path, and
+/// sets `format.requires_key` when a key schema is present. All records in a
+/// verify batch share the sink's schema, so one lookup per side is enough.
+async fn resolve_glue_schemas(
+    state: &State,
+    records: &[Record<Vec<u8>>],
+    format: &mut RecordFormat,
+) -> Result<(Option<mz_avro::Schema>, Option<mz_avro::Schema>), anyhow::Error> {
+    let client = aws_sdk_glue::Client::new(&state.aws_config);
+
+    async fn schema_for(
+        client: &aws_sdk_glue::Client,
+        payload: Option<&Vec<u8>>,
+    ) -> Result<Option<mz_avro::Schema>, anyhow::Error> {
+        let Some(payload) = payload else {
+            return Ok(None);
+        };
+        let (schema_version_id, _) = mz_interchange::glue::extract_avro_header(payload)?;
+        let resp = client
+            .get_schema_version()
+            .schema_version_id(schema_version_id.to_string())
+            .send()
+            .await
+            .with_context(|| format!("fetching Glue schema version {schema_version_id}"))?;
+        let definition = resp
+            .schema_definition()
+            .ok_or_else(|| anyhow!("Glue schema version {schema_version_id} has no definition"))?;
+        Ok(Some(
+            avro::parse_schema(definition, &[]).context("parsing Glue avro schema")?,
+        ))
+    }
+
+    let value_schema = if let Format::Avro = format.value {
+        schema_for(&client, records.iter().find_map(|r| r.value.as_ref())).await?
+    } else {
+        None
+    };
+    let key_schema = if let Format::Avro = format.key {
+        let schema = schema_for(&client, records.iter().find_map(|r| r.key.as_ref())).await?;
+        if schema.is_some() {
+            format.requires_key = true;
+        }
+        schema
+    } else {
+        None
+    };
+    Ok((key_schema, value_schema))
+}
+
 /// Expect and split out `n` whitespace-delimited headers before the main contents of the 'expect' row.
 fn split_headers(input: &str, n_headers: usize) -> anyhow::Result<(Vec<String>, &str)> {
     let whitespace = Regex::new("\\s+").expect("building known-valid regex");
@@ -333,11 +418,26 @@ fn split_headers(input: &str, n_headers: usize) -> anyhow::Result<(Vec<String>, 
     Ok((headers, rest))
 }
 
+/// Decode Avro `bytes` with `schema`, stripping Glue framing when `glue` is set
+/// and Confluent framing otherwise.
+fn decode_avro(
+    schema: &mz_avro::Schema,
+    bytes: &[u8],
+    glue: bool,
+) -> Result<avro::Value, anyhow::Error> {
+    if glue {
+        avro::from_glue_bytes(schema, bytes)
+    } else {
+        avro::from_confluent_bytes(schema, bytes)
+    }
+}
+
 fn decode_messages(
     actual_bytes: Vec<Record<Vec<u8>>>,
     key_schema: &Option<mz_avro::Schema>,
     value_schema: &Option<mz_avro::Schema>,
     format: &RecordFormat,
+    glue: bool,
 ) -> Result<Vec<Record<DecodedValue>>, anyhow::Error> {
     let mut actual_messages = vec![];
 
@@ -345,9 +445,11 @@ fn decode_messages(
         let Record { key, value, .. } = record;
         let key = if format.requires_key {
             match (key, format.key) {
-                (Some(bytes), Format::Avro) => Some(DecodedValue::Avro(DebugValue(
-                    avro::from_confluent_bytes(key_schema.as_ref().unwrap(), &bytes)?,
-                ))),
+                (Some(bytes), Format::Avro) => Some(DecodedValue::Avro(DebugValue(decode_avro(
+                    key_schema.as_ref().unwrap(),
+                    &bytes,
+                    glue,
+                )?))),
                 (Some(bytes), Format::Json) => Some(DecodedValue::Json(
                     serde_json::from_slice(&bytes).context("decoding json")?,
                 )),
@@ -361,9 +463,11 @@ fn decode_messages(
         };
 
         let value = match (value, format.value) {
-            (Some(bytes), Format::Avro) => Some(DecodedValue::Avro(DebugValue(
-                avro::from_confluent_bytes(value_schema.as_ref().unwrap(), &bytes)?,
-            ))),
+            (Some(bytes), Format::Avro) => Some(DecodedValue::Avro(DebugValue(decode_avro(
+                value_schema.as_ref().unwrap(),
+                &bytes,
+                glue,
+            )?))),
             (Some(bytes), Format::Json) => Some(DecodedValue::Json(
                 serde_json::from_slice(&bytes).context("decoding json")?,
             )),

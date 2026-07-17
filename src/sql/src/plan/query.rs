@@ -1806,6 +1806,17 @@ pub fn plan_nested_query(
         project,
         group_size_hints,
     } = qcx.checked_recur_mut(|qcx| plan_query(qcx, q))?;
+    // A nested query is an unordered relation. Its `ORDER BY` is only observable
+    // in combination with a row-limiting clause (`LIMIT`/`OFFSET`), which selects
+    // which rows survive. Without such a clause the ordering has no defined
+    // meaning, so it is dropped rather than materialized into a `TopK`.
+    //
+    // NOTE: This diverges from PostgreSQL, where an order-sensitive aggregate
+    // (`array_agg`, `string_agg`, ...) in the outer query observes a sorted
+    // subquery's output as an executor artifact. That behavior is not guaranteed
+    // by the SQL standard and PostgreSQL itself documents it as fragile. Callers
+    // that need a specific aggregation order must use the in-aggregate
+    // `agg(value ORDER BY ...)` form instead.
     if limit.is_some()
         || !offset
             .clone()
@@ -6075,11 +6086,122 @@ pub fn scalar_type_from_sql(
     }
 }
 
+/// Maximum nesting depth of a custom type. A deeper type is rejected rather than
+/// recursed into, so a long `CREATE TYPE` chain (`l0 <- l1 <- ... <- lN`) cannot
+/// overflow the stack while resolving.
+const MAX_TYPE_NESTING_DEPTH: usize = 128;
+
+/// Maximum number of sub-type resolutions performed while resolving a single
+/// custom type. A record whose fields reference the same sub-type produces a
+/// type tree that is exponential in its depth (fields hold owned copies, not
+/// shared references), so bound the total work to reject such a type before it
+/// exhausts memory / CPU rather than after.
+const MAX_TYPE_RESOLUTION_NODES: usize = 100_000;
+
 pub fn scalar_type_from_catalog(
     catalog: &dyn SessionCatalog,
     id: CatalogItemId,
     modifiers: &[i64],
 ) -> Result<SqlScalarType, PlanError> {
+    let (depth_limit, mut budget) = type_resolution_limits(catalog);
+    scalar_type_from_catalog_inner(catalog, id, modifiers, 0, depth_limit, &mut budget)
+}
+
+/// The `(nesting-depth, resolution-node)` limits to apply while resolving one
+/// root custom type. See [`MAX_TYPE_NESTING_DEPTH`] and
+/// [`MAX_TYPE_RESOLUTION_NODES`] for what each guards against.
+///
+/// The limits are lifted while re-planning a persisted catalog item. The
+/// `unsafe_enable_unbounded_custom_type_resolution` flag signals this, and
+/// `SystemVars::enable_for_item_parsing` force-enables it during bootstrap. A
+/// type that an earlier version already accepted resolves to a finite tree, so
+/// its persisted `create_sql` must keep re-planning after these limits were
+/// introduced. Rejecting such a grandfathered type during rehydration would
+/// turn a graceful planning error into a fatal bootstrap panic. A later
+/// resolution in a normal user session still applies the limits and returns the
+/// graceful error.
+fn type_resolution_limits(catalog: &dyn SessionCatalog) -> (usize, usize) {
+    if catalog
+        .system_vars()
+        .unsafe_enable_unbounded_custom_type_resolution()
+    {
+        (usize::MAX, usize::MAX)
+    } else {
+        (MAX_TYPE_NESTING_DEPTH, MAX_TYPE_RESOLUTION_NODES)
+    }
+}
+
+/// Bounds the total resolution work while resolving one root custom type into a
+/// `SqlScalarType`. A single budget must span the entire root type: a record's
+/// fields, and any containers nested within them, all draw from one shared pool.
+/// A type that is small field-by-field but enormous in aggregate is therefore
+/// still rejected. Resetting the budget per field would let a wide record of
+/// individually-cheap fields resolve into an unbounded type tree and exhaust
+/// memory, which is the denial of service this bound exists to prevent.
+///
+/// Use this when resolving a type that is being assembled from its parts (for
+/// example at `CREATE TYPE` time, before the root exists in the catalog) so that
+/// creation-time validation rejects exactly the types a later direct
+/// [`scalar_type_from_catalog`] call would reject.
+pub struct TypeResolutionBudget {
+    /// Sub-type resolutions remaining before the root type is rejected as too
+    /// complex.
+    remaining: usize,
+    /// Nesting depth past which the root type is rejected. Shared by every
+    /// child so the whole root type is bounded consistently.
+    depth_limit: usize,
+}
+
+impl TypeResolutionBudget {
+    /// Creates a budget for resolving one root type, charging the root node
+    /// itself against the budget. Children resolved through
+    /// [`TypeResolutionBudget::resolve_child`] begin at nesting depth one,
+    /// mirroring a direct [`scalar_type_from_catalog`] call. The limits are
+    /// relaxed for grandfathered persisted items, see [`type_resolution_limits`].
+    pub fn for_root(catalog: &dyn SessionCatalog) -> TypeResolutionBudget {
+        let (depth_limit, budget) = type_resolution_limits(catalog);
+        TypeResolutionBudget {
+            // The root type counts as one node.
+            remaining: budget.saturating_sub(1),
+            depth_limit,
+        }
+    }
+
+    /// Resolves a type referenced directly by the root (a record field, list
+    /// element, or map value) into a `SqlScalarType`, drawing from this shared
+    /// budget so that all such children of one root are bounded together.
+    pub fn resolve_child(
+        &mut self,
+        catalog: &dyn SessionCatalog,
+        id: CatalogItemId,
+        modifiers: &[i64],
+    ) -> Result<SqlScalarType, PlanError> {
+        scalar_type_from_catalog_inner(
+            catalog,
+            id,
+            modifiers,
+            1,
+            self.depth_limit,
+            &mut self.remaining,
+        )
+    }
+}
+
+fn scalar_type_from_catalog_inner(
+    catalog: &dyn SessionCatalog,
+    id: CatalogItemId,
+    modifiers: &[i64],
+    depth: usize,
+    depth_limit: usize,
+    budget: &mut usize,
+) -> Result<SqlScalarType, PlanError> {
+    if depth > depth_limit {
+        sql_bail!("custom type nesting depth exceeds limit of {}", depth_limit);
+    }
+    *budget = match budget.checked_sub(1) {
+        Some(remaining) => remaining,
+        None => sql_bail!("custom type is too complex to resolve"),
+    };
     let entry = catalog.get_item(&id);
     let type_details = match entry.type_details() {
         Some(type_details) => type_details,
@@ -6178,19 +6300,27 @@ pub fn scalar_type_from_catalog(
             match t {
                 CatalogType::Array {
                     element_reference: element_id,
-                } => Ok(SqlScalarType::Array(Box::new(scalar_type_from_catalog(
-                    catalog,
-                    *element_id,
-                    modifiers,
-                )?))),
+                } => Ok(SqlScalarType::Array(Box::new(
+                    scalar_type_from_catalog_inner(
+                        catalog,
+                        *element_id,
+                        modifiers,
+                        depth + 1,
+                        depth_limit,
+                        budget,
+                    )?,
+                ))),
                 CatalogType::List {
                     element_reference: element_id,
                     element_modifiers,
                 } => Ok(SqlScalarType::List {
-                    element_type: Box::new(scalar_type_from_catalog(
+                    element_type: Box::new(scalar_type_from_catalog_inner(
                         catalog,
                         *element_id,
                         element_modifiers,
+                        depth + 1,
+                        depth_limit,
+                        budget,
                     )?),
                     custom_id: Some(id),
                 }),
@@ -6200,26 +6330,39 @@ pub fn scalar_type_from_catalog(
                     value_reference: value_id,
                     value_modifiers,
                 } => Ok(SqlScalarType::Map {
-                    value_type: Box::new(scalar_type_from_catalog(
+                    value_type: Box::new(scalar_type_from_catalog_inner(
                         catalog,
                         *value_id,
                         value_modifiers,
+                        depth + 1,
+                        depth_limit,
+                        budget,
                     )?),
                     custom_id: Some(id),
                 }),
                 CatalogType::Range {
                     element_reference: element_id,
                 } => Ok(SqlScalarType::Range {
-                    element_type: Box::new(scalar_type_from_catalog(catalog, *element_id, &[])?),
+                    element_type: Box::new(scalar_type_from_catalog_inner(
+                        catalog,
+                        *element_id,
+                        &[],
+                        depth + 1,
+                        depth_limit,
+                        budget,
+                    )?),
                 }),
                 CatalogType::Record { fields } => {
                     let scalars: Box<[(ColumnName, SqlColumnType)]> = fields
                         .iter()
                         .map(|f| {
-                            let scalar_type = scalar_type_from_catalog(
+                            let scalar_type = scalar_type_from_catalog_inner(
                                 catalog,
                                 f.type_reference,
                                 &f.type_modifiers,
+                                depth + 1,
+                                depth_limit,
+                                budget,
                             )?;
                             Ok((
                                 f.name.clone(),

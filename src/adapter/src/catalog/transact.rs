@@ -364,6 +364,9 @@ pub enum ReplicaCreateDropReason {
     /// converging a cluster onto an in-flight `reconfiguration` target (a background
     /// `ALTER CLUSTER`).
     GracefulReconfiguration,
+    /// The cluster controller's hydration-burst strategy created the transient burst replica
+    /// it runs while a cluster's objects are not yet hydrated.
+    HydrationBurst,
     /// The cluster controller dropped the replica because the cluster's configuration no longer
     /// calls for it. The uniform reason on every controller-emitted drop (e.g. a
     /// replication-factor decrease).
@@ -385,6 +388,9 @@ impl ReplicaCreateDropReason {
             ),
             ReplicaCreateDropReason::GracefulReconfiguration => {
                 (CreateOrDropClusterReplicaReasonV1::Reconfiguration, None)
+            }
+            ReplicaCreateDropReason::HydrationBurst => {
+                (CreateOrDropClusterReplicaReasonV1::HydrationBurst, None)
             }
             ReplicaCreateDropReason::Retired => (CreateOrDropClusterReplicaReasonV1::Retired, None),
         };
@@ -432,6 +438,31 @@ impl Catalog {
             ClusterVariant::Managed(managed) => managed.reconfiguration.as_ref(),
             ClusterVariant::Unmanaged => None,
         }
+    }
+
+    /// The cluster config's `burst` record, if any.
+    fn burst_record_of(config: &ClusterConfig) -> Option<&mz_catalog::memory::objects::BurstState> {
+        match &config.variant {
+            ClusterVariant::Managed(managed) => managed.burst.as_ref(),
+            ClusterVariant::Unmanaged => None,
+        }
+    }
+
+    /// Whether a cluster config write moves the burst lifecycle: a record
+    /// appears or disappears. Unlike reconfiguration there is no status field,
+    /// so presence transitions are the whole lifecycle. Bookkeeping rewrites of
+    /// an existing record (the hydration stamp and its reset) move nothing.
+    ///
+    /// Every such movement is an audit-log transition, so a write performing
+    /// one must declare the matching intent.
+    fn burst_lifecycle_moved(old_config: &ClusterConfig, new_config: &ClusterConfig) -> bool {
+        matches!(
+            (
+                Self::burst_record_of(old_config),
+                Self::burst_record_of(new_config),
+            ),
+            (None, Some(_)) | (Some(_), None)
+        )
     }
 
     /// Whether a cluster config write moves the reconfiguration lifecycle: a
@@ -560,14 +591,12 @@ impl Catalog {
         cluster_name: &str,
         audit: BurstAudit,
     ) -> Result<ClusterHydrationBurstV1, AdapterError> {
-        fn burst(config: &ClusterConfig) -> Option<&mz_catalog::memory::objects::BurstState> {
-            match &config.variant {
-                ClusterVariant::Managed(managed) => managed.burst.as_ref(),
-                ClusterVariant::Unmanaged => None,
-            }
-        }
         let (transition, finish_cause, record) = match audit {
-            BurstAudit::Started => (HydrationBurstLifecycleV1::Started, None, burst(new_config)),
+            BurstAudit::Started => (
+                HydrationBurstLifecycleV1::Started,
+                None,
+                Self::burst_record_of(new_config),
+            ),
             BurstAudit::Finished { cause } => {
                 let cause = match cause {
                     BurstFinishCause::LingerElapsed => BurstFinishCauseV1::LingerElapsed,
@@ -576,7 +605,7 @@ impl Catalog {
                 (
                     HydrationBurstLifecycleV1::Finished,
                     Some(cause),
-                    burst(old_config),
+                    Self::burst_record_of(old_config),
                 )
             }
         };
@@ -2829,11 +2858,28 @@ impl Catalog {
             Op::UpdateClusterConfig {
                 id,
                 name,
-                config,
+                mut config,
                 reconfiguration_audit,
-                burst_audit,
+                mut burst_audit,
             } => {
                 let mut cluster = state.get_cluster(id).clone();
+                // A write that invalidates the in-flight burst (policy removed
+                // or re-sized, cluster turned off) retires the record here, in
+                // the same transaction. Retiring at this chokepoint rather
+                // than in each sequencer path means no writer can forget, so a
+                // committed config never carries a record it does not warrant.
+                // Writes that declare a burst intent manage the record
+                // themselves.
+                if burst_audit.is_none() {
+                    if let ClusterVariant::Managed(managed) = &mut config.variant {
+                        if managed.has_unwarranted_burst_record() {
+                            managed.burst = None;
+                            burst_audit = Some(BurstAudit::Finished {
+                                cause: BurstFinishCause::NoLongerWarranted,
+                            });
+                        }
+                    }
+                }
                 // Writes that declare no reconfiguration intent must not move
                 // the reconfiguration lifecycle, or the audit log would
                 // silently lose the transition. Writer bug, fails the
@@ -2844,6 +2890,14 @@ impl Catalog {
                     return Err(AdapterError::Internal(format!(
                         "cluster {name} reconfiguration record moved without a declared \
                          audit intent"
+                    )));
+                }
+                // The same contract for the burst lifecycle: a record appearing
+                // or disappearing without a declared intent would silently lose
+                // the started/finished audit transition.
+                if burst_audit.is_none() && Self::burst_lifecycle_moved(&cluster.config, &config) {
+                    return Err(AdapterError::Internal(format!(
+                        "cluster {name} burst record moved without a declared audit intent"
                     )));
                 }
                 let reconfiguration_event = reconfiguration_audit
@@ -3745,6 +3799,136 @@ mod tests {
             &managed(Some(record(ReconfigurationStatus::Cancelled))),
             &unmanaged,
         ));
+    }
+
+    #[mz_ore::test]
+    fn test_burst_lifecycle_moved() {
+        use std::time::Duration;
+
+        use mz_catalog::memory::objects::{
+            BurstState, ClusterConfig, ClusterVariant, ClusterVariantManaged,
+        };
+        use mz_controller::clusters::ReplicaLogging;
+        use mz_repr::Timestamp;
+        use mz_repr::optimize::OptimizerFeatureOverrides;
+
+        let managed = |burst: Option<BurstState>| ClusterConfig {
+            variant: ClusterVariant::Managed(ClusterVariantManaged {
+                size: "small".into(),
+                availability_zones: Vec::new(),
+                logging: ReplicaLogging {
+                    log_logging: false,
+                    interval: None,
+                },
+                replication_factor: 1,
+                optimizer_feature_overrides: OptimizerFeatureOverrides::default(),
+                schedule: Default::default(),
+                auto_scaling_strategy: None,
+                reconfiguration: None,
+                burst,
+            }),
+            workload_class: None,
+        };
+        let unmanaged = ClusterConfig {
+            variant: ClusterVariant::Unmanaged,
+            workload_class: None,
+        };
+        let record = |steady_hydrated_at| BurstState {
+            burst_size: "large".into(),
+            linger_duration: Duration::from_secs(60),
+            steady_hydrated_at,
+        };
+
+        // Lifecycle movements: these writes must declare an audit intent.
+        // A fresh record appears.
+        assert!(Catalog::burst_lifecycle_moved(
+            &managed(None),
+            &managed(Some(record(None))),
+        ));
+        // The record is cleared.
+        assert!(Catalog::burst_lifecycle_moved(
+            &managed(Some(record(None))),
+            &managed(None),
+        ));
+        // The record is dropped by converting the cluster to unmanaged (which
+        // the sequencer refuses, and this guard backstops).
+        assert!(Catalog::burst_lifecycle_moved(
+            &managed(Some(record(None))),
+            &unmanaged,
+        ));
+
+        // Not movements: no record at all, and the bookkeeping rewrites (the
+        // hydration stamp and its reset) that keep the record present.
+        assert!(!Catalog::burst_lifecycle_moved(
+            &managed(None),
+            &managed(None)
+        ));
+        assert!(!Catalog::burst_lifecycle_moved(
+            &managed(Some(record(None))),
+            &managed(Some(record(Some(Timestamp::from(100u64))))),
+        ));
+        assert!(!Catalog::burst_lifecycle_moved(
+            &managed(Some(record(Some(Timestamp::from(100u64))))),
+            &managed(Some(record(None))),
+        ));
+    }
+
+    #[mz_ore::test]
+    fn test_has_unwarranted_burst_record() {
+        use std::time::Duration;
+
+        use mz_catalog::memory::objects::{BurstState, ClusterVariantManaged};
+        use mz_controller::clusters::ReplicaLogging;
+        use mz_repr::optimize::OptimizerFeatureOverrides;
+        use mz_sql::plan::{AutoScalingStrategy, OnHydration};
+
+        let managed = |replication_factor: u32,
+                       strategy: Option<AutoScalingStrategy>,
+                       burst: Option<BurstState>| ClusterVariantManaged {
+            size: "small".into(),
+            availability_zones: Vec::new(),
+            logging: ReplicaLogging {
+                log_logging: false,
+                interval: None,
+            },
+            replication_factor,
+            optimizer_feature_overrides: OptimizerFeatureOverrides::default(),
+            schedule: Default::default(),
+            auto_scaling_strategy: strategy,
+            reconfiguration: None,
+            burst,
+        };
+        let policy = |hydration_size: &str| AutoScalingStrategy {
+            on_hydration: Some(OnHydration {
+                hydration_size: hydration_size.into(),
+                linger_duration: None,
+            }),
+        };
+        let record = || BurstState {
+            burst_size: "large".into(),
+            linger_duration: Duration::from_secs(60),
+            steady_hydrated_at: None,
+        };
+
+        // No record: nothing to retire, with or without a policy.
+        assert!(!managed(1, None, None).has_unwarranted_burst_record());
+        assert!(!managed(1, Some(policy("large")), None).has_unwarranted_burst_record());
+
+        // A record backed by a matching, active policy is warranted.
+        assert!(!managed(1, Some(policy("large")), Some(record())).has_unwarranted_burst_record());
+
+        // Unwarranted: policy removed, policy re-sized, or cluster turned off.
+        assert!(managed(1, None, Some(record())).has_unwarranted_burst_record());
+        assert!(
+            managed(
+                1,
+                Some(AutoScalingStrategy { on_hydration: None }),
+                Some(record())
+            )
+            .has_unwarranted_burst_record()
+        );
+        assert!(managed(1, Some(policy("xlarge")), Some(record())).has_unwarranted_burst_record());
+        assert!(managed(0, Some(policy("large")), Some(record())).has_unwarranted_burst_record());
     }
 
     #[mz_ore::test]

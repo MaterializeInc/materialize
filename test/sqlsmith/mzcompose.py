@@ -114,7 +114,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         # non-trivial arrangement sizes occur, indexes so index-based plans
         # (lookup/delta joins) occur, and arrays/lists/maps/ranges so
         # functions over those types have interesting inputs. NOTE: t5 is
-        # deliberately capped at 1000 rows, larger sizes make random
+        # deliberately capped at 100 rows. Larger sizes make random
         # multi-way joins OOM the memory-capped clusterd regularly.
         c.sql(
             """
@@ -186,7 +186,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             INSERT INTO t3 VALUES (NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
             CREATE TABLE t4 (a int4, b text);
             CREATE TABLE t5 (a int4, b int8, c text);
-            INSERT INTO t5 SELECT a, a::int8 * 37, 'val_' || a FROM generate_series(1, 1000) g(a);
+            INSERT INTO t5 SELECT a, a::int8 * 37, 'val_' || a FROM generate_series(1, 100) g(a);
             CREATE INDEX t5_idx_a ON t5 (a);
             """,
             service=mz_server,

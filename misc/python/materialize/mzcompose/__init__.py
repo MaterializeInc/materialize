@@ -97,6 +97,16 @@ def get_minimal_system_parameters(
         "enable_refresh_every_mvs": "true",
         "enable_replacement_materialized_views": "true",
         "enable_cluster_schedule_refresh": "true",
+        # The cluster controller and background ALTER CLUSTER land dark in
+        # production (the dyncfg defaults stay false); force them on for the test
+        # harness so CI exercises the controller owning the managed-cluster
+        # replica set. The real production default flip is a separate rollout.
+        "enable_cluster_controller": (
+            "true" if version >= MzVersion.parse_mz("v26.29.0-dev") else "false"
+        ),
+        "enable_background_alter_cluster": (
+            "true" if version >= MzVersion.parse_mz("v26.29.0-dev") else "false"
+        ),
         "enable_s3_tables_region_check": "false",
         "enable_statement_lifecycle_logging": "true",
         "enable_storage_introspection_logs": "true",
@@ -130,10 +140,24 @@ class VariableSystemParameter:
 def get_variable_system_parameters(
     version: MzVersion,
     force_source_table_syntax: bool,
+    metadata_store: str,
 ) -> list[VariableSystemParameter]:
     """Note: Only the default is tested unless we explicitly select "System Parameters: Random" in trigger-ci.
     These defaults are applied _after_ applying the settings from `get_minimal_system_parameters`.
     """
+
+    # `persist_pg_consensus_read_committed` must stay off on CockroachDB, where
+    # the lockless CRDB_* consensus queries are only linearizable under
+    # SERIALIZABLE and persist asserts on the connection's isolation level. On
+    # Postgres-backed consensus the query family is linearizable under READ
+    # COMMITTED, so default it on and let it vary. FoundationDB does not use the
+    # Postgres consensus, so leaving it off there is a harmless no-op.
+    read_committed_safe = metadata_store in ("postgres-metadata", "alloydb")
+    persist_pg_consensus_read_committed = VariableSystemParameter(
+        "persist_pg_consensus_read_committed",
+        "true" if read_committed_safe else "false",
+        ["true", "false"] if read_committed_safe else ["false"],
+    )
 
     return [
         # -----
@@ -421,11 +445,7 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "persist_blob_cache_scale_with_threads", "true", ["true", "false"]
         ),
-        VariableSystemParameter(
-            "persist_pg_consensus_read_committed",
-            "false",
-            ["true", "false"],
-        ),
+        persist_pg_consensus_read_committed,
         VariableSystemParameter(
             "persist_state_update_lease_timeout", "1s", ["0s", "1s", "10s"]
         ),
@@ -485,18 +505,30 @@ def get_variable_system_parameters(
 def get_default_system_parameters(
     version: MzVersion | None = None,
     force_source_table_syntax: bool = False,
+    metadata_store: str | None = None,
 ) -> dict[str, str]:
     """For upgrade tests we only want parameters set when all environmentd /
     clusterd processes have reached a specific version (or higher)
+
+    `metadata_store` selects backend-specific defaults. It defaults to the
+    globally configured metadata store, but callers that target a different
+    backend than the global (e.g. a local CockroachDB) must pass their own.
     """
 
     if not version:
         version = MzVersion.parse_cargo()
 
+    if metadata_store is None:
+        from materialize.mzcompose.services.metadata_store import METADATA_STORE
+
+        metadata_store = METADATA_STORE
+
     params = get_minimal_system_parameters(version)
 
     system_param_setting = os.getenv("CI_SYSTEM_PARAMETERS", "")
-    variable_params = get_variable_system_parameters(version, force_source_table_syntax)
+    variable_params = get_variable_system_parameters(
+        version, force_source_table_syntax, metadata_store
+    )
 
     if system_param_setting == "":
         for param in variable_params:
@@ -713,10 +745,11 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "mcp_request_timeout",
     "user_id_pool_batch_size",
     "webhook_max_request_size_bytes",
-    "enable_cluster_controller",
     "cluster_controller_tick_interval",
-    "enable_background_alter_cluster",
     "default_cluster_reconfiguration_timeout",
+    "read_then_write_max_dependencies",
+    "enable_hydration_burst",
+    "default_hydration_burst_linger",
 ]
 
 

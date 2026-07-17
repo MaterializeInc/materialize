@@ -1,6 +1,6 @@
 ---
 source: src/pgwire/src/protocol.rs
-revision: 339168a637
+revision: e4df9977da
 ---
 
 # pgwire::protocol
@@ -15,3 +15,5 @@ During startup, parameters that are successfully applied via `set()` are collect
 In the ready state, stray `CopyData`, `CopyDone`, and `CopyFail` messages are accepted and ignored (returning `State::Ready`) rather than triggering drain. Clients stream COPY data optimistically, so these messages can arrive after a COPY statement fails before COPY mode is entered; draining would discard unrelated messages until the next Sync.
 
 When decoding bind parameters, NUL characters in a decoded string value produce an error with `SqlState::CHARACTER_NOT_IN_REPERTOIRE`, matching PostgreSQL's SQLSTATE for this condition.
+
+When `enable_statement_arrival_logging` is on, `maybe_log_message_arrival` logs each arriving frontend message at info level before it is processed, so a message that crashes the process still appears in the log. SQL text is redacted with the same policy as the statement log. Bind parameter values are data that redaction cannot reach, so only their count is logged. Authentication payloads are never logged. COPY data payloads are logged as their byte length only.

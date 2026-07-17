@@ -904,7 +904,8 @@ impl<'a, T> Hash for DatumList<'a, T> {
 impl<T> Ord for DatumList<'_, T> {
     #[inline(always)]
     fn cmp(&self, other: &DatumList<'_, T>) -> Ordering {
-        self.iter().cmp(other.iter())
+        // Grow the stack: lists can be arbitrarily deeply nested (e.g. jsonb).
+        mz_ore::stack::maybe_grow(|| self.iter().cmp(other.iter()))
     }
 }
 
@@ -972,7 +973,8 @@ impl<'a, T> Hash for DatumMap<'a, T> {
 impl<'a, T> Ord for DatumMap<'a, T> {
     #[inline(always)]
     fn cmp(&self, other: &DatumMap<'a, T>) -> Ordering {
-        self.iter().cmp(other.iter())
+        // Grow the stack: maps can be arbitrarily deeply nested (e.g. jsonb).
+        mz_ore::stack::maybe_grow(|| self.iter().cmp(other.iter()))
     }
 }
 
@@ -1049,7 +1051,8 @@ impl<'a> DatumNested<'a> {
 
 impl<'a> Ord for DatumNested<'a> {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.datum().cmp(&other.datum())
+        // Grow the stack: this recurses once per level of nested list/map values.
+        mz_ore::stack::maybe_grow(|| self.datum().cmp(&other.datum()))
     }
 }
 
@@ -3488,6 +3491,26 @@ mod tests {
 
     use super::*;
 
+    // Regression: comparing deeply nested list values must not overflow the
+    // stack (STACK-7). `Datum` ordering recurses once per nesting level.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn cmp_deep_nested_list_does_not_overflow() {
+        fn deep() -> Row {
+            // `push_list` byte-copies the inner value, so building does not recurse.
+            let mut row = Row::pack_slice(&[Datum::Int64(1)]);
+            for _ in 0..50_000 {
+                let mut next = Row::default();
+                next.packer().push_list([row.unpack_first()]);
+                row = next;
+            }
+            row
+        }
+        let a = deep();
+        let b = deep();
+        assert_eq!(a.unpack_first().cmp(&b.unpack_first()), Ordering::Equal);
+    }
+
     fn hash<T: Hash>(t: &T) -> u64 {
         let mut hasher = DefaultHasher::new();
         t.hash(&mut hasher);
@@ -4155,6 +4178,7 @@ mod tests {
     /// using the new Datum::cmp, Eq says they are equal, which matches what Ord
     /// compares via iter().cmp(other.iter()), and them as equal.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn test_datum_list_eq_ord_consistency() {
         // Build list containing +0.0
         let mut row_pos = Row::default();
@@ -4271,6 +4295,7 @@ mod tests {
 
     /// Ord/PartialOrd for DatumList: less, equal, greater.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn test_datum_list_ordering() {
         let mut row_12 = Row::default();
         row_12.packer().push_list_with(|p| {
@@ -4350,6 +4375,7 @@ mod tests {
 
     /// Ord/PartialOrd for DatumMap: less, equal, greater (by key then value).
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn test_datum_map_ordering() {
         let mut row_a1 = Row::default();
         row_a1.packer().push_dict_with(|p| {
@@ -4381,6 +4407,7 @@ mod tests {
     /// Datum puts Null last in the enum so that nulls sort last (PostgreSQL default).
     /// This ordering is used when comparing DatumList/DatumMap (e.g. jsonb_agg tiebreaker).
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn test_datum_list_and_map_null_sorts_last() {
         // DatumList: [1] < [null] so non-null sorts before null
         let mut row_list_1 = Row::default();

@@ -34,17 +34,45 @@ use mz_repr::Timestamp;
 // decision can share them without depending on this crate. They are part of the
 // ctx vocabulary, so re-export them here.
 pub use mz_adapter_types::cluster_state::{
-    AvailabilityZones, BurstAudit, BurstFinishCause, BurstRecord, ExpectedClusterState, OnTimeout,
-    ReconfigurationAudit, ReconfigurationRecord, ReconfigurationStatus, ReconfigurationTarget,
-    ReplicaShape,
+    AutoScalingPolicy, AvailabilityZones, BurstAudit, BurstFinishCause, BurstRecord,
+    ExpectedClusterState, OnHydrationPolicy, OnTimeout, ReconfigurationAudit,
+    ReconfigurationRecord, ReconfigurationStatus, ReconfigurationTarget, ReplicaShape,
 };
 
 /// A replica that actually exists on a cluster, as observed through the ctx.
+/// Every replica physically on the cluster appears here, whether or not the
+/// controller owns it; [`Self::owned_shape`] is the ownership test.
 #[derive(Clone, Debug)]
 pub struct ObservedReplica {
     pub replica_id: ReplicaId,
     pub name: String,
-    pub shape: ReplicaShape,
+    /// `None` for a replica with an unmanaged location, which has no managed
+    /// shape to reconcile against.
+    pub shape: Option<ReplicaShape>,
+    /// Created with `INTERNAL`.
+    pub internal: bool,
+    /// Carries a `BILLED AS` override.
+    pub billed_as: bool,
+    /// The `-pending` target of an in-flight graceful reconfiguration.
+    pub pending: bool,
+}
+
+impl ObservedReplica {
+    /// The replica's shape if the controller owns it, `None` otherwise.
+    ///
+    /// INTERNAL / BILLED AS replicas are manually managed: a user can attach
+    /// one to any managed cluster, outside the replication-factor domain. A
+    /// pending replica is owned by the reconfiguration sequencer path until
+    /// finalize (retiring it would defeat the zero-downtime resize creating
+    /// it). The controller must neither count such a replica toward a desired
+    /// shape nor drop it as excess, but their names still block the name
+    /// generator, since every replica observed here occupies a name.
+    pub fn owned_shape(&self) -> Option<&ReplicaShape> {
+        if self.internal || self.billed_as || self.pending {
+            return None;
+        }
+        self.shape.as_ref()
+    }
 }
 
 /// The durable state of a single managed cluster plus its observed replicas, as
@@ -63,11 +91,12 @@ pub struct ClusterState {
     pub replication_factor: u32,
     pub availability_zones: Vec<String>,
     pub logging: ComputeReplicaLogging,
+    pub auto_scaling_policy: Option<AutoScalingPolicy>,
     /// Latest graceful reconfiguration record, if one has been written.
     pub reconfiguration: Option<ReconfigurationRecord>,
     /// In-flight hydration burst, if any.
     pub burst: Option<BurstRecord>,
-    /// The replicas that actually exist on the cluster.
+    /// The replicas that actually exist on the cluster, owned or not.
     pub replicas: Vec<ObservedReplica>,
 }
 
@@ -89,6 +118,7 @@ impl ClusterState {
             replication_factor: self.replication_factor,
             availability_zones: AvailabilityZones(self.availability_zones.clone()),
             logging: self.logging.clone(),
+            auto_scaling_policy: self.auto_scaling_policy.clone(),
             reconfiguration: self.reconfiguration.clone(),
             burst: self.burst.clone(),
         }
@@ -247,6 +277,15 @@ pub trait ClusterControllerCtx: Send {
         cluster_id: ClusterId,
         replicas: &[ReplicaId],
     ) -> BTreeSet<ReplicaId>;
+
+    /// Whether `cluster_id` has at least one hydratable (dataflow-backed) object
+    /// bound to it: an index, materialized view, ingestion source, or sink.
+    ///
+    /// A catalog-level approximation of "the hydration check has something to
+    /// count". Where the two disagree at the margin, the mismatch is
+    /// self-healing: a replica with nothing to hydrate reads hydrated, and the
+    /// burst winds down via its linger.
+    async fn has_hydratable_objects(&mut self, cluster_id: ClusterId) -> bool;
 
     /// Apply a tick's batch of decisions under their compare-and-append guards.
     /// Each decision carries the [`ExpectedClusterState`] it was derived from;

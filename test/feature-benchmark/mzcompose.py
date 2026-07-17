@@ -31,6 +31,7 @@ from materialize.feature_benchmark.benchmark_result_selection import (
 )
 from materialize.feature_benchmark.report import (
     Report,
+    ReportMeasurement,
     determine_scenario_classes_with_regressions,
 )
 from materialize.mz_version import MzVersion
@@ -226,14 +227,15 @@ def run_one_scenario(
                 additional_system_parameter_defaults[param_name] = param_value
 
         mz_image = f"{image_registry()}/materialized:{tag}" if tag else None
-        # TODO: Better azurite support detection
         mz = create_mz_service(
             mz_image,
             size,
             additional_system_parameter_defaults,
-            args.azurite and instance == "this",
+            args.azurite,
         )
-        clusterd_image = f"materialize/clusterd:{tag}" if tag else None
+        # Keep clusterd on the same registry as materialized; both services of
+        # one instance must be pulled from the same place.
+        clusterd_image = f"{image_registry()}/clusterd:{tag}" if tag else None
         clusterd = create_clusterd_service(
             clusterd_image,
             size,
@@ -245,14 +247,16 @@ def run_one_scenario(
                 f"Unable to find materialize image with tag {tag}, proceeding with latest instead!"
             )
             mz_image = f"{image_registry()}/materialized:latest"
-            # TODO: Better azurite support detection
             mz = create_mz_service(
                 mz_image,
                 size,
                 additional_system_parameter_defaults,
-                args.azurite and instance == "this",
+                args.azurite,
             )
-            clusterd_image = f"materialize/clusterd:{tag}" if tag else None
+            # Fall back to latest for clusterd too, so the two services of the
+            # instance stay on a matching tag instead of pairing latest
+            # materialized with a missing-tag clusterd.
+            clusterd_image = f"{image_registry()}/clusterd:latest"
             clusterd = create_clusterd_service(
                 clusterd_image,
                 size,
@@ -914,6 +918,10 @@ def _create_feature_benchmark_result_entry(
     scenario_version = report.get_scenario_version(scenario_name)
     measurements = report.measurements_of_this(scenario_name)
 
+    # Memory measurement types are absent when running with --no-measure-memory,
+    # so fall back to an empty measurement instead of a KeyError.
+    empty_measurement: ReportMeasurement[float] = ReportMeasurement([None])
+
     return feature_benchmark_result_storage.FeatureBenchmarkResultEntry(
         scenario_name=scenario_name,
         scenario_group=scenario_group,
@@ -922,6 +930,8 @@ def _create_feature_benchmark_result_entry(
         scale=scale or "default",
         is_regression=is_regression,
         wallclock=measurements[MeasurementType.WALLCLOCK],
-        memory_mz=measurements[MeasurementType.MEMORY_MZ],
-        memory_clusterd=measurements[MeasurementType.MEMORY_CLUSTERD],
+        memory_mz=measurements.get(MeasurementType.MEMORY_MZ, empty_measurement),
+        memory_clusterd=measurements.get(
+            MeasurementType.MEMORY_CLUSTERD, empty_measurement
+        ),
     )

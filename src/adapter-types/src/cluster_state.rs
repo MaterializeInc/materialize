@@ -86,6 +86,9 @@ pub struct ExpectedClusterState {
     pub replication_factor: u32,
     pub availability_zones: AvailabilityZones,
     pub logging: ComputeReplicaLogging,
+    /// The autoscaling policy. Part of the witness because it determines whether,
+    /// and at what size, a burst is warranted.
+    pub auto_scaling_policy: Option<AutoScalingPolicy>,
     pub reconfiguration: Option<ReconfigurationRecord>,
     pub burst: Option<BurstRecord>,
 }
@@ -207,6 +210,43 @@ pub struct BurstRecord {
     pub burst_size: String,
     pub linger_duration: Duration,
     pub steady_hydrated_at: Option<Timestamp>,
+}
+
+/// The single definition of when an in-flight burst record of `record_size` is
+/// warranted: the cluster is on and the `ON HYDRATION` policy in force (if any)
+/// bursts at the record's size. `hydration_size` is `None` when no policy is in
+/// force. The catalog and the cluster controller wrap this over their own
+/// config representations, so the two sides of the burst lifecycle cannot
+/// drift.
+pub fn burst_record_warranted(
+    record_size: &str,
+    replication_factor: u32,
+    hydration_size: Option<&str>,
+) -> bool {
+    replication_factor != 0 && hydration_size == Some(record_size)
+}
+
+/// The user-configured autoscaling policy of a managed cluster, mirrored from
+/// durable state. A plain-data mirror of `mz_sql::plan::AutoScalingStrategy`,
+/// free of a dependency on the SQL layer.
+///
+/// Extensible: future strategies are additional optional sub-policies. v1 carries
+/// only the `ON HYDRATION` burst policy.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AutoScalingPolicy {
+    pub on_hydration: Option<OnHydrationPolicy>,
+}
+
+/// The `ON HYDRATION` burst sub-policy: while some object on the cluster is not
+/// hydrated on a steady replica, run one extra replica at `hydration_size` to
+/// accelerate hydration, lingering for `linger_duration` after the steady set
+/// hydrates.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OnHydrationPolicy {
+    pub hydration_size: String,
+    /// `None` falls back to the system default linger when the burst strategy
+    /// writes its record.
+    pub linger_duration: Option<Duration>,
 }
 
 #[cfg(test)]

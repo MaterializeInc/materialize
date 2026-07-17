@@ -13,7 +13,7 @@
 # Statically-linked `ssh` client, used by the SSH tunnel feature.
 MZFROM openssh-static AS openssh-static
 
-MZFROM ubuntu-base
+MZFROM debian-base
 
 RUN groupadd --system --gid=999 materialize \
     && useradd --system --gid=999 --uid=999 --create-home materialize

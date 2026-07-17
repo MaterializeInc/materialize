@@ -352,11 +352,10 @@ deadpool = { version = "0.9.5", default-features = false, features = ["managed"]
 deadpool-postgres = "0.10.3"
 dec = "0.4.9"
 derivative = "2.2.0"
-differential-dataflow = "0.24.0"
-differential-dogs3 = "0.24.0"
+differential-dataflow = "0.25.0"
+differential-dogs3 = "0.25.0"
 digest = "0.10.7"
 dirs = "6.0.0"
-domain = { version = "0.11.1", default-features = false, features = ["resolv"] }
 duckdb = { version = "1.4.3", default-features = false, features = ["native-tls"] }
 dynfmt = { version = "0.1.5", features = ["curly"] }
 either = "1.16.0"
@@ -381,6 +380,7 @@ headers = "0.4.1"
 hex = "0.4.3"
 hex-literal = "1.1.0"
 hibitset = "0.6.4"
+hickory-resolver = "0.26.1"
 hmac = "0.12.1"
 http = "1.4.0"
 http-body-util = "0.1.3"
@@ -535,7 +535,7 @@ tiberius = { version = "0.12", default-features = false, features = ["chrono", "
 tikv-jemalloc-ctl = { version = "0.6", features = ["stats", "use_std"] }
 tikv-jemallocator = { version = "0.6", features = ["background_threads", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
 time = "0.3.17"
-timely = "0.30.0"
+timely = "0.31.0"
 tokio = { version = "1.52.3", features = ["full", "test-util"] }
 tokio-metrics = "0.5.0"
 tokio-native-tls = "0.3.1"

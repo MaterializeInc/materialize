@@ -1148,6 +1148,13 @@ impl KafkaConnection {
     /// Generates a string that can be used as the base for a configuration ID
     /// (e.g., `client.id`, `group.id`, `transactional.id`) for a Kafka source
     /// or sink.
+    ///
+    /// NOTE: the `mz_catalog.mz_kafka_sources` builtin materialized view
+    /// reconstructs this exact `materialize-<env>-<conn>-<obj>` format in SQL
+    /// (see `MZ_KAFKA_SOURCES` in `src/catalog/src/builtin/mz_catalog.rs`).
+    /// The two must stay in sync. `test/testdrive/kafka-commit.td` guards this
+    /// by feeding the view's reconstructed value into `kafka-verify-commit`,
+    /// so a divergence here fails that test.
     pub fn id_base(
         connection_context: &ConnectionContext,
         connection_id: CatalogItemId,

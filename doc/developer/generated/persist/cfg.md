@@ -1,6 +1,6 @@
 ---
 source: src/persist/src/cfg.rs
-revision: 6c3b074fbb
+revision: 83c55157ed
 ---
 
 # persist::cfg
@@ -9,3 +9,4 @@ Provides `BlobConfig` and `ConsensusConfig` enums that enumerate all supported s
 `BlobConfig::try_from` parses a URI into the appropriate variant (file, S3, Azure, mem, turmoil) and `BlobConfig::open` instantiates the corresponding `Blob` implementation.
 `ConsensusConfig` mirrors this pattern for consensus backends (Postgres, mem, turmoil; FoundationDB is available behind the `foundationdb` feature flag).
 `BlobKnobs` defines timeout and sizing parameters consumed by both S3 and Azure backends.
+`all_dyn_configs` registers all `mz_persist` dynamic configs into a `ConfigSet`; currently it adds `PG_CONSENSUS_READ_COMMITTED` from `crate::postgres`.

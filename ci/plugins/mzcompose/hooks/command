@@ -25,8 +25,14 @@ mzcompose() {
 
 run_mzcompose() {
     if [ -n "${BUILDKITE_PLUGIN_MZCOMPOSE_RUN_TIMEOUT:-}" ]; then
-        timeout --signal=TERM --kill-after=30s "$BUILDKITE_PLUGIN_MZCOMPOSE_RUN_TIMEOUT" \
-            stdbuf --output=L --error=L bin/ci-builder run "$builder" bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
+        # NOTE: The timeout must run inside the container. Wrapping the
+        # `docker run` in host-side timeout(1) moves the docker CLI into a new
+        # process group, and under the Buildkite agent the CLI then reliably
+        # fails to exit after the container is done, so every run hangs from
+        # workflow completion until the timeout expires and counts as failed.
+        stdbuf --output=L --error=L bin/ci-builder run "$builder" \
+            timeout --signal=TERM --kill-after=30s "$BUILDKITE_PLUGIN_MZCOMPOSE_RUN_TIMEOUT" \
+            bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
     else
         mzcompose "$@"
     fi
@@ -290,6 +296,10 @@ cleanup() {
   fi
 
   unset CI_EXTRA_ARGS # We don't want extra args for the annotation
+  CI_ANNOTATE_ERRORS_ARGS=()
+  if [ -n "${BUILDKITE_PLUGIN_MZCOMPOSE_LOG_START_AT_LAST:-}" ]; then
+      CI_ANNOTATE_ERRORS_ARGS+=("--log-start-at-last=$BUILDKITE_PLUGIN_MZCOMPOSE_LOG_START_AT_LAST")
+  fi
   # Continue even if ci-annotate-errors fails
   CI_ANNOTATE_ERRORS_RESULT=0
   # We have to upload artifacts before ci-annotate-errors, so that the annotations can link to the artifacts
@@ -306,7 +316,7 @@ cleanup() {
   # shellcheck disable=SC2086
   wait "$UPLOAD_PID" $TRUFFLEHOG_PID
   ci_unimportant_heading "Annotating errors"
-  bin/ci-builder run "$builder" bin/ci-annotate-errors --test-cmd="$TEST_CMD" --test-desc="$TEST_DESC" --test-result="$TEST_RESULT" "${artifacts[@]}" trufflehog.log > ci-annotate-errors.log || CI_ANNOTATE_ERRORS_RESULT=$?
+  bin/ci-builder run "$builder" bin/ci-annotate-errors "${CI_ANNOTATE_ERRORS_ARGS[@]}" --test-cmd="$TEST_CMD" --test-desc="$TEST_DESC" --test-result="$TEST_RESULT" "${artifacts[@]}" trufflehog.log > ci-annotate-errors.log || CI_ANNOTATE_ERRORS_RESULT=$?
   buildkite-agent artifact upload "ci-annotate-errors.log" &
 
   export_cov() {

@@ -1,12 +1,12 @@
 ---
 source: src/sql-server-util/src/lib.rs
-revision: 8552b76c17
+revision: ddb8fab070
 ---
 
 # mz-sql-server-util
 
 SQL Server utility library that provides a connection client, CDC streaming, schema inspection, and row decoding for Materialize's SQL Server source.
-The crate root defines `Client` (a higher-level wrapper over `tiberius` that models transactions via an internal request/response channel, exposing `execute`, `query`, `query_streaming`, `simple_query`, `transaction`, `set_transaction_isolation`, and `get_transaction_isolation`), `Transaction` (RAII guard with auto-rollback on drop; exposes `create_savepoint`, `lock_table_shared`, `get_lsn`, `commit`, and `rollback`), and `Connection` (the companion future that drives the underlying TCP+TDS connection via an `UnboundedReceiver` loop).
+The crate root defines `Client` (a higher-level wrapper over `tiberius` that models transactions via an internal request/response channel, exposing `execute`, `query`, `query_streaming`, `simple_query`, `transaction`, `set_transaction_isolation`, `get_transaction_isolation`, and `engine_edition`), `Transaction` (RAII guard with auto-rollback on drop; exposes `create_savepoint`, `lock_table_shared`, `get_lsn`, `commit`, and `rollback`), and `Connection` (the companion future that drives the underlying TCP+TDS connection via an `UnboundedReceiver` loop). `engine_edition` queries `SERVERPROPERTY('EngineEdition')` on first call and caches the result for the life of the `Client`.
 `TransactionIsolationLevel` enumerates the five SQL Server isolation levels (`ReadUncommitted`, `ReadCommitted`, `RepeatableRead`, `Snapshot`, `Serializable`).
 Error types `SqlServerError` and `SqlServerDecodeError` are defined at the crate root; `SqlServerDecodeError`'s string representation is durably stored in persist and must remain stable across releases.
 `quote_identifier` is a public helper that bracket-quotes identifiers using `[` / `]` following SQL Server's `QUOTENAME` semantics.

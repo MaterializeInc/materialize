@@ -8,6 +8,8 @@
 # by the Apache License, Version 2.0.
 
 
+from typing import Any
+
 from materialize.checks.actions import (
     Action,
     BumpVersion,
@@ -293,9 +295,10 @@ class ZeroDowntimeUpgradeEntireMzFourVersions(Scenario):
         executor: Executor,
         features: Features,
         seed: str | None = None,
+        **kwargs: Any,
     ):
         self.minor_versions = get_minor_versions()
-        super().__init__(checks, executor, features, seed)
+        super().__init__(checks, executor, features, seed, **kwargs)
 
     def base_version(self) -> MzVersion:
         return self.minor_versions[3]

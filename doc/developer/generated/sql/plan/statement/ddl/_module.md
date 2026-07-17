@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/statement/ddl.rs
-revision: 3d7eb1c1da
+revision: e6fbabee58
 ---
 
 # mz-sql::plan::statement::ddl
@@ -14,3 +14,6 @@ The `iceberg_sink_builder` function accepts an optional `storage_connection: Opt
 `plan_create_connection` dispatches on `CreateConnectionType::GlueSchemaRegistry` to plan `CREATE CONNECTION ... FOR AWS GLUE SCHEMA REGISTRY`, guarded by the `ENABLE_GLUE_SCHEMA_REGISTRY` feature flag.
 `plan_alter_connection` maps `Connection::Gcp(_)` to `CreateConnectionType::Gcp`.
 `AvroSchema::Glue { connection, seed, .. }` in a source format is fully planned: the connection is resolved (must be a `Connection::GlueSchemaRegistry` item) and the seed (populated by purification) is required.
+`plan_alter_cluster` rejects a `WAIT` clause when no shape dimension (`SIZE`, `AVAILABILITY ZONES`, or `INTROSPECTION`) is being changed: there is no hydrate-overlap to wait on.
+`plan_alter_sink` handles `AlterSinkAction::SetOptions` and `AlterSinkAction::ResetOptions`, currently restricted to the `CommitInterval` option name. A `SET` identical to the current with-options returns `Plan::AlterNoop`. A `RESET` of an option that is not set is rejected.
+`iceberg_sink_builder` enforces a minimum `COMMIT INTERVAL` of 1 second; intervals shorter than 1 second produce the error `"COMMIT INTERVAL must be at least 1 second"`.

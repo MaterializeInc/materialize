@@ -4884,10 +4884,15 @@ pub fn serve(
         let clusters_caught_up_check =
             clusters_caught_up_trigger.map(|trigger| {
                 let mut exclude_collections: BTreeSet<GlobalId> =
-                    new_builtin_collections.into_iter().collect();
+                    new_builtin_collections.iter().copied().collect();
 
-                // Migrated MVs can't make progress in read-only mode. Exclude them and all their
-                // transitive dependents.
+                // A collection that can't advance its write frontier in read-only mode
+                // stalls its transitive dependents too, so exclude those from the caught-up
+                // check as well. That's migrated MVs (their dataflows don't write in
+                // read-only mode) and new builtin MVs (their fresh shard has no writer until
+                // this deployment promotes). An excluded dependent may still be hydrating
+                // right after promotion, a brief blip we accept because these MVs are small
+                // and get a writer at cut-over.
                 //
                 // TODO: Consider sending `allow_writes` for the dataflows of migrated MVs, which
                 //       would allow them to make progress even in read-only mode. This doesn't
@@ -4895,12 +4900,21 @@ pub fn serve(
                 //       than v26.17, since before that version the catalog shard's frontier wasn't
                 //       kept up-to-date with the current time. So this workaround has to remain in
                 //       place upgrades from a version less than v26.17 are no longer supported.
+                let new_builtin_mvs = new_builtin_collections
+                    .iter()
+                    .map(|global_id| {
+                        catalog
+                            .state()
+                            .try_get_entry_by_global_id(global_id)
+                            .expect("new builtin collections have catalog entries")
+                    })
+                    .filter(|entry| entry.is_materialized_view())
+                    .map(|entry| entry.id());
                 let mut todo: Vec<_> = migrated_storage_collections_0dt
                     .iter()
-                    .filter(|id| {
-                        catalog.state().get_entry(id).is_materialized_view()
-                    })
                     .copied()
+                    .filter(|id| catalog.state().get_entry(id).is_materialized_view())
+                    .chain(new_builtin_mvs)
                     .collect();
                 while let Some(item_id) = todo.pop() {
                     let entry = catalog.state().get_entry(&item_id);

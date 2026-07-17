@@ -199,9 +199,7 @@ def resolve_tag(tag: str) -> str | None:
 def update_captured_workloads_repo() -> None:
     """Clone the captured-workloads repository and check out the pinned commit."""
     path = pathlib.Path(MZ_ROOT / "test" / "workload-replay" / "captured-workloads")
-    # Pin the commit so replay is reproducible. This must be applied to fresh
-    # clones (every CI run) too, not only to pre-existing checkouts.
-    commit = "598060c6cf4c2d69730a1313a46704f8663e24fa"
+    commit = "1e28eef6b6d37277058ed45d80782902ea3c7f05"
     public_url = "https://github.com/MaterializeInc/captured-workloads"
 
     used_token = False
@@ -247,14 +245,27 @@ def update_captured_workloads_repo() -> None:
         spawn.runv(["git", "-C", str(path), "remote", "set-url", "origin", public_url])
 
 
+_WORKLOAD_EXTS = ("*.yml", "*.yml.zst")
+
+
 def get_paths(globs: list[str]) -> list[pathlib.Path]:
     """Get paths matching the given glob patterns."""
     paths = []
     for glob in globs:
         new_paths = list(LOCATION.rglob(glob))
+        # Auto-expand `*.yml` to also match `.yml.zst` so zstd-compressed
+        # workloads are picked up transparently.
+        if glob.endswith(".yml"):
+            new_paths.extend(LOCATION.rglob(glob + ".zst"))
         if not new_paths:
             known = "\n  ".join(
-                [posixpath.relpath(file, LOCATION) for file in LOCATION.rglob("*.yml")]
+                sorted(
+                    {
+                        posixpath.relpath(file, LOCATION)
+                        for ext in _WORKLOAD_EXTS
+                        for file in LOCATION.rglob(ext)
+                    }
+                )
             )
             raise ValueError(
                 f'No workload files found matching "{glob}", known:\n  {known}'
@@ -264,7 +275,67 @@ def get_paths(globs: list[str]) -> list[pathlib.Path]:
     return paths
 
 
+def load_workload(path: pathlib.Path) -> dict[str, Any]:
+    """Load a workload YAML file, transparently decompressing `.yml.zst`."""
+    import io
+
+    import yaml
+
+    if path.suffix == ".zst":
+        import zstandard
+
+        with open(path, "rb") as raw:
+            reader = zstandard.ZstdDecompressor().stream_reader(raw)
+            text = io.TextIOWrapper(reader, encoding="utf-8")
+            return yaml.load(text, Loader=yaml.CSafeLoader)
+    with open(path) as f:
+        return yaml.load(f, Loader=yaml.CSafeLoader)
+
+
 # Reference parsing helpers
+
+# Dotted reference like `foo.bar.baz` or `"hyphen-name".bar."with spaces"`.
+# Each part is either a double-quoted identifier or an unquoted identifier.
+_REF_PART = r'(?:"[^"]+"|[a-zA-Z0-9_]+)'
+_REF_PATTERN = rf"{_REF_PART}(?:\.{_REF_PART})*"
+
+
+def _split_dotted_reference(ref: str) -> list[str]:
+    """Split a dotted reference into parts, stripping double quotes."""
+    parts = []
+    i = 0
+    while i < len(ref):
+        if ref[i] == '"':
+            end = ref.index('"', i + 1)
+            parts.append(ref[i + 1 : end])
+            i = end + 1
+        else:
+            j = i
+            while j < len(ref) and ref[j] != ".":
+                j += 1
+            parts.append(ref[i:j])
+            i = j
+        if i < len(ref) and ref[i] == ".":
+            i += 1
+    return parts
+
+
+def _extract_reference(child: dict[str, Any]) -> str:
+    if child["type"] == "table":
+        match = re.search(
+            rf"REFERENCE\s*=\s*({_REF_PATTERN})",
+            child["create_sql"],
+        )
+        assert match, f"Couldn't find REFERENCE in {child['create_sql']}"
+    elif child["type"] == "subsource":
+        match = re.search(
+            rf"EXTERNAL\s+REFERENCE\s*=\s*({_REF_PATTERN})",
+            child["create_sql"],
+        )
+        assert match, f"Couldn't find EXTERNAL REFERENCE in {child['create_sql']}"
+    else:
+        raise ValueError(f"Unhandled child type {child['type']}")
+    return match.group(1)
 
 
 def get_kafka_topic(source: dict[str, Any]) -> str:
@@ -282,41 +353,13 @@ def get_postgres_reference_db_schema_table(
     child: dict[str, Any],
 ) -> tuple[str, str, str]:
     """Extract database, schema, and table from a Postgres source child."""
-    if child["type"] == "table":
-        match = re.search(
-            r"REFERENCE\s*=\s*([a-zA-Z0-9_.]+)",
-            child["create_sql"],
-        )
-        assert match, f"Couldn't find REFERENCE in {child['create_sql']}"
-    elif child["type"] == "subsource":
-        match = re.search(
-            r"EXTERNAL\s+REFERENCE\s*=\s*([a-zA-Z0-9_.]+)",
-            child["create_sql"],
-        )
-        assert match, f"Couldn't find EXTERNAL REFERENCE in {child['create_sql']}"
-    else:
-        raise ValueError(f"Unhandled child type {child['type']}")
-    db, schema, table = match.group(1).split(".", 2)
+    db, schema, table = _split_dotted_reference(_extract_reference(child))
     return (db, schema, table)
 
 
 def get_mysql_reference_db_table(child: dict[str, Any]) -> tuple[str, str]:
     """Extract database and table from a MySQL source child."""
-    if child["type"] == "table":
-        match = re.search(
-            r"REFERENCE\s*=\s*([a-zA-Z0-9_.]+)",
-            child["create_sql"],
-        )
-        assert match, f"Couldn't find REFERENCE in {child['create_sql']}"
-    elif child["type"] == "subsource":
-        match = re.search(
-            r"EXTERNAL\s+REFERENCE\s*=\s*([a-zA-Z0-9_.]+)",
-            child["create_sql"],
-        )
-        assert match, f"Couldn't find EXTERNAL REFERENCE in {child['create_sql']}"
-    else:
-        raise ValueError(f"Unhandled child type {child['type']}")
-    db, table = match.group(1).split(".", 1)
+    db, table = _split_dotted_reference(_extract_reference(child))
     return db, table
 
 
@@ -324,21 +367,7 @@ def get_sql_server_reference_db_schema_table(
     child: dict[str, Any],
 ) -> tuple[str, str, str]:
     """Extract database, schema, and table from a SQL Server source child."""
-    if child["type"] == "table":
-        match = re.search(
-            r"REFERENCE\s*=\s*([a-zA-Z0-9_.]+)",
-            child["create_sql"],
-        )
-        assert match, f"Couldn't find REFERENCE in {child['create_sql']}"
-    elif child["type"] == "subsource":
-        match = re.search(
-            r"EXTERNAL\s+REFERENCE\s*=\s*([a-zA-Z0-9_.]+)",
-            child["create_sql"],
-        )
-        assert match, f"Couldn't find EXTERNAL REFERENCE in {child['create_sql']}"
-    else:
-        raise ValueError(f"Unhandled child type {child['type']}")
-    db, schema, table = match.group(1).split(".", 2)
+    db, schema, table = _split_dotted_reference(_extract_reference(child))
     return (db, schema, table)
 
 

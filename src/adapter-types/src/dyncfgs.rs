@@ -127,6 +127,18 @@ pub const ENABLE_PASSWORD_AUTH: Config<bool> = Config::new(
     "Enable password authentication.",
 );
 
+/// Upper bound on the number of transitive dependencies validated for a
+/// read-then-write statement (e.g. `DELETE ... WHERE ... IN (SELECT ...)`).
+/// Validation walks the read set's dependency graph, which is user controlled
+/// and can be arbitrarily large. The bound rejects pathological graphs with a
+/// clean error instead of consuming unbounded time and memory.
+pub const READ_THEN_WRITE_MAX_DEPENDENCIES: Config<usize> = Config::new(
+    "read_then_write_max_dependencies",
+    100_000,
+    "Maximum number of transitive dependencies validated for a read-then-write \
+     statement before it is rejected.",
+);
+
 /// OIDC issuer URL.
 pub const OIDC_ISSUER: Config<Option<&'static str>> =
     Config::new("oidc_issuer", None, "OIDC issuer URL.");
@@ -336,9 +348,12 @@ pub const ENABLE_SCOPED_SYSTEM_PARAMETERS: Config<bool> = Config::new(
 /// managed-cluster replica set and the legacy paths (the graceful 3-stage
 /// machine and `cluster_scheduling.rs`) are bypassed. The replica set cannot
 /// have two writers, so this is a clean switch, not a per-strategy toggle.
+///
+/// Defaults on. This is the break-glass switch to fall back to the legacy
+/// paths if the controller misbehaves.
 pub const ENABLE_CLUSTER_CONTROLLER: Config<bool> = Config::new(
     "enable_cluster_controller",
-    false,
+    true,
     "Whether the cluster controller owns the managed-cluster replica set. When false, the legacy scheduling and graceful-reconfiguration paths run instead.",
 );
 
@@ -358,9 +373,12 @@ pub const CLUSTER_CONTROLLER_TICK_INTERVAL: Config<Duration> = Config::new(
 ///
 /// Only consulted while [`ENABLE_CLUSTER_CONTROLLER`] is on, when the
 /// controller owns the reconfiguration.
+///
+/// Defaults on. This is the break-glass switch back to the blocking wait-shim
+/// if returning immediately causes trouble.
 pub const ENABLE_BACKGROUND_ALTER_CLUSTER: Config<bool> = Config::new(
     "enable_background_alter_cluster",
-    false,
+    true,
     "Whether a config-shape ALTER CLUSTER returns immediately (true) or the session blocks on a wait-shim over the durable reconfiguration record (false).",
 );
 
@@ -373,6 +391,28 @@ pub const DEFAULT_CLUSTER_RECONFIGURATION_TIMEOUT: Config<Duration> = Config::ne
     "The reconfiguration deadline written when a config-shape ALTER CLUSTER omits WITH (WAIT ...).",
 );
 
+/// Break-glass for the hydration-burst strategy: when off the controller never
+/// runs a burst replica; graceful reconfiguration and `ON REFRESH` scheduling
+/// are unaffected.
+///
+/// Only consulted while [`ENABLE_CLUSTER_CONTROLLER`] is on. A cluster can only
+/// carry an `AUTO SCALING STRATEGY` while its SQL acceptance feature flag is
+/// on, so this is the second of the two gates burst sits behind.
+pub const ENABLE_HYDRATION_BURST: Config<bool> = Config::new(
+    "enable_hydration_burst",
+    true,
+    "Whether the cluster controller's hydration-burst strategy may run a burst replica (break-glass; leaves graceful reconfiguration and ON REFRESH untouched).",
+);
+
+/// The burst-replica linger duration written into a new `burst` record when the
+/// cluster's `AUTO SCALING STRATEGY` omits `LINGER DURATION`. The burst replica
+/// stays up this long after the steady-state replicas first hydrate.
+pub const DEFAULT_HYDRATION_BURST_LINGER: Config<Duration> = Config::new(
+    "default_hydration_burst_linger",
+    Duration::from_secs(0),
+    "The burst-replica linger duration written when an AUTO SCALING STRATEGY omits LINGER DURATION.",
+);
+
 /// Adds the full set of all adapter `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -381,6 +421,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&CLUSTER_CONTROLLER_TICK_INTERVAL)
         .add(&ENABLE_BACKGROUND_ALTER_CLUSTER)
         .add(&DEFAULT_CLUSTER_RECONFIGURATION_TIMEOUT)
+        .add(&ENABLE_HYDRATION_BURST)
+        .add(&DEFAULT_HYDRATION_BURST_LINGER)
         .add(&WITH_0DT_DEPLOYMENT_MAX_WAIT)
         .add(&WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL)
         .add(&ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT)
@@ -396,6 +438,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION)
         .add(&ENABLE_EXPRESSION_CACHE)
         .add(&ENABLE_PASSWORD_AUTH)
+        .add(&READ_THEN_WRITE_MAX_DEPENDENCIES)
         .add(&OIDC_ISSUER)
         .add(&OIDC_AUDIENCE)
         .add(&OIDC_AUTHENTICATION_CLAIM)

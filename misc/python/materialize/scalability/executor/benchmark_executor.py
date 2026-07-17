@@ -118,10 +118,12 @@ class BenchmarkExecutor:
         # Targeted retries: re-run both baseline and HEAD at regressed
         # concurrency levels. Re-running only HEAD is not sufficient because
         # the baseline may have had an anomalously good measurement.
+        did_retry = False
         for retry in range(MAX_RETRIES_ON_REGRESSION):
             if not outcome.has_regressions():
                 break
 
+            did_retry = True
             regressed_concurrencies = [r.concurrency for r in outcome.regressions]
             print(
                 f"Potential regression in workload {workload_name} at concurrencies "
@@ -207,6 +209,14 @@ class BenchmarkExecutor:
                 baseline_result,
                 other_endpoint_result,
             )
+
+        if did_retry:
+            # Persist the retried measurements over the original run's. Without
+            # this the CSVs, plots, and test-analytics upload keep the anomalous
+            # first-run numbers while pass/fail is decided on the retried ones,
+            # so a green run could still upload the regression.
+            self._persist_workload_result(baseline_result)
+            self._persist_workload_result(other_endpoint_result)
 
         return outcome
 
@@ -487,3 +497,21 @@ class BenchmarkExecutor:
         )
 
         self.result.append_workload_result(endpoint_version_info, result)
+
+    def _persist_workload_result(self, result: WorkloadResult) -> None:
+        """Record a workload result and (over)write its CSVs.
+
+        Safe to call again after retries: append_workload_result replaces the
+        prior entry for the same endpoint and workload, and the CSVs are
+        rewritten from the final dataframes."""
+        endpoint_version_name = result.endpoint.try_load_version()
+        pathlib.Path(paths.endpoint_dir(endpoint_version_name)).mkdir(
+            parents=True, exist_ok=True
+        )
+        result.df_totals.to_csv(
+            paths.df_totals_csv(endpoint_version_name, result.workload.name())
+        )
+        result.df_details.to_csv(
+            paths.df_details_csv(endpoint_version_name, result.workload.name())
+        )
+        self._record_results(result)

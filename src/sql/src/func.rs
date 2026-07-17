@@ -4687,9 +4687,27 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params![MapAny] => UnaryFunc::MapLength(func::MapLength)
                 => Int32, oid::FUNC_MAP_LENGTH_OID;
         },
+        // `mz_environment_id` is a plan-time constant: its value is fixed
+        // for the lifetime of the envd process. Fold directly to a literal
+        // here so downstream layers (MVs, indexes, dataflow) can treat it
+        // as an ordinary string, not an unmaterializable function.
+        //
+        // Unlike the other system-information functions in this file, it is
+        // intentionally not gated by `restrict_to_user_objects`. The
+        // environment ID is not sensitive, and because the fold bakes the
+        // value into any stored view that references it, a gate here could
+        // only ever be partial (it would catch direct calls but not values
+        // already materialized into a view), which is more misleading than
+        // no gate at all. See
+        // doc/developer/design/20260508_restrict_to_user_objects.md.
         "mz_environment_id" => Scalar {
-            params!() => UnmaterializableFunc::MzEnvironmentId
-                => String, oid::FUNC_MZ_ENVIRONMENT_ID_OID;
+            params!() => Operation::nullary(|ecx| {
+                let env_id = ecx.catalog().config().environment_id.to_string();
+                Ok(HirScalarExpr::literal(
+                    Datum::String(&env_id),
+                    SqlScalarType::String,
+                ))
+            }) => String, oid::FUNC_MZ_ENVIRONMENT_ID_OID;
         },
         "mz_is_superuser" => Scalar {
             params!() => UnmaterializableFunc::MzIsSuperuser
@@ -5286,6 +5304,16 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
             params!(Jsonb) => UnaryFunc::ParseCatalogPrivileges(func::ParseCatalogPrivileges)
                 => SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)),
                 oid::FUNC_PARSE_CATALOG_PRIVILEGES_OID;
+        },
+        "parse_kafka_source_details" => Scalar {
+            params!(String) => UnaryFunc::ParseKafkaSourceDetails(
+                func::ParseKafkaSourceDetails,
+            ) => Jsonb, oid::FUNC_PARSE_KAFKA_SOURCE_DETAILS_OID;
+        },
+        "parse_postgres_source_details" => Scalar {
+            params!(String) => UnaryFunc::ParsePostgresSourceDetails(
+                func::ParsePostgresSourceDetails,
+            ) => Jsonb, oid::FUNC_PARSE_POSTGRES_SOURCE_DETAILS_OID;
         },
         "redact_sql" => Scalar {
             params!(String) => UnaryFunc::RedactSql(func::RedactSql)

@@ -216,7 +216,7 @@ strict serializable
 statement error Expected transaction mode, found EOF
 SET TRANSACTION
 
-statement error SET TRANSACTION <access-mode> are not supported
+statement error SET TRANSACTION <access-mode> not yet supported
 SET TRANSACTION READ ONLY
 
 # Test that a failed transaction will not commit var changes.

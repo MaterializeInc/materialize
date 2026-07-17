@@ -147,11 +147,11 @@ materialize ""
 
 # ...and also in `\l`
 $ psql-execute command="\l"
-\                                                   List of databases
-    Name     |    Owner    | Encoding | Locale Provider | Collate | Ctype | ICU Locale | ICU Rules | Access privileges
--------------+-------------+----------+-----------------+---------+-------+------------+-----------+-------------------
- d           | materialize | UTF8     | libc            | C       | C     |            |           |
- materialize | mz_system   | UTF8     | libc            | C       | C     |            |           |
+\                                                 List of databases
+    Name     |    Owner    | Encoding | Locale Provider | Collate | Ctype | Locale | ICU Rules | Access privileges
+-------------+-------------+----------+-----------------+---------+-------+--------+-----------+-------------------
+ d           | materialize | UTF8     | libc            | C       | C     |        |           |
+ materialize | mz_system   | UTF8     | libc            | C       | C     |        |           |
 
 
 
@@ -521,7 +521,6 @@ mz_iceberg_sinks               ""
 mz_index_columns               ""
 mz_kafka_connections           ""
 mz_kafka_sinks                 ""
-mz_kafka_sources               ""
 mz_list_types                  ""
 mz_map_types                   ""
 mz_operators                   ""
@@ -553,6 +552,7 @@ mz_connections        mz_catalog_server   ""
 mz_databases          mz_catalog_server   ""
 mz_default_privileges mz_catalog_server   ""
 mz_indexes            mz_catalog_server   ""
+mz_kafka_sources      mz_catalog_server   ""
 mz_role_members       mz_catalog_server   ""
 mz_role_parameters    mz_catalog_server   ""
 mz_roles              mz_catalog_server   ""
@@ -614,7 +614,6 @@ mz_object_arrangement_size_history       ""
 mz_object_dependencies                   ""
 mz_object_global_ids                     ""
 mz_optimizer_notices                     ""
-mz_postgres_sources                      ""
 mz_postgres_source_tables                ""
 mz_replacements                          ""
 mz_sessions                              ""
@@ -722,6 +721,8 @@ pg_authid_core                           ""
 > SHOW MATERIALIZED VIEWS FROM mz_internal
 name                   cluster             comment
 ----------------------------------------------------
+mz_cluster_auto_scaling_strategies    mz_catalog_server   ""
+mz_cluster_reconfigurations    mz_catalog_server   ""
 mz_cluster_schedules           mz_catalog_server   ""
 mz_cluster_system_parameters   mz_catalog_server   ""
 mz_cluster_workload_classes    mz_catalog_server   ""
@@ -731,6 +732,7 @@ mz_network_policies            mz_catalog_server   ""
 mz_network_policy_rules        mz_catalog_server   ""
 mz_overridden_system_parameters mz_catalog_server   ""
 mz_pending_cluster_replicas    mz_catalog_server   ""
+mz_postgres_sources            mz_catalog_server   ""
 mz_replica_system_parameters   mz_catalog_server   ""
 
 # Check default sources, tables, and views in mz_introspection.
@@ -828,11 +830,11 @@ test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-44
+42
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-270
+272
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

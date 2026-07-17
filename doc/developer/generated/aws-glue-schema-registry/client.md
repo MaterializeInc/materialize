@@ -1,6 +1,6 @@
 ---
 source: src/aws-glue-schema-registry/src/client.rs
-revision: 9d96aa256e
+revision: bcc9fbf96b
 ---
 
 # mz-aws-glue-schema-registry::client

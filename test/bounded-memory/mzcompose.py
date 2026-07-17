@@ -89,6 +89,11 @@ class Scenario:
     post_restart: str
     materialized_memory: str
     clusterd_memory: str
+    # Testdrive `--default-timeout`, i.e. the wall-clock budget for a `>` query
+    # to reach its expected result while the dataflow catches up. Kept tight by
+    # default so that a memory-bounding-induced hang fails fast. Scenarios whose
+    # legitimate snapshot/hydration time is close to this budget raise it.
+    timeout: str = "5m"
     disabled: bool = False
     needs_iceberg: bool = False
 
@@ -250,6 +255,10 @@ SCENARIOS = [
             """),
         materialized_memory="4.5Gb",
         clusterd_memory="1Gb",
+        # Snapshotting 20M rows (~20GB) under a 1Gb clusterd runs I/O-bound and
+        # legitimately takes ~4.5min in the good case, too close to the default
+        # 5m budget to be reliable on shared CI hosts.
+        timeout="10m",
     ),
     PgCdcScenario(
         name="pg-cdc-update",
@@ -1506,7 +1515,7 @@ def run_scenario(
             ))
         """)
 
-        testdrive_timeout_arg = "--default-timeout=5m"
+        testdrive_timeout_arg = f"--default-timeout={scenario.timeout}"
         statement_timeout = "> SET statement_timeout = '600s';\n"
         extra_testdrive_args: list[str] = []
 

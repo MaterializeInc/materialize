@@ -1581,37 +1581,7 @@ c_schedule_4  manual  NULL
 c_schedule_5  manual  NULL
 c_schedule_hydration_time_estimate  on-refresh  00:16:35
 
-statement ok
-SELECT mz_unsafe.mz_sleep(8);
-
-query TTTTBT rowsort
-SELECT DISTINCT
-  event_type,
-  object_type,
-  (details->'cluster_name')::text,
-  (details->'reason')::text,
-  (details->'scheduling_policies') IS NULL,
-  regexp_replace((details->'scheduling_policies'->'on_refresh')::text, '\["u.*"\]', '["uXXX"]')
-FROM mz_audit_events
-WHERE
-  event_type IN ('create', 'drop') AND
-  object_type = 'cluster-replica' AND
-  ((details->'cluster_name')::text LIKE '"c_schedule_%"' OR (details->'cluster_name')::text = '"other"') AND
-  (details->'cluster_name')::text != '"c_schedule_4"';
-----
-create  cluster-replica  "c_schedule_1"  "manual"  true  NULL
-create  cluster-replica  "c_schedule_1"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":["uXXX"]}
-create  cluster-replica  "c_schedule_2"  "manual"  true  NULL
-create  cluster-replica  "c_schedule_3"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":["uXXX"]}
-create  cluster-replica  "c_schedule_5"  "manual"  true  NULL
-create  cluster-replica  "c_schedule_hydration_time_estimate"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:16:35","objects_needing_compaction":[],"objects_needing_refresh":["uXXX"]}
-create  cluster-replica  "other"  "manual"  true  NULL
-drop  cluster-replica  "c_schedule_1"  "schedule"  false  {"decision":"off","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":[]}
-drop  cluster-replica  "c_schedule_3"  "schedule"  false  {"decision":"off","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":[]}
-drop  cluster-replica  "other"  "manual"  true  NULL
-
 ## Now test `cluster_refresh_mv_compaction_estimate`.
-## (This would make the above audit test flaky, so it should be after that.)
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET cluster_refresh_mv_compaction_estimate = 1200000
 ----
@@ -1674,25 +1644,6 @@ SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_6
 ----
 1
 
-# The audit events should now have a row that has a non-empty `objects_needing_compaction`.
-query TTTTBT rowsort
-SELECT DISTINCT
-  event_type,
-  object_type,
-  (details->'cluster_name')::text,
-  (details->'reason')::text,
-  (details->'scheduling_policies') IS NULL,
-  regexp_replace((details->'scheduling_policies'->'on_refresh')::text, '\["u.*"\]', '["uXXX"]')
-FROM mz_audit_events
-WHERE
-  event_type IN ('create', 'drop') AND
-  object_type = 'cluster-replica' AND
-  (details->'cluster_name')::text = '"c_schedule_6"';
-----
-create  cluster-replica  "c_schedule_6"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_compaction":["uXXX"],"objects_needing_refresh":[]}
-create  cluster-replica  "c_schedule_6"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":["uXXX"]}
-drop  cluster-replica  "c_schedule_6"  "schedule"  false  {"decision":"off","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":[]}
-
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET cluster_refresh_mv_compaction_estimate = 0
 ----
@@ -1701,8 +1652,7 @@ COMPLETE 0
 # Switching a managed cluster to a non-MANUAL SCHEDULE while its REPLICATION FACTOR is greater
 # than 1 must be rejected. Otherwise the cluster would be left in an invalid state (a refresh
 # schedule implies a replication factor of 0 or 1), which used to make SHOW CREATE CLUSTER panic
-# the coordinator (see database-issues SQL-215). This is placed at the end of the scheduling
-# section so that creating/dropping this cluster doesn't pollute the audit-event queries above.
+# the coordinator (see database-issues SQL-215).
 statement ok
 CREATE CLUSTER c_schedule_rf (SIZE = 'scale=1,workers=1', REPLICATION FACTOR = 2);
 

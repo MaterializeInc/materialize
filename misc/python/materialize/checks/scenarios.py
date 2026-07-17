@@ -9,6 +9,7 @@
 
 from dataclasses import dataclass
 from random import Random
+from typing import Any
 
 from materialize.checks.actions import Action, Initialize, Manipulate, Validate
 from materialize.checks.checks import Check
@@ -53,10 +54,20 @@ class Scenario:
         executor: Executor,
         features: Features,
         seed: str | None = None,
+        additional_system_parameter_defaults: dict[str, str] | None = None,
+        default_replication_factor: int = 2,
     ) -> None:
-        self._checks = checks
+        # Copy the list since checks() shuffles it in place.
+        self._checks = list(checks)
         self.executor = executor
         self.features = features
+        # Applied by StartMz on top of any action-specific parameters so that
+        # --system-param and --default-replication-factor reach every Mz
+        # instance started by a scenario.
+        self.additional_system_parameter_defaults = (
+            additional_system_parameter_defaults or {}
+        )
+        self.default_replication_factor = default_replication_factor
         self.rng = None if seed is None else Random(seed)
         self._base_version = MzVersion.parse_cargo()
 
@@ -306,8 +317,9 @@ class SystemVarChange(Scenario):
         features: Features,
         seed: str | None,
         change_entries: list[SystemVarChangeEntry],
+        **kwargs: Any,
     ):
-        super().__init__(checks, executor, features, seed)
+        super().__init__(checks, executor, features, seed, **kwargs)
         self.change_entries = change_entries
 
     def actions(self) -> list[Action]:

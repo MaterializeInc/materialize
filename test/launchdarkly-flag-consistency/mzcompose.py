@@ -227,12 +227,17 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     crdb_keepalives_interval
     crdb_keepalives_retries
     crdb_tcp_user_timeout
+    default_cluster_reconfiguration_timeout
+    default_hydration_burst_linger
     default_timestamp_interval
     disallow_unmaterializable_functions_as_of
     enable_0dt_caught_up_replica_status_check
     enable_0dt_caught_up_stability_check
     enable_0dt_deployment_panic_after_timeout
     enable_alter_table_add_column
+    enable_auto_scaling_strategy
+    enable_background_alter_cluster
+    enable_statement_arrival_logging
     enable_binary_date_bin
     enable_bounded_staleness_isolation
     enable_cluster_controller
@@ -247,6 +252,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_eq_classes_withholding_errors
     enable_fixed_correlated_cte_lowering
     enable_frontend_subscribes
+    enable_hydration_burst
     enable_introspection_subscribes
     enable_less_reduce_in_eqprop
     enable_list_length_max
@@ -336,6 +342,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     persist_fetch_semaphore_cost_adjustment
     persist_gc_fallback_threshold_ms
     persist_gc_min_versions
+    persist_pg_consensus_read_committed
     persist_pubsub_client_receiver_channel_size
     persist_pubsub_client_sender_channel_size
     persist_pubsub_connect_attempt_timeout
@@ -356,7 +363,6 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     persist_txns_data_shard_retryer_multiplier
     persist_usage_state_fetch_concurrency_limit
     persist_use_critical_since_txn
-    persist_use_postgres_tuned_queries
     persist_write_combine_inline_writes
     pg_source_connect_timeout
     pg_source_snapshot_statement_timeout
@@ -374,6 +380,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     plan_insights_notice_fast_path_clusters_optimize_duration
     postgres_fetch_slot_resume_lsn_interval
     privatelink_status_update_quota_per_minute
+    read_then_write_max_dependencies
     replica_metrics_history_retention_interval
     replica_status_history_retention_window
     scram_iterations
@@ -403,6 +410,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     unsafe_enable_table_check_constraint
     unsafe_enable_table_foreign_key
     unsafe_enable_table_keys
+    unsafe_enable_unbounded_custom_type_resolution
     unsafe_enable_unorchestrated_cluster_replicas
     unsafe_enable_unsafe_functions
     unsafe_enable_unstable_dependencies
@@ -514,8 +522,8 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "enable_cast_elimination",
     "enable_compute_correction_v2",
     "enable_compute_temporal_bucketing",
-    "enable_create_table_from_source",
     "enable_new_outer_join_lowering",
+    "enable_upsert_v2",
     "enable_variadic_left_join_lowering",
     "persist_batch_delete_enabled",
     "persist_rollup_use_active_rollup",
@@ -537,7 +545,6 @@ KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     enable_column_paged_batcher
     enable_column_paged_batcher_spill
     enable_compute_correction_v2
-    enable_create_table_from_source
     enable_eager_delta_joins
     enable_glue_schema_registry
     enable_index_options

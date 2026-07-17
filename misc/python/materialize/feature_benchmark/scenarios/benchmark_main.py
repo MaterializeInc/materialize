@@ -2342,6 +2342,16 @@ class StartupLoaded(Scenario):
     SCALE = 1  # 10 objects of each kind
     # Can not scale to 100s of objects
     MAX_SCALE = 1.5
+    # The measured span is only ~0.5-1.5s and starts when `docker compose up`
+    # observes the restarted containers healthy, on a 1s healthcheck interval.
+    # That start-anchor jitter plus docker exec overhead makes the per-cycle
+    # minimum swing by 30%+ for identical binaries, so a 10% wallclock
+    # threshold mostly detects noise (nightly 17404).
+    RELATIVE_THRESHOLD: dict[MeasurementType, float] = {
+        MeasurementType.WALLCLOCK: 0.30,
+        MeasurementType.MEMORY_MZ: 0.20,
+        MeasurementType.MEMORY_CLUSTERD: 0.50,
+    }
 
     def shared(self) -> Action:
         return TdAction(self.schema() + """
@@ -2717,75 +2727,6 @@ ALTER SYSTEM SET max_tables = {self.n() + 200};
 {renames_back}
 
 > COMMIT;
-
-> SELECT 1;
-  /* B */
-1
-""")
-
-
-class MultiTableTransactionCommit(Coordinator):
-    """Measure COMMIT latency of a write transaction spanning many tables.
-
-    Such a transaction goes through group commit as one txn-wal transaction
-    touching one data shard per table, so COMMIT pays the txns-shard write
-    plus whatever per-shard work sits on the group commit response path
-    (batch apply and compaction, unless deferred).
-
-    The table write worker is a single serial task: it will not start the
-    next txn's txns-shard write until the previous txn's apply and compaction
-    have finished. So to observe the response-path latency of one COMMIT in
-    isolation, the worker must be idle when that COMMIT arrives. The reads at
-    the top of each iteration drain it: they touch every table, which blocks
-    until the previous iteration's txn is fully applied across all shards.
-    Reading a single table would only wait for that one shard's apply and
-    leave the worker busy with the rest, so the measured COMMIT would queue
-    behind that leftover work and hide any response-path win.
-    """
-
-    SCALE = 3  # 1000 tables
-    # The deferred apply/compaction the response path saves is one persist
-    # write per shard, so the win grows with the table count while the fixed
-    # per-COMMIT floor (group commit, timestamp selection, pgwire) does not.
-    # A high table count is what makes that saving dominate the measured
-    # window rather than the floor.
-    FIXED_SCALE = True
-
-    def init(self) -> list[Action]:
-        creates = "\n".join(
-            f"> CREATE TABLE mttc_t{i} (x INT);" for i in range(self.n())
-        )
-        return [TdAction(f"""
-$ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
-ALTER SYSTEM SET max_tables = {self.n() + 200};
-
-{creates}
-""")]
-
-    def benchmark(self) -> MeasurementSource:
-        inserts = "\n".join(
-            f"> INSERT INTO mttc_t{i} VALUES (1);" for i in range(self.n())
-        )
-        # Read every table so this waits for the whole previous txn to apply,
-        # draining the serial write worker before we measure. Separate reads
-        # (rather than one wide UNION ALL) keep each peek cheap to plan and
-        # avoid the deep-expr recursion limit at high table counts.
-        drain = "\n".join(
-            f"> SELECT count(*) >= 0 FROM mttc_t{i}\ntrue" for i in range(self.n())
-        )
-
-        return Td(f"""
-{drain}
-
-> BEGIN
-
-{inserts}
-
-> SELECT 1;
-  /* A */
-1
-
-> COMMIT
 
 > SELECT 1;
   /* B */

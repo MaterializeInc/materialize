@@ -1602,8 +1602,13 @@ impl<'a> NameResolver<'a> {
             // If there isn't a version specified, and this item supports versioning, track the
             // latest.
             None => match item.latest_version() {
-                // Only track the version of the referenced object, if the feature is enabled.
-                Some(v) if alter_table_enabled => RelationVersionSelector::Specific(v),
+                // Only pin a version for user items, and only with the feature on. Mirrors the
+                // by-name path in `fold_item_name`. Builtins are not user-versioned, so pinning
+                // one strands the reference if the builtin is ever converted to an item type
+                // without versions.
+                Some(v) if id.is_user() && alter_table_enabled => {
+                    RelationVersionSelector::Specific(v)
+                }
                 _ => RelationVersionSelector::Latest,
             },
             // Note: Return the specific version if one is specified, even if the feature is off.
@@ -1613,6 +1618,12 @@ impl<'a> NameResolver<'a> {
                     Some(latest) if latest >= specified_version => {
                         RelationVersionSelector::Specific(specified_version)
                     }
+                    // A version pin on a builtin is meaningless, since builtins are not
+                    // user-versioned. Such a pin can still sit in a persisted catalog, and if the
+                    // builtin has been converted to an item type without versions it no longer
+                    // validates. Resolve to latest instead of failing catalog open. User items
+                    // keep the strict check so real out-of-range versions still error.
+                    _ if !id.is_user() => RelationVersionSelector::Latest,
                     _ => {
                         if self.status.is_ok() {
                             self.status = Err(PlanError::InvalidVersion {
@@ -2055,6 +2066,9 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             RetainHistoryFor(value) => RetainHistoryFor(self.fold_value(value)),
             Refresh(refresh) => Refresh(self.fold_refresh_option_value(refresh)),
             ClusterScheduleOptionValue(value) => ClusterScheduleOptionValue(value),
+            ClusterAutoScalingStrategyOptionValue(value) => {
+                ClusterAutoScalingStrategyOptionValue(value)
+            }
             ClusterAlterStrategy(value) => {
                 ClusterAlterStrategy(self.fold_cluster_alter_option_value(value))
             }

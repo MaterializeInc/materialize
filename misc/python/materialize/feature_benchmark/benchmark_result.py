@@ -84,7 +84,11 @@ class BenchmarkScenarioMetric(Generic[T]):
         return self._points[0]
 
     def points_this(self) -> list[T]:
-        return self._points
+        # Only the THIS-side value. _points also holds the OTHER (baseline)
+        # value at index 1 for the this-vs-other comparison, but it must not
+        # leak into THIS-side stats (e.g. the analytics min/max/mean/variance),
+        # which would otherwise mix HEAD with the baseline.
+        return self._points[:1]
 
     def this_as_str(self) -> str:
         if self.this() is None:

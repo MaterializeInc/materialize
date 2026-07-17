@@ -874,6 +874,510 @@ pub mod v1alpha1 {
             }
         }
     }
+
+    /// Partial mirror of [`MaterializeSpec`] for field-wise conversion of
+    /// objects that may be incomplete. See [`super::convert_v1_to_v1alpha1`].
+    ///
+    /// Each field is a [`PartialField`], distinguishing absent from explicit
+    /// null from a value, and unknown fields pass through via `extra`, so
+    /// serializing reproduces exactly what was deserialized. Adding a field
+    /// to [`MaterializeSpec`] breaks the exhaustive destructures in the
+    /// `From` impls below until its conversion is decided.
+    #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct PartialMaterializeSpec {
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub environmentd_image_ref: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub environmentd_extra_args: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub environmentd_extra_env: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub environmentd_iam_role_arn: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub environmentd_connection_role_arn: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub environmentd_resource_requirements: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub environmentd_scratch_volume_storage_requirement: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub balancerd_resource_requirements: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub console_resource_requirements: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub balancerd_replicas: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub console_replicas: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub service_account_name: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub service_account_annotations: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub service_account_labels: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub pod_annotations: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub pod_labels: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub request_rollout: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub force_promote: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub force_rollout: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub in_place_rollout: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub rollout_strategy: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub rollout_request_timeout: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub backend_secret_name: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub authenticator_kind: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub enable_rbac: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub environment_id: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub system_parameter_configmap_name: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub balancerd_external_certificate_spec: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub console_external_certificate_spec: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub internal_certificate_spec: PartialField,
+        #[serde(flatten)]
+        pub extra: serde_json::Map<String, serde_json::Value>,
+    }
+
+    /// Partial mirror of [`MaterializeStatus`], see [`PartialMaterializeSpec`].
+    #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct PartialMaterializeStatus {
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub resource_id: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub active_generation: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub last_completed_rollout_request: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub last_completed_rollout_environmentd_image_ref: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub resources_hash: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub last_completed_rollout_hash: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub conditions: PartialField,
+        #[serde(flatten)]
+        pub extra: serde_json::Map<String, serde_json::Value>,
+    }
+
+    /// Partial mirror of [`Materialize`], see [`PartialMaterializeSpec`].
+    #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct PartialMaterialize {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub api_version: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub kind: Option<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub metadata: Option<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub spec: Option<PartialMaterializeSpec>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub status: Option<PartialMaterializeStatus>,
+        #[serde(flatten)]
+        pub extra: serde_json::Map<String, serde_json::Value>,
+    }
+
+    impl From<MaterializeSpec> for PartialMaterializeSpec {
+        fn from(spec: MaterializeSpec) -> Self {
+            let MaterializeSpec {
+                environmentd_image_ref,
+                environmentd_extra_args,
+                environmentd_extra_env,
+                environmentd_iam_role_arn,
+                environmentd_connection_role_arn,
+                environmentd_resource_requirements,
+                environmentd_scratch_volume_storage_requirement,
+                balancerd_resource_requirements,
+                console_resource_requirements,
+                balancerd_replicas,
+                console_replicas,
+                service_account_name,
+                service_account_annotations,
+                service_account_labels,
+                pod_annotations,
+                pod_labels,
+                request_rollout,
+                force_promote,
+                force_rollout,
+                in_place_rollout,
+                rollout_strategy,
+                rollout_request_timeout,
+                backend_secret_name,
+                authenticator_kind,
+                enable_rbac,
+                environment_id,
+                system_parameter_configmap_name,
+                balancerd_external_certificate_spec,
+                console_external_certificate_spec,
+                internal_certificate_spec,
+            } = spec;
+            Self {
+                environmentd_image_ref: present(environmentd_image_ref),
+                environmentd_extra_args: present_opt(environmentd_extra_args),
+                environmentd_extra_env: present_opt(environmentd_extra_env),
+                environmentd_iam_role_arn: present_opt(environmentd_iam_role_arn),
+                environmentd_connection_role_arn: present_opt(environmentd_connection_role_arn),
+                environmentd_resource_requirements: present_opt(environmentd_resource_requirements),
+                environmentd_scratch_volume_storage_requirement: present_opt(
+                    environmentd_scratch_volume_storage_requirement,
+                ),
+                balancerd_resource_requirements: present_opt(balancerd_resource_requirements),
+                console_resource_requirements: present_opt(console_resource_requirements),
+                balancerd_replicas: present_opt(balancerd_replicas),
+                console_replicas: present_opt(console_replicas),
+                service_account_name: present_opt(service_account_name),
+                service_account_annotations: present_opt(service_account_annotations),
+                service_account_labels: present_opt(service_account_labels),
+                pod_annotations: present_opt(pod_annotations),
+                pod_labels: present_opt(pod_labels),
+                request_rollout: present(request_rollout),
+                force_promote: present(force_promote),
+                force_rollout: present(force_rollout),
+                in_place_rollout: present(in_place_rollout),
+                rollout_strategy: present(rollout_strategy),
+                rollout_request_timeout: present(rollout_request_timeout),
+                backend_secret_name: present(backend_secret_name),
+                authenticator_kind: present(authenticator_kind),
+                enable_rbac: present(enable_rbac),
+                environment_id: present(environment_id),
+                system_parameter_configmap_name: present_opt(system_parameter_configmap_name),
+                balancerd_external_certificate_spec: present_opt(
+                    balancerd_external_certificate_spec,
+                ),
+                console_external_certificate_spec: present_opt(console_external_certificate_spec),
+                internal_certificate_spec: present_opt(internal_certificate_spec),
+                extra: serde_json::Map::new(),
+            }
+        }
+    }
+
+    impl From<MaterializeStatus> for PartialMaterializeStatus {
+        fn from(status: MaterializeStatus) -> Self {
+            let MaterializeStatus {
+                resource_id,
+                active_generation,
+                last_completed_rollout_request,
+                last_completed_rollout_environmentd_image_ref,
+                resources_hash,
+                last_completed_rollout_hash,
+                conditions,
+            } = status;
+            Self {
+                resource_id: present(resource_id),
+                active_generation: present(active_generation),
+                last_completed_rollout_request: present(last_completed_rollout_request),
+                last_completed_rollout_environmentd_image_ref: present_opt(
+                    last_completed_rollout_environmentd_image_ref,
+                ),
+                resources_hash: present(resources_hash),
+                last_completed_rollout_hash: present_opt(last_completed_rollout_hash),
+                conditions: present(conditions),
+                extra: serde_json::Map::new(),
+            }
+        }
+    }
+
+    impl From<Materialize> for PartialMaterialize {
+        fn from(mz: Materialize) -> Self {
+            let Materialize {
+                metadata,
+                spec,
+                status,
+            } = mz;
+            Self {
+                api_version: Some("materialize.cloud/v1alpha1".to_owned()),
+                kind: Some("Materialize".into()),
+                metadata: Some(
+                    serde_json::to_value(metadata).expect("ObjectMeta serializes to JSON"),
+                ),
+                spec: Some(spec.into()),
+                status: status.map(Into::into),
+                extra: serde_json::Map::new(),
+            }
+        }
+    }
+
+    impl From<super::v1::PartialMaterializeSpec> for PartialMaterializeSpec {
+        fn from(spec: super::v1::PartialMaterializeSpec) -> Self {
+            let super::v1::PartialMaterializeSpec {
+                environmentd_image_ref,
+                environmentd_extra_args,
+                environmentd_extra_env,
+                environmentd_connection_role_arn,
+                environmentd_resource_requirements,
+                environmentd_scratch_volume_storage_requirement,
+                balancerd_resource_requirements,
+                console_resource_requirements,
+                balancerd_replicas,
+                console_replicas,
+                service_account_name,
+                service_account_annotations,
+                service_account_labels,
+                pod_annotations,
+                pod_labels,
+                force_promote,
+                force_rollout,
+                rollout_strategy,
+                rollout_request_timeout,
+                backend_secret_name,
+                authenticator_kind,
+                enable_rbac,
+                environment_id,
+                system_parameter_configmap_name,
+                balancerd_external_certificate_spec,
+                console_external_certificate_spec,
+                internal_certificate_spec,
+                extra,
+            } = spec;
+            Self {
+                environmentd_image_ref,
+                environmentd_extra_args,
+                environmentd_extra_env,
+                environmentd_iam_role_arn: None,
+                environmentd_connection_role_arn,
+                environmentd_resource_requirements,
+                environmentd_scratch_volume_storage_requirement,
+                balancerd_resource_requirements,
+                console_resource_requirements,
+                balancerd_replicas,
+                console_replicas,
+                service_account_name,
+                service_account_annotations,
+                service_account_labels,
+                pod_annotations,
+                pod_labels,
+                // Derived from the complete spec. Spliced in by
+                // `convert_v1_to_v1alpha1` when the input is complete, left
+                // absent for partial objects so a field manager cannot gain
+                // ownership of a field it never set.
+                request_rollout: None,
+                force_promote,
+                force_rollout,
+                in_place_rollout: None,
+                rollout_strategy,
+                rollout_request_timeout,
+                backend_secret_name,
+                authenticator_kind,
+                enable_rbac,
+                environment_id,
+                system_parameter_configmap_name,
+                balancerd_external_certificate_spec,
+                console_external_certificate_spec,
+                internal_certificate_spec,
+                extra,
+            }
+        }
+    }
+
+    impl From<super::v1::PartialMaterializeStatus> for PartialMaterializeStatus {
+        fn from(status: super::v1::PartialMaterializeStatus) -> Self {
+            let super::v1::PartialMaterializeStatus {
+                resource_id,
+                active_generation,
+                last_completed_rollout_environmentd_image_ref,
+                last_completed_rollout_hash,
+                requested_rollout_hash: _,
+                conditions,
+                extra,
+            } = status;
+            Self {
+                resource_id,
+                active_generation,
+                // Derived from the complete object, spliced in by
+                // `convert_v1_to_v1alpha1` when the input is complete, left
+                // absent for partial objects so a field manager cannot gain
+                // ownership of fields it never set.
+                last_completed_rollout_request: None,
+                resources_hash: None,
+                last_completed_rollout_environmentd_image_ref,
+                last_completed_rollout_hash,
+                conditions,
+                extra,
+            }
+        }
+    }
+
+    impl From<super::v1::PartialMaterialize> for PartialMaterialize {
+        fn from(mz: super::v1::PartialMaterialize) -> Self {
+            let super::v1::PartialMaterialize {
+                api_version: _,
+                kind,
+                metadata,
+                spec,
+                status,
+                extra,
+            } = mz;
+            Self {
+                api_version: Some("materialize.cloud/v1alpha1".to_owned()),
+                kind,
+                metadata,
+                spec: spec.map(Into::into),
+                status: status.map(Into::into),
+                extra,
+            }
+        }
+    }
 }
 
 pub mod v1 {
@@ -1616,6 +2120,622 @@ pub mod v1 {
             mz
         }
     }
+
+    /// Partial mirror of [`MaterializeSpec`] for field-wise conversion of
+    /// objects that may be incomplete. See [`super::convert_v1alpha1_to_v1`].
+    ///
+    /// Each field is a [`PartialField`], distinguishing absent from explicit
+    /// null from a value, and unknown fields pass through via `extra`, so
+    /// serializing reproduces exactly what was deserialized. Adding a field
+    /// to [`MaterializeSpec`] breaks the exhaustive destructures in the
+    /// `From` impls below until its conversion is decided.
+    #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct PartialMaterializeSpec {
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub environmentd_image_ref: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub environmentd_extra_args: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub environmentd_extra_env: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub environmentd_connection_role_arn: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub environmentd_resource_requirements: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub environmentd_scratch_volume_storage_requirement: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub balancerd_resource_requirements: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub console_resource_requirements: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub balancerd_replicas: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub console_replicas: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub service_account_name: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub service_account_annotations: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub service_account_labels: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub pod_annotations: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub pod_labels: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub force_promote: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub force_rollout: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub rollout_strategy: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub rollout_request_timeout: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub backend_secret_name: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub authenticator_kind: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub enable_rbac: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub environment_id: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub system_parameter_configmap_name: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub balancerd_external_certificate_spec: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub console_external_certificate_spec: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub internal_certificate_spec: PartialField,
+        #[serde(flatten)]
+        pub extra: serde_json::Map<String, serde_json::Value>,
+    }
+
+    /// Partial mirror of [`MaterializeStatus`], see [`PartialMaterializeSpec`].
+    #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct PartialMaterializeStatus {
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub resource_id: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub active_generation: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub last_completed_rollout_environmentd_image_ref: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub last_completed_rollout_hash: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub requested_rollout_hash: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub conditions: PartialField,
+        #[serde(flatten)]
+        pub extra: serde_json::Map<String, serde_json::Value>,
+    }
+
+    /// Partial mirror of [`Materialize`], see [`PartialMaterializeSpec`].
+    #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct PartialMaterialize {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub api_version: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub kind: Option<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub metadata: Option<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub spec: Option<PartialMaterializeSpec>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub status: Option<PartialMaterializeStatus>,
+        #[serde(flatten)]
+        pub extra: serde_json::Map<String, serde_json::Value>,
+    }
+
+    impl From<MaterializeSpec> for PartialMaterializeSpec {
+        fn from(spec: MaterializeSpec) -> Self {
+            let MaterializeSpec {
+                environmentd_image_ref,
+                environmentd_extra_args,
+                environmentd_extra_env,
+                environmentd_connection_role_arn,
+                environmentd_resource_requirements,
+                environmentd_scratch_volume_storage_requirement,
+                balancerd_resource_requirements,
+                console_resource_requirements,
+                balancerd_replicas,
+                console_replicas,
+                service_account_name,
+                service_account_annotations,
+                service_account_labels,
+                pod_annotations,
+                pod_labels,
+                force_promote,
+                force_rollout,
+                rollout_strategy,
+                rollout_request_timeout,
+                backend_secret_name,
+                authenticator_kind,
+                enable_rbac,
+                environment_id,
+                system_parameter_configmap_name,
+                balancerd_external_certificate_spec,
+                console_external_certificate_spec,
+                internal_certificate_spec,
+            } = spec;
+            Self {
+                environmentd_image_ref: present(environmentd_image_ref),
+                environmentd_extra_args: present_opt(environmentd_extra_args),
+                environmentd_extra_env: present_opt(environmentd_extra_env),
+                environmentd_connection_role_arn: present_opt(environmentd_connection_role_arn),
+                environmentd_resource_requirements: present_opt(environmentd_resource_requirements),
+                environmentd_scratch_volume_storage_requirement: present_opt(
+                    environmentd_scratch_volume_storage_requirement,
+                ),
+                balancerd_resource_requirements: present_opt(balancerd_resource_requirements),
+                console_resource_requirements: present_opt(console_resource_requirements),
+                balancerd_replicas: present_opt(balancerd_replicas),
+                console_replicas: present_opt(console_replicas),
+                service_account_name: present_opt(service_account_name),
+                service_account_annotations: present_opt(service_account_annotations),
+                service_account_labels: present_opt(service_account_labels),
+                pod_annotations: present_opt(pod_annotations),
+                pod_labels: present_opt(pod_labels),
+                force_promote: present_opt(force_promote),
+                force_rollout: present(force_rollout),
+                rollout_strategy: present(rollout_strategy),
+                rollout_request_timeout: present(rollout_request_timeout),
+                backend_secret_name: present(backend_secret_name),
+                authenticator_kind: present(authenticator_kind),
+                enable_rbac: present(enable_rbac),
+                environment_id: present(environment_id),
+                system_parameter_configmap_name: present_opt(system_parameter_configmap_name),
+                balancerd_external_certificate_spec: present_opt(
+                    balancerd_external_certificate_spec,
+                ),
+                console_external_certificate_spec: present_opt(console_external_certificate_spec),
+                internal_certificate_spec: present_opt(internal_certificate_spec),
+                extra: serde_json::Map::new(),
+            }
+        }
+    }
+
+    impl From<MaterializeStatus> for PartialMaterializeStatus {
+        fn from(status: MaterializeStatus) -> Self {
+            let MaterializeStatus {
+                resource_id,
+                active_generation,
+                last_completed_rollout_environmentd_image_ref,
+                last_completed_rollout_hash,
+                requested_rollout_hash,
+                conditions,
+            } = status;
+            Self {
+                resource_id: present(resource_id),
+                active_generation: present(active_generation),
+                last_completed_rollout_environmentd_image_ref: present_opt(
+                    last_completed_rollout_environmentd_image_ref,
+                ),
+                last_completed_rollout_hash: present_opt(last_completed_rollout_hash),
+                requested_rollout_hash: present_opt(requested_rollout_hash),
+                conditions: present(conditions),
+                extra: serde_json::Map::new(),
+            }
+        }
+    }
+
+    impl From<Materialize> for PartialMaterialize {
+        fn from(mz: Materialize) -> Self {
+            let Materialize {
+                metadata,
+                spec,
+                status,
+            } = mz;
+            Self {
+                api_version: Some("materialize.cloud/v1".to_owned()),
+                kind: Some("Materialize".into()),
+                metadata: Some(
+                    serde_json::to_value(metadata).expect("ObjectMeta serializes to JSON"),
+                ),
+                spec: Some(spec.into()),
+                status: status.map(Into::into),
+                extra: serde_json::Map::new(),
+            }
+        }
+    }
+
+    impl From<super::v1alpha1::PartialMaterializeSpec> for PartialMaterializeSpec {
+        fn from(spec: super::v1alpha1::PartialMaterializeSpec) -> Self {
+            let super::v1alpha1::PartialMaterializeSpec {
+                environmentd_image_ref,
+                environmentd_extra_args,
+                environmentd_extra_env,
+                environmentd_iam_role_arn,
+                environmentd_connection_role_arn,
+                environmentd_resource_requirements,
+                environmentd_scratch_volume_storage_requirement,
+                balancerd_resource_requirements,
+                console_resource_requirements,
+                balancerd_replicas,
+                console_replicas,
+                service_account_name,
+                service_account_annotations,
+                service_account_labels,
+                pod_annotations,
+                pod_labels,
+                request_rollout: _,
+                force_promote,
+                force_rollout,
+                in_place_rollout: _,
+                rollout_strategy,
+                rollout_request_timeout,
+                backend_secret_name,
+                authenticator_kind,
+                enable_rbac,
+                environment_id,
+                system_parameter_configmap_name,
+                balancerd_external_certificate_spec,
+                console_external_certificate_spec,
+                internal_certificate_spec,
+                extra,
+            } = spec;
+            let service_account_annotations = merge_environmentd_iam_role_arn(
+                service_account_annotations,
+                environmentd_iam_role_arn,
+            );
+            // "" and the nil UUID mean "not force promoting" in v1alpha1,
+            // which v1 spells as an absent field.
+            let force_promote = match force_promote {
+                Some(Some(value)) if value == "" || value == NIL_UUID_STR => None,
+                other => other,
+            };
+            Self {
+                environmentd_image_ref,
+                environmentd_extra_args,
+                environmentd_extra_env,
+                environmentd_connection_role_arn,
+                environmentd_resource_requirements,
+                environmentd_scratch_volume_storage_requirement,
+                balancerd_resource_requirements,
+                console_resource_requirements,
+                balancerd_replicas,
+                console_replicas,
+                service_account_name,
+                service_account_annotations,
+                service_account_labels,
+                pod_annotations,
+                pod_labels,
+                force_promote,
+                force_rollout,
+                rollout_strategy,
+                rollout_request_timeout,
+                backend_secret_name,
+                authenticator_kind,
+                enable_rbac,
+                environment_id,
+                system_parameter_configmap_name,
+                balancerd_external_certificate_spec,
+                console_external_certificate_spec,
+                internal_certificate_spec,
+                extra,
+            }
+        }
+    }
+
+    impl From<super::v1alpha1::PartialMaterializeStatus> for PartialMaterializeStatus {
+        fn from(status: super::v1alpha1::PartialMaterializeStatus) -> Self {
+            let super::v1alpha1::PartialMaterializeStatus {
+                resource_id,
+                active_generation,
+                last_completed_rollout_request: _,
+                last_completed_rollout_environmentd_image_ref,
+                resources_hash: _,
+                last_completed_rollout_hash,
+                conditions,
+                extra,
+            } = status;
+            Self {
+                resource_id,
+                active_generation,
+                last_completed_rollout_environmentd_image_ref,
+                last_completed_rollout_hash,
+                // Derived from the complete object, spliced in by
+                // `convert_v1alpha1_to_v1` when the input is complete, left
+                // absent for partial objects so a field manager cannot gain
+                // ownership of a field it never set.
+                requested_rollout_hash: None,
+                conditions,
+                extra,
+            }
+        }
+    }
+
+    impl From<super::v1alpha1::PartialMaterialize> for PartialMaterialize {
+        fn from(mz: super::v1alpha1::PartialMaterialize) -> Self {
+            let super::v1alpha1::PartialMaterialize {
+                api_version: _,
+                kind,
+                metadata,
+                spec,
+                status,
+                extra,
+            } = mz;
+            Self {
+                api_version: Some("materialize.cloud/v1".to_owned()),
+                kind,
+                metadata,
+                spec: spec.map(Into::into),
+                status: status.map(Into::into),
+                extra,
+            }
+        }
+    }
+}
+
+/// The nil UUID rendered the way it appears in JSON-encoded specs.
+const NIL_UUID_STR: &str = "00000000-0000-0000-0000-000000000000";
+
+/// One field of a partial object: absent (`None`), explicit null
+/// (`Some(None)`), or a value (`Some(Some(_))`).
+///
+/// Values are untyped [`serde_json::Value`]s because conversion must be a
+/// total function over anything schema-shaped, including values that do not
+/// validate. The type system is used for field *names*: the partial mirror
+/// structs convert via exhaustive destructures, so adding a field to a spec
+/// without deciding its conversion does not compile.
+pub type PartialField = Option<Option<serde_json::Value>>;
+
+/// Serde adapter for [`PartialField`] distinguishing explicit null from an
+/// absent field. Use with `#[serde(default, with = "double_option",
+/// skip_serializing_if = "Option::is_none")]`.
+mod double_option {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn deserialize<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+    where
+        T: Deserialize<'de>,
+        D: Deserializer<'de>,
+    {
+        Option::<T>::deserialize(deserializer).map(Some)
+    }
+
+    pub fn serialize<T, S>(value: &Option<Option<T>>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        T: Serialize,
+        S: Serializer,
+    {
+        match value {
+            Some(inner) => inner.serialize(serializer),
+            // Unreachable under skip_serializing_if = "Option::is_none".
+            None => serializer.serialize_none(),
+        }
+    }
+}
+
+/// A [`PartialField`] holding a value that is always present in the typed
+/// struct.
+fn present<T: Serialize>(value: T) -> PartialField {
+    Some(Some(
+        serde_json::to_value(value).expect("CRD field serializes to JSON"),
+    ))
+}
+
+/// A [`PartialField`] from a typed optional field, absent when `None`.
+fn present_opt<T: Serialize>(value: Option<T>) -> PartialField {
+    value.map(|value| Some(serde_json::to_value(value).expect("CRD field serializes to JSON")))
+}
+
+/// Merges a v1alpha1 `environmentdIamRoleArn` value into the
+/// `serviceAccountAnnotations` map as `eks.amazonaws.com/role-arn`, matching
+/// the typed conversion. An existing annotation wins. Annotations that are
+/// not an object pass through untouched.
+fn merge_environmentd_iam_role_arn(
+    annotations: PartialField,
+    role_arn: PartialField,
+) -> PartialField {
+    let Some(Some(role_arn)) = role_arn else {
+        return annotations;
+    };
+    let mut map = match annotations {
+        Some(Some(serde_json::Value::Object(map))) => map,
+        Some(Some(other)) => return Some(Some(other)),
+        Some(None) | None => serde_json::Map::new(),
+    };
+    map.entry("eks.amazonaws.com/role-arn").or_insert(role_arn);
+    Some(Some(serde_json::Value::Object(map)))
+}
+
+/// Converts a JSON-encoded v1alpha1 Materialize object to v1, for use by the
+/// CRD conversion webhook.
+///
+/// Output fields are exactly the input fields, mapped field-wise, plus
+/// derived fields when the input is complete. Server-side apply round-trips
+/// each field manager's owned subset of an object through the conversion
+/// webhook when it reconciles managed fields recorded at another version.
+/// Those subsets routinely lack required fields, so conversion must accept
+/// partial objects, and it must not add fields the input did not carry,
+/// since a field manager must not gain ownership of fields it never set.
+///
+/// Fields derived from the complete spec (`status.requestedRolloutHash`
+/// here, `spec.requestRollout` in the other direction) cannot be computed
+/// from a subset, so they are spliced in from the typed conversion only when
+/// the input deserializes as a complete object. The request carries no
+/// indicator of partialness, so a subset that happens to contain every
+/// required field also gains the derived fields. That is the irreducible
+/// ambiguity, and it is limited to exactly those fields.
+pub fn convert_v1alpha1_to_v1(
+    value: serde_json::Value,
+) -> Result<serde_json::Value, anyhow::Error> {
+    let complete = serde_json::from_value::<v1alpha1::Materialize>(value.clone()).ok();
+    let partial: v1alpha1::PartialMaterialize = serde_json::from_value(value)?;
+    let mut converted = v1::PartialMaterialize::from(partial);
+    if let Some(complete) = complete {
+        let typed = v1::Materialize::from(complete);
+        if let (Some(status), Some(typed_status)) = (converted.status.as_mut(), typed.status) {
+            status.requested_rollout_hash = present_opt(typed_status.requested_rollout_hash);
+            status.last_completed_rollout_hash =
+                present_opt(typed_status.last_completed_rollout_hash);
+        }
+    }
+    Ok(serde_json::to_value(converted)?)
+}
+
+/// Converts a JSON-encoded v1 Materialize object to v1alpha1, for use by the
+/// CRD conversion webhook.
+///
+/// See [`convert_v1alpha1_to_v1`] for the conversion contract. In this
+/// direction the derived fields are `spec.requestRollout` and
+/// `status.lastCompletedRolloutRequest`, both deterministic UUIDs derived
+/// from rollout hashes of the complete object, and `status.resourcesHash`,
+/// which has no v1 counterpart but is required by the v1alpha1 schema
+/// whenever a status is present, so complete conversions must carry the
+/// typed conversion's placeholder to stay valid at the storage version.
+pub fn convert_v1_to_v1alpha1(
+    value: serde_json::Value,
+) -> Result<serde_json::Value, anyhow::Error> {
+    let complete = serde_json::from_value::<v1::Materialize>(value.clone()).ok();
+    let partial: v1::PartialMaterialize = serde_json::from_value(value)?;
+    let mut converted = v1alpha1::PartialMaterialize::from(partial);
+    if let Some(complete) = complete {
+        let typed = v1alpha1::Materialize::from(complete);
+        if let Some(spec) = converted.spec.as_mut() {
+            spec.request_rollout = present(typed.spec.request_rollout);
+        }
+        if let (Some(status), Some(typed_status)) = (converted.status.as_mut(), typed.status) {
+            status.last_completed_rollout_request =
+                present(typed_status.last_completed_rollout_request);
+            status.resources_hash = present(typed_status.resources_hash);
+        }
+    }
+    Ok(serde_json::to_value(converted)?)
 }
 
 fn parse_image_ref(image_ref: &str) -> Option<Version> {
@@ -2013,5 +3133,233 @@ mod tests {
             }),
         );
         assert_eq!(mz.active_environmentd_image_ref(), OLD);
+    }
+
+    // Server-side apply round-trips each field manager's owned subset of an
+    // object through the conversion webhook. Such subsets lack required
+    // fields, so conversion must map them field-wise instead of erroring.
+    #[mz_ore::test]
+    fn convert_partial_v1alpha1_to_v1() {
+        let subset = serde_json::json!({
+            "apiVersion": "materialize.cloud/v1alpha1",
+            "kind": "Materialize",
+            "metadata": {"name": "mz", "namespace": "materialize"},
+            "spec": {
+                "environmentdIamRoleArn": "arn:aws:iam::123456789012:role/mz",
+                "requestRollout": "1e6ef7bc-bff2-4bd4-90dc-eda5697bd0e6",
+                "inPlaceRollout": false,
+                "forcePromote": "",
+                "serviceAccountLabels": {"team": "data"},
+            },
+            "status": {
+                "activeGeneration": 3,
+                "lastCompletedRolloutRequest": "1e6ef7bc-bff2-4bd4-90dc-eda5697bd0e6",
+                "resourcesHash": "abc123",
+            },
+        });
+        let converted = super::convert_v1alpha1_to_v1(subset).unwrap();
+        assert_eq!(converted["apiVersion"], "materialize.cloud/v1");
+        assert_eq!(converted["kind"], "Materialize");
+        assert_eq!(converted["metadata"]["name"], "mz");
+        let spec = converted["spec"].as_object().unwrap();
+        assert!(!spec.contains_key("requestRollout"));
+        assert!(!spec.contains_key("inPlaceRollout"));
+        assert!(!spec.contains_key("forcePromote"));
+        assert!(!spec.contains_key("environmentdIamRoleArn"));
+        assert_eq!(
+            spec["serviceAccountAnnotations"]["eks.amazonaws.com/role-arn"],
+            "arn:aws:iam::123456789012:role/mz"
+        );
+        assert_eq!(spec["serviceAccountLabels"]["team"], "data");
+        let status = converted["status"].as_object().unwrap();
+        assert_eq!(status["activeGeneration"], 3);
+        assert!(!status.contains_key("lastCompletedRolloutRequest"));
+        assert!(!status.contains_key("resourcesHash"));
+        assert!(!status.contains_key("requestedRolloutHash"));
+
+        // A meaningful forcePromote value survives the conversion.
+        let subset = serde_json::json!({
+            "apiVersion": "materialize.cloud/v1alpha1",
+            "kind": "Materialize",
+            "metadata": {"name": "mz"},
+            "spec": {"forcePromote": "1e6ef7bc-bff2-4bd4-90dc-eda5697bd0e6"},
+        });
+        let converted = super::convert_v1alpha1_to_v1(subset).unwrap();
+        assert_eq!(
+            converted["spec"]["forcePromote"],
+            "1e6ef7bc-bff2-4bd4-90dc-eda5697bd0e6"
+        );
+    }
+
+    #[mz_ore::test]
+    fn convert_partial_v1_to_v1alpha1() {
+        let subset = serde_json::json!({
+            "apiVersion": "materialize.cloud/v1",
+            "kind": "Materialize",
+            "metadata": {"name": "mz"},
+            "spec": {"environmentdImageRef": "materialize/environmentd:v26.0.0"},
+            "status": {"requestedRolloutHash": "abc123", "activeGeneration": 1},
+        });
+        let converted = super::convert_v1_to_v1alpha1(subset).unwrap();
+        assert_eq!(converted["apiVersion"], "materialize.cloud/v1alpha1");
+        assert_eq!(
+            converted["spec"]["environmentdImageRef"],
+            "materialize/environmentd:v26.0.0"
+        );
+        let status = converted["status"].as_object().unwrap();
+        assert_eq!(status["activeGeneration"], 1);
+        assert!(!status.contains_key("requestedRolloutHash"));
+        assert!(!status.contains_key("resourcesHash"));
+        // Derived fields must not be invented for partial objects, a field
+        // manager must not gain ownership of fields it never set.
+        assert!(
+            !converted["spec"]
+                .as_object()
+                .unwrap()
+                .contains_key("requestRollout")
+        );
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `sha256_compress` on OS `linux`
+    fn convert_full_v1alpha1_to_v1_derives_fields() {
+        let mz = Materialize {
+            metadata: ObjectMeta {
+                name: Some("mz".to_owned()),
+                namespace: Some("materialize".to_owned()),
+                ..Default::default()
+            },
+            spec: MaterializeSpec {
+                environmentd_image_ref: "materialize/environmentd:v26.0.0".to_owned(),
+                backend_secret_name: "mz-backend".to_owned(),
+                ..Default::default()
+            },
+            status: Some(MaterializeStatus::default()),
+        };
+        let value = serde_json::to_value(&mz).unwrap();
+        let converted = super::convert_v1alpha1_to_v1(value).unwrap();
+        assert_eq!(converted["apiVersion"], "materialize.cloud/v1");
+        // Complete objects take the typed conversion, which computes fields
+        // derived from the whole spec.
+        assert!(converted["status"]["requestedRolloutHash"].is_string());
+    }
+
+    #[mz_ore::test]
+    fn convert_rejects_non_objects() {
+        assert!(super::convert_v1alpha1_to_v1(serde_json::json!("not an object")).is_err());
+        assert!(super::convert_v1_to_v1alpha1(serde_json::json!(42)).is_err());
+        assert!(
+            super::convert_v1alpha1_to_v1(serde_json::json!({"spec": "not an object"})).is_err()
+        );
+    }
+
+    #[mz_ore::test]
+    fn convert_preserves_null_vs_absent() {
+        let subset = serde_json::json!({
+            "apiVersion": "materialize.cloud/v1alpha1",
+            "kind": "Materialize",
+            "metadata": {"name": "mz"},
+            "spec": {
+                "environmentdExtraArgs": null,
+                "backendSecretName": "mz-backend",
+            },
+        });
+        let converted = super::convert_v1alpha1_to_v1(subset).unwrap();
+        let spec = converted["spec"].as_object().unwrap();
+        assert!(spec.contains_key("environmentdExtraArgs"));
+        assert!(spec["environmentdExtraArgs"].is_null());
+        assert!(!spec.contains_key("consoleReplicas"));
+    }
+
+    // A subset containing every required field deserializes as a complete
+    // object and takes the derived-field splice, but the conversion must
+    // still not add defaults or nulls for fields the subset did not carry.
+    // Field managers must not gain ownership of fields they never set.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `sha256_compress` on OS `linux`
+    fn convert_faithful_output_for_required_field_subsets() {
+        let subset = serde_json::json!({
+            "apiVersion": "materialize.cloud/v1alpha1",
+            "kind": "Materialize",
+            "metadata": {"name": "mz"},
+            "spec": {
+                "environmentdImageRef": "materialize/environmentd:v26.0.0",
+                "backendSecretName": "mz-backend",
+            },
+        });
+        let converted = super::convert_v1alpha1_to_v1(subset).unwrap();
+        let spec = converted["spec"].as_object().unwrap();
+        let mut keys: Vec<_> = spec.keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, ["backendSecretName", "environmentdImageRef"]);
+    }
+
+    #[mz_ore::test]
+    fn convert_passes_unknown_fields_through() {
+        let subset = serde_json::json!({
+            "apiVersion": "materialize.cloud/v1alpha1",
+            "kind": "Materialize",
+            "metadata": {"name": "mz"},
+            "spec": {"someFutureField": {"a": 1}},
+            "someTopLevelField": true,
+        });
+        let converted = super::convert_v1alpha1_to_v1(subset).unwrap();
+        assert_eq!(converted["spec"]["someFutureField"]["a"], 1);
+        assert_eq!(converted["someTopLevelField"], true);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `sha256_compress` on OS `linux`
+    fn convert_full_v1_to_v1alpha1_derives_request_rollout() {
+        let mz = super::v1::Materialize {
+            metadata: ObjectMeta {
+                name: Some("mz".to_owned()),
+                namespace: Some("materialize".to_owned()),
+                ..Default::default()
+            },
+            spec: super::v1::MaterializeSpec {
+                environmentd_image_ref: "materialize/environmentd:v26.0.0".to_owned(),
+                backend_secret_name: "mz-backend".to_owned(),
+                ..Default::default()
+            },
+            status: Some(super::v1::MaterializeStatus::default()),
+        };
+        let expected = Materialize::from(mz.clone()).spec.request_rollout;
+        let converted = super::convert_v1_to_v1alpha1(serde_json::to_value(&mz).unwrap()).unwrap();
+        assert_eq!(converted["apiVersion"], "materialize.cloud/v1alpha1");
+        assert_eq!(
+            converted["spec"]["requestRollout"],
+            expected.hyphenated().to_string()
+        );
+        // The status fields required by the v1alpha1 schema but absent from
+        // v1 must be spliced in, else the converted object fails validation
+        // at the storage version.
+        let status = converted["status"].as_object().unwrap();
+        assert!(status["resourcesHash"].is_string());
+        assert!(status["lastCompletedRolloutRequest"].is_string());
+    }
+
+    // The `From<Materialize> for PartialMaterialize` impls are the
+    // compile-time guard tying the partial mirrors to the typed structs.
+    // Their output must be faithful: unset optional fields stay absent
+    // rather than becoming nulls.
+    #[mz_ore::test]
+    fn partial_mirror_from_typed_omits_unset_fields() {
+        let mz = Materialize {
+            metadata: ObjectMeta::default(),
+            spec: MaterializeSpec {
+                environmentd_image_ref: "materialize/environmentd:v26.0.0".to_owned(),
+                backend_secret_name: "mz-backend".to_owned(),
+                ..Default::default()
+            },
+            status: None,
+        };
+        let value = serde_json::to_value(super::v1alpha1::PartialMaterialize::from(mz)).unwrap();
+        let spec = value["spec"].as_object().unwrap();
+        assert!(!spec.contains_key("balancerdReplicas"));
+        for (key, field_value) in spec {
+            assert!(!field_value.is_null(), "unexpected null for {key}");
+        }
+        assert!(!value.as_object().unwrap().contains_key("status"));
     }
 }

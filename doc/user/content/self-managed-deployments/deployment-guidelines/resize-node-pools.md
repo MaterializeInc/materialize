@@ -51,12 +51,12 @@ module "gke" {
   node_pools = [
     {
       name         = "materialize"
-      machine_type = "n2-highmem-8"
+      machine_type = "c4a-highmem-8-lssd"
       # ...
     },
     {
       name         = "materialize-xl"
-      machine_type = "n2-highmem-16"
+      machine_type = "c4a-highmem-16-lssd"
       # ... same labels and taints as above ...
     },
   ]
@@ -68,12 +68,14 @@ Or, if you're using a single-pool module wrapper, instantiate it twice:
 ```hcl
 module "materialize_nodepool" {
   # ... existing pool config ...
-  machine_type = "n2-highmem-8"
+  machine_type = "c4a-highmem-8-lssd"
 }
 
 module "materialize_nodepool_xl" {
-  # ... copy the existing config, change name and machine_type ...
-  machine_type = "n2-highmem-16"
+  # ... copy the existing config, change name and machine_type. For -lssd
+  # machine types, also update local_ssd_count to the variant's bundled
+  # disk count (c4a-highmem-16-lssd bundles 4) ...
+  machine_type = "c4a-highmem-16-lssd"
 }
 ```
 

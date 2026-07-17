@@ -1,6 +1,6 @@
 ---
 source: src/timestamp-oracle/src/postgres_oracle.rs
-revision: 6c2b81feaf
+revision: 83c55157ed
 ---
 
 # mz-timestamp-oracle::postgres_oracle

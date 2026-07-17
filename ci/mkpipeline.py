@@ -1178,7 +1178,7 @@ def add_cargo_test_dependency(
     sanitizer: Sanitizer,
     lto: bool,
 ) -> None:
-    """Cargo Test normally doesn't have to wait for the build to complete, but it requires a few images (ubuntu-base, postgres), which are rarely changed. So only add a dependency when those images are not on Dockerhub yet."""
+    """Cargo Test normally doesn't have to wait for the build to complete, but it requires a few images (debian-base, postgres), which are rarely changed. So only add a dependency when those images are not on Dockerhub yet."""
     if pipeline_name not in ("test", "nightly"):
         return
     if ui.env_is_truthy("BUILDKITE_PULL_REQUEST") and pipeline_name == "test":
@@ -1378,6 +1378,8 @@ def remove_mz_specific_keys(pipeline: Any) -> None:
             del step["sanitizer"]
         if "ci_glue_exempt" in step:
             del step["ci_glue_exempt"]
+        if "topics" in step:
+            del step["topics"]
         if (
             "timeout_in_minutes" not in step
             and "prompt" not in step

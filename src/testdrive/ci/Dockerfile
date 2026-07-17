@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-MZFROM ubuntu-base
+MZFROM debian-base
 
 RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -y install --no-install-recommends ca-certificates postgresql-client && apt-get clean && rm -rf /var/lib/apt/lists/*
 

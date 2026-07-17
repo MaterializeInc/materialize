@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/cluster_controller.rs
-revision: 73111c3e52
+revision: 8598d82c1c
 ---
 
 # adapter::coord::cluster_controller
@@ -13,8 +13,9 @@ Everything here is gated by `ENABLE_CLUSTER_CONTROLLER` (default off). With the 
 
 Key types and functions:
 
-* `ClusterControllerRequest` — the enum of requests the controller task marshals to the Coordinator: `ManagedClusterIds`, `ClusterStates` (batched read plus `now`), `Apply` (tick's decision batch), `TickInterval`. Each variant carries a oneshot for the reply.
+* `ClusterControllerRequest` — the enum of requests the controller task marshals to the Coordinator: `ManagedClusterIds`, `ClusterStates` (batched read; reply also carries `now`), `HydratedReplicas` (per-cluster live signal a strategy pulls on demand), `Apply` (tick's decision batch), `TickInterval`. Each variant carries a oneshot for the reply.
 * `CoordCtx` — the controller-task side of the `ClusterControllerCtx` boundary. Marshals every ctx call to the Coordinator via `internal_cmd_tx`. Latches `now` from the most recent `ClusterStates` reply so both phases of a tick see a consistent time.
 * `Coordinator::spawn_cluster_controller_task` — spawns the controller task. The task loops: reads the tick interval via a `TickInterval` request, sleeps, then calls `ClusterController::reconcile` if the gate is on. Called once at bootstrap.
-* `Coordinator::handle_cluster_controller_request` — the Coordinator-side handler for `Message::ClusterControllerRequest`. Dispatches each variant to the appropriate catalog/controller reads or applies the decision batch via `apply_cluster_controller_decisions`.
-* `Coordinator::apply_cluster_controller_decisions` — transacts a decision batch: for each `Decision`, checks `check_cluster_state` and, if the state still matches, creates or drops the replica or writes the state. Returns `ApplyOutcome::Rejected` if any check fails, `Applied` otherwise.
+* `Coordinator::handle_cluster_controller_request` — the Coordinator-side handler for `Message::ClusterControllerRequest`. Dispatches each variant to the appropriate catalog/controller reads or applies the decision batch via `apply_cluster_controller_decisions`. For `HydratedReplicas`, starts per-replica hydration checks on the coordinator loop (via `start_hydration_checks`) then waits for compute's replies off-loop in a spawned task.
+* `Coordinator::start_hydration_checks` — checks storage and compute hydration for a set of replicas on a cluster. Returns only replicas that are already storage-hydrated and known to the compute controller. Replica-pinned materialized views (those with `IN CLUSTER ... REPLICA`) are excluded from the hydration check for replicas they are not pinned to, so a graceful reconfiguration does not wait forever for a new replica to hydrate an MV bound to a replica being replaced.
+* `Coordinator::apply_cluster_controller_decisions` — transacts a decision batch: for each `Decision`, checks `check_cluster_state` and, if the state still matches, creates or drops the replica or writes the state. Returns `ApplyOutcome::Rejected` if any check fails, `ApplyOutcome::ResourceExhausted` if the batch exceeds the resource budget, and `Applied` otherwise. Create decisions carry a strategy attribution translated to a `ReplicaCreateDropReason` via `reason_from_strategies`: the graceful reconfiguration strategy maps to `GracefulReconfiguration`; all others map to `Manual`.
