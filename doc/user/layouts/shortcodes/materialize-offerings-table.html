@@ -1,3 +1,4 @@
+{{- $parentPath := partial "relative-link.html" . -}}
 <div class="table-container">
 <table>
   <thead>
@@ -12,7 +13,7 @@
       <td>Materialize Cloud</td>
       <td>Materialize Cloud is a fully-managed service for Materialize.</td>
       <td>
-        Sign up for a <a href="https://materialize.com/register/?utm_campaign=General&amp;utm_source=documentation">free trial account</a> on Materialize Cloud and try out the <a href="/get-started/quickstart/">Quickstart</a>.
+        Sign up for a <a href="https://materialize.com/register/?utm_campaign=General&amp;utm_source=documentation">free trial account</a> on Materialize Cloud and try out the <a href="{{ $parentPath }}{{ "/get-started/quickstart/" | relURL }}">Quickstart</a>.
       </td>
     </tr>
     <tr>
@@ -63,14 +64,14 @@
         </table>
       </td>
       <td>
-        <a href="/get-started/install/">Install self-managed</a> and try out the <a href="/get-started/quickstart/">Quickstart</a>, or see the <a href="/self-managed-deployments/">deployment guide</a> to compare editions.
+        <a href="{{ $parentPath }}{{ "/get-started/install/" | relURL }}">Install self-managed</a> and try out the <a href="{{ $parentPath }}{{ "/get-started/quickstart/" | relURL }}">Quickstart</a>, or see the <a href="{{ $parentPath }}{{ "/self-managed-deployments/" | relURL }}">deployment guide</a> to compare editions.
       </td>
     </tr>
     <tr>
       <td>Materialize Emulator</td>
       <td>Materialize Emulator is an all-in-one Docker image that provides the fastest way to get hands-on experience with Materialize for local development.</td>
       <td>
-        <a href="/get-started/install-materialize-emulator/">Download and run Materialize Emulator</a> and try out the <a href="/get-started/quickstart/">Quickstart</a>.
+        <a href="{{ $parentPath }}{{ "/get-started/install-materialize-emulator/" | relURL }}">Download and run Materialize Emulator</a> and try out the <a href="{{ $parentPath }}{{ "/get-started/quickstart/" | relURL }}">Quickstart</a>.
       </td>
     </tr>
   </tbody>
