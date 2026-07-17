@@ -47,11 +47,12 @@
 //! out as soon as they are written. Heap-backed chunks (oversize payloads
 //! and class-exhaustion fallbacks) sit outside the identity: they can never
 //! be evicted, so the budget is enforced against evictable bytes only.
-//! Nothing is ever both uncompressed and on the device. Pageout is observed
-//! rather than assumed: an extent counts against the compressed tier until
-//! `mincore` reports its whole range nonresident, so reclaim the kernel
-//! declines surfaces as `extent_pageout_incomplete` (and a tier settled
-//! above its capacity) instead of as RSS the ledger cannot see.
+//! Slots never reach the swap device: only compressed extents are offered
+//! to it. Pageout is observed rather than assumed: an extent counts against
+//! the compressed tier until the page table shows its whole range unmapped,
+//! so reclaim the kernel declines surfaces as `extent_pageout_incomplete`
+//! (and a tier settled above its capacity) instead of as RSS the ledger
+//! cannot see.
 //!
 //! Residency is a state, not a type. It descends through eviction and
 //! ascends through exactly one transition: an admitting read
@@ -203,8 +204,9 @@ pub struct PoolStats {
     /// stealing the slot of a clean backed victim of the same size class.
     /// The victim becomes `Evicted` with zero I/O and its extent intact.
     pub admissions_steal: u64,
-    /// Admitting reads of evicted chunks that found neither budget headroom
-    /// nor a clean victim and were served as a plain decompress instead.
+    /// Admitting reads of evicted chunks served as a plain decompress
+    /// instead: no budget headroom (or an exhausted size class), and no
+    /// clean victim whose growth the budget could absorb.
     pub admissions_denied: u64,
     /// Allocation bytes of compressed extents currently resident — the
     /// compressed-but-resident middle tier. Bounded by the RSS target;
@@ -220,11 +222,11 @@ pub struct PoolStats {
     /// Extents pushed to the swap device by RSS-target enforcement, with
     /// the whole range observed nonresident afterwards.
     pub extent_pageouts: u64,
-    /// Pageout passes whose residency observation found some of the
-    /// extent's pages still in memory: `MADV_PAGEOUT` may decline pages and
-    /// still succeed, so `mincore` decides. The extent keeps its full
-    /// resident accounting and is retried until its per-extent retry cap.
-    /// Climbing steadily on a loaded pool means pages cannot actually reach
+    /// Pageout passes whose observation found some of the extent's pages
+    /// still mapped: `MADV_PAGEOUT` may decline pages and still succeed, so
+    /// the page table decides. The extent keeps its full resident
+    /// accounting and is retried until its per-extent retry cap. Climbing
+    /// steadily on a loaded pool means pages cannot actually be unmapped to
     /// the swap device (no swap, or a cgroup that cannot reclaim).
     pub extent_pageout_incomplete: u64,
     /// Extent writes that fell back to the heap because their extent-arena
@@ -323,9 +325,11 @@ struct PoolInner {
     /// is the number of non-stale queue entries across all bands;
     /// [`PoolInner::prune_queues`] compacts the queues against it.
     live_chunks: AtomicU64,
-    /// Number of live chunks whose extent is currently resident, which is
-    /// the number of non-stale `extent_queue` entries;
-    /// [`PoolInner::prune_extent_queue`] compacts the queue against it.
+    /// Number of live chunks whose extent is currently resident, including
+    /// unreclaimable extents that deliberately hold no `extent_queue` entry
+    /// (heap-backed and retry-capped ones). It therefore upper-bounds the
+    /// queue's non-stale entries, and [`PoolInner::prune_extent_queue`]'s
+    /// compaction threshold is conservative by the unreclaimable count.
     extent_residents: AtomicU64,
     /// Single-flight claim for budget enforcement.
     enforcing: Mutex<()>,
@@ -1443,16 +1447,14 @@ impl PoolInner {
                 .resident_bytes
                 .fetch_sub(len_bytes, Ordering::Relaxed);
         }
-        if let Some(slot) = self.steal_clean_victim(class) {
-            // The victim's bytes left the ledger inside the steal and the
-            // admitted chunk's enter here. The slot's physical pages
-            // transfer deliberately, but only up to the admitted payload:
-            // the victim's pages past it would stay resident with no ledger
+        if let Some(slot) = self.steal_clean_victim(class, meta.len_bytes()) {
+            // The ledger was settled inside the steal: the victim's bytes
+            // out, the admitted chunk's in, with any growth reserved
+            // against the budget. The slot's physical pages transfer
+            // deliberately, but only up to the admitted payload: the
+            // victim's pages past it would stay resident with no ledger
             // bytes to answer for them.
             self.trim_slot_tail(class, slot, meta.len_bytes());
-            self.counters
-                .resident_bytes
-                .fetch_add(len_bytes, Ordering::Relaxed);
             self.counters
                 .admissions_steal
                 .fetch_add(1, Ordering::Relaxed);
@@ -1464,21 +1466,28 @@ impl PoolInner {
         None
     }
 
-    /// Takes the slot of a clean victim in `class`: a `BackedResident`
-    /// chunk with a clear touched bit, whose extent already duplicates its
-    /// slot, so the victim transitions to `Evicted` with zero I/O, its
-    /// extent intact, and its queue entry dropped. The returned slot keeps
-    /// its physical pages (no `dontneed`, no free-list round trip). They
-    /// hold the victim's stale bytes, and the victim's resident bytes have
-    /// left the ledger. `None` when the bounded scan finds no such victim.
+    /// Takes the slot of a clean victim in `class` for an admitted payload
+    /// of `admitted_len_bytes`: a `BackedResident` chunk with a clear
+    /// touched bit, whose extent already duplicates its slot, so the victim
+    /// transitions to `Evicted` with zero I/O, its extent intact, and its
+    /// queue entry dropped. The returned slot keeps its physical pages (no
+    /// `dontneed`, no free-list round trip). They hold the victim's stale
+    /// bytes. The ledger is settled inside the steal: the victim's bytes
+    /// leave and the admitted payload's enter in one step, and a steal that
+    /// grows resident bytes must fit the budget like any other admission
+    /// (a shrinking steal always may proceed). `None` when the bounded scan
+    /// finds no such victim, or none whose growth the budget can absorb.
     ///
     /// The caller holds its own chunk's state lock. The scan follows the
     /// enforcement discipline (deepest band first, queue guard dropped
     /// before any chunk lock, victims only ever `try_lock`ed), which is
     /// what keeps the chunk-lock-while-probing-chunk-lock window
     /// deadlock-free: two admitters stealing toward each other both fail
-    /// the `try_lock` and skip.
-    fn steal_clean_victim(&self, class: usize) -> Option<u32> {
+    /// the `try_lock` and skip. Unlike enforcement, the scan rotates
+    /// unsuitable entries (touched, wrong class, unbacked) to the back
+    /// without spending touched bits, shuffling FIFO order the way the
+    /// backing scan does.
+    fn steal_clean_victim(&self, class: usize, admitted_len_bytes: usize) -> Option<u32> {
         // Bound on entries examined per band before moving to the next.
         // The budget is per band, not shared across the scan: a deep band
         // densely populated with touched resident chunks (a probe-heavy
@@ -1524,11 +1533,31 @@ impl PoolInner {
                     self.queue(band).push_back(weak);
                     continue;
                 }
+                // Settle the ledger in one step: the victim's bytes out, the
+                // admitted payload's in. A steal that grows resident bytes
+                // is an admission and must fit the budget (against evictable
+                // bytes, as everywhere); a shrinking steal always may
+                // proceed. On failure the victim is requeued untouched.
+                let victim_len = u64::cast_from(meta.len_bytes());
+                let admitted_len = u64::cast_from(admitted_len_bytes);
+                let settled = self
+                    .counters
+                    .resident_bytes
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
+                        let next = cur.checked_add(admitted_len)?.saturating_sub(victim_len);
+                        let oversize = self.counters.oversize_bytes.load(Ordering::Relaxed);
+                        (next <= cur
+                            || next.saturating_sub(oversize)
+                                <= self.budget_bytes.load(Ordering::Relaxed))
+                        .then_some(next)
+                    })
+                    .is_ok();
+                if !settled {
+                    self.queue(band).push_back(weak);
+                    continue;
+                }
                 let slot = state.slot.take().expect("backed chunk has a slot");
                 state.residency = Residency::Evicted;
-                self.counters
-                    .resident_bytes
-                    .fetch_sub(u64::cast_from(meta.len_bytes()), Ordering::Relaxed);
                 return Some(slot);
             }
         }
@@ -1536,8 +1565,8 @@ impl PoolInner {
     }
 
     /// Capacity of the compressed-resident tier: the RSS target's headroom
-    /// above the slot budget and the warm cap. Zero when no target is set —
-    /// extents then page out as soon as written, today's pre-tier behavior.
+    /// above the slot budget and the warm cap. With no target set the tier
+    /// has zero capacity, so extents page out as soon as they are written.
     fn compressed_cap(&self) -> u64 {
         let target = self.rss_target_bytes.load(Ordering::Relaxed);
         let floor = self
@@ -1677,7 +1706,7 @@ impl PoolInner {
     /// Pages out the oldest resident extents until the compressed tier falls
     /// to its capacity. The compression is already paid and the device write
     /// is the kernel's async writeback, so each pageout is one bounded
-    /// madvise plus a mincore observation; spill threads run this between
+    /// madvise plus a page-table observation; spill threads run this between
     /// jobs, and other threads only when no spill threads exist (see
     /// [`PoolInner::enforce_or_defer_compressed_cap`]). Not single-flighted:
     /// concurrent passes pop disjoint victims. Visits are bounded by the
@@ -1808,6 +1837,12 @@ impl ChunkHandle {
     /// evicting or compressing anything. When neither source yields a slot
     /// the read is served as a plain decompress and the chunk stays
     /// evicted.
+    ///
+    /// For demand reads on probe paths, where the same chunk is likely to
+    /// be read again. Merge, drain, and other consume-once paths should use
+    /// [`ChunkHandle::read_into`] or [`ChunkHandle::take`]: admitting there
+    /// churns the clean-victim stock that eager backing exists to build,
+    /// evicting probe targets to house data about to die.
     pub fn read_into_admit(&self, dst: &mut Vec<u64>) {
         self.read_impl(dst, true);
     }
@@ -1867,8 +1902,11 @@ impl ChunkHandle {
                         dst.extend_from_slice(src);
                         // Resident again: rejoin the eviction candidates.
                         // A leftover entry from before the chunk's eviction
-                        // is a harmless duplicate, since each entry is
-                        // validated against the chunk's state on visit.
+                        // stays sound (each entry is validated against the
+                        // chunk's state on visit) but costs policy: two live
+                        // entries give the enforcer two chances to spend
+                        // this chunk's single touched bit, halving its
+                        // second chance until one entry drains.
                         meta.pool
                             .queue(band(meta.depth))
                             .push_back(Arc::downgrade(&self.meta));
@@ -1879,7 +1917,11 @@ impl ChunkHandle {
                         // read takes an initialized `&mut [u8]`, so skipping
                         // the fill would mean exposing uninitialized memory
                         // through a safe reference. Callers that read
-                        // repeatedly amortize it by reusing `dst`'s capacity.
+                        // repeatedly amortize it by reusing `dst` within a
+                        // pass, shrinking it back after oversized reads (a
+                        // reused buffer otherwise ratchets to the largest
+                        // chunk it ever carried, invisible to every pool
+                        // gauge; the design doc's reader discipline).
                         dst.resize(meta.len, 0);
                         let bytes: &mut [u8] = bytemuck::cast_slice_mut(dst.as_mut_slice());
                         extent.read_into(bytes);
@@ -2113,8 +2155,8 @@ mod tests {
         assert_eq!(pool.stats().extent_resident_bytes, 0);
     }
 
-    /// With no RSS target (the default), extents page out as soon as they
-    /// are written — the pre-tier behavior.
+    /// With no RSS target (the default), the compressed tier has zero
+    /// capacity and extents page out as soon as they are written.
     #[mz_ore::test]
     fn default_target_pages_extents_immediately() {
         let pool = test_pool(256 << 20);
@@ -2650,6 +2692,148 @@ mod tests {
         assert_eq!(stats.admissions_denied, 0);
         assert_eq!(stats.resident_bytes, 0);
         assert_eq!(stats.frees, 1);
+    }
+
+    /// A steal settles the ledger with the payload difference: a shrinking
+    /// steal always proceeds, while a steal that would grow resident bytes
+    /// past the budget is denied and leaves the victim untouched.
+    #[mz_ore::test]
+    fn steal_admission_charges_the_budget() {
+        // Shrinking steal: the victim is larger than the admitted payload,
+        // so the steal lowers resident bytes and always may proceed.
+        let pool = test_pool(256 << 20);
+        let victim_orig = payload(SMALL, 84);
+        let victim = insert(&pool, &mut victim_orig.clone());
+        assert!(pool.back_step(), "victim backs");
+        let small_orig = payload(SMALL / 2, 85);
+        let handle = insert(&pool, &mut small_orig.clone());
+        pool.evict(&handle);
+        pool.set_budget(64 << 10);
+        assert_eq!(read_admit(&handle), small_orig);
+        let stats = pool.stats();
+        assert_eq!(stats.admissions_steal, 1, "no headroom, so the read steals");
+        assert_eq!(stats.resident_bytes, u64::cast_from(SMALL / 2 * 8));
+        assert_eq!(victim.residency(), Residency::Evicted);
+        assert_eq!(read(&victim), victim_orig, "victim serves from its extent");
+
+        // Growing steal: the admitted payload is larger than the only
+        // victim, and the growth does not fit the budget, so the admission
+        // is denied and the victim is left untouched.
+        let pool = test_pool(256 << 20);
+        let big_orig = payload(SMALL, 86);
+        let big = insert(&pool, &mut big_orig.clone());
+        pool.evict(&big);
+        let small_victim = insert(&pool, &mut payload(SMALL / 2, 87));
+        assert!(pool.back_step(), "victim backs");
+        pool.set_budget(32 << 10);
+        assert_eq!(read_admit(&big), big_orig);
+        let stats = pool.stats();
+        assert_eq!(stats.admissions_denied, 1, "growth exceeds the budget");
+        assert_eq!(stats.admissions_steal, 0);
+        assert_eq!(big.residency(), Residency::Evicted);
+        assert_eq!(small_victim.residency(), Residency::BackedResident);
+    }
+
+    /// Admission of a chunk whose extent was pushed to the device: the read
+    /// revives the extent into the acquired slot and re-counts it.
+    #[mz_ore::test]
+    fn admission_revives_paged_out_extent() {
+        let pool = test_pool(256 << 20);
+        let orig = payload(SMALL, 88);
+        let handle = insert(&pool, &mut orig.clone());
+        pool.evict(&handle);
+        assert_eq!(
+            pool.stats().extent_resident_bytes,
+            0,
+            "zero RSS target pages the extent out on eviction",
+        );
+        // Raise the target so the read's own tier enforcement does not
+        // page the revived extent straight back out.
+        pool.set_rss_target(1 << 30);
+        assert_eq!(read_admit(&handle), orig);
+        assert_eq!(handle.residency(), Residency::BackedResident);
+        let stats = pool.stats();
+        assert_eq!(stats.admissions_budget, 1);
+        assert!(stats.extent_resident_bytes > 0, "revived and re-counted");
+    }
+
+    /// An admitting read of a chunk that is not evicted is a plain read:
+    /// no admission counter moves and no state changes.
+    #[mz_ore::test]
+    fn admit_is_plain_read_on_non_evicted_chunks() {
+        let pool = test_pool(256 << 20);
+        let orig = payload(SMALL, 89);
+        let resident = insert(&pool, &mut orig.clone());
+        assert_eq!(read_admit(&resident), orig);
+        assert_eq!(resident.residency(), Residency::UnbackedResident);
+        let words = SIZE_CLASSES[SIZE_CLASSES.len() - 1] / 8 + 1;
+        let oversize_orig = payload(words, 90);
+        let oversize = insert(&pool, &mut oversize_orig.clone());
+        assert_eq!(read_admit(&oversize), oversize_orig);
+        let empty = insert(&pool, &mut Vec::new());
+        assert!(read_admit(&empty).is_empty());
+        let stats = pool.stats();
+        assert_eq!(stats.admissions_budget, 0);
+        assert_eq!(stats.admissions_steal, 0);
+        assert_eq!(stats.admissions_denied, 0);
+    }
+
+    /// Concurrent admitting reads with no budget headroom: every admission
+    /// must go through the steal path, racing steals against each other on
+    /// the same victims (the pool's only two-chunk lock edge). Contents are
+    /// asserted on every read.
+    #[mz_ore::test]
+    fn concurrent_admits_exercise_the_steal_path() {
+        const CHUNKS: u64 = 8;
+        let pool = test_pool(usize::MAX);
+        let origs: Vec<_> = (0..CHUNKS).map(|seed| payload(SMALL, 900 + seed)).collect();
+        let evicted: Arc<Vec<(Vec<u64>, ChunkHandle)>> = Arc::new(
+            origs
+                .iter()
+                .map(|orig| {
+                    let handle = insert(&pool, &mut orig.clone());
+                    pool.evict(&handle);
+                    (orig.clone(), handle)
+                })
+                .collect(),
+        );
+        let mut victims = Vec::new();
+        for seed in 0..CHUNKS {
+            victims.push(insert(&pool, &mut payload(SMALL, 950 + seed)));
+            assert!(pool.back_step(), "victim backs");
+        }
+        // Exactly the victims' bytes: no free headroom, so every admission
+        // steals or is denied.
+        pool.set_budget(usize::cast_from(CHUNKS) * (64 << 10));
+        let threads: Vec<_> = (0..2u64)
+            .map(|t| {
+                let evicted = Arc::clone(&evicted);
+                std::thread::spawn(move || {
+                    for round in 0..CHUNKS {
+                        let (orig, handle) = &evicted[usize::cast_from((t + round) % CHUNKS)];
+                        let mut out = Vec::new();
+                        handle.read_into_admit(&mut out);
+                        assert_eq!(&out, orig);
+                    }
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().expect("admitting thread panicked");
+        }
+        let stats = pool.stats();
+        assert!(stats.admissions_steal > 0, "no headroom forces steals");
+        assert!(
+            stats.resident_bytes <= u64::cast_from(usize::cast_from(CHUNKS) * (64 << 10)),
+            "steals never grow resident bytes past the budget",
+        );
+        // The victims were held live as steal targets; a steal leaves its
+        // victim evicted, so at least one is evicted here.
+        let stolen = victims
+            .iter()
+            .filter(|v| v.residency() == Residency::Evicted)
+            .count();
+        assert!(stolen > 0, "a steal evicts its victim");
     }
 
     /// A re-admitted chunk keeps its insert-time depth: under budget

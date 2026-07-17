@@ -380,11 +380,13 @@ pub(crate) fn page_size() -> usize {
     sys::page_size()
 }
 
-/// Whether every page of the page-aligned subrange of `[ptr, ptr + len)` is
-/// out of memory, per `mincore(2)`: the observation the pageout ledger
-/// trusts instead of the reclaim advice's return value. Errs toward `false`
-/// (resident) when the observation is unavailable. In test builds the
-/// answer comes from [`fake_residency`] instead of the platform.
+/// Whether every page of the page-aligned subrange of `[ptr, ptr + len)`
+/// has been unmapped from this process, per the pagemap present bits: the
+/// observation the pageout ledger trusts instead of the reclaim advice's
+/// return value. A page unmapped to a swap entry counts as reclaimed even
+/// while its clean copy lingers in the kernel's swap cache. Errs toward
+/// `false` (resident) when the observation is unavailable. In test builds
+/// the answer comes from the `fake_residency` seam instead of the platform.
 pub(crate) fn nonresident(ptr: *mut u8, len: usize) -> bool {
     #[cfg(test)]
     {
@@ -620,8 +622,19 @@ mod sys {
     }
 
     /// Whether every page of the page-aligned subrange of `[ptr, ptr + len)`
-    /// is nonresident, per `mincore(2)`. A failed observation reports
-    /// `false`: the ledger keeps counting pages it cannot prove gone.
+    /// has been unmapped from this process, per the present bits in
+    /// `/proc/self/pagemap`. A failed observation reports `false`: the
+    /// ledger keeps counting pages it cannot prove gone.
+    ///
+    /// The present bit is the signal, deliberately not `mincore(2)`:
+    /// successful asynchronous reclaim unmaps the PTE to a swap entry while
+    /// the page's clean copy lingers in the kernel's swap cache, and mincore
+    /// reports swap-cache pages as in core. Observing in-core-ness would
+    /// therefore misclassify essentially every successful pageout on an
+    /// unpressured host (the retry advice cannot change the outcome either,
+    /// since the advice skips already-unmapped PTEs). An unmapped page is
+    /// reclaimed for this ledger's purposes: a clean swap-cache copy is
+    /// memory the kernel drops for free.
     ///
     /// Only Linux answers from the kernel. Elsewhere the reclaim advice is
     /// compiled out, so there is no reclaim to observe and the answer is
@@ -630,25 +643,47 @@ mod sys {
     pub(super) fn nonresident(ptr: *mut u8, len: usize) -> bool {
         #[cfg(target_os = "linux")]
         {
+            use std::cell::RefCell;
+            use std::os::unix::fs::FileExt;
+            use std::sync::OnceLock;
+
+            // Reading a process's own pagemap needs no privilege since
+            // Linux 4.2: unprivileged readers see zeroed frame numbers,
+            // which this probe never looks at.
+            static PAGEMAP: OnceLock<Option<std::fs::File>> = OnceLock::new();
+            let Some(pagemap) = PAGEMAP
+                .get_or_init(|| std::fs::File::open("/proc/self/pagemap").ok())
+                .as_ref()
+            else {
+                return false;
+            };
             let page = page_size();
             let Some((offset, sub_len)) = aligned_subrange(ptr.addr(), len, page) else {
                 // No whole page to observe: vacuously nonresident.
                 return true;
             };
-            // SAFETY: `offset <= len` (`aligned_subrange`'s contract), so the
-            // add stays within the caller's range and preserves provenance.
-            let aligned = unsafe { ptr.byte_add(offset) }.cast::<libc::c_void>();
-            // `sub_len` is a whole number of pages (`aligned_subrange`'s
-            // contract), one status byte each.
-            let mut status = vec![0u8; sub_len / page];
-            // SAFETY: pointer and length describe a fully page-aligned
-            // subrange of the caller's live mapping, and `status` holds one
-            // byte per page of it.
-            let rc = unsafe { libc::mincore(aligned, sub_len, status.as_mut_ptr().cast()) };
-            if rc != 0 {
-                return false;
+            let first_page = (ptr.addr() + offset) / page;
+            let pages = sub_len / page;
+            thread_local! {
+                static SCRATCH: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
             }
-            status.iter().all(|&page_status| page_status & 1 == 0)
+            SCRATCH.with(|scratch| {
+                let mut buf = scratch.borrow_mut();
+                buf.clear();
+                buf.resize(pages, 0);
+                let file_offset = u64::try_from(first_page).expect("page index fits u64") * 8;
+                if pagemap
+                    .read_exact_at(bytemuck::cast_slice_mut(buf.as_mut_slice()), file_offset)
+                    .is_err()
+                {
+                    return false;
+                }
+                // One native-endian u64 per page, per the kernel ABI
+                // (Documentation/admin-guide/mm/pagemap.rst); bit 63 is
+                // "present in RAM". A swap-entry PTE (bit 62) and a
+                // never-faulted zero entry are both out of memory.
+                buf.iter().all(|entry| entry & (1 << 63) == 0)
+            })
         }
         #[cfg(not(target_os = "linux"))]
         {

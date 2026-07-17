@@ -24,8 +24,8 @@
 //! `MADV_PAGEOUT`. "Read" issues
 //! `MADV_WILLNEED` ahead of the decompress (and makes the pages resident
 //! again); "free" returns the slot to the arena with its pages discarded,
-//! which also drops any swapped copy for free. Nothing is ever both
-//! uncompressed and on the device.
+//! which also drops any swapped copy for free. Chunk slots never reach the
+//! swap device: only these compressed extents are offered to it.
 //!
 //! The arena exists so that extent pages never belong to the global
 //! allocator: `MADV_PAGEOUT` over allocator-owned memory leaves swap-entry
@@ -37,10 +37,13 @@
 //! allocation (counted, never paged out) rather than failing.
 //!
 //! Pageout is observed, never assumed: `MADV_PAGEOUT` may decline any page
-//! and still return success (a transient extra reference fails isolation,
-//! the swap device may be full or absent), so after the advice `mincore`
+//! and still return success (a kernel-internal pin fails isolation, the
+//! swap device may be full or absent), so after the advice the page table
 //! decides whether the extent left memory, and the extent stays fully
-//! resident for accounting until its entire range is nonresident.
+//! resident for accounting until its entire range is unmapped. The
+//! observation reads pagemap present bits rather than `mincore`, which
+//! would count the clean swap-cache copies of successfully reclaimed pages
+//! as resident.
 
 use std::alloc::Layout;
 use std::io;
@@ -56,13 +59,14 @@ use crate::pool::region::{self, Region};
 const SIZE_PREFIX: usize = 4;
 
 /// Consecutive incomplete pageout passes after which an extent stops being
-/// advised out until a read faults it back in. Transient declines (a racing
-/// read holding an extra page reference, a momentary swap-slot allocation
-/// failure) clear as soon as the racing operation finishes, so a retry or
-/// two recovers them. Persistent declines (no swap device, an exhausted or
-/// unswappable cgroup) never clear, and further advice is pure page-table
-/// walking. Three passes covers the transient causes while bounding the
-/// wasted advice at two extra passes per extent.
+/// advised out until a read faults it back in. Transient declines are
+/// kernel-internal page pins that defeat the reclaim's isolation step (a
+/// folio sitting in another CPU's LRU batch, a momentary swap-slot
+/// allocation failure); they clear as soon as the pin drains, so a retry
+/// or two recovers them. Persistent declines (no swap device, an exhausted
+/// or unswappable cgroup) never clear, and further advice is pure
+/// page-table walking. Three passes covers the transient causes while
+/// bounding the wasted advice at two extra passes per extent.
 pub(crate) const PAGEOUT_RETRY_CAP: u8 = 3;
 
 /// The extent size-class ladder for a `page`-byte page size: `page`, then
@@ -315,11 +319,15 @@ impl SwapExtent {
 
     /// Hints the kernel to push the extent's pages to the swap device and
     /// observes the result: returns `true`, marking the extent non-resident,
-    /// only when the observation finds the whole range out of memory. An
+    /// only when the observation finds the whole range unmapped (a page
+    /// whose clean copy lingers in the swap cache counts as reclaimed). An
     /// incomplete pass leaves the extent fully resident for accounting and
-    /// spends one unit of the retry budget. Cheap: the compression is
-    /// already paid, the madvise and mincore are microseconds, and the
-    /// device write happens on the kernel's asynchronous writeback path.
+    /// spends one unit of the retry budget: a single pinned page keeps the
+    /// whole extent counted, which is the safe direction, and the retry
+    /// budget exists exactly for such transient pins. Cheap: the
+    /// compression is already paid, the madvise and page-table read are
+    /// microseconds, and the device write happens on the kernel's
+    /// asynchronous writeback path.
     ///
     /// Callers must not invoke this on a [`SwapExtent::pageout_capped`]
     /// extent.
