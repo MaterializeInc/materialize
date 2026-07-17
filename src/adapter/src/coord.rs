@@ -2047,6 +2047,18 @@ pub struct Coordinator {
     /// it manually.
     advance_timelines_interval: Interval,
 
+    /// The largest oracle write timestamp that this process has observed from
+    /// `write_ts` calls. Group commit uses it as a pacing hint to decide
+    /// whether to wait for the wall clock to catch up before committing,
+    /// without paying an oracle round trip for a `peek_write_ts`.
+    ///
+    /// This is a lower bound on the oracle's write timestamp, not
+    /// linearizability-relevant state: an underestimate only means a group
+    /// commit proceeds immediately and gets a timestamp ahead of `now()`,
+    /// which group commit explicitly tolerates. The bound self-corrects with
+    /// the `write_ts` result of that same commit.
+    last_seen_oracle_write_ts: Timestamp,
+
     /// Serialized DDL. DDL must be serialized because:
     /// - Many of them do off-thread work and need to verify the catalog is in a valid state, but
     ///   [`PlanValidity`] does not currently support tracking all changes. Doing that correctly
@@ -5037,6 +5049,7 @@ pub fn serve(
                     deferred_write_ops: BTreeMap::new(),
                     pending_writes: Vec::new(),
                     advance_timelines_interval,
+                    last_seen_oracle_write_ts: Timestamp::MIN,
                     secrets_controller,
                     caching_secrets_reader,
                     cloud_resource_controller,

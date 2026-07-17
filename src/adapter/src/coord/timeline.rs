@@ -123,12 +123,16 @@ impl Coordinator {
     /// timestamp to ensure they are not visible to any real-time earlier reads.
     #[instrument(name = "coord::get_local_write_ts")]
     pub(crate) async fn get_local_write_ts(&mut self) -> WriteTimestamp {
-        self.global_timelines
+        let write_ts = self
+            .global_timelines
             .get_mut(&Timeline::EpochMilliseconds)
             .expect("no realtime timeline")
             .oracle
             .write_ts()
-            .await
+            .await;
+        self.last_seen_oracle_write_ts =
+            std::cmp::max(self.last_seen_oracle_write_ts, write_ts.timestamp);
+        write_ts
     }
 
     /// Peek the current timestamp used for operations on local inputs. Used to determine how much
