@@ -15,6 +15,9 @@ export const INVOICE_FETCH_ERROR_MESSAGE =
 export const FORBIDDEN_PAYMENT_ERROR_MESSAGE =
   "Only organization admins can manage payment methods. Contact an admin to make changes.";
 
+export const ACCOUNT_SPEND_FETCH_ERROR_MESSAGE =
+  "An error occurred loading your usage";
+
 export const ROLLING_AVG_TIME_RANGE_LOOKBACK_DAYS = 30;
 
 export const costUnits = {

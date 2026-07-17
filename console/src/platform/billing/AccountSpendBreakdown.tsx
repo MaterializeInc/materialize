@@ -47,7 +47,11 @@ import {
   calculateTooltipPosition,
 } from "~/utils/graph";
 
-import { baseCellStyles, resourceTypePaddingLeft } from "./constants";
+import {
+  ACCOUNT_SPEND_FETCH_ERROR_MESSAGE,
+  baseCellStyles,
+  resourceTypePaddingLeft,
+} from "./constants";
 import {
   accountDailyTotals,
   accountIdsByTotal,
@@ -681,7 +685,6 @@ const AccountSpendBreakdown = ({
   days,
   isLoading,
   isError,
-  error,
   regionFilter,
   setRegionFilter,
   timeRange,
@@ -706,9 +709,7 @@ const AccountSpendBreakdown = ({
       {isLoading ? (
         <Spinner data-testid="account-breakdown-loading" />
       ) : isError ? (
-        <ErrorBox
-          message={error?.message || "There was an error fetching your usage."}
-        />
+        <ErrorBox message={ACCOUNT_SPEND_FETCH_ERROR_MESSAGE} />
       ) : !days || accountIds.length === 0 ? (
         <Text
           textStyle="text-ui-reg"
