@@ -20,7 +20,9 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Self-Managed: 2026-07-17* <br>
 
 ### Improved hydration times on Materialize Cloud {#v26.33-upgraded-cloud-hardware}
+
 *Materialize Cloud only*
+
 We've upgraded cluster hardware for all Materialize Cloud environments. The new hardware speeds up compute-intensive
 operations. We've observed a 10%–66% reduction in hydration times. You don't need to take any actions. The improvement is live across all Materialize Cloud
 environments, on all new and existing clusters. 
