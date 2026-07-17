@@ -28,10 +28,12 @@ serialization-failure retries that `SERIALIZABLE` incurs under contention,
 improving metadata write throughput. This is controlled by the new
 `persist_pg_consensus_read_committed` system parameter, which is off by default.
 
-The parameter applies only to PostgreSQL metadata databases and must stay off on
-CockroachDB, so Materialize Cloud and other CockroachDB-backed deployments are
-unaffected. Enable it only after your entire environment has finished upgrading to
-v26.33 or later. For details, see the [Self-Managed upgrade
+{{< note >}}
+The parameter applies only to PostgreSQL metadata databases. Only enable it 
+after you have upgraded your self-managed deployment to v26.33 or later.
+{{< /note >}}
+
+For details, see the [Self-Managed upgrade
 notes](/self-managed-deployments/upgrading/version-notes/).
 
 ## v26.32.0
