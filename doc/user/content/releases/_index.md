@@ -20,13 +20,16 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Self-Managed: 2026-07-17* <br>
 
 ### READ COMMITTED isolation for PostgreSQL metadata databases {#v26.33-pg-consensus-read-committed}
-Self-managed deployments that use a PostgreSQL metadata database can now run
-Materialize's internal consensus queries under `READ COMMITTED` transaction
-isolation instead of `SERIALIZABLE`. The consensus queries are designed to be
-linearizable under `READ COMMITTED`, and running under it avoids the
+
+*Materialize Self-Managed only*
+
+Starting in v26.33, self-managed deployments that use a PostgreSQL metadata
+database can configure Materialize to run its internal consensus queries under
+`READ COMMITTED` transaction isolation instead of `SERIALIZABLE`. The consensus
+queries are linearizable under `READ COMMITTED`, while avoiding the
 serialization-failure retries that `SERIALIZABLE` incurs under contention,
-improving metadata write throughput. This is controlled by the new
-`persist_pg_consensus_read_committed` system parameter, which is off by default.
+improving metadata write throughput. To use `READ COMMITTED`, Materialize
+introduces the `persist_pg_consensus_read_committed` system parameter.
 
 {{< note >}}
 The parameter applies only to PostgreSQL metadata databases. Only enable it 
