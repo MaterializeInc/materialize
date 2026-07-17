@@ -1719,6 +1719,12 @@ class FlipFlagsAction(Action):
             "100",
             "200",
         ]
+        self.flags_with_values["persist_pg_consensus_pipeline_depth"] = [
+            "0",
+            "1",
+            "16",
+            "1024",
+        ]
         self.flags_with_values["persist_source_fetch_concurrency"] = [
             "1",
             "2",

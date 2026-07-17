@@ -21,6 +21,24 @@ metrics:
   help: times a connection was created
   source: src/postgres-client/src/metrics.rs
   visibility: internal
+- name: '*_postgres_connpool_shared_inflight_bucket'
+  help: in-flight operations on a shared connection at acquisition
+  labels:
+  - le
+  source: src/postgres-client/src/metrics.rs
+  visibility: internal
+- name: '*_postgres_connpool_shared_inflight_count'
+  help: in-flight operations on a shared connection at acquisition
+  source: src/postgres-client/src/metrics.rs
+  visibility: internal
+- name: '*_postgres_connpool_shared_inflight_sum'
+  help: in-flight operations on a shared connection at acquisition
+  source: src/postgres-client/src/metrics.rs
+  visibility: internal
+- name: '*_postgres_connpool_shared_size'
+  help: connections in the shared set for pipelined operations
+  source: src/postgres-client/src/metrics.rs
+  visibility: internal
 - name: '*_postgres_connpool_size'
   help: number of connections currently in pool
   source: src/postgres-client/src/metrics.rs

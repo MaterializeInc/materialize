@@ -27,8 +27,6 @@ import json
 import threading
 import time
 
-import requests
-
 from materialize.mzcompose.composition import (
     Composition,
     Service,
@@ -128,7 +126,12 @@ class ConnectionSampler(threading.Thread):
                 "--format=tsv",
                 "--set=show_times=false",
                 "-e",
-                "SELECT count(*) FROM crdb_internal.cluster_sessions",
+                # Internal sessions and the sampler's own shell set an
+                # application_name starting with '$'; the benchmark's
+                # connections leave it unset. Without this filter the counts
+                # would include the sampler itself.
+                "SELECT count(*) FROM crdb_internal.cluster_sessions"
+                " WHERE application_name NOT LIKE '$%'",
                 capture=True,
             ).stdout.splitlines()[-1]
         return int(out)
@@ -182,29 +185,30 @@ def reset_consensus_table(c: Composition, backend: str) -> None:
 
 
 def setup_proxy(c: Composition, upstream: str, rtt_ms: int) -> None:
-    url = f"http://localhost:{c.port('toxiproxy', 8474)}"
+    # Drive the admin API through toxiproxy-cli inside the container rather
+    # than the host-mapped port, which keeps working when host-to-container
+    # forwarding is flaky on long-lived hosts.
+    def cli(*args: str, check: bool = True) -> None:
+        c.exec("toxiproxy", "/toxiproxy-cli", *args, check=check)
+
     # Idempotent across reruns against a still-running toxiproxy.
-    requests.delete(f"{url}/proxies/postgres")
-    r = requests.post(
-        f"{url}/proxies",
-        json={
-            "name": "postgres",
-            "listen": f"0.0.0.0:{PROXY_PORT}",
-            "upstream": upstream,
-        },
-    )
-    r.raise_for_status()
+    cli("delete", "postgres", check=False)
+    cli("create", "-l", f"0.0.0.0:{PROXY_PORT}", "-u", upstream, "postgres")
     if rtt_ms > 0:
-        r = requests.post(
-            f"{url}/proxies/postgres/toxics",
-            json={
-                "name": "rtt",
-                "type": "latency",
-                "stream": "downstream",
-                "attributes": {"latency": rtt_ms, "jitter": 0},
-            },
+        cli(
+            "toxic",
+            "add",
+            "-n",
+            "rtt",
+            "-t",
+            "latency",
+            "-a",
+            f"latency={rtt_ms}",
+            "-a",
+            "jitter=0",
+            "--downstream",
+            "postgres",
         )
-        r.raise_for_status()
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -212,7 +216,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--shards",
         nargs="+",
         type=int,
-        default=[8, 32, 128, 512],
+        default=[8, 32, 128, 512, 2048, 8192, 32768],
         help="shard counts to sweep",
     )
     parser.add_argument("--pool-size", type=int, default=50)
@@ -239,17 +243,36 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         " uses the production default)",
     )
     parser.add_argument(
+        "--pipeline-depth",
+        type=int,
+        default=None,
+        help="maximum in-flight ops per shared connection before new ops"
+        " wait for a slot (0 disables the limit, unset uses the production"
+        " default)",
+    )
+    parser.add_argument(
         "--backend",
         choices=["postgres", "cockroach"],
         default="postgres",
     )
     parser.add_argument("--fsync", choices=["on", "off"], default="on")
+    parser.add_argument(
+        "--crdb-in-memory",
+        action="store_true",
+        help="run CockroachDB with an in-memory store, removing the raft"
+        " disk-sync cost from commits (the CRDB analogue of --fsync off)",
+    )
     args = parser.parse_args()
 
     metadata_service = (
         "postgres-metadata" if args.backend == "postgres" else "cockroach"
     )
-    with c.override(postgres_service(args.fsync)):
+    crdb_override = (
+        [Cockroach(setup_materialize=True, in_memory=True)]
+        if args.crdb_in_memory
+        else []
+    )
+    with c.override(postgres_service(args.fsync), *crdb_override):
         results = run_benchmarks(c, args, metadata_service)
 
     print()
@@ -269,7 +292,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 def run_benchmarks(c: Composition, args, metadata_service: str) -> list[dict]:
     c.up(metadata_service, "toxiproxy", Service("persistcli", idle=True))
-    setup_proxy(c, f"{metadata_service}:26257", args.rtt_ms)
+    # The latency toxic delays each response chunk serially per stream, which
+    # penalizes pipelined connections in a way a real network does not. Runs
+    # with no added RTT therefore connect directly instead of through an
+    # unproxied toxiproxy, keeping them artifact-free.
+    if args.rtt_ms > 0:
+        setup_proxy(c, f"{metadata_service}:26257", args.rtt_ms)
+        consensus_addr = f"toxiproxy:{PROXY_PORT}"
+    else:
+        consensus_addr = f"{metadata_service}:26257"
 
     results = []
     for num_shards in args.shards:
@@ -279,7 +310,7 @@ def run_benchmarks(c: Composition, args, metadata_service: str) -> list[dict]:
         cmd = [
             "persistcli",
             "consensus-bench",
-            f"--consensus-uri=postgres://root@toxiproxy:{PROXY_PORT}"
+            f"--consensus-uri=postgres://root@{consensus_addr}"
             "?options=--search_path=consensus",
             f"--num-shards={num_shards}",
             f"--runtime={args.runtime}",
@@ -289,6 +320,8 @@ def run_benchmarks(c: Composition, args, metadata_service: str) -> list[dict]:
         ]
         if args.pipeline_connections is not None:
             cmd.append(f"--pipeline-connections={args.pipeline_connections}")
+        if args.pipeline_depth is not None:
+            cmd.append(f"--pipeline-depth={args.pipeline_depth}")
         # The READ COMMITTED query family is Postgres-only. CockroachDB always
         # runs the SERIALIZABLE CRDB_* queries.
         if not args.serializable and args.backend == "postgres":

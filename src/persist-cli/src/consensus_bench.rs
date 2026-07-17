@@ -28,7 +28,9 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::url::SensitiveUrl;
 use mz_persist::cfg::ConsensusConfig;
 use mz_persist::location::{CaSResult, Consensus, SeqNo, VersionedData};
-use mz_persist::postgres::PG_CONSENSUS_READ_COMMITTED;
+use mz_persist::postgres::{
+    PG_CONSENSUS_PIPELINE_CONNECTIONS, PG_CONSENSUS_PIPELINE_DEPTH, PG_CONSENSUS_READ_COMMITTED,
+};
 use mz_persist_client::ShardId;
 use mz_postgres_client::PostgresClientKnobs;
 use mz_postgres_client::metrics::PostgresClientMetrics;
@@ -79,6 +81,11 @@ pub struct Args {
     /// uses the production default.
     #[clap(long)]
     pipeline_connections: Option<usize>,
+
+    /// Maximum in-flight ops per shared connection before new ops wait for a
+    /// slot. 0 disables the limit. Unset uses the production default.
+    #[clap(long)]
+    pipeline_depth: Option<usize>,
 }
 
 #[derive(Debug)]
@@ -136,14 +143,14 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
     let mut updates = ConfigUpdates::default();
     updates.add(&PG_CONSENSUS_READ_COMMITTED, args.read_committed);
     if let Some(pipeline_connections) = args.pipeline_connections {
-        updates.add(
-            &mz_persist::postgres::PG_CONSENSUS_PIPELINE_CONNECTIONS,
-            pipeline_connections,
-        );
+        updates.add(&PG_CONSENSUS_PIPELINE_CONNECTIONS, pipeline_connections);
+    }
+    if let Some(pipeline_depth) = args.pipeline_depth {
+        updates.add(&PG_CONSENSUS_PIPELINE_DEPTH, pipeline_depth);
     }
     updates.apply(&configs);
-    let pipeline_connections =
-        mz_persist::postgres::PG_CONSENSUS_PIPELINE_CONNECTIONS.get(&configs);
+    let pipeline_connections = PG_CONSENSUS_PIPELINE_CONNECTIONS.get(&configs);
+    let pipeline_depth = PG_CONSENSUS_PIPELINE_DEPTH.get(&configs);
 
     let consensus = ConsensusConfig::try_from(
         &args.consensus_uri,
@@ -251,6 +258,7 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
         "num_shards": args.num_shards,
         "pool_size": args.pool_size,
         "pipeline_connections": pipeline_connections,
+        "pipeline_depth": pipeline_depth,
         "read_committed": args.read_committed,
         "data_size": args.data_size,
         "runtime_s": runtime_s,

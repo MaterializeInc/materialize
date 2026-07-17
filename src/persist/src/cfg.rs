@@ -36,6 +36,7 @@ pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&crate::postgres::PG_CONSENSUS_READ_COMMITTED)
         .add(&crate::postgres::PG_CONSENSUS_PIPELINE_CONNECTIONS)
+        .add(&crate::postgres::PG_CONSENSUS_PIPELINE_DEPTH)
 }
 
 /// Config for an implementation of [Blob].
