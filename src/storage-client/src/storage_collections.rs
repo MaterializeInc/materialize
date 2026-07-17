@@ -1683,6 +1683,20 @@ impl StorageCollections for StorageCollectionsImpl {
         ids_to_drop: BTreeSet<GlobalId>,
         ids_to_register: BTreeMap<GlobalId, ShardId>,
     ) -> Result<(), StorageError> {
+        // Durable metadata can outlive its collection. Reconcile it with live
+        // collection state so orphaned mappings do not block finalization.
+        let mut active_collection_ids: BTreeSet<_> = {
+            let collections = self.collections.lock().expect("poisoned");
+            collections
+                .iter()
+                .filter_map(|(id, collection)| {
+                    (!ids_to_drop.contains(id) && !collection.is_dropped()).then_some(*id)
+                })
+                .collect()
+        };
+        active_collection_ids.extend(ids_to_add.iter().copied());
+        active_collection_ids.extend(ids_to_register.keys().copied());
+
         txn.insert_collection_metadata(
             ids_to_add
                 .into_iter()
@@ -1707,9 +1721,11 @@ impl StorageCollections for StorageCollectionsImpl {
             }
         }
         let remaining_metadata = txn.get_collection_metadata();
-        let remaining_ids = remaining_metadata.keys().copied().collect();
-        let (referenced_shards, dropped_shards) =
-            partition_finalizable_shards(remaining_metadata, &remaining_ids, dropped_shards);
+        let (referenced_shards, dropped_shards) = partition_finalizable_shards(
+            remaining_metadata,
+            &active_collection_ids,
+            dropped_shards,
+        );
         if !referenced_shards.is_empty() {
             mz_ore::soft_panic_or_log!(
                 "dropped collections would finalize shards that active collections still use: \
@@ -2238,10 +2254,19 @@ impl StorageCollections for StorageCollectionsImpl {
         debug!(?identifiers, "drop_collections_unvalidated");
 
         let mut self_collections = self.collections.lock().expect("lock poisoned");
+        // Durable metadata can outlive its collection. Reconcile it with live
+        // collection state so orphaned mappings do not block finalization.
+        let dropping: BTreeSet<_> = identifiers.iter().copied().collect();
+        let active_collection_ids: BTreeSet<_> = self_collections
+            .iter()
+            .filter_map(|(id, collection)| {
+                (!dropping.contains(id) && !collection.is_dropped()).then_some(*id)
+            })
+            .collect();
         let shards_in_use: BTreeSet<_> = storage_metadata
             .collection_metadata
-            .values()
-            .copied()
+            .iter()
+            .filter_map(|(id, shard)| active_collection_ids.contains(id).then_some(*shard))
             .collect();
 
         // Policies that advance the since to the empty antichain. We do still
