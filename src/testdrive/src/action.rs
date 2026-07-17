@@ -877,6 +877,9 @@ impl Run for PosCommand {
                     "file-append" => file::run_append(builtin, state).await,
                     "file-delete" => file::run_delete(builtin, state).await,
                     "glue-create-schema" => glue::run_create_schema(builtin, state).await,
+                    "glue-verify-compatibility" => {
+                        glue::run_verify_compatibility(builtin, state).await
+                    }
                     "http-request" => http::run_request(builtin, state).await,
                     "kafka-add-partitions" => kafka::run_add_partitions(builtin, state).await,
                     "kafka-create-topic" => kafka::run_create_topic(builtin, state).await,

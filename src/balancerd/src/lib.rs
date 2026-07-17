@@ -34,8 +34,8 @@ use futures::TryFutureExt;
 use futures::stream::BoxStream;
 use hickory_resolver::config::LookupIpStrategy;
 use hickory_resolver::lookup_ip::LookupIp;
-use hickory_resolver::name_server::TokioConnectionProvider;
-use hickory_resolver::proto::rr::RecordType;
+use hickory_resolver::net::runtime::TokioRuntimeProvider;
+use hickory_resolver::proto::rr::{RData, RecordType};
 use hickory_resolver::system_conf::read_system_conf;
 use hickory_resolver::{Resolver, TokioResolver};
 use hyper::StatusCode;
@@ -1518,9 +1518,9 @@ fn create_resolver() -> Result<TokioResolver, anyhow::Error> {
     opts.ip_strategy = LookupIpStrategy::Ipv4thenIpv6;
 
     Ok(
-        Resolver::builder_with_config(config, TokioConnectionProvider::default())
+        Resolver::builder_with_config(config, TokioRuntimeProvider::default())
             .with_options(opts)
-            .build(),
+            .build()?,
     )
 }
 
@@ -1547,8 +1547,8 @@ impl TenantDnsResolver {
     async fn resolve_cname(&self, hostname: &str) -> Option<String> {
         match self.resolver.lookup(hostname, RecordType::CNAME).await {
             Ok(cname_response) => {
-                if let Some(cname_record) = cname_response.iter().next() {
-                    if let Some(cname_data) = cname_record.as_cname() {
+                if let Some(cname_record) = cname_response.answers().first() {
+                    if let RData::CNAME(cname_data) = &cname_record.data {
                         let cname = cname_data.to_string();
                         debug!("CNAME for {}: {}", hostname, cname);
                         return Some(cname);

@@ -660,11 +660,9 @@ class CopyFromS3Action(Action):
                 # CSV cannot distinguish NULL from the empty string, so the
                 # roundtrip can produce NULLs for NOT NULL columns.
                 "violates not-null constraint",
-                # COPY TO can write types (e.g. arrays) that COPY FROM's
-                # parquet reader cannot decode yet.
+                "timeout: error trying to connect",
                 # TODO: Remove when https://linear.app/materializeinc/issue/SS-341 is fixed
                 "parquet error",
-                "timeout: error trying to connect",
             ]
         )
         if exe.db.complexity == Complexity.DDL:
@@ -1295,6 +1293,7 @@ class ReplaceMaterializedViewAction(Action):
         errors = [
             # A concurrent or leaked replacement of the same view
             "because it already has a replacement",
+            "is sealed and thus cannot be replaced",
         ] + super().errors_to_ignore(exe)
         if exe.db.scenario == Scenario.Rename:
             # The view's rendered SELECT embeds qualified names captured at
@@ -1322,11 +1321,7 @@ class ReplaceMaterializedViewAction(Action):
         )
         time.sleep(self.rng.random())
         try:
-            # Also run ALTER MATERIALIZED VIEW {view} APPLY REPLACEMENT
-            # {tmp_mv} here, applying while the target has a temporary
-            # dependent panics the coordinator's consistency check.
-            # TODO: Reenable when https://linear.app/materializeinc/issue/SQL-504 is fixed
-            exe.execute(f"DROP MATERIALIZED VIEW {tmp_mv}")
+            exe.execute(f"ALTER MATERIALIZED VIEW {view} APPLY REPLACEMENT {tmp_mv}")
         except QueryError:
             # Clean up, a leaked replacement blocks all future replacements
             # of this view.
@@ -2112,6 +2107,8 @@ class FlipFlagsAction(Action):
             # it low would make ordinary DELETE/UPDATE/INSERT ... SELECT fail,
             # which the workload does not expect.
             "read_then_write_max_dependencies",
+            "enable_hydration_burst",
+            "default_hydration_burst_linger",
         ]
 
     def run(self, exe: Executor) -> bool:

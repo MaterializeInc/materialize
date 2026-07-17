@@ -133,6 +133,13 @@ target  jsonb  The␠config␠shape␠the␠cluster␠is␠reconfiguring␠to,�
 changes  jsonb  The␠dimensions␠in␠which␠`target`␠differs␠from␠the␠cluster's␠realized␠configuration,␠as␠a␠JSON␠object␠holding␠the␠target␠value␠per␠changed␠dimension.␠Empty␠(`{}`)␠once␠a␠record␠settles␠with␠its␠target␠applied.␠A␠rolled-back␠record␠keeps␠the␠abandoned␠diff.
 
 query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_auto_scaling_strategies' ORDER BY position
+----
+cluster_id  text  The␠ID␠of␠the␠cluster.␠Corresponds␠to␠`mz_clusters.id`.
+strategy  jsonb  **Unstable**␠The␠configured␠autoscaling␠policy,␠as␠JSON.␠Currently␠an␠`on_hydration`␠sub-policy␠carrying␠its␠`hydration_size`␠and␠optional␠`linger_duration`.
+state  jsonb  **Unstable**␠The␠in-flight␠autoscaling␠runtime␠state,␠as␠JSON␠keyed␠by␠strategy,␠or␠`NULL`␠when␠nothing␠is␠running.␠Currently␠a␠`burst`␠key␠carrying␠the␠active␠hydration␠burst:␠its␠`burst_size`,␠`linger_duration`,␠and␠`steady_hydrated_at`.
+
+query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_metrics' ORDER BY position
 ----
 replica_id  text  The␠ID␠of␠a␠cluster␠replica.

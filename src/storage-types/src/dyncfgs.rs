@@ -351,7 +351,7 @@ pub const STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT: Config<bool> = Config::new(
 /// Whether to use the v2 upsert operator.
 pub const ENABLE_UPSERT_V2: Config<bool> = Config::new(
     "enable_upsert_v2",
-    true,
+    false,
     "Whether to use the v2 upsert operator.",
 );
 

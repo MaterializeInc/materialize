@@ -414,9 +414,9 @@ impl Cluster {
                 replication_factor,
                 optimizer_feature_overrides,
                 schedule,
-                // Not surfaced in the create plan: these are controller-managed
-                // runtime state and (for the policy) a separate SQL surface.
-                auto_scaling_strategy: _,
+                auto_scaling_strategy,
+                // In-flight runtime records, controller-managed and not part of
+                // the create statement.
                 reconfiguration: _,
                 burst: _,
             }) => {
@@ -441,6 +441,7 @@ impl Cluster {
                     compute,
                     optimizer_feature_overrides: optimizer_feature_overrides.clone(),
                     schedule: schedule.clone(),
+                    auto_scaling_strategy: auto_scaling_strategy.clone(),
                 })
             }
             ClusterVariant::Unmanaged => {
@@ -2450,6 +2451,27 @@ impl CatalogItem {
         }
     }
 
+    /// Whether this item runs a dataflow on its cluster's replicas and so has
+    /// hydration state: an index, materialized view, sink, or ingestion
+    /// source. Non-ingestion sources (webhooks, ingestion exports) are bound
+    /// to a cluster but run no dataflow on any replica.
+    pub fn is_hydratable(&self) -> bool {
+        match self {
+            CatalogItem::Index(_) | CatalogItem::MaterializedView(_) | CatalogItem::Sink(_) => true,
+            CatalogItem::Source(source) => matches!(
+                source.data_source,
+                DataSourceDesc::Ingestion { .. } | DataSourceDesc::OldSyntaxIngestion { .. }
+            ),
+            CatalogItem::Table(_)
+            | CatalogItem::Log(_)
+            | CatalogItem::View(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_) => false,
+        }
+    }
+
     pub fn cluster_id(&self) -> Option<ClusterId> {
         match self {
             CatalogItem::MaterializedView(mv) => Some(mv.cluster_id),
@@ -3394,6 +3416,26 @@ impl ClusterVariantManaged {
             logging: logging.clone(),
         }
     }
+
+    /// Whether the in-flight `burst` record is no longer warranted by this
+    /// config: the `ON HYDRATION` policy was removed or re-sized away from the
+    /// record's size, or the cluster was turned off (`replication_factor` 0).
+    /// `false` when there is no record.
+    pub fn has_unwarranted_burst_record(&self) -> bool {
+        let Some(record) = &self.burst else {
+            return false;
+        };
+        let hydration_size = self
+            .auto_scaling_strategy
+            .as_ref()
+            .and_then(|strategy| strategy.on_hydration.as_ref())
+            .map(|policy| policy.hydration_size.as_str());
+        !mz_adapter_types::cluster_state::burst_record_warranted(
+            &record.burst_size,
+            self.replication_factor,
+            hydration_size,
+        )
+    }
 }
 
 impl From<ClusterVariantManaged> for durable::ClusterVariantManaged {
@@ -3875,6 +3917,15 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
         }
     }
 
+    fn auto_scaling_strategy(&self) -> Option<&AutoScalingStrategy> {
+        match &self.config.variant {
+            ClusterVariant::Managed(ClusterVariantManaged {
+                auto_scaling_strategy,
+                ..
+            }) => auto_scaling_strategy.as_ref(),
+            ClusterVariant::Unmanaged => None,
+        }
+    }
     fn try_to_plan(&self) -> Result<CreateClusterPlan, PlanError> {
         self.try_to_plan()
     }

@@ -2247,6 +2247,8 @@ impl_display_t!(CreateTypeStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ClusterOptionName {
+    /// The `AUTO SCALING STRATEGY [[=] (...)]` option.
+    AutoScalingStrategy,
     /// The `AVAILABILITY ZONES [[=] '[' <values> ']' ]` option.
     AvailabilityZones,
     /// The `DISK` option.
@@ -2272,6 +2274,7 @@ pub enum ClusterOptionName {
 impl AstDisplay for ClusterOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
+            ClusterOptionName::AutoScalingStrategy => f.write_str("AUTO SCALING STRATEGY"),
             ClusterOptionName::AvailabilityZones => f.write_str("AVAILABILITY ZONES"),
             ClusterOptionName::Disk => f.write_str("DISK"),
             ClusterOptionName::IntrospectionDebugging => f.write_str("INTROSPECTION DEBUGGING"),
@@ -2294,7 +2297,8 @@ impl WithOptionName for ClusterOptionName {
     /// on the conservative side and return `true`.
     fn redact_value(&self) -> bool {
         match self {
-            ClusterOptionName::AvailabilityZones
+            ClusterOptionName::AutoScalingStrategy
+            | ClusterOptionName::AvailabilityZones
             | ClusterOptionName::Disk
             | ClusterOptionName::IntrospectionDebugging
             | ClusterOptionName::IntrospectionInterval
@@ -4447,6 +4451,7 @@ pub enum WithOptionValue<T: AstInfo> {
     RetainHistoryFor(Value),
     Refresh(RefreshOptionValue<T>),
     ClusterScheduleOptionValue(ClusterScheduleOptionValue),
+    ClusterAutoScalingStrategyOptionValue(ClusterAutoScalingStrategyOptionValue),
     ClusterAlterStrategy(ClusterAlterOptionValue<T>),
     NetworkPolicyRules(Vec<NetworkPolicyRuleDefinition<T>>),
 }
@@ -4483,6 +4488,7 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
                 | WithOptionValue::KafkaMatchingBrokerRule(_)
                 | WithOptionValue::ClusterReplicas(_)
                 | WithOptionValue::ClusterScheduleOptionValue(_)
+                | WithOptionValue::ClusterAutoScalingStrategyOptionValue(_)
                 | WithOptionValue::ClusterAlterStrategy(_)
                 | WithOptionValue::NetworkPolicyRules(_) => {
                     // These do not need redaction.
@@ -4544,6 +4550,7 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
             }
             WithOptionValue::Refresh(opt) => f.write_node(opt),
             WithOptionValue::ClusterScheduleOptionValue(value) => f.write_node(value),
+            WithOptionValue::ClusterAutoScalingStrategyOptionValue(value) => f.write_node(value),
             WithOptionValue::ClusterAlterStrategy(value) => f.write_node(value),
         }
     }
@@ -4642,6 +4649,67 @@ impl AstDisplay for ClusterScheduleOptionValue {
                 }
             }
         }
+    }
+}
+
+/// The value of the `AUTO SCALING STRATEGY` cluster option: the autoscaling
+/// policy block. Extensible: future strategies are additional optional
+/// sub-policies, so the block grows without changing existing ones. An empty
+/// block (all sub-policies absent) disables autoscaling for the cluster, the same
+/// as `RESET (AUTO SCALING STRATEGY)`.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Deserialize,
+    Serialize
+)]
+pub struct ClusterAutoScalingStrategyOptionValue {
+    pub on_hydration: Option<OnHydrationOptionValue>,
+}
+
+impl AstDisplay for ClusterAutoScalingStrategyOptionValue {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("(");
+        if let Some(on_hydration) = &self.on_hydration {
+            f.write_node(on_hydration);
+        }
+        f.write_str(")");
+    }
+}
+
+/// The `ON HYDRATION` autoscaling sub-policy: while objects are un-hydrated, run
+/// an extra replica at `hydration_size` to accelerate hydration, lingering for
+/// `linger_duration` after the steady-state replicas hydrate.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Deserialize,
+    Serialize
+)]
+pub struct OnHydrationOptionValue {
+    pub hydration_size: Value,
+    pub linger_duration: Option<Value>,
+}
+
+impl AstDisplay for OnHydrationOptionValue {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("ON HYDRATION (HYDRATION SIZE = ");
+        f.write_node(&self.hydration_size);
+        if let Some(linger_duration) = &self.linger_duration {
+            f.write_str(", LINGER DURATION = ");
+            f.write_node(linger_duration);
+        }
+        f.write_str(")");
     }
 }
 

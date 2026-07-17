@@ -2143,6 +2143,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_auto_scaling_strategy,
+        desc: "`AUTO SCALING STRATEGY` cluster option",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_reduce_mfp_fusion,
         desc: "fusion of MFPs in reductions",
         default: true,

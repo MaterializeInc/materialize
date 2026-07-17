@@ -18,7 +18,7 @@ process or external server is required.
 
 ## Overview
 
-You can connect an MCP-compatible client (such as Claude Code, Claude Desktop,
+You can connect an MCP-compatible client (such as Claude Code, Claude Cowork,
 or Cursor) to the MCP server to:
 
 - Ask questions about the Materialize system
@@ -123,9 +123,9 @@ your MCP client. The `materialize-developer` MCP server URL has the form:
 
 {{< /tab >}}
 
-{{< tab "Claude Desktop/Chrome" >}}
+{{< tab "Claude Cowork/Chrome" >}}
 
-To configure Claude Desktop/Chrome, add a custom connector. The exact steps
+To configure Claude Cowork/Chrome, add a custom connector. The exact steps
 depend on your Claude plan; for example:
 
 - **Organization settings** → **Connectors** → **Add** → **Custom** → **Web**,
@@ -385,32 +385,56 @@ When saving your credentials or other sensitive information in a config file, do
 
 {{< /tab >}}
 
-{{< tab "Claude Desktop" >}}
+{{< tab "Claude Cowork" >}}
 
-1. Add the `materialize-developer` MCP server entry to your Claude Desktop
+Claude Cowork's `claude_desktop_config.json` does not connect to a remote MCP
+server directly. Use the
+[`mcp-remote`](https://www.npmjs.com/package/mcp-remote) bridge, which runs
+locally and forwards requests to the `materialize-developer` MCP server over
+HTTP. `mcp-remote` is invoked with `npx` and requires
+[Node.js](https://nodejs.org/).
+
+{{< note >}}
+[`mcp-remote`](https://github.com/geelen/mcp-remote) is a third-party,
+community-maintained tool. It is not maintained by Anthropic or Materialize.
+Your MCP token is passed to it on each launch. The configuration below pins a
+specific version rather than pulling the latest release. Review the tool and
+update the pinned version as appropriate for your environment.
+{{< /note >}}
+
+1. Add the `materialize-developer` MCP server entry to your Claude Cowork
    configuration (`claude_desktop_config.json`).
    - When merging into an existing `mcpServers` object, remember to add commas
      between entries.
    - If the `mcpServers` field does not already exist, add it as well.
-   - For older Claude Desktop versions, you may need to include the transport
-     `"type": "http",` as well as part of the `materialize-developer` entry.
 
-   ```json {hl_lines="3-8"}
+   ```json {hl_lines="3-14"}
    {
      "mcpServers": {
        "materialize-developer": {
-         "url": "<baseURL>/api/mcp/developer",
-         "headers": {
-           "Authorization": "Basic <mcp-token>"
+         "command": "npx",
+         "args": [
+           "-y", "mcp-remote@0.1.38",
+           "<baseURL>/api/mcp/developer",
+           "--header", "Authorization:${AUTH_HEADER}"
+         ],
+         "env": {
+           "AUTH_HEADER": "Basic <mcp-token>"
          }
        }
      }
    }
    ```
 
+   The `Authorization` header value is passed through the `AUTH_HEADER`
+   environment variable. This avoids a known `mcp-remote` issue where a space in
+   a `--header` argument (such as the space in `Basic <mcp-token>`) is
+   mishandled on some platforms. The colon in `"Authorization:${AUTH_HEADER}"`
+   has no trailing space.
+
    {{% include-headless "/headless/mcp-endpoint-config-replacements" %}}
 
-1. Restart Claude Desktop to pick up the new setting.
+1. Restart Claude Cowork to pick up the new setting.
 
 1. Upon successful connection, you can [Start asking
    questions](#start-asking-questions).
