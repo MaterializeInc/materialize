@@ -21,7 +21,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 
 ### Improved hydration times on Materialize Cloud {#v26.33-upgraded-cloud-hardware}
 
-*Materialize Cloud only*
+<red>*Materialize Cloud only*</red>
 
 We've upgraded cluster hardware for all Materialize Cloud environments. The new hardware speeds up compute-intensive
 operations. We've observed a 10%–66% reduction in hydration times. You don't need to take any actions. The improvement is live across all Materialize Cloud
@@ -29,7 +29,7 @@ environments, on all new and existing clusters.
 
 ### READ COMMITTED isolation for PostgreSQL metadata databases {#v26.33-pg-consensus-read-committed}
 
-*Materialize Self-Managed only*
+<red>*Materialize Self-Managed only*</red>
 
 Starting in v26.33, self-managed deployments that use a PostgreSQL metadata
 database can configure Materialize to run its internal consensus queries under
