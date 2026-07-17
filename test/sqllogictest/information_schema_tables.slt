@@ -162,7 +162,7 @@ MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_kafka_connections
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_kafka_sinks
@@ -238,7 +238,7 @@ MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_ssh_tunnel_connections
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_storage_usage

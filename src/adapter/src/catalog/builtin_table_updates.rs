@@ -18,12 +18,11 @@ use mz_catalog::builtin::{
     BuiltinTable, MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AWS_CONNECTIONS,
     MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_SIZE_INTERNAL,
     MZ_CLUSTER_REPLICA_SIZES, MZ_COLUMNS, MZ_EGRESS_IPS, MZ_FUNCTIONS,
-    MZ_HISTORY_RETENTION_STRATEGIES, MZ_ICEBERG_SINKS, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS,
-    MZ_KAFKA_SINKS, MZ_LICENSE_KEYS, MZ_LIST_TYPES, MZ_MAP_TYPES,
-    MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_OBJECT_DEPENDENCIES, MZ_OBJECT_GLOBAL_IDS,
-    MZ_OPERATORS, MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_SESSIONS, MZ_SINKS,
-    MZ_SOURCE_REFERENCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS,
-    MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
+    MZ_HISTORY_RETENTION_STRATEGIES, MZ_ICEBERG_SINKS, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS,
+    MZ_LICENSE_KEYS, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES,
+    MZ_OBJECT_DEPENDENCIES, MZ_OBJECT_GLOBAL_IDS, MZ_OPERATORS, MZ_PSEUDO_TYPES, MZ_REPLACEMENTS,
+    MZ_ROLE_AUTH, MZ_SESSIONS, MZ_SINKS, MZ_SOURCE_REFERENCES, MZ_STORAGE_USAGE_BY_SHARD,
+    MZ_SUBSCRIPTIONS, MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::durable::SourceReferences;
@@ -51,12 +50,10 @@ use mz_sql::ast::{CreateIndexStatement, Statement};
 use mz_sql::catalog::{CatalogType, TypeCategory};
 use mz_sql::func::FuncImplCatalogDetails;
 use mz_sql::names::SchemaSpecifier;
-use mz_sql::plan::{ConnectionDetails, SshKey};
+use mz_sql::plan::ConnectionDetails;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::client::TableData;
-use mz_storage_types::connections::KafkaConnection;
 use mz_storage_types::connections::aws::{AwsAuth, AwsConnection};
-use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::string_or_secret::StringOrSecret;
 use mz_storage_types::sinks::{IcebergSinkConnection, KafkaSinkConnection, StorageSinkConnection};
 use smallvec::smallvec;
@@ -401,9 +398,6 @@ impl CatalogState {
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         let mut updates = vec![];
         match connection.details {
-            ConnectionDetails::Kafka(ref kafka) => {
-                updates.extend(self.pack_kafka_connection_update(id, kafka, diff));
-            }
             ConnectionDetails::Aws(ref aws_config) => {
                 match self.pack_aws_connection_update(id, aws_config, diff) {
                     Ok(update) => {
@@ -425,14 +419,13 @@ impl CatalogState {
                     tracing::error!(%id, "missing AWS principal context; cannot write row to mz_aws_privatelink_connections table");
                 }
             }
-            ConnectionDetails::Ssh {
-                ref key_1,
-                ref key_2,
-                ..
-            } => {
-                updates.push(self.pack_ssh_tunnel_connection_update(id, key_1, key_2, diff));
-            }
-            ConnectionDetails::Csr(_)
+            // Kafka (mz_kafka_connections) and SSH (mz_ssh_tunnel_connections)
+            // connection details are now derived from the persisted create_sql
+            // by materialized views over mz_catalog_raw, so they need no
+            // special packing here.
+            ConnectionDetails::Kafka(_)
+            | ConnectionDetails::Ssh { .. }
+            | ConnectionDetails::Csr(_)
             | ConnectionDetails::GlueSchemaRegistry(_)
             | ConnectionDetails::Gcp(_)
             | ConnectionDetails::Postgres(_)
@@ -441,56 +434,6 @@ impl CatalogState {
             | ConnectionDetails::IcebergCatalog(_) => (),
         };
         updates
-    }
-
-    pub(crate) fn pack_ssh_tunnel_connection_update(
-        &self,
-        id: CatalogItemId,
-        key_1: &SshKey,
-        key_2: &SshKey,
-        diff: Diff,
-    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
-        BuiltinTableUpdate::row(
-            &*MZ_SSH_TUNNEL_CONNECTIONS,
-            Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                Datum::String(key_1.public_key().as_str()),
-                Datum::String(key_2.public_key().as_str()),
-            ]),
-            diff,
-        )
-    }
-
-    fn pack_kafka_connection_update(
-        &self,
-        id: CatalogItemId,
-        kafka: &KafkaConnection<ReferencedConnection>,
-        diff: Diff,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let progress_topic = kafka.progress_topic(&self.config.connection_context, id);
-        let mut row = Row::default();
-        row.packer()
-            .try_push_array(
-                &[ArrayDimension {
-                    lower_bound: 1,
-                    length: kafka.brokers.len(),
-                }],
-                kafka
-                    .brokers
-                    .iter()
-                    .map(|broker| Datum::String(&broker.address)),
-            )
-            .expect("kafka.brokers is 1 dimensional, and its length is used for the array length");
-        let brokers = row.unpack_first();
-        vec![BuiltinTableUpdate::row(
-            &*MZ_KAFKA_CONNECTIONS,
-            Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                brokers,
-                Datum::String(&progress_topic),
-            ]),
-            diff,
-        )]
     }
 
     pub fn pack_aws_privatelink_connection_update(
