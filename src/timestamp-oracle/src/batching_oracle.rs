@@ -32,10 +32,31 @@ use crate::{TimestampOracle, WriteTimestamp};
 /// result as of an earlier moment, but batching them up is correct because this
 /// can only make it so that we return later timestamps. Those later timestamps
 /// still fall within the duration of the `read_ts` call and so are linearized.
+///
+/// Batches are processed by [`READ_TS_PIPELINE_DEPTH`] workers, so a new batch
+/// can be gathered and its backing read issued while previous batches are
+/// still in flight. This pipelining is correct for the same reason batching
+/// is: each worker drains its batch _before_ issuing the backing `read_ts`, so
+/// the returned timestamp is determined during every waiter's `read_ts` call.
+/// Distinct callers whose calls overlap may observe timestamps in either
+/// completion order, which linearizability allows for concurrent operations.
+/// Calls that do not overlap stay ordered: a call that starts after another
+/// completed is served by a backing read issued after the earlier one
+/// finished, and the backing oracle's read timestamp never regresses.
 pub struct BatchingTimestampOracle<T> {
     inner: Arc<dyn TimestampOracle<T> + Send + Sync>,
     command_tx: UnboundedSender<Command<T>>,
 }
+
+/// The number of concurrent read batches that may be in flight against the
+/// backing oracle.
+///
+/// A depth of 1 gives strictly serialized batches: while a batch is in flight,
+/// waiters queue up for the next batch, adding up to a full backing-oracle
+/// round trip of latency. A depth of 2 lets the next batch be issued
+/// immediately, cutting that queueing delay, in exchange for up to twice the
+/// query rate against the backing store when reads are saturated.
+const READ_TS_PIPELINE_DEPTH: usize = 2;
 
 /// A command on the internal batching command stream.
 enum Command<T> {
@@ -54,40 +75,63 @@ where
 {
     /// Crates a [`BatchingTimestampOracle`] that uses the given inner oracle.
     pub fn new(metrics: Arc<Metrics>, oracle: Arc<dyn TimestampOracle<T> + Send + Sync>) -> Self {
-        let (command_tx, mut command_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (command_tx, command_rx) = tokio::sync::mpsc::unbounded_channel();
+        let command_rx = Arc::new(tokio::sync::Mutex::new(command_rx));
 
-        let task_oracle = Arc::clone(&oracle);
+        for worker_id in 0..READ_TS_PIPELINE_DEPTH {
+            let task_oracle = Arc::clone(&oracle);
+            let metrics = Arc::clone(&metrics);
+            let command_rx = Arc::clone(&command_rx);
 
-        mz_ore::task::spawn(|| "BatchingTimestampOracle Worker Task", async move {
-            let read_ts_metrics = &metrics.batching.read_ts;
+            mz_ore::task::spawn(
+                move || format!("BatchingTimestampOracle Worker Task {}", worker_id),
+                async move {
+                    let read_ts_metrics = &metrics.batching.read_ts;
 
-            // See comment on `BatchingTimestampOracle` for why this batching is
-            // correct.
-            while let Some(cmd) = command_rx.recv().await {
-                let mut pending_cmds = vec![cmd];
-                while let Ok(cmd) = command_rx.try_recv() {
-                    pending_cmds.push(cmd);
-                }
+                    // See comment on `BatchingTimestampOracle` for why this
+                    // batching and pipelining is correct.
+                    loop {
+                        // NOTE: The receiver lock must be released before the
+                        // backing read_ts call below, so that another worker
+                        // can gather the next batch while this one's read is
+                        // in flight. A worker parked on `recv` holds the lock,
+                        // which is fine: exactly one worker gathers commands
+                        // at a time, the others park on the lock.
+                        let pending_cmds = {
+                            let mut command_rx = command_rx.lock().await;
+                            match command_rx.recv().await {
+                                Some(cmd) => {
+                                    let mut pending_cmds = vec![cmd];
+                                    while let Ok(cmd) = command_rx.try_recv() {
+                                        pending_cmds.push(cmd);
+                                    }
+                                    pending_cmds
+                                }
+                                None => break,
+                            }
+                        };
 
-                read_ts_metrics
-                    .ops_count
-                    .inc_by(u64::cast_from(pending_cmds.len()));
-                read_ts_metrics.batches_count.inc();
+                        read_ts_metrics
+                            .ops_count
+                            .inc_by(u64::cast_from(pending_cmds.len()));
+                        read_ts_metrics.batches_count.inc();
 
-                let ts = task_oracle.read_ts().await;
-                for cmd in pending_cmds {
-                    match cmd {
-                        Command::ReadTs(response_tx) => {
-                            // It's okay if the receiver drops, just means
-                            // they're not interested anymore.
-                            let _ = response_tx.send(ts.clone());
+                        let ts = task_oracle.read_ts().await;
+                        for cmd in pending_cmds {
+                            match cmd {
+                                Command::ReadTs(response_tx) => {
+                                    // It's okay if the receiver drops, just means
+                                    // they're not interested anymore.
+                                    let _ = response_tx.send(ts.clone());
+                                }
+                            }
                         }
                     }
-                }
-            }
 
-            tracing::debug!("shutting down BatchingTimestampOracle task");
-        });
+                    tracing::debug!("shutting down BatchingTimestampOracle task");
+                },
+            );
+        }
 
         Self {
             inner: oracle,
