@@ -8,13 +8,10 @@
 
 {{ .RenderShortcodes }}
 
-{{ range .Pages }}
-{{- if not (in $excludedSections .Section) }}
----
-
-## {{ .Title }}
-
-{{ .RenderShortcodes }}
-{{ end -}}
+{{ with .Pages }}
+## In this section
+{{ range . }}
+- [{{ .Title }}]({{ .RelPermalink }})
+{{- end }}
 {{ end }}
 {{- end -}}
