@@ -1791,14 +1791,24 @@ class RenameKafkaSinkAction(Action):
         return True
 
 
-class ReplaceMaterializedViewAction(Action):
+class CreateReplacementMaterializedViewAction(Action):
+    """CREATE REPLACEMENT MATERIALIZED VIEW for a random materialized view.
+
+    Deliberately only creates. The replacement stays alive until an
+    ApplyReplacementMaterializedViewAction or
+    DropReplacementMaterializedViewAction finds it in the catalog, from any
+    worker and possibly only after a kill or 0dt deploy. Resolving the
+    replacement on the creating connection would tie its lifetime to that
+    connection, so it could never span an envd restart. Incident 1136
+    (bootstrap loses the replacement collection's primary link to the
+    target's shard, a post-restart DROP of the replacement then finalizes the
+    target's live shard) lives exactly in that gap.
+    """
+
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         errors = [
-            # Constant materialized views can be sealed before replacement is applied
-            "is sealed and thus cannot be replaced",
-            # A concurrent or leaked replacement of the same view
+            # A concurrent replacement of the same view
             "because it already has a replacement",
-            "is sealed and thus cannot be replaced",
         ] + super().errors_to_ignore(exe)
         if exe.db.scenario == Scenario.Rename:
             # The view's rendered SELECT embeds qualified names captured at
@@ -1808,7 +1818,18 @@ class ReplaceMaterializedViewAction(Action):
 
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
-            mvs = [v for v in exe.db.views if v.materialized]
+            # Skip views whose shard can seal legitimately: REFRESH AT views
+            # seal after their last refresh, repeat_row constant views seal
+            # on hydration. Never replacing those keeps "is sealed" errors
+            # and empty write frontiers of the remaining views hard failure
+            # signals, see SealedMaterializedViewCheckAction.
+            mvs = [
+                v
+                for v in exe.db.views
+                if v.materialized
+                and not (v.refresh or "").startswith("AT")
+                and not v.repeat_row_const
+            ]
             if not mvs:
                 return False
             view = self.rng.choice(mvs)
@@ -1824,23 +1845,144 @@ class ReplaceMaterializedViewAction(Action):
         exe.execute(
             f"CREATE REPLACEMENT MATERIALIZED VIEW {tmp_mv} FOR {view} AS {view.get_select()}",
         )
-        time.sleep(self.rng.random())
+        return True
+
+
+class ResolveReplacementMaterializedViewAction(Action):
+    """Base for actions resolving live replacements.
+
+    Replacements are picked from the catalog instead of tracked state so that
+    replacements created by other workers or left behind by dead connections,
+    kills, and 0dt deploys are found too.
+    """
+
+    def pick_replacement(self, exe: Executor) -> tuple[str, str] | None:
+        exe.execute(
+            "SELECT rd.name, rs.name, r_mv.name, td.name, ts.name, t_mv.name"
+            " FROM mz_internal.mz_replacements r"
+            " JOIN mz_catalog.mz_materialized_views r_mv ON r_mv.id = r.id"
+            " JOIN mz_catalog.mz_schemas rs ON rs.id = r_mv.schema_id"
+            " JOIN mz_catalog.mz_databases rd ON rd.id = rs.database_id"
+            " JOIN mz_catalog.mz_materialized_views t_mv ON t_mv.id = r.target_id"
+            " JOIN mz_catalog.mz_schemas ts ON ts.id = t_mv.schema_id"
+            " JOIN mz_catalog.mz_databases td ON td.id = ts.database_id",
+            http=Http.NO,
+        )
+        rows = exe.cur.fetchall()
+        if not rows:
+            return None
+        r_db, r_schema, r_name, t_db, t_schema, t_name = self.rng.choice(rows)
+        replacement = f"{identifier(r_db)}.{identifier(r_schema)}.{identifier(r_name)}"
+        target = f"{identifier(t_db)}.{identifier(t_schema)}.{identifier(t_name)}"
+        return replacement, target
+
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            # Reading catalog relations inside a txn that already touched
+            # user objects crosses timedomains.
+            "in the same timedomain",
+        ] + super().errors_to_ignore(exe)
+
+
+class ApplyReplacementMaterializedViewAction(ResolveReplacementMaterializedViewAction):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        # NOTE: "is sealed and thus cannot be replaced" is deliberately not
+        # ignored. Replacements are only created for views whose shard never
+        # seals legitimately, so hitting it means the target's shard was
+        # wrongly finalized (incident 1136).
+        errors = [
+            # A concurrent apply or drop won the race for this replacement
+            "replacement materialized view does not exist",
+        ] + super().errors_to_ignore(exe)
+        if exe.db.scenario == Scenario.Rename:
+            # The target was renamed between picking and applying
+            errors += ["does not exist"]
+        return errors
+
+    def run(self, exe: Executor) -> bool:
+        picked = self.pick_replacement(exe)
+        if picked is None:
+            return False
+        replacement, target = picked
+        # APPLY REPLACEMENT waits for the target's write frontier to catch up
+        # to the replacement's. The wait never finishes if the target is
+        # concurrently cascade-dropped (database-issues#9820), so bound it
+        # with a statement timeout.
+        exe.execute("SET statement_timeout = '60s'")
+        # Statement timeouts on this session are expected from here on, an
+        # in-flight statement can still hit the old timeout after RESET.
+        exe.statement_timeout_set = True
         try:
-            # Either apply the replacement into the target view or discard it.
-            if self.rng.choice([True, False]):
-                exe.execute(
-                    f"ALTER MATERIALIZED VIEW {view} APPLY REPLACEMENT {tmp_mv}"
-                )
-            else:
-                exe.execute(f"DROP MATERIALIZED VIEW {tmp_mv}")
-        except QueryError:
-            # Clean up, a leaked replacement blocks all future replacements
-            # of this view.
+            exe.execute(
+                f"ALTER MATERIALIZED VIEW {target} APPLY REPLACEMENT {replacement}"
+            )
+        finally:
             try:
-                exe.execute(f"DROP MATERIALIZED VIEW IF EXISTS {tmp_mv}")
+                exe.execute("RESET statement_timeout")
             except QueryError:
                 pass
-            raise
+        return True
+
+
+class DropReplacementMaterializedViewAction(ResolveReplacementMaterializedViewAction):
+    """Drop a live replacement without applying it.
+
+    This is the incident 1136 trigger statement when it runs after an envd
+    restart: bootstrap loses the replacement collection's primary link, so
+    the drop wrongly finalizes the target's live shard.
+    SealedMaterializedViewCheckAction detects the resulting damage.
+    """
+
+    def run(self, exe: Executor) -> bool:
+        picked = self.pick_replacement(exe)
+        if picked is None:
+            return False
+        replacement, _ = picked
+        # IF EXISTS, a concurrent apply or drop may have resolved it already.
+        exe.execute(f"DROP MATERIALIZED VIEW IF EXISTS {replacement}")
+        return True
+
+
+class SealedMaterializedViewCheckAction(Action):
+    """Client-side data-loss oracle for wrongly finalized MV shards.
+
+    A shard's upper only becomes empty when the shard is sealed, in normal
+    operation only during shard finalization after its collection was
+    dropped. A live materialized view with an empty write frontier therefore
+    means its shard was finalized out from under it. Incident 1136 is the
+    known trigger: dropping a replacement after an envd restart finalizes the
+    target's shard because bootstrap dropped the replacement collection's
+    primary link. REFRESH AT views seal legitimately after their last refresh
+    and are excluded.
+    """
+
+    def applicable(self, exe: Executor) -> bool:
+        # repeat_row constant views seal legitimately on hydration and are
+        # indistinguishable from damage in the catalog.
+        return exe.db.scenario != Scenario.RepeatRow
+
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            "in the same timedomain",
+        ] + super().errors_to_ignore(exe)
+
+    def run(self, exe: Executor) -> bool:
+        exe.execute(
+            "SELECT mv.id, mv.name"
+            " FROM mz_catalog.mz_materialized_views mv"
+            " JOIN mz_internal.mz_frontiers f ON f.object_id = mv.id"
+            " WHERE f.write_frontier IS NULL"
+            " AND NOT EXISTS ("
+            "SELECT 1 FROM mz_internal.mz_materialized_view_refresh_strategies rs"
+            " WHERE rs.materialized_view_id = mv.id AND rs.type = 'at')",
+            http=Http.NO,
+        )
+        sealed = exe.cur.fetchall()
+        if sealed:
+            raise ValueError(
+                "Materialized views with wrongly sealed persist shards"
+                f" (incident 1136 class): {sealed}"
+            )
         return True
 
 
@@ -3989,7 +4131,11 @@ class CancelAction(Action):
 
     def run(self, exe: Executor) -> bool:
         pid = self.rng.choice(
-            [worker.exe.pg_pid for worker in self.workers if worker.exe and worker.exe.pg_pid != -1]  # type: ignore
+            [
+                worker.exe.pg_pid
+                for worker in self.workers
+                if worker.exe and worker.exe.pg_pid != -1
+            ]  # type: ignore
         )
         worker = None
         for i in range(len(self.workers)):
@@ -5605,7 +5751,10 @@ ddl_action_list = ActionList(
         (RenameKafkaSinkAction, 10),
         (RenameIcebergSinkAction, 10),
         (SwapSchemaAction, 10),
-        (ReplaceMaterializedViewAction, 20),
+        (CreateReplacementMaterializedViewAction, 10),
+        (ApplyReplacementMaterializedViewAction, 5),
+        (DropReplacementMaterializedViewAction, 5),
+        (SealedMaterializedViewCheckAction, 2),
         (TransactionIsolationAction, 1),
         (BoundedStalenessReadAction, 2),
         (ReadOnlyTransactionAction, 3),

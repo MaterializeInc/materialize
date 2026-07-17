@@ -24,11 +24,12 @@ from materialize.mzcompose.composition import Composition
 from materialize.parallel_workload.action import (
     Action,
     ActionList,
+    ApplyReplacementMaterializedViewAction,
     BackupRestoreAction,
     CancelAction,
+    CreateReplacementMaterializedViewAction,
     ExplainAnalyzeAction,
     KillAction,
-    ReplaceMaterializedViewAction,
     StatisticsAction,
     ZeroDowntimeDeployAction,
     action_lists,
@@ -548,12 +549,16 @@ def print_stats(
     # broken SQL or an impossible precondition.
     excluded: set[type[Action]] = {ExplainAnalyzeAction}
     if scenario == Scenario.Rename:
-        # ReplaceMaterializedViewAction re-renders the view's SELECT with the
-        # object names captured at creation. Renames invalidate them, so
-        # CREATE REPLACEMENT fails with a tolerated "does not exist"/"unknown
+        # CreateReplacementMaterializedViewAction re-renders the view's SELECT
+        # with the object names captured at creation. Renames invalidate them,
+        # so CREATE REPLACEMENT fails with a tolerated "does not exist"/"unknown
         # schema", and a churny rename seed can legitimately never land a clean
-        # attempt. It succeeds in the other scenarios, so it stays checked there.
-        excluded.add(ReplaceMaterializedViewAction)
+        # attempt. With no replacement ever created,
+        # ApplyReplacementMaterializedViewAction then has nothing to apply
+        # either. Both succeed in the other scenarios, so they stay checked
+        # there.
+        excluded.add(CreateReplacementMaterializedViewAction)
+        excluded.add(ApplyReplacementMaterializedViewAction)
     action_classes = {
         c
         for c in action_classes
