@@ -2342,6 +2342,16 @@ class StartupLoaded(Scenario):
     SCALE = 1  # 10 objects of each kind
     # Can not scale to 100s of objects
     MAX_SCALE = 1.5
+    # The measured span is only ~0.5-1.5s and starts when `docker compose up`
+    # observes the restarted containers healthy, on a 1s healthcheck interval.
+    # That start-anchor jitter plus docker exec overhead makes the per-cycle
+    # minimum swing by 30%+ for identical binaries, so a 10% wallclock
+    # threshold mostly detects noise (nightly 17404).
+    RELATIVE_THRESHOLD: dict[MeasurementType, float] = {
+        MeasurementType.WALLCLOCK: 0.30,
+        MeasurementType.MEMORY_MZ: 0.20,
+        MeasurementType.MEMORY_CLUSTERD: 0.50,
+    }
 
     def shared(self) -> Action:
         return TdAction(self.schema() + """
