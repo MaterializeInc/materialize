@@ -283,12 +283,11 @@ Apache License, Version 2.0. */}}
         }
       });
 
-      const systemButton = document.querySelector("button.system");
-      const lightButton = document.querySelector("button.light");
-      const darkButton = document.querySelector("button.dark");
+      const lightButtons = [...document.querySelectorAll("button.light")];
+      const darkButtons = [...document.querySelectorAll("button.dark")];
 
       const highlightButton = (theme) => {
-        [systemButton, lightButton, darkButton].forEach((button) => {
+        [...lightButtons, ...darkButtons].forEach((button) => {
           if ([...button.classList].includes(theme)) {
             button.classList.add("active");
           } else {
@@ -297,7 +296,11 @@ Apache License, Version 2.0. */}}
         });
       };
 
-      highlightButton(theme);
+      // Reflect the theme actually applied to the page. A brand-new visitor
+      // still on the "system" default has no explicit choice, so highlight the
+      // resolved light/dark state rather than the stored "system" value.
+      const appliedTheme = document.body.classList.contains("dark") ? "dark" : "light";
+      highlightButton(appliedTheme);
 
       const syncDocSearchTheme = () => {
         document.documentElement.dataset.theme = document.body.classList.contains("dark")
@@ -308,40 +311,25 @@ Apache License, Version 2.0. */}}
       darkMediaQuery.addEventListener("change", () => {
         const storedTheme = localStorage.getItem("theme");
         if (storedTheme === "system") {
-          highlightButton(storedTheme);
-          if (darkMediaQuery.matches) {
-            document.body.classList.replace("light", "dark");
-          } else {
-            document.body.classList.replace("dark", "light");
-          }
+          document.body.classList.replace(darkMediaQuery.matches ? "light" : "dark", darkMediaQuery.matches ? "dark" : "light");
+          highlightButton(darkMediaQuery.matches ? "dark" : "light");
           syncDocSearchTheme();
         }
       });
 
-      systemButton.addEventListener("click", () => {
-        if (darkMediaQuery.matches) {
-          document.body.classList.replace("light", "dark");
-        } else {
-          document.body.classList.replace("dark", "light");
-        }
-        localStorage.setItem("theme", "system");
-        highlightButton("system");
-        syncDocSearchTheme();
-      });
-
-      lightButton.addEventListener("click", () => {
+      lightButtons.forEach((button) => button.addEventListener("click", () => {
         document.body.classList.replace("dark", "light");
         localStorage.setItem("theme", "light");
         highlightButton("light");
         syncDocSearchTheme();
-      });
+      }));
 
-      darkButton.addEventListener("click", () => {
+      darkButtons.forEach((button) => button.addEventListener("click", () => {
         document.body.classList.replace("light", "dark");
         localStorage.setItem("theme", "dark");
         highlightButton("dark");
         syncDocSearchTheme();
-      });
+      }));
 
       const allLinks = document.querySelectorAll("a");
       console.log(allLinks.length);

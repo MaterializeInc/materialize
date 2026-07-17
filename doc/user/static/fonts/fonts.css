@@ -7,25 +7,21 @@
  * the Business Source License, use of this software will be governed
  * by the Apache License, Version 2.0. */
 
-/* Fonts served by the docs site, vendored from the Materialize website repo
- * (www-temporary/apps/web/static/fonts) so docs and site share one type
- * system.
+/* Fonts are served directly from www.materialize.com so the docs and the
+ * marketing site share one type system and one set of hosted font binaries.
  *
- * Licensing:
+ * The binaries are intentionally NOT vendored into this repository:
  *
- * - Inter is licensed under the SIL Open Font License 1.1, which permits
- *   redistribution: https://github.com/rsms/inter/blob/master/LICENSE.txt
+ * - Inter is licensed under the SIL Open Font License 1.1.
  *
  * - FAIRE Sprig Sans and FAIRE Sprig Sans Mono are Materialize brand fonts,
- *   commercially licensed to Materialize, Inc. and already served publicly
- *   by www.materialize.com. They are included here solely for use by the
- *   Materialize documentation site. They are NOT covered by this
- *   repository's license. Do not copy or reuse them in other projects.
+ *   commercially licensed to Materialize, Inc. Referencing them from the site
+ *   that is already licensed to serve them avoids redistributing them here.
  */
 
 @font-face {
     font-family: "Inter";
-    src: url("inter/Inter-Regular.woff2") format("woff2");
+    src: url("https://materialize.com/fonts/inter/Inter-Regular.woff2") format("woff2");
     font-weight: 400;
     font-style: normal;
     font-display: swap;
@@ -33,7 +29,7 @@
 
 @font-face {
     font-family: "Inter";
-    src: url("inter/Inter-SemiBold.woff2") format("woff2");
+    src: url("https://materialize.com/fonts/inter/Inter-SemiBold.woff2") format("woff2");
     font-weight: 600;
     font-style: normal;
     font-display: swap;
@@ -41,7 +37,7 @@
 
 @font-face {
     font-family: "FAIRE Sprig Sans";
-    src: url("faire-sprig-sans/FAIRE-SprigSans-Regular.woff2") format("woff2");
+    src: url("https://materialize.com/fonts/faire-sprig-sans/FAIRE-SprigSans-Regular.woff2") format("woff2");
     font-weight: 400;
     font-style: normal;
     font-display: swap;
@@ -49,7 +45,7 @@
 
 @font-face {
     font-family: "FAIRE Sprig Sans";
-    src: url("faire-sprig-sans/FAIRE-SprigSans-Medium.woff2") format("woff2");
+    src: url("https://materialize.com/fonts/faire-sprig-sans/FAIRE-SprigSans-Medium.woff2") format("woff2");
     font-weight: 500;
     font-style: normal;
     font-display: swap;
@@ -57,7 +53,7 @@
 
 @font-face {
     font-family: "FAIRE Sprig Sans Mono";
-    src: url("faire-sprig-sans-mono/FAIRE-SprigSansMono-Regular.woff2") format("woff2");
+    src: url("https://materialize.com/fonts/faire-sprig-sans-mono/FAIRE-SprigSansMono-Regular.woff2") format("woff2");
     font-weight: 400;
     font-style: normal;
     font-display: swap;
@@ -65,7 +61,7 @@
 
 @font-face {
     font-family: "FAIRE Sprig Sans Mono";
-    src: url("faire-sprig-sans-mono/FAIRE-SprigSansMono-Medium.woff2") format("woff2");
+    src: url("https://materialize.com/fonts/faire-sprig-sans-mono/FAIRE-SprigSansMono-Medium.woff2") format("woff2");
     font-weight: 500;
     font-style: normal;
     font-display: swap;

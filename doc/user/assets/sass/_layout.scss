@@ -761,6 +761,14 @@ body.light {
     flex: 0 0 300px;
     padding-left: var(--milli);
     box-sizing: border-box;
+    position: relative;
+
+    &::before {
+        content: "";
+        inset: 0;
+        pointer-events: none;
+        position: absolute;
+    }
 
     @media (min-width: 1571px) {
         flex-basis: calc(((100vw - 1400px) / 2) + 300px);
@@ -771,7 +779,6 @@ body.light {
         min-width: 0;
         padding-left: 0;
         position: fixed;
-        background: var(--bg);
         z-index: 100;
         top: var(--nav-height);
         left: 0;
@@ -798,6 +805,58 @@ body.light {
     }
 }
 
+body.dark .sidebar-wrapper::before {
+    background-color: #000;
+    background-image:
+        radial-gradient(ellipse 42% 85% at 100% 45%, var(--docs-mesh-accent) 0%, transparent 68%),
+        linear-gradient(to right, var(--docs-mesh-grid-major) 1px, transparent 1px),
+        linear-gradient(to bottom, var(--docs-mesh-grid-major) 1px, transparent 1px),
+        linear-gradient(to right, var(--docs-mesh-grid-minor) 1px, transparent 1px),
+        linear-gradient(to bottom, var(--docs-mesh-grid-minor) 1px, transparent 1px),
+        radial-gradient(circle, var(--docs-mesh-dot) var(--docs-mesh-dot-size), transparent var(--docs-mesh-dot-size));
+    background-position: center;
+    background-repeat: no-repeat, repeat, repeat, repeat, repeat, repeat;
+    background-size:
+        100% 100%,
+        var(--docs-mesh-grid-major-step) var(--docs-mesh-grid-major-step),
+        var(--docs-mesh-grid-major-step) var(--docs-mesh-grid-major-step),
+        var(--docs-mesh-grid-minor-step) var(--docs-mesh-grid-minor-step),
+        var(--docs-mesh-grid-minor-step) var(--docs-mesh-grid-minor-step),
+        var(--docs-mesh-dot-step) var(--docs-mesh-dot-step);
+}
+
+body.light .sidebar-wrapper::before {
+    background-color: var(--bg);
+    @include docs-page-mesh-grid-layers-no-icons;
+    background-position: center;
+    background-repeat: repeat;
+    @include docs-page-mesh-grid-size(
+        var(--docs-mesh-grid-major-step),
+        var(--docs-mesh-grid-minor-step),
+        var(--docs-mesh-dot-step)
+    );
+}
+
+@media(max-width: 850px) {
+    body.dark .sidebar-wrapper::before {
+        background-size:
+            100% 100%,
+            var(--docs-mesh-grid-major-step-sm) var(--docs-mesh-grid-major-step-sm),
+            var(--docs-mesh-grid-major-step-sm) var(--docs-mesh-grid-major-step-sm),
+            var(--docs-mesh-grid-minor-step-sm) var(--docs-mesh-grid-minor-step-sm),
+            var(--docs-mesh-grid-minor-step-sm) var(--docs-mesh-grid-minor-step-sm),
+            var(--docs-mesh-dot-step-sm) var(--docs-mesh-dot-step-sm);
+    }
+
+    body.light .sidebar-wrapper::before {
+        @include docs-page-mesh-grid-size(
+            var(--docs-mesh-grid-major-step-sm),
+            var(--docs-mesh-grid-minor-step-sm),
+            var(--docs-mesh-dot-step-sm)
+        );
+    }
+}
+
 .sidebar {
     position: sticky;
     top: var(--nav-height);
@@ -809,6 +868,7 @@ body.light {
     font-size: rem(1.3);
     overflow-x: hidden;
     overscroll-behavior: contain;
+    z-index: 1;
 
     &,
     ul {
@@ -1236,37 +1296,47 @@ body.light {
 }
 
 .theme-switcher {
-    display: flex;
-    justify-content: center;
-    gap: var(--xx-small);
+    display: inline-flex;
+    align-items: center;
+    gap: rem(0.2);
+    padding: rem(0.3);
+    border: 1px solid var(--divider-light);
+    border-radius: rem(2);
+    background: color-mix(in srgb, var(--divider-light) 18%, transparent);
 
     button {
+        display: flex;
+        align-items: center;
+        justify-content: center;
         background: transparent;
         border: none;
+        border-radius: rem(1.6);
+        cursor: pointer;
+        padding: rem(0.4);
+        transition: background 0.15s ease;
+
+        &:hover svg {
+            fill: var(--body);
+        }
+
+        &.active {
+            background: var(--docs-card-inset);
+        }
     }
 
     svg {
         fill: var(--gray-mid);
-        height: rem(2.2);
-        width: rem(2.2);
+        height: rem(1.5);
+        width: rem(1.5);
+        transition: fill 0.15s ease;
     }
 
-    .system.active {
-        svg {
-            fill: var(--important);
-        }
+    .light.active svg {
+        fill: orange;
     }
 
-    .light.active {
-        svg {
-            fill: orange;
-        }
-    }
-
-    .dark.active {
-        svg {
-            fill: var(--gray-light);
-        }
+    .dark.active svg {
+        fill: var(--gray-light);
     }
 }
 
@@ -1331,6 +1401,14 @@ body.dark {
     .theme-switcher {
         svg {
             fill: var(--gray-dark);
+        }
+
+        button.active svg {
+            fill: var(--gray-light);
+        }
+
+        .light.active svg {
+            fill: orange;
         }
     }
 }

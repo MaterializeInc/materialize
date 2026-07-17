@@ -1,9 +1,10 @@
 {{- $parentPath := partial "relative-link.html" . -}}
-<div class="callout">
+<div class="callout{{ with .Get "class" }} {{ . }}{{ end }}">
 
   <div>
     {{ .Inner | $.Page.RenderString }}
 
+    {{ if and ($.Params) (or (isset $.Params "primary_text") (isset $.Params "secondary_text")) }}
     <p>
       {{ if and ($.Params) (isset $.Params "primary_text") }}
       <a class="btn" {{ with .Get "primary_url" }} href="
@@ -30,6 +31,7 @@
       </a>
       {{ end }}
     </p>
+    {{ end }}
   </div>
 
 </div>

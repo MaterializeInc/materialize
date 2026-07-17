@@ -14,6 +14,12 @@
         @media(max-width: 850px) {
             display: none !important;
         }
+
+        // Right-side actions group (theme switcher, Sign In, Get Started)
+        // needs a tighter gap than the primary menu links.
+        &.nav-actions {
+            gap: var(--milli);
+        }
     }
 
     .mobile {
@@ -69,6 +75,10 @@
     .btn {
         font-family: var(--font-body);
         font-weight: var(--weight-body);
+    }
+
+    .nav-theme-switcher {
+        margin-right: var(--nano);
     }
 
     &-logo {
