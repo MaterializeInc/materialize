@@ -509,13 +509,29 @@ def print_stats(
     # dependents, which proves the SQL and catalog path work. Under an
     # unlucky worker-to-action-list assignment (many DDL workers churning
     # out views, sinks, and indexes) a Drop* action can hit it on every
-    # attempt of a run. Tracked separately so such actions don't trip the
+    # attempt of a run. The remaining entries are also legitimate rejections
+    # that prove the path works: optimistic concurrency control aborting a DDL
+    # whose catalog a concurrent session modified (any DDL can hit it on every
+    # attempt when it is rare and the run is DDL-heavy, e.g. SwapSchema), and
+    # the replacement lifecycle refusing a second or a sealed replacement
+    # (ReplaceMaterializedView, whose replacements pile up unfinalized in the
+    # workload). Tracked separately so such actions don't trip the
     # broken-action assertion below.
     noise = {
         "must be owner of",
         "permission denied for",
         "still depended upon by",
+        "another session modified the catalog while this DDL transaction was open",
+        "because it already has a replacement",
+        "is sealed and thus cannot be replaced",
     }
+    if scenario == Scenario.Rename:
+        # Concurrent renames invalidate the qualified names an action captured
+        # earlier (a stored SELECT it re-renders, a target it resolved before
+        # the rename), so a rare action can fail on every attempt with a
+        # name-resolution race. Expected only in this scenario. In Regression,
+        # where nothing renames, these would be a genuine signal.
+        noise |= {"does not exist", "unknown schema", "unknown catalog item"}
     num_errored_real: Counter[type[Action]] = Counter()
     for worker in workers:
         num_successes.update(worker.num_successes)
