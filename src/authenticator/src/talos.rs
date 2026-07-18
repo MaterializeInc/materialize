@@ -836,4 +836,131 @@ mod tests {
         }
         drop(tx);
     }
+
+    /// Live contract test against a REAL Ory Talos (e.g. the Ory Network dev
+    /// project). Exercises the exact validation code path — issue a key with
+    /// email/organization_id metadata, derive a JWT, fetch the derived-keys
+    /// JWKS, and validate/map with our own `parse_derived_jwks` +
+    /// `validate_derived_token` + `map_claims`. Confirms the claims contract
+    /// (sub/act/meta) and EdDSA JWKS shape hold on the real service, not just
+    /// Talos OSS.
+    ///
+    /// Skipped unless `ORY_PROJECT_URL` and `ORY_PROJECT_API_KEY` are set:
+    /// ```text
+    /// ORY_PROJECT_URL=https://<slug>.projects.oryapis.com \
+    /// ORY_PROJECT_API_KEY=<project api key> \
+    /// cargo test -p mz-authenticator live_talos -- --nocapture
+    /// ```
+    #[mz_ore::test(tokio::test)]
+    async fn live_talos_derive_and_validate() {
+        let (Ok(url), Ok(api_key)) = (
+            std::env::var("ORY_PROJECT_URL"),
+            std::env::var("ORY_PROJECT_API_KEY"),
+        ) else {
+            eprintln!("ORY_PROJECT_URL/ORY_PROJECT_API_KEY not set; skipping live Talos test");
+            return;
+        };
+        let url = url.trim_end_matches('/').to_string();
+        let http = reqwest::Client::new();
+        let actor = "talos-live-test-actor";
+        let email = "talos-live-test@materialize.com";
+        let org = "talos-live-test-org";
+
+        // Issue a key with the same metadata the sync-server stamps.
+        let issued: serde_json::Value = http
+            .post(format!("{url}/v2alpha1/admin/issuedApiKeys"))
+            .bearer_auth(&api_key)
+            .json(&serde_json::json!({
+                "actor_id": actor,
+                "name": "authenticator-live-test",
+                "metadata": { "source": "console", "email": email, "organization_id": org },
+            }))
+            .send()
+            .await
+            .expect("issue request")
+            .error_for_status()
+            .expect("issue status")
+            .json()
+            .await
+            .expect("issue body");
+        let key_id = issued["issued_api_key"]["key_id"]
+            .as_str()
+            .expect("key_id")
+            .to_string();
+        let secret = issued["secret"].as_str().expect("secret").to_string();
+        eprintln!("issued key {key_id}");
+
+        // Derive a JWT from the presented secret.
+        let derived: serde_json::Value = http
+            .post(format!("{url}/v2alpha1/admin/apiKeys:derive"))
+            .bearer_auth(&api_key)
+            .json(&serde_json::json!({
+                "credential": secret,
+                "algorithm": "TOKEN_ALGORITHM_JWT",
+                "ttl": "300s",
+            }))
+            .send()
+            .await
+            .expect("derive request")
+            .error_for_status()
+            .expect("derive status")
+            .json()
+            .await
+            .expect("derive body");
+        let jwt = derived["token"]["token"]
+            .as_str()
+            .expect("derived jwt")
+            .to_string();
+
+        // Fetch the derived-keys JWKS and parse it with OUR envelope-aware parser.
+        let jwks_body = http
+            .get(format!("{url}/v2alpha1/derivedKeys/jwks.json"))
+            .send()
+            .await
+            .expect("jwks request")
+            .error_for_status()
+            .expect("jwks status")
+            .text()
+            .await
+            .expect("jwks body");
+        let keys = parse_derived_jwks(&jwks_body).expect("parse real derived-keys JWKS");
+        assert!(!keys.is_empty(), "real JWKS must contain signing keys");
+
+        // Validate + map with OUR code, exactly as a connection would.
+        let header = jsonwebtoken::decode_header(&jwt).expect("jwt header");
+        eprintln!("derived JWT alg={:?} kid={:?}", header.alg, header.kid);
+        let kid = header.kid.expect("jwt kid");
+        let key = keys.get(&kid).expect("kid present in JWKS");
+        let claims = validate_derived_token(&jwt, key).expect("validate real derived token");
+        let identity = map_claims(claims, Some(email)).expect("map real claims");
+
+        assert_eq!(
+            identity.user, email,
+            "meta.email must round-trip through derive"
+        );
+        assert_eq!(
+            identity.organization_id.as_deref(),
+            Some(org),
+            "meta.organization_id must round-trip through derive"
+        );
+        assert_eq!(identity.key_id, key_id, "sub must be the key id");
+        eprintln!(
+            "VALIDATED: user={} org={:?} actor={:?} key_id={}",
+            identity.user, identity.organization_id, identity.actor_id, identity.key_id
+        );
+
+        // Cleanup: revoke the test key.
+        let _ = http
+            .post(format!(
+                "{url}/v2alpha1/admin/issuedApiKeys/{key_id}:revoke"
+            ))
+            .bearer_auth(&api_key)
+            .json(&serde_json::json!({
+                "reason": "REVOCATION_REASON_UNSPECIFIED",
+                "description": "authenticator live test cleanup",
+            }))
+            .send()
+            .await;
+        eprintln!("revoked key {key_id}");
+    }
 }
