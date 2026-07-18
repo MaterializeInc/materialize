@@ -5650,6 +5650,246 @@ fn test_mcp_developer_search_path_defense() {
     );
 }
 
+/// Pins that the developer MCP endpoint is a pass-through for RBAC: every
+/// permission check is enforced by the pgwire session's role, with no
+/// MCP-side gating or elevation on top. Prompted by a support-role scenario
+/// where the same statement failed via MCP but succeeded via psql, which
+/// turned out to be two different roles behind the two paths.
+///
+/// For each statement, the same role runs it once through MCP `query` and
+/// once through pgwire. The two results must match at every step: both
+/// denied without USAGE, both denied without SELECT after USAGE is granted,
+/// both succeeding once both privileges are in place.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_mcp_developer_rbac_passthrough() {
+    let server = test_util::TestHarness::default()
+        .with_mcp_routes(false, true)
+        .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string())
+        .start_blocking();
+
+    let developer_url = format!("http://{}/api/mcp/developer", server.http_local_addr());
+
+    // Mirrors an mz_support-style role: broad system grants, no USAGE on the
+    // user schema created below. RBAC must be enabled for the missing USAGE
+    // to actually deny.
+    {
+        let mut super_user = server
+            .pg_config_internal()
+            .user(&SYSTEM_USER.name)
+            .connect(postgres::NoTls)
+            .unwrap();
+
+        super_user
+            .batch_execute("ALTER SYSTEM SET enable_rbac_checks TO true")
+            .unwrap();
+        super_user
+            .batch_execute(&format!("CREATE ROLE {}", &HTTP_DEFAULT_USER.name))
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT ALL PRIVILEGES ON SYSTEM TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT ALL PRIVILEGES ON DATABASE materialize TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT ALL PRIVILEGES ON CLUSTER quickstart TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+
+        super_user
+            .batch_execute("CREATE SCHEMA restricted_schema")
+            .unwrap();
+        super_user
+            .batch_execute("CREATE VIEW restricted_schema.v AS SELECT 1 AS x")
+            .unwrap();
+        super_user
+            .batch_execute(
+                "CREATE MATERIALIZED VIEW restricted_schema.mv \
+                 IN CLUSTER quickstart AS SELECT 1 AS x",
+            )
+            .unwrap();
+    }
+
+    // The developer `query` tool wraps adapter errors in `result.isError`
+    // rather than raising a JSON-RPC `error`, so both shapes have to be
+    // handled here.
+    let error_message = |body: &serde_json::Value| -> String {
+        if let Some(msg) = body["error"]["message"].as_str() {
+            return msg.to_string();
+        }
+        if body["result"]["isError"].as_bool() == Some(true) {
+            if let Some(text) = body["result"]["content"][0]["text"].as_str() {
+                return text.to_string();
+            }
+        }
+        String::new()
+    };
+
+    let mcp_query = |sql: &str, id: i64| -> String {
+        let (status, body) = mcp_post(
+            &developer_url,
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": {
+                    "name": "query",
+                    "arguments": {"cluster": "quickstart", "sql_query": sql},
+                }
+            }),
+        );
+        assert_eq!(status, StatusCode::OK, "unexpected HTTP status for {sql}");
+        error_message(&body)
+    };
+
+    let pgwire_query = |sql: &str| -> String {
+        let mut client = server
+            .pg_config()
+            .user(&HTTP_DEFAULT_USER.name)
+            .connect(postgres::NoTls)
+            .unwrap();
+        match client.batch_execute(sql) {
+            Ok(()) => String::new(),
+            // `postgres::Error`'s `Display` collapses to "db error" without
+            // the SQLSTATE/message chain, so unwrap the DbError explicitly.
+            Err(e) => match e.as_db_error() {
+                Some(db_err) => db_err.message().to_string(),
+                None => format!("{e:?}"),
+            },
+        }
+    };
+
+    // Asserts a permission-denied error on the schema, on both paths, for a
+    // single statement. Kept as a single helper because the interesting
+    // property is that MCP and pgwire agree, not the wording per statement.
+    let assert_both_denied = |sql: &str, id: i64| {
+        let mcp_err = mcp_query(sql, id);
+        assert!(
+            mcp_err.contains("permission denied") && mcp_err.contains("restricted_schema"),
+            "MCP `{sql}` should be denied on the schema, got: {mcp_err}"
+        );
+        let pg_err = pgwire_query(sql);
+        assert!(
+            pg_err.contains("permission denied") && pg_err.contains("restricted_schema"),
+            "pgwire `{sql}` should be denied on the schema, got: {pg_err}"
+        );
+    };
+
+    let assert_both_ok = |sql: &str, id: i64| {
+        let mcp_err = mcp_query(sql, id);
+        assert!(
+            mcp_err.is_empty(),
+            "MCP `{sql}` should succeed, got: {mcp_err}"
+        );
+        let pg_err = pgwire_query(sql);
+        assert!(
+            pg_err.is_empty(),
+            "pgwire `{sql}` should succeed, got: {pg_err}"
+        );
+    };
+
+    // Statement variants Seth's report called out (SHOW CREATE forms and
+    // EXPLAIN referencing an object in the schema). Plain EXPLAIN is used in
+    // place of EXPLAIN ANALYZE because the `AS SQL` variants of ANALYZE do
+    // not exercise the same object-resolution path.
+    let show_create_view = "SHOW CREATE VIEW restricted_schema.v";
+    let show_create_mv = "SHOW CREATE MATERIALIZED VIEW restricted_schema.mv";
+    let explain_select = "EXPLAIN SELECT * FROM restricted_schema.v";
+    let select_view = "SELECT * FROM restricted_schema.v";
+
+    // No USAGE on the schema: both paths deny on all statement shapes.
+    assert_both_denied(show_create_view, 1);
+    assert_both_denied(show_create_mv, 2);
+    assert_both_denied(explain_select, 3);
+    assert_both_denied(select_view, 4);
+
+    // Grant USAGE on the schema. SHOW CREATE and EXPLAIN then work (they do
+    // not need SELECT on the object), but a real SELECT still needs SELECT
+    // on the view, so it must stay denied on both paths.
+    {
+        let mut super_user = server
+            .pg_config_internal()
+            .user(&SYSTEM_USER.name)
+            .connect(postgres::NoTls)
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT USAGE ON SCHEMA restricted_schema TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+    }
+
+    assert_both_ok(show_create_view, 10);
+    assert_both_ok(show_create_mv, 11);
+    assert_both_ok(explain_select, 12);
+
+    // Per-object RBAC also has to match. USAGE alone is not enough for a
+    // real SELECT: the message flips to "permission denied for VIEW", and
+    // it must flip identically on both paths.
+    let mcp_err = mcp_query(select_view, 13);
+    assert!(
+        mcp_err.contains("permission denied") && mcp_err.contains("restricted_schema.v"),
+        "MCP SELECT should be denied on the view, got: {mcp_err}"
+    );
+    let pg_err = pgwire_query(select_view);
+    assert!(
+        pg_err.contains("permission denied") && pg_err.contains("restricted_schema.v"),
+        "pgwire SELECT should be denied on the view, got: {pg_err}"
+    );
+
+    // Grant SELECT on the view. Both paths now succeed.
+    {
+        let mut super_user = server
+            .pg_config_internal()
+            .user(&SYSTEM_USER.name)
+            .connect(postgres::NoTls)
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT SELECT ON restricted_schema.v TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+    }
+
+    assert_both_ok(select_view, 20);
+
+    // Revoke USAGE. Both paths must deny again, which confirms the pin
+    // holds through grant transitions in either direction.
+    {
+        let mut super_user = server
+            .pg_config_internal()
+            .user(&SYSTEM_USER.name)
+            .connect(postgres::NoTls)
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "REVOKE USAGE ON SCHEMA restricted_schema FROM {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+    }
+
+    assert_both_denied(show_create_view, 30);
+    assert_both_denied(select_view, 31);
+}
+
 /// Helper to POST a JSON-RPC request to an MCP endpoint and return the parsed response.
 fn mcp_post(url: &str, json: serde_json::Value) -> (reqwest::StatusCode, serde_json::Value) {
     let res = Client::new().post(url).json(&json).send().unwrap();
