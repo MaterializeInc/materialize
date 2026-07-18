@@ -11,6 +11,10 @@ Review the notes for your target version before upgrading. For the general
 upgrade procedure, see the [upgrade
 guides](/self-managed-deployments/upgrading/#upgrade-guides).
 
+## Upgrading to `v26.33` and later versions
+
+{{< include-md file="shared-content/self-managed/upgrade-notes/v26.33.md" >}}
+
 ## Upgrading to `v26.30` and later versions
 
 {{< include-md file="shared-content/self-managed/upgrade-notes/v26.30.md" >}}

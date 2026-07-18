@@ -164,11 +164,13 @@ use crate::extensions::temporal_bucket::TemporalBucketing;
 use crate::logging::compute::{
     ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors, OperatorHydration,
 };
+use crate::render::columnar::CollectionEdge;
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
 use mz_row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
 
+pub(crate) mod columnar;
 pub mod context;
 pub(crate) mod errors;
 mod flat_map;
@@ -936,6 +938,7 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                 // We need to ensure that the raw collection exists, but do not have enough information
                 // here to cause that to happen.
                 let (oks, mut err) = bundle.collection.clone().unwrap();
+                let oks = oks.into_vec();
                 self.insert_id(Id::Local(id), bundle);
                 let (oks_v, err_v) = variables.remove(&Id::Local(id)).unwrap();
 
@@ -991,6 +994,7 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
             for id in rec_ids.into_iter() {
                 let bundle = self.remove_id(Id::Local(id)).unwrap();
                 let (oks, err) = bundle.collection.unwrap();
+                let oks = oks.into_vec();
                 self.insert_id(
                     Id::Local(id),
                     CollectionBundle::from_collections(
@@ -1316,8 +1320,11 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
             }
             Negate { input } => {
                 let input = expect_input(input);
-                let (oks, errs) = input.as_specific_collection(None, &self.config_set);
-                CollectionBundle::from_collections(oks.negate(), errs)
+                let (oks, errs) = input
+                    .collection
+                    .clone()
+                    .expect("Negate input must be an unarranged collection");
+                CollectionBundle::from_edge(oks.negate(), errs)
             }
             Threshold {
                 input,
@@ -1334,8 +1341,10 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                 let mut oks = Vec::new();
                 let mut errs = Vec::new();
                 for (input, strategy) in inputs.into_iter().zip_eq(temporal_bucketing_strategies) {
-                    let (os, es) =
-                        expect_input(input).as_specific_collection(None, &self.config_set);
+                    let (os, es) = expect_input(input)
+                        .collection
+                        .clone()
+                        .expect("Union input must be an unarranged collection");
                     // Apply per-input temporal bucketing. No-op for `Direct`.
                     // Only consolidating Unions carry non-`Direct` strategies;
                     // see the `Union` arm of `lower_mir_expr_stack_safe`.
@@ -1346,26 +1355,26 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                             .get(&self.config_set)
                             .try_into()
                             .expect("must fit");
-                        T::maybe_apply_temporal_bucketing(
+                        let os = os.into_vec();
+                        CollectionEdge::Vec(T::maybe_apply_temporal_bucketing(
                             os.inner,
                             self.as_of_frontier.clone(),
                             summary,
-                        )
+                        ))
                     } else {
                         os
                     };
                     oks.push(os);
                     errs.push(es);
                 }
-                let mut oks = differential_dataflow::collection::concatenate(self.scope, oks);
-                if consolidate_output {
-                    oks = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
-                        oks,
-                        "UnionConsolidation",
-                    )
-                }
+                let oks = CollectionEdge::concat_many(self.scope, oks);
+                let oks = if consolidate_output {
+                    oks.consolidate_named("UnionConsolidation")
+                } else {
+                    oks
+                };
                 let errs = differential_dataflow::collection::concatenate(self.scope, errs);
-                CollectionBundle::from_collections(oks, errs)
+                CollectionBundle::from_edge(oks, errs)
             }
             ArrangeBy {
                 input_key,
@@ -1441,8 +1450,16 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                     .collection
                     .as_mut()
                     .expect("CollectionBundle invariant");
-                let stream = self.log_operator_hydration_inner(oks.inner.clone(), lir_id);
-                *oks = stream.as_collection();
+                match oks {
+                    CollectionEdge::Vec(c) => {
+                        let stream = self.log_operator_hydration_inner(c.inner.clone(), lir_id);
+                        *c = stream.as_collection();
+                    }
+                    CollectionEdge::Columnar(c) => {
+                        let stream = self.log_operator_hydration_inner(c.inner.clone(), lir_id);
+                        *c = stream.as_collection();
+                    }
+                }
             }
         }
     }

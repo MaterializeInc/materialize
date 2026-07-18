@@ -502,20 +502,27 @@ def print_stats(
     num_successes: Counter[type[Action]] = Counter()
     num_skips: Counter[type[Action]] = Counter()
     num_errored: Counter[type[Action]] = Counter()
-    # "must be owner of" and "permission denied for" are pervasive noise from
-    # ReconnectAction reconnecting as a random role, not evidence that an
-    # action's SQL or preconditions are broken. Tracked separately so a
-    # rarely-run action that never lands a lucky owner-matching session (e.g.
-    # DropClusterReplicaAction, gated on an unmanaged cluster having a spare
-    # replica) doesn't trip the broken-action assertion below.
-    ownership_noise = {"must be owner of", "permission denied for"}
+    # Some tolerated errors are pervasive noise, not evidence that an action's
+    # SQL or preconditions are broken. "must be owner of" and "permission
+    # denied for" come from ReconnectAction reconnecting as a random role.
+    # "still depended upon by" is a RESTRICT drop rejecting a target with
+    # dependents, which proves the SQL and catalog path work. Under an
+    # unlucky worker-to-action-list assignment (many DDL workers churning
+    # out views, sinks, and indexes) a Drop* action can hit it on every
+    # attempt of a run. Tracked separately so such actions don't trip the
+    # broken-action assertion below.
+    noise = {
+        "must be owner of",
+        "permission denied for",
+        "still depended upon by",
+    }
     num_errored_real: Counter[type[Action]] = Counter()
     for worker in workers:
         num_successes.update(worker.num_successes)
         num_skips.update(worker.num_skips)
         for error, counter in worker.ignored_errors.items():
             num_errored.update(counter)
-            if error not in ownership_noise:
+            if error not in noise:
                 num_errored_real.update(counter)
     action_classes = {
         action_class
@@ -556,7 +563,7 @@ def print_stats(
     if num_threads < 50 and scenario in (Scenario.Regression, Scenario.Rename):
         # Only in scenarios without kills/restores/cancels can we be sure that
         # an action failing on every single attempt is actually broken, and
-        # only when the failures aren't just ownership noise (see above).
+        # only when the failures aren't just tolerated noise (see above).
         always_erroring = [
             action_class.__name__
             for action_class, skips, errored in never_succeeded

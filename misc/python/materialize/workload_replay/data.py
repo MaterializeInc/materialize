@@ -14,6 +14,7 @@ Initial data creation functions for workload replay.
 from __future__ import annotations
 
 import asyncio
+import multiprocessing
 import os
 import random
 import threading
@@ -45,6 +46,13 @@ from materialize.workload_replay.util import (
 
 _NUM_WORKERS = min(os.cpu_count() or 4, 16)
 _CHUNK_ROWS = 100_000
+
+# Pool workers must not fork-inherit this process's state. During a
+# comparison benchmark the parent holds cached confluent_kafka producers
+# (ingest.make_kafka_producer) from the previous run, and librdkafka's
+# threads don't survive fork, so produce()/flush() on such a producer in a
+# fork()ed worker hangs forever. forkserver workers import modules fresh.
+_MP_CONTEXT = multiprocessing.get_context("forkserver")
 
 
 # Subprocess workers (run in forked children, must use only picklable args)
@@ -279,7 +287,7 @@ def create_initial_data_requiring_mz(
     totals: dict[str, int] = {}
     webhook_items: list[tuple[str, str, str, dict[str, Any], int]] = []
 
-    with ProcessPoolExecutor(max_workers=_NUM_WORKERS) as pool:
+    with ProcessPoolExecutor(max_workers=_NUM_WORKERS, mp_context=_MP_CONTEXT) as pool:
         for db, schemas in workload["databases"].items():
             for schema, items in schemas.items():
                 for name, table in items["tables"].items():
@@ -343,7 +351,7 @@ def create_initial_data_external(
             _ports[service] = c.default_port(service)
         return _ports[service]
 
-    with ProcessPoolExecutor(max_workers=_NUM_WORKERS) as pool:
+    with ProcessPoolExecutor(max_workers=_NUM_WORKERS, mp_context=_MP_CONTEXT) as pool:
         for db, schemas in workload["databases"].items():
             for schema, items in schemas.items():
                 for name, source in items["sources"].items():

@@ -15,6 +15,69 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.33.0
+*Released to Materialize Cloud: 2026-07-16* <br>
+*Released to Materialize Self-Managed: 2026-07-17* <br>
+
+### Improved hydration times on Materialize Cloud {#v26.33-upgraded-cloud-hardware}
+
+<red>*Materialize Cloud only*</red>
+
+We've upgraded cluster hardware for all Materialize Cloud environments. The new hardware speeds up compute-intensive
+operations. We've observed a 10%–66% reduction in hydration times. You don't need to take any actions. The improvement is live across all Materialize Cloud
+environments, on all new and existing clusters.
+
+### READ COMMITTED isolation for PostgreSQL metadata databases {#v26.33-pg-consensus-read-committed}
+
+<red>*Materialize Self-Managed only*</red>
+
+Starting in v26.33, self-managed deployments that use a PostgreSQL metadata
+database can configure Materialize to run its internal metadata queries under
+`READ COMMITTED` transaction isolation instead of `SERIALIZABLE`. This improves metadata
+write throughput. To enable this isolation mode, enable the `persist_pg_consensus_read_committed` system parameter after completing an upgrade to v26.33.
+
+{{< note >}}
+The parameter applies only to PostgreSQL metadata databases. Only enable it
+after you have upgraded your self-managed deployment to v26.33 or later.
+{{< /note >}}
+
+For details, see the [Self-Managed upgrade
+notes](/self-managed-deployments/upgrading/version-notes/).
+
+### Improvements {#v26.33-improvements}
+- **`EXPLAIN ANALYZE` on multi-replica clusters via MCP**: The Materialize MCP developer endpoint's `query` tool now accepts an optional cluster replica parameter, so `EXPLAIN ANALYZE` can target a specific replica.
+- **Faster queries on busy environments**: We've improved query latency on query-heavy clusters. We've reduced by caching the catalog snapshot for the duration of a session. In our tests, we've seen QPS improvements of up to 13%.
+- **Improved responsiveness under load**: A slow timestamp oracle no longer stalls unrelated sessions that are running `EXPLAIN TIMESTAMP` or `SUBSCRIBE`.
+- **[Agent skills](/integrations/coding-agent-skills/) — dbt support**: The coding agent skills now include skills for using dbt with Materialize, so your coding agent can help you build and manage dbt models against Materialize.
+
+### Bug Fixes {#v26.33-bug-fixes}
+- Fixed server crashes triggered by stack overflows while computing object dependencies and read privileges.
+- Fixed catalog corruption and coordinator panics triggered by `ALTER SCHEMA RENAME` when the target schema contains user-defined types, functions, or temporary objects.
+- Fixed a crash that could occur when a `SUBSCRIBE` ran while an index or other dependency it read was concurrently dropped; the query now returns a clean error.
+- Fixed a crash triggered by binding a non-UTF-8 `char` parameter over the extended query protocol.
+- Calling `mz_any` or `mz_all` with a non-boolean argument now returns a planning error instead of crashing a compute worker.
+- Polymorphic array functions such as `array_remove` now return a planning error instead of dropping the connection when an argument would produce an array of `list` or `map`.
+- Fixed a class of crashes where cancelling or tearing down a statement (for example, `DROP CLUSTER`) while it was being dispatched could abort the server.
+- Fixed a crash where scraping the usage metrics endpoint could abort the server when an unmanaged cluster replica was present.
+- Fixed queries with nested, shadowed common table expressions returning incorrect results.
+- Fixed queries that reference a correlated CTE from a nested correlated scope returning incorrect results.
+- Fixed `SHOW COLUMNS` returning duplicate rows for certain system catalog objects after upgrading across releases.
+- Query results that fit within `max_result_size` are no longer incorrectly rejected by an over-counted memory estimate.
+- `DROP SCHEMA` without `CASCADE` no longer silently drops a schema that contains only user-defined types or functions; it now correctly treats the schema as non-empty.
+- Casting large OID values from text (`2147483648` through `4294967295`) and copying into `oid` columns no longer fail with an invalid-input error.
+- `NUL` bytes supplied to text values through query parameters, the HTTP SQL API, `COPY FROM`, and `convert_from` are now rejected, matching PostgreSQL.
+- A `COPY` that fails before entering copy mode no longer corrupts or hangs the connection for clients such as pgx and libpq.
+- `RESET` and `DISCARD ALL` now restore client-supplied startup parameters, such as the connected database, rather than server defaults, fixing connection poolers that rebound pooled sessions to the wrong database.
+- Fixed PostgreSQL sources so that upgrades correctly handle `oid` values above the signed 32-bit range instead of leaving replication stuck.
+- Fixed PostgreSQL sources that exclude a column erroneously halting when the excluded column and its constraint were dropped upstream.
+- Kafka source and sink metadata refresh intervals below one second are now rejected, and existing definitions with smaller values are migrated automatically on upgrade.
+- `COPY FROM` can now read array columns from Arrow files that were written by `COPY TO`.
+- `GRANT` and `REVOKE USAGE ON ALL POLICIES` now correctly grant and revoke network-policy privileges instead of silently succeeding as a no-op.
+- Fixed the system administrator role being unable to invoke certain side-effecting functions, such as terminating backend sessions.
+- Closed a resource-isolation gap that allowed `INSERT ... SELECT` and `COPY ... TO <url>` reads of user objects to run on the reserved `mz_catalog_server` cluster.
+- Fixed inline credentials in `CREATE CONNECTION` options being written in clear text to redacted SQL and telemetry.
+- Error messages that include connection URLs now redact embedded credentials instead of exposing the username and password.
+
 ## v26.32.0
 *Released to Materialize Cloud: 2026-07-09* <br>
 *Released to Materialize Self-Managed: 2026-07-10* <br>

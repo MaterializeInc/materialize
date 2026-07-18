@@ -2060,6 +2060,164 @@ INSERT INTO pk_table SELECT @i:=@i+1, @i*@i FROM mysql.time_zone t1, mysql.time_
             """)
 
 
+class MySqlInitialLoadMultiWorkerSampled(MySqlCdc):
+    """Measure an 8-worker snapshot across 20 tables with a single-column
+    non-integer primary key (a CHAR(26) ULID-like key)."""
+
+    RELATIVE_THRESHOLD: dict[MeasurementType, float] = {
+        MeasurementType.WALLCLOCK: 0.10,
+        MeasurementType.MEMORY_MZ: 0.60,
+        MeasurementType.MEMORY_CLUSTERD: 0.60,
+    }
+
+    # Cap scale so each per-table load fits one mysql.time_zone self-join
+    # (~3M rows), so a single INSERT per table suffices.
+    MAX_SCALE = 6
+
+    # Number of tables to snapshot. Their row counts sum to n() (spread across the
+    # tables, not n() each) so total snapshot volume stays at n().
+    TABLES = 20
+
+    def rows_per_table(self) -> list[int]:
+        """Per-table row counts, one entry per table, summing to exactly n().
+        Any remainder from an uneven split lands in the last table."""
+        base = self.n() // self.TABLES
+        counts = [base] * self.TABLES
+        counts[-1] += self.n() - base * self.TABLES
+        return counts
+
+    def shared(self) -> Action:
+        row_values = "LPAD(CONV(@i := @i + 1, 10, 36), 26, '0'), @i"
+        row_counts = self.rows_per_table()
+        table_blocks = []
+        for i in range(self.TABLES):
+            table = f"pk_table{i + 1}"
+            table_blocks.append(
+                f"CREATE TABLE {table} (pk CHAR(26) PRIMARY KEY, f2 BIGINT);\n"
+                f"SET @i := 0;\n"
+                f"INSERT INTO {table} SELECT {row_values} "
+                f"FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT {row_counts[i]};"
+            )
+        load = "\n".join(table_blocks)
+        return TdAction(f"""
+$ mysql-connect name=mysql url=mysql://root@mysql password=${{arg.mysql-root-password}}
+
+$ mysql-execute name=mysql
+DROP DATABASE IF EXISTS public;
+CREATE DATABASE public;
+USE public;
+
+{load}
+""")
+
+    def before(self) -> Action:
+        return TdAction("""
+> DROP SOURCE IF EXISTS mz_source_mysqlcdc CASCADE;
+> DROP CLUSTER IF EXISTS source_cluster CASCADE
+            """)
+
+    def benchmark(self) -> MeasurementSource:
+        # The first CREATE TABLE carries the /* A */ start marker and the last
+        # count carries /* B */, so the measured window spans creating every
+        # subsource and hydrating all the tables' snapshots.
+        creates = []
+        for i in range(self.TABLES):
+            table = f"pk_table{i + 1}"
+            stmt = (
+                f"> CREATE TABLE {table} FROM SOURCE mz_source_mysqlcdc "
+                f"(REFERENCE public.{table});"
+            )
+            if i == 0:
+                stmt += "\n  /* A */"
+            creates.append(stmt)
+        row_counts = self.rows_per_table()
+        counts = []
+        for i in range(self.TABLES):
+            table = f"pk_table{i + 1}"
+            marker = "  /* B */\n" if i == self.TABLES - 1 else ""
+            counts.append(f"> SELECT count(*) FROM {table}\n{marker}{row_counts[i]}")
+        create_stmts = "\n".join(creates)
+        count_stmts = "\n".join(counts)
+        return Td(f"""
+> CREATE SECRET IF NOT EXISTS mysqlpass AS '${{arg.mysql-root-password}}'
+> CREATE CONNECTION IF NOT EXISTS mysql_conn TO MYSQL (
+    HOST mysql,
+    USER root,
+    PASSWORD SECRET mysqlpass
+  )
+
+> CREATE CLUSTER source_cluster SIZE 'scale=1,workers=8', REPLICATION FACTOR 1;
+
+> CREATE SOURCE mz_source_mysqlcdc
+  IN CLUSTER source_cluster
+  FROM MYSQL CONNECTION mysql_conn;
+
+{create_stmts}
+
+{count_stmts}
+            """)
+
+
+class MySqlInitialLoadMultiWorkerSingleTable(MySqlCdc):
+    """Measure an 8-worker snapshot of a single table of n() rows with a
+    single-column non-integer primary key (a CHAR(26) ULID-like key). The
+    single-table companion to MySqlInitialLoadMultiWorkerSampled."""
+
+    RELATIVE_THRESHOLD: dict[MeasurementType, float] = {
+        MeasurementType.WALLCLOCK: 0.10,
+        MeasurementType.MEMORY_MZ: 0.60,
+        MeasurementType.MEMORY_CLUSTERD: 0.60,
+    }
+
+    # Cap scale so the load fits one mysql.time_zone self-join (~3M rows), so a
+    # single INSERT suffices.
+    MAX_SCALE = 6
+
+    def shared(self) -> Action:
+        # The PK is a CHAR(26) holding the base-36 sequence value, left-padded to a
+        # fixed width so the keys sort lexicographically.
+        return TdAction(f"""
+$ mysql-connect name=mysql url=mysql://root@mysql password=${{arg.mysql-root-password}}
+
+$ mysql-execute name=mysql
+DROP DATABASE IF EXISTS public;
+CREATE DATABASE public;
+USE public;
+
+CREATE TABLE pk_table (pk CHAR(26) PRIMARY KEY, f2 BIGINT);
+SET @i := 0;
+INSERT INTO pk_table SELECT LPAD(CONV(@i := @i + 1, 10, 36), 26, '0'), @i FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT {self.n()};
+""")
+
+    def before(self) -> Action:
+        return TdAction("""
+> DROP SOURCE IF EXISTS mz_source_mysqlcdc CASCADE;
+> DROP CLUSTER IF EXISTS source_cluster CASCADE
+            """)
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(f"""
+> CREATE SECRET IF NOT EXISTS mysqlpass AS '${{arg.mysql-root-password}}'
+> CREATE CONNECTION IF NOT EXISTS mysql_conn TO MYSQL (
+    HOST mysql,
+    USER root,
+    PASSWORD SECRET mysqlpass
+  )
+
+> CREATE CLUSTER source_cluster SIZE 'scale=1,workers=8', REPLICATION FACTOR 1;
+
+> CREATE SOURCE mz_source_mysqlcdc
+  IN CLUSTER source_cluster
+  FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE pk_table FROM SOURCE mz_source_mysqlcdc (REFERENCE public.pk_table);
+  /* A */
+
+> SELECT count(*) FROM pk_table
+  /* B */
+{self.n()}
+            """)
+
+
 class MySqlStreaming(MySqlCdc):
     """Measure the time it takes to ingest records from MySQL post-snapshot"""
 
@@ -2342,6 +2500,16 @@ class StartupLoaded(Scenario):
     SCALE = 1  # 10 objects of each kind
     # Can not scale to 100s of objects
     MAX_SCALE = 1.5
+    # The measured span is only ~0.5-1.5s and starts when `docker compose up`
+    # observes the restarted containers healthy, on a 1s healthcheck interval.
+    # That start-anchor jitter plus docker exec overhead makes the per-cycle
+    # minimum swing by 30%+ for identical binaries, so a 10% wallclock
+    # threshold mostly detects noise (nightly 17404).
+    RELATIVE_THRESHOLD: dict[MeasurementType, float] = {
+        MeasurementType.WALLCLOCK: 0.30,
+        MeasurementType.MEMORY_MZ: 0.20,
+        MeasurementType.MEMORY_CLUSTERD: 0.50,
+    }
 
     def shared(self) -> Action:
         return TdAction(self.schema() + """

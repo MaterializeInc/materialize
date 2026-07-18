@@ -284,6 +284,25 @@ pub async fn run_verify_data(
         (key_schema, value_schema)
     };
 
+    // The Glue path resolves schemas from the received records, so an empty batch
+    // leaves the schema unset. Parsing the (required, non-empty) expected messages
+    // would then unwrap a `None` schema and panic. Turn that into the normal
+    // "sink produced no output" diagnostic instead.
+    if glue {
+        if matches!(format.value, Format::Avro) && value_schema.is_none() {
+            bail!(
+                "kafka-verify-data glue=true: no records received to resolve the \
+                 value schema from Glue (did the sink produce no output?)"
+            );
+        }
+        if format.requires_key && matches!(format.key, Format::Avro) && key_schema.is_none() {
+            bail!(
+                "kafka-verify-data glue=true: no keyed records received to resolve \
+                 the key schema from Glue (did the sink produce no output?)"
+            );
+        }
+    }
+
     let mut actual_messages =
         decode_messages(actual_bytes, &key_schema, &value_schema, &format, glue)?;
 

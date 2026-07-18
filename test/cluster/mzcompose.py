@@ -32,7 +32,6 @@ from psycopg import Cursor
 from psycopg.errors import (
     DatabaseError,
     InternalError_,
-    OperationalError,
     QueryCanceled,
 )
 
@@ -5857,6 +5856,14 @@ def workflow_test_zero_downtime_reconfigure(
               ENVELOPE UPSERT
             """),
         )
+        # Drive the controller tick down so the reconfiguration converges quickly.
+        c.sql(
+            "ALTER SYSTEM SET cluster_controller_tick_interval = '5ms'",
+            port=6877,
+            user="mz_system",
+        )
+
+        # No reconfiguration in flight yet: exactly the one managed replica.
         replicas = c.sql_query("""
             SELECT mz_cluster_replicas.name
             FROM mz_cluster_replicas, mz_clusters WHERE
@@ -5866,7 +5873,36 @@ def workflow_test_zero_downtime_reconfigure(
             ("r1",)
         ], f"Cluster should only have one replica prior to alter, found {replicas}"
 
-        replicas = c.sql_query("""
+        # Kick off a graceful reconfiguration. With the controller owning the
+        # replica set and background ALTER on, this writes a durable
+        # reconfiguration record and returns immediately; the controller brings up
+        # a fresh target replica alongside r1, re-hydrates it, then cuts the
+        # realized size over and drops r1. `WAIT FOR` resolves to ON TIMEOUT
+        # COMMIT, so the reconfiguration commits even if its deadline passes during
+        # the restart below.
+        c.sql(
+            """
+            ALTER CLUSTER cluster1 SET (SIZE = 'scale=1,workers=2') WITH (WAIT FOR '10s')
+            """,
+            port=6877,
+            user="mz_system",
+        )
+
+        # Wait until the reconfiguration is in flight (the controller has brought
+        # up the target replica alongside r1) so the restart interrupts it.
+        for _ in range(60):
+            replicas = c.sql_query("""
+                SELECT mz_cluster_replicas.name
+                FROM mz_cluster_replicas, mz_clusters
+                WHERE mz_cluster_replicas.cluster_id = mz_clusters.id
+                AND mz_clusters.name='cluster1';
+                """)
+            if len(replicas) >= 2:
+                break
+            time.sleep(0.5)
+
+        # The controller never creates a legacy "-pending" replica.
+        pending = c.sql_query("""
             SELECT cr.name
             FROM mz_internal.mz_pending_cluster_replicas ur
             INNER join mz_cluster_replicas cr ON cr.id=ur.id
@@ -5874,64 +5910,41 @@ def workflow_test_zero_downtime_reconfigure(
             WHERE c.name = 'cluster1';
             """)
         assert (
-            len(replicas) == 0
-        ), f"Cluster should only have no pending replica prior to alter, found {replicas}"
+            len(pending) == 0
+        ), f"controller reconfiguration must not use pending replicas, found {pending}"
 
-        def zero_downtime_alter():
-            try:
-                c.sql(
-                    """
-                    ALTER CLUSTER cluster1 SET (SIZE = 'scale=1,workers=2') WITH ( WAIT FOR '10s')
-                    """,
-                    port=6877,
-                    user="mz_system",
-                )
-            except OperationalError:
-                # We expect the network to drop during this
-                pass
-
-        # Run a reconfigure
-        thread = Thread(target=zero_downtime_alter)
-        thread.start()
-        time.sleep(3)
-
-        # Validate that there is a pending replica
-        replicas = c.sql_query("""
-            SELECT mz_cluster_replicas.name
-            FROM mz_cluster_replicas, mz_clusters WHERE
-            mz_cluster_replicas.cluster_id = mz_clusters.id AND mz_clusters.name='cluster1';
-            """)
-        assert replicas == [("r1",), ("r1-pending",)], replicas
-        replicas = c.sql_query("""
-            SELECT cr.name
-            FROM mz_internal.mz_pending_cluster_replicas ur
-            INNER join mz_cluster_replicas cr ON cr.id=ur.id
-            INNER join mz_clusters c ON c.id=cr.cluster_id
-            WHERE c.name = 'cluster1';
-            """)
-        assert (
-            len(replicas) == 1
-        ), "pending replica should be in mz_pending_cluster_replicas"
-
-        # Restart environmentd
+        # Restart environmentd while the reconfiguration may still be in flight.
         c.kill("materialized")
         c.up("materialized")
 
-        # Ensure there is no pending replica
+        # The reconfiguration record is durable, so the controller resumes and
+        # completes it across the restart: the realized size cuts over and the
+        # cluster settles back to a single managed replica at the new size.
+        size = None
+        for _ in range(120):
+            size = c.sql_query("SELECT size FROM mz_clusters WHERE name='cluster1';")
+            if size == [("scale=1,workers=2",)]:
+                break
+            time.sleep(1)
+        assert size == [
+            ("scale=1,workers=2",)
+        ], f"reconfiguration did not complete across the restart, size is {size}"
+
         replicas = c.sql_query("""
-            SELECT mz_cluster_replicas.name
+            SELECT mz_cluster_replicas.size
             FROM mz_cluster_replicas, mz_clusters
             WHERE mz_cluster_replicas.cluster_id = mz_clusters.id
             AND mz_clusters.name='cluster1';
             """)
         assert replicas == [
-            ("r1",)
-        ], f"Expected one non pending replica, found {replicas}"
+            ("scale=1,workers=2",)
+        ], f"Expected one replica at the new size, found {replicas}"
 
-        # Ensure the cluster config did not change
-        assert c.sql_query("""
-            SELECT size FROM mz_clusters WHERE name='cluster1';
-            """) == [("scale=1,workers=1",)]
+        # The source's data survived the zero-downtime reconfiguration.
+        c.testdrive(dedent("""
+            > SELECT count(*) FROM kafka_tbl
+            1000
+            """))
         c.sql(
             """
             ALTER SYSTEM RESET enable_zero_downtime_cluster_reconfiguration;
@@ -5945,17 +5958,21 @@ def workflow_test_pending_replica_audit_events(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
     """
-    Regression test: when envd is killed while an ALTER CLUSTER ... WAIT FOR
-    is in progress, pending replicas are cleaned up on restart.  The drop
-    must be recorded in mz_audit_events so that every "create" for a
-    cluster-replica has a matching "drop" (unless the replica still exists).
+    Regression test: a cluster reconfiguration interrupted by an environmentd
+    restart must not orphan a replica in mz_audit_events. The controller's
+    reconfiguration record is durable, so on restart the controller resumes and
+    completes the reconfiguration; every cluster-replica "create" must still end
+    up matched by a "drop" (unless the replica still exists), with no leftover
+    legacy "-pending" replica.
     """
     c.up("materialized")
 
-    # Enable the feature flag and create a managed cluster.
+    # Enable the WAIT surface and drive the controller tick down so the (empty)
+    # cluster's reconfiguration converges quickly.
     c.sql(
         """
         ALTER SYSTEM SET enable_zero_downtime_cluster_reconfiguration = true;
+        ALTER SYSTEM SET cluster_controller_tick_interval = '5ms';
         CREATE CLUSTER test_audit (SIZE = 'scale=1,workers=1');
         GRANT ALL ON CLUSTER test_audit TO materialize;
         """,
@@ -5963,57 +5980,63 @@ def workflow_test_pending_replica_audit_events(
         user="mz_system",
     )
 
-    # Kick off an ALTER that creates a pending replica, but will
-    # block waiting for it to hydrate (with a long timeout so it
-    # doesn't finish before we kill envd).
-    def zero_downtime_alter():
-        try:
-            c.sql(
-                """
-                ALTER CLUSTER test_audit SET (SIZE = 'scale=1,workers=2')
-                WITH (WAIT FOR '300s')
-                """,
-                port=6877,
-                user="mz_system",
-            )
-        except (OperationalError, DatabaseError):
-            pass
+    # Kick off a background graceful reconfiguration. With the controller owning
+    # the replica set and background ALTER on, this writes a durable
+    # reconfiguration record and returns immediately; the controller brings up a
+    # fresh target replica, cuts the size over, and drops the old one. `WAIT FOR`
+    # resolves to ON TIMEOUT COMMIT with a long deadline, so the in-flight
+    # reconfiguration commits once the (empty) target hydrates.
+    c.sql(
+        """
+        ALTER CLUSTER test_audit SET (SIZE = 'scale=1,workers=2') WITH (WAIT FOR '300s')
+        """,
+        port=6877,
+        user="mz_system",
+    )
 
-    thread = Thread(target=zero_downtime_alter)
-    thread.start()
-
-    # Wait until the pending replica appears.
-    for _ in range(60):
-        pending = c.sql_query("""
-            SELECT cr.name
-            FROM mz_internal.mz_pending_cluster_replicas pr
-            JOIN mz_cluster_replicas cr ON cr.id = pr.id
-            JOIN mz_clusters c ON c.id = cr.cluster_id
-            WHERE c.name = 'test_audit';
-            """)
-        if len(pending) > 0:
-            break
-        time.sleep(0.5)
-    else:
-        raise RuntimeError("Pending replica never appeared")
-
-    # Kill envd while the ALTER is still in progress.
-    c.kill("materialized")
-    thread.join(timeout=10)
-
-    # Restart envd — the pending replica should be cleaned up and
-    # an audit log drop event should be emitted.
-    c.up("materialized")
-
-    # Verify that the pending replica was removed.
-    replicas = c.sql_query("""
-        SELECT cr.name FROM mz_cluster_replicas cr
+    # The controller never creates a legacy "-pending" replica.
+    pending = c.sql_query("""
+        SELECT cr.name
+        FROM mz_internal.mz_pending_cluster_replicas pr
+        JOIN mz_cluster_replicas cr ON cr.id = pr.id
         JOIN mz_clusters c ON c.id = cr.cluster_id
         WHERE c.name = 'test_audit';
         """)
+    assert (
+        len(pending) == 0
+    ), f"controller reconfiguration must not use pending replicas, found {pending}"
+
+    # Kill envd while the reconfiguration may still be in flight, then restart.
+    c.kill("materialized")
+    c.up("materialized")
+
+    # The controller resumes the durable reconfiguration and completes it: the
+    # cluster settles on a single managed replica at the new size.
+    replicas = None
+    for _ in range(120):
+        replicas = c.sql_query("""
+            SELECT cr.size FROM mz_cluster_replicas cr
+            JOIN mz_clusters c ON c.id = cr.cluster_id
+            WHERE c.name = 'test_audit';
+            """)
+        if replicas == [("scale=1,workers=2",)]:
+            break
+        time.sleep(1)
     assert replicas == [
-        ("r1",)
-    ], f"Expected only the original replica, found {replicas}"
+        ("scale=1,workers=2",)
+    ], f"reconfiguration did not complete across the restart, found {replicas}"
+
+    # No leftover pending replica.
+    pending = c.sql_query("""
+        SELECT cr.name
+        FROM mz_internal.mz_pending_cluster_replicas pr
+        JOIN mz_cluster_replicas cr ON cr.id = pr.id
+        JOIN mz_clusters c ON c.id = cr.cluster_id
+        WHERE c.name = 'test_audit';
+        """)
+    assert (
+        len(pending) == 0
+    ), f"Expected no pending replica after restart, found {pending}"
 
     # Verify that every 'create' of a cluster-replica in
     # mz_audit_events has a matching 'drop' (or the replica still
@@ -7294,6 +7317,113 @@ def workflow_github_11322(c: Composition) -> None:
     collection_metadata = storage_collection_metadata()
     assert collection_metadata[mv_id] == mv_shard
     assert rp_id not in collection_metadata
+
+
+def workflow_test_replacement_mv_drop_after_restart(c: Composition) -> None:
+    """Dropping a replacement MV after restart must preserve the target shard."""
+
+    def storage_metadata() -> dict:
+        port = c.port("materialized", 6878)
+        resp = requests.get(f"http://localhost:{port}/api/catalog/dump")
+        resp.raise_for_status()
+        return resp.json()["storage_metadata"]
+
+    def storage_collection_states() -> dict[str, str]:
+        port = c.port("materialized", 6878)
+        resp = requests.get(f"http://localhost:{port}/api/coordinator/dump")
+        resp.raise_for_status()
+        return resp.json()["controller"]["storage_collections"]["collections"]
+
+    def debug_global_id(global_id: str) -> str:
+        assert global_id.startswith("u"), global_id
+        return f"User({global_id[1:]})"
+
+    def data_shard(collection_state: str) -> str:
+        match = re.search(r"data_shard: ShardId\(([^)]+)\)", collection_state)
+        assert match is not None, collection_state
+        return f"s{match.group(1)}"
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    c.sql("""
+        CREATE CLUSTER stalled SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
+        CREATE TABLE t (a int);
+        CREATE MATERIALIZED VIEW mv IN CLUSTER stalled AS SELECT * FROM t;
+        CREATE MATERIALIZED VIEW plain_mv IN CLUSTER stalled AS SELECT * FROM t;
+        CREATE REPLACEMENT MATERIALIZED VIEW rp1 FOR mv
+            IN CLUSTER stalled AS SELECT * FROM t;
+        """)
+
+    [(mv_id,)] = c.sql_query("SELECT id FROM mz_materialized_views WHERE name = 'mv'")
+    [(plain_mv_id,)] = c.sql_query(
+        "SELECT id FROM mz_materialized_views WHERE name = 'plain_mv'"
+    )
+    [(rp1_id,)] = c.sql_query("SELECT id FROM mz_materialized_views WHERE name = 'rp1'")
+
+    c.sql("""
+        ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp1;
+        CREATE REPLACEMENT MATERIALIZED VIEW rp2 FOR mv
+            IN CLUSTER stalled AS SELECT * FROM t;
+        ALTER CLUSTER stalled SET (REPLICATION FACTOR 0);
+        """)
+    [(rp2_id,)] = c.sql_query("SELECT id FROM mz_materialized_views WHERE name = 'rp2'")
+
+    # Without a replica, no dataflow holds a persist read lease after restart.
+    # Such a lease would delay finalization beyond the runtime of this test.
+    c.kill("materialized")
+    c.up("materialized")
+
+    collection_states = storage_collection_states()
+    mv_state = collection_states[mv_id]
+    rp1_state = collection_states[rp1_id]
+    rp2_state = collection_states[rp2_id]
+    plain_mv_state = collection_states[plain_mv_id]
+    mv_shard = data_shard(mv_state)
+    plain_mv_shard = data_shard(plain_mv_state)
+
+    assert data_shard(rp1_state) == mv_shard
+    assert data_shard(rp2_state) == mv_shard
+    assert "primary: None" in mv_state, mv_state
+    assert f"primary: Some({debug_global_id(mv_id)})" in rp1_state, rp1_state
+    assert f"primary: Some({debug_global_id(rp1_id)})" in rp2_state, rp2_state
+    assert "primary: None" in plain_mv_state, plain_mv_state
+    for collection_state in (mv_state, rp1_state, rp2_state, plain_mv_state):
+        assert "read_policy: LagWriteFrontier" in collection_state, collection_state
+
+    # Drop the staged replacement without applying it.
+    c.sql("DROP MATERIALIZED VIEW rp2")
+
+    # The finalization record is removed by the next catalog transaction after
+    # finalization completes, so inspect it immediately after the drop.
+    unfinalized = storage_metadata()["unfinalized_shards"]
+    assert mv_shard not in unfinalized, (
+        f"dropping the replacement marked the target's shard {mv_shard} for"
+        f" finalization. Unfinalized shards: {unfinalized}"
+    )
+
+    # A plain MV still owns its shard after bootstrap, so dropping it must
+    # enqueue that shard for finalization.
+    c.sql("DROP MATERIALIZED VIEW plain_mv")
+    unfinalized = storage_metadata()["unfinalized_shards"]
+    assert plain_mv_shard in unfinalized, (
+        f"dropping a plain MV did not mark its shard {plain_mv_shard} for"
+        f" finalization. Unfinalized shards: {unfinalized}"
+    )
+
+    c.sql(
+        "CREATE REPLACEMENT MATERIALIZED VIEW rp3 FOR mv"
+        " IN CLUSTER stalled AS SELECT * FROM t"
+    )
+
+    # The target's shard must not have been sealed.
+    upper_empty = c.sql_query("""
+        SELECT write_frontier IS NULL
+        FROM mz_internal.mz_frontiers
+        JOIN mz_materialized_views ON id = object_id
+        WHERE name = 'mv'
+        """)[0][0]
+    assert not upper_empty, "the target MV's shard was sealed, its data is lost"
 
 
 def workflow_test_github_10102(c: Composition) -> None:
