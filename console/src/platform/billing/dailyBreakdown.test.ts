@@ -14,6 +14,7 @@ import {
   accountIdsByTotal,
   accountTotal,
   aggregateDays,
+  breakdownByAccount,
   stackedDailyRows,
 } from "./dailyBreakdown";
 
@@ -164,6 +165,34 @@ describe("accountIdsByTotal / stackedDailyRows", () => {
     expect(stackedDailyRows(days, ids)).toEqual([
       { startDate: "2026-06-01T00:00:00Z", big: 5, small: 1 },
       { startDate: "2026-06-02T00:00:00Z", big: 5, small: 0 },
+    ]);
+  });
+});
+
+describe("breakdownByAccount", () => {
+  it("breaks a tie in totals by account id, matching accountIdsByTotal's order", () => {
+    const days: CostBreakdownDay[] = [
+      {
+        startDate: "2026-06-01T00:00:00Z",
+        endDate: "2026-06-02T00:00:00Z",
+        accounts: [
+          {
+            external_customer_id: "b-account",
+            clusters: [cluster({ amounts: { "price-compute": "10.00" } })],
+          },
+          {
+            external_customer_id: "a-account",
+            clusters: [cluster({ amounts: { "price-compute": "10.00" } })],
+          },
+        ],
+      },
+    ];
+
+    const result = breakdownByAccount(days);
+
+    expect(result?.accounts.map((account) => account.id)).toEqual([
+      "a-account",
+      "b-account",
     ]);
   });
 });

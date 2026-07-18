@@ -35,6 +35,7 @@ import { formatCurrency } from "~/utils/format";
 import {
   accountTotal,
   aggregateDays,
+  breakdownByAccount,
   filterDaysByRegion,
   shortAccountId,
 } from "./dailyBreakdown";
@@ -283,30 +284,6 @@ function breakdownTotal(days: CostBreakdownDay[] | null): number | null {
     return null;
   }
   return accounts.reduce((sum, account) => sum + accountTotal(account), 0);
-}
-
-/**
- * Per-account spend over a breakdown window, biggest spender first, plus the
- * window total. Used to itemize the "Last 30 days" row by account. `null` if
- * there's no data to show (see `breakdownTotal`).
- */
-function breakdownByAccount(
-  days: CostBreakdownDay[] | null,
-): { total: number; accounts: { id: string; total: number }[] } | null {
-  if (!days || days.length === 0) {
-    return null;
-  }
-  const accounts = aggregateDays(days)
-    .accounts.map((account) => ({
-      id: account.external_customer_id,
-      total: accountTotal(account),
-    }))
-    .sort((a, b) => b.total - a.total);
-  if (accounts.length === 0) {
-    return null;
-  }
-  const total = accounts.reduce((sum, account) => sum + account.total, 0);
-  return { total, accounts };
 }
 
 /**

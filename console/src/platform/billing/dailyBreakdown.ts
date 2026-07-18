@@ -161,6 +161,30 @@ export function accountIdsByTotal(days: CostBreakdownDay[]): string[] {
   });
 }
 
+/**
+ * Per-account spend over a breakdown window, biggest spender first (ties
+ * broken by id, matching `accountIdsByTotal`), plus the window total. Used to
+ * itemize the "Last 30 days" row by account. `null` if there's no data.
+ */
+export function breakdownByAccount(
+  days: CostBreakdownDay[] | null,
+): { total: number; accounts: { id: string; total: number }[] } | null {
+  if (!days || days.length === 0) {
+    return null;
+  }
+  const accounts = aggregateDays(days)
+    .accounts.map((account) => ({
+      id: account.external_customer_id,
+      total: accountTotal(account),
+    }))
+    .sort((a, b) => b.total - a.total || a.id.localeCompare(b.id));
+  if (accounts.length === 0) {
+    return null;
+  }
+  const total = accounts.reduce((sum, account) => sum + account.total, 0);
+  return { total, accounts };
+}
+
 /** One stacked-chart row per day: the day plus each account's total for it. */
 export type StackedDailyRow = { startDate: string } & {
   [accountId: string]: number | string;
