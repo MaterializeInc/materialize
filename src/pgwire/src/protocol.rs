@@ -177,8 +177,13 @@ where
 
     let user = params.remove("user").unwrap_or_else(String::new);
     let options = parse_options(params.get("options").unwrap_or(&String::new()));
-    let authenticator =
-        get_authenticator(authenticator_kind, frontegg, oidc, talos, adapter_client.clone());
+    let authenticator = get_authenticator(
+        authenticator_kind,
+        frontegg,
+        oidc,
+        talos,
+        adapter_client.clone(),
+    );
     // TODO move this somewhere it can be shared with HTTP
     let is_internal_user = INTERNAL_USER_NAMES.contains(&user);
     // this is a superset of internal users
@@ -239,7 +244,7 @@ where
                         authenticated,
                     );
                     let expired = async move { auth_session.expired().await };
-                    (session, expired.left_future())
+                    (session, expired.boxed())
                 }
                 Err(err) => {
                     warn!(?err, "pgwire connection failed authentication");
@@ -282,7 +287,7 @@ where
                         );
                         // No invalidation of the auth session once authenticated,
                         // so auth session lasts indefinitely.
-                        (session, pending().right_future())
+                        (session, pending().boxed())
                     }
                     Err(err) => {
                         warn!(?err, "pgwire connection failed authentication");
@@ -306,7 +311,7 @@ where
                         return conn.send(e).await;
                     }
                 };
-                (session, pending().right_future())
+                (session, pending().boxed())
             }
         }
         Authenticator::Talos(talos) => {
@@ -322,12 +327,12 @@ where
             if talos.is_talos_key(&password) {
                 let auth_response = talos.authenticate(&password, Some(&user)).await;
                 match auth_response {
-                    Ok((claims, authenticated)) => {
+                    Ok((mut handle, authenticated)) => {
                         let session = adapter_client.new_session(
                             SessionConfig {
                                 conn_id: conn.conn_id().clone(),
                                 uuid: conn_uuid,
-                                user: claims.user,
+                                user: handle.user().into(),
                                 client_ip: conn.peer_addr().clone(),
                                 external_metadata_rx: None,
                                 helm_chart_version,
@@ -336,12 +341,11 @@ where
                             },
                             authenticated,
                         );
-                        // Revocation takes effect on reconnect: a new connection
-                        // re-derives and fails if the key was revoked. Live
-                        // teardown of an established session via a background
-                        // refresh loop is a follow-up (OIDC has the same
-                        // limitation today).
-                        (session, pending().right_future())
+                        // The handle's background task re-derives periodically;
+                        // `expired()` completes when the key is revoked/expired,
+                        // tearing the connection down (bounded revocation).
+                        let expired = async move { handle.expired().await };
+                        (session, expired.boxed())
                     }
                     Err(err) => {
                         warn!(?err, "pgwire connection failed authentication");
@@ -365,7 +369,7 @@ where
                         return conn.send(e).await;
                     }
                 };
-                (session, pending().right_future())
+                (session, pending().boxed())
             }
         }
         Authenticator::Password(adapter_client) => {
@@ -393,7 +397,7 @@ where
                 }
             };
             // No frontegg check, so auth session lasts indefinitely.
-            (session, pending().right_future())
+            (session, pending().boxed())
         }
         Authenticator::Sasl(adapter_client) => {
             // Start the handshake
@@ -577,7 +581,7 @@ where
                 authenticated,
             );
             // No frontegg check, so auth session lasts indefinitely.
-            let auth_session = pending().right_future();
+            let auth_session = pending().boxed();
             (session, auth_session)
         }
 
@@ -596,7 +600,7 @@ where
                 Authenticated,
             );
             // No frontegg check, so auth session lasts indefinitely.
-            let auth_session = pending().right_future();
+            let auth_session = pending().boxed();
             (session, auth_session)
         }
     };
@@ -3420,9 +3424,11 @@ fn get_authenticator(
         listeners::AuthenticatorKind::Password => Authenticator::Password(adapter_client),
         listeners::AuthenticatorKind::Sasl => Authenticator::Sasl(adapter_client),
         listeners::AuthenticatorKind::Oidc => Authenticator::Oidc(oidc),
-        listeners::AuthenticatorKind::Talos => Authenticator::Talos(talos.expect(
-            "Talos authenticator should exist with listeners::AuthenticatorKind::Talos",
-        )),
+        listeners::AuthenticatorKind::Talos => {
+            Authenticator::Talos(talos.expect(
+                "Talos authenticator should exist with listeners::AuthenticatorKind::Talos",
+            ))
+        }
         listeners::AuthenticatorKind::None => Authenticator::None,
     }
 }

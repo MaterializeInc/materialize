@@ -15,7 +15,8 @@ use mz_frontegg_auth::Authenticator as FronteggAuthenticator;
 
 pub use oidc::{GenericOidcAuthenticator, OidcClaims, OidcError, ValidatedClaims};
 pub use talos::{
-    DeriveCredential, TalosAuthenticator, TalosConfig, TalosError, ValidatedTalosClaims,
+    DeriveCredential, TalosAuthenticator, TalosConfig, TalosError, TalosSessionHandle,
+    ValidatedTalosClaims,
 };
 
 use mz_auth::AuthenticatorKind;

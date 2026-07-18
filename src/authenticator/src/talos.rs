@@ -47,18 +47,26 @@ use mz_auth::Authenticated;
 use mz_pgwire_common::{ErrorResponse, Severity};
 use reqwest::Client as HttpClient;
 use serde::Deserialize;
+use tokio::sync::watch;
 use tokio_postgres::error::SqlState;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 use url::Url;
+use zeroize::Zeroizing;
 
 /// Path of the Talos admin endpoint that exchanges an API key for a JWT.
 const DERIVE_PATH: &str = "v2alpha1/admin/apiKeys:derive";
 /// Path of the derived-keys JWKS used to validate derived JWTs locally.
 const JWKS_PATH: &str = "v2alpha1/derivedKeys/jwks.json";
 /// TTL requested for derived tokens. Kept short: the token only has to live
-/// long enough to be validated once (and, once the session cache lands, to
-/// pace re-derivation), so a short TTL tightens the revocation window.
+/// long enough to be validated once at connection time; it is not reused after
+/// that, so a short TTL keeps the minted-token exposure minimal.
 const DEFAULT_DERIVED_TOKEN_TTL: Duration = Duration::from_secs(300);
+/// How often an established connection re-derives to confirm its key is still
+/// live. A revoked key makes `derive` fail (it re-checks parent status), which
+/// tears the connection down — so this bounds the revocation latency for live
+/// connections. Talos derived tokens are NOT individually revocable (revocation
+/// is TTL-bound), so this periodic re-derive is the revocation mechanism.
+const DEFAULT_REVOCATION_CHECK_INTERVAL: Duration = Duration::from_secs(300);
 /// Timeout for the derive and JWKS HTTP calls.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -220,6 +228,9 @@ pub struct TalosConfig {
     pub key_prefix: String,
     /// TTL requested for derived tokens.
     pub derived_token_ttl: Duration,
+    /// How often a live connection re-derives to confirm its key is still
+    /// valid (the revocation-latency bound for established connections).
+    pub revocation_check_interval: Duration,
 }
 
 impl TalosConfig {
@@ -229,6 +240,7 @@ impl TalosConfig {
             derive_credential,
             key_prefix,
             derived_token_ttl: DEFAULT_DERIVED_TOKEN_TTL,
+            revocation_check_interval: DEFAULT_REVOCATION_CHECK_INTERVAL,
         }
     }
 }
@@ -248,6 +260,7 @@ struct TalosAuthenticatorInner {
     derive_credential: DeriveCredential,
     key_prefix: String,
     derived_token_ttl: Duration,
+    revocation_check_interval: Duration,
     /// kid -> decoding key cache for the derived-keys JWKS, refreshed on miss.
     decoding_keys: Mutex<BTreeMap<String, DecodingKey>>,
 }
@@ -268,6 +281,7 @@ impl TalosAuthenticator {
                 derive_credential: config.derive_credential,
                 key_prefix: config.key_prefix,
                 derived_token_ttl: config.derived_token_ttl,
+                revocation_check_interval: config.revocation_check_interval,
                 decoding_keys: Mutex::new(BTreeMap::new()),
             }),
         })
@@ -280,20 +294,124 @@ impl TalosAuthenticator {
     }
 
     /// Authenticates a presented Talos key: derive a JWT, validate it locally,
-    /// map it to an identity, and confirm the role may log in.
+    /// map it to an identity, confirm the role may log in, and return a session
+    /// handle that keeps confirming the key stays live.
+    ///
+    /// Unlike the Frontegg authenticator, there is no shared, secret-keyed
+    /// session cache: each connection gets its own handle and its own
+    /// liveness-check task. That trades a per-connection derive for
+    /// per-connection isolation (no cross-connection shared session state) and
+    /// keeps the raw secret out of any long-lived shared map — it lives only,
+    /// zeroized, inside this connection's refresh task.
     pub async fn authenticate(
         &self,
         password: &str,
         expected_user: Option<&str>,
-    ) -> Result<(ValidatedTalosClaims, Authenticated), TalosError> {
+    ) -> Result<(TalosSessionHandle, Authenticated), TalosError> {
         if !self.is_talos_key(password) {
             return Err(TalosError::NotTalosKey);
         }
         let token = self.inner.derive(password).await?;
         let validated = self.inner.validate(&token, expected_user).await?;
         self.inner.check_role_login(&validated.user).await?;
-        Ok((validated, Authenticated))
+
+        let claims = Arc::new(validated);
+        // `valid` starts true; the refresh task flips it to false (or drops the
+        // sender, closing the channel) when the key is definitively no longer
+        // valid, which `TalosSessionHandle::expired` awaits.
+        let (valid_tx, valid_rx) = watch::channel(true);
+        spawn_revocation_check(
+            Arc::clone(&self.inner),
+            Zeroizing::new(password.to_string()),
+            claims.key_id.clone(),
+            valid_tx,
+        );
+        Ok((TalosSessionHandle { claims, valid_rx }, Authenticated))
     }
+}
+
+/// A handle to an authenticated Talos session.
+///
+/// While the handle is alive, a background task periodically re-derives the
+/// key to confirm it is still valid; if the key is revoked or expires,
+/// [`TalosSessionHandle::expired`] completes and the caller (pgwire) tears the
+/// connection down. Dropping the handle closes the channel, which stops the
+/// background task.
+#[derive(Debug)]
+pub struct TalosSessionHandle {
+    claims: Arc<ValidatedTalosClaims>,
+    valid_rx: watch::Receiver<bool>,
+}
+
+impl TalosSessionHandle {
+    /// The login user (the key owner's email).
+    pub fn user(&self) -> &str {
+        &self.claims.user
+    }
+
+    /// The Ory actor (identity) id the key is bound to, if present.
+    pub fn actor_id(&self) -> Option<&str> {
+        self.claims.actor_id.as_deref()
+    }
+
+    /// The organization the key owner belongs to, if stamped.
+    pub fn organization_id(&self) -> Option<&str> {
+        self.claims.organization_id.as_deref()
+    }
+
+    /// The Talos key id (derived-token subject).
+    pub fn key_id(&self) -> &str {
+        &self.claims.key_id
+    }
+
+    /// Completes when the session is no longer valid — either the background
+    /// check found the key revoked/expired (value set to `false`) or the task
+    /// ended and dropped the sender (channel closed).
+    pub async fn expired(&mut self) {
+        // `wait_for` resolves when the predicate is true; it returns `Err` if
+        // the sender was dropped (channel closed), which we also treat as
+        // expired. Either way this future completes only once the session is
+        // no longer usable.
+        let _ = self.valid_rx.wait_for(|valid| !*valid).await;
+    }
+}
+
+/// Spawns the background task that bounds revocation latency for one live
+/// connection by periodically re-deriving the key.
+fn spawn_revocation_check(
+    inner: Arc<TalosAuthenticatorInner>,
+    secret: Zeroizing<String>,
+    key_id: String,
+    valid_tx: watch::Sender<bool>,
+) {
+    let task_name = format!("talos-revocation-check-{key_id}");
+    mz_ore::task::spawn(|| task_name, async move {
+        let interval = inner.revocation_check_interval;
+        loop {
+            tokio::select! {
+                // Stop as soon as the connection (the only receiver) goes away.
+                _ = valid_tx.closed() => break,
+                _ = tokio::time::sleep(interval) => {}
+            }
+            match inner.derive(&secret).await {
+                Ok(_) => {
+                    // Key still valid; discard the freshly derived token.
+                }
+                // Definitive: the key is revoked, expired, or gone. Signal the
+                // connection to tear down and stop checking.
+                Err(TalosError::InvalidKey) => {
+                    info!(%key_id, "Talos key no longer valid; expiring session");
+                    let _ = valid_tx.send(false);
+                    break;
+                }
+                // Transient (network/Talos outage): fail OPEN — do not kill a
+                // live session over a blip. Try again next interval.
+                Err(e) => {
+                    warn!(%key_id, error = %e, "Talos revocation check failed transiently; will retry");
+                }
+            }
+        }
+    });
 }
 
 impl TalosAuthenticatorInner {
@@ -672,5 +790,50 @@ mod tests {
             !rendered.contains("super-secret"),
             "credential must not leak in Debug: {rendered}"
         );
+    }
+
+    fn test_handle(valid_rx: watch::Receiver<bool>) -> TalosSessionHandle {
+        TalosSessionHandle {
+            claims: Arc::new(ValidatedTalosClaims {
+                user: "user@example.com".to_string(),
+                actor_id: Some("actor".to_string()),
+                organization_id: Some("org".to_string()),
+                key_id: "key".to_string(),
+                _private: (),
+            }),
+            valid_rx,
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn handle_expires_when_revoked() {
+        let (tx, rx) = watch::channel(true);
+        let mut handle = test_handle(rx);
+        // The revocation-check task would do this on a revoked key.
+        tx.send(false).expect("receiver alive");
+        // Must complete promptly; the test harness would hang otherwise.
+        handle.expired().await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn handle_expires_when_check_task_ends() {
+        let (tx, rx) = watch::channel(true);
+        let mut handle = test_handle(rx);
+        // Dropping the sender models the background task exiting; a closed
+        // channel must also count as expired so the connection never hangs.
+        drop(tx);
+        handle.expired().await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn handle_stays_live_while_valid() {
+        let (tx, rx) = watch::channel(true);
+        let mut handle = test_handle(rx);
+        // While valid, expired() must NOT complete.
+        tokio::select! {
+            _ = handle.expired() => panic!("session expired while still valid"),
+            _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+        }
+        drop(tx);
     }
 }
