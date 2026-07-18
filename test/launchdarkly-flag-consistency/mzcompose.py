@@ -316,7 +316,6 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     network_policy
     oidc_audience
     oidc_authentication_claim
-    oidc_group_claim
     oidc_group_role_sync_strict
     oidc_issuer
     opentelemetry_filter_defaults
@@ -506,6 +505,7 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "kafka_progress_record_fetch_timeout",
     "kafka_socket_timeout",
     "mz_metrics_lgalloc_refresh_interval",
+    "oidc_group_claim",
     "persist_batch_max_run_len",
     "persist_source_hydration_frontier_coalesce_bytes",
     "persist_validate_part_bounds_on_read",
@@ -537,7 +537,6 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
 KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     allow_real_time_recency
     allowed_cluster_replica_sizes
-    column_paged_batcher_swap_pageout
     compute_dataflow_max_inflight_bytes
     compute_peek_response_stash_threshold_bytes
     compute_subscribe_snapshot_optimization
@@ -546,7 +545,6 @@ KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     enable_column_paged_batcher_spill
     enable_compute_correction_v2
     enable_eager_delta_joins
-    enable_glue_schema_registry
     enable_index_options
     enable_join_prioritize_arranged
     enable_kafka_broker_matching_rules
@@ -564,6 +562,8 @@ KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     max_materialized_views
     max_sources
     mz_metrics_lgalloc_refresh_interval
+    oidc_group_claim
+    oidc_group_role_sync_enabled
     persist_batch_delete_enabled
     persist_catalog_force_compaction_fuel
     persist_claim_compaction_min_version
