@@ -20,6 +20,7 @@ import {
 } from "@chakra-ui/react";
 import { AxisBottom, AxisLeft, AxisScale } from "@visx/axis";
 import { curveMonotoneX } from "@visx/curve";
+import { localPoint } from "@visx/event";
 import { Group } from "@visx/group";
 import ParentSize, {
   ParentSizeProvidedProps,
@@ -37,7 +38,7 @@ import {
   CostBreakdownDay,
 } from "~/api/cloudGlobalApi";
 import ErrorBox from "~/components/ErrorBox";
-import { GraphTooltip } from "~/components/graphComponents";
+import { GraphEventOverlay, GraphTooltip } from "~/components/graphComponents";
 import ChevronRightIcon from "~/svg/ChevronRightIcon";
 import { MaterializeTheme } from "~/theme";
 import { DATE_FORMAT_SHORT, formatDateInUtc } from "~/utils/dateFormat";
@@ -69,7 +70,6 @@ import TimeRangeSelect from "./TimeRangeSelect";
 
 const margin = { top: 10, right: 0, bottom: 36, left: 50 };
 const chartHeightPx = 245;
-const TOOLTIP_DISMISS_TIMEOUT_MS = 300;
 const SPARKLINE_STROKE_WIDTH = 2;
 
 type AccountSpendBreakdownProps = {
@@ -146,11 +146,17 @@ const AccountSpendChartGraph = ({
   height,
 }: AccountSpendChartGraphProps) => {
   const { colors, textStyles } = useTheme<MaterializeTheme>();
-  const { svgProps, axisLeftProps, axisBottomProps, xScaleRange, yScaleRange } =
-    useMemo(
-      () => buildXYGraphLayoutProps({ width, height, margin }),
-      [width, height],
-    );
+  const {
+    svgProps,
+    axisLeftProps,
+    axisBottomProps,
+    graphEventOverlayProps,
+    xScaleRange,
+    yScaleRange,
+  } = useMemo(
+    () => buildXYGraphLayoutProps({ width, height, margin }),
+    [width, height],
+  );
   const {
     tooltipOpen,
     tooltipLeft,
@@ -163,9 +169,6 @@ const AccountSpendChartGraph = ({
     detectBounds: true,
     scroll: true,
   });
-  const tooltipTimeoutRef = React.useRef<number>();
-  // Clear any pending dismiss on unmount so hideTooltip can't fire after.
-  React.useEffect(() => () => clearTimeout(tooltipTimeoutRef.current), []);
 
   const maxDailyTotal = useMemo(
     () =>
@@ -206,6 +209,22 @@ const AccountSpendChartGraph = ({
     [accountIds, colorFor, colors],
   );
 
+  // scaleBand has no invert() (which findNearestDatum requires), so map the
+  // pointer's x to a column by stepping from the band range's start.
+  const handlePointerMove = (event: React.PointerEvent<SVGRectElement>) => {
+    const svgPoint = localPoint(event);
+    if (!svgPoint || rows.length === 0) return;
+    const [rangeStart] = xScale.range();
+    const index = Math.min(
+      rows.length - 1,
+      Math.max(0, Math.floor((svgPoint.x - rangeStart) / xScale.step())),
+    );
+    showTooltip({
+      ...calculateTooltipPosition({ event }),
+      tooltipData: { row: rows[index] },
+    });
+  };
+
   return (
     <Box position="relative">
       <svg data-testid="account-spend-chart" ref={containerRef} {...svgProps}>
@@ -234,22 +253,6 @@ const AccountSpendChartGraph = ({
                       fill={bar.color}
                       initial={{ opacity: 1 }}
                       animate={{ opacity: isDemoted ? 0.5 : 1 }}
-                      onMouseLeave={() => {
-                        tooltipTimeoutRef.current = window.setTimeout(
-                          () => hideTooltip(),
-                          TOOLTIP_DISMISS_TIMEOUT_MS,
-                        );
-                      }}
-                      onMouseMove={(event) => {
-                        if (tooltipTimeoutRef.current) {
-                          clearTimeout(tooltipTimeoutRef.current);
-                          tooltipTimeoutRef.current = undefined;
-                        }
-                        showTooltip({
-                          ...calculateTooltipPosition({ event }),
-                          tooltipData: { row: rows[bar.index] },
-                        });
-                      }}
                     />
                   );
                 }),
@@ -293,6 +296,11 @@ const AccountSpendChartGraph = ({
             })}
           />
         </Group>
+        <GraphEventOverlay
+          {...graphEventOverlayProps}
+          onPointerMove={handlePointerMove}
+          onPointerLeave={() => hideTooltip()}
+        />
       </svg>
       {tooltipOpen &&
         tooltipData &&
