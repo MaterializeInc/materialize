@@ -68,6 +68,9 @@ pub struct ComputeMetrics {
     index_peek_result_sort_seconds: Histogram,
     index_peek_frontier_check_seconds: Histogram,
     index_peek_row_collection_seconds: Histogram,
+    // Peek coalescing counters (per-cluster, no worker label)
+    index_peek_coalesced_groups_total: IntCounter,
+    index_peek_coalesced_peeks_total: IntCounter,
 
     // memory usage
     shared_row_heap_capacity_bytes: raw::UIntGaugeVec,
@@ -218,6 +221,14 @@ impl ComputeMetrics {
                 help: "Time constructing RowCollection from peek results.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             )),
+            index_peek_coalesced_groups_total: registry.register(metric!(
+                name: "mz_index_peek_coalesced_groups_total",
+                help: "Number of coalesced index peek groups (each served by a single arrangement walk).",
+            )),
+            index_peek_coalesced_peeks_total: registry.register(metric!(
+                name: "mz_index_peek_coalesced_peeks_total",
+                help: "Number of index peeks served through coalescing.",
+            )),
             replica_expiration_timestamp_seconds: registry.register(metric!(
                 name: "mz_dataflow_replica_expiration_timestamp_seconds",
                 help: "The replica expiration timestamp in seconds since epoch.",
@@ -271,6 +282,8 @@ impl ComputeMetrics {
         let index_peek_result_sort_seconds = self.index_peek_result_sort_seconds.clone();
         let index_peek_frontier_check_seconds = self.index_peek_frontier_check_seconds.clone();
         let index_peek_row_collection_seconds = self.index_peek_row_collection_seconds.clone();
+        let index_peek_coalesced_groups_total = self.index_peek_coalesced_groups_total.clone();
+        let index_peek_coalesced_peeks_total = self.index_peek_coalesced_peeks_total.clone();
         let replica_expiration_timestamp_seconds = self
             .replica_expiration_timestamp_seconds
             .with_label_values(&[&worker]);
@@ -298,6 +311,8 @@ impl ComputeMetrics {
             index_peek_result_sort_seconds,
             index_peek_frontier_check_seconds,
             index_peek_row_collection_seconds,
+            index_peek_coalesced_groups_total,
+            index_peek_coalesced_peeks_total,
             replica_expiration_timestamp_seconds,
             replica_expiration_remaining_seconds,
             shared_row_heap_capacity_bytes,
@@ -343,6 +358,10 @@ pub struct WorkerMetrics {
     pub(crate) index_peek_frontier_check_seconds: Histogram,
     /// Histogram of index peek row collection construction durations.
     pub(crate) index_peek_row_collection_seconds: Histogram,
+    /// Number of coalesced index peek groups, each served by a single arrangement walk.
+    pub(crate) index_peek_coalesced_groups_total: IntCounter,
+    /// Number of index peeks served through coalescing.
+    pub(crate) index_peek_coalesced_peeks_total: IntCounter,
     /// The timestamp of replica expiration.
     pub(crate) replica_expiration_timestamp_seconds: UIntGauge,
     /// Remaining seconds until replica expiration.

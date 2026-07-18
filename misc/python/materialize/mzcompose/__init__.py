@@ -79,6 +79,7 @@ def get_minimal_system_parameters(
         "enable_columnation_lgalloc": "false",
         "enable_compute_correction_v2": "true",
         "enable_compute_logical_backpressure": "true",
+        "enable_compute_peek_coalescing": "true",
         "enable_connection_validation_syntax": "true",
         "enable_create_table_from_source": "true",
         "enable_eager_delta_joins": "true",

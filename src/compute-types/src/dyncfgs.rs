@@ -409,6 +409,15 @@ pub const ENABLE_PEEK_RESPONSE_STASH: Config<bool> = Config::new(
     "Whether to enable the peek response stash, for sending back large peek responses. Will only be used for results that exceed compute_peek_response_stash_threshold_bytes.",
 );
 
+/// Whether to coalesce index peeks that are pending against the same index at
+/// the same timestamp into a single arrangement walk, amortizing cursor setup
+/// and key/value decoding across the peeks.
+pub const ENABLE_PEEK_COALESCING: Config<bool> = Config::new(
+    "enable_compute_peek_coalescing",
+    true,
+    "Whether to coalesce index peeks pending against the same index at the same timestamp into a single arrangement walk.",
+);
+
 /// The threshold for peek response size above which we should use the peek
 /// response stash. Only used if the peek response stash is enabled _and_ if the
 /// query is "streamable" (roughly: doesn't have an ORDER BY).
@@ -526,6 +535,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES)
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK)
         .add(&ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA)
+        .add(&ENABLE_PEEK_COALESCING)
         .add(&ENABLE_PEEK_RESPONSE_STASH)
         .add(&PEEK_RESPONSE_STASH_THRESHOLD_BYTES)
         .add(&PEEK_RESPONSE_STASH_BATCH_MAX_RUNS)
