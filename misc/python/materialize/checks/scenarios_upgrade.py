@@ -33,6 +33,7 @@ from materialize.version_list import (
     get_compatible_upgrade_from_versions,
     get_published_minor_mz_versions,
     get_self_managed_versions,
+    keep_latest_patch_per_minor,
 )
 
 # late initialization
@@ -674,7 +675,11 @@ class SelfManagedLinearUpgradePathManipulateBeforeUpgrade(Scenario):
         seed: str | None = None,
         **kwargs: Any,
     ):
-        self.self_managed_versions = get_compatible_upgrade_from_versions()
+        # Thin to one version per minor so the linear path stays within the
+        # test's time budget as releases accumulate. See keep_latest_patch_per_minor.
+        self.self_managed_versions = keep_latest_patch_per_minor(
+            get_compatible_upgrade_from_versions()
+        )
         super().__init__(checks, executor, features, seed, **kwargs)
 
     def base_version(self) -> MzVersion:
@@ -731,7 +736,11 @@ class SelfManagedLinearUpgradePathManipulateDuringUpgrade(Scenario):
         seed: str | None = None,
         **kwargs: Any,
     ):
-        self.self_managed_versions = get_compatible_upgrade_from_versions()
+        # Thin to one version per minor so the linear path stays within the
+        # test's time budget as releases accumulate. See keep_latest_patch_per_minor.
+        self.self_managed_versions = keep_latest_patch_per_minor(
+            get_compatible_upgrade_from_versions()
+        )
         super().__init__(checks, executor, features, seed, **kwargs)
 
     def base_version(self) -> MzVersion:

@@ -2003,7 +2003,7 @@ feature_flags!(
     {
         name: enable_glue_schema_registry,
         desc: "CREATE CONNECTION ... TO AWS GLUE SCHEMA REGISTRY",
-        default: false,
+        default: true,
         enable_for_item_parsing: true,
     },
     {
