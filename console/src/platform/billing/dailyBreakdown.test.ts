@@ -15,6 +15,7 @@ import {
   accountTotal,
   aggregateDays,
   breakdownByAccount,
+  pivotBreakdown,
   stackedDailyRows,
 } from "./dailyBreakdown";
 
@@ -157,12 +158,16 @@ describe("accountIdsByTotal / stackedDailyRows", () => {
   ];
 
   it("orders account ids by descending period total", () => {
-    expect(accountIdsByTotal(days)).toEqual(["big", "small"]);
+    expect(accountIdsByTotal(accountDailyTotals(days))).toEqual([
+      "big",
+      "small",
+    ]);
   });
 
   it("builds one zero-filled row per day, keyed by every account", () => {
-    const ids = accountIdsByTotal(days);
-    expect(stackedDailyRows(days, ids)).toEqual([
+    const series = accountDailyTotals(days);
+    const ids = accountIdsByTotal(series);
+    expect(stackedDailyRows(days, ids, series)).toEqual([
       { startDate: "2026-06-01T00:00:00Z", big: 5, small: 1 },
       { startDate: "2026-06-02T00:00:00Z", big: 5, small: 0 },
     ]);
@@ -194,5 +199,70 @@ describe("breakdownByAccount", () => {
       "a-account",
       "b-account",
     ]);
+  });
+});
+
+describe("pivotBreakdown", () => {
+  it("returns empty defaults for null days", () => {
+    expect(pivotBreakdown(null, "all")).toEqual({
+      accountIds: [],
+      rows: [],
+      orderedAccounts: [],
+      series: new Map(),
+      totalSpend: 0,
+    });
+  });
+
+  it("orders accounts biggest-spender first and sums to the period total", () => {
+    const days: CostBreakdownDay[] = [
+      {
+        startDate: "2026-06-01T00:00:00Z",
+        endDate: "2026-06-02T00:00:00Z",
+        accounts: [
+          {
+            external_customer_id: "small",
+            clusters: [cluster({ amounts: { c: "1.00" } })],
+          },
+          {
+            external_customer_id: "big",
+            clusters: [cluster({ amounts: { c: "5.00" } })],
+          },
+        ],
+      },
+    ];
+
+    const result = pivotBreakdown(days, "all");
+
+    expect(result.accountIds).toEqual(["big", "small"]);
+    expect(
+      result.orderedAccounts.map((account) => account.external_customer_id),
+    ).toEqual(["big", "small"]);
+    expect(result.rows).toEqual([
+      { startDate: "2026-06-01T00:00:00Z", big: 5, small: 1 },
+    ]);
+    expect(result.series.get("big")).toEqual([5]);
+    expect(result.totalSpend).toBe(6);
+  });
+
+  it("restricts to a single region, matching filterDaysByRegion", () => {
+    const days: CostBreakdownDay[] = [
+      {
+        startDate: "2026-06-01T00:00:00Z",
+        endDate: "2026-06-02T00:00:00Z",
+        accounts: [
+          {
+            external_customer_id: "acct",
+            clusters: [
+              cluster({ region: "aws/us-east-1", amounts: { c: "3.00" } }),
+              cluster({ region: "aws/eu-west-1", amounts: { c: "4.00" } }),
+            ],
+          },
+        ],
+      },
+    ];
+
+    const result = pivotBreakdown(days, "aws/us-east-1");
+
+    expect(result.totalSpend).toBe(3);
   });
 });

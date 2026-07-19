@@ -54,15 +54,11 @@ import {
   resourceTypePaddingLeft,
 } from "./constants";
 import {
-  accountDailyTotals,
-  accountIdsByTotal,
   accountTotal,
-  aggregateDays,
   clusterTotal,
-  filterDaysByRegion,
+  pivotBreakdown,
   shortAccountId,
   StackedDailyRow,
-  stackedDailyRows,
 } from "./dailyBreakdown";
 import RegionSelect from "./RegionSelect";
 import { SafariSafeCollapse } from "./SpendBreakdown";
@@ -626,48 +622,11 @@ function useAccountSpendPivot(
   days: CostBreakdownDay[] | null,
   regionFilter: "all" | string,
 ) {
-  const filteredDays = useMemo(
-    () => (days ? filterDaysByRegion(days, regionFilter) : null),
+  const { accountIds, rows, orderedAccounts, series, totalSpend } = useMemo(
+    () => pivotBreakdown(days, regionFilter),
     [days, regionFilter],
   );
-  const accountIds = useMemo(
-    () => (filteredDays ? accountIdsByTotal(filteredDays) : []),
-    [filteredDays],
-  );
-  const rows = useMemo(
-    () => (filteredDays ? stackedDailyRows(filteredDays, accountIds) : []),
-    [filteredDays, accountIds],
-  );
   const colorFor = useAccountColors(accountIds);
-  const aggregate = useMemo(
-    () => (filteredDays ? aggregateDays(filteredDays) : null),
-    [filteredDays],
-  );
-  const series = useMemo(
-    () =>
-      filteredDays
-        ? accountDailyTotals(filteredDays)
-        : new Map<string, number[]>(),
-    [filteredDays],
-  );
-
-  // Order the aggregated accounts biggest-spender first, matching the chart's
-  // stack order.
-  const orderedAccounts = useMemo(
-    () =>
-      accountIds
-        .map((id) =>
-          aggregate?.accounts.find((a) => a.external_customer_id === id),
-        )
-        .filter((a): a is CostBreakdownAccount => a !== undefined),
-    [accountIds, aggregate],
-  );
-
-  const totalSpend = useMemo(
-    () =>
-      orderedAccounts.reduce((sum, account) => sum + accountTotal(account), 0),
-    [orderedAccounts],
-  );
 
   const rangeStart = days?.length
     ? formatDateInUtc(parseISO(days[0].startDate), DATE_FORMAT_SHORT)

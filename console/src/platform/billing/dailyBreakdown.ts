@@ -145,14 +145,16 @@ export function accountDailyTotals(
 /**
  * Account ids ordered by descending period total (ties broken by id for a
  * stable order). Drives the stacked-chart layer order, the legend, and the
- * comparison table's row order so the biggest spender is on top.
+ * comparison table's row order so the biggest spender is on top. Takes an
+ * already-computed `accountDailyTotals` series rather than `days` so callers
+ * that need both don't compute it twice.
  */
-export function accountIdsByTotal(days: CostBreakdownDay[]): string[] {
+export function accountIdsByTotal(series: Map<string, number[]>): string[] {
   const totals = new Map<string, number>();
-  for (const [id, series] of accountDailyTotals(days)) {
+  for (const [id, dailyTotals] of series) {
     totals.set(
       id,
-      series.reduce((sum, amount) => sum + amount, 0),
+      dailyTotals.reduce((sum, amount) => sum + amount, 0),
     );
   }
   return Array.from(totals.keys()).sort((a, b) => {
@@ -193,13 +195,15 @@ export type StackedDailyRow = { startDate: string } & {
 /**
  * Reshape the per-account daily series into one row per day keyed by account
  * id — the row shape visx `BarStack` consumes (`keys` = `accountIds`). Every
- * account is present on every row (zero-filled), so stacks line up across days.
+ * account is present on every row (zero-filled), so stacks line up across
+ * days. Takes an already-computed `accountDailyTotals` series rather than
+ * `days` so callers that need both don't compute it twice.
  */
 export function stackedDailyRows(
   days: CostBreakdownDay[],
   accountIds: string[],
+  series: Map<string, number[]>,
 ): StackedDailyRow[] {
-  const series = accountDailyTotals(days);
   return days.map((day, dayIndex) => {
     const row: StackedDailyRow = { startDate: day.startDate };
     for (const id of accountIds) {
@@ -207,4 +211,49 @@ export function stackedDailyRows(
     }
     return row;
   });
+}
+
+/**
+ * Shared pivot of a breakdown window into everything the chart and the
+ * ledger render: account order (biggest spender first), stacked chart rows,
+ * per-account daily series, the aggregated accounts in that same order, and
+ * the period total. Computes `accountDailyTotals` exactly once and derives
+ * everything else from it, rather than each piece recomputing its own copy.
+ */
+export function pivotBreakdown(
+  days: CostBreakdownDay[] | null,
+  regionFilter: "all" | string,
+): {
+  accountIds: string[];
+  rows: StackedDailyRow[];
+  orderedAccounts: CostBreakdownAccount[];
+  series: Map<string, number[]>;
+  totalSpend: number;
+} {
+  if (!days) {
+    return {
+      accountIds: [],
+      rows: [],
+      orderedAccounts: [],
+      series: new Map(),
+      totalSpend: 0,
+    };
+  }
+  const filteredDays = filterDaysByRegion(days, regionFilter);
+  const series = accountDailyTotals(filteredDays);
+  const accountIds = accountIdsByTotal(series);
+  const rows = stackedDailyRows(filteredDays, accountIds, series);
+  const aggregate = aggregateDays(filteredDays);
+  const orderedAccounts = accountIds
+    .map((id) =>
+      aggregate.accounts.find((account) => account.external_customer_id === id),
+    )
+    .filter(
+      (account): account is CostBreakdownAccount => account !== undefined,
+    );
+  const totalSpend = orderedAccounts.reduce(
+    (sum, account) => sum + accountTotal(account),
+    0,
+  );
+  return { accountIds, rows, orderedAccounts, series, totalSpend };
 }
