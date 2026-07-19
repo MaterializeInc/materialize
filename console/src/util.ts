@@ -211,6 +211,22 @@ export function nowUTC(): Date {
   );
 }
 
+/**
+ * UTC midnight of the day `days` after `date`'s UTC calendar day (negative
+ * `days` for before). Pure calendar arithmetic (`Date.UTC` tolerates a day
+ * value outside 1-31, rolling into the adjacent month), not millisecond
+ * addition, so this stays correct regardless of `date`'s time component.
+ */
+export function addUtcDays(date: Date, days: number): Date {
+  return new Date(
+    Date.UTC(
+      date.getUTCFullYear(),
+      date.getUTCMonth(),
+      date.getUTCDate() + days,
+    ),
+  );
+}
+
 export function exhaustiveGuard(val: never): never {
   throw new Error(`Unhandled switch case: ${val}`);
 }

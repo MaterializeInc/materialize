@@ -24,7 +24,7 @@ import {
   recentInvoices,
   setDefaultPaymentMethod,
 } from "~/api/cloudGlobalApi";
-import { nowUTC } from "~/util";
+import { addUtcDays, nowUTC } from "~/util";
 
 export const creditBalanceQueryKeys = {
   all: () => buildGlobalQueryKey("credits"),
@@ -76,22 +76,11 @@ export function useRecentInvoices() {
 // `date-fns`'s `startOfDay`/`addDays` read and set calendar fields in the
 // browser's local time zone, not UTC. Near UTC midnight, "local tomorrow" can
 // actually be UTC "today" (or "the day after tomorrow"), silently shifting the
-// whole window by a day. Date.UTC's day component tolerates values outside
-// 1-31 (e.g. `date + 1`) and normalizes into the next/previous month, so this
-// stays entirely within UTC calendar arithmetic.
+// whole window by a day. `addUtcDays` stays entirely within UTC calendar
+// arithmetic instead.
 export function getDayAlignedRange(span: number): [Date, Date] {
   const now = nowUTC();
-  const endDate = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1),
-  );
-  const startDate = new Date(
-    Date.UTC(
-      now.getUTCFullYear(),
-      now.getUTCMonth(),
-      now.getUTCDate() + 1 - span,
-    ),
-  );
-  return [startDate, endDate];
+  return [addUtcDays(now, 1 - span), addUtcDays(now, 1)];
 }
 
 /**
