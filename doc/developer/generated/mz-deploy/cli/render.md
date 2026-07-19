@@ -1,6 +1,6 @@
 ---
 source: src/mz-deploy/src/cli/render.rs
-revision: a647094cc4
+revision: b01635d144
 ---
 
 # mz-deploy::cli::render

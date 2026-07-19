@@ -1,6 +1,6 @@
 ---
 source: src/mz-deploy/src/diagnostics.rs
-revision: a647094cc4
+revision: e9facff5dd
 ---
 
 # mz-deploy::diagnostics
