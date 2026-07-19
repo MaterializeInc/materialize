@@ -131,6 +131,19 @@ kubectl get secret -n ory materialize-oauth2-client \
 
 Compare with the Materialize CR's `system_parameters.oidc_audience`.
 
+### Inspecting the JWT
+
+To see exactly which claims a Hydra-issued token carries, sign in through the
+browser, then in DevTools grab the `id_token` (Application → Cookies, or the
+OAuth callback response in the Network tab) and decode the middle segment:
+
+```bash
+echo '<paste-JWT>' | cut -d. -f2 | base64 -d 2>/dev/null | jq
+```
+
+Look for `email`, `iss` (should match your `ory_hydra_fqdn`), and any custom
+claims you configured (`groups`, etc.).
+
 ### JWT is missing a custom claim (e.g. `groups`) even though the IdP is sending it
 
 Kratos's OIDC jsonnet mapper exposes standard OpenID claims (`email`, `sub`,
