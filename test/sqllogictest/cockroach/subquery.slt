@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,20 +9,18 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/subquery
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/subquery
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
 mode cockroach
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET unsafe_enable_table_keys = true
-----
-COMPLETE 0
 
 # Tests for subqueries (SELECT statements which are part of a bigger statement).
 
@@ -59,22 +57,26 @@ SELECT (1, 2, 3) IN (SELECT 1, 2, 3)
 ----
 true
 
-# TODO(ggevay): scalar subquery returning multiple columns. We could add support for this.
-# (same for many of the following commented out queries)
-# query B
-# SELECT (1, 2, 3) = (SELECT 1, 2, 3)
-# ----
-# true
-#
-# query B
-# SELECT (1, 2, 3) != (SELECT 1, 2, 3)
-# ----
-# false
-#
-# query B
-# SELECT (SELECT 1, 2, 3) = (SELECT 1, 2, 3)
-# ----
-# true
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT (1, 2, 3) = (SELECT 1, 2, 3)
+----
+true
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT (1, 2, 3) != (SELECT 1, 2, 3)
+----
+false
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT (SELECT 1, 2, 3) = (SELECT 1, 2, 3)
+----
+true
 
 query B
 SELECT (SELECT 1) IN (SELECT 1)
@@ -91,48 +93,55 @@ true
 # supporting the specific Postgres behavior appears onerous. Fingers
 # crossed this doesn't bite us down the road.
 
-# TODO(ggevay): Materialize error msg is unclear to me.
-# # Postgres cannot handle this query (but MySQL can), even though it
-# # seems sensical:
-# #   ERROR:  subquery must return only one column
-# #   LINE 1: select (select 1, 2) IN (select 1, 2);
-# #                  ^
-# query B
-# SELECT (SELECT 1, 2) IN (SELECT 1, 2)
-# ----
-# true
-#
-# # Postgres cannot handle this query, even though it seems sensical:
-# #   ERROR:  subquery must return only one column
-# #   LINE 1: select (select 1, 2) IN ((1, 2));
-# #                  ^
-# query B
-# SELECT (SELECT 1, 2) IN ((1, 2))
-# ----
-# true
-#
-# # Postgres cannot handle this query, even though it seems sensical:
-# #   ERROR:  subquery has too many columns
-# #   LINE 1: select (select (1, 2)) IN (select 1, 2);
-# #                                  ^
-# query B
-# SELECT (SELECT (1, 2)) IN (SELECT 1, 2)
-# ----
-# true
+# Not supported by Materialize.
+onlyif cockroach
+# Postgres cannot handle this query (but MySQL can), even though it
+# seems sensical:
+#   ERROR:  subquery must return only one column
+#   LINE 1: select (select 1, 2) IN (select 1, 2);
+#                  ^
+query B
+SELECT (SELECT 1, 2) IN (SELECT 1, 2)
+----
+true
+
+# Not supported by Materialize.
+onlyif cockroach
+# Postgres cannot handle this query, even though it seems sensical:
+#   ERROR:  subquery must return only one column
+#   LINE 1: select (select 1, 2) IN ((1, 2));
+#                  ^
+query B
+SELECT (SELECT 1, 2) IN ((1, 2))
+----
+true
+
+# Not supported by Materialize.
+onlyif cockroach
+# Postgres cannot handle this query, even though it seems sensical:
+#   ERROR:  subquery has too many columns
+#   LINE 1: select (select (1, 2)) IN (select 1, 2);
+#                                  ^
+query B
+SELECT (SELECT (1, 2)) IN (SELECT 1, 2)
+----
+true
 
 query B
 SELECT (SELECT (1, 2)) IN ((1, 2))
 ----
 true
 
-# # Postgres cannot handle this query, even though it seems sensical:
-# #   ERROR:  subquery must return only one column
-# #   LINE 1: select (select 1, 2) in (select (1, 2));
-# #                  ^
-# query B
-# SELECT (SELECT 1, 2) IN (SELECT (1, 2))
-# ----
-# true
+# Not supported by Materialize.
+onlyif cockroach
+# Postgres cannot handle this query, even though it seems sensical:
+#   ERROR:  subquery must return only one column
+#   LINE 1: select (select 1, 2) in (select (1, 2));
+#                  ^
+query B
+SELECT (SELECT 1, 2) IN (SELECT (1, 2))
+----
+true
 
 query B
 SELECT (SELECT (1, 2)) IN (SELECT (1, 2))
@@ -169,7 +178,7 @@ SELECT (1, 2) = ALL(SELECT 1, 2)
 ----
 true
 
-query error pgcode 42601 db error: ERROR: Expected subselect to return 1 column, got 2 columns
+query error pgcode 42601 Expected subselect to return 1 column, got 2 columns
 SELECT (SELECT 1, 2)
 
 query error subquery1 has 2 columns available but 1 columns specified
@@ -184,6 +193,10 @@ CREATE TABLE abc (a INT PRIMARY KEY, b INT, c INT)
 statement ok
 INSERT INTO abc VALUES (1, 2, 3), (4, 5, 6)
 
+# TODO(nvanbenschoten): until we have conditional logic in these files, disable
+# this statement so that we can continue to test this file with the 3node-tenant
+# config.
+#
 # statement ok
 # ALTER TABLE abc SPLIT AT VALUES ((SELECT 1))
 
@@ -246,38 +259,24 @@ SELECT * FROM xyz
 statement ok
 INSERT INTO xyz (x, y, z) VALUES (10, 11, 12)
 
-# Materialize doesn't allow subqueries in `SET`.
-# statement ok
-# UPDATE xyz SET z = (SELECT 10) WHERE x = 7
-
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
-UPDATE xyz SET z = 10 WHERE x = 7
+UPDATE xyz SET z = (SELECT 10) WHERE x = 7
 
 query III rowsort
 SELECT * FROM xyz
 ----
-1 2 3
-4 5 6
-7 8 10
-10 11 12
+1  2  3
+10  11  12
+4  5  6
+7  8  9
 
-# statement error value type tuple{int, int} doesn't match type int of column "z"
-# UPDATE xyz SET z = (SELECT (10, 11)) WHERE x = 7
-#
-# statement error [subquery must return 2 columns, found 1 | number of columns (2) does not match number of values (1)]
-# UPDATE xyz SET (y, z) = (SELECT (11, 12)) WHERE x = 7
+statement error SET clause does not allow subqueries
+UPDATE xyz SET z = (SELECT (10, 11)) WHERE x = 7
 
-#regression, see database-issues#2135
-#statement ok
-#UPDATE xyz SET (y, z) = (SELECT 11, 12) WHERE x = 7
-#
-#query III rowsort
-#SELECT * FROM xyz
-#----
-#1 2  3
-#4 5  6
-#7 11 12
-#10 11 12
+statement error Expected identifier, found left parenthesis
+UPDATE xyz SET (y, z) = (SELECT (11, 12)) WHERE x = 7
 
 query B
 SELECT 1 IN (SELECT x FROM xyz ORDER BY x DESC)
@@ -297,7 +296,20 @@ SELECT * FROM xyz WHERE x = (SELECT max(x) FROM xyz)
 query III
 SELECT * FROM xyz WHERE x = (SELECT max(x) FROM xyz WHERE EXISTS(SELECT * FROM xyz WHERE z=x+3))
 ----
-10 11 12
+
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+UPDATE xyz SET (y, z) = (SELECT 11, 12) WHERE x = 7
+
+query III rowsort
+SELECT * FROM xyz
+----
+1  2  3
+10  11  12
+4  5  6
+7  8  9
 
 statement ok
 CREATE TABLE kv (k INT PRIMARY KEY, v STRING)
@@ -441,24 +453,28 @@ SELECT x FROM xyz WHERE x IN (SELECT x FROM xyz WHERE x = 7)
 ----
 7
 
-# TODO(ggevay): Materialize doesn't allow subqueries in _top-level_ LIMIT or OFFSET clauses.
-# query I
-# SELECT x FROM xyz WHERE x = 7 LIMIT (SELECT x FROM xyz WHERE x = 1)
-# ----
-# 7
-#
-# query I
-# SELECT x FROM xyz ORDER BY x OFFSET (SELECT x FROM xyz WHERE x = 1)
-# ----
-# 4
-# 7
-# 10
+# Not supported by Materialize.
+onlyif cockroach
+query I
+SELECT x FROM xyz WHERE x = 7 LIMIT (SELECT x FROM xyz WHERE x = 1)
+----
+7
 
-# TODO(ggevay): Materialize doesn't allow subqueries in RETURNING clause.
-# query B
-# INSERT INTO xyz (x, y, z) VALUES (13, 11, 12) RETURNING (y IN (SELECT y FROM xyz))
-# ----
-# true
+# Not supported by Materialize.
+onlyif cockroach
+query I
+SELECT x FROM xyz ORDER BY x OFFSET (SELECT x FROM xyz WHERE x = 1)
+----
+4
+7
+10
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+INSERT INTO xyz (x, y, z) VALUES (13, 11, 12) RETURNING (y IN (SELECT y FROM xyz))
+----
+true
 
 # This test checks that the double sub-query plan expansion caused by a
 # sub-expression being shared by two or more plan nodes does not
@@ -476,9 +492,236 @@ query I
 SELECT col0 FROM tab4 WHERE (col0 <= 0 AND col4 <= 5.38) OR (col4 IN (SELECT col1 FROM tab4 WHERE col1 > 8.27)) AND (col3 <= 5 AND (col3 BETWEEN 7 AND 9))
 ----
 
+subtest correlated
+
+statement ok
+CREATE TABLE corr (
+  k INT PRIMARY KEY,
+  i INT
+)
+
+statement ok
+INSERT INTO corr VALUES (1, 10), (2, 22), (3, 30), (4, 40), (5, 50)
+
+query II rowsort
+SELECT * FROM corr
+WHERE CASE WHEN k < 5 THEN k*10 = (SELECT i FROM corr tmp WHERE k = corr.k) END
+----
+1  10
+3  30
+4  40
+
+query III colnames,rowsort
+SELECT k, i, CASE WHEN k > 1 THEN (SELECT i FROM corr tmp WHERE k = corr.k-1) END AS prev_i
+FROM corr
+----
+k  i   prev_i
+1  10  NULL
+2  22  10
+3  30  22
+4  40  30
+5  50  40
+
+# A test similar to the previous showing that the physical ordering requested by
+# the ORDER BY is respected when re-optimizing the subquery.
+query IIR colnames,rowsort
+SELECT k, i,
+  CASE WHEN k > 1 THEN (SELECT i/1 FROM corr tmp WHERE i < corr.i ORDER BY i DESC LIMIT 1) END prev_i
+FROM corr
+----
+k  i   prev_i
+1  10  NULL
+2  22  10
+3  30  22
+4  40  30
+5  50  40
+
+# Not supported by Materialize.
+onlyif cockroach
+# The same query as above, but as a prepared statement with placeholders in the
+# subquery.
+statement ok
+PREPARE corr_s1(INT) AS
+SELECT k, i,
+  CASE WHEN k > 1 THEN (SELECT i/$1 FROM corr tmp WHERE i < corr.i ORDER BY i DESC LIMIT $1) END prev_i
+FROM corr
+
+# Not supported by Materialize.
+onlyif cockroach
+query IIR colnames,rowsort
+EXECUTE corr_s1(1)
+----
+k  i   prev_i
+1  10  NULL
+2  22  10
+3  30  22
+4  40  30
+5  50  40
+
+# A subquery with a star-expansion.
+query IIR colnames,rowsort
+SELECT k, i,
+  CASE WHEN k > 1 THEN (
+    SELECT * FROM (VALUES (33::DECIMAL)) v(i)
+    UNION ALL
+    SELECT i/1 FROM corr tmp WHERE i < corr.i
+    ORDER BY i DESC LIMIT 1
+  ) END prev_i
+FROM corr
+----
+k  i   prev_i
+1  10  NULL
+2  22  33
+3  30  33
+4  40  33
+5  50  40
+
+query II
+SELECT * FROM corr
+WHERE CASE WHEN k < 5 THEN EXISTS (SELECT i FROM corr tmp WHERE i = corr.k*10) END
+----
+1  10
+3  30
+4  40
+
+query IIB
+SELECT *,
+  CASE WHEN k < 5 THEN EXISTS (SELECT i FROM corr tmp WHERE i = corr.k*10) END
+FROM corr
+----
+1  10  true
+2  22  false
+3  30  true
+4  40  true
+5  50  NULL
+
+# Not supported by Materialize.
+onlyif cockroach
+# TODO(mgartner): Execute correlated <op> ANY subqueries.
+statement error could not decorrelate subquery
+SELECT * FROM corr
+WHERE CASE WHEN k < 5 THEN k*10 = ANY (SELECT i FROM corr tmp WHERE k <= corr.k) END
+
+# Not supported by Materialize.
+onlyif cockroach
+# Correlated subqueries can reference outer with expressions.
+query III colnames,rowsort
+WITH w AS MATERIALIZED (
+  (VALUES (1))
+)
+SELECT k, i,
+  CASE WHEN k > 0 THEN (SELECT i+corr.i FROM corr tmp UNION ALL SELECT * FROM w LIMIT 1) END i_plus_first_i
+FROM corr
+----
+k  i   i_plus_first_i
+1  10  20
+2  22  32
+3  30  40
+4  40  50
+5  50  60
+
+# Not supported by Materialize.
+onlyif cockroach
+# Uncorrelated subqueries within correlated subqueries can reference outer with
+# expressions.
+query III colnames,rowsort
+WITH w AS MATERIALIZED (
+  (VALUES (1))
+)
+SELECT k, i,
+  CASE WHEN k > 0 THEN (SELECT i+corr.i FROM corr tmp WHERE k = (SELECT * FROM w)) END i_plus_first_i
+FROM corr
+----
+k  i   i_plus_first_i
+1  10  20
+2  22  32
+3  30  40
+4  40  50
+5  50  60
+
+# Not supported by Materialize.
+onlyif cockroach
+# WITH within subquery that is shadowing outer WITH.
+query III colnames,rowsort
+WITH w(i) AS MATERIALIZED (
+  (VALUES (1))
+)
+SELECT k, i,
+  CASE WHEN k > 0 THEN (
+    WITH w(i) AS MATERIALIZED (
+      (VALUES (2))
+    )
+    SELECT * FROM w UNION ALL SELECT i+corr.i FROM corr tmp LIMIT 1
+  ) END w
+FROM corr
+UNION ALL
+SELECT NULL, NULL, i FROM w
+----
+k     i     w
+1     10    2
+2     22    2
+3     30    2
+4     40    2
+5     50    2
+NULL  NULL  1
+
+statement ok
+CREATE TABLE corr2 (i INT);
+
+# Not supported by Materialize.
+onlyif cockroach
+# A NOT MATERIALIZED CTE with a mutation.
+statement ok
+WITH tmp AS NOT MATERIALIZED (INSERT INTO corr2 VALUES (1) RETURNING i)
+SELECT * FROM corr
+WHERE CASE WHEN k < 5 THEN k+1 = (SELECT i FROM tmp WHERE i = corr.k) END
+
+# The statement above should perform the INSERT only once.
+query I
+SELECT count(*) FROM corr2
+----
+0
+
+# Uncorrelated EXISTS subqueries within correlated subqueries can be executed.
+query I
+SELECT i FROM (VALUES (1), (2)) v(i)
+WHERE CASE
+  WHEN i < 3 THEN (SELECT 1/i = 1 FROM (VALUES (1)) WHERE EXISTS (SELECT * FROM corr))
+  ELSE false
+END
+----
+1
+
+# Correlated EXISTS subqueries within correlated subqueries can be executed.
+query I
+SELECT i FROM (VALUES (1), (10)) v(i)
+WHERE CASE
+  WHEN i > 0 THEN (
+    SELECT i/1 = j FROM (VALUES (1), (10)) w(j)
+    WHERE CASE
+      WHEN j > 0 THEN EXISTS (SELECT * FROM corr WHERE k/1 = j)
+      ELSE false
+    END
+  )
+  ELSE false
+END
+----
+1
+
+
+subtest regressions
+
 statement ok
 CREATE TABLE z (z INT PRIMARY KEY)
 
+# Not supported by Materialize.
+onlyif cockroach
+# Regression test for #24171.
+query I
+SELECT * FROM  z WHERE CAST(COALESCE((SELECT 'a' FROM crdb_internal.zones LIMIT 1 OFFSET 5), (SELECT 'b' FROM pg_catalog.pg_trigger)) AS BYTEA) <= 'a'
+----
+
+# Regression test for #24170.
 query I
 SELECT * FROM z WHERE CAST(COALESCE((SELECT 'a'), (SELECT 'a')) AS bytea) < 'a'
 ----
@@ -489,12 +732,12 @@ CREATE TABLE test (a INT PRIMARY KEY)
 statement ok
 CREATE TABLE test2(b INT PRIMARY KEY)
 
-# Regression test for materialize#24225.
+# Regression test for #24225.
 query I
 SELECT * FROM test2 WHERE 0 = CASE WHEN true THEN (SELECT a FROM test LIMIT 1) ELSE 10 END
 ----
 
-# Regression test for database-issues#8301.
+# Regression test for #28335.
 query I
 SELECT (SELECT ARRAY(SELECT 1))[1]
 ----
@@ -508,50 +751,249 @@ false
 statement error unknown schema 'crdb_internal'
 SELECT * FROM xyz WHERE x IN (SELECT crdb_internal.force_error('', 'subqueryfail'))
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
-PREPARE a AS SELECT 1 = (SELECT $1::int)
+PREPARE a AS SELECT 1 = (SELECT $1:::int)
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 EXECUTE a(1)
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 EXECUTE a(2)
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
-PREPARE b AS SELECT EXISTS (SELECT $1::int)
+PREPARE b AS SELECT EXISTS (SELECT $1:::int)
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 EXECUTE b(3)
 ----
 true
 
-# Regression test for materialize#29205 - make sure the memory account for wrapped local
+# Regression test for #29205 - make sure the memory account for wrapped local
 # planNode within subqueries is properly hooked up.
 
 statement ok
 CREATE TABLE a (a TEXT PRIMARY KEY)
 
-# Materialize doesn't support this non-standard [...] syntax.
-# statement ok
-# SELECT (SELECT repeat(a::STRING, 2) FROM [INSERT INTO a VALUES('foo') RETURNING a]);
-
-# statement ok
-# UPDATE abc SET a = 2, (b, c) = (SELECT 5, 6) WHERE a = 1;
-
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
-UPDATE abc SET a = 2, b = 5, c = 6 WHERE a = 1;
+SELECT (SELECT repeat(a::STRING, 2) FROM [INSERT INTO a VALUES('foo') RETURNING a]);
 
-# # Failure in outer query with mutations in the subquery do not take effect.
-# statement error pq: bar
-# SELECT crdb_internal.force_error('foo', 'bar') FROM [INSERT INTO abc VALUES (11,12,13) RETURNING a]
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+UPDATE abc SET a = 2, (b, c) = (SELECT 5, 6) WHERE a = 1;
+
+# Failure in outer query with mutations in the subquery do not take effect.
+statement error expected id
+SELECT crdb_internal.force_error('foo', 'bar') FROM [INSERT INTO abc VALUES (11,12,13) RETURNING a]
 
 query III
 SELECT * FROM abc WHERE a = 11
 ----
 
-# statement error pq: bar
-# INSERT INTO abc VALUES (1,2, (SELECT crdb_internal.force_error('foo', 'bar')))
+statement error unknown schema 'crdb_internal'
+INSERT INTO abc VALUES (1,2, (SELECT crdb_internal.force_error('foo', 'bar')))
+
+# Regression test for #37263.
+query B
+SELECT 3::decimal IN (SELECT 1)
+----
+false
+
+# Not supported by Materialize.
+onlyif cockroach
+query error unsupported comparison operator
+SELECT 3::decimal IN (SELECT 1::int)
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT 1 IN (SELECT '1');
+----
+true
+
+# Not supported by Materialize.
+onlyif cockroach
+# Regression test for #14554.
+query ITIIIII
+SELECT
+  t.oid, t.typname, t.typsend, t.typreceive, t.typoutput, t.typinput, t.typelem
+FROM
+  pg_type AS t
+WHERE
+  t.oid
+  NOT IN (SELECT (ARRAY[704, 11676, 10005, 3912, 11765, 59410, 11397])[i] FROM generate_series(1, 376) AS i)
+----
+
+# Not supported by Materialize.
+onlyif cockroach
+# Regression test for #96441.
+statement ok
+CREATE TABLE t96441 (
+  k INT PRIMARY KEY,
+  i INT,
+  CHECK (k IN (1, 2))
+);
+INSERT INTO t96441 VALUES (1, 10);
+
+# Not supported by Materialize.
+onlyif cockroach
+query III
+SELECT * FROM (VALUES (0))
+FULL JOIN t96441 AS t1
+ON 1 IN (SELECT t1.i FROM t96441)
+----
+NULL  1     10
+0     NULL  NULL
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER TABLE abc INJECT STATISTICS '[
+  {
+    "columns": ["a"],
+    "created_at": "2018-05-01 1:00:00.00000+00:00",
+    "row_count": 10000,
+    "distinct_count": 10000
+  }
+]'
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER TABLE abc INJECT STATISTICS '[
+  {
+    "columns": ["b"],
+    "created_at": "2018-05-01 1:00:00.00000+00:00",
+    "row_count": 10000,
+    "distinct_count": 10000
+  }
+]'
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER TABLE xyz INJECT STATISTICS '[
+  {
+    "columns": ["x"],
+    "created_at": "2018-05-01 1:00:00.00000+00:00",
+    "row_count": 1000,
+    "distinct_count": 1000
+  }
+]'
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER TABLE xyz INJECT STATISTICS '[
+  {
+    "columns": ["y"],
+    "created_at": "2018-05-01 1:00:00.00000+00:00",
+    "row_count": 1000,
+    "distinct_count": 1000
+  }
+]'
+
+statement ok
+INSERT INTO xyz VALUES(5, 4, 7)
+
+statement ok
+INSERT INTO abc VALUES(12, 13, 14)
+
+statement ok
+CREATE INDEX abc_b ON abc(b)
+
+statement ok
+CREATE INDEX xyz_y ON xyz(y)
+
+### Split Disjunctions Tests
+query III rowsort
+SELECT * FROM abc WHERE EXISTS (SELECT * FROM xyz WHERE abc.a = xyz.x OR abc.b = xyz.y)
+----
+1  2  3
+4  5  6
+7  8  9
+
+query III rowsort
+SELECT * FROM abc WHERE EXISTS (SELECT * FROM xyz WHERE abc.a = xyz.y OR abc.b = xyz.x)
+----
+4  5  6
+
+query III rowsort
+SELECT * FROM abc WHERE EXISTS (SELECT * FROM xyz WHERE (abc.a = xyz.x OR abc.b = xyz.y)and abc.a > 3 AND xyz.z > 10)
+----
+
+
+query III rowsort
+SELECT * FROM abc WHERE EXISTS (SELECT * FROM xyz WHERE (abc.a = xyz.y OR abc.b = xyz.x) AND abc.a > 3 AND xyz.z > 10)
+----
+
+
+query III rowsort
+SELECT * FROM abc WHERE NOT EXISTS (SELECT * FROM xyz WHERE abc.a = xyz.x OR abc.b = xyz.y)
+----
+12  13  14
+
+query III rowsort
+SELECT * FROM abc WHERE NOT EXISTS (SELECT * FROM xyz WHERE abc.a = xyz.y OR abc.b = xyz.x)
+----
+1  2  3
+12  13  14
+7  8  9
+
+query III rowsort
+SELECT * FROM abc WHERE NOT EXISTS (SELECT * FROM xyz WHERE (abc.a = xyz.x OR abc.b = xyz.y)and abc.a > 3 AND xyz.z > 10)
+----
+1  2  3
+12  13  14
+4  5  6
+7  8  9
+
+query III rowsort
+SELECT * FROM abc WHERE NOT EXISTS (SELECT * FROM xyz WHERE (abc.a = xyz.y OR abc.b = xyz.x) AND abc.a > 3 AND xyz.z > 10)
+----
+1  2  3
+12  13  14
+4  5  6
+7  8  9
+
+query III rowsort
+SELECT * FROM abc WHERE EXISTS (SELECT * FROM xyz WHERE (abc.a = xyz.x OR abc.b = xyz.y) AND (abc.a = xyz.y OR abc.b = xyz.y))
+----
+1  2  3
+4  5  6
+7  8  9
+
+query III rowsort
+SELECT * FROM abc WHERE NOT EXISTS (SELECT * FROM xyz WHERE (abc.a = xyz.x OR abc.b = xyz.y) AND (abc.a = xyz.y OR abc.b = xyz.y))
+----
+12  13  14
+
+### End Split Disjunctions Tests
+
+# Regression test for SHOW session_id in a subquery.
+# See https://github.com/cockroachdb/cockroach/issues/93739
+let $session_id
+SHOW session_id
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+select lower((select session_id from [show session_id])) = lower('$session_id')
+----
+true

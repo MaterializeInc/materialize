@@ -1,0 +1,183 @@
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# This file is derived from the logic test suite in CockroachDB. The
+# original file was retrieved on July 6, 2026 from:
+#
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/secondary_index_column_families
+#
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
+# root of this repository.
+
+mode cockroach
+
+# Not supported by Materialize.
+onlyif cockroach
+# Ensure updates that remove a k/v pair succeed.
+statement ok
+CREATE TABLE t (
+  x INT PRIMARY KEY,
+  y INT,
+  z INT,
+  w INT,
+  INDEX i (y) STORING (z, w),
+  FAMILY (x), FAMILY (y), FAMILY (z), FAMILY (w)
+);
+INSERT INTO t VALUES (1, 2, 3, 4);
+UPDATE t SET z = NULL, w = NULL WHERE y = 2
+
+# Not supported by Materialize.
+onlyif cockroach
+query III
+SELECT y, z, w FROM t@i WHERE y = 2
+----
+2 NULL NULL
+
+# Test some cases around insert on conflict.
+statement ok
+DROP TABLE IF EXISTS t;
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE TABLE t (
+  x INT PRIMARY KEY,
+  y INT,
+  z STRING,
+  v INT,
+  UNIQUE INDEX i (y) STORING (z, v)
+);
+INSERT INTO t VALUES (1, 2, '3', 4), (5, 6, '7', 8);
+INSERT INTO t VALUES (10, 2, '10', 10) ON CONFLICT (y) DO NOTHING
+
+# Not supported by Materialize.
+onlyif cockroach
+query ITI rowsort
+SELECT y, z, v FROM t@i
+----
+2 3 4
+6 7 8
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+INSERT INTO t VALUES (10, 2, '10', 10) ON CONFLICT (y) DO UPDATE set x = 20, z = '20', v = 20 WHERE t.y = 2
+
+# Not supported by Materialize.
+onlyif cockroach
+query ITI rowsort
+SELECT y, z, v FROM t@i
+----
+2 20 20
+6 7 8
+
+# Test some cases around upsert.
+statement ok
+DROP TABLE IF EXISTS t;
+
+statement ok
+CREATE TABLE t (
+  x INT PRIMARY KEY,
+  y STRING,
+  z DECIMAL,
+  w INT,
+  FAMILY (y), FAMILY (z), FAMILY (x, w),
+  INDEX i (y) STORING (z, w)
+);
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+INSERT INTO t VALUES (1, '2', 3.0, 4), (5, '6', 7.00, 8);
+UPSERT INTO t VALUES (9, '10', 11.000, 12), (1, '3', 5.0, 16)
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTI rowsort
+SELECT y, z, w FROM t@i
+----
+3 5.0 16
+6 7.00 8
+10 11.000 12
+
+# Test some cases around schema changes.
+statement ok
+DROP TABLE IF EXISTS t;
+
+statement ok
+CREATE TABLE t (
+  x INT PRIMARY KEY,
+  y DECIMAL,
+  z INT,
+  w INT,
+  v INT
+);
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+INSERT INTO t VALUES (1, 2, 3, 4, 5), (6, 7, 8, 9, 10), (11, 12, 13, 14, 15);
+CREATE INDEX i ON t (y) STORING (z, w, v)
+
+# Not supported by Materialize.
+onlyif cockroach
+query TIII rowsort
+SELECT y, z, w, v FROM t@i
+----
+2 3 4 5
+7 8 9 10
+12 13 14 15
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+DROP INDEX t@i
+
+query ITIII rowsort
+SELECT * FROM t
+----
+
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER TABLE t ADD COLUMN u INT DEFAULT (20) CREATE FAMILY new_fam;
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE INDEX i ON t (y) STORING (z, w, v, u)
+
+# Not supported by Materialize.
+onlyif cockroach
+query TIIII rowsort
+SELECT y, z, w, v, u FROM t@i
+----
+2 3 4 5 20
+7 8 9 10 20
+12 13 14 15 20
+
+# Regression for #42992.
+statement ok
+CREATE TABLE t42992 (x TIMESTAMP PRIMARY KEY, y INT, z INT, UNIQUE INDEX i (y) STORING (z), FAMILY (x), FAMILY (y), FAMILY (z))
+
+statement ok
+INSERT INTO t42992 VALUES (now(), NULL, 2)
+
+# Not supported by Materialize.
+onlyif cockroach
+query II
+SELECT y, z FROM t42992@i
+----
+NULL 2

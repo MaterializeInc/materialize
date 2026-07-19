@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,12 +9,15 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/suboperators
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/suboperators
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
 mode cockroach
@@ -82,21 +85,29 @@ SELECT 1 = ANY(ARRAY[2, NULL])
 ----
 NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT 1 = ANY(ARRAY[NULL, NULL])
 ----
 NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 1 = ANY(ARRAY[1,2] || 3)
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 1 = ANY(ARRAY[2,3] || 1)
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 1 = ANY(ARRAY[2,3] || 4)
 ----
@@ -121,14 +132,22 @@ query III
 SELECT * FROM abc WHERE a = ANY(ARRAY[4, NULL])
 ----
 
+# Not supported by Materialize.
+onlyif cockroach
 query III
 SELECT * FROM abc WHERE a = ANY(ARRAY[NULL, NULL])
 ----
 
-query error unsupported comparison operator: 1 = ANY ARRAY\['foo', 'bar'\]
+query error operator does not exist: integer = text
 SELECT 1 = ANY(ARRAY['foo', 'bar'])
 
-query error unsupported comparison operator: <int> = ANY <string\[\]>
+query error operator does not exist: text\[\] \|\| text
+SELECT 1 = ANY(ARRAY['foo'] || 'bar'::string)
+
+# Note that this relatively poor error message is caused by the fact that
+# strings are constant castable to string arrays. Postgres also makes this
+# same minor mistake in error generation.
+query error unsupported binary operator: <string\[\]> || <string> (desired <int\[\]>)
 SELECT 1 = ANY(ARRAY['foo'] || 'bar')
 
 # ANY/SOME with subqueries.
@@ -184,7 +203,7 @@ SELECT 1 = ANY(SELECT * FROM unnest(ARRAY[2, NULL]))
 NULL
 
 query T
-SELECT 1 = ANY(SELECT * FROM unnest(ARRAY[NULL, NULL]))
+SELECT 1 = ANY(SELECT * FROM unnest(ARRAY[NULL, NULL]::int[]))
 ----
 NULL
 
@@ -233,10 +252,10 @@ SELECT * FROM abc WHERE a = ANY(SELECT * FROM unnest(ARRAY[4, NULL]))
 ----
 
 query III
-SELECT * FROM abc WHERE a = ANY(SELECT * FROM unnest(ARRAY[NULL, NULL]))
+SELECT * FROM abc WHERE a = ANY(SELECT * FROM unnest(ARRAY[NULL, NULL]::int[]))
 ----
 
-query error unsupported comparison operator: <int> = ANY <tuple\{string\}>
+query error operator does not exist: integer = text
 SELECT 1 = ANY(SELECT * FROM unnest(ARRAY['foo', 'bar']))
 
 # ALL with arrays.
@@ -276,16 +295,22 @@ SELECT 1 = ALL(ARRAY[1, NULL])
 ----
 NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT 1 = ALL(ARRAY[NULL, NULL])
 ----
 NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 5 > ALL(ARRAY[1, 2] || 3)
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 5 > ALL(ARRAY[6, 7] || 8)
 ----
@@ -305,15 +330,17 @@ query III
 SELECT * FROM abc WHERE a > ALL(ARRAY[1, NULL])
 ----
 
+# Not supported by Materialize.
+onlyif cockroach
 query III
 SELECT * FROM abc WHERE a > ALL(ARRAY[NULL, NULL])
 ----
 
-query error unsupported comparison operator: 1 = ALL ARRAY\['foo', 'bar'\]
+query error operator does not exist: integer = text
 SELECT 1 = ALL(ARRAY['foo', 'bar'])
 
-query error unsupported comparison operator: <int> = ALL <string\[\]>
-SELECT 1 = ALL(ARRAY['foo'] || 'bar')
+query error operator does not exist: text\[\] \|\| text
+SELECT 1 = ALL(ARRAY['foo'] || 'bar'::text)
 
 # ALL with subqueries.
 
@@ -348,7 +375,7 @@ SELECT 1 = ALL(SELECT * FROM unnest(ARRAY[1, NULL]))
 NULL
 
 query T
-SELECT 1 = ALL(SELECT * FROM unnest(ARRAY[NULL, NULL]))
+SELECT 1 = ALL(SELECT * FROM unnest(ARRAY[NULL, NULL]::int[]))
 ----
 NULL
 
@@ -373,71 +400,140 @@ SELECT * FROM abc WHERE a > ALL(SELECT * FROM unnest(ARRAY[1, NULL]))
 ----
 
 query III
-SELECT * FROM abc WHERE a > ALL(SELECT * FROM unnest(ARRAY[NULL, NULL]))
+SELECT * FROM abc WHERE a > ALL(SELECT * FROM unnest(ARRAY[NULL, NULL]::int[]))
 ----
 
-query error unsupported comparison operator: <int> = ALL <tuple\{string\}>
+query error operator does not exist: integer = text
 SELECT 1 = ALL(SELECT * FROM unnest(ARRAY['foo', 'bar']))
 
 # ANY/ALL with tuples.
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 1 = ANY (1, 2, 3)
 ----
 true
 
-query error unsupported comparison operator: <int> = <string>
+query error ANY requires a single expression or subquery, not an expression list
 SELECT 1 = ANY (1, 2, 3.3, 'foo')
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 1 = ANY (((1, 2, 3)))
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 1 = ANY (2, 3, 4)
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 1 = ANY (((2, 3, 4)))
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 1 = ANY (1, 1.1)
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 1::decimal = ANY (1, 1.1)
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 1 = ANY (1.0, 1.1)
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 1 = ANY (((1.0, 1.1)))
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 1::decimal = ANY (1.0, 1.1)
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 1::decimal = ANY (((1.0, 1.1)))
 ----
 true
 
-query error unsupported comparison operator: <int> = <string>
+query error ANY requires a single expression or subquery, not an expression list
 SELECT 1 = ANY (1, 'hello', 3)
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 1 = ANY ROW()
 ----
 false
+
+# Regression test for #37793 - don't fold sub-operators with untyped NULL
+# operands during type-checking.
+query B
+SELECT NULL = ANY(ARRAY []::INTEGER[]);
+----
+false
+
+query B
+SELECT NULL = SOME(ARRAY []::INTEGER[]);
+----
+false
+
+query B
+SELECT NULL = ALL(ARRAY []::INTEGER[]);
+----
+true
+
+query B
+SELECT NULL = ANY(ARRAY [1]::INTEGER[]);
+----
+NULL
+
+query B
+SELECT NULL = SOME(ARRAY [1]::INTEGER[]);
+----
+NULL
+
+query B
+SELECT NULL = ALL(ARRAY [1]::INTEGER[]);
+----
+NULL
+
+query B
+SELECT NULL = ANY(NULL::INTEGER[]);
+----
+false
+
+query B
+SELECT NULL = SOME(NULL::INTEGER[]);
+----
+false
+
+query B
+SELECT NULL = ALL(NULL::INTEGER[]);
+----
+true

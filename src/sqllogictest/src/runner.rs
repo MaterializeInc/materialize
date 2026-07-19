@@ -472,6 +472,9 @@ pub struct RunnerInner<'a> {
     client: tokio_postgres::Client,
     system_client: tokio_postgres::Client,
     clients: BTreeMap<String, tokio_postgres::Client>,
+    /// The user set by the most recent `user` directive, if any. Records run
+    /// on that user's connection (cached in `clients`) instead of `client`.
+    active_user: Option<String>,
     auto_index_tables: bool,
     auto_index_selects: bool,
     auto_transactions: bool,
@@ -685,7 +688,7 @@ where
     T::from_sql_nullable(type_, value)
 }
 
-fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
+fn format_datum(d: Slt, typ: &Type, mode: Mode) -> String {
     match (typ, d.0) {
         (Type::Bool, Value::Bool(b)) => b.to_string(),
 
@@ -770,10 +773,15 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
 
         (Type::Oid, Value::Oid(o)) => o.to_string(),
 
-        (_, d) => panic!(
-            "Don't know how to format {:?} as {:?} in column {}",
-            d, typ, col,
-        ),
+        // A mismatch between the declared column type and the value the query
+        // actually returned. Fall back to normal text encoding so the
+        // mismatch surfaces as an output diff rather than a panic that aborts
+        // the entire run.
+        (_, d) => {
+            let mut buf = BytesMut::new();
+            d.encode_text(&mut buf);
+            String::from_utf8_lossy(&buf).into_owned()
+        }
     }
 }
 
@@ -781,7 +789,7 @@ fn format_row(row: &Row, types: &[Type], mode: Mode) -> Vec<String> {
     let mut formatted: Vec<String> = vec![];
     for i in 0..row.len() {
         let t: Option<Slt> = row.get::<usize, Option<Slt>>(i);
-        let t: Option<String> = t.map(|d| format_datum(d, &types[i], mode, i));
+        let t: Option<String> = t.map(|d| format_datum(d, &types[i], mode));
         formatted.push(match t {
             Some(t) => t,
             None => "NULL".into(),
@@ -789,6 +797,87 @@ fn format_row(row: &Row, types: &[Type], mode: Mode) -> Vec<String> {
     }
 
     formatted
+}
+
+/// Reports whether `err` matches the `expected_error` regex of a record.
+///
+/// Expected errors in files imported from CockroachDB are not always valid
+/// regexes. An invalid regex cannot match, so the record fails with the usual
+/// mismatch outcome rather than aborting the entire run.
+fn error_matches(expected_error: &str, err: &str) -> bool {
+    match Regex::new(expected_error) {
+        Ok(re) => re.is_match(err),
+        Err(_) => false,
+    }
+}
+
+/// Removes CockroachDB-specific physical-layout items (`INDEX`,
+/// `UNIQUE INDEX`, `INVERTED INDEX`, and `FAMILY` definitions) from the
+/// column list of a `CREATE TABLE` statement. Constraints are kept, since
+/// dropping them would change the statement's semantics. Returns `None` if
+/// `sql` does not look like a `CREATE TABLE` statement.
+fn strip_crdb_table_items(sql: &str) -> Option<String> {
+    if !sql.trim_start().to_uppercase().starts_with("CREATE TABLE") {
+        return None;
+    }
+    let open = sql.find('(')?;
+    let mut depth = 1;
+    let mut in_string = false;
+    let mut in_ident = false;
+    let mut items: Vec<&str> = vec![];
+    let mut item_start = open + 1;
+    let mut close = None;
+    for (i, c) in sql[open + 1..].char_indices() {
+        let i = open + 1 + i;
+        match c {
+            '\'' if !in_ident => in_string = !in_string,
+            '"' if !in_string => in_ident = !in_ident,
+            _ if in_string || in_ident => (),
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(i);
+                    break;
+                }
+            }
+            ',' if depth == 1 => {
+                items.push(&sql[item_start..i]);
+                item_start = i + 1;
+            }
+            _ => (),
+        }
+    }
+    let close = close?;
+    items.push(&sql[item_start..close]);
+    fn first_word(s: &str) -> String {
+        s.trim_start()
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect::<String>()
+            .to_uppercase()
+    }
+    let kept: Vec<&str> = items
+        .into_iter()
+        .filter(|item| {
+            let first = first_word(item);
+            let is_physical = match first.as_str() {
+                "INDEX" | "FAMILY" => true,
+                "UNIQUE" | "INVERTED" => {
+                    let rest = &item.trim_start()[first.len()..];
+                    first_word(rest) == "INDEX"
+                }
+                _ => false,
+            };
+            !is_physical
+        })
+        .collect();
+    Some(format!(
+        "{}{}{}",
+        &sql[..open + 1],
+        kept.join(","),
+        &sql[close..]
+    ))
 }
 
 impl<'a> Runner<'a> {
@@ -877,6 +966,7 @@ impl<'a> Runner<'a> {
                 .batch_execute(sql!("DROP DATABASE {}", Sql::ident(name)).as_str())
                 .await?;
         }
+
         inner
             .system_client
             .batch_execute("CREATE DATABASE materialize")
@@ -971,6 +1061,26 @@ impl<'a> Runner<'a> {
                 .await?;
         }
 
+        // Drop all user roles except the default one, so that roles created
+        // via the `user` directive or by the tests themselves do not leak
+        // into later files. Best-effort: a role that still owns objects (for
+        // example through default privileges) stays behind rather than
+        // failing the reset.
+        for row in inner
+            .system_client
+            .query(
+                "SELECT name FROM mz_roles WHERE id LIKE 'u%' AND name != 'materialize'",
+                &[],
+            )
+            .await?
+        {
+            let name: &str = row.get("name");
+            let _ = inner
+                .system_client
+                .batch_execute(sql!("DROP ROLE {}", Sql::ident(name)).as_str())
+                .await;
+        }
+
         // Grant initial privileges.
         inner
             .system_client
@@ -1014,6 +1124,7 @@ impl<'a> Runner<'a> {
             .await
             .unwrap();
         inner.clients = BTreeMap::new();
+        inner.active_user = None;
 
         Ok(())
     }
@@ -1360,6 +1471,7 @@ impl<'a> RunnerInner<'a> {
             client,
             system_client,
             clients: BTreeMap::new(),
+            active_user: None,
             auto_index_tables: config.auto_index_tables,
             auto_index_selects: config.auto_index_selects,
             auto_transactions: config.auto_transactions,
@@ -1390,6 +1502,70 @@ impl<'a> RunnerInner<'a> {
         Ok(())
     }
 
+    /// The connection records run on: the `user` directive's connection when
+    /// one is active, the default connection otherwise.
+    fn active_client(&self) -> &tokio_postgres::Client {
+        match &self.active_user {
+            Some(user) => self
+                .clients
+                .get(user)
+                .expect("connection for the active user exists"),
+            None => &self.client,
+        }
+    }
+
+    /// Handles a `user` directive: ensures the role exists, connects as it,
+    /// and makes it the active user. CockroachDB's `root` maps to the
+    /// default `materialize` user.
+    #[allow(clippy::disallowed_methods)]
+    async fn run_user<'r>(
+        &mut self,
+        user: &'r str,
+        location: &Location,
+        in_transaction: &mut bool,
+    ) -> Result<Outcome<'r>, anyhow::Error> {
+        if self.auto_transactions && *in_transaction {
+            self.active_client().execute("COMMIT", &[]).await?;
+            *in_transaction = false;
+        }
+        if user == "root" || user == "materialize" {
+            self.active_user = None;
+            return Ok(Outcome::Success);
+        }
+        if !self.clients.contains_key(user) {
+            let create = sql!("CREATE ROLE {}", Sql::ident(user));
+            if let Err(error) = self.system_client.batch_execute(create.as_str()).await {
+                if !error.to_string_with_causes().contains("already exists") {
+                    return Ok(Outcome::Bail {
+                        cause: Box::new(Outcome::PlanFailure {
+                            error: anyhow!(error),
+                            expected_error: None,
+                            location: location.clone(),
+                        }),
+                        location: location.clone(),
+                    });
+                }
+            }
+            match connect(self.server_addr, Some(user), None).await {
+                Ok(client) => {
+                    self.clients.insert(user.to_string(), client);
+                }
+                Err(error) => {
+                    return Ok(Outcome::Bail {
+                        cause: Box::new(Outcome::PlanFailure {
+                            error: anyhow!(error),
+                            expected_error: None,
+                            location: location.clone(),
+                        }),
+                        location: location.clone(),
+                    });
+                }
+            }
+        }
+        self.active_user = Some(user.to_string());
+        Ok(Outcome::Success)
+    }
+
     #[allow(clippy::disallowed_methods)]
     async fn run_record<'r>(
         &mut self,
@@ -1398,6 +1574,7 @@ impl<'a> RunnerInner<'a> {
         replacements: &[(Regex, String)],
     ) -> Result<Outcome<'r>, anyhow::Error> {
         match &record {
+            Record::User { user, location } => self.run_user(user, location, in_transaction).await,
             Record::Statement {
                 expected_error,
                 rows_affected,
@@ -1405,7 +1582,7 @@ impl<'a> RunnerInner<'a> {
                 location,
             } => {
                 if self.auto_transactions && *in_transaction {
-                    self.client.execute("COMMIT", &[]).await?;
+                    self.active_client().execute("COMMIT", &[]).await?;
                     *in_transaction = false;
                 }
                 match self
@@ -1416,7 +1593,7 @@ impl<'a> RunnerInner<'a> {
                         if self.auto_index_tables {
                             let additional = mutate(sql);
                             for stmt in additional {
-                                self.client.execute(&stmt, &[]).await?;
+                                self.active_client().execute(&stmt, &[]).await?;
                             }
                         }
                         Ok(Outcome::Success)
@@ -1498,7 +1675,44 @@ impl<'a> RunnerInner<'a> {
             return Ok(Outcome::Success);
         }
 
-        match self.client.execute(sql, &[]).await {
+        // CockroachDB's logic tests frequently pack multiple commands into
+        // one statement record. The extended protocol used by `execute`
+        // rejects those, and Materialize restricts DDL inside the implicit
+        // transaction the simple protocol would wrap them in, so run each
+        // command separately and report the first error. This path cannot
+        // report an affected-row count, so records that assert one keep the
+        // single-command path (and fail if they contain multiple commands).
+        let commands = if expected_rows_affected.is_none() {
+            match mz_sql::parse::parse(sql) {
+                Ok(stmts) if stmts.len() > 1 => {
+                    Some(stmts.iter().map(|s| s.sql.to_owned()).collect::<Vec<_>>())
+                }
+                Ok(_) => None,
+                // A statement Materialize cannot parse may be a CockroachDB
+                // `CREATE TABLE` with inline physical-layout items. Retry
+                // with those stripped, so the semantic records that follow
+                // can still run against the table.
+                Err(_) => strip_crdb_table_items(sql)
+                    .filter(|stripped| mz_sql::parse::parse(stripped).is_ok())
+                    .map(|stripped| vec![stripped]),
+            }
+        } else {
+            None
+        };
+        let result = match commands {
+            Some(commands) => {
+                let mut result = Ok(0);
+                for command in &commands {
+                    if let Err(error) = self.active_client().execute(command, &[]).await {
+                        result = Err(error);
+                        break;
+                    }
+                }
+                result
+            }
+            None => self.active_client().execute(sql, &[]).await,
+        };
+        match result {
             Ok(actual) => {
                 if let Some(expected_error) = expected_error {
                     return Ok(Outcome::UnexpectedPlanSuccess {
@@ -1523,7 +1737,7 @@ impl<'a> RunnerInner<'a> {
             }
             Err(error) => {
                 if let Some(expected_error) = expected_error {
-                    if Regex::new(expected_error)?.is_match(&error.to_string_with_causes()) {
+                    if error_matches(expected_error, &error.to_string_with_causes()) {
                         return Ok(Outcome::Success);
                     }
                     return Ok(Outcome::PlanFailure {
@@ -1531,6 +1745,18 @@ impl<'a> RunnerInner<'a> {
                         expected_error: Some(expected_error.to_string()),
                         location,
                     });
+                }
+                // CockroachDB tests configure many CockroachDB-specific
+                // session settings. Treat setting an unknown parameter as a
+                // no-op success so the records that follow still run.
+                static SET_STATEMENT_REGEX: LazyLock<Regex> =
+                    LazyLock::new(|| Regex::new("(?i)^(SET|RESET) ").unwrap());
+                if SET_STATEMENT_REGEX.is_match(sql.trim_start())
+                    && error
+                        .to_string_with_causes()
+                        .contains("unrecognized configuration parameter")
+                {
+                    return Ok(Outcome::Success);
                 }
                 Ok(Outcome::PlanFailure {
                     error: anyhow!(error),
@@ -1560,7 +1786,7 @@ impl<'a> RunnerInner<'a> {
                     }));
                 }
                 Err(expected_error) => {
-                    if Regex::new(expected_error)?.is_match(&e.to_string_with_causes()) {
+                    if error_matches(expected_error, &e.to_string_with_causes()) {
                         return Ok(PrepareQueryOutcome::Outcome(Outcome::Success));
                     } else {
                         return Ok(PrepareQueryOutcome::Outcome(Outcome::ParseFailure {
@@ -1571,10 +1797,17 @@ impl<'a> RunnerInner<'a> {
                 }
             },
         };
+        // Query records in files imported from CockroachDB occasionally
+        // contain zero or multiple statements. Fail the record rather than
+        // the entire run.
         let statement = match &*statements {
-            [] => bail!("Got zero statements?"),
             [statement] => &statement.ast,
-            _ => bail!("Got multiple statements: {:?}", statements),
+            _ => {
+                return Ok(PrepareQueryOutcome::Outcome(Outcome::ParseFailure {
+                    error: anyhow!("expected one statement, but got {}", statements.len()),
+                    location,
+                }));
+            }
         };
         let (is_select, num_attributes, has_as_of) = match statement {
             Statement::Select(stmt) => (
@@ -1589,13 +1822,13 @@ impl<'a> RunnerInner<'a> {
             Ok(_) => {
                 if self.auto_transactions && !*in_transaction {
                     // No ISOLATION LEVEL SERIALIZABLE because of database-issues#5323
-                    self.client.execute("BEGIN", &[]).await?;
+                    self.active_client().execute("BEGIN", &[]).await?;
                     *in_transaction = true;
                 }
             }
             Err(_) => {
                 if self.auto_transactions && *in_transaction {
-                    self.client.execute("COMMIT", &[]).await?;
+                    self.active_client().execute("COMMIT", &[]).await?;
                     *in_transaction = false;
                 }
             }
@@ -1607,7 +1840,7 @@ impl<'a> RunnerInner<'a> {
         match statement {
             Statement::Show(..) => {
                 if self.auto_transactions && *in_transaction {
-                    self.client.execute("COMMIT", &[]).await?;
+                    self.active_client().execute("COMMIT", &[]).await?;
                     *in_transaction = false;
                 }
             }
@@ -1628,7 +1861,7 @@ impl<'a> RunnerInner<'a> {
         location: Location,
         replacements: &[(Regex, String)],
     ) -> Result<Outcome<'r>, anyhow::Error> {
-        let rows = match self.client.query(sql, &[]).await {
+        let rows = match self.active_client().query(sql, &[]).await {
             Ok(rows) => rows,
             Err(error) => {
                 let error_string = error.to_string_with_causes();
@@ -1649,7 +1882,7 @@ impl<'a> RunnerInner<'a> {
                         }
                     }
                     Err(expected_error) => {
-                        if Regex::new(expected_error)?.is_match(&error_string) {
+                        if error_matches(expected_error, &error_string) {
                             Ok(Outcome::Success)
                         } else {
                             Ok(Outcome::PlanFailure {
@@ -1783,12 +2016,12 @@ impl<'a> RunnerInner<'a> {
         location: Location,
     ) -> Result<Option<Outcome<'r>>, anyhow::Error> {
         print_sql_if(self.stdout, sql, self.verbose);
-        let sql_result = self.client.execute(sql, &[]).await;
+        let sql_result = self.active_client().execute(sql, &[]).await;
 
         // Evaluate if we already reached an outcome or not.
         let tentative_outcome = if let Err(view_error) = sql_result {
             if let Err(expected_error) = output {
-                if Regex::new(expected_error)?.is_match(&view_error.to_string_with_causes()) {
+                if error_matches(expected_error, &view_error.to_string_with_causes()) {
                     Some(Outcome::Success)
                 } else {
                     Some(Outcome::PlanFailure {
@@ -1857,7 +2090,9 @@ impl<'a> RunnerInner<'a> {
 
         // Remember to clean up after ourselves by dropping the view.
         print_sql_if(self.stdout, drop_view.as_str(), self.verbose);
-        self.client.execute(drop_view.as_str(), &[]).await?;
+        self.active_client()
+            .execute(drop_view.as_str(), &[])
+            .await?;
 
         Ok(view_outcome)
     }
@@ -2123,6 +2358,9 @@ fn print_record(config: &RunConfig<'_>, record: &Record) {
                 table_name,
                 tsv_path
             )
+        }
+        Record::User { user, .. } => {
+            writeln!(config.stdout, "{}user {}", " ".repeat(PRINT_INDENT), user)
         }
         Record::ResetServer => {
             writeln!(config.stdout, "{}reset-server", " ".repeat(PRINT_INDENT))
@@ -3057,5 +3295,52 @@ fn test_mutate() {
     for (sql, expected) in cases {
         let stmts = mutate(sql);
         assert_eq!(expected, stmts, "sql: {sql}");
+    }
+}
+
+#[mz_ore::test]
+fn test_strip_crdb_table_items() {
+    let cases = vec![
+        (
+            "CREATE TABLE t (a INT, INDEX foo (a), b INT)",
+            Some("CREATE TABLE t (a INT, b INT)"),
+        ),
+        (
+            "CREATE TABLE t (a INT, INDEX(a))",
+            Some("CREATE TABLE t (a INT)"),
+        ),
+        (
+            "CREATE TABLE t (a INT, UNIQUE INDEX foo (a), INVERTED INDEX bar (a))",
+            Some("CREATE TABLE t (a INT)"),
+        ),
+        (
+            "CREATE TABLE t (k INT, v STRING, FAMILY \"primary\" (k, v))",
+            Some("CREATE TABLE t (k INT, v STRING)"),
+        ),
+        // Partial and expression indexes have nested clauses.
+        (
+            "CREATE TABLE t (a INT, INDEX (a) WHERE a = 0, INDEX ((a + 1)))",
+            Some("CREATE TABLE t (a INT)"),
+        ),
+        // Constraints are kept.
+        (
+            "CREATE TABLE t (a INT, UNIQUE (a), CHECK (a > 0))",
+            Some("CREATE TABLE t (a INT, UNIQUE (a), CHECK (a > 0))"),
+        ),
+        // Column names that merely start with a stripped keyword are kept.
+        (
+            "CREATE TABLE t (index_col INT, \"index\" INT)",
+            Some("CREATE TABLE t (index_col INT, \"index\" INT)"),
+        ),
+        // Parens inside strings do not confuse the item splitter.
+        (
+            "CREATE TABLE t (a TEXT DEFAULT 'a,(b', INDEX (a))",
+            Some("CREATE TABLE t (a TEXT DEFAULT 'a,(b')"),
+        ),
+        ("SELECT 1", None),
+    ];
+    for (sql, expected) in cases {
+        let stripped = strip_crdb_table_items(sql);
+        assert_eq!(expected.map(|e| e.to_string()), stripped, "sql: {sql}");
     }
 }

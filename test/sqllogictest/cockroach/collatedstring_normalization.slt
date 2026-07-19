@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,16 +9,16 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/collatedstring_normalization
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/collatedstring_normalization
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
-
-# not supported yet
-halt
 
 mode cockroach
 
@@ -27,10 +27,14 @@ CREATE TABLE t (
   a STRING COLLATE fr PRIMARY KEY
 )
 
+# Not supported by Materialize.
+onlyif cockroach
 # Insert Amélie in NFD form.
 statement ok
 INSERT INTO t VALUES (b'Ame\xcc\x81lie' COLLATE fr)
 
+# Not supported by Materialize.
+onlyif cockroach
 # Retrieve Amélie in NFC form.
 query T
 SELECT a FROM t WHERE a = (b'Am\xc3\xa9lie' COLLATE fr)
@@ -40,10 +44,14 @@ Amélie
 statement ok
 DELETE FROM t
 
+# Not supported by Materialize.
+onlyif cockroach
 # Insert Amélie in NFC form.
 statement ok
 INSERT INTO t VALUES (b'Am\xc3\xa9lie' COLLATE fr)
 
+# Not supported by Materialize.
+onlyif cockroach
 # Retrieve Amélie in NFD form.
 query T
 SELECT a FROM t WHERE a = (b'Ame\xcc\x81lie' COLLATE fr)

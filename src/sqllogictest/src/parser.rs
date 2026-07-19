@@ -133,7 +133,25 @@ impl<'a> Parser<'a> {
             "halt" => Ok(Record::Halt),
 
             // this is some cockroach-specific thing, we don't care
-            "subtest" | "user" | "kv-batch-size" => self.parse_record(),
+            "subtest" | "kv-batch-size" | "skip_on_retry" => self.parse_record(),
+
+            // CockroachDB's `user` directive switches the session user for
+            // subsequent records.
+            "user" => Ok(Record::User {
+                location: self.location(),
+                user: words
+                    .next()
+                    .ok_or_else(|| anyhow!("user directive missing name"))?,
+            }),
+
+            // CockroachDB's `let $var` binds the result of the following query
+            // to a variable that later records reference. We don't support the
+            // binding, so skip the directive and its query block. Records that
+            // reference the variable fail at execution time instead.
+            "let" => {
+                self.split_at(&DOUBLE_LINE_REGEX)?;
+                self.parse_record()
+            }
 
             "mode" => {
                 self.mode = match words.next() {
@@ -223,8 +241,17 @@ impl<'a> Parser<'a> {
                         .map_err(|err| anyhow!("parsing count of rows affected: {}", err))?,
                 );
             }
-            Some("ok") | Some("OK") => (),
             Some("error") => expected_error = Some(parse_expected_error(first_line)),
+            // CockroachDB's `statement notice <regex>` expects the statement
+            // to succeed and additionally emit a matching notice. We only
+            // check for success.
+            Some("notice") => (),
+            // An `ok` prefix accepts the typos present in files imported from
+            // CockroachDB (`oK`, `ok;`, `oko`), which CockroachDB's own
+            // lenient runner treats as plain `ok`.
+            Some(disposition) if disposition.to_lowercase().starts_with("ok") => (),
+            // A bare `statement` with no disposition expects success.
+            None => (),
             _ => bail!("invalid statement disposition: {}", first_line),
         };
         let sql = self.split_at(&DOUBLE_LINE_REGEX)?;
@@ -256,6 +283,7 @@ impl<'a> Parser<'a> {
         let mut sort = Sort::No;
         let mut check_column_names = false;
         let mut multiline = false;
+        let mut noticetrace = false;
         if let Some(options) = words.next() {
             for option in options.split(',') {
                 match option {
@@ -264,6 +292,13 @@ impl<'a> Parser<'a> {
                     "valuesort" => sort = Sort::Value,
                     "colnames" => check_column_names = true,
                     "multiline" => multiline = true,
+                    // CockroachDB re-runs `retry` queries until the output
+                    // converges. We run them once, like any other query.
+                    "retry" => (),
+                    // CockroachDB `noticetrace` queries assert the emitted
+                    // notices rather than rows. We can't observe notices, so
+                    // the whole record is skipped below.
+                    "noticetrace" => noticetrace = true,
                     other => {
                         if other.starts_with("partialsort") {
                             // TODO(jamii) https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/logic.go#L153
@@ -285,12 +320,70 @@ impl<'a> Parser<'a> {
         static LINE_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new("\r?(\n|$)").unwrap());
         static HASH_REGEX: LazyLock<Regex> =
             LazyLock::new(|| Regex::new(r"(\S+) values hashing to (\S+)").unwrap());
+        // CockroachDB queries may omit the `----` separator entirely, in
+        // which case the query must succeed and return no rows. Detect this
+        // by checking whether the record ends before the next `----`, which
+        // otherwise belongs to a later record. A blank line only ends the
+        // record if what follows it starts a new record (directive, comment,
+        // or end of file): hand-written files contain blank lines inside a
+        // query's SQL, which CockroachDB's own files never do.
+        static RECORD_START_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+            Regex::new(
+                r"^(#|$|statement( |$)|query( |$)|simple( |$)|halt( |$)|mode |copy |user |subtest( |$)|let |skipif |onlyif |hash-threshold |reset-server( |$)|replace |kv-batch-size |skip_on_retry( |$))",
+            )
+            .unwrap()
+        });
+        let sep = QUERY_OUTPUT_REGEX.find(self.contents);
+        let end = DOUBLE_LINE_REGEX.find(self.contents);
+        let no_separator = match (&sep, &end) {
+            (Some(sep), Some(end)) if sep.start() < end.start() => false,
+            (_, Some(end)) => {
+                let mut rest = &self.contents[end.end()..];
+                loop {
+                    let line_end = rest.find('\n').map_or(rest.len(), |i| i + 1);
+                    let line = rest[..line_end].trim();
+                    if line.is_empty() && line_end < rest.len() {
+                        rest = &rest[line_end..];
+                        continue;
+                    }
+                    break RECORD_START_REGEX.is_match(line);
+                }
+            }
+            (_, None) => false,
+        };
+        if no_separator {
+            let sql = self.split_at(&DOUBLE_LINE_REGEX)?;
+            if noticetrace {
+                return self.parse_record();
+            }
+            return Ok(Record::Query {
+                sql,
+                output: Ok(QueryOutput {
+                    types,
+                    sort,
+                    multiline,
+                    label,
+                    column_names: None,
+                    mode: self.mode,
+                    output: Output::Values(vec![]),
+                    // An empty slice at the end of the SQL, so rewriting has
+                    // an in-bounds position to work with.
+                    output_str: &sql[sql.len()..],
+                }),
+                location,
+            });
+        }
+
         let sql = self.split_at(&QUERY_OUTPUT_REGEX)?;
         let mut output_str = self.split_at(if multiline {
             &EOF_REGEX
         } else {
             &DOUBLE_LINE_REGEX
         })?;
+
+        if noticetrace {
+            return self.parse_record();
+        }
 
         // The `split_at(&QUERY_OUTPUT_REGEX)` stopped at the end of `----`, so `output_str` usually
         // starts with a newline, which is not actually part of the expected output. Strip off this
@@ -494,6 +587,9 @@ fn parse_types(input: &str) -> Result<Vec<Type>, anyhow::Error> {
                 'T' => Type::Text,
                 'I' => Type::Integer,
                 'R' => Type::Real,
+                // CockroachDB uses `F` for floats and `R` for decimals. We
+                // don't distinguish the two.
+                'F' => Type::Real,
                 'B' => Type::Bool,
                 'O' => Type::Oid,
                 _ => bail!("Unexpected type char {} in: {}", char, input),
@@ -534,5 +630,43 @@ pub fn regexp_strip_prefix<'a>(text: &'a str, regexp: &Regex) -> Option<&'a str>
             }
         }
         None => None,
+    }
+}
+
+#[mz_ore::test]
+fn test_parse_query_blank_lines_and_missing_separator() {
+    // A blank line inside a query's SQL does not end the record.
+    let file = "query I\nSELECT 1\n\nUNION ALL SELECT 2\n----\n1\n2\n\n";
+    let records = Parser::new("f", file).parse_records().unwrap();
+    assert_eq!(records.len(), 1);
+    match &records[0] {
+        Record::Query { sql, .. } => {
+            assert!(sql.contains("UNION ALL"), "sql: {sql}")
+        }
+        other => panic!("unexpected record: {other:?}"),
+    }
+
+    // A query with no ---- separator expects zero rows, and the blank line
+    // ends the record when a new record follows.
+    let file = "query I\nSELECT 3\n\nstatement ok\nSELECT 4\n\n# comment\n\nquery I\nSELECT 5\n";
+    let records = Parser::new("f", file).parse_records().unwrap();
+    assert_eq!(records.len(), 3);
+    match &records[0] {
+        Record::Query { sql, output, .. } => {
+            assert_eq!(*sql, "SELECT 3");
+            assert_eq!(output.as_ref().unwrap().output, Output::Values(vec![]));
+        }
+        other => panic!("unexpected record: {other:?}"),
+    }
+
+    // No separator at end of file.
+    let file = "query I\nSELECT 6\n";
+    let records = Parser::new("f", file).parse_records().unwrap();
+    assert_eq!(records.len(), 1);
+    match &records[0] {
+        Record::Query { output, .. } => {
+            assert_eq!(output.as_ref().unwrap().output, Output::Values(vec![]));
+        }
+        other => panic!("unexpected record: {other:?}"),
     }
 }

@@ -1,0 +1,69 @@
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# This file is derived from the logic test suite in CockroachDB. The
+# original file was retrieved on July 6, 2026 from:
+#
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/savepoints
+#
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
+# root of this repository.
+
+mode cockroach
+
+# Regression test for https://github.com/cockroachdb/cockroach/issues/94337.
+# The linked issue only manifests itself if the read request is able to drop
+# latches early. Before this bug was fixed, one of the conditions required for
+# a read request to drop its latches early was that it needed to have a higher
+# read timestamp compared to the timestamp at which it had written all intents
+# the read overlapped with. Adding the sleeps here bumps the transaction's read
+# timestamp, by virtue of the closed timestamp interval.
+
+statement ok
+CREATE TABLE a (id INT);
+
+statement ok
+BEGIN
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+SELECT pg_sleep(1.5)
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+SAVEPOINT s
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+SELECT pg_sleep(1.5)
+
+statement ok
+INSERT INTO a(id) VALUES (0);
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ROLLBACK TO SAVEPOINT s
+
+# Not supported by Materialize.
+onlyif cockroach
+query I
+SELECT * FROM a
+----
+
+statement ok
+COMMIT

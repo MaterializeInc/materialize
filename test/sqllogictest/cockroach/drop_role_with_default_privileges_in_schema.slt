@@ -1,0 +1,162 @@
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# This file is derived from the logic test suite in CockroachDB. The
+# original file was retrieved on July 6, 2026 from:
+#
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/drop_role_with_default_privileges_in_schema
+#
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
+# root of this repository.
+
+mode cockroach
+
+# Test cases when a user has default privileges in a schema.
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE ROLE test1;
+CREATE ROLE test2;
+GRANT test1, test2 TO root;
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE test1 IN SCHEMA public GRANT SELECT ON TABLES TO test2;
+
+statement error unknown role 'test1'
+DROP ROLE test1
+
+statement error unknown role 'test2'
+DROP ROLE test2;
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE test1 IN SCHEMA public REVOKE ALL ON TABLES FROM test2;
+ALTER DEFAULT PRIVILEGES FOR ROLE test1 IN SCHEMA public REVOKE ALL ON TYPES FROM test2;
+ALTER DEFAULT PRIVILEGES FOR ROLE test1 IN SCHEMA public REVOKE ALL ON SEQUENCES FROM test2;
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+DROP ROLE test1;
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+DROP ROLE test2;
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE USER test2
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA public GRANT SELECT ON TABLES TO test2
+
+statement error unknown role 'test2'
+DROP ROLE test2;
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA public REVOKE SELECT ON TABLES FROM test2;
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA public GRANT USAGE ON TYPES TO test2;
+
+statement error unknown role 'test2'
+DROP ROLE test2
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA public REVOKE USAGE ON TYPES FROM test2;
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA public GRANT SELECT ON SEQUENCES TO test2;
+
+statement error unknown role 'test2'
+DROP ROLE test2
+
+# In a user defined schema.
+
+statement ok
+CREATE SCHEMA s
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE ROLE test3;
+CREATE ROLE test4;
+GRANT test3, test4 TO root;
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE test3 IN SCHEMA s GRANT SELECT ON TABLES TO test4;
+
+statement error unknown role 'test3'
+DROP ROLE test3
+
+statement error unknown role 'test4'
+DROP ROLE test4;
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE test3 IN SCHEMA s REVOKE ALL ON TABLES FROM test4;
+ALTER DEFAULT PRIVILEGES FOR ROLE test3 IN SCHEMA s REVOKE ALL ON TYPES FROM test4;
+ALTER DEFAULT PRIVILEGES FOR ROLE test3 IN SCHEMA s REVOKE ALL ON SEQUENCES FROM test4;
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+DROP ROLE test3;
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+DROP ROLE test4;
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE USER test4
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA s GRANT SELECT ON TABLES TO test4
+
+statement error unknown role 'test4'
+DROP ROLE test4;
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA s REVOKE SELECT ON TABLES FROM test4;
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA s GRANT USAGE ON TYPES TO test4;
+
+statement error unknown role 'test4'
+DROP ROLE test4
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA s REVOKE USAGE ON TYPES FROM test4;
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA s GRANT SELECT ON SEQUENCES TO test4;
+
+statement error unknown role 'test4'
+DROP ROLE test4

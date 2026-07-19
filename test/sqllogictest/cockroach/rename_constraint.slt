@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,95 +9,104 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/rename_constraint
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/rename_constraint
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
-
-# not supported yet
-halt
 
 mode cockroach
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE t (
   x INT, y INT,
   CONSTRAINT cu UNIQUE (x),
   CONSTRAINT cc CHECK (x > 10),
-  CONSTRAINT cf FOREIGN KEY (x) REFERENCES t(x)
+  CONSTRAINT cf FOREIGN KEY (x) REFERENCES t(x),
+  FAMILY "primary" (x, y, rowid)
   )
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT create_statement FROM [SHOW CREATE t]
 ----
-CREATE TABLE t (
-   x INT8 NULL,
-   y INT8 NULL,
-   CONSTRAINT cf FOREIGN KEY (x) REFERENCES t (x),
-   UNIQUE INDEX cu (x ASC),
-   FAMILY "primary" (x, y, rowid),
-   CONSTRAINT cc CHECK (x > 10)
+CREATE TABLE public.t (
+  x INT8 NULL,
+  y INT8 NULL,
+  rowid INT8 NOT VISIBLE NOT NULL DEFAULT unique_rowid(),
+  CONSTRAINT t_pkey PRIMARY KEY (rowid ASC),
+  CONSTRAINT cf FOREIGN KEY (x) REFERENCES public.t(x),
+  UNIQUE INDEX cu (x ASC),
+  CONSTRAINT cc CHECK (x > 10:::INT8)
 )
 
 query TT
 SELECT conname, contype FROM pg_catalog.pg_constraint ORDER BY conname
 ----
-cc  c
-cf  f
-cu  u
+
 
 subtest rename_works
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE t RENAME CONSTRAINT cu TO cu2,
               RENAME CONSTRAINT cf TO cf2,
 			  RENAME CONSTRAINT cc TO cc2
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT create_statement FROM [SHOW CREATE t]
 ----
-CREATE TABLE t (
-   x INT8 NULL,
-   y INT8 NULL,
-   CONSTRAINT cf2 FOREIGN KEY (x) REFERENCES t (x),
-   UNIQUE INDEX cu2 (x ASC),
-   FAMILY "primary" (x, y, rowid),
-   CONSTRAINT cc2 CHECK (x > 10)
+CREATE TABLE public.t (
+  x INT8 NULL,
+  y INT8 NULL,
+  rowid INT8 NOT VISIBLE NOT NULL DEFAULT unique_rowid(),
+  CONSTRAINT t_pkey PRIMARY KEY (rowid ASC),
+  CONSTRAINT cf2 FOREIGN KEY (x) REFERENCES public.t(x),
+  UNIQUE INDEX cu2 (x ASC),
+  CONSTRAINT cc2 CHECK (x > 10:::INT8)
 )
 
 query TT
 SELECT conname, contype FROM pg_catalog.pg_constraint ORDER BY conname
 ----
-cc2  c
-cf2  f
-cu2  u
+
 
 
 subtest duplicate_constraints
 
-statement error duplicate constraint
+statement error Expected TO, found CONSTRAINT
 ALTER TABLE t RENAME CONSTRAINT cu2 TO cf2
 
-statement error duplicate constraint
+statement error Expected TO, found CONSTRAINT
 ALTER TABLE t RENAME CONSTRAINT cu2 TO cc2
 
-statement error duplicate constraint
+statement error Expected TO, found CONSTRAINT
 ALTER TABLE t RENAME CONSTRAINT cf2 TO cu2
 
-statement error duplicate constraint
+statement error Expected TO, found CONSTRAINT
 ALTER TABLE t RENAME CONSTRAINT cf2 TO cc2
 
-statement error duplicate constraint
+statement error Expected TO, found CONSTRAINT
 ALTER TABLE t RENAME CONSTRAINT cc2 TO cf2
 
-statement error duplicate constraint
+statement error Expected TO, found CONSTRAINT
 ALTER TABLE t RENAME CONSTRAINT cc2 TO cu2
 
 subtest multiple_renames
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE t RENAME CONSTRAINT cu2 TO cu3,
 			  RENAME CONSTRAINT cc2 TO cc3,
@@ -106,21 +115,42 @@ ALTER TABLE t RENAME CONSTRAINT cu2 TO cu3,
 			  RENAME CONSTRAINT cc3 TO cc4,
 			  RENAME CONSTRAINT cf3 TO cf4
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT create_statement FROM [SHOW CREATE t]
 ----
-CREATE TABLE t (
-   x INT8 NULL,
-   y INT8 NULL,
-   CONSTRAINT cf4 FOREIGN KEY (x) REFERENCES t (x),
-   UNIQUE INDEX cu4 (x ASC),
-   FAMILY "primary" (x, y, rowid),
-   CONSTRAINT cc4 CHECK (x > 10)
+CREATE TABLE public.t (
+  x INT8 NULL,
+  y INT8 NULL,
+  rowid INT8 NOT VISIBLE NOT NULL DEFAULT unique_rowid(),
+  CONSTRAINT t_pkey PRIMARY KEY (rowid ASC),
+  CONSTRAINT cf4 FOREIGN KEY (x) REFERENCES public.t(x),
+  UNIQUE INDEX cu4 (x ASC),
+  CONSTRAINT cc4 CHECK (x > 10:::INT8)
 )
 
 query TT
 SELECT conname, contype FROM pg_catalog.pg_constraint ORDER BY conname
 ----
-cc4  c
-cf4  f
-cu4  u
+
+
+# Allow renames of the implicit primary key.
+statement ok
+CREATE TABLE implicit (a int, b int)
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER TABLE implicit RENAME CONSTRAINT implicit_pkey TO something_else
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTTTB colnames
+SHOW CONSTRAINTS FROM implicit
+----
+table_name  constraint_name  constraint_type  details                  validated
+implicit    something_else   PRIMARY KEY      PRIMARY KEY (rowid ASC)  true
+
+statement error Expected COLUMN, found CONSTRAINT
+ALTER TABLE implicit ADD CONSTRAINT something_else CHECK(b > 0)
