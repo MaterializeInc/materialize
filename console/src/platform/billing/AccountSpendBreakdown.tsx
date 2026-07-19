@@ -42,7 +42,7 @@ import { GraphEventOverlay, GraphTooltip } from "~/components/graphComponents";
 import ChevronRightIcon from "~/svg/ChevronRightIcon";
 import { MaterializeTheme } from "~/theme";
 import { DATE_FORMAT_SHORT, formatDateInUtc } from "~/utils/dateFormat";
-import { formatCurrency } from "~/utils/format";
+import { formatCurrency, formatPercentage } from "~/utils/format";
 import {
   buildXYGraphLayoutProps,
   calculateTooltipPosition,
@@ -467,7 +467,7 @@ const AccountLedgerGroup = ({
         </Box>
         <Box {...groupHeaderStyles} role="cell" />
         <Box {...groupHeaderStyles} role="cell" justifyContent="end">
-          {share.toFixed(1)}%
+          {formatPercentage(share, 1)}
         </Box>
         <Box {...groupHeaderStyles} role="cell">
           <TrendSparkline points={trend} color={color} />
@@ -576,7 +576,7 @@ const UnifiedLedger = ({
       </Box>
       {accounts.map((account, ix) => {
         const total = totals[ix];
-        const share = grandTotal > 0 ? (total / grandTotal) * 100 : 0;
+        const share = grandTotal > 0 ? total / grandTotal : 0;
         return (
           <AccountLedgerGroup
             key={account.external_customer_id}
