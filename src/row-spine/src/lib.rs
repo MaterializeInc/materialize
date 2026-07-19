@@ -155,10 +155,28 @@ mod spines {
 #[cfg(test)]
 mod tests {
     use crate::DatumContainer;
+    use crate::spines::{RowLayout, RowRowLayout, RowValLayout};
     use differential_dataflow::trace::implementations::BatchContainer;
+    use differential_dataflow::trace::implementations::ord_neu::{OrdKeyBatch, OrdValBatch};
     use mz_repr::adt::date::Date;
     use mz_repr::adt::interval::Interval;
-    use mz_repr::{Datum, Row, SqlScalarType};
+    use mz_repr::{Datum, Diff, Row, SqlScalarType, Timestamp};
+    use mz_timely_util::columnation::ColumnationStack;
+
+    fn assert_send_sync<T: Send + Sync>() {}
+
+    /// The batch types backing our spines must stay `Send + Sync`, so that batches
+    /// can be shared across threads (for example behind an `Arc`) to serve reads
+    /// from outside the worker that maintains the trace. This holds because the
+    /// backing containers bottom out in `Vec`s, lgalloc regions, and `CompactBytes`,
+    /// all of which are thread-safe.
+    #[mz_ore::test]
+    fn batches_are_send_sync() {
+        assert_send_sync::<OrdValBatch<RowRowLayout<((Row, Row), Timestamp, Diff)>>>();
+        assert_send_sync::<OrdValBatch<RowValLayout<((Row, Row), Timestamp, Diff)>>>();
+        assert_send_sync::<OrdKeyBatch<RowLayout<((Row, ()), Timestamp, Diff)>>>();
+        assert_send_sync::<ColumnationStack<((Row, Row), Timestamp, Diff)>>();
+    }
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: integer-to-pointer casts and `ptr::with_exposed_provenance` are not supported
