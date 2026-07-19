@@ -409,13 +409,16 @@ pub const ENABLE_PEEK_RESPONSE_STASH: Config<bool> = Config::new(
     "Whether to enable the peek response stash, for sending back large peek responses. Will only be used for results that exceed compute_peek_response_stash_threshold_bytes.",
 );
 
-/// Whether to coalesce index peeks that are pending against the same index at
-/// the same timestamp into a single arrangement walk, amortizing cursor setup
-/// and key/value decoding across the peeks.
+/// Whether to coalesce index peeks against the same index at the same timestamp
+/// into a single arrangement walk, amortizing cursor setup and key/value
+/// decoding across the peeks. Index peeks are deferred from the command handler
+/// into `process_peeks`, so peeks drained together in one command batch coalesce
+/// even when every one of them is ready on arrival (the common case, and the
+/// only case under Serializable isolation).
 pub const ENABLE_PEEK_COALESCING: Config<bool> = Config::new(
     "enable_compute_peek_coalescing",
     true,
-    "Whether to coalesce index peeks pending against the same index at the same timestamp into a single arrangement walk.",
+    "Whether to coalesce index peeks against the same index at the same timestamp into a single arrangement walk.",
 );
 
 /// The threshold for peek response size above which we should use the peek

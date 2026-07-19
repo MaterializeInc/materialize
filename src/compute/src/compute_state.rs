@@ -696,7 +696,27 @@ impl<'a> ActiveComputeState<'a> {
             logger.log(&pending.as_log_event(true));
         }
 
-        self.process_peek(&mut Antichain::new(), pending);
+        // When coalescing is enabled, defer index peeks into `process_peeks`
+        // instead of retiring each one here. All peeks drained from the command
+        // channel in a single `handle_pending_commands` pass then coalesce into
+        // one arrangement walk. This is what lets ready-on-arrival peeks (the
+        // common case, and the only case under Serializable, which always reads
+        // an already-processed timestamp) coalesce at all. NotReady peeks land in
+        // the same `pending_peeks` set and are grouped identically.
+        //
+        // Deferring adds no maintenance-tick latency: the worker loop calls
+        // `process_peeks` every iteration, right after `handle_pending_commands`
+        // and before the next park (see `Worker::run_client`), so a deferred peek
+        // is retired in the same iteration it arrived. Persist peeks retire
+        // immediately as before, since they fulfill asynchronously.
+        let coalesce = ENABLE_PEEK_COALESCING.get(&self.compute_state.worker_config)
+            && matches!(pending, PendingPeek::Index(_));
+        if coalesce {
+            let uuid = pending.peek().uuid;
+            self.compute_state.pending_peeks.insert(uuid, pending);
+        } else {
+            self.process_peek(&mut Antichain::new(), pending);
+        }
     }
 
     fn handle_cancel_peek(&mut self, uuid: Uuid) {
