@@ -24,21 +24,16 @@ SELECT user() = current_user()
 ----
 true
 
-# SQL-502 (https://linear.app/materializeinc/issue/SQL-502): PG reserves
-# CURRENT_USER / SESSION_USER as role specifications and rejects them as role
-# names. Materialize accepts them, creating roles literally named "current_user"
-# / "session_user", which is ambiguous in later "GRANT ... TO CURRENT_USER"
-# forms. Sourced from the imported CockroachDB role logic test.
+# CURRENT_USER and SESSION_USER are PostgreSQL role specification names, so
+# a role named after them would be ambiguous in forms like
+# "GRANT ... TO CURRENT_USER". Materialize reserves them and rejects such
+# CREATE ROLE statements, matching PostgreSQL. role.slt covers the full set of
+# reserved specification names. Sourced from the imported CockroachDB role
+# logic test.
 # PG: ERROR: CURRENT_USER cannot be used as a role name here
-statement ok
+statement error role name "current_user" is reserved
 CREATE ROLE CURRENT_USER
 
-statement ok
-DROP ROLE CURRENT_USER
-
 # PG: ERROR: SESSION_USER cannot be used as a role name here
-statement ok
+statement error role name "session_user" is reserved
 CREATE ROLE SESSION_USER
-
-statement ok
-DROP ROLE SESSION_USER
