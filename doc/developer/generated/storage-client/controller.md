@@ -1,6 +1,6 @@
 ---
 source: src/storage-client/src/controller.rs
-revision: 4d59d67c50
+revision: 55e361b0a6
 ---
 
 # storage-client::controller
@@ -10,4 +10,4 @@ Provides key supporting types: `CollectionDescription`, `DataSource`, `ExportDes
 `DataSource` enumerates how collection data is produced: `Ingestion`, `IngestionExport`, `Introspection`, `Progress`, `Webhook`, `Table`, `Other`, and `Sink { desc: ExportDescription }`.
 `StorageWriteOp` represents high-level write operations (`Append` and `Delete`) used to update differential introspection collections.
 `WallclockLagHistogramPeriod` represents a `[start, end)` time range for wallclock lag histogram bucketing.
-The `StorageTxn` trait abstracts durable metadata persistence for shard-to-collection mappings, unfinalized shard tracking, and the txn WAL shard.
+The `StorageTxn` trait abstracts durable metadata persistence for shard-to-collection mappings, unfinalized shard tracking, and the txn WAL shard. `remove_unfinalized_shards` removes entries from the unfinalized shard set without finalizing the underlying Persist shards; callers are responsible for reconciling the set against active collection metadata before calling it, since stale entries can refer to active collections.

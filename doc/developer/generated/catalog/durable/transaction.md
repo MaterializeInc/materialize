@@ -1,6 +1,6 @@
 ---
 source: src/catalog/src/durable/transaction.rs
-revision: 584bb9030c
+revision: 55e361b0a6
 ---
 
 # catalog::durable::transaction

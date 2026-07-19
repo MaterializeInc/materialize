@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/compute_state/peek_result_iterator.rs
-revision: 31e0aab020
+revision: 1c55de49eb
 ---
 
 # mz-compute::compute_state::peek_result_iterator

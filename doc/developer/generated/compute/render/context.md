@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/render/context.rs
-revision: e926ec3a86
+revision: d43cd78803
 ---
 
 # mz-compute::render::context
@@ -8,5 +8,5 @@ revision: e926ec3a86
 Defines `Context`, the central data structure that accumulates dataflow-local collections and arrangements while a `RenderPlan` is being translated into Timely operators.
 Provides `lookup_id` for resolving `Id` references to either locally rendered collections or imported arrangements, and `insert_id`/`update_id`/`remove_id` for managing `CollectionBundle` bindings keyed by `Id`.
 Handles timestamp refinement: the context is parameterized by a scope `S` whose timestamp implements `RenderTimestamp`, which refines `mz_repr::Timestamp`; the two may differ in the case of regions or iteration, and the context provides `enter_region` to bring all bindings into a child scope.
-`CollectionBundle` exposes two low-level flat-map helpers: `flat_map_core_fallible` builds a two-output operator returning `(ok_stream, err_stream)`, with `PendingWork` retaining one capability per output so work can be spread across activations; `flat_map_core_ok` is a single-output sibling for callers that never emit errors, backed by `PendingWorkOk` which holds a single capability. `as_specific_collection` uses `flat_map_core_ok`. The ok output container builder is generic at each call site.
+`CollectionBundle` wraps its ok collection in a `CollectionEdge` enum (from the `columnar` submodule) that can hold either a `Vec`-backed or columnar collection; the `from_edge` constructor accepts a `CollectionEdge` directly, while `from_collections` wraps a `VecCollection` as `CollectionEdge::Vec`. `CollectionBundle` exposes two low-level flat-map helpers: `flat_map_core_fallible` builds a two-output operator returning `(ok_stream, err_stream)`, with `PendingWork` retaining one capability per output so work can be spread across activations; `flat_map_core_ok` is a single-output sibling for callers that never emit errors, backed by `PendingWorkOk` which holds a single capability. `as_specific_collection` uses `flat_map_core_ok`. The ok output container builder is generic at each call site.
 `arrange_collection` accepts a `use_paged_path: bool` flag controlled by the `ENABLE_COLUMN_PAGED_BATCHER` dyncfg: when true it uses `Col2ValPagedBatcher`/`RowRowColPagedBuilder`; when false it falls back to the legacy `Col2ValBatcher`/`RowRowBuilder` path.

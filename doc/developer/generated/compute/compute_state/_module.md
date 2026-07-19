@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/compute_state.rs
-revision: 141cb2a0a5
+revision: 1c55de49eb
 ---
 
 # mz-compute::compute_state

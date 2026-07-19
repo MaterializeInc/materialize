@@ -1,6 +1,6 @@
 ---
 source: src/mz-deploy/src/project/compiler/typecheck/convert.rs
-revision: a647094cc4
+revision: 1c8a0e5945
 ---
 
 # mz-deploy::project::compiler::typecheck::convert

@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/render/sinks.rs
-revision: e926ec3a86
+revision: d43cd78803
 ---
 
 # mz-compute::render::sinks

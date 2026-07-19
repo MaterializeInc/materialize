@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/frontend_peek.rs
-revision: dbd2c3fc06
+revision: 9b2fd0bbc6
 ---
 
 # adapter::frontend_peek
@@ -14,3 +14,4 @@ The `ENABLE_FRONTEND_SUBSCRIBES` dyncfg gates the SUBSCRIBE frontend path specif
 The optimizer config is built by layering cluster features, then cluster-coherent scoped overrides (`CatalogState::cluster_scoped_optimizer_overrides`), over the base `OptimizerConfig`. A cluster-scoped LaunchDarkly rule beats a manual `FEATURES` pin on the cluster, following the scoped feature flags resolution order.
 The private `Execution` enum branches the post-optimization flow among `Peek`, `Subscribe`, `CopyToS3`, `ExplainPlan`, and `ExplainPushdown` variants.
 `frontend_determine_timestamp` mirrors the coordinator's `determine_timestamp`, acquiring read holds and computing a `TimestampDetermination` entirely within the session task. For bounded-staleness queries that do not respond immediately, it also records a `timestamp_difference_for_bounded_staleness_ms` session metric comparing the chosen timestamp against what serializable would have produced.
+When the first non-AS OF query in a multi-statement transaction determines the transaction timestamp, its read holds are stored in the coordinator via `Command::StoreTransactionReadHolds`. A timestamp-less determination (e.g. a constant query) does not pin the transaction timestamp, so its holds are not stored: only the statement that establishes the transaction timestamp may define the timedomain.

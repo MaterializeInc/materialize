@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/group_sync.rs
-revision: 5c2ad8e23e
+revision: 605cc6fd1a
 ---
 
 # adapter::coord::group_sync
