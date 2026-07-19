@@ -227,6 +227,20 @@ describe("UsagePage", () => {
     expect(thirtyDay?.get("endDate")).toBe(utcDay(0));
   });
 
+  it("shows an error state when the breakdown request fails", async () => {
+    server.use(buildDailyCostBreakdownResponse({ status: 500 }));
+    renderComponent(<UsagePage />);
+    expect(
+      await screen.findByText("An error occurred loading your usage"),
+    ).toBeVisible();
+  });
+
+  it("shows an empty state when the window has no usage", async () => {
+    // beforeEach's default handler already returns { days: [] }.
+    renderComponent(<UsagePage />);
+    expect(await screen.findByTestId("account-breakdown-empty")).toBeVisible();
+  });
+
   it("renders 0.0% shares for an all-zero period instead of NaN (SAS-144)", async () => {
     server.use(
       buildDailyCostBreakdownResponse({
