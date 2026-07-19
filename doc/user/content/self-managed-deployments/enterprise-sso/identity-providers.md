@@ -117,6 +117,11 @@ POLIS_API_KEY=$(kubectl get secret -n ory polis-config \
 
 ### Step 3. Register the SAML connection in Polis
 
+You can register through the Polis admin API (below) or through the Polis
+admin UI, which is easier for ongoing management but requires bootstrapping
+first, see
+[Unlock the Polis admin UI without SMTP](/self-managed-deployments/enterprise-sso/operations/#unlock-the-polis-admin-ui-without-smtp).
+
 If the IdP exposes a publicly-fetchable metadata URL:
 
 ```bash
@@ -144,6 +149,13 @@ curl -X POST https://<your-polis-hostname>/api/v1/sso \
   --data-urlencode "redirectUrl=https://<your-kratos-hostname>/self-service/methods/oidc/callback/polis" \
   --data-urlencode "defaultRedirectUrl=https://<your-console-hostname>" \
   --data-urlencode "rawMetadata=$(cat saml-metadata.xml)"
+```
+
+If `rawMetadata` fails with "Couldn't fetch XML data" (some shells strip
+newlines), base64-encode the file first and use `encodedRawMetadata` instead:
+
+```bash
+--data-urlencode "encodedRawMetadata=$(base64 < saml-metadata.xml | tr -d '\n')"
 ```
 
 The response contains a `clientID` and `clientSecret`. Save them for the
@@ -192,6 +204,9 @@ Adds automatic user provisioning and deactivation from your IdP to
 Materialize. Build on top of the SAML setup above.
 
 ### Step 1. Create a SCIM directory in Polis
+
+Same choice as with SAML: register through the API (below) or through the
+Polis admin UI ([bootstrapped separately](/self-managed-deployments/enterprise-sso/operations/#unlock-the-polis-admin-ui-without-smtp)).
 
 ```bash
 curl -X POST https://<your-polis-hostname>/api/v1/dsync \

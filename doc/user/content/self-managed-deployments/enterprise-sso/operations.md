@@ -168,6 +168,10 @@ configure a NextAuth provider for login (see
 
 ### Unlock the Polis admin UI without SMTP
 
+Once the admin UI is up, prefer it over the direct API calls in
+[Configure identity providers](/self-managed-deployments/enterprise-sso/identity-providers/)
+for registering SAML connections and SCIM directories going forward.
+
 The default admin login flow uses an email magic link, which requires
 SMTP to be configured. If you don't want to run SMTP just to access the
 admin plane, Polis exposes a built-in reserved tenant
