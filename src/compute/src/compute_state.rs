@@ -1204,10 +1204,23 @@ impl<'a> ActiveComputeState<'a> {
         // The single shared arrangement walk.
         let walk_start = Instant::now();
         peek_coalesce::collect_coalesced_ok_data(peeks[0].trace_bundle.oks_mut(), &mut muxed);
+        let walk_duration = walk_start.elapsed();
         self.compute_state
             .metrics
             .index_peek_row_iteration_seconds
-            .observe(walk_start.elapsed().as_secs_f64());
+            .observe(walk_duration.as_secs_f64());
+
+        // Attribute the shared walk time to each peek's total-time histogram so
+        // that dashboard stays populated when coalescing is on. The per-phase
+        // histograms (cursor setup, sort, row collection, frontier check) are
+        // single-peek concepts and do not apply to the shared walk; the
+        // coalesced-group/peek counters below cover coalesced visibility.
+        for _ in 0..group_size {
+            self.compute_state
+                .metrics
+                .index_peek_total_seconds
+                .observe(walk_duration.as_secs_f64());
+        }
 
         self.compute_state
             .metrics
@@ -1670,24 +1683,20 @@ pub(crate) struct IndexPeekMetrics<'a> {
 }
 
 impl IndexPeek {
-    /// Attempts to fulfill the peek and reports success.
-    ///
-    /// To produce output at `peek.timestamp`, we must be certain that
-    /// it is no longer changing. A trace guarantees that all future
-    /// changes will be greater than or equal to an element of `upper`.
-    ///
-    /// If an element of `upper` is less or equal to `peek.timestamp`,
-    /// then there can be further updates that would change the output.
-    /// If no element of `upper` is less or equal to `peek.timestamp`,
-    /// then for any time `t` less or equal to `peek.timestamp` it is
-    /// not the case that `upper` is less or equal to that timestamp,
-    /// and so the result cannot further evolve.
     /// Determines whether the peek's timestamp is ready to be read from the trace.
     ///
-    /// A peek is ready once both the ok and err traces have advanced their upper
-    /// beyond `peek.timestamp`, so the output at that timestamp can no longer
-    /// change. Returns an error if the arrangement has already compacted past the
-    /// timestamp, which makes a correct read impossible.
+    /// To produce output at `peek.timestamp`, we must be certain that it is no
+    /// longer changing. A trace guarantees that all future changes will be
+    /// greater than or equal to an element of `upper`. If an element of `upper`
+    /// is less or equal to `peek.timestamp`, there can be further updates that
+    /// would change the output, so the peek is `NotReady`. If no element of
+    /// `upper` is less or equal to `peek.timestamp`, then for any time `t` less
+    /// or equal to `peek.timestamp` it is not the case that `upper` is less or
+    /// equal to that timestamp, and so the result cannot further evolve.
+    ///
+    /// Checks both the ok and err traces. Returns an error if the arrangement has
+    /// already compacted past the timestamp, which makes a correct read
+    /// impossible.
     fn readiness(&mut self, upper: &mut Antichain<Timestamp>) -> Readiness {
         self.trace_bundle.oks_mut().read_upper(upper);
         if upper.less_equal(&self.peek.timestamp) {
@@ -1711,6 +1720,10 @@ impl IndexPeek {
         Readiness::Ready
     }
 
+    /// Fulfills a ready single peek from its trace, or reports it not ready.
+    ///
+    /// This is the single-peek path; a group of coalesced peeks is served by
+    /// [`peek_coalesce::collect_coalesced_ok_data`] instead.
     fn seek_fulfillment(
         &mut self,
         upper: &mut Antichain<Timestamp>,

@@ -455,7 +455,8 @@ fn visit_key<Tr>(
         val.extend_datums(&arena, &mut borrow, None);
         let kv_len = borrow.len();
 
-        // Summed diff at the read timestamp. Shared across the group.
+        // Summed diff at the read timestamp. Shared across the group because the
+        // group reads at one timestamp.
         let mut copies = Diff::ZERO;
         cursor.map_times(storage, |time, diff| {
             if time.less_equal(&timestamp) {
@@ -464,13 +465,13 @@ fn visit_key<Tr>(
         });
         let copies = classify_copies(copies);
 
-        // A row that does not exist at this timestamp contributes to no peek.
-        if let Copies::Zero = copies {
-            drop(borrow);
-            cursor.step_val(storage);
-            continue;
-        }
-
+        // NOTE: We must not skip a zero-multiplicity row before evaluating each
+        // peek's map-filter-project. The single-peek path (`PeekResultIterator`)
+        // evaluates the MFP first and surfaces MFP errors regardless of the
+        // multiplicity, so a row that sums to zero at this timestamp (reachable
+        // for unconsolidated data before compaction) must still run every peek's
+        // MFP. The per-peek `Copies::Zero` arm below drops the row after the MFP
+        // has had its chance to error, matching the single-peek path exactly.
         for i in 0..peeks.len() {
             let mult = mults[i];
             if mult == 0 || peeks[i].outcome.is_some() {
@@ -706,10 +707,20 @@ mod tests {
 
     /// Builds a `RowRow` arrangement over the given `(key, val)` pairs (each with
     /// multiplicity one at time 0), then runs `body` against the sealed trace.
+    fn with_arrangement<F>(data: Vec<(i64, i64)>, body: F)
+    where
+        F: FnOnce(&mut crate::typedefs::RowRowAgent<Timestamp, Diff>) + Send + Sync + 'static,
+    {
+        let data = data.into_iter().map(|(k, v)| (k, v, 1)).collect();
+        with_arrangement_diffs(data, body);
+    }
+
+    /// Builds a `RowRow` arrangement over the given `(key, val, diff)` triples at
+    /// time 0, then runs `body` against the sealed trace.
     ///
     /// The trace is compacted to time 0, mirroring how a real index peek prepares
     /// its trace handle before reading.
-    fn with_arrangement<F>(data: Vec<(i64, i64)>, body: F)
+    fn with_arrangement_diffs<F>(data: Vec<(i64, i64, i64)>, body: F)
     where
         F: FnOnce(&mut crate::typedefs::RowRowAgent<Timestamp, Diff>) + Send + Sync + 'static,
     {
@@ -725,7 +736,7 @@ mod tests {
             let mut trace = worker.dataflow::<Timestamp, _, _>(|scope| {
                 let updates: Vec<((Row, Row), Timestamp, Diff)> = data
                     .iter()
-                    .map(|(k, v)| ((row(*k), row(*v)), Timestamp::from(0u64), Diff::ONE))
+                    .map(|(k, v, d)| ((row(*k), row(*v)), Timestamp::from(0u64), Diff::from(*d)))
                     .collect();
                 let arranged = updates
                     .to_stream(scope)
@@ -752,6 +763,36 @@ mod tests {
             trace.set_physical_compaction(Antichain::new().borrow());
 
             body(&mut trace);
+        });
+    }
+
+    #[mz_ore::test]
+    fn coalesced_counts_multiplicity() {
+        // A key/val with diff 3 must be reported with count 3 by every peek.
+        with_arrangement_diffs(vec![(1, 10, 3), (2, 20, 1)], |trace| {
+            let mut group = vec![muxed(2, None), muxed(2, None)];
+            collect_coalesced_ok_data(trace, &mut group);
+            let expected = vec![(vec![1, 10], 3), (vec![2, 20], 1)];
+            assert_eq!(extract(group[0].outcome.take()), expected);
+            assert_eq!(extract(group[1].outcome.take()), expected);
+        });
+    }
+
+    #[mz_ore::test]
+    fn coalesced_negative_multiplicity_errors() {
+        // A negative summed diff is corrupt data: every peek whose MFP passes the
+        // row must surface an error, matching the single-peek path. This also
+        // exercises that the MFP runs before the copies check (the error only
+        // fires once the identity MFP has accepted the row).
+        with_arrangement_diffs(vec![(1, 10, -1)], |trace| {
+            let mut group = vec![muxed(2, None), muxed(2, None)];
+            collect_coalesced_ok_data(trace, &mut group);
+            for peek in &mut group {
+                assert!(matches!(
+                    peek.outcome.take(),
+                    Some(PeekOutcome::Response(PeekResponse::Error(_)))
+                ));
+            }
         });
     }
 

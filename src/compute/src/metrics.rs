@@ -223,11 +223,11 @@ impl ComputeMetrics {
             )),
             index_peek_coalesced_groups_total: registry.register(metric!(
                 name: "mz_index_peek_coalesced_groups_total",
-                help: "Number of coalesced index peek groups (each served by a single arrangement walk).",
+                help: "Number of coalesced index peek groups (each served by a single arrangement walk), summed across the process's workers.",
             )),
             index_peek_coalesced_peeks_total: registry.register(metric!(
                 name: "mz_index_peek_coalesced_peeks_total",
-                help: "Number of index peeks served through coalescing.",
+                help: "Number of index peeks served through coalescing, summed across the process's workers (each worker counts the same logical peeks).",
             )),
             replica_expiration_timestamp_seconds: registry.register(metric!(
                 name: "mz_dataflow_replica_expiration_timestamp_seconds",
