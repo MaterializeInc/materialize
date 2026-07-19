@@ -981,6 +981,7 @@ impl ComputeController {
         read_hold: ReadHold,
         target_replica: Option<ReplicaId>,
         peek_response_tx: oneshot::Sender<PeekResponse>,
+        notify_coordinator: bool,
     ) -> Result<(), PeekError> {
         use PeekError::*;
 
@@ -1014,6 +1015,7 @@ impl ComputeController {
                 read_hold,
                 target_replica,
                 peek_response_tx,
+                notify_coordinator,
             )
             .expect("validated")
         });

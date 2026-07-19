@@ -55,6 +55,7 @@ pub mod config;
 pub mod flags;
 pub mod metrics;
 pub mod peek_client;
+pub mod peek_registry;
 pub mod session;
 pub mod statement_logging;
 pub mod telemetry;
