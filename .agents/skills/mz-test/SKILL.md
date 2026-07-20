@@ -41,7 +41,14 @@ bin/sqllogictest -- PATH [PATH ...]
 
 `PATH` is relative to the repo root, usually a file in `test/sqllogictest/`.
 sqllogictest accepts a list of files, not just one, and runs them in order.
+Prefer batching files into one invocation: it matches how CI drives the suite,
+so goldens generated one-file-per-process can diverge from CI's batched context.
 Rewrite expected results with `bin/sqllogictest -- --rewrite-results PATH`.
+
+When a plan changes only because of nondeterministic IDs in the output,
+normalize it with sqllogictest's `replace` directive rather than running files
+isolated to dodge the ID noise. Treat catalog-bloat plan drift as a real signal
+to investigate, not ID text noise.
 
 Add `--optimized` when running many or large files: it significantly improves execution speed at the cost of a longer one-time compile.
 For a single small file, skip `--optimized`, since the extra compile time outweighs the runtime savings.
@@ -73,6 +80,19 @@ bin/mzcompose --find testdrive run default -- FILENAME.td
 ```
 
 `FILENAME.td` is a file in `test/testdrive/`, relative to that directory (not the repo root).
+
+`connection=mz_system` is NOT a built-in testdrive connection. A `.td` that uses
+`$ postgres-execute connection=mz_system` (e.g. for `ALTER SYSTEM SET`) must
+first register it:
+
+```
+$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+```
+
+Omitting the line fails in CI with `connection 'mz_system' not found`. When
+verifying a `.td` locally, run it as written (bare `mz_system` name), not a copy
+with the full URL hand-substituted into `connection=...`, since the URL form
+passes locally while the committed bare-name form fails CI.
 
 Some compositions (e.g. platform-checks, upgrade, pg-cdc multi-version) run the
 same `.td` file against multiple Materialize versions. When a change alters
@@ -186,6 +206,8 @@ Determine the right framework based on what you're testing:
   Use `mode cockroach`, test NULLs and edge cases.
   Do NOT modify files in `test/sqllogictest/sqlite` or `test/sqllogictest/cockroach` (upstream).
   When adding new tests to slt files, prefer adding them to an existing slt file rather than creating new slt files, if you are able to quickly find an existing slt file where the new tests fit naturally.
+  Do NOT drive data-dependent assertions with a `LOAD GENERATOR COUNTER` source plus `mz_unsafe.mz_sleep(...)` to wait for ingestion: the counter emits rows over wall-clock time, so the check races ingestion and flakes in CI. Use a plain `CREATE TABLE` with deterministic `INSERT`s.
+  When a statically-monotonic operator needs a `FROM SOURCE` load generator (whose row timing is nondeterministic), split coverage: test the plan shape with `EXPLAIN PHYSICAL PLAN` over the `FROM SOURCE` table (no data, non-flaky), and test runtime row correctness with a one-shot `SELECT` over a plain `CREATE TABLE` + `INSERT`.
 * **Sources/sinks, Kafka, catalog, pgwire** (external systems): testdrive (`.td` in `test/testdrive/`).
   Frameworks like `pg-cdc`, `mysql-cdc`, `sql-server-cdc`, `kafka-*` have targeted setups but also run testdrive files.
 * **Raw pgwire messages** (COPY, extended protocol): pgtest (`.pt` in `test/pgtest/`).

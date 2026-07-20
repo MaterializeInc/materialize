@@ -101,6 +101,23 @@ Two files control license policy, **keep in sync**: `deny.toml` (`[licenses].all
   deviations in code or architecture that we are working on. At the same time,
   we want to keep our changes minimal so it's good to call out deviations and
   then we can decide together what to do about it.
+* Never put a side effect inside `debug_assert!` (or `debug_assert_eq!`, etc.).
+  The macro body compiles out whenever debug-assertions are off, which includes
+  `[profile.optimized]` (what `bin/environmentd` and mzcompose use) and
+  `[profile.release]`. Only `[profile.ci]` turns them on. A side effect written
+  there, for example `debug_assert!(map.insert(k, v).is_none())`, runs under
+  `cargo test` but silently vanishes in optimized and release builds, leaving
+  the logic it powered inert and profiler-blind. Bind the effect to a `let`
+  outside the assert, then assert on the bound value. Clippy's
+  `debug_assert_with_mut_call` catches `&mut self` receivers but not `&self` or
+  free-function side effects.
+* Never write vendor, customer, or account names into durable or user-facing
+  surfaces: committed code, comments, column comments, docs, specs, commit
+  messages, PR bodies, or test fixtures. Anything persisted to disk gets shared,
+  indexed, and outlives the context, so a name in it is a leak. Anonymize to the
+  technical pattern instead, for example "a wide unfiltered LEFT JOIN driving a
+  freshness incident" rather than who hit it. Names are fine in ephemeral chat,
+  not on disk.
 
 ## Code comments
 
