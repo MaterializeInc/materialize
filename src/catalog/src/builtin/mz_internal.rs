@@ -4719,10 +4719,10 @@ pub static MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY: LazyLock<BuiltinTable> = LazyLock
             (
                 "size",
                 "The total arrangement heap and batcher size in bytes for this object on this replica \
-                 at `collection_timestamp`. Objects below 10 MiB are dropped from the snapshot; \
-                 objects at or above the floor are rounded to the nearest 10 MiB to reduce \
-                 per-byte churn in the underlying differential collection. May reflect a mid-build \
-                 size if `hydration_complete` is `false`.",
+                 at `collection_timestamp`, rounded to the nearest 10 MiB to reduce per-byte churn \
+                 in the underlying differential collection. Objects with less than 5 MiB of \
+                 arrangements are not recorded. May reflect a mid-build size if \
+                 `hydration_complete` is `false`.",
             ),
             (
                 "collection_timestamp",

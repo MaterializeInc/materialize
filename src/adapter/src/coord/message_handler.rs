@@ -25,7 +25,7 @@ use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
 use mz_ore::option::OptionExt;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_ore::{soft_assert_or_log, task};
+use mz_ore::{soft_assert_or_log, soft_panic_or_log, task};
 use mz_persist_client::usage::ShardsUsageReferenced;
 use mz_repr::{Datum, Diff, Row};
 use mz_sql::ast::Statement;
@@ -48,6 +48,14 @@ use crate::coord::{
 };
 use crate::telemetry::{EventDetails, SegmentClientExt};
 use crate::{AdapterNotice, TimestampContext};
+
+/// How long an introspection subscribe must have been delivering data before
+/// the arrangement sizes snapshot trusts its replica's rows.
+///
+/// See `Coordinator::fresh_introspection_replicas` for why a margin is needed.
+/// 10s comfortably covers the collection manager's ~1s write batching plus the
+/// oracle read timestamp trailing the wall clock.
+const ARRANGEMENT_SIZES_FRESHNESS_MARGIN: Duration = Duration::from_secs(10);
 
 impl Coordinator {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 74KB. This would
@@ -475,26 +483,23 @@ impl Coordinator {
     /// See [`Coordinator::fresh_introspection_replicas`].
     #[mz_ore::instrument(level = "debug")]
     async fn arrangement_sizes_snapshot(&self) {
-        // The catalog server is not writable in read-only mode. Skip the
-        // cycle and reschedule so collection resumes once the coordinator
-        // transitions out of read-only. The transition is one-way, so
+        // Builtin collections are not writable in read-only mode. Skip the
+        // cycle but keep rescheduling, mirroring `storage_usage_fetch`, so
+        // collection stays alive regardless of how the coordinator leaves
+        // read-only mode. The transition is one-way, so
         // `arrangement_sizes_write` needs no check of its own.
         if self.controller.read_only() {
             self.schedule_arrangement_sizes_collection().await;
             return;
         }
 
-        // See `fresh_introspection_replicas` for why the margin is needed.
-        // 10s comfortably covers the collection manager's ~1s write batching
-        // plus the oracle read timestamp trailing the wall clock.
-        const FRESHNESS_MARGIN: Duration = Duration::from_secs(10);
         let fresh_size_replicas = self.fresh_introspection_replicas(
             IntrospectionType::ComputeObjectArrangementSizes,
-            FRESHNESS_MARGIN,
+            ARRANGEMENT_SIZES_FRESHNESS_MARGIN,
         );
         let fresh_hydration_replicas = self.fresh_introspection_replicas(
             IntrospectionType::ComputeHydrationTimes,
-            FRESHNESS_MARGIN,
+            ARRANGEMENT_SIZES_FRESHNESS_MARGIN,
         );
         if fresh_size_replicas.is_empty() {
             // No replica has reported sizes in this process yet, so the live
@@ -526,15 +531,19 @@ impl Coordinator {
         task::spawn(|| "arrangement_sizes_snapshot", async move {
             let collection_metric_timer = collection_metric.start_timer();
 
-            // Taking `read_ts` inside the task keeps the window between
-            // choosing the timestamp and reading minimal. If the collection's
-            // since still overtakes it, the cycle is skipped and the
-            // reschedule retries at the next interval.
+            // No read hold is taken, so the reads rely on both collections
+            // being retained-metrics objects, whose since lags the upper by
+            // `metrics_retention` rather than tracking it closely. If the
+            // since still overtakes `read_ts`, the snapshot fails, and the
+            // cycle is skipped and retried at the next interval.
             let read_ts = oracle.read_ts().await;
             let live_snapshot = match storage_collections.snapshot(live_global_id, read_ts).await {
                 Ok(s) => s,
                 Err(e) => {
-                    tracing::warn!("arrangement sizes snapshot failed: {e:?}");
+                    // Unreachable short of a read-policy bug or catalog
+                    // corruption, so be loud, but degrade to a skipped cycle
+                    // in production.
+                    soft_panic_or_log!("arrangement sizes snapshot failed: {e:?}");
                     let _ = internal_cmd_tx.send(Message::ArrangementSizesSchedule);
                     return;
                 }
@@ -545,7 +554,7 @@ impl Coordinator {
             {
                 Ok(s) => s,
                 Err(e) => {
-                    tracing::warn!("arrangement sizes hydration snapshot failed: {e:?}");
+                    soft_panic_or_log!("arrangement sizes hydration snapshot failed: {e:?}");
                     let _ = internal_cmd_tx.send(Message::ArrangementSizesSchedule);
                     return;
                 }
@@ -565,9 +574,7 @@ impl Coordinator {
                 Message::ArrangementSizesWrite(records)
             };
             // It is not an error for this task to outlive `internal_cmd_rx`.
-            if let Err(e) = internal_cmd_tx.send(msg) {
-                warn!("internal_cmd_rx dropped before we could send: {e:?}");
-            }
+            let _ = internal_cmd_tx.send(msg);
         });
     }
 
@@ -576,6 +583,22 @@ impl Coordinator {
     /// the next collection once the append completes.
     #[mz_ore::instrument(level = "debug")]
     async fn arrangement_sizes_write(&mut self, records: Vec<ArrangementSizeRecord>) {
+        // Freshness may have been invalidated while the snapshot task ran,
+        // e.g. by a cluster event reporting a replica offline. Revalidate so
+        // records prepared from a now-untrusted replica's data are dropped.
+        let fresh_size_replicas = self.fresh_introspection_replicas(
+            IntrospectionType::ComputeObjectArrangementSizes,
+            ARRANGEMENT_SIZES_FRESHNESS_MARGIN,
+        );
+        let records: Vec<_> = records
+            .into_iter()
+            .filter(|record| fresh_size_replicas.contains(&record.replica_id))
+            .collect();
+        if records.is_empty() {
+            self.schedule_arrangement_sizes_collection().await;
+            return;
+        }
+
         // `collection_ts` is stamped after the snapshot so it's always >= the
         // state the rows describe, and monotone across restarts. The snapshot
         // read and this stamp aren't atomic, but the resulting skew is bounded
@@ -1020,6 +1043,14 @@ impl Coordinator {
             new_process_status,
         );
 
+        // The replica's introspection subscribes may keep serving data written
+        // for its previous incarnation until their failure responses are
+        // processed. Invalidate freshness eagerly so consumers like the
+        // arrangement sizes history don't record that data as current.
+        if !matches!(event.status, ClusterStatus::Online) || restart_count_changed {
+            self.invalidate_introspection_freshness(event.replica_id);
+        }
+
         if let Some(old_replica_status) = old_replica_status {
             let cluster = self.catalog().get_cluster(event.cluster_id);
             let replica = cluster.replica(event.replica_id).expect("Replica exists");
@@ -1295,7 +1326,7 @@ mod arrangement_sizes_records_tests {
             Datum::String(replica_id),
             Datum::String(object_id),
             if hydrated {
-                Datum::Int64(1)
+                Datum::UInt64(1)
             } else {
                 Datum::Null
             },

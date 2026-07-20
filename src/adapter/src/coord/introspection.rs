@@ -492,6 +492,21 @@ impl Coordinator {
         );
     }
 
+    /// Invalidates introspection-subscribe freshness for the given replica.
+    ///
+    /// Called when a cluster event reports one of the replica's processes offline or restarted.
+    /// The target collections may keep serving data written for the previous incarnation of the
+    /// replica, and the subscribe failures that will reinstall them can arrive after further
+    /// consumers of `fresh_introspection_replicas` have run. Freshness returns once a subscribe
+    /// delivers data again.
+    pub(super) fn invalidate_introspection_freshness(&mut self, replica_id: ReplicaId) {
+        for subscribe in self.introspection_subscribes.values_mut() {
+            if subscribe.replica_id == replica_id {
+                subscribe.first_data_at = None;
+            }
+        }
+    }
+
     /// Returns the IDs of replicas whose introspection subscribe of the given type first
     /// delivered data at least `margin` ago.
     ///

@@ -165,17 +165,17 @@ metrics:
   tags:
   - compute
 - name: mz_arrangement_sizes_collection_time_seconds_bucket
-  help: Seconds to read mz_object_arrangement_sizes and prepare history-table updates for one snapshot.
+  help: Seconds to read mz_object_arrangement_sizes and prepare history records for one snapshot.
   labels:
   - le
   source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_arrangement_sizes_collection_time_seconds_count
-  help: Seconds to read mz_object_arrangement_sizes and prepare history-table updates for one snapshot.
+  help: Seconds to read mz_object_arrangement_sizes and prepare history records for one snapshot.
   source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_arrangement_sizes_collection_time_seconds_sum
-  help: Seconds to read mz_object_arrangement_sizes and prepare history-table updates for one snapshot.
+  help: Seconds to read mz_object_arrangement_sizes and prepare history records for one snapshot.
   source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_arrangement_sizes_rows_written_total

@@ -1138,23 +1138,25 @@ def workflow_rename_schema_types_functions(c: Composition) -> None:
 
 def workflow_arrangement_sizes_stale_snapshot_after_restart(c: Composition) -> None:
     """After a restart, mz_object_arrangement_size_history should not
-    contain rows with outdated sizes tagged hydration_complete = true.
+    record rows read from stale pre-restart shard contents (SQL-218).
 
     The collections backing the history snapshots retain pre-restart rows
-    until the new introspection subscribes replace them, so snapshots taken
-    in that window would record outdated sizes (SQL-218).
-
-    Inserting data right after each restart makes the post-restart
-    steady-state sizes larger than the pre-restart sizes. Any
-    hydration_complete = true row still carrying the old size was
-    captured from the stale persist shard before the new introspection
-    subscribe replaced it.
+    until the new introspection subscribes replace them. Each round drops
+    two indexes and kills environmentd immediately, before the drops'
+    retractions can reach the collections, so the retained shard contents
+    include rows for objects that no longer exist in the catalog. After
+    the restart nothing can legitimately report those objects, so any
+    post-restart history row for them must have been read from the stale
+    shard contents. Unlike asserting on sizes, this cannot
+    false-positive: a rehydrating index legitimately reports its
+    pre-restart size, but a dropped object cannot be reported at all.
     """
 
     num_replicas = 2
-    names = tuple(f"sidx{i}" for i in range(1, 21))
-    expected_count = len(names) * num_replicas
-    name_filter = "(" + ", ".join(f"'{n}'" for n in names) + ")"
+    all_names = [f"sidx{i}" for i in range(1, 21)]
+
+    def name_filter(names: list[str]) -> str:
+        return "(" + ", ".join(f"'{n}'" for n in names) + ")"
 
     c.down(destroy_volumes=True)
     with c.override(
@@ -1174,69 +1176,67 @@ def workflow_arrangement_sizes_stale_snapshot_after_restart(c: Composition) -> N
                 {"".join(f"CREATE INDEX sidx{i} IN CLUSTER stale_test ON stale_v ((a + {i}));" for i in range(1, 21))}
                 """))
 
-        def wait_for_full_sample() -> None:
+        # Object IDs must be captured before dropping: history rows are keyed
+        # by object_id, and dropped objects no longer join against mz_objects.
+        object_ids = {name: obj_id for obj_id, name in c.sql_query(f"""
+                SELECT o.id, o.name FROM mz_objects o
+                WHERE o.name IN {name_filter(all_names)}""")}
+        assert len(object_ids) == len(all_names)
+
+        def wait_for_full_sample(names: list[str]) -> None:
+            expected_count = len(names) * num_replicas
             deadline = time.time() + 120
             while time.time() < deadline:
                 if c.sql_query(f"""
                     SELECT 1 FROM mz_internal.mz_object_arrangement_size_history h
                     JOIN mz_objects o ON o.id = h.object_id
-                    WHERE o.name IN {name_filter}
+                    WHERE o.name IN {name_filter(names)}
                     GROUP BY h.collection_timestamp
                     HAVING count(*) = {expected_count} LIMIT 1"""):
                     return
                 time.sleep(0.5)
             raise UIError("timed out waiting for a full sample")
 
-        def get_live_sizes() -> dict[tuple[str, str], int]:
-            return {(r, n): int(sz) for r, n, sz in c.sql_query(f"""
-                    SELECT s.replica_id, o.name, s.size
-                    FROM mz_internal.mz_object_arrangement_sizes s
-                    JOIN mz_objects o ON o.id = s.object_id
-                    WHERE o.name IN {name_filter}""")}
-
-        wait_for_full_sample()
+        remaining = all_names
+        wait_for_full_sample(remaining)
 
         for round_num in range(5):
-            pre_sizes = get_live_sizes()
-            max_ts = c.sql_query(f"""
-                SELECT max(h.collection_timestamp)::text
-                FROM mz_internal.mz_object_arrangement_size_history h
-                JOIN mz_objects o ON o.id = h.object_id
-                WHERE o.name IN {name_filter}""")[0][0]
+            dropped, remaining = remaining[:2], remaining[2:]
 
+            # Kill right after the drops: their retractions cannot reach the
+            # storage collections before the process dies, so the retained
+            # shard contents keep rows for the now-nonexistent indexes.
+            c.sql(";".join(f"DROP INDEX {name}" for name in dropped))
             c.kill("materialized")
             c.up("materialized")
 
-            lo = 30001 + round_num * 30000
-            c.sql(
-                f"INSERT INTO stale_t SELECT g, repeat('x', 1024) FROM generate_series({lo}, {lo + 29999}) g"
+            # With the freshness gate, recording cannot resume until well
+            # after this query runs, so `boundary` cleanly separates pre-kill
+            # rows from anything recorded after the restart.
+            boundary = c.sql_query("""
+                SELECT max(collection_timestamp)::text
+                FROM mz_internal.mz_object_arrangement_size_history""")[0][0]
+            assert boundary is not None, (
+                f"round {round_num}: history table is empty right after "
+                "restart; pre-restart contents must be retained"
             )
-            time.sleep(8)
 
-            wait_for_full_sample()
-            post_sizes = get_live_sizes()
-            assert len(post_sizes) == expected_count
+            # A full post-restart sample of the remaining indexes implies the
+            # subscribes have delivered, so the stale window has closed.
+            wait_for_full_sample(remaining)
 
-            mismatches = [
-                (ts, rid, n, int(sz), int(post_sizes[(rid, n)]))
-                for ts, rid, n, sz in c.sql_query(f"""
-                    SELECT h.collection_timestamp::text, h.replica_id, o.name, h.size
-                    FROM mz_internal.mz_object_arrangement_size_history h
-                    JOIN mz_objects o ON o.id = h.object_id
-                    WHERE o.name IN {name_filter}
-                      AND h.hydration_complete
-                      AND h.collection_timestamp > '{max_ts}'::timestamptz
-                    ORDER BY h.collection_timestamp""")
-                if (rid, n) in post_sizes
-                and (rid, n) in pre_sizes
-                and int(sz) == pre_sizes[(rid, n)]
-                and int(sz) != post_sizes[(rid, n)]
-            ]
+            dropped_ids = ", ".join(f"'{object_ids[name]}'" for name in dropped)
+            stale_rows = c.sql_query(f"""
+                SELECT h.collection_timestamp::text, h.replica_id, h.object_id, h.size
+                FROM mz_internal.mz_object_arrangement_size_history h
+                WHERE h.object_id IN ({dropped_ids})
+                  AND h.collection_timestamp > '{boundary}'::timestamptz
+                ORDER BY h.collection_timestamp""")
 
-            assert not mismatches, (
-                f"round {round_num}: {len(mismatches)} history rows with "
-                f"hydration_complete = true carry stale pre-restart sizes; "
-                f"first 10: {mismatches[:10]}"
+            assert not stale_rows, (
+                f"round {round_num}: {len(stale_rows)} post-restart history "
+                f"rows recorded for indexes dropped just before the restart "
+                f"({dropped}); first 10: {stale_rows[:10]}"
             )
 
 
