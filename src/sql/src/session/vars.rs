@@ -1158,7 +1158,7 @@ pub struct SystemVars {
     vars: BTreeMap<&'static UncasedStr, SystemVar>,
     /// External components interested in when a [`SystemVar`] gets updated.
     #[derivative(Debug = "ignore")]
-    callbacks: BTreeMap<String, Vec<Arc<dyn Fn(&SystemVars) + Send + Sync>>>,
+    callbacks: BTreeMap<&'static UncasedStr, Vec<Arc<dyn Fn(&SystemVars) + Send + Sync>>>,
 
     /// NB: This is intentionally disconnected from the one that is plumbed around to persist and
     /// the controllers. This is so we can explicitly control and reason about when changes to config
@@ -1613,17 +1613,17 @@ impl SystemVars {
         var: &VarDefinition,
         callback: Arc<dyn Fn(&SystemVars) + Send + Sync>,
     ) {
-        self.callbacks
-            .entry(var.name().to_string())
-            .or_default()
-            .push(callback);
+        self.callbacks.entry(var.name).or_default().push(callback);
         self.notify_callbacks(var.name());
     }
 
     /// Notify any external components interested in this variable.
+    ///
+    /// The name is resolved case-insensitively, matching how `set`, `reset`,
+    /// and `set_default` resolve variables.
     fn notify_callbacks(&self, name: &str) {
         // Get the callbacks interested in this variable.
-        if let Some(callbacks) = self.callbacks.get(name) {
+        if let Some(callbacks) = self.callbacks.get(UncasedStr::new(name)) {
             for callback in callbacks {
                 (callback)(self);
             }
@@ -2575,5 +2575,44 @@ mod isolation_feature_flag_tests {
             &system_vars,
         )
         .expect("unrelated var ignored");
+    }
+}
+
+#[cfg(test)]
+mod callback_case_sensitivity_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    use super::*;
+
+    /// `set` resolves variable names case-insensitively, so callback dispatch
+    /// must too. Otherwise a non-canonical spelling changes the var without
+    /// notifying its callbacks, silently desyncing state mirrored through
+    /// `register_callback` (e.g. connection limit enforcement).
+    #[mz_ore::test]
+    fn callback_fires_for_non_canonical_name_spelling() {
+        let mut system_vars = SystemVars::new();
+        let mirror = Arc::new(AtomicU32::new(0));
+        let mirror_clone = Arc::clone(&mirror);
+        system_vars.register_callback(
+            &MAX_CONNECTIONS,
+            Arc::new(move |vars| {
+                mirror_clone.store(vars.max_connections(), Ordering::SeqCst);
+            }),
+        );
+        // Registration invokes the callback with the current value.
+        assert_eq!(mirror.load(Ordering::SeqCst), 5000);
+
+        // Set via a non-canonical spelling, as a programmatic caller might
+        // pass. `set` resolves the var case-insensitively.
+        system_vars
+            .set("MAX_CONNECTIONS", VarInput::Flat("123"))
+            .expect("set succeeds despite non-canonical spelling");
+        assert_eq!(system_vars.max_connections(), 123, "the var itself changed");
+        assert_eq!(
+            mirror.load(Ordering::SeqCst),
+            123,
+            "callback must fire for non-canonical name spellings"
+        );
     }
 }

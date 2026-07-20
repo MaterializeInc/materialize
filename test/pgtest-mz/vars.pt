@@ -23,3 +23,40 @@ ReadyForQuery
 ----
 ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"22023"},{"typ":"M","value":"parameter \"standard_conforming_strings\" requires a \"boolean\" value"}]}
 ReadyForQuery {"status":"I"}
+
+# ParameterStatus is sent for variables in the notify set, also when the
+# variable name is written as a quoted, non-lowercase identifier.
+send
+Query {"query": "SET application_name TO ps_plain"}
+----
+
+until keep=ParameterStatus
+ReadyForQuery
+----
+ParameterStatus {"name":"application_name","value":"ps_plain"}
+CommandComplete {"tag":"SET"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "SET \"APPLICATION_NAME\" TO ps_quoted"}
+----
+
+until keep=ParameterStatus
+ReadyForQuery
+----
+ParameterStatus {"name":"application_name","value":"ps_quoted"}
+CommandComplete {"tag":"SET"}
+ReadyForQuery {"status":"I"}
+
+# The ParameterStatus lookup must also work for variables with a mixed-case
+# canonical name. The reported name is the canonical spelling.
+send
+Query {"query": "SET timezone TO 'UTC'"}
+----
+
+until keep=ParameterStatus
+ReadyForQuery
+----
+ParameterStatus {"name":"TimeZone","value":"UTC"}
+CommandComplete {"tag":"SET"}
+ReadyForQuery {"status":"I"}

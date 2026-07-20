@@ -20,7 +20,7 @@ use uncased::UncasedStr;
 use crate::ast::display::AstDisplay;
 use crate::ast::{
     CloseStatement, DeallocateStatement, DeclareStatement, DiscardStatement, DiscardTarget,
-    ExecuteStatement, FetchOption, FetchOptionName, FetchStatement, PrepareStatement,
+    ExecuteStatement, FetchOption, FetchOptionName, FetchStatement, Ident, PrepareStatement,
     ResetVariableStatement, SetVariableStatement, SetVariableTo, ShowVariableStatement,
 };
 use crate::names::{self, Aug};
@@ -40,6 +40,18 @@ pub fn describe_set_variable(
     Ok(StatementDesc::new(None))
 }
 
+/// Extracts a variable name from its identifier, normalizing it to lowercase.
+///
+/// This matches the lexer's lowercasing of unquoted identifiers, so quoted
+/// spellings like `"TIMEZONE"` behave identically to unquoted ones. The
+/// normalization matters beyond lookup (which is case-insensitive anyway):
+/// the name is also used as a case-sensitive key in durable state, namely the
+/// system configuration and the role vars map, and in case-sensitive
+/// comparisons in the sequencer and the pgwire/HTTP `ParameterStatus` logic.
+pub(crate) fn plan_variable_name(variable: Ident) -> String {
+    variable.into_string().to_lowercase()
+}
+
 pub fn plan_set_variable(
     scx: &StatementContext,
     SetVariableStatement {
@@ -49,7 +61,7 @@ pub fn plan_set_variable(
     }: SetVariableStatement,
 ) -> Result<Plan, PlanError> {
     let value = plan_set_variable_to(to)?;
-    let name = variable.into_string();
+    let name = plan_variable_name(variable);
 
     // Gate feature-flagged isolation levels at plan time. The same check runs in
     // `SessionVars::set`, which also covers `ALTER ROLE ... SET` and connection
@@ -95,7 +107,7 @@ pub fn plan_reset_variable(
     ResetVariableStatement { variable }: ResetVariableStatement,
 ) -> Result<Plan, PlanError> {
     Ok(Plan::ResetVariable(ResetVariablePlan {
-        name: variable.to_string(),
+        name: plan_variable_name(variable),
     }))
 }
 
@@ -111,11 +123,17 @@ pub fn describe_show_variable(
             .finish()
     } else if variable.as_str() == SCHEMA_ALIAS {
         RelationDesc::builder()
-            .with_column(variable.as_str(), SqlScalarType::String.nullable(true))
+            .with_column(
+                variable.as_str().to_lowercase(),
+                SqlScalarType::String.nullable(true),
+            )
             .finish()
     } else {
         RelationDesc::builder()
-            .with_column(variable.as_str(), SqlScalarType::String.nullable(false))
+            .with_column(
+                variable.as_str().to_lowercase(),
+                SqlScalarType::String.nullable(false),
+            )
             .finish()
     };
     Ok(StatementDesc::new(Some(desc)))
@@ -129,7 +147,7 @@ pub fn plan_show_variable(
         Ok(Plan::ShowAllVariables)
     } else {
         Ok(Plan::ShowVariable(ShowVariablePlan {
-            name: variable.to_string(),
+            name: plan_variable_name(variable),
         }))
     }
 }

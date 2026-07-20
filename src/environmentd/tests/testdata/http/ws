@@ -68,6 +68,36 @@ ws-text
 {"type":"ParameterStatus","payload":{"name":"application_name","value":"a"}}
 {"type":"ReadyForQuery","payload":"I"}
 
+# A quoted, non-lowercase spelling of the variable name must also produce a
+# ParameterStatus message.
+
+ws-text
+{"query": "SET \"APPLICATION_NAME\" TO quoted_a"}
+----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"CommandComplete","payload":"SET"}
+{"type":"ParameterStatus","payload":{"name":"application_name","value":"quoted_a"}}
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text
+{"query": "SET \"Application_Name\" TO a"}
+----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"CommandComplete","payload":"SET"}
+{"type":"ParameterStatus","payload":{"name":"application_name","value":"a"}}
+{"type":"ReadyForQuery","payload":"I"}
+
+# ParameterStatus also works for variables with a mixed-case canonical name,
+# and reports the canonical spelling.
+
+ws-text
+{"query": "SET \"TIMEZONE\" TO 'UTC'"}
+----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"CommandComplete","payload":"SET"}
+{"type":"ParameterStatus","payload":{"name":"TimeZone","value":"UTC"}}
+{"type":"ReadyForQuery","payload":"I"}
+
 ws-text
 {"query": ""}
 ----
