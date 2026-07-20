@@ -444,6 +444,8 @@ function buildFakeEnabledEnvironment({
     httpAddress,
     sqlAddress: "",
     resolvable: true,
+    // No real Kubernetes condition to report for a fabricated environment.
+    upToDate: "True",
     // A made up enabled at time only used during impersonation and self-managed,
     // since we don't know when the environment was enabled.
     enabledAt: fakeEnabledAt.toString(),
