@@ -26,22 +26,12 @@ Syntax element                | Description
 
 `SHOW CLUSTERS` returns the following columns:
 
-{{< if-unreleased "v26.34" >}}
-Column      | Description
-------------|------------
-`name`      | The name of the cluster.
-`replicas`  | The cluster's replicas and their sizes.
-`comment`   | Any [comment](/sql/comment-on/) on the cluster.
-{{< /if-unreleased >}}
-
-{{< if-released "v26.34" >}}
 Column      | Description
 ------------|------------
 `name`      | The name of the cluster.
 `replicas`  | The cluster's replicas and their sizes.
 `activity`  | A summary of any in-flight [resize](/sql/alter-cluster/#monitoring-a-resize) or [hydration burst](/sql/alter-cluster/#speed-up-hydration-by-autoscaling-to-a-larger-size) on the cluster, or `NULL` when the cluster is steady.
 `comment`   | Any [comment](/sql/comment-on/) on the cluster.
-{{< /if-released >}}
 
 ## Pre-installed clusters
 
@@ -149,7 +139,6 @@ SHOW CLUSTERS LIKE 'auction_%';
  auction_house        |  r1 (25cc)
 ```
 
-{{< if-released "v26.34" >}}
 While a cluster is being [resized](/sql/alter-cluster/#monitoring-a-resize) or
 is running a [hydration
 burst](/sql/alter-cluster/#speed-up-hydration-by-autoscaling-to-a-larger-size), the
@@ -162,7 +151,6 @@ burst](/sql/alter-cluster/#speed-up-hydration-by-autoscaling-to-a-larger-size), 
  billing            |  r1 (100cc) | hydration burst at 800cc
  default            |  r1 (25cc)  |
 ```
-{{< /if-released >}}
 
 
 ## Related pages
