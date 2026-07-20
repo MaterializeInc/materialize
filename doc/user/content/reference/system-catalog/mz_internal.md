@@ -575,12 +575,39 @@ each materialized view with a refresh strategy other than `on-commit`.
 
 ## `mz_mcp_data_products`
 
-The `mz_mcp_data_products` view lists data products (materialized views
-and indexed views) that are available through the Model Context Protocol
-(MCP) server and that the current user has SELECT access on. Non-indexed
-regular views are excluded to avoid triggering a full recompute when an
-agent queries the data product. Comments are optional enrichment. This
-is a lightweight discovery view. Use
+The `mz_mcp_data_products` view lists data products available for discovery
+through the Model Context Protocol (MCP) server. An object counts as a data
+product, and appears in this view, when all of the following hold:
+
+- It is a **materialized view**, or a **view with at least one index on a
+  cluster the current role can use**. Non-indexed regular views, and indexed
+  views whose indexes all live on clusters the role lacks `USAGE` on, are
+  excluded to avoid triggering a full recompute when an agent queries the
+  data product.
+- The current role has `SELECT` on the object.
+- It is not in a system schema (`mz_catalog`, `mz_internal`, `pg_catalog`,
+  `information_schema`, `mz_introspection`).
+
+The description is the index comment when present, otherwise the object
+comment. Comments are optional enrichment, so an object without comments is
+still listed, with a null description.
+
+An object indexed on multiple clusters is advertised once per index cluster.
+A materialized view with no indexes is advertised with the cluster it
+computes on. The `cluster` value is only shown for clusters the current role
+has `USAGE` on and is null otherwise, so a data product never advertises a
+cluster the role cannot run reads on. A materialized view can therefore
+appear both with a named cluster and with a null cluster when the role can
+use only some of its index clusters. When reading a data product, the MCP
+server by default routes the read to an advertised cluster so it benefits
+from the index. `read_data_product` also accepts an explicit `cluster`
+argument to override that choice (for example, to run the same read on a
+larger cluster). If no advertised cluster is usable (which only happens for
+materialized views, since plain views without a usable index cluster are not
+listed), the read falls back to the session's default cluster and is served
+from persist without index benefit.
+
+This is a lightweight discovery view. Use
 [`mz_mcp_data_product_details`](#mz_mcp_data_product_details) for full column
 schema information.
 
@@ -588,7 +615,7 @@ schema information.
 | Field         | Type     | Meaning                                                                                  |
 | ------------- | -------- | ---------------------------------------------------------------------------------------- |
 | `object_name` | [`text`] | Fully qualified object name (database.schema.name).                                      |
-| `cluster`     | [`text`] | Cluster where the object computes or its index is hosted. Reads from any cluster work, but only reads on this cluster benefit from the index. |
+| `cluster`     | [`text`] | Cluster hosting the object's index or compute. Reads still work from any cluster you can use, but only reads on this cluster benefit from the index. Shown only when your role has USAGE on it (otherwise null). |
 | `description` | [`text`] | Index comment if available, otherwise object comment. Used as data product description.   |
 
 ## `mz_mcp_data_product_details`
@@ -603,7 +630,7 @@ has no replicas — needs operator action."
 | Field         | Type     | Meaning                                                                                  |
 | ------------- | -------- | ---------------------------------------------------------------------------------------- |
 | `object_name` | [`text`] | Fully qualified object name (database.schema.name).                                      |
-| `cluster`     | [`text`] | Cluster where the object computes or its index is hosted. Reads from any cluster work, but only reads on this cluster benefit from the index. |
+| `cluster`     | [`text`] | Cluster hosting the object's index or compute. Reads still work from any cluster you can use, but only reads on this cluster benefit from the index. Shown only when your role has USAGE on it (otherwise null). |
 | `description` | [`text`] | Index comment if available, otherwise object comment. Used as data product description.   |
 | `schema`      | [`jsonb`]| JSON Schema describing the object's columns and types.                                   |
 | `hydration`   | [`jsonb`]| Readiness summary as a JSON object with `hydrated` (bool), `replica_count` (int), and `hydrated_replica_count` (int). `hydrated` is true only when the cluster has at least one replica and the dataflow is hydrated on every replica. Reads against a non-hydrated data product block until the dataflow catches up (they never return partial data). Check this before reading: if `hydrated` is false and `replica_count > 0`, wait and retry; if `replica_count` is 0, the cluster has no replicas and that needs operator action, not a retry. |
