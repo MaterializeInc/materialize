@@ -45,11 +45,17 @@ doing maintenance.
 - Correctness is unchanged. A read observes exactly the collection at its
   timestamp, gated by the same `since <= timestamp < upper` window as today.
 - The controller remains the single authority on compaction. No arrangement
-  compacts past a time a read still needs, and the read path never pins an
-  arrangement back beyond what the controller already holds.
+  compacts past a time a read still needs. A read never holds a maintenance
+  arrangement back below the controller's own read hold. A peek holds nothing (it
+  reads a point-in-time snapshot), and a longer-lived import holds only its own
+  `as_of`, released when it drops, which is the same shape as a read hold today.
 - Maintenance throughput is not regressed. Publishing an arrangement for reading
-  costs the maintenance path only constant per-batch overhead, and the read side
-  does not hold maintenance compaction back.
+  costs the maintenance path only constant per-batch overhead, and publishing
+  alone never pins compaction.
+- Generality is preserved. The read side imports an arrangement with an `as_of`
+  and replays its change stream, so a continuously maintained read (a subscribe)
+  can move to the interactive runtime later. The design does not bake in a
+  point-in-time-only mechanism that would foreclose that.
 
 Non-criterion, stated to head off a misreading: this does not make an individual
 peek's cursor walk faster. It removes the walk, and the wait to be serviced,
@@ -90,6 +96,14 @@ arrangement directly and only contend for CPU with maintenance. That is the
 whole point: a peek does not wait for a maintenance worker to come back around
 its loop, because the thread serving it is not a maintenance worker.
 
+The shared trace supports two read modes, and the design uses both. A **snapshot**
+mode serves a point-in-time read (a peek) by handing back a consistent cursor
+over the current batch chain, held alive by its `Arc`s. An **import** mode
+replays the arrangement's change stream from an `as_of` into a dataflow, exactly
+as a same-worker `import_index` does today, and is the general path that a future
+subscribe migration would use. Peeks take the snapshot mode because it is
+pin-free and needs no dataflow. Temporary dataflows take the import mode.
+
 ### Serving a peek
 
 A fast-path index peek is served by taking a consistent snapshot of the
@@ -119,9 +133,20 @@ peek" model most directly. Either way the walk is off the maintenance threads.
 
 A slow-path peek or other ad-hoc query is rendered as a temporary dataflow on
 the interactive runtime. It imports the maintenance arrangements it needs as
-ordinary `Arranged` collections through `SharedTraceHandle::import`, then runs
-joins, reduces, and the rest with no maintenance-thread involvement. Its result
-is peeked and the dataflow is dropped, as transient dataflows are today.
+ordinary `Arranged` collections through the import mode, replaying the change
+stream from the dataflow's `as_of`, then runs joins, reduces, and the rest with
+no maintenance-thread involvement. Its result is peeked and the dataflow is
+dropped, as transient dataflows are today.
+
+The import registers a real read hold at its `as_of` on the shared trace, which
+is released when the dataflow drops. This is deliberate, not a wart. It is the
+same read-hold shape a same-worker import has today, and it is what lets a
+continuously maintained read hold its `as_of` for as long as it runs. It is the
+reason the design keeps the change-stream import rather than a point-in-time-only
+snapshot: a subscribe cannot be served from a frozen snapshot, it needs the
+ongoing stream, so foreclosing the import mode would foreclose ever moving
+subscribes here. The hold is bounded and safe for the same reason a peek's is
+(next section).
 
 ## What decouples, and what does not
 
@@ -199,16 +224,49 @@ combining contract is its own (pass a peek response through from whichever side
 produced it, report maintained frontiers from maintenance), which is why it
 cannot simply reuse `PartitionedComputeState`.
 
-## Publication and the publish-versus-read handshake
+## Where the sharing hooks in
 
-When the maintenance runtime renders an index (`export_index`,
-`compute/src/render.rs:688`), it publishes the arrangement and records the
-resulting `SharedTraceHandle`s in a **per-process publication registry** keyed by
-`GlobalId`, one entry per worker ordinal. This registry is a new first-class
-per-process object, shared into both runtimes the same way the persist client
+**Mechanism: a publication point on the arrange stream, not an `Arc`-native
+trace.** The tempting move is to make the trace itself cross-thread, an
+`Arc<Mutex<..>>` trace box the interactive runtime imports from directly.
+Rejected. Differential's `TraceAgent`/`TraceBox` and its whole import path are
+`Rc`-based (`Rc<RefCell<TraceBox>>`, `Rc` listener queues, `Activator`), so an
+`Arc`-native trace is an invasive change to differential's core handle, and it
+puts a lock on the *maintenance worker's own* hot read path, which every local
+dataflow import and every compaction call would then pay. Instead, the local
+trace stays a lock-free `Rc` `TraceAgent`, and a separate publication point
+carries the `Arc` batches, frontiers, importer queues, and holds across the
+boundary. Only cross-thread readers pay the lock. This is additive and leaves
+the owning worker's path untouched.
+
+**Maintenance insertion site: `export_index`** (`compute/src/render.rs:688`).
+The `ArrangementFlavor::Local` arm has the `Arranged` in hand, with both its
+change stream (`oks.stream`/`errs.stream`) and its trace, right before
+`traces.set(idx_id, TraceBundle::new(oks.trace, errs.trace))`
+(`render.rs:713-737`). That is where publication attaches: it sinks the arrange
+output stream (the change stream that mirrors `TraceWriter::insert`) into a
+publication point and records a `Send` handle in a per-process registry. The
+`ArrangementFlavor::Trace(gid, ..)` re-export arm (`render.rs:739-743`), which
+today just re-registers the existing trace under a new id, re-registers the same
+published handle. `export_index_iterative` mirrors this. Publishing does not
+change what `traces.set` stores, so the local trace and its compaction are
+exactly as today.
+
+**The registry.** A new first-class per-process object keyed by `GlobalId`, one
+entry per worker ordinal, shared into both runtimes the way the persist client
 cache is shared today (created once, handed to both `serve` calls,
 `compute_state.rs:114-116`). Interactive worker `i` finds maintenance worker
-`i`'s handle. Publication cost is one `Arc` clone plus a mutex push per batch.
+`i`'s handle.
+
+**Interactive insertion sites.** Two read entry points consume the registry.
+Peeks: a lookup that takes a snapshot and runs the cursor walk, replacing the
+`handle_peek` path's local `TraceManager` lookup (`compute_state.rs:673-699`)
+with a registry lookup for the target id. Temporary dataflows: a new import path
+analogous to `import_index` (`render.rs:591`) that sources the imported
+`Arranged` from the registry handle (import mode) instead of the local
+`TraceManager`.
+
+Publication cost is one `Arc` clone plus a mutex push per batch.
 
 The two runtimes step independently, so there is no happens-before between
 "maintenance renders and publishes index X" and "interactive is asked to read
@@ -229,7 +287,7 @@ drives an arrangement's `since` from `AllowCompaction` exactly as today, derived
 from the controller's read holds (`instance.rs:1922-1981`). The read side must
 never pin a maintenance arrangement back below that frontier.
 
-Correctness of a read rests on three things, and only the first exists today:
+Correctness rests on three things, and only the first exists today:
 
 1. The controller already holds a maintenance arrangement back for as long as a
    read needs it. A peek carries a read hold at its timestamp, and a temporary
@@ -238,40 +296,50 @@ Correctness of a read rests on three things, and only the first exists today:
    *emission* of `AllowCompaction`, not its delivery: it never emits a frontier
    past a time it is still holding. So while the read is outstanding, the
    maintenance `since` cannot advance past the read timestamp.
-2. The read's snapshot pins immutable batches, so even after the controller
-   releases and maintenance compacts, an in-progress walk is unaffected.
+2. The batches a read observes are immutable. A snapshot peek pins its captured
+   batches by `Arc`, and an import replays immutable batches into its dataflow,
+   so in either mode maintenance may merge and compact concurrently without
+   affecting an in-progress read.
 3. A `since <= timestamp` gate on the read path, so a read at a time the
    arrangement has already compacted past returns the same error it does today
    (`compute_state.rs:1536-1544`) rather than a silently coalesced result.
 
-**Two changes to the shared-arrangements primitive are required for this to
-hold, and the primitive does not do them yet.** Both were found by adversarial
-review of `sharing.rs` and are the gating work for this design:
+The two read modes differ in how they hold, and both are safe:
+
+- A **snapshot peek holds nothing on the trace.** Its `Arc`'d batches are its
+  only hold, and they defer only the *frees*, never maintenance's compaction
+  *decisions*. It cannot pin maintenance no matter how slow it is.
+- An **import holds a real read hold at its `as_of`**, released when the dataflow
+  drops. This is intended. It is the same read-hold shape a same-worker import
+  has today, and it is what a subscribe needs to keep its `as_of` alive while it
+  runs. It cannot pin maintenance *below the controller's own hold*, because the
+  controller holds the same `as_of` for as long as the read exists (criterion 1).
+  A wedged importer that never drops is no worse than a stuck read today: the
+  read it serves never completes, so the controller's hold is stuck at the same
+  frontier regardless. Dropping the import is how the hold is freed, which is
+  exactly the "droppable to free the read hold" property we want.
+
+**Two changes to the shared-arrangements primitive are required, and the
+primitive does not do them yet.** Both were found by adversarial review of
+`sharing.rs` and are gating work for this design:
 
 - **The publisher must not pin compaction.** As written, the publisher holds a
   `TraceAgent` clone whose logical/physical hold is sourced from its own
   `get_logical_compaction` and never advances (`sharing.rs:412,462`), so merely
   publishing an index freezes its compaction at publish-time `since` for the life
-  of the index. The publisher's liveness hold must instead track the maintenance
-  runtime's controller-driven compaction frontier, so publishing does not hold
-  the trace back at all.
-- **Reads must register no independent hold.** `import` and handle registration
-  install real holds that the publisher forwards to the maintenance trace
-  (`sharing.rs:169-170,229-230,435-463`), so a wedged interactive reader would
-  pin maintenance compaction. The integration needs a read mode that registers
-  no hold and relies solely on the controller's hold (criterion 1 above). Only
-  then is it true that a wedged interactive runtime cannot pin maintenance.
-
+  of the index, even with no readers. Publishing must not carry an independent
+  compaction floor. The maintenance handle and controller drive `since`, and only
+  a live import's own `as_of` hold (released on drop) may hold the trace back.
 - **`snapshot_at` must enforce the `since <= timestamp` gate** (criterion 3). It
   currently waits only for `upper` to pass the time and returns whatever `since`
   the snapshot has (`sharing.rs:185-203`), so it could serve stale rows once
   compaction actually moves. The gate must be added on the read path.
 
-With those changes, the read side is purely a reader: it holds nothing back, the
-controller remains the sole authority, and a stuck interactive thread can fall
-behind on its own reads but cannot wedge maintenance compaction. Without them,
-the "interactive never pins maintenance" property this design depends on is
-false.
+Note the earlier framing that "reads register no hold" was too strong. That is
+true and desirable for the snapshot peek path, but an import legitimately holds
+its `as_of`. The property the design actually needs is the weaker and correct
+one: publishing pins nothing, and every hold that does exist is either the
+controller's or a live import's own `as_of`, both released on completion.
 
 ## Internal to compute, one protocol endpoint
 
@@ -323,13 +391,15 @@ restart of one runtime. A read in flight when the process dies fails with the
 process and is retried by the controller against the restarted replica, which is
 the existing behavior.
 
-Shared fate is a requirement, not just a convenience: it is what lets the read
-side hold nothing and rely on the controller. For it to hold, a panic on any
-worker or reader thread of either runtime must abort the whole process. The
-implementation must confirm the panic path is abort-equivalent for both
-runtimes. If a single thread could panic without taking the process down, a
-wedged reader's state and a half-served peek would leak, and that fallback path
-would need its own correctness argument.
+Shared fate is a requirement, not just a convenience. It is what makes an
+import's read hold safe without a lease-expiry mechanism. A wedged importer can
+hold maintenance compaction back only as long as its process lives, and shared
+fate bounds that to the life of the whole replica, which is exactly the bound a
+stuck read has today. For it to hold, a panic on any worker or reader thread of
+either runtime must abort the whole process. The implementation must confirm the
+panic path is abort-equivalent for both runtimes. If a single thread could panic
+without taking the process down, a wedged importer's hold and a half-served read
+would leak, and that fallback path would need its own correctness argument.
 
 ## New components this design requires
 
@@ -339,11 +409,14 @@ Called out explicitly, because the mechanism does not reduce to existing objects
   `PartitionedComputeState`).
 - The per-process publication registry keyed by `GlobalId`, plus the
   block-until-published handshake.
-- An interactive read path that gates and walks a `SharedTraceHandle` snapshot
-  (a new `PendingPeek` variant or reader-pool equivalent), since today's
-  `handle_peek` reads only the local `TraceManager` (`compute_state.rs:673-699`).
-- The three primitive changes in "Compaction": publisher-does-not-pin, no-hold
-  reads, and the `snapshot_at` since gate.
+- Two interactive read entry points off the registry: a peek path that snapshots
+  and walks (a new `PendingPeek` variant or reader-pool equivalent, replacing the
+  local `TraceManager` lookup in `handle_peek`, `compute_state.rs:673-699`), and a
+  temporary-dataflow import path analogous to `import_index` (`render.rs:591`)
+  that imports the change stream from the registry handle.
+- The two primitive changes in "Compaction": publisher-does-not-pin and the
+  `snapshot_at` since gate. Plus the `import` equal-peers assertion and the
+  `batches_through` straddle fix (open questions).
 - A compile-time `Send` assertion over the peek walk. `peek_stash.rs:44-48`
   documents that `PeekResultIterator` is `!Send` today because the trace reader
   is `Rc`. The `Arc` migration should flip it, but the design depends on it, so
@@ -356,13 +429,17 @@ Called out explicitly, because the mechanism does not reduce to existing objects
   the resulting threads share cores, and whether oversubscription is acceptable
   given the interactive side is often blocked on reads, is deferred to
   measurement.
-- **Import queue backpressure.** The primitive's replay queue is bounded today
+- **Import queue backpressure.** The change-stream replay queue is bounded today
   only because producer and consumer share a worker step. Across runtimes they
-  are independently scheduled, so a lagging interactive runtime can grow the
-  queue without bound. A bound plus publisher backpressure is likely needed.
-  This is a liveness and memory concern, not a compaction one: with the no-hold
-  read mode, a slow reader falls behind on its own imports but cannot wedge
-  maintenance compaction. Captured in the primitive design.
+  are independently scheduled, so a lagging interactive importer can grow the
+  queue without bound. A bound plus publisher backpressure is likely needed. This
+  is the price of keeping the general change-stream import (peeks avoid it by
+  using the snapshot mode, which has no queue). It is a liveness and memory
+  concern more than a compaction one: a lagging importer still holds only its own
+  `as_of`, bounded by the controller's hold and by shared fate, so it falls
+  behind on its own updates rather than compacting-wedging maintenance. It grows
+  in importance if long-lived imports (subscribes) move here. Captured in the
+  primitive design.
 - **Introspection and memory attribution.** Under one endpoint the controller
   cannot see which runtime holds what memory, and a shared arrangement reachable
   from both runtimes' arrangement-size loggers can be double-counted or

@@ -146,6 +146,20 @@ reader, plus a mutex acquisition per activation. No per-record work.
 
 #### Compaction forwarding
 
+> **Corrections required (from adversarial review and the compute integration).**
+> This section describes the current `sharing.rs` behavior, which has two defects
+> the [two-runtime compute design](../20260720_two_runtime_compute/README.md)
+> depends on fixing. First, with no readers the publisher forwards its own
+> `get_logical_compaction`, a frozen hold that never advances, so merely
+> publishing pins the trace's compaction at publish-time `since` forever.
+> Publishing must carry no independent compaction floor. The trace's writer and
+> the controller drive `since`, and only a live importer's own `as_of` hold
+> (released on drop) may hold it back. Second, `snapshot_at` must enforce a
+> `since <= t` gate so a point read past compaction errors rather than returning
+> stale rows. Read holds from `import` are correct and intended (they are how a
+> long-lived read keeps its `as_of`, and how a subscribe would), they just must
+> never sit below the controller's own hold.
+
 Readers register holds. The publisher aggregates them and advances its
 `TraceAgent`, which is the only writer of the underlying trace's compaction
 frontiers. Two hazards shape how:
