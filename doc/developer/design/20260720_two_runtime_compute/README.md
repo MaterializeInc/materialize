@@ -7,7 +7,8 @@
     the differential-level primitive this design consumes.
   - Implementation of the `Arc`-batches prerequisite: differential
     TimelyDataflow/differential-dataflow#807, materialize
-    MaterializeInc/materialize#37743.
+    MaterializeInc/materialize#37743. File and line references to the `Arc`
+    spines below are to the state on those branches, not to `main`.
 
 ## The Problem
 
@@ -19,34 +20,43 @@ behind ad-hoc queries.
 
 These contend. An index peek runs its cursor walk synchronously on the worker
 thread (`compute/src/compute_state.rs:982-988`, driven from the loop at
-`compute/src/server.rs:417`), so it waits for the worker that owns the relevant
-shard to come around to it. That worker may be deep in a join or a large merge.
-The result is read tail latency proportional to how busy maintenance is, which
-is exactly when users are watching. Persist peeks already sidestep this by
-offloading to an async task (`compute_state.rs:1254-1325`). Index peeks, the
-common fast path, do not.
+`compute/src/server.rs:417`). The worker only reaches peek servicing after it
+returns from `step_or_park`, so a peek waits for the worker that owns the shard
+to come back around its loop. That worker may be deep in a join or a large
+merge, and timely operators run to completion. The result is read tail latency
+proportional to how busy maintenance is, which is exactly when users are
+watching. Persist peeks already sidestep this by offloading to an async task
+(`compute_state.rs:1254-1325`). Index peeks, the common fast path, do not.
 
 The root cause is that reads and maintenance share worker threads, and an
-arrangement is readable only from the worker that maintains it. The
-[`Arc`-batches work](../20260719_shared_arrangements_across_runtimes/README.md)
-removes the second half of that restriction: arrangement batches are now `Arc`'d
-and their contents are `Send + Sync` (`row-spine/src/lib.rs:175-177`), so a batch
-can be read from another thread. This design uses that to move reads off the
-maintenance threads.
+arrangement is readable only from the worker that maintains it. The `Arc`-batches
+work removes the second half of that restriction: arrangement batches become
+`Arc`'d and their contents are asserted `Send + Sync` in `mz-row-spine` (added
+by the Arc migration, #37743), so a batch can be read from another thread. This
+design uses that to serve reads from a different set of threads than the ones
+doing maintenance.
 
 ## Success Criteria
 
-- A read (a peek, and later a temporary dataflow) does not wait behind
-  maintenance work on a worker thread. Read tail latency is decoupled from
-  maintenance load.
+- A read is served by threads other than the maintenance worker threads. Its
+  latency floor is CPU contention with maintenance, not waiting for a
+  maintenance worker to return to its command loop. The read no longer queues
+  behind a long maintenance operator step.
 - Correctness is unchanged. A read observes exactly the collection at its
   timestamp, gated by the same `since <= timestamp < upper` window as today.
 - The controller remains the single authority on compaction. No arrangement
-  compacts past a time a read still needs.
+  compacts past a time a read still needs, and the read path never pins an
+  arrangement back beyond what the controller already holds.
 - Maintenance throughput is not regressed. Publishing an arrangement for reading
-  costs the maintenance path only constant per-batch overhead.
-- The change is stageable: an early increment ships read isolation without the
-  full second-runtime architecture.
+  costs the maintenance path only constant per-batch overhead, and the read side
+  does not hold maintenance compaction back.
+
+Non-criterion, stated to head off a misreading: this does not make an individual
+peek's cursor walk faster. It removes the walk, and the wait to be serviced,
+from the maintenance worker's critical path. A tiny point-lookup that was
+microseconds inline is still microseconds, now paid on an interactive thread
+that was free to run it immediately instead of after the maintenance worker's
+current step.
 
 ## Out of Scope
 
@@ -55,244 +65,253 @@ maintenance threads.
 - Changing the fast-path versus slow-path peek decision, which lives in the
   coordinator (`adapter/src/coord/peek.rs`). This design changes only where the
   read executes on the replica, not how the coordinator plans it.
-- Scheduling policy between the two runtimes (thread counts, pinning,
-  priorities). Discussed under open questions, not decided here.
+- Core-sharing policy between the two runtimes (pinning, priorities,
+  oversubscription). Worker counts are fixed by this design. How the resulting
+  threads share cores is deferred to measurement (see open questions).
 - Multi-replica or cross-replica concerns. This is about one replica's internal
   structure.
 
-## Solution overview: two stages
+## Architecture
 
-The design is a full arc, delivered in two stages. Stage 1 gets most of the
-latency win with a small, self-contained change and no second runtime. Stage 2
-is the full two-runtime architecture that also isolates temporary dataflows.
+One replica process runs two compute timely runtimes, two `serve`/`ClusterSpec`
+instances (`compute/src/server.rs:85-131`) sharing per-process resources exactly
+as storage and compute already do today (`clusterd/src/lib.rs`, `background.md`):
 
-The staging matters because the two stages need very different amounts of the
-[shared-arrangements primitive](../20260719_shared_arrangements_across_runtimes/README.md).
-Stage 1 needs only `Arc` batches and a `Send` snapshot. Stage 2 adds publish and
-import. Its cross-thread hold aggregation is available but not load-bearing,
-because the interactive runtime reads read-only and never holds maintenance
-compaction back (see "Compaction reconciliation").
+- The **maintenance runtime** owns the durable, maintained work: indexes,
+  materialized views, and subscribes. It renders and maintains their
+  arrangements as today, and additionally *publishes* each index arrangement so
+  other threads can read it.
+- The **interactive runtime** owns the ephemeral, read-oriented work: peeks and
+  temporary dataflows. It reads maintenance arrangements through the published
+  handles, never touching a maintenance worker thread.
 
-## Stage 1: off-worker peek reads
+Reads are served on the interactive side by threads that hold the published
+arrangement directly and only contend for CPU with maintenance. That is the
+whole point: a peek does not wait for a maintenance worker to come back around
+its loop, because the thread serving it is not a maintenance worker.
 
-**Idea.** Keep one timely runtime. On an index peek, the worker does only the
-cheap, gated part on-thread, then hands the expensive cursor walk to a reader
-thread pool. This mirrors what Persist peeks already do
-(`compute_state.rs:1254-1325`).
+### Serving a peek
 
-**Mechanism.** When a `Peek { target: Index { id }, timestamp, .. }` arrives, the
-worker:
+A fast-path index peek is served by taking a consistent snapshot of the
+published arrangement and running the existing cursor walk against it, on an
+interactive thread:
 
-1. Gates as today: it waits until the trace `upper` passes `timestamp` and
-   checks `since <= timestamp` (`compute_state.rs:1517-1544`). This stays
-   on-thread because it is a frontier comparison, not a data scan.
-2. Takes a `Send` snapshot of its own trace. A snapshot is a clone of the
-   current batch chain (a handful of `Arc` clones) plus the `since` and `upper`
-   frontiers. This is cheap and does not block on maintenance.
-3. Hands the snapshot, the `SafeMfpPlan`, the `RowSetFinishing`, and the peek
-   `uuid` to a reader pool. The pool runs the existing `PeekResultIterator`
-   cursor walk (`compute/src/compute_state/peek_result_iterator.rs`) against the
-   snapshot and produces the `PeekResponse`.
-4. The pool delivers the response back through the existing response path,
-   re-activating the worker via a `SyncActivator` exactly as the Persist peek
-   task does.
+1. The routing layer delivers the `Peek` to the interactive side without going
+   through a maintenance worker's command loop.
+2. The interactive side looks up the published handle for the target
+   `GlobalId`, gates on the published `upper`/`since`, and takes a `Send`
+   snapshot: a clone of the current batch chain (a handful of `Arc` clones) plus
+   the frontiers.
+3. It runs `PeekResultIterator` (`compute/src/compute_state/peek_result_iterator.rs`)
+   over the snapshot and produces the `PeekResponse`.
 
-**Why this is correct and cheap.**
+The snapshot's `Arc`'d batches are immutable, so once taken, the maintenance
+runtime may merge and compact freely while the walk proceeds. No lock is held
+across the walk, and there is no torn read.
 
-- The snapshot's `Arc`'d batches are immutable. Once taken, the maintenance
-  worker may merge and compact freely. The reader pool reads the pinned
-  pre-merge batches. No torn read, no lock held across the walk.
-- The controller's per-peek read hold already keeps the trace `since <=
-  timestamp` until the `PeekResponse` is received
-  (`compute-client/src/controller/instance.rs:1922-1981`), so the snapshot is
-  accurate at `timestamp`. The existing `since` gate stays as the safety net.
-- `PeekResultIterator` already operates over a `CursorList` and a `Vec` of
-  batches, which become `Send` once batches are `Send + Sync`. The walk moves
-  off-thread almost unchanged.
+Whether the walk runs on the interactive runtime's timely workers or on a
+dedicated reader pool alongside it is an implementation choice. A dedicated pool
+isolates peeks even from the interactive runtime's own temporary-dataflow
+rendering, which matches the "a thread that just grabs the trace and runs the
+peek" model most directly. Either way the walk is off the maintenance threads.
 
-**What stage 1 needs from the primitive.** Only the `Arc` batches (done in #807
-and #37743) and a `Send` snapshot type. It does *not* need a publication point,
-import, or cross-thread hold registration. The worker snapshots its own trace on
-demand. There is no second runtime and no cross-runtime compaction to reconcile.
+### Serving a temporary dataflow
 
-**What stage 1 does not solve.** Slow-path peeks still ship a transient dataflow
-onto the maintenance runtime, and temporary dataflows still run there. Their
-rendering and operator work still contends with maintenance. Stage 1 isolates
-the fast-path read, which is the common case and the sharpest latency problem,
-but not temporary-dataflow rendering.
+A slow-path peek or other ad-hoc query is rendered as a temporary dataflow on
+the interactive runtime. It imports the maintenance arrangements it needs as
+ordinary `Arranged` collections through `SharedTraceHandle::import`, then runs
+joins, reduces, and the rest with no maintenance-thread involvement. Its result
+is peeked and the dataflow is dropped, as transient dataflows are today.
 
-### Cancellation and lifecycle (stage 1)
+## What decouples, and what does not
 
-`CancelPeek` must cancel an in-flight offloaded read. The reader pool task holds
-a cancellation flag keyed by `uuid`, checked between output batches, mirroring
-how `pending_peeks` is drained today (`compute_state.rs:701-705`). A snapshot
-held by a running task keeps its batches alive independently of the trace, so
-cancellation is about not sending a response, not about memory safety.
+The latency win is real and comes from the serving thread not being a
+maintenance worker. A peek at a timestamp at or below the arrangement's
+published `upper`, which is the common case, is served immediately, bounded only
+by CPU availability. It does not queue behind a maintenance operator step.
 
-## Stage 2: the interactive runtime
+The one residual dependency is frontier freshness, and it is not new in kind. A
+peek at a timestamp *beyond* the published `upper` must wait for the maintenance
+runtime to publish a newer `upper`. Publication happens on the maintenance
+worker's activation and is cheap (a chain refresh plus a frontier update, no
+per-record work), so it advances whenever the worker steps, independently of
+whether the worker is free to do a full walk. This is the same kind of wait a
+read at the frontier edge already incurs today (waiting for the trace `upper` to
+advance), not a wait for the maintenance worker to be free to *serve* the read.
+So fresh-edge reads are gated on maintenance frontier progress as before, and
+everything at or behind the published frontier is fully decoupled.
 
-**Idea.** Stand up a second compute timely runtime in the same process, the
-*interactive runtime*, alongside the *maintenance runtime*. The maintenance
-runtime owns the durable, maintained work (indexes, materialized views,
-subscribes) as today and publishes its index arrangements. The interactive
-runtime owns the ephemeral, read-oriented work (peeks and temporary dataflows),
-importing maintenance arrangements so that serving reads never competes with
-maintenance for threads.
+## Memory
 
-The split stays **internal to compute**. The controller sees one replica behind
-one protocol endpoint. A routing layer in the replica process dispatches each
-command to the runtime that owns its target, and merges both runtimes' responses
-back into the single stream the controller expects. The controller protocol and
-its compaction authority are unchanged.
+A snapshot pins the specific batches it captured until the read finishes. While
+it is held, the maintenance runtime may merge those batches into a new one, so
+the pre-merge inputs (pinned by the reader) and the merged output (in the live
+trace) coexist for the read's duration. This is bounded by the arrangement size
+and is transient, and it is the intended cost of letting a reader hold a
+consistent view while the writer compacts.
 
-**Topology.** One replica process, two compute `serve` instances (two
-`ClusterSpec` runtimes, `compute/src/server.rs:85-131`). The interactive runtime
-runs with **exactly the same worker count** as the maintenance runtime. This is
-a categorical requirement, not a tuning knob: equal worker counts plus the
-shared `hash % peers` key routing (`compute/src/extensions/arrange.rs:133`) mean
-a key lives on the same worker ordinal in both runtimes, so interactive worker
-`i` imports maintenance worker `i`'s publication point and any interactive-side
-operator on that key is co-located with no cross-worker exchange, ever. It
-reuses the equal-worker invariant `clusterd` already asserts between storage and
-compute (`clusterd/src/lib.rs:426-429`).
+It is not a new doubling. A fueled merge already holds both its input and output
+batches in memory while the merge is in progress, independent of any reader. A
+held snapshot extends the lifetime of its captured batches, it does not create a
+second copy of the whole arrangement.
 
-**Routing by target id.** The routing layer dispatches on the id a command
+## Routing and response merging
+
+The controller sees one replica behind one protocol endpoint. A **new
+process-level multiplexer** sits between the controller connection and the two
+runtimes. It is a genuinely new component, not a reuse of the existing
+`PartitionedComputeState` (`compute-client/src/service.rs:79`), which merges
+*homogeneous* partitions (all workers of one runtime, waiting for every part and
+taking a meet). The two runtimes are *heterogeneous*: each collection id lives on
+exactly one runtime, and a peek is answered by exactly one runtime. The
+multiplexer therefore does ownership-based demux and pass-through, not a meet or
+an all-parts union.
+
+**Routing by target id.** The multiplexer dispatches on the id a command
 targets:
 
-- `Peek`, `CancelPeek`, and `CreateDataflow` for a **temporary dataflow** go to
-  the interactive runtime. A temporary dataflow is identified by its export
-  being a `GlobalId::Transient` (`compute-types/src/dataflows.rs:380-383`), which
-  is exactly how a slow-path peek's one-off dataflow and other ad-hoc query
-  work are already tagged
-  are already tagged.
-- `CreateDataflow` for maintained work (indexes, MVs, and **subscribes**),
-  `Schedule`, `AllowWrites`, and `AllowCompaction` for a maintained id go to the
-  maintenance runtime.
-- `AllowCompaction` (including the empty-frontier drop) for a transient id go to
-  the interactive runtime that owns that temporary dataflow.
+- `Peek`, `CancelPeek`, and `CreateDataflow` for a temporary dataflow go to the
+  interactive side. A temporary dataflow exports only `GlobalId::Transient`
+  (`compute-types/src/dataflows.rs:380-383`).
+- `CreateDataflow` for maintained work (indexes, MVs, subscribes), `Schedule`,
+  `AllowWrites`, and `AllowCompaction` for a maintained id go to the maintenance
+  runtime.
+- `AllowCompaction` (including the empty-frontier drop) for a transient id goes
+  to the interactive side that owns that temporary dataflow.
 - Lifecycle commands (`CreateInstance`, `UpdateConfiguration`,
   `InitializationComplete`) go to both.
 
-The one wrinkle is that subscribes also export transient ids yet must stay on
-the maintenance runtime, because they are continuously maintained rather than
-read once. So the routing predicate is not "transient id" alone. It is "a
-one-shot temporary dataflow" versus "maintained work", and a subscribe is
-distinguished by carrying a subscribe sink in its `DataflowDescription`. The
-exact predicate is an implementation detail, but the principle is: maintained
-work to maintenance, one-shot reads to interactive.
+Note that routing is not literally "by the target id" for every command. A
+fast-path `Peek` names a maintenance-owned index yet must be served on the
+interactive side, and `CancelPeek` keys by `uuid`. So the multiplexer learns
+transient-id ownership by observing `CreateDataflow`, and treats peeks as
+interactive by command type. The one subtlety is that subscribes also export
+transient ids but must stay on the maintenance runtime, since they are
+continuously maintained rather than read once. A subscribe is distinguished by
+carrying a subscribe sink in its `DataflowDescription`. The predicate is a
+bespoke policy, "maintained work to maintenance, one-shot reads to interactive",
+not a one-line id check.
 
-Each runtime keeps its own worker-0 broadcast
-(`compute/src/command_channel.rs`), so command ordering within a runtime is
-preserved.
+**Response merging.** The multiplexer merges both runtimes' responses into the
+one stream the controller expects. `PeekResponse`s originate on the interactive
+side, `Frontiers` for maintained collections on the maintenance runtime. Its
+combining contract is its own (pass a peek response through from whichever side
+produced it, report maintained frontiers from maintenance), which is why it
+cannot simply reuse `PartitionedComputeState`.
 
-**Publication.** When the maintenance runtime renders an index
-(`export_index`, `compute/src/render.rs:688`), it also publishes the arrangement
-and records the resulting `SharedTraceHandle`s in a per-process, per-worker
-registry keyed by `GlobalId`, so interactive worker `i` finds maintenance worker
-`i`'s handle. Publication cost is one `Arc` clone plus a mutex push per batch, so
-maintenance throughput is unaffected.
+## Publication and the publish-versus-read handshake
 
-**Interactive-side reads.**
+When the maintenance runtime renders an index (`export_index`,
+`compute/src/render.rs:688`), it publishes the arrangement and records the
+resulting `SharedTraceHandle`s in a **per-process publication registry** keyed by
+`GlobalId`, one entry per worker ordinal. This registry is a new first-class
+per-process object, shared into both runtimes the same way the persist client
+cache is shared today (created once, handed to both `serve` calls,
+`compute_state.rs:114-116`). Interactive worker `i` finds maintenance worker
+`i`'s handle. Publication cost is one `Arc` clone plus a mutex push per batch.
 
-- A slow-path peek is served by the interactive runtime: instead of shipping a
-  transient index dataflow onto the maintenance runtime, the interactive runtime
-  renders it, importing the base arrangements it needs, and peeks its own result.
-- A temporary dataflow (the general form) is rendered entirely on the
-  interactive runtime, importing maintenance arrangements as ordinary `Arranged`
-  collections through `SharedTraceHandle::import`.
+The two runtimes step independently, so there is no happens-before between
+"maintenance renders and publishes index X" and "interactive is asked to read
+X". In steady state the controller only issues a peek after a `Frontiers`
+response proves the index rendered, which implies it published. But on
+reconciliation or replica restart the controller replays `CreateDataflow` and
+`Peek` from history, and a peek can reach the interactive side before the
+maintenance runtime has re-rendered and re-published. The design therefore
+requires an explicit readiness rule: a read for an unregistered `GlobalId`
+**blocks** until the publication point appears, woken when it registers, rather
+than erroring or reading an empty snapshot as if valid. This block-until-
+published handshake is new machinery the primitive does not provide today.
 
-**Response merging.** The routing layer merges responses from both runtimes into
-the single stream the controller expects. `PeekResponse`s originate in the
-interactive runtime, `Frontiers` for maintained collections in the maintenance
-runtime. This extends the existing per-process `PartitionedComputeState` merge
-(`compute-client/src/service.rs:79`) to span two runtimes rather than only the
-workers of one.
+## Compaction: controller authority and required primitive changes
 
-## Compaction reconciliation
+The controller stays the sole compaction authority. The maintenance runtime
+drives an arrangement's `since` from `AllowCompaction` exactly as today, derived
+from the controller's read holds (`instance.rs:1922-1981`). The read side must
+never pin a maintenance arrangement back below that frontier.
 
-This is the subtlest correctness point, and it differs by stage.
+Correctness of a read rests on three things, and only the first exists today:
 
-**Stage 1.** No reconciliation. There is one runtime and one trace. The
-controller drives `since` through `AllowCompaction` exactly as today. The
-offloaded read is protected by the controller's per-peek read hold plus the
-snapshot's immutable batches.
+1. The controller already holds a maintenance arrangement back for as long as a
+   read needs it. A peek carries a read hold at its timestamp, and a temporary
+   dataflow is created behind a read hold at its `as_of`. Command reordering
+   across the two runtimes cannot defeat this, because the controller gates the
+   *emission* of `AllowCompaction`, not its delivery: it never emits a frontier
+   past a time it is still holding. So while the read is outstanding, the
+   maintenance `since` cannot advance past the read timestamp.
+2. The read's snapshot pins immutable batches, so even after the controller
+   releases and maintenance compacts, an in-progress walk is unaffected.
+3. A `since <= timestamp` gate on the read path, so a read at a time the
+   arrangement has already compacted past returns the same error it does today
+   (`compute_state.rs:1536-1544`) rather than a silently coalesced result.
 
-**Stage 2.** The controller stays the sole compaction authority, and the
-interactive runtime **never pins the maintenance arrangement back**. It either
-tracks the maintenance runtime's `since` (following it as it advances) or holds
-nothing at all. It never forwards a hold that would keep the maintenance trace
-below the maintenance runtime's own compaction frontier.
+**Two changes to the shared-arrangements primitive are required for this to
+hold, and the primitive does not do them yet.** Both were found by adversarial
+review of `sharing.rs` and are the gating work for this design:
 
-This works because the controller already holds the maintenance arrangement back
-for exactly as long as the read needs it. A peek carries a read hold at its
-timestamp, and a temporary dataflow is created behind a read hold at its `as_of`
-(`instance.rs:1922-1981`). The maintenance runtime will not compact past that
-hold, so an interactive-side read that imports at that `as_of` (or snapshots at
-that timestamp) stays valid for its whole life without the interactive runtime
-holding anything itself. When the read finishes and the controller releases,
-the maintenance runtime compacts and the interactive side follows.
+- **The publisher must not pin compaction.** As written, the publisher holds a
+  `TraceAgent` clone whose logical/physical hold is sourced from its own
+  `get_logical_compaction` and never advances (`sharing.rs:412,462`), so merely
+  publishing an index freezes its compaction at publish-time `since` for the life
+  of the index. The publisher's liveness hold must instead track the maintenance
+  runtime's controller-driven compaction frontier, so publishing does not hold
+  the trace back at all.
+- **Reads must register no independent hold.** `import` and handle registration
+  install real holds that the publisher forwards to the maintenance trace
+  (`sharing.rs:169-170,229-230,435-463`), so a wedged interactive reader would
+  pin maintenance compaction. The integration needs a read mode that registers
+  no hold and relies solely on the controller's hold (criterion 1 above). Only
+  then is it true that a wedged interactive runtime cannot pin maintenance.
 
-The consequence is a deliberate non-goal: the interactive runtime does not keep
-a maintenance arrangement readable at times the controller has allowed to
-compact. There is no independent interactive lease, so a wedged interactive
-runtime cannot pin maintenance compaction, and the lease-expiry question the
-primitive raises does not arise for this integration. The cost is that an
-interactive read must sit within a compaction window the controller is already
-holding, which it always is, because the controller acquires that hold before
-issuing the peek or creating the temporary dataflow.
+- **`snapshot_at` must enforce the `since <= timestamp` gate** (criterion 3). It
+  currently waits only for `upper` to pass the time and returns whatever `since`
+  the snapshot has (`sharing.rs:185-203`), so it could serve stale rows once
+  compaction actually moves. The gate must be added on the read path.
 
-This also feeds back to the primitive: because the interactive runtime reads
-read-only and never holds below maintenance's `since`, the sharing module's
-cross-thread hold *aggregation* is not exercised by this integration. Imports
-register holds that at most mirror maintenance, so the publisher's hold
-forwarding is a no-op relative to maintenance's own compaction. The primitive's
-`snapshot` and `import` are used. Its hold-aggregation machinery is available but
-not load-bearing here, which removes the wedge and lease hazards from the
-compute integration entirely.
+With those changes, the read side is purely a reader: it holds nothing back, the
+controller remains the sole authority, and a stuck interactive thread can fall
+behind on its own reads but cannot wedge maintenance compaction. Without them,
+the "interactive never pins maintenance" property this design depends on is
+false.
 
 ## Internal to compute, one protocol endpoint
 
-The split is invisible to the controller. It sees one replica behind one
-protocol endpoint. The replica's routing layer dispatches commands to the owning
-runtime (see "Routing by target id") and merges both runtimes' responses into
-one stream. The controller protocol is unchanged, and its compaction authority
-is unchanged because `AllowCompaction` for a maintained id still targets the
-maintenance runtime's trace.
+The split is invisible to the controller, by choice. Teaching the controller
+about two runtimes (an explicit sub-runtime axis in `ReplicaState`,
+`instance.rs:3082-3097`) would enable smarter placement and per-runtime
+introspection, but it is a real protocol and controller change and is not needed
+for the mechanism to work. The cost of staying internal is that peek routing and
+per-runtime memory attribution are not visible to the controller, which
+introspection will eventually want (see open questions).
 
-This is a deliberate choice over teaching the controller about two runtimes. An
-explicit model (the controller routing to two sub-runtimes, `ReplicaState`
-growing a sub-runtime axis at `instance.rs:3082-3097`) would enable smarter
-placement and per-runtime introspection, but it is a real protocol and
-controller change and it is not needed for the mechanism to work. The cost of
-staying internal is that peek routing and per-runtime memory attribution are not
-visible to the controller, which introspection will eventually want. That is a
-follow-up, not a blocker (see open questions).
+## Equal peers is a hard requirement
+
+Co-location of an imported arrangement with interactive-side operators relies on
+both runtimes routing a key to the same worker ordinal, which holds only if they
+have the same total peer count. Peer count is `workers_per_process *
+num_processes` (`compute/src/extensions/arrange.rs`), so both factors must match
+between the two compute runtimes, not just workers-per-process. This is stronger
+than the storage-versus-compute worker-count assertion that exists today
+(`clusterd/src/lib.rs:426-429`), which does not cover it. The design requires a
+hard assertion of equal peers at replica configuration, and the primitive's
+`import` should assert matching peers at import time (it does not today, contrary
+to an earlier claim in the primitive design).
 
 ## Resource sharing and the single-instance assumption
 
 Two compute runtimes in one process share the per-process resources the
 storage/compute split already shares: the persist client cache, tracing handle,
-and metrics registry (`compute_state.rs:114-116`, `background.md`). Three
-process-global assumptions must be reconciled, since they are written for "a
-replica process hosts a single instance" (`compute_state.rs:495-496`):
+and metrics registry (`compute_state.rs:114-116`). Three process-global
+assumptions must be reconciled, since they are written for "a replica process
+hosts a single instance" (`compute_state.rs:495-496`):
 
 - `mz_row_spine::DICTIONARY_COMPRESSION` (`compute_state.rs:497`): a process
-  global. Both runtimes must agree on it, or it must move to per-runtime state.
+  global both runtimes would write. They must agree, or it must move to
+  per-runtime state.
 - lgalloc and pager configuration (`compute_state.rs:255-361`): initialized once
   per process. The second runtime must not re-initialize it.
 - Metrics (`compute_state.rs:538-540`): already shared with storage, so the
-  pattern exists, but per-runtime labels are needed to tell maintenance and interactive
-  metrics apart.
-
-## Thread allocation
-
-The interactive runtime runs the same number of workers as the maintenance
-runtime, which is a correctness requirement for pairwise import (see "Topology")
-independent of scheduling. That puts `2N` worker threads on the process's cores.
-How those threads share cores (dedicated splits, oversubscription relying on the
-interactive runtime being mostly blocked on reads and imports, pinning) is a
-tuning question deferred to later measurement, not fixed by this design. Stage 1
-sidesteps it entirely: one runtime plus a bounded reader pool.
+  pattern exists, but per-runtime labels are needed to tell maintenance and
+  interactive metrics apart.
 
 ## Failure model
 
@@ -300,49 +319,85 @@ The two runtimes share fate, exactly as the replica process behaves today. They
 live in one process, so a fatal error in either brings the process down and the
 replica restarts as a whole. There is no partial-failure path, no fallback that
 reroutes interactive reads onto the maintenance runtime, and no independent
-restart of one runtime. A peek in flight when the process dies fails with the
+restart of one runtime. A read in flight when the process dies fails with the
 process and is retried by the controller against the restarted replica, which is
-the existing behavior. Shared fate is deliberate. It keeps the failure model
-identical to today and avoids a cross-runtime fallback path that would otherwise
-need its own correctness argument.
+the existing behavior.
+
+Shared fate is a requirement, not just a convenience: it is what lets the read
+side hold nothing and rely on the controller. For it to hold, a panic on any
+worker or reader thread of either runtime must abort the whole process. The
+implementation must confirm the panic path is abort-equivalent for both
+runtimes. If a single thread could panic without taking the process down, a
+wedged reader's state and a half-served peek would leak, and that fallback path
+would need its own correctness argument.
+
+## New components this design requires
+
+Called out explicitly, because the mechanism does not reduce to existing objects:
+
+- The process-level command/response multiplexer over two runtimes (not
+  `PartitionedComputeState`).
+- The per-process publication registry keyed by `GlobalId`, plus the
+  block-until-published handshake.
+- An interactive read path that gates and walks a `SharedTraceHandle` snapshot
+  (a new `PendingPeek` variant or reader-pool equivalent), since today's
+  `handle_peek` reads only the local `TraceManager` (`compute_state.rs:673-699`).
+- The three primitive changes in "Compaction": publisher-does-not-pin, no-hold
+  reads, and the `snapshot_at` since gate.
+- A compile-time `Send` assertion over the peek walk. `peek_stash.rs:44-48`
+  documents that `PeekResultIterator` is `!Send` today because the trace reader
+  is `Rc`. The `Arc` migration should flip it, but the design depends on it, so
+  it must be asserted, including the batch cursor and the columnation containers,
+  not just the batch wrapper.
 
 ## Open questions
 
-- **Core sharing between runtimes.** Worker counts are settled (equal, see
-  "Thread allocation"). How the resulting `2N` threads share cores, and whether
-  oversubscription is acceptable given the interactive runtime is mostly blocked
-  on reads, is deferred to later measurement.
-- **Import queue backpressure (stage 2).** The primitive's replay queue is
-  bounded today only because producer and consumer share a worker step. Across
-  runtimes they are independently scheduled, so a lagging interactive runtime can
-  grow the queue without bound. A bound plus publisher backpressure is likely
-  needed. This is a liveness and memory concern, not a compaction one: since the
-  interactive runtime holds nothing back (see "Compaction reconciliation"), a
-  slow reader cannot wedge maintenance compaction, only fall behind on its own
-  imports. Captured in the primitive design.
-- **Introspection and memory attribution.** Under transparency the controller
-  cannot see which runtime holds what memory. Shared arrangements are counted by
-  whoever drops last. Introspection needs a per-runtime view eventually.
-- **Slow-path versus stage 1.** Stage 1 offloads fast-path index peeks but not
-  slow-path peeks. Is it worth teaching the coordinator to prefer the fast path
-  more aggressively once stage 1 lands, deferring stage 2?
+- **Core sharing between runtimes.** Worker counts are fixed (equal peers). How
+  the resulting threads share cores, and whether oversubscription is acceptable
+  given the interactive side is often blocked on reads, is deferred to
+  measurement.
+- **Import queue backpressure.** The primitive's replay queue is bounded today
+  only because producer and consumer share a worker step. Across runtimes they
+  are independently scheduled, so a lagging interactive runtime can grow the
+  queue without bound. A bound plus publisher backpressure is likely needed.
+  This is a liveness and memory concern, not a compaction one: with the no-hold
+  read mode, a slow reader falls behind on its own imports but cannot wedge
+  maintenance compaction. Captured in the primitive design.
+- **Introspection and memory attribution.** Under one endpoint the controller
+  cannot see which runtime holds what memory, and a shared arrangement reachable
+  from both runtimes' arrangement-size loggers can be double-counted or
+  misattributed depending on drop order. Per-replica memory relations
+  (`mz_arrangement_sizes` and friends) need a per-runtime view eventually.
+- **Cancellation and exactly-one response.** With the walk off the maintenance
+  thread, a `CancelPeek` can race a completing read. The merge point on the
+  interactive side must guarantee exactly one `PeekResponse`, including for
+  point-lookups that produce no intermediate batch at which to observe the
+  cancel.
+- **`batches_through` straddle handling.** The primitive's `batches_through`
+  includes a batch that straddles the requested cut rather than panicking as the
+  spine does (`sharing.rs:258-276`). Confirm every `cursor_through` frontier that
+  reaches a `SharedTraceHandle` is batch-aligned, or restore a fail-stop, so an
+  import cannot silently return updates past the cut.
 
 ## Alternatives
 
-- **Priority scheduling inside one runtime.** Yield more finely so peeks can
+- **Priority scheduling inside one runtime.** Yield more finely so peeks
   interleave with maintenance. Timely scheduling is cooperative per worker, so a
   peek behind a long operator step cannot preempt it, and this couples
   maintenance throughput to read latency permanently. It also does nothing for
-  temporary-dataflow rendering. Stage 1's offload achieves read isolation without
-  this coupling.
+  temporary-dataflow rendering.
+- **Offload only the walk, keeping the snapshot on the maintenance worker.** A
+  smaller change: the maintenance worker gates and snapshots on its own loop,
+  then hands the walk to a pool. Rejected, because the worker must still come
+  around its loop to take the snapshot, so the read still queues behind a long
+  maintenance step. It removes the walk cost but not the wait to be serviced,
+  which is the dominant tail. Serving the read from an interactive thread that
+  holds the published handle avoids both.
 - **Serve all peeks from Persist.** Peeks can read persist shards directly
-  (`PeekTarget::Persist`), bypassing arrangements. This already exists for some
-  peeks, but it loses the in-memory arrangement's latency and freshness and does
-  not help index-backed reads that must reflect the maintained arrangement.
+  (`PeekTarget::Persist`), bypassing arrangements. This exists for some peeks,
+  but it loses the in-memory arrangement's latency and freshness and does not
+  help index-backed reads that must reflect the maintained arrangement.
 - **A second process instead of a second runtime.** Isolates reads fully but
-  cannot share arrangements in memory, so it would copy data across the process
-  boundary, which is what persist already offers. In-process sharing is the whole
+  cannot share arrangements in memory, so it copies data across the process
+  boundary, which is what persist already offers. In-process sharing is the
   point.
-- **Do only stage 1, never stage 2.** Viable if fast-path peek isolation turns
-  out to cover the observed latency problem. Stage 2 is justified only if ad-hoc
-  temporary-dataflow rendering is shown to contend materially with maintenance.

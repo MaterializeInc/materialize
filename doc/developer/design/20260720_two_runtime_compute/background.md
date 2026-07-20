@@ -114,10 +114,10 @@ pub struct TraceBundle {
 
 The handle type is a `TraceAgent` over the spine (`RowRowAgent = TraceAgent<
 RowRowSpine>`, `typedefs.rs:98`). The ok arrangements are backed by
-`RowRowSpine` and errors by `ErrSpine`. Both spines are already `Arc`-backed
-after the batch migration (`row-spine/src/lib.rs:51`, `typedefs.rs:107`), and
-their batch contents are asserted `Send + Sync`
-(`row-spine/src/lib.rs:175-177`). The remaining single-runtime coupling is
+`RowRowSpine` and errors by `ErrSpine`. On `main` these spines wrap batches in
+`Rc` (`row-spine/src/lib.rs:51`, `typedefs.rs:107`). The `Arc`-batches migration
+(#37743) changes the wrapper to `Arc` and adds `Send + Sync` assertions over the
+batch contents. Either way the coupling that keeps a trace single-runtime is
 *above* the batch layer: the `TraceAgent` handle and the `to_drop: Rc<dyn Any>`
 token (`manager.rs:238`) are `Rc`-based and `!Send`.
 
