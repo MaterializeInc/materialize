@@ -3297,6 +3297,17 @@ impl ClusterConfig {
             ClusterVariant::Unmanaged => None,
         }
     }
+
+    /// The interval at which the cluster's replicas log introspection data.
+    ///
+    /// `None` if logging is disabled or the cluster is unmanaged (unmanaged
+    /// replicas carry their own logging configuration).
+    pub fn replica_logging_interval(&self) -> Option<Duration> {
+        match &self.variant {
+            ClusterVariant::Managed(managed) => managed.logging.interval,
+            ClusterVariant::Unmanaged => None,
+        }
+    }
 }
 
 impl From<ClusterConfig> for durable::ClusterConfig {

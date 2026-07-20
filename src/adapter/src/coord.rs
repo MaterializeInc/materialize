@@ -2453,6 +2453,7 @@ impl Coordinator {
                 ClusterConfig {
                     arranged_logs: instance.log_indexes.clone(),
                     workload_class: instance.config.workload_class.clone(),
+                    replica_logging_interval: instance.config.replica_logging_interval(),
                 },
             )?;
             for replica in instance.replicas() {

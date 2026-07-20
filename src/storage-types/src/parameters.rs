@@ -98,6 +98,11 @@ pub struct StorageParameters {
     pub pg_snapshot_config: PgSourceSnapshotConfig,
     /// Duration that we wait to batch rows for user owned, storage managed, collections.
     pub user_storage_managed_collections_batch_duration: Duration,
+    /// The interval at which the instance's replicas log introspection data, as
+    /// derived from the cluster's replica logging configuration
+    /// (`ComputeReplicaLogging`). `None` indicates that replica logging is
+    /// disabled.
+    pub replica_logging_interval: Option<Duration>,
 
     /// Updates used to update `StorageConfiguration::config_set`.
     pub dyncfg_updates: mz_dyncfg::ConfigUpdates,
@@ -108,6 +113,9 @@ pub const STATISTICS_COLLECTION_INTERVAL_DEFAULT: Duration = Duration::from_secs
 pub const STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT: Duration = Duration::from_secs(1);
 pub const REPLICA_STATUS_HISTORY_RETENTION_WINDOW_DEFAULT: Duration =
     Duration::from_secs(30 * 24 * 60 * 60); // 30 days
+// NOTE: Must match `mz_compute_types::DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL`.
+// storage-types does not depend on compute-types, so the value is duplicated here.
+pub const REPLICA_LOGGING_INTERVAL_DEFAULT: Duration = Duration::from_secs(1);
 
 // Implement `Default` manually, so that the default can match the
 // LD default. This is not strictly necessary, but improves clarity.
@@ -143,6 +151,7 @@ impl Default for StorageParameters {
             pg_snapshot_config: Default::default(),
             user_storage_managed_collections_batch_duration:
                 STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT,
+            replica_logging_interval: Some(REPLICA_LOGGING_INTERVAL_DEFAULT),
             dyncfg_updates: Default::default(),
         }
     }
@@ -203,6 +212,7 @@ impl StorageParameters {
             statistics_collection_interval,
             pg_snapshot_config,
             user_storage_managed_collections_batch_duration,
+            replica_logging_interval,
             dyncfg_updates,
         }: StorageParameters,
     ) {
@@ -236,6 +246,7 @@ impl StorageParameters {
         self.pg_snapshot_config = pg_snapshot_config;
         self.user_storage_managed_collections_batch_duration =
             user_storage_managed_collections_batch_duration;
+        self.replica_logging_interval = replica_logging_interval;
         self.dyncfg_updates.extend(dyncfg_updates);
     }
 

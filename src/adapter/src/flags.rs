@@ -17,7 +17,8 @@ use mz_ore::error::ErrorExt;
 use mz_service::params::GrpcClientParameters;
 use mz_sql::session::vars::SystemVars;
 use mz_storage_types::parameters::{
-    PgSourceSnapshotConfig, StorageMaxInflightBytesConfig, StorageParameters,
+    PgSourceSnapshotConfig, REPLICA_LOGGING_INTERVAL_DEFAULT, StorageMaxInflightBytesConfig,
+    StorageParameters,
 };
 use mz_tracing::params::TracingParameters;
 
@@ -143,6 +144,10 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
         },
         user_storage_managed_collections_batch_duration: config
             .user_storage_managed_collections_batch_duration(),
+        // Overridden per-instance from the cluster's logging config in
+        // `StorageController::create_instance`; this base value is only a
+        // fallback.
+        replica_logging_interval: Some(REPLICA_LOGGING_INTERVAL_DEFAULT),
         dyncfg_updates: config.dyncfg_updates(),
     }
 }

@@ -56,6 +56,11 @@ pub struct ClusterConfig {
     /// An optional arbitrary string that describes the class of the workload
     /// this cluster is running (e.g., `production` or `staging`).
     pub workload_class: Option<String>,
+    /// The interval at which the cluster's replicas log introspection data.
+    ///
+    /// Threaded into the storage instance's configuration at creation. `None`
+    /// indicates that replica logging is disabled.
+    pub replica_logging_interval: Option<Duration>,
 }
 
 /// The status of a cluster.
@@ -415,8 +420,11 @@ impl Controller {
         id: ClusterId,
         config: ClusterConfig,
     ) -> Result<(), anyhow::Error> {
-        self.storage
-            .create_instance(id, config.workload_class.clone());
+        self.storage.create_instance(
+            id,
+            config.workload_class.clone(),
+            config.replica_logging_interval,
+        );
         self.compute
             .create_instance(id, config.arranged_logs, config.workload_class)?;
         Ok(())
