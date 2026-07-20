@@ -269,6 +269,19 @@ pub enum Expr {
         /// [`LirRelationNode::Union::temporal_bucketing_strategies`].
         temporal_bucketing_strategies: Vec<ArrangementStrategy>,
     },
+    /// See `LirRelationNode::SetDifference`.
+    SetDifference {
+        /// The positive input.
+        base: LirId,
+        /// The negated input.
+        subtract: LirId,
+        /// Key columns of `base`'s existing arrangement. See `LirRelationNode::SetDifference`.
+        base_key: Vec<LirScalarExpr>,
+        /// Key columns of `subtract`'s existing arrangement. See `LirRelationNode::SetDifference`.
+        subtract_key: Vec<LirScalarExpr>,
+        /// Key/permutation/thinning of the output arrangement (thinning is empty).
+        ensure_arrangement: (Vec<LirScalarExpr>, Vec<usize>, Vec<usize>),
+    },
     /// The `input` plan, but with additional arrangements.
     ///
     /// This operator does not change the logical contents of `input`, but ensures that certain
@@ -515,6 +528,25 @@ impl TryFrom<LirRelationExpr> for LetFreePlan {
                             .into_iter()
                             .map(|plan| (plan, Some(lir_id), nesting.saturating_add(1))),
                     );
+                }
+                LirRelationNode::SetDifference {
+                    base,
+                    subtract,
+                    base_key,
+                    subtract_key,
+                    ensure_arrangement,
+                } => {
+                    let expr = SetDifference {
+                        base: base.lir_id,
+                        subtract: subtract.lir_id,
+                        base_key,
+                        subtract_key,
+                        ensure_arrangement,
+                    };
+                    insert_node(lir_id, parent, expr, nesting);
+
+                    todo.push((*base, Some(lir_id), nesting.saturating_add(1)));
+                    todo.push((*subtract, Some(lir_id), nesting.saturating_add(1)));
                 }
                 LirRelationNode::ArrangeBy {
                     input_key,
@@ -998,6 +1030,7 @@ impl<'a> std::fmt::Display for RenderPlanExprHumanizer<'a> {
 
                 Ok(())
             }
+            SetDifference { .. } => write!(f, "SetDifference"),
             ArrangeBy {
                 input_key: _,
                 input: _,

@@ -584,6 +584,51 @@ true
 """)
 
 
+class SetDifferenceCoArranged(Dataflow):
+    """Set-difference anti-side over co-arranged inputs.
+
+    Outer-join decorrelation and `EXCEPT` both lower the "rows of A absent from
+    B" side to `Threshold(Union(A, Negate(B)))`. When A and B are already
+    arranged on the difference key, rendering still inserts an intermediate
+    `ArrangeBy` feeding the `Threshold`, plus a `UnionConsolidation` over the
+    concatenated inputs. This scenario builds that dataflow with both inputs
+    arranged on the key, so WALLCLOCK and MEMORY_CLUSTERD capture the cost of the
+    intermediate arrangement and the consolidation.
+
+    A dedicated set-difference operator reading the two co-arranged traces
+    directly (CLU-168) would elide both. Re-running this scenario against that
+    change measures the win, which is the definition of done for the spike.
+    """
+
+    def init(self) -> list[Action]:
+        return [
+            self.view_ten(),
+            TdAction(f"""
+> CREATE MATERIALIZED VIEW input_a AS SELECT {self.unique_values()} AS k FROM {self.join()};
+
+> CREATE MATERIALIZED VIEW input_b AS SELECT k FROM input_a WHERE k < {self.n() // 2};
+
+> SELECT COUNT(*) = {self.n()} FROM input_a;
+true
+
+> SELECT COUNT(*) = {self.n() // 2} FROM input_b;
+true
+"""),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(f"""
+> DROP MATERIALIZED VIEW IF EXISTS v_diff
+  /* A */
+
+> CREATE MATERIALIZED VIEW v_diff AS SELECT k FROM input_a EXCEPT SELECT k FROM input_b
+
+> SELECT COUNT(*) FROM v_diff
+  /* B */
+{self.n() - self.n() // 2}
+""")
+
+
 class MinMax(Dataflow):
     def init(self) -> list[Action]:
         return [

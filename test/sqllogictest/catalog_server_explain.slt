@@ -9289,19 +9289,13 @@ Explained Query:
             →Map/Filter/Project
               Project: #1, #0, #2, #3
               Map: null, null, null
-                →Threshold Diffs #0
-                  →Arrange (#0)
-                    →Consolidating Union
-                      →Negate Diffs
-                        →Fused with Child Map/Filter/Project
-                          Project: #3
-                            →Arranged mz_catalog.mz_indexes
-                              Key: (#0{id})
-                      →Unarranged Raw Stream
-                        →Distinct GroupAggregate
-                          →Fused with Child Map/Filter/Project
-                            Project: #5
-                              →Read l5
+                →Set Difference #0 base_key=[#0] subtract_key=[#0]
+                  →Unarranged Raw Stream
+                    →Distinct GroupAggregate
+                      →Fused with Child Map/Filter/Project
+                        Project: #5
+                          →Read l5
+                  →Arranged mz_catalog.mz_indexes
         →Arrange (#0)
           →Union
             →Stream l7
@@ -10880,19 +10874,13 @@ Explained Query:
           →Map/Filter/Project
             Project: #0..=#2
             Map: null, null
-              →Threshold Diffs #0
-                →Arrange (#0)
-                  →Consolidating Union
-                    →Negate Diffs
-                      →Fused with Child Map/Filter/Project
-                        Project: #0
-                          →Arranged mz_catalog.mz_roles
-                            Key: (#0{id})
-                    →Unarranged Raw Stream
-                      →Distinct GroupAggregate
-                        →Fused with Child Map/Filter/Project
-                          Project: #1
-                            →Read l0
+              →Set Difference #0 base_key=[#0] subtract_key=[#0]
+                →Unarranged Raw Stream
+                  →Distinct GroupAggregate
+                    →Fused with Child Map/Filter/Project
+                      Project: #1
+                        →Read l0
+                →Arranged mz_catalog.mz_roles
       →Arrange (#0)
         →Union
           →Fused with Child Map/Filter/Project
@@ -11032,19 +11020,13 @@ Explained Query:
           →Map/Filter/Project
             Project: #0..=#2
             Map: null, null
-              →Threshold Diffs #0
-                →Arrange (#0)
-                  →Consolidating Union
-                    →Negate Diffs
-                      →Fused with Child Map/Filter/Project
-                        Project: #0
-                          →Arranged mz_catalog.mz_roles
-                            Key: (#0{id})
-                    →Unarranged Raw Stream
-                      →Distinct GroupAggregate
-                        →Fused with Child Map/Filter/Project
-                          Project: #1
-                            →Read l0
+              →Set Difference #0 base_key=[#0] subtract_key=[#0]
+                →Unarranged Raw Stream
+                  →Distinct GroupAggregate
+                    →Fused with Child Map/Filter/Project
+                      Project: #1
+                        →Read l0
+                →Arranged mz_catalog.mz_roles
       →Arrange (#0)
         →Union
           →Fused with Child Map/Filter/Project
@@ -11344,19 +11326,13 @@ Explained Query:
             →Map/Filter/Project
               Project: #0..=#2
               Map: null, null
-                →Threshold Diffs #0
-                  →Arrange (#0)
-                    →Consolidating Union
-                      →Negate Diffs
-                        →Fused with Child Map/Filter/Project
-                          Project: #0
-                            →Arranged mz_catalog.mz_roles
-                              Key: (#0{id})
-                      →Unarranged Raw Stream
-                        →Distinct GroupAggregate
-                          →Fused with Child Map/Filter/Project
-                            Project: #1
-                              →Read l0
+                →Set Difference #0 base_key=[#0] subtract_key=[#0]
+                  →Unarranged Raw Stream
+                    →Distinct GroupAggregate
+                      →Fused with Child Map/Filter/Project
+                        Project: #1
+                          →Read l0
+                  →Arranged mz_catalog.mz_roles
         →Arrange (#0)
           →Union
             →Fused with Child Map/Filter/Project
@@ -11450,19 +11426,13 @@ Explained Query:
             →Map/Filter/Project
               Project: #0..=#2
               Map: null, null
-                →Threshold Diffs #0
-                  →Arrange (#0)
-                    →Consolidating Union
-                      →Negate Diffs
-                        →Fused with Child Map/Filter/Project
-                          Project: #0
-                            →Arranged mz_catalog.mz_roles
-                              Key: (#0{id})
-                      →Unarranged Raw Stream
-                        →Distinct GroupAggregate
-                          →Fused with Child Map/Filter/Project
-                            Project: #1
-                              →Read l0
+                →Set Difference #0 base_key=[#0] subtract_key=[#0]
+                  →Unarranged Raw Stream
+                    →Distinct GroupAggregate
+                      →Fused with Child Map/Filter/Project
+                        Project: #1
+                          →Read l0
+                  →Arranged mz_catalog.mz_roles
         →Arrange (#0)
           →Union
             →Fused with Child Map/Filter/Project
@@ -11776,19 +11746,13 @@ Explained Query:
             →Map/Filter/Project
               Project: #0..=#2
               Map: null, null
-                →Threshold Diffs #0
-                  →Arrange (#0)
-                    →Consolidating Union
-                      →Negate Diffs
-                        →Fused with Child Map/Filter/Project
-                          Project: #0
-                            →Arranged mz_catalog.mz_roles
-                              Key: (#0{id})
-                      →Unarranged Raw Stream
-                        →Distinct GroupAggregate
-                          →Fused with Child Map/Filter/Project
-                            Project: #3
-                              →Read l0
+                →Set Difference #0 base_key=[#0] subtract_key=[#0]
+                  →Unarranged Raw Stream
+                    →Distinct GroupAggregate
+                      →Fused with Child Map/Filter/Project
+                        Project: #3
+                          →Read l0
+                  →Arranged mz_catalog.mz_roles
         →Arrange (#0)
           →Union
             →Fused with Child Map/Filter/Project
@@ -12243,19 +12207,13 @@ Explained Query:
             →Map/Filter/Project
               Project: #0..=#2
               Map: null, null
-                →Threshold Diffs #0
-                  →Arrange (#0)
-                    →Consolidating Union
-                      →Negate Diffs
-                        →Fused with Child Map/Filter/Project
-                          Project: #0
-                            →Arranged mz_catalog.mz_roles
-                              Key: (#0{id})
-                      →Unarranged Raw Stream
-                        →Distinct GroupAggregate
-                          →Fused with Child Map/Filter/Project
-                            Project: #2
-                              →Read l0
+                →Set Difference #0 base_key=[#0] subtract_key=[#0]
+                  →Unarranged Raw Stream
+                    →Distinct GroupAggregate
+                      →Fused with Child Map/Filter/Project
+                        Project: #2
+                          →Read l0
+                  →Arranged mz_catalog.mz_roles
         →Arrange (#0)
           →Union
             →Fused with Child Map/Filter/Project
@@ -12371,19 +12329,13 @@ Explained Query:
             →Map/Filter/Project
               Project: #0..=#2
               Map: null, null
-                →Threshold Diffs #0
-                  →Arrange (#0)
-                    →Consolidating Union
-                      →Negate Diffs
-                        →Fused with Child Map/Filter/Project
-                          Project: #0
-                            →Arranged mz_catalog.mz_roles
-                              Key: (#0{id})
-                      →Unarranged Raw Stream
-                        →Distinct GroupAggregate
-                          →Fused with Child Map/Filter/Project
-                            Project: #0
-                              →Read l0
+                →Set Difference #0 base_key=[#0] subtract_key=[#0]
+                  →Unarranged Raw Stream
+                    →Distinct GroupAggregate
+                      →Fused with Child Map/Filter/Project
+                        Project: #0
+                          →Read l0
+                  →Arranged mz_catalog.mz_roles
         →Arrange (#0)
           →Union
             →Fused with Child Map/Filter/Project
@@ -12592,19 +12544,13 @@ Explained Query:
           →Map/Filter/Project
             Project: #0..=#2
             Map: null, null
-              →Threshold Diffs #0
-                →Arrange (#0)
-                  →Consolidating Union
-                    →Negate Diffs
-                      →Fused with Child Map/Filter/Project
-                        Project: #0
-                          →Arranged mz_catalog.mz_roles
-                            Key: (#0{id})
-                    →Unarranged Raw Stream
-                      →Distinct GroupAggregate
-                        →Fused with Child Map/Filter/Project
-                          Project: #3
-                            →Read l0
+              →Set Difference #0 base_key=[#0] subtract_key=[#0]
+                →Unarranged Raw Stream
+                  →Distinct GroupAggregate
+                    →Fused with Child Map/Filter/Project
+                      Project: #3
+                        →Read l0
+                →Arranged mz_catalog.mz_roles
       →Arrange (#0)
         →Union
           →Fused with Child Map/Filter/Project
@@ -12793,19 +12739,13 @@ Explained Query:
           →Map/Filter/Project
             Project: #0..=#2
             Map: null, null
-              →Threshold Diffs #0
-                →Arrange (#0)
-                  →Consolidating Union
-                    →Negate Diffs
-                      →Fused with Child Map/Filter/Project
-                        Project: #0
-                          →Arranged mz_catalog.mz_roles
-                            Key: (#0{id})
-                    →Unarranged Raw Stream
-                      →Distinct GroupAggregate
-                        →Fused with Child Map/Filter/Project
-                          Project: #2
-                            →Read l0
+              →Set Difference #0 base_key=[#0] subtract_key=[#0]
+                →Unarranged Raw Stream
+                  →Distinct GroupAggregate
+                    →Fused with Child Map/Filter/Project
+                      Project: #2
+                        →Read l0
+                →Arranged mz_catalog.mz_roles
       →Arrange (#0)
         →Union
           →Fused with Child Map/Filter/Project
@@ -12969,19 +12909,13 @@ Explained Query:
           →Map/Filter/Project
             Project: #0..=#2
             Map: null, null
-              →Threshold Diffs #0
-                →Arrange (#0)
-                  →Consolidating Union
-                    →Negate Diffs
-                      →Fused with Child Map/Filter/Project
-                        Project: #0
-                          →Arranged mz_catalog.mz_roles
-                            Key: (#0{id})
-                    →Unarranged Raw Stream
-                      →Distinct GroupAggregate
-                        →Fused with Child Map/Filter/Project
-                          Project: #0
-                            →Read l0
+              →Set Difference #0 base_key=[#0] subtract_key=[#0]
+                →Unarranged Raw Stream
+                  →Distinct GroupAggregate
+                    →Fused with Child Map/Filter/Project
+                      Project: #0
+                        →Read l0
+                →Arranged mz_catalog.mz_roles
       →Arrange (#0)
         →Union
           →Fused with Child Map/Filter/Project

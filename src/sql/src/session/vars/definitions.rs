@@ -2155,6 +2155,12 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
+        name: enable_fused_set_difference,
+        desc: "fused set-difference operator over co-arranged inputs",
+        default: false,
+        enable_for_item_parsing: false,
+    },
+    {
         name: enable_worker_core_affinity,
         desc: "set core affinity for replica worker threads",
         default: false,
@@ -2344,6 +2350,7 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_eager_delta_joins: vars.enable_eager_delta_joins(),
             enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
             enable_reduce_mfp_fusion: vars.enable_reduce_mfp_fusion(),
+            enable_fused_set_difference: vars.enable_fused_set_difference(),
             enable_variadic_left_join_lowering: vars.enable_variadic_left_join_lowering(),
             enable_letrec_fixpoint_analysis: vars.enable_letrec_fixpoint_analysis(),
             enable_cardinality_estimates: vars.enable_cardinality_estimates(),
@@ -2390,6 +2397,7 @@ mod tests {
             enable_letrec_fixpoint_analysis,
             enable_new_outer_join_lowering,
             enable_reduce_mfp_fusion,
+            enable_fused_set_difference,
             enable_variadic_left_join_lowering,
             enable_cardinality_estimates,
             persist_fast_path_limit,
@@ -2421,6 +2429,7 @@ mod tests {
         set_var!(enable_letrec_fixpoint_analysis);
         set_var!(enable_new_outer_join_lowering);
         set_var!(enable_reduce_mfp_fusion);
+        set_var!(enable_fused_set_difference);
         set_var!(enable_variadic_left_join_lowering);
         set_var!(enable_cardinality_estimates);
         set_var!(persist_fast_path_limit);
