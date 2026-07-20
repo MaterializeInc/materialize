@@ -8,40 +8,31 @@ Materialize currently keeps dataflow state (batcher chains, arrangement batches,
 
 That model has four structural limits:
 
-* A blob pages in and out whole. `read_at_many` has no production user, every miss deserializes and copies the body, and its resident and paged representations differ. A size-only policy must therefore make an irreversible residency decision at pageout.
+* A blob pages in and out whole. `read_at_many` has no production user, and a miss re-reads the entire body into a fresh allocation before any record is accessible. Interpreting those bytes as a `Column` is zero-copy, so the cost is the all-or-nothing I/O and allocation, not deserialization. A size-only policy must therefore make an irreversible residency decision at pageout.
 * Per-chunk files require create, writev, open, pread, and unlink for every merge generation. In one workload, unlink and inode eviction took 35.6 s versus 4.3 s for opens. Merge churn makes this cost unavoidable.
 * Swap makes re-reads free until reclaim, but under pressure faults synchronously, per 4 KiB, on workers. The pager benchmark spent 64 of 65 seconds of a single-threaded merge in system time. The kernel also writes chunks that the next merge immediately kills.
-* Only the pre-seal columnar batcher spills. Sealed spine batches, the dominant long-lived state, remain resident and unbudgeted. Columnation arrangements still rely on lgalloc mappings, but columnar containers removed lgalloc and replaced it only through the batcher.
+* Only the pre-seal columnar batcher spills. Sealed spine batches, the dominant long-lived state, remain resident and unbudgeted. Columnation arrangements retain their lgalloc path, but lgalloc is disabled in production (it runs only in the emulator), so in production sealed state has no offload mechanism at all.
 
 This design replaces blob spilling with an Umbra/vmcache-style buffer manager. Materialize can simplify the general problem because sealed state is immutable, recreatable from persist, and has an engine-known lifecycle.
 
 ## Success criteria
 
-Each criterion is annotated with where its implementation lives. This document lands first; the PRs stacked on it carry Layers 1 and 2, the `mz_ore::pool` buffer manager and swap-backed extents (the pool PR) and the dyncfg and metrics wiring (the config PR). The chunk seam, `ColumnChunk`, the `ChunkSpine`, the upsert drain, compute arrange adoption, and the pager deletion land in subsequent PRs of the accompanying stack.
+Each criterion states an observable outcome and the metric or measurement that proves it, tying back to the limits above. Which PR of the accompanying stack delivers each piece is tracked in the Status section.
 
-* Resident access to a chunk costs no translation, no serialization, no copy.
-  Implemented in the accompanying stack, landing in subsequent PRs: a resident chunk is a direct borrow of an `Rc`-shared column on the heap, and a spilled body costs exactly one copy-out per read (a memcpy from a pool slot, a decompress from an evicted extent), never a hash-table translation and never a reference into pool memory.
-* A chunk that dies before pressure forces it out never touches disk.
-  In the stacked pool PR: freeing an `UnbackedResident` chunk is a pure memory operation (`writes_elided`), and freeing a chunk mid-write cancels the write.
-* Workers never enter kernel direct reclaim on the state path, and any state-path I/O a worker performs is explicit, bounded, and chunk-granular at a point the engine chose.
-  In the stacked pool PR: compression and `MADV_PAGEOUT` run on spill threads, and reads are bounded decompresses at call sites the consumer chose.
-* Chunk turnover performs no per-chunk filesystem metadata operations: no create, no unlink, no inode churn.
-  In the stacked pool PR, satisfied by construction: swap-backed extents create no filesystem objects at all. File extents remain future work.
-* Sealed arrangement batches can be paged: a merge of two batches holds a bounded resident window rather than both batches.
-  Implemented in the accompanying stack, landing in subsequent PRs, for the upsert feedback arrangement, whose trace is a spine of chunk batches with spillable bodies. Compute's row spines still hold sealed batches resident (their chunk port is open), and cold reads are batched copy-out probes rather than cursor seeks.
-* Hydration of an arrangement larger than the memory budget completes with RSS bounded by the budget, not by state size.
-  Implemented in the accompanying stack, landing in subsequent PRs, for the upsert path, measured (see Measured under Performance estimates).
-* One budget pool covers batcher chains and arrangement batches, and exceeding it triggers eviction of cold chunks rather than gating pageout decisions per chunk.
-  The stacked pool PR carries the pool and its cold-chunk eviction. It serves storage's stash and feedback arrangement and compute's batchers, correction buffers, and temporal buckets as those consumers land in subsequent PRs of the accompanying stack.
-* The swap and file backends of `mz_ore::pager`, and the `PagedColumn` residency enum, are deleted at the end of the migration.
-  Implemented in the accompanying stack, landing in subsequent PRs: the migration also deletes `ColumnPager`, `PagingPolicy`, and the tiered-pager dyncfgs, leaving only `mz_timely_util::pool_config` to install and configure the pool.
+* Resident access to a chunk costs no translation, no serialization, no copy, and a spilled body costs exactly one copy-out per read (a memcpy from a pool slot, a decompress from an evicted extent), never a hash-table translation and never a reference into pool memory. Proved by construction, and visible in the hot re-access row of the headline comparison.
+* A chunk that dies before pressure forces it out never touches disk. Proved by the `writes_elided` counter staying material under steady-state merging (early hydration measured 100–400 elisions per second).
+* Workers never enter kernel direct reclaim on the state path, and any state-path I/O a worker performs is explicit, bounded, and chunk-granular at a point the engine chose. Proved by cgroup `pgscan_direct` and pool-VMA swap staying zero under memory pressure, and by worker profiles free of fault stalls (both held in the staging run, see Measured).
+* Chunk turnover performs no per-chunk filesystem metadata operations: no create, no unlink, no inode churn. Proved by construction: swap-backed extents create no filesystem objects at all.
+* Sealed arrangement batches can be paged: a merge of two batches holds a bounded resident window rather than both batches. In scope for the upsert feedback arrangement, whose trace is a spine of chunk batches with spillable bodies, while compute's row spines hold sealed batches resident until the spine port. Proved by pool residency gauges holding at budget through fueled merges of larger-than-budget traces.
+* Hydration of an arrangement larger than the memory budget completes with RSS bounded by the budget, not by state size. In scope for the upsert path. Proved by the staging measurement: a ~395 GiB logical stash hydrated under ~8.5 GiB of anonymous RSS (see Measured).
+* One budget pool covers batcher chains and arrangement batches, and exceeding it triggers eviction of cold chunks rather than gating pageout decisions per chunk. Proved by a single budget gauge covering storage's stash and feedback arrangement and compute's batchers, correction buffers, and temporal buckets.
+* The swap and file backends of `mz_ore::pager`, the `PagedColumn` residency enum, `ColumnPager`, `PagingPolicy`, and the tiered-pager dyncfgs are deleted at the end of the migration, leaving only `mz_timely_util::pool_config` to install and configure the pool.
 
 ## Out of scope
 
 * Durability or crash consistency. State is recreatable and scratch is a cache, so there is no WAL, manifest, or fsync.
-* Async timely operators. Reads remain synchronous, with one bounded cold decompress. ForSt-style async access is separate work.
+* Asynchronous operator APIs. Spill threads already run compression and pageout off-worker, but operators never observe that asynchrony: a worker's read is a synchronous call with one bounded cold decompress. Restructuring operators to suspend on state I/O, as Flink's ForSt state backend does (see Prior art), is separate work.
 * Warm restart on swap-backed extents, which are anonymous and die with the process. File extents make it possible.
-* Persist-compatible on-disk format. It is a north star, not a requirement.
 * WiscKey-style value separation. The container can accommodate it later.
 * Non-Linux production support, as with the pager.
 
@@ -51,21 +42,20 @@ Each criterion is annotated with where its implementation lives. This document l
 
 Materialize has approached larger-than-memory state three times.
 
-Generation one, [lgalloc](https://crates.io/crates/lgalloc) (2023), used size-classed file-backed mappings. Columnation arrangements and persist Arrow buffers still use it, but the kernel controls reclaim and writeback. Its knobs approximate policy below an allocator boundary that sees only allocation and free.
+Generation one, [lgalloc](https://crates.io/crates/lgalloc) (2023), used size-classed file-backed mappings. Columnation arrangements and persist Arrow buffers retain the code path, but production runs with lgalloc disabled, and it is on only in the emulator. The kernel controls reclaim and writeback, and its knobs approximate policy below an allocator boundary that sees only allocation and free. Layer 2 retains lgalloc's size-classed layout but replaces file-backed mmap and kernel paging with anonymous memory and engine-scheduled I/O.
 
 Generation two was kernel swap: every anonymous allocation was implicitly spillable, with worker-side direct reclaim, `pgscan_direct` spikes, and synchronous 4 KiB faults.
 
-Generation three, the explicit [pager](20260504_pager.md), lets the application mark blobs cold and choose a backend. Removing lgalloc from columnar containers ([CLU-64](https://linear.app/materializeinc/issue/CLU-64/remove-lgalloc-from-columnar)) created its seam, but retained the blob limits above.
+Generation three is explicit paging, and this design is its continuation: the [pager](20260504_pager.md) never reached production, and the pool replaces it directly. The pager lets the application mark blobs cold and choose a backend. Removing lgalloc from columnar containers ([CLU-64](https://linear.app/materializeinc/issue/CLU-64/remove-lgalloc-from-columnar)) created its seam, but retained the blob limits above. This design completes the generation with two moves: `mz_ore::pool` replaces the pager, and differential's [`Chunk` abstraction](https://github.com/TimelyDataflow/differential-dataflow/pull/744), including `UnloadChunk`, becomes the unit managed from collection through batcher and sealed spine. The last migration deletes the pager, both backends, and `PagedColumn`.
 
-Generation four has two moves: `mz_ore::pool` replaces the pager, and differential's [`Chunk` abstraction](https://github.com/TimelyDataflow/differential-dataflow/pull/744), including `UnloadChunk`, becomes the unit managed from collection through batcher and sealed spine. The last migration deletes the pager, both backends, and `PagedColumn`.
-
-The owner of eviction must know lifecycle. Layer 2 retains lgalloc's size-classed layout but replaces file-backed mmap and kernel paging with anonymous memory and engine-scheduled I/O.
+The through-line of the generations is that eviction keeps moving toward the component that knows lifecycle: from the kernel, to allocator-level knobs, to the engine itself.
 
 ### The workload, from first principles
 
 The state this design serves has properties a general-purpose storage engine cannot assume:
 
 * **Immutable after seal.** Only residency changes, eliminating dirty tracking, writeback ordering, content latches, and torn reads.
+* **Predictably sized.** Grading cuts chunks just below a ~2 MiB target with a bounded maximum, so a handful of size classes fits every body and fragmentation stays bounded.
 * **Recreatable.** Persist can rebuild everything, eliminating durability machinery.
 * **Lifecycle known.** The batcher knows its next merge and when a chunk dies. Hydration output is write-once, read-rarely. Generic managers must guess this.
 * **Sequential maintenance, random updates.** Merges, extraction, and hydration are scans and move most bytes. Joins and upsert probes are delta-proportional, and peeks are random. How much each side matters is workload-dependent and is the assumption here most likely to draw disagreement. Batched extraction, a resident-only cursor path, and a possible record cache protect probe latency.
@@ -74,6 +64,21 @@ The state this design serves has properties a general-purpose storage engine can
 The best measured blob strategy ([#36948](https://github.com/MaterializeInc/materialize/pull/36948), [CLU-108](https://linear.app/materializeinc/issue/CLU-108/correctionv2-pager-lz4-compress-spilled-chunks-madv-pageout-swap)) lz4-compresses then eagerly `MADV_PAGEOUT`s: peak RSS was 0.40 GiB versus 0.97 GiB with lazy hints, because compression reduces refault bytes ~5.6×. It validates compression and eager release, but re-access still causes worker-side 4 KiB faults, dead-soon chunks still spill and refault, and pageout decisions are irreversible. Layer 2 keeps that policy but with a mechanism the engine schedules, prioritizes, and can cancel.
 
 Disk-first state buys pressure-free eviction and warm restart, but imposes a merge-proportional write floor that is fatal for short-lived data and EBS-class disks. Pure spill avoids that floor but turns pressure into a write storm and leaves nothing to reattach. Both use the same mechanism and differ only in when a chunk must be backed: lazy for young, churning data and eager for deep, long-lived sealed data.
+
+### What the design borrows
+
+Each source below contributes one core insight, and the design is the composition of them (full citations under Prior art):
+
+* **Faults are the wrong interface** (the CIDR 2022 mmap critique, confirmed by generation two in production). The kernel schedules faults, reclaim, and writeback at times the engine cannot choose. Everything below follows from taking that scheduling back: state I/O is explicit, engine-chosen, and off the worker's critical path.
+* **Size-classed anonymous regions make variable-size residency cheap** (Umbra). Reserve one large region per power-of-two class, let physical memory appear on use and leave with `MADV_DONTNEED`, and a slot can be any class size with no fragmentation, while resident translation is a multiply rather than a hash lookup.
+* **Residency is a state word, not a type** (vmcache). Each chunk carries one small lock-guarded state machine, and eviction, backing, and re-admission are transitions on it. vmcache also supplies the throughput ceiling, `madvise` page-table work and TLB shootdowns, which is why the unit here is a ~2 MiB chunk rather than a 4 KiB page.
+* **Resident access must cost nothing, and reclaim needs a stock of cheap victims** (LeanStore). Translation is paid only at the disk boundary, and a cooling stock of reclaimable-but-resident pages supplies frames at demand time. Eager backing builds that stock here, and clean-victim steal is the demand-time supply.
+* **Compression belongs at the eviction boundary** (BtrBlocks, measured here by #36948). lz4 between slot and extent cut refault bytes ~5.6×, which makes a compressed-resident tier the cheap middle rung between uncompressed slots and the device.
+* **The spine is already an LSM** (the WiscKey lineage). Differential owns sorted immutable runs and a fueled compactor, so the design needs paged runs under an existing LSM, not a storage engine.
+
+Materialize adds the simplification none of those systems could assume: sealed state is immutable, recreatable from persist, and lifecycle-known, so dirty tracking, durability machinery, and lifetime guessing disappear.
+
+The composition is the three-layer structure of the proposal: an extent store for cold compressed bytes (Layer 1), a budgeted buffer manager over size-classed slots with state-word residency and copy-out reads (Layer 2), and a chunk seam that makes batcher chains and sealed batches pageable units behind differential's `Chunk` trait (Layer 3).
 
 ## Solution proposal
 
@@ -114,9 +119,9 @@ The backend has no metadata cost. A paged-out read still leaves kernel fault ser
 
 A July 2026 staging run found anonymous RSS growing 10–19 GiB per hour despite capped gauges. Fifteen to twenty percent of pageout traffic stayed resident while the ledger marked it on-device.
 
-`MADV_PAGEOUT` may decline pages while returning success. A partially covered large folio may need a split that fails. Extra references can defeat isolation, `reclaim_pages`' result is ignored, and the kernel does not check swap availability. This is common because multi-size THP is enabled for anonymous memory and page-rounded, few-hundred-KiB extents often cross folios.
+`MADV_PAGEOUT` may decline pages while returning success: extra references can defeat isolation, `reclaim_pages`' result is ignored, and the kernel does not check swap availability. Large folios add another cause where they occur, since a partially covered folio needs a split that can fail. The process requests THP only via `MADV_HUGEPAGE` on the large slot classes, but per-size THP policy for anonymous memory is a host kernel and distro choice the process does not control. Rather than diagnose which cause dominates, the design removes the folio cause structurally by placing extents in `MADV_NOHUGEPAGE` arena regions and observes the outcome for the rest.
 
-The ledger must therefore observe residency (implemented in the stacked pool PR): after the advice, read the page-table present bits from `/proc/self/pagemap`, retain accounting for extents the kernel declined, cap retries per extent, and expose `extent_pageout_incomplete`. A node or cgroup without usable swap then increments the counter instead of silently diverging from RSS. The observation deliberately reads the page table rather than `mincore`: successful asynchronous reclaim unmaps the PTE to a swap entry while the page's clean copy lingers in the kernel's swap cache, and `mincore` reports swap-cache pages as in core, which would misclassify essentially every healthy pageout (and the retry advice cannot change that outcome, since `madvise` skips already-unmapped PTEs). Folio-split failures are avoided structurally: extents live in `MADV_NOHUGEPAGE` arena regions.
+The ledger must therefore observe residency: after the advice, read the page-table present bits from `/proc/self/pagemap`, retain accounting for extents the kernel declined, cap retries per extent, and expose `extent_pageout_incomplete`. A node or cgroup without usable swap then increments the counter instead of silently diverging from RSS. Page-table reads deserve caution. A `pagemap` read walks the page tables under `mmap_lock`, the lock worker page faults and the pool's own `madvise` calls also take, so long scans would contend with the hot paths. The observation is therefore deliberately narrow: spill threads, never workers, read present bits over just-advised extent ranges only, so each hold is short and bounded to one pass per pageout attempt. And because the snapshot is unsynchronized, the result feeds accounting alone, never correctness, so a stale answer costs at most one enforcement cycle. The alternatives answer the wrong question. Trusting the advice's return value is what produced the divergence above, and `mincore` reports swap-cache pages as in core: successful asynchronous reclaim unmaps the PTE to a swap entry while the page's clean copy lingers in the kernel's swap cache, which would misclassify essentially every healthy pageout (and retrying the advice cannot change that outcome, since `madvise` skips already-unmapped PTEs).
 
 #### File extents (future)
 
@@ -128,6 +133,12 @@ Use a few large preallocated files per worker, or `O_TMPFILE` inodes, with a use
 * Follow DuckDB's native-format, recycled temp-file slots rather than one file per object.
 
 The backend fits the existing extent interface, activates per cluster class with scratch volumes, and can be benchmarked directly against swap.
+
+#### Swapless environments: the emulator
+
+The emulator runs without swap, and it is also the one environment where lgalloc remains enabled, so the migration must not strand it. The pieces are independent: lgalloc is untouched by this design and keeps serving columnation arrangements in the emulator, while the pool degrades gracefully on a swapless host. Budget eviction still compresses cold chunks into the compressed-resident tier and die-young elision still works, so uncompressed residency stays budget-bounded. Tier pageout finds no swap, `extent_pageout_incomplete` counts the declined extents, and the ledger keeps charging them, so cold compressed state accumulates in RAM, honestly accounted, rather than silently diverging.
+
+Compression-only offload holds several times more state than resident slots at equal RSS (~5.6× measured), but it is not the disk offload the pager's file backend offered the emulator. File extents are the complete answer for swapless hosts, since the emulator has a filesystem, and the emulator is a reason to prioritize them.
 
 ### Layer 2: buffer manager
 
@@ -362,20 +373,18 @@ Per 2 MiB chunk, on a ~1.4 GB/s encrypted NVMe and a ~7 GB/s striped r8gd NVMe:
 
 ### Headline comparison
 
-"Swap" is the pager's swap backend (`MADV_COLD`, plus the lz4+`MADV_PAGEOUT` variant of #36948 where noted). "lgalloc" is kernel-paged file-backed mmap. "File" is the pager's per-chunk scratch files. "This design" is Layer 2 on the swap-backed extent store, with file-extent cells marked as estimates.
+"Swap" is the pager's swap backend (`MADV_COLD`, plus the lz4+`MADV_PAGEOUT` variant of #36948 where noted). "File" is the pager's per-chunk scratch files. "This design" is Layer 2 on the swap-backed extent store, with file-extent cells marked as estimates. lgalloc has no column because it was not measured. It shares swap's kernel fault path, plus file-backed dirty writeback at kernel discretion.
 
-| Dimension | Swap | lgalloc | File (pager) | This design |
-|---|---|---|---|---|
-| Hot re-access, resident | memory speed, unless already reclaimed (refault) | memory speed | full round trip every time (~1–4 ms/chunk) | resident chunk: pointer deref; pool slot: one memcpy copy-out |
-| Merge throughput, 1 thread, 2–4× pressure | 0.12–0.15 GiB/s (measured) | ≈ swap (same fault path) | 0.36–0.50 GiB/s (measured) | ~0.6 GiB/s sync executor; ~0.7 GiB/s (device/2) with read overlap (file-extent estimate) |
-| Merge throughput, 16–64 threads, fast disk | ~1.5 GiB/s overall, ~2.5 merge-phase (measured) | ≈ swap | 1.73 GiB/s, disk-bound (measured) | ≥ file; same disk ceiling raised by write elision and, where data compresses, by the lz4 ratio (5.6× measured) on disk traffic |
-| RSS under pressure | pins to cgroup cap; 0.40 GiB with lz4+PAGEOUT (measured) | kernel-managed, opaque | working window, ~376 MB at 64 threads (measured) | budget, by construction (measured, see Measured) |
-| Worker stall profile | unbounded; 97% sys time single-threaded (measured) | ≈ swap, plus dirty-page writeback at kernel discretion | bounded but eager: every pageout pays serialize+write | ~0 on eviction (off-worker); bounded decompress per cold read |
-| Per-chunk metadata | none | none | dominant at scale (measured, see model) | none |
-| Cold point lookup into sealed state | n/a (resident); per-touched-4 KiB fault if it paged | per-touched-4 KiB fault | whole-chunk rehydrate minimum | one chunk copy-out per touched chunk, amortized across the batched probe set |
-| Hydration RSS | working set (kernel may lag) | working set, kernel-paced relief | unbounded on the columnar path | budget (measured, see Measured) |
-
-The lgalloc column is inferred (it shares swap's kernel fault path, plus file-backed dirty writeback), not independently measured.
+| Dimension | Swap | File (pager) | This design |
+|---|---|---|---|
+| Hot re-access, resident | memory speed, unless already reclaimed (refault) | full round trip every time (~1–4 ms/chunk) | resident chunk: pointer deref; pool slot: one memcpy copy-out |
+| Merge throughput, 1 thread, 2–4× pressure | 0.12–0.15 GiB/s (measured) | 0.36–0.50 GiB/s (measured) | ~0.6 GiB/s sync executor; ~0.7 GiB/s (device/2) with read overlap (file-extent estimate) |
+| Merge throughput, 16–64 threads, fast disk | ~1.5 GiB/s overall, ~2.5 merge-phase (measured) | 1.73 GiB/s, disk-bound (measured) | ≥ file; same disk ceiling raised by write elision and, where data compresses, by the lz4 ratio (5.6× measured) on disk traffic |
+| RSS under pressure | pins to cgroup cap; 0.40 GiB with lz4+PAGEOUT (measured) | working window, ~376 MB at 64 threads (measured) | budget, by construction (measured, see Measured) |
+| Worker stall profile | unbounded; 97% sys time single-threaded (measured) | bounded but eager: every pageout pays serialize+write | ~0 on eviction (off-worker); bounded decompress per cold read |
+| Per-chunk metadata | none | dominant at scale (measured, see model) | none |
+| Cold point lookup into sealed state | n/a (resident); per-touched-4 KiB fault if it paged | whole-chunk rehydrate minimum | one chunk copy-out per touched chunk, amortized across the batched probe set |
+| Hydration RSS | working set (kernel may lag) | unbounded on the columnar path | budget (measured, see Measured) |
 
 On the swap-backed extent store, writes match the measured lz4+`MADV_PAGEOUT` line and a cold read of a paged-out extent is kernel swap-in over 5.6× fewer bytes plus the decompress. Low-thread reclaim ceilings soften the merge-throughput rows toward the swap column while the RSS, stall, metadata, and elision rows hold.
 
@@ -406,14 +415,14 @@ The swap-backed pool ran under the upsert-v2 source-stash hydration workload, wh
 2. **Chunk seam:** lands in a subsequent PR of the accompanying stack. Differential `Chunk`, `ColumnChunk`, and copy-out reads replace the pager, its backends, `PagedColumn`, and the bespoke paged batcher.
 3. **Sealed batches:** lands in a subsequent PR of the accompanying stack, for the upsert feedback `ChunkSpine`, whose `UnloadChunk` drain replaces per-key cursor seeks.
 4. **Compute:** lands in a subsequent PR of the accompanying stack, behind `enable_column_paged_batcher`. Chains spill through an `UnchunkBuilder` bridge to unchanged row spines. `temporal_bucket` and `correction_v2` use the pool.
-5. **Open:** file extents, including warm restart and `O_DIRECT` reads.
+5. **Open:** file extents, including warm restart, `O_DIRECT` reads, and disk offload for swapless environments (the emulator).
 6. **Open:** row-spine chunks, peek-aware policy, eager-backing thresholds, the consumer wiring for hot-chunk re-admission, and per-dataflow priorities.
 
 ## Incremental migration: coexisting with swap
 
 The *pager's swap backend* ends with this migration. The pool absorbs both pager consumers and the pager is deleted.
 
-*Node-level swap* remains the process-wide backstop for lgalloc-backed arrangements, persist Arrow buffers, operator heap state, and allocator headroom. It is also the pool's extent device. It remains provisioned until every large allocation has another mechanism, including work outside this design.
+*Node-level swap* remains the process-wide backstop for columnation arrangements, persist Arrow buffers, operator heap state, and allocator headroom. It is also the pool's extent device. It remains provisioned until every large allocation has another mechanism, including work outside this design.
 
 ### Coexistence semantics
 
@@ -461,7 +470,7 @@ Rejected. Flink demonstrates the costs of byte-API serialization, competing comp
 
 ### File-backed mmap of scratch files (the lgalloc architecture)
 
-lgalloc is the production-tested version and still backs columnation arrangements. Rejected for new work because faults are synchronous and unschedulable, reclaim and writeback are kernel-paced, and policy becomes allocator-level knobs. The design retains size-classed VM regions but uses anonymous mappings and explicit I/O.
+lgalloc shipped to production in 2023 and still backs columnation arrangements where it is enabled, today only the emulator. Rejected for new work because faults are synchronous and unschedulable, reclaim and writeback are kernel-paced, and policy becomes allocator-level knobs. The design retains size-classed VM regions but uses anonymous mappings and explicit I/O.
 
 ### Keep the two-backend pager and optimize it
 
