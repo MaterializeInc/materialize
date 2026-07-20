@@ -361,6 +361,51 @@ fn test_time() {
     );
 }
 
+/// The builtin `mz_internal.mz_analytics` connection is an assume-role AWS
+/// connection present on every environment. Its row in
+/// `mz_internal.mz_aws_connections` is reconstructed from the plan-time AWS
+/// context functions. Without the AWS context those functions fold to NULL, and
+/// the view must drop the row entirely, matching the packer it replaced, which
+/// bailed and wrote no row in that case. See MZ_AWS_CONNECTIONS in
+/// src/catalog/src/builtin/mz_internal.rs.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_mz_aws_connections_context_dependent_row() {
+    // With the AWS context configured (the default), the assume-role row is
+    // present and fully populated.
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let count: i64 = client
+        .query_one("SELECT count(*) FROM mz_internal.mz_aws_connections", &[])
+        .unwrap()
+        .get(0);
+    assert_eq!(count, 1, "mz_analytics row present with AWS context");
+
+    // Without the AWS context, the assume-role row is dropped rather than
+    // emitted with a malformed example_trust_policy.
+    let server = test_util::TestHarness::default()
+        .without_aws_connection_context()
+        .start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let count: i64 = client
+        .query_one("SELECT count(*) FROM mz_internal.mz_aws_connections", &[])
+        .unwrap()
+        .get(0);
+    assert_eq!(count, 0, "mz_analytics row dropped without AWS context");
+
+    // The connection object itself still exists; only its derived view row is
+    // suppressed.
+    let count: i64 = client
+        .query_one(
+            "SELECT count(*) FROM mz_catalog.mz_connections \
+             WHERE name = 'mz_analytics' AND type = 'aws'",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    assert_eq!(count, 1, "mz_analytics connection object still present");
+}
+
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_subscribe_consolidation() {

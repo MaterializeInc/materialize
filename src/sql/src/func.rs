@@ -4709,6 +4709,56 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 ))
             }) => String, oid::FUNC_MZ_ENVIRONMENT_ID_OID;
         },
+        // The three AWS-context functions below are plan-time constants, fixed
+        // for the lifetime of the envd process, folded to a literal here for the
+        // same reason as `mz_environment_id`: the mz_aws_connections and
+        // mz_aws_privatelink_connections materialized views reproduce the AWS
+        // principal, external id, and trust policy in SQL, and a materialized
+        // view cannot reference an unmaterializable function. They return NULL
+        // on environments without the corresponding context (non-cloud/local).
+        //
+        // Like `mz_environment_id`, they are not gated by
+        // `restrict_to_user_objects`. The fold bakes the value into any stored
+        // view that references it, so a gate here could only catch direct calls,
+        // not values already materialized into a view, which is more misleading
+        // than no gate. Restricted sessions are still blocked from the system
+        // connection views themselves (they are system relations). See
+        // doc/developer/design/20260508_restrict_to_user_objects.md.
+        "mz_aws_account_id" => Scalar {
+            params!() => Operation::nullary(|ecx| {
+                Ok(match &ecx.catalog().config().aws_account_id {
+                    Some(account_id) => {
+                        HirScalarExpr::literal(Datum::String(account_id), SqlScalarType::String)
+                    }
+                    None => HirScalarExpr::literal_null(SqlScalarType::String),
+                })
+            }) => String, oid::FUNC_MZ_AWS_ACCOUNT_ID_OID;
+        },
+        "mz_aws_external_id_prefix" => Scalar {
+            params!() => Operation::nullary(|ecx| {
+                let prefix = ecx
+                    .catalog()
+                    .config()
+                    .connection_context
+                    .aws_external_id_prefix
+                    .as_ref()
+                    .map(|p| p.to_string());
+                Ok(match prefix {
+                    Some(prefix) => {
+                        HirScalarExpr::literal(Datum::String(&prefix), SqlScalarType::String)
+                    }
+                    None => HirScalarExpr::literal_null(SqlScalarType::String),
+                })
+            }) => String, oid::FUNC_MZ_AWS_EXTERNAL_ID_PREFIX_OID;
+        },
+        "mz_aws_connection_role_arn" => Scalar {
+            params!() => Operation::nullary(|ecx| {
+                Ok(match &ecx.catalog().config().connection_context.aws_connection_role_arn {
+                    Some(arn) => HirScalarExpr::literal(Datum::String(arn), SqlScalarType::String),
+                    None => HirScalarExpr::literal_null(SqlScalarType::String),
+                })
+            }) => String, oid::FUNC_MZ_AWS_CONNECTION_ROLE_ARN_OID;
+        },
         "mz_is_superuser" => Scalar {
             params!() => UnmaterializableFunc::MzIsSuperuser
                 => SqlScalarType::Bool, oid::FUNC_MZ_IS_SUPERUSER;

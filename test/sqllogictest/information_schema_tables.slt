@@ -102,7 +102,7 @@ MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_aws_privatelink_connections
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_base_types
@@ -278,7 +278,7 @@ BASE TABLE
 materialize
 mz_internal
 mz_aws_connections
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_aws_privatelink_connection_status_history
