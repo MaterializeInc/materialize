@@ -206,8 +206,8 @@ By default, resizing a cluster with `ALTER CLUSTER <name> SET (SIZE = ...)`
 incurs **no downtime**. Rather than restarting the cluster in place, Materialize
 provisions new replicas at the target size alongside the existing ones, waits
 for them to [hydrate](/concepts/clusters/#consider-hydration-requirements), then
-cuts over to the new replicas and retires the old ones. The command returns
-immediately and the resize proceeds in the background.
+retires the old replicas. The command returns immediately and the resize
+proceeds in the background.
 
 ```mzsql
 ALTER CLUSTER c1 SET (SIZE = '100cc');
@@ -218,28 +218,27 @@ by default), Materialize rolls back the resize and the cluster keeps its current
 size. See [Monitoring a resize](#monitoring-a-resize) to track progress and
 [cancel](#monitoring-a-resize) an in-flight resize.
 
-To bound the wait or block the session until the resize completes, use the
-`WITH` options:
+To customize the timeout and what happens when it expires, use the `WITH`
+options. The resize still proceeds in the background, these options only
+configure it:
 
 {{< private-preview >}}
-Bounding the wait with `WAIT UNTIL READY` or `WAIT FOR`
+Customizing the resize timeout with `WAIT UNTIL READY` or `WAIT FOR`
 {{< /private-preview >}}
 
-- `WAIT UNTIL READY (TIMEOUT = ..., ON TIMEOUT = ...)` blocks the session until
-  the new replicas are ready or `TIMEOUT` elapses. On timeout, `ON TIMEOUT`
-  selects whether to `COMMIT` (cut over to the not-yet-hydrated replicas, which
-  can cause downtime) or `ROLLBACK` (keep the current size and return a timeout
-  error). Default: `ROLLBACK`.
+- `WAIT UNTIL READY (TIMEOUT = ..., ON TIMEOUT = ...)` sets the timeout for the
+  resize. On timeout, `ON TIMEOUT` selects whether to `COMMIT` (retire the old
+  replicas and proceed with the not-yet-hydrated new ones, which can cause
+  downtime) or `ROLLBACK` (keep the current size). Default: `ROLLBACK`.
 
   ```mzsql
   ALTER CLUSTER c1
   SET (SIZE = '100cc') WITH (WAIT UNTIL READY (TIMEOUT = '10m', ON TIMEOUT = 'ROLLBACK'));
   ```
 
-  {{% include-headless "/headless/alter-cluster-wait-until-ready-note" %}}
-
-- `WAIT FOR '<duration>'` waits a fixed duration, then cuts over regardless of
-  hydration status, which can cause downtime. Prefer `WAIT UNTIL READY`.
+- `WAIT FOR '<duration>'` sets the timeout and commits when it expires,
+  regardless of hydration status, which can cause downtime. Prefer
+  `WAIT UNTIL READY`.
 {{< /if-released >}}
 
 #### Speed up hydration by bursting to a larger size
@@ -254,10 +253,11 @@ During a graceful resize, Materialize:
 1. Provisions new replicas at the target size, alongside the current replicas.
 2. Waits for the new replicas to
    [hydrate](/concepts/clusters/#consider-hydration-requirements).
-3. Cuts over to the new replicas and retires the old ones.
+3. Retires the old replicas.
 
-Throughout, the cluster keeps serving queries from its current replicas, so the
-resize incurs no downtime.
+Throughout, the cluster keeps serving queries, first from the old replicas,
+then from both sets as the new replicas come up, so the resize incurs no
+downtime.
 
 To **cancel** an in-flight resize, reissue `ALTER CLUSTER` with the cluster's
 current size. Materialize drops the pending replicas and keeps the current
@@ -399,7 +399,7 @@ The command returns immediately and the resize proceeds in the background. See
 ALTER CLUSTER c1 SET (SIZE = '100cc');
 ```
 
-To block the session until the new replicas are ready, use the `WAIT UNTIL
+To customize the timeout and what happens when it expires, use the `WAIT UNTIL
 READY` [option](#syntax):
 
 ```mzsql

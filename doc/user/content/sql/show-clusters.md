@@ -26,17 +26,21 @@ Syntax element                | Description
 
 `SHOW CLUSTERS` returns the following columns:
 
+{{< if-unreleased "v26.34" >}}
 Column      | Description
 ------------|------------
 `name`      | The name of the cluster.
 `replicas`  | The cluster's replicas and their sizes.
 `comment`   | Any [comment](/sql/comment-on/) on the cluster.
+{{< /if-unreleased >}}
 
 {{< if-released "v26.34" >}}
-`SHOW CLUSTERS` also returns an `activity` column: a summary of any in-flight
-[resize](/sql/alter-cluster/#monitoring-a-resize) or [hydration
-burst](/sql/alter-cluster/#speed-up-hydration-by-bursting-to-a-larger-size) on
-the cluster, or `NULL` when the cluster is steady.
+Column      | Description
+------------|------------
+`name`      | The name of the cluster.
+`replicas`  | The cluster's replicas and their sizes.
+`activity`  | A summary of any in-flight [resize](/sql/alter-cluster/#monitoring-a-resize) or [hydration burst](/sql/alter-cluster/#speed-up-hydration-by-bursting-to-a-larger-size) on the cluster, or `NULL` when the cluster is steady.
+`comment`   | Any [comment](/sql/comment-on/) on the cluster.
 {{< /if-released >}}
 
 ## Pre-installed clusters

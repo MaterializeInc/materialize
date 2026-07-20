@@ -152,4 +152,4 @@
     | Option | Description |
     |--------|-------------|
     | `TIMEOUT` | The maximum duration to wait for the new replicas to be ready. |
-    | `ON TIMEOUT` | The action to take on timeout. <br><ul><li><code>COMMIT</code> cuts over to the new replica regardless of its hydration status, which may lead to downtime.</li><li><code>ROLLBACK</code> removes the pending replica and returns a timeout error.</li></ul>Default: <code>ROLLBACK</code>. |
+    | `ON TIMEOUT` | The action to take on timeout. <br><ul><li><code>COMMIT</code> retires the old replicas and proceeds with the new ones regardless of their hydration status, which may lead to downtime.</li><li><code>ROLLBACK</code> removes the pending replicas and keeps the current configuration.</li></ul>Default: <code>ROLLBACK</code>. |
