@@ -89,6 +89,12 @@ An active Azure subscription with permission to create:
 
 {{< /note >}}
 
+{{< tip >}}
+
+* {{% self-managed/terraform-enterprise-example-tip %}}
+
+{{< /tip >}}
+
 ### Step 1: Set Up the Environment
 
 1. Open a terminal window.
