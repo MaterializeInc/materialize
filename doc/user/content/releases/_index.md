@@ -20,8 +20,8 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 {{</ note >}}
 
 ## v26.34.0
-*Released to Materialize Cloud: 2026-07-23* <br>
-*Released to Materialize Self-Managed: 2026-07-24* <br>
+*Released to Materialize Cloud: 2026-07-21* <br>
+*Released to Materialize Self-Managed: 2026-07-21* <br>
 
 ### Background cluster reconfiguration {#v26.34-background-cluster-reconfiguration}
 The cluster controller is now enabled by default. `ALTER CLUSTER` for configuration changes (such as resizing) now returns immediately and converges in the background, rather than blocking until the new replica set is ready. `CREATE CLUSTER` and `ALTER CLUSTER` also accept the new `AUTO SCALING STRATEGY` option for configuring hydration-burst autoscaling behavior.
