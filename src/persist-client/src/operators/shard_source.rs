@@ -127,6 +127,7 @@
 //! [AbortOnDropHandle]: mz_ore::task::AbortOnDropHandle
 
 use std::collections::BTreeMap;
+use std::collections::VecDeque;
 use std::collections::hash_map::DefaultHasher;
 use std::convert::Infallible;
 use std::fmt::{Debug, Formatter};
@@ -884,9 +885,10 @@ where
 }
 
 /// Capacity of the bounded channel carrying fetch results from the fetch task
-/// back to [shard_source_fetch]. Small, to keep fetched-but-undrained blobs
-/// bounded when Timely is busy, while leaving room for a little fetch/decode
-/// pipelining. See the channel's construction for the full rationale.
+/// back to [shard_source_fetch]. This is only a hand-off buffer between the
+/// task and the operator. The number of parts held resident is bounded
+/// separately by `max_concurrency` (see the fetch loop), so this can stay
+/// small.
 const FETCH_RESULT_CHANNEL_CAPACITY: usize = 4;
 
 pub(crate) fn shard_source_fetch<'inner, K, V, T, D, TInner>(
@@ -938,13 +940,12 @@ where
     //
     // The result channel is *bounded*: the fetch task downloads parts ahead of
     // the operator (which only drains when Timely schedules it), so an unbounded
-    // channel would let fetched blobs — the memory-heavy payloads — pile up
-    // without limit whenever Timely is busy and Tokio keeps fetching. The bound
-    // makes the task block in `send` once the operator falls behind, restoring
-    // the implicit "roughly one in flight" limit the async operator had (its
-    // future only advanced when Timely scheduled it) while still allowing a
-    // little fetch/decode pipelining. (The persist fetch semaphore bounds total
-    // in-flight *bytes*; this is the coarser per-operator count bound.)
+    // channel would let fetched blobs, the memory-heavy payloads, pile up
+    // without limit whenever Timely is busy and Tokio keeps fetching. The fetch
+    // task never blocks the loop on a full channel (see the fetch loop for why);
+    // the number of resident parts is instead bounded by `max_concurrency`. (The
+    // persist fetch semaphore bounds total in-flight *bytes*; this is the coarser
+    // per-operator count bound.)
     let (desc_tx, mut desc_rx) =
         tokio::sync::mpsc::unbounded_channel::<(TInner, ExchangeableBatchPart<T>)>();
     let (blob_tx, blob_rx) = tokio::sync::mpsc::channel::<(
@@ -1014,32 +1015,57 @@ where
             // Up to `max_concurrency` fetches run at once. The operator's
             // time-keyed bookkeeping tolerates results completing out of order.
             // In-flight *bytes* stay bounded by the persist fetch semaphore
-            // inside `fetch_leased_part`; the bounded result channel bounds
-            // fetched-but-undrained blobs.
+            // inside `fetch_leased_part`.
             let mut in_flight = FuturesUnordered::new();
+            // Completed downloads waiting for room in the result channel. A
+            // download that finished must be moved out of `in_flight` and parked
+            // here rather than forwarded inline: a `send().await` on a full
+            // channel would stop polling `in_flight`, and since a
+            // `FuturesUnordered` only advances the futures inside it while it is
+            // polled, that would freeze every other in-flight fetch. Draining
+            // into `ready` and forwarding via a reserved permit keeps
+            // `in_flight` polled whenever there is spare concurrency, so the
+            // downloads actually overlap. `ready` never exceeds `max_concurrency`
+            // because we stop starting new fetches once `in_flight.len() +
+            // ready.len()` reaches the cap.
+            let mut ready: VecDeque<(TInner, Result<FetchedBlob<K, V, T, D>, (BlobKey, String)>)> =
+                VecDeque::new();
             let mut input_done = false;
             loop {
+                // Downloading plus downloaded-but-not-yet-forwarded. This, not
+                // the result channel capacity, is what bounds resident parts.
+                let outstanding = in_flight.len() + ready.len();
                 tokio::select! {
                     biased;
-                    // Drain a completed fetch and forward it. `send().await`
-                    // blocks here once the operator falls behind, which is the
-                    // intended backpressure.
-                    Some((time, fetched)) = in_flight.next(), if !in_flight.is_empty() => {
-                        if blob_tx.send((time, fetched)).await.is_err() {
+                    // Forward a completed fetch once the channel has room.
+                    // `reserve` leaves this arm pending (rather than blocking the
+                    // loop) when the channel is full, so `in_flight` keeps being
+                    // polled and the other downloads keep making progress.
+                    permit = blob_tx.reserve(), if !ready.is_empty() => {
+                        match permit {
+                            Ok(permit) => {
+                                permit.send(ready.pop_front().expect("ready is non-empty"));
+                                activator.activate();
+                            }
                             // The operator is gone; stop fetching.
-                            return;
+                            Err(_) => return,
                         }
-                        activator.activate();
+                    }
+                    // Move a completed download into `ready`. Buffering it here
+                    // rather than forwarding inline is what keeps a full result
+                    // channel from freezing the poll of `in_flight`.
+                    Some((time, fetched)) = in_flight.next(), if !in_flight.is_empty() => {
+                        ready.push_back((time, fetched));
                     }
                     // Start another fetch while there is spare concurrency and
                     // the desc channel is still open.
-                    maybe = desc_rx.recv(), if !input_done && in_flight.len() < max_concurrency => {
+                    maybe = desc_rx.recv(), if !input_done && outstanding < max_concurrency => {
                         match maybe {
                             Some((time, part)) => in_flight.push(fetch_one(time, part)),
                             None => input_done = true,
                         }
                     }
-                    // Input closed and nothing in flight: the task is done.
+                    // Input closed and nothing left to fetch or forward: done.
                     else => return,
                 }
             }
