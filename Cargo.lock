@@ -3094,6 +3094,7 @@ checksum = "56254986775e3233ffa9c4d7d3faaf6d36a2c09d30b20687e9f88bc8bafc16c8"
 [[package]]
 name = "differential-dataflow"
 version = "0.25.1"
+source = "git+https://github.com/antiguru/differential-dataflow?branch=claude%2Fspines-differential-arc-j93mho#5b06554f09cd8b32a62b8ea3f490e0ce9b449e3b"
 dependencies = [
  "columnar",
  "columnation",
@@ -3107,6 +3108,7 @@ dependencies = [
 [[package]]
 name = "differential-dogs3"
 version = "0.25.1"
+source = "git+https://github.com/antiguru/differential-dataflow?branch=claude%2Fspines-differential-arc-j93mho#5b06554f09cd8b32a62b8ea3f490e0ce9b449e3b"
 dependencies = [
  "differential-dataflow",
  "serde",
@@ -10728,7 +10730,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03da047801ff44bb6a4d407d4860c05fd70bb81714e6b2f3812603d5b145b042"
 dependencies = [
  "heck",
- "itertools 0.10.5",
+ "itertools 0.14.0",
  "log",
  "multimap",
  "petgraph",
@@ -10749,7 +10751,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
 dependencies = [
  "anyhow",
- "itertools 0.10.5",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
