@@ -1238,7 +1238,7 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                             self.until.clone(),
                             &self.config_set,
                         );
-                        CollectionBundle::from_collections(oks, errs)
+                        CollectionBundle::from_edge(oks, errs)
                     }
                     mz_compute_types::plan::GetPlan::Collection(mfp) => {
                         let (oks, errs) = collection.as_collection_core(
@@ -1247,7 +1247,7 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                             self.until.clone(),
                             &self.config_set,
                         );
-                        CollectionBundle::from_collections(oks, errs)
+                        CollectionBundle::from_edge(oks, errs)
                     }
                 }
             }
@@ -1267,7 +1267,7 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                         self.until.clone(),
                         &self.config_set,
                     );
-                    CollectionBundle::from_collections(oks, errs)
+                    CollectionBundle::from_edge(oks, errs)
                 }
             }
             FlatMap {
