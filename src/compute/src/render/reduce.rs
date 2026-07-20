@@ -108,7 +108,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 
             let (key_val_input, err) = input
                 .enter_region(inner)
-                .flat_map::<_, ConsolidatingContainerBuilder<Vec<((Row, Row), T, Diff)>>, _>(
+                .flat_map::<ConsolidatingContainerBuilder<Vec<((Row, Row), T, Diff)>>, _>(
                     input_key.map(|k| (k, None)),
                     max_demand,
                     move |row_datums, time, diff, ok_session, err_session| {
