@@ -358,18 +358,36 @@ The columnar `consolidate_named` becomes the sole implementation.
 Files: `src/compute/src/render/columnar.rs`.
 Base: `T2`.
 
-### Stacked pull requests
+### One linear gh-stack chain
 
-The consumer wave is several short stacks off `upstream/main`.
+Work happens in a fork, and GitHub stacked pull requests require same-repository branches, so the DAG cannot be realized as parallel lanes of fork-to-upstream PRs.
+gh-stack is strictly linear anyway: each branch has exactly one parent and one child.
+So the DAG is flattened into a single chain, managed with gh-stack, where each branch is based on the one before it and carries one PR whose diff is only that layer.
 
-* `C1` then `C3`, `C4`, `C5`.
-* `F1`, `C2`, `C6`, `C7`, `C8` are independent roots, off `upstream/main`.
+The chain is a topological order of the DAG, so every dependency edge points backward:
 
-The producer wave starts only after the entire consumer wave has landed, which resolves the fan-in problem: the producer nodes and the teardown rebase on a single merged base, not on a live tangle of consumer stacks.
-Producer nodes are mutually independent.
-The teardown is a short chain `T1`, `T2`, `T3` on top of the merged producer wave.
+```
+C1 -> C3 -> C4 -> C5 -> F1 -> C2 -> C6 -> C7 -> C8
+   -> P1 -> P2 -> P3 -> P4 -> P5 -> P6 -> P7 -> P8 -> P9
+   -> T1 -> T2 -> T3
+```
 
-gh-stack reference: https://github.github.com/gh-stack/#get-started
+Order constraints honored by this chain:
+
+* C1 precedes C3, C4, C5, which reuse its columnar key-forming pattern.
+* All consumer nodes, C and F, precede all producer nodes P, per the producer-flip invariant.
+* The teardown T1, T2, T3 is last, in order.
+
+The `Base` field in each node spec records the nearest semantic dependency.
+In the chain, a branch's git base is simply the entry before it, which transitively includes every earlier dependency.
+Linearizing serializes the work: there is no cross-node parallelism, which is the cost of the fork constraint and the linear-stack model.
+
+Practical notes for the executor:
+
+* Manage the chain with the `gh-stack` skill, non-interactively: `gh stack init C1`, then `gh stack add <node>` per layer, `gh stack submit --auto` for draft PRs, `gh stack sync --prune` after a bottom PR merges.
+* The repository must have stacked PRs enabled, or `submit` exits with code 9.
+* A 21-layer chain is deep. If rebases become unwieldy, land it as three sequential sub-stacks, Wave 1 then Wave 2 then teardown, each rooted on `upstream/main` after the previous has merged.
+* There is no runtime rollback, so a layer merges only after its tests pass and its diff is reviewed.
 
 ### Testing strategy
 
