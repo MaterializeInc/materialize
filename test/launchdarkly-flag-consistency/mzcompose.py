@@ -538,6 +538,7 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
 KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     allow_real_time_recency
     allowed_cluster_replica_sizes
+    column_paged_batcher_budget_fraction
     compute_dataflow_max_inflight_bytes
     compute_peek_response_stash_threshold_bytes
     compute_subscribe_snapshot_optimization
