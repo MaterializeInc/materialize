@@ -20,6 +20,7 @@ anyhow = { workspace = true, optional = true }
 # deps, security-critical — must be available unconditionally so that
 # `ore::secure` types are always accessible without feature-flag opt-in).
 async-trait = { workspace = true, optional = true }
+rustls = { workspace = true, features = ["aws_lc_rs"], optional = true, default-features = false }
 bytemuck = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
@@ -56,6 +57,7 @@ sentry-panic = { workspace = true, optional = true }
 serde.workspace = true
 tokio = { workspace = true, optional = true }
 tokio-openssl = { workspace = true, optional = true }
+tokio-rustls = { workspace = true, optional = true, default-features = false }
 thiserror.workspace = true
 tracing-capture = { workspace = true, optional = true }
 # TODO(guswynn): determine, when, if ever, we can remove `tracing-log`
@@ -107,6 +109,7 @@ async = [
     "openssl",
     "tokio/tracing",
     "tokio-openssl",
+    "tokio-rustls",
     "tokio",
     "dep:tracing",
 ]
@@ -147,6 +150,10 @@ assert = ["assert-no-tracing", "ctor", "tracing"]
 proptest = ["dep:proptest", "proptest-derive"]
 overflowing = ["assert"]
 pager = ["dep:bytemuck", "libc", "rand", "dep:tracing"]
+# Installs the aws-lc-rs rustls crypto provider process-wide at startup, so
+# every binary that links a `crypto`-enabled mz-ore can build rustls
+# configurations without selecting a provider explicitly.
+crypto = ["rustls", "ctor"]
 
 [[test]]
 name = "future"

@@ -11,17 +11,24 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
-mz-ore = { path = "../ore", default-features = false }
+mz-ore = { path = "../ore", features = ["crypto"], default-features = false }
 openssl.workspace = true
 openssl-sys.workspace = true
 postgres-openssl.workspace = true
+rustls = { workspace = true, features = ["aws_lc_rs", "std"], default-features = false }
+rustls-native-certs.workspace = true
+rustls-pki-types = { workspace = true, features = ["std"] }
+sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-postgres.workspace = true
+tokio-rustls.workspace = true
 tracing.workspace = true
+x509-cert.workspace = true
 
 [dev-dependencies]
-mz-ore = { path = "../ore", features = ["test"] }
+mz-ore = { path = "../ore", features = ["async", "test"] }
+tempfile.workspace = true
 
 [features]
 default = []

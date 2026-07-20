@@ -9,6 +9,10 @@
 
 //! A tiny utility library for making TLS connectors.
 
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+
 use mz_ore::secure::{Zeroize, Zeroizing};
 use openssl::pkcs12::Pkcs12;
 use openssl::pkey::PKey;
@@ -16,7 +20,12 @@ use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use openssl::stack::Stack;
 use openssl::x509::X509;
 use postgres_openssl::MakeTlsConnector;
+use rustls_pki_types::pem::PemObject;
+use rustls_pki_types::{CertificateDer, PrivateKeyDer, ServerName};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_postgres::config::SslMode;
+use tokio_postgres::tls::ChannelBinding;
+use tokio_rustls::TlsConnector;
 
 macro_rules! bail_generic {
     ($err:expr $(,)?) => {
@@ -96,6 +105,287 @@ pub fn make_tls(config: &tokio_postgres::Config) -> Result<MakeTlsConnector, Tls
     Ok(tls_connector)
 }
 
+/// Creates a rustls-based TLS connector for the given
+/// [`Config`](tokio_postgres::Config).
+///
+/// The rustls equivalent of [`make_tls`]. The two coexist while consumers
+/// migrate from openssl to rustls one at a time.
+pub fn make_tls_rustls(config: &tokio_postgres::Config) -> Result<MakeRustlsConnect, TlsError> {
+    let mut root_store = rustls::RootCertStore::empty();
+
+    // The mode dictates whether we verify peer certs and hostnames. By default, Postgres is
+    // pretty relaxed and recommends SslMode::VerifyCa or SslMode::VerifyFull for security.
+    //
+    // For more details, check out Table 33.1. SSL Mode Descriptions in
+    // https://postgresql.org/docs/current/libpq-ssl.html#LIBPQ-SSL-PROTECTION.
+    let verify_mode = match config.get_ssl_mode() {
+        SslMode::Disable | SslMode::Prefer => false,
+        // If a root CA file exists, the behavior of sslmode=require will be the same as
+        // that of verify-ca, meaning the server certificate is validated against the CA.
+        //
+        // For more details, check out the note about backwards compatibility in
+        // https://postgresql.org/docs/current/libpq-ssl.html#LIBQ-SSL-CERTIFICATES.
+        SslMode::Require => config.get_ssl_root_cert().is_some(),
+        SslMode::VerifyCa | SslMode::VerifyFull => true,
+        _ => panic!("unexpected sslmode {:?}", config.get_ssl_mode()),
+    };
+
+    // When verifying, seed the trust store with the platform's native roots.
+    // This matches the openssl connector, whose builder trusts the system
+    // default CA paths. Without it, verify modes with no explicit sslrootcert
+    // would reject every server certificate.
+    if verify_mode {
+        let native = rustls_native_certs::load_native_certs();
+        for error in &native.errors {
+            tracing::warn!("failed to load native root certs: {error}");
+        }
+        let (added, ignored) = root_store.add_parsable_certificates(native.certs);
+        tracing::debug!("loaded {added} native root certs, ignored {ignored}");
+    }
+
+    // Load root certificates if verification is needed.
+    if let Some(ssl_root_cert) = config.get_ssl_root_cert() {
+        let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(ssl_root_cert)
+            .collect::<Result<_, _>>()
+            .map_err(|e| TlsError::Generic(anyhow::anyhow!("failed to parse root certs: {e}")))?;
+        for cert in certs {
+            root_store
+                .add(cert)
+                .map_err(|e| TlsError::Generic(anyhow::anyhow!("invalid root cert: {e}")))?;
+        }
+    }
+
+    let builder = if verify_mode {
+        rustls::ClientConfig::builder().with_root_certificates(root_store)
+    } else {
+        // When not verifying, use a custom verifier that accepts all certs.
+        rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(NoVerifier))
+    };
+
+    // Configure client certificate if provided.
+    let tls_config = match (config.get_ssl_cert(), config.get_ssl_key()) {
+        (Some(ssl_cert), Some(ssl_key)) => {
+            let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(ssl_cert)
+                .collect::<Result<_, _>>()
+                .map_err(|e| {
+                    TlsError::Generic(anyhow::anyhow!("failed to parse client cert: {e}"))
+                })?;
+            let key = PrivateKeyDer::from_pem_slice(ssl_key).map_err(|e| {
+                TlsError::Generic(anyhow::anyhow!("failed to parse client key: {e}"))
+            })?;
+            builder.with_client_auth_cert(certs, key).map_err(|e| {
+                TlsError::Generic(anyhow::anyhow!("failed to configure client auth: {e}"))
+            })?
+        }
+        (None, Some(_)) => {
+            bail_generic!("must provide both sslcert and sslkey, but only provided sslkey")
+        }
+        (Some(_), None) => {
+            bail_generic!("must provide both sslcert and sslkey, but only provided sslcert")
+        }
+        _ => builder.with_no_client_auth(),
+    };
+
+    Ok(MakeRustlsConnect::new(tls_config))
+}
+
+/// Wrapper around `tokio_rustls::client::TlsStream` that implements
+/// `tokio_postgres::tls::TlsStream`.
+pub struct RustlsTlsStream<S>(tokio_rustls::client::TlsStream<S>);
+
+impl<S: AsyncRead + AsyncWrite + Unpin> AsyncRead for RustlsTlsStream<S> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().0).poll_read(cx, buf)
+    }
+}
+
+impl<S: AsyncRead + AsyncWrite + Unpin> AsyncWrite for RustlsTlsStream<S> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        Pin::new(&mut self.get_mut().0).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().0).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().0).poll_shutdown(cx)
+    }
+}
+
+impl<S: AsyncRead + AsyncWrite + Unpin> tokio_postgres::tls::TlsStream for RustlsTlsStream<S> {
+    fn channel_binding(&self) -> ChannelBinding {
+        let (_, session) = self.0.get_ref();
+        match session
+            .peer_certificates()
+            .and_then(|certs| certs.first())
+            .and_then(tls_server_end_point)
+        {
+            Some(hash) => ChannelBinding::tls_server_end_point(hash),
+            None => ChannelBinding::none(),
+        }
+    }
+}
+
+/// Computes the RFC 5929 `tls-server-end-point` channel binding data for a
+/// server certificate: a hash of the DER certificate using the hash function
+/// of its signature algorithm, with MD5 and SHA-1 upgraded to SHA-256.
+///
+/// Returns `None` when the signature algorithm has no well-defined hash
+/// function (e.g. Ed25519, RSASSA-PSS). The openssl connector also reports no
+/// channel binding for those, so this preserves parity.
+fn tls_server_end_point(cert: &CertificateDer<'_>) -> Option<Vec<u8>> {
+    use sha2::{Digest, Sha256, Sha384, Sha512};
+    use x509_cert::der::Decode;
+    use x509_cert::der::oid::ObjectIdentifier;
+
+    const MD5_RSA: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.4");
+    const SHA1_RSA: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.5");
+    const SHA256_RSA: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.11");
+    const SHA384_RSA: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.12");
+    const SHA512_RSA: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.13");
+    const SHA1_ECDSA: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.4.1");
+    const SHA256_ECDSA: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.2");
+    const SHA384_ECDSA: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.3");
+    const SHA512_ECDSA: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.4");
+
+    let parsed = x509_cert::Certificate::from_der(cert.as_ref()).ok()?;
+    let oid = parsed.signature_algorithm.oid;
+    if oid == MD5_RSA
+        || oid == SHA1_RSA
+        || oid == SHA256_RSA
+        || oid == SHA1_ECDSA
+        || oid == SHA256_ECDSA
+    {
+        Some(Sha256::digest(cert.as_ref()).to_vec())
+    } else if oid == SHA384_RSA || oid == SHA384_ECDSA {
+        Some(Sha384::digest(cert.as_ref()).to_vec())
+    } else if oid == SHA512_RSA || oid == SHA512_ECDSA {
+        Some(Sha512::digest(cert.as_ref()).to_vec())
+    } else {
+        None
+    }
+}
+
+/// A `MakeTlsConnect` implementation backed by rustls.
+#[derive(Clone)]
+pub struct MakeRustlsConnect {
+    config: Arc<rustls::ClientConfig>,
+}
+
+impl MakeRustlsConnect {
+    /// Creates a connector factory from the given client config.
+    pub fn new(config: rustls::ClientConfig) -> Self {
+        Self {
+            config: Arc::new(config),
+        }
+    }
+}
+
+impl<S> tokio_postgres::tls::MakeTlsConnect<S> for MakeRustlsConnect
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    type Stream = RustlsTlsStream<S>;
+    type TlsConnect = RustlsConnect;
+    type Error = rustls_pki_types::InvalidDnsNameError;
+
+    fn make_tls_connect(&mut self, domain: &str) -> Result<Self::TlsConnect, Self::Error> {
+        // For Unix socket connections, tokio-postgres passes an empty string as
+        // the domain. Socket paths starting with "/" are also not valid DNS names.
+        // TLS is never negotiated over Unix sockets, so use a placeholder.
+        let server_name = if domain.is_empty() || domain.starts_with('/') {
+            ServerName::try_from("localhost").unwrap()
+        } else {
+            ServerName::try_from(domain.to_owned())?
+        };
+        Ok(RustlsConnect {
+            connector: TlsConnector::from(Arc::clone(&self.config)),
+            server_name,
+        })
+    }
+}
+
+/// A pending rustls TLS connection to a specific server.
+pub struct RustlsConnect {
+    connector: TlsConnector,
+    server_name: ServerName<'static>,
+}
+
+impl<S> tokio_postgres::tls::TlsConnect<S> for RustlsConnect
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    type Stream = RustlsTlsStream<S>;
+    type Error = std::io::Error;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Stream, Self::Error>> + Send>>;
+
+    fn connect(self, stream: S) -> Self::Future {
+        Box::pin(async move {
+            let tls_stream = self.connector.connect(self.server_name, stream).await?;
+            Ok(RustlsTlsStream(tls_stream))
+        })
+    }
+}
+
+/// A certificate verifier that accepts all certificates.
+/// Used when SslMode is Disable, Prefer, or Require without a root cert.
+#[derive(Debug)]
+struct NoVerifier;
+
+impl rustls::client::danger::ServerCertVerifier for NoVerifier {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls_pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        rustls::crypto::aws_lc_rs::default_provider()
+            .signature_verification_algorithms
+            .supported_schemes()
+    }
+}
+
 pub struct Pkcs12Archive {
     pub der: Vec<u8>,
     pub pass: String,
@@ -170,7 +460,304 @@ pub fn pkcs12der_from_pem(
 
 #[cfg(test)]
 mod tests {
+    use openssl::asn1::Asn1Time;
+    use openssl::bn::{BigNum, MsbOption};
+    use openssl::ec::{EcGroup, EcKey};
+    use openssl::hash::MessageDigest;
+    use openssl::nid::Nid;
+    use openssl::pkey::Private;
+    use openssl::rsa::Rsa;
+    use openssl::x509::X509NameBuilder;
+    use openssl::x509::extension::{BasicConstraints, SubjectAlternativeName};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
+    use tokio_postgres::tls::{MakeTlsConnect, TlsConnect};
+
     use super::*;
+
+    /// A throwaway CA that can issue leaf certificates.
+    struct TestCa {
+        cert: X509,
+        key: PKey<Private>,
+    }
+
+    fn random_serial() -> openssl::asn1::Asn1Integer {
+        let mut bn = BigNum::new().unwrap();
+        bn.rand(64, MsbOption::MAYBE_ZERO, false).unwrap();
+        bn.to_asn1_integer().unwrap()
+    }
+
+    impl TestCa {
+        fn new() -> TestCa {
+            let key = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
+            let mut name = X509NameBuilder::new().unwrap();
+            name.append_entry_by_text("CN", "mz-tls-util test CA")
+                .unwrap();
+            let name = name.build();
+            let mut builder = X509::builder().unwrap();
+            builder.set_version(2).unwrap();
+            builder.set_serial_number(&random_serial()).unwrap();
+            builder.set_subject_name(&name).unwrap();
+            builder.set_issuer_name(&name).unwrap();
+            builder.set_pubkey(&key).unwrap();
+            builder
+                .set_not_before(&Asn1Time::days_from_now(0).unwrap())
+                .unwrap();
+            builder
+                .set_not_after(&Asn1Time::days_from_now(1).unwrap())
+                .unwrap();
+            builder
+                .append_extension(BasicConstraints::new().critical().ca().build().unwrap())
+                .unwrap();
+            builder.sign(&key, MessageDigest::sha256()).unwrap();
+            TestCa {
+                cert: builder.build(),
+                key,
+            }
+        }
+
+        /// Issues a leaf certificate, returning its PEM cert and PKCS#8 key.
+        fn issue(&self, cn: &str, dns_san: Option<&str>) -> (Vec<u8>, Vec<u8>) {
+            let key = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
+            let mut name = X509NameBuilder::new().unwrap();
+            name.append_entry_by_text("CN", cn).unwrap();
+            let name = name.build();
+            let mut builder = X509::builder().unwrap();
+            builder.set_version(2).unwrap();
+            builder.set_serial_number(&random_serial()).unwrap();
+            builder.set_subject_name(&name).unwrap();
+            builder.set_issuer_name(self.cert.subject_name()).unwrap();
+            builder.set_pubkey(&key).unwrap();
+            builder
+                .set_not_before(&Asn1Time::days_from_now(0).unwrap())
+                .unwrap();
+            builder
+                .set_not_after(&Asn1Time::days_from_now(1).unwrap())
+                .unwrap();
+            if let Some(dns) = dns_san {
+                let san = SubjectAlternativeName::new()
+                    .dns(dns)
+                    .build(&builder.x509v3_context(Some(&self.cert), None))
+                    .unwrap();
+                builder.append_extension(san).unwrap();
+            }
+            builder.sign(&self.key, MessageDigest::sha256()).unwrap();
+            (
+                builder.build().to_pem().unwrap(),
+                key.private_key_to_pem_pkcs8().unwrap(),
+            )
+        }
+    }
+
+    /// Starts a TLS server on an ephemeral port. Each connection receives
+    /// "ok" once the handshake, including client certificate verification
+    /// when `client_ca_pem` is given, has completed on the server side.
+    async fn run_tls_server(
+        cert_pem: &[u8],
+        key_pem: &[u8],
+        client_ca_pem: Option<&[u8]>,
+    ) -> std::net::SocketAddr {
+        let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(cert_pem)
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let key = PrivateKeyDer::from_pem_slice(key_pem).unwrap();
+        let builder = rustls::ServerConfig::builder();
+        let config = match client_ca_pem {
+            Some(ca_pem) => {
+                let mut roots = rustls::RootCertStore::empty();
+                for cert in CertificateDer::pem_slice_iter(ca_pem) {
+                    roots.add(cert.unwrap()).unwrap();
+                }
+                let verifier = rustls::server::WebPkiClientVerifier::builder(Arc::new(roots))
+                    .build()
+                    .unwrap();
+                builder.with_client_cert_verifier(verifier)
+            }
+            None => builder.with_no_client_auth(),
+        }
+        .with_single_cert(certs, key)
+        .unwrap();
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        mz_ore::task::spawn(|| "tls-test-server", async move {
+            loop {
+                let (stream, _) = listener.accept().await.unwrap();
+                let acceptor = acceptor.clone();
+                mz_ore::task::spawn(|| "tls-test-server-conn", async move {
+                    let mut tls = acceptor.accept(stream).await.unwrap();
+                    tls.write_all(b"ok").await.unwrap();
+                    tls.shutdown().await.unwrap();
+                });
+            }
+        });
+        addr
+    }
+
+    /// Completes a TLS handshake for `host` via `make_tls_rustls`, returning
+    /// the established stream. Panics if certificate validation fails.
+    async fn rustls_connect(
+        config: &tokio_postgres::Config,
+        host: &str,
+        addr: impl tokio::net::ToSocketAddrs,
+    ) -> RustlsTlsStream<TcpStream> {
+        let mut make = make_tls_rustls(config).unwrap();
+        let connect = MakeTlsConnect::<TcpStream>::make_tls_connect(&mut make, host).unwrap();
+        let tcp = TcpStream::connect(addr).await.unwrap();
+        TlsConnect::<TcpStream>::connect(connect, tcp)
+            .await
+            .unwrap()
+    }
+
+    /// Completes a TLS handshake for `host` via the openssl `make_tls`,
+    /// returning the established stream. Panics if validation fails.
+    async fn openssl_connect(
+        config: &tokio_postgres::Config,
+        host: &str,
+        addr: impl tokio::net::ToSocketAddrs,
+    ) -> postgres_openssl::TlsStream<TcpStream> {
+        let mut make = make_tls(config).unwrap();
+        let connect = MakeTlsConnect::<TcpStream>::make_tls_connect(&mut make, host).unwrap();
+        let tcp = TcpStream::connect(addr).await.unwrap();
+        TlsConnect::<TcpStream>::connect(connect, tcp)
+            .await
+            .unwrap()
+    }
+
+    /// Reads the "ok" the test server sends after its side of the handshake,
+    /// including any client certificate verification, has succeeded.
+    async fn assert_server_ok<S: AsyncRead + AsyncWrite + Unpin>(mut tls: S) {
+        let mut buf = [0u8; 2];
+        tls.read_exact(&mut buf).await.unwrap();
+        assert_eq!(&buf, b"ok");
+    }
+
+    /// In verify modes with no explicit sslrootcert, both connectors must
+    /// trust CAs from the environment's default trust store (SSL_CERT_FILE).
+    /// Guards the native root loading in `make_tls_rustls`.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // uses the network and openssl FFI
+    async fn verify_full_trusts_default_store() {
+        let ca = TestCa::new();
+        let (server_cert, server_key) = ca.issue("server", Some("localhost"));
+
+        let mut ca_file = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut ca_file, &ca.cert.to_pem().unwrap()).unwrap();
+        // SAFETY: env mutation is process global, but nextest gives each test
+        // its own process, which is how CI runs. Under plain `cargo test`
+        // this can race with other tests that read the environment.
+        unsafe { std::env::set_var("SSL_CERT_FILE", ca_file.path()) };
+
+        let addr = run_tls_server(&server_cert, &server_key, None).await;
+        let mut config = tokio_postgres::Config::new();
+        config.ssl_mode(SslMode::VerifyFull);
+
+        assert_server_ok(rustls_connect(&config, "localhost", addr).await).await;
+        assert_server_ok(openssl_connect(&config, "localhost", addr).await).await;
+    }
+
+    /// Both connectors must present the configured client certificate when
+    /// the server requires one.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // uses the network and openssl FFI
+    async fn client_certs_accepted() {
+        let ca = TestCa::new();
+        let (server_cert, server_key) = ca.issue("server", Some("localhost"));
+        let (client_cert, client_key) = ca.issue("client", None);
+        let ca_pem = ca.cert.to_pem().unwrap();
+
+        let addr = run_tls_server(&server_cert, &server_key, Some(&ca_pem)).await;
+        let mut config = tokio_postgres::Config::new();
+        config.ssl_mode(SslMode::VerifyFull);
+        config.ssl_root_cert(&ca_pem);
+        config.ssl_cert(&client_cert);
+        config.ssl_key(&client_key);
+
+        assert_server_ok(rustls_connect(&config, "localhost", addr).await).await;
+        assert_server_ok(openssl_connect(&config, "localhost", addr).await).await;
+    }
+
+    /// Validates the rustls connector against a real endpoint whose
+    /// certificate chains to a public CA, exercising the platform trust store
+    /// end to end. Needs external network access, so it only runs when the
+    /// Nightly pipeline sets MZ_TLS_UTIL_TEST_EXTERNAL_CAS.
+    ///
+    /// The openssl connector is deliberately not covered. Our vendored
+    /// openssl compiles its default trust store path to /usr/local/ssl, which
+    /// does not exist at runtime, so `make_tls` cannot validate public CAs
+    /// unless SSL_CERT_FILE points at a bundle.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // uses the network and openssl FFI
+    async fn external_public_ca_endpoint() {
+        if std::env::var_os("MZ_TLS_UTIL_TEST_EXTERNAL_CAS").is_none() {
+            return;
+        }
+        const HOST: &str = "s3.amazonaws.com";
+        let mut config = tokio_postgres::Config::new();
+        config.ssl_mode(SslMode::VerifyFull);
+        // Completing the handshake is the assertion. connect() fails if the
+        // chain does not validate against the platform trust store.
+        drop(rustls_connect(&config, HOST, (HOST, 443)).await);
+    }
+
+    fn self_signed_der(key: &PKey<Private>, digest: MessageDigest) -> Vec<u8> {
+        let mut name = X509NameBuilder::new().unwrap();
+        name.append_entry_by_text("CN", "localhost").unwrap();
+        let name = name.build();
+        let mut builder = X509::builder().unwrap();
+        builder.set_version(2).unwrap();
+        builder.set_subject_name(&name).unwrap();
+        builder.set_issuer_name(&name).unwrap();
+        builder.set_pubkey(key).unwrap();
+        builder
+            .set_not_before(&Asn1Time::days_from_now(0).unwrap())
+            .unwrap();
+        builder
+            .set_not_after(&Asn1Time::days_from_now(1).unwrap())
+            .unwrap();
+        builder.sign(key, digest).unwrap();
+        builder.build().to_der().unwrap()
+    }
+
+    /// Asserts that our `tls-server-end-point` hash of a cert signed with
+    /// `sign_digest` matches openssl's `X509_digest` with `expected`, which is
+    /// what postgres-openssl uses. `None` expects no channel binding.
+    fn check_end_point_parity(
+        key: &PKey<Private>,
+        sign_digest: MessageDigest,
+        expected: Option<MessageDigest>,
+    ) {
+        let der = self_signed_der(key, sign_digest);
+        let computed = tls_server_end_point(&CertificateDer::from(der.clone()));
+        let expected =
+            expected.map(|md| X509::from_der(&der).unwrap().digest(md).unwrap().to_vec());
+        assert_eq!(computed, expected);
+    }
+
+    #[mz_ore::test]
+    fn tls_server_end_point_digests() {
+        let rsa = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
+        check_end_point_parity(&rsa, MessageDigest::sha256(), Some(MessageDigest::sha256()));
+        check_end_point_parity(&rsa, MessageDigest::sha384(), Some(MessageDigest::sha384()));
+        check_end_point_parity(&rsa, MessageDigest::sha512(), Some(MessageDigest::sha512()));
+        // RFC 5929 upgrades SHA-1 to SHA-256.
+        check_end_point_parity(&rsa, MessageDigest::sha1(), Some(MessageDigest::sha256()));
+
+        let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
+        let ec = PKey::from_ec_key(EcKey::generate(&group).unwrap()).unwrap();
+        check_end_point_parity(&ec, MessageDigest::sha256(), Some(MessageDigest::sha256()));
+
+        // Ed25519 has no hash in its signature algorithm, so no channel
+        // binding, matching openssl.
+        let ed = PKey::generate_ed25519().unwrap();
+        check_end_point_parity(&ed, MessageDigest::null(), None);
+    }
+
+    #[mz_ore::test]
+    fn tls_server_end_point_rejects_garbage() {
+        let garbage = CertificateDer::from(vec![0x30, 0x00]);
+        assert_eq!(tls_server_end_point(&garbage), None);
+    }
 
     #[mz_ore::test]
     fn pkcs12_archive_needs_drop() {
