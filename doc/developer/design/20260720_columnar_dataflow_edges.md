@@ -148,7 +148,6 @@ graph TD
     C2["C2: FlatMap input decode via the edge, fueling preserved"]
     C3["C3: TopK input columnar"]
     C4["C4: linear-join input columnar"]
-    C8["C8: Union temporal-bucket sanctioned decode, consume edge then into_vec"]
   end
   subgraph Wave2["Wave 2: producers flip, every consumer already native"]
     P1["P1: as_collection_core columnar output, flips Get and Mfp"]
@@ -162,7 +161,7 @@ graph TD
     P9["P9: source and index import producers columnar"]
   end
   subgraph Wave3["Wave 3: teardown, producer half compiler-enforced"]
-    T1["T1: delete vec_to_columnar"]
+    T1["T1: retire concat_many mixed-variant upgrade branch"]
     T2["T2: collapse enum to a columnar alias, into_vec becomes a leaf fn"]
     T3["T3: de-match negate, concat_many, consolidate_named"]
   end
@@ -176,9 +175,8 @@ graph TD
 
 The bold edge from Wave 1 to Wave 2 is the producer-flip invariant: no producer node starts until every consumer node has landed.
 Within Wave 1, C1 gates the three nodes that reuse its columnar key-forming pattern.
-F1, C2, and C8 are independent roots.
+F1 and C2 are independent roots.
 F1 gives the native columnar `consolidate_named` that Union's `concat_many` then `consolidate_named` path uses once its inputs are columnar in Wave 2.
-C8 is a sanctioned decode node, so it does not depend on F1.
 Within Wave 2, each producer feeds only native consumers, so the nodes are mutually independent and land in any order.
 Wave 3 collapses the enum.
 Its producer half is compiler-enforced, see the completeness note.
@@ -263,16 +261,13 @@ The consolidation uses the raw `CollectionExt::consolidate_named` on the already
 Confirmed by inspection of `render.rs`; no separate node exists.
 NOTE for T2: `render.rs:941/997` are leaf-decode call sites T2 must adapt when `into_vec` becomes a free function.
 
-**C8: Union temporal-bucket sanctioned decode.**
-Keep the `into_vec` at `render.rs:1358` that feeds `maybe_apply_temporal_bucketing` inside a consolidating Union, adapted to consume the columnar edge.
-This is a sanctioned decode point, resolved by the prototype.
-`maybe_apply_temporal_bucketing` hardwires `StreamVec` in and out (`render.rs:1561`, `temporal_bucket.rs:49`), and the operator is the most correctness-sensitive in the migration.
-The internals are already columnar (`ColumnMergeBatcher`, `ColumnChunker`), so a native input would delete an internal `Vec` staging round-trip.
-Deferred as a fast-follow; the path is narrow, gated on `ENABLE_COMPUTE_TEMPORAL_BUCKETING`.
-The Union's own `concat_many` then `consolidate_named` path still goes native via F1 once its inputs are columnar.
-Files: `src/compute/src/render.rs`.
-Test: temporal and temporal-bucketing sqllogictest.
-Base: `upstream/main`.
+**C8: Union temporal-bucket sanctioned decode.** No work, subsumed by the #36507 scaffolding plus F1.
+Union already reads its inputs as edges directly (`render.rs:1344-1347`, no `as_specific_collection`, no pre-boundary `Vec`).
+The temporal-bucket `into_vec` at `render.rs:1358` is already a local, gated sanctioned leaf: it fires only on `strategy == TemporalBucketing && ENABLE_COMPUTE_TEMPORAL_BUCKETING`, decodes locally right before `maybe_apply_temporal_bucketing` (which hardwires `StreamVec`), and re-wraps as `CollectionEdge::Vec`; every other input keeps the edge undecoded.
+The Union body already uses the edge methods `concat_many` then `consolidate_named` (`render.rs:1370-1372`), so F1's columnar-native consolidate arm handles it once inputs are columnar.
+Native temporal-bucketing stays deferred as a fast-follow (the operator is correctness-sensitive; internals are already columnar, so native input would delete an internal `Vec` staging round-trip).
+Confirmed by inspection of `render.rs`; no separate node exists.
+NOTE for T2: the `into_vec` at 1358 and the `CollectionEdge::Vec` re-wrap at 1359 are leaf sites T2 adapts; the re-wrap re-encodes the bucketed `StreamVec` via `vec_to_columnar` (a sanctioned-decode return, see T1).
 
 **P1: columnar output for the `flat_map` family.**
 Generalize `as_collection_core` to build into a `ColumnBuilder` and return a columnar edge, which flips the Get and Mfp producers.
@@ -332,15 +327,19 @@ Files: `src/compute/src/render.rs`.
 Test: source and index import sqllogictest and testdrive coverage.
 Base: Wave 1 complete.
 
-**T1: delete `vec_to_columnar`.**
-Once every producer emits columnar, no edge carries `Vec`, so `vec_to_columnar` is dead.
-Delete it and the mixed-variant upgrade branch in `concat_many`.
+**T1: retire the `concat_many` mixed-variant upgrade branch.**
+Once every producer emits columnar, no edge carries `Vec`, so `concat_many` never sees a mixed set of arms.
+Delete its mixed-variant upgrade branch.
+Do NOT delete `vec_to_columnar`.
+It survives as a leaf ENCODE primitive for producers whose source data is genuinely row-shaped and must be placed on the columnar edge: P9 imports (row data from persist or a trace), and the sanctioned-decode returns C7 LetRec and C8 Union temporal-bucketing, which decode to `Vec`, operate via `branch_when` / `maybe_apply_temporal_bucketing` (both `Vec`-only), then re-encode to the columnar edge.
+Symmetrically `into_vec` / `columnar_to_vec` survive as leaf DECODE primitives (sinks, the same sanctioned decodes).
+The teardown collapses the enum, not the leaf conversions.
 Files: `src/compute/src/render/columnar.rs`.
 Base: all P nodes.
 
 **T2: collapse the enum.**
 Replace `CollectionEdge` with a `ColumnarCollection` type alias.
-Demote `into_vec` to a free function used only by leaf consumers that serialize rows and by any sanctioned decode point.
+Demote `into_vec` / `columnar_to_vec` (leaf decode) and `vec_to_columnar` (leaf encode) to free functions used at leaves: consumers that serialize rows, the sanctioned decode-and-re-encode points, and row-shaped producers. These leaf conversions are NOT deleted; only the enum and its arms collapse.
 Update `CollectionBundle.collection` and all construction sites.
 This is the widest diff, touching `context.rs` and every construction site, so alias the enum first and land the construction-site churn as a mechanical rename reviewed separately.
 Files: `src/compute/src/render/columnar.rs`, `src/compute/src/render/context.rs`, `src/compute/src/render.rs`, and every construction site.
@@ -361,12 +360,13 @@ So the DAG is flattened into a single chain, managed with gh-stack, where each b
 The chain is a topological order of the DAG, so every dependency edge points backward:
 
 ```
-C1 -> C3 -> C4 -> F1 -> C2 -> C8
+C1 -> C3 -> C4 -> F1 -> C2
    -> P1 -> P2 -> P3 -> P4 -> P5 -> P6 -> P7 -> P8 -> P9
    -> T1 -> T2 -> T3
 ```
 
-C5, C6, and C7 are not in the chain: delta-join input is subsumed by C1, and the sink and LetRec already leaf-decode the edge (see the C5, C6, and C7 nodes).
+C5, C6, C7, and C8 are not in the chain: delta-join input is subsumed by C1; the sink, LetRec, and Union temporal-bucketing already leaf-decode the edge (see their nodes).
+Wave 1 is complete: C1, C3, C4, F1, C2 landed and C5, C6, C7, C8 subsumed, so the chain from here is the producer wave plus teardown.
 
 Order constraints honored by this chain:
 
