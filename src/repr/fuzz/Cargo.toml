@@ -22,10 +22,10 @@ libfuzzer-sys = "0.4"
 mz-persist-types = { path = "../../persist-types" }
 mz-proto = { path = "../../proto" }
 mz-repr = { path = "..", features = ["proptest"] }
-chrono = { version = "0.4", default-features = false }
+chrono = { version = "0.4.39", default-features = false }
 dec = "0.4.9"
 prost = "0.14.3"
-proptest = "1"
+proptest = "1.11.0"
 
 [[bin]]
 name = "row_proto_roundtrip"

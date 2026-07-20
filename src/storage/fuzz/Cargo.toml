@@ -20,7 +20,7 @@ mz-storage-types = { path = "../../storage-types" }
 mz-row-spine = { path = "../../row-spine" }
 differential-dataflow = "0.25.0"
 timely = "0.31.0"
-tokio = { version = "1", features = ["rt"] }
+tokio = { version = "1.52.3", features = ["rt"] }
 chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "std"] }
 uuid = "1.19.0"
 
