@@ -384,6 +384,8 @@ impl StorageController for Controller {
         let target_replicas: Option<BTreeSet<ReplicaId>> =
             target_replica_ids.map(|ids| ids.into_iter().collect());
 
+        let instance = self.instances.get(target_cluster_id);
+
         let mut all_hydrated = true;
         for (collection_id, collection_state) in self.collections.iter() {
             if collection_id.is_transient() || exclude_collections.contains(collection_id) {
@@ -395,7 +397,23 @@ impl StorageController for Controller {
                         continue;
                     }
                     match &target_replicas {
-                        Some(target_replicas) => !state.hydrated_on.is_disjoint(target_replicas),
+                        Some(target_replicas) => {
+                            // Not scheduled on any target replica means it can
+                            // never hydrate there, so it does not count (see
+                            // the trait docs). If the instance is unknown (the
+                            // cluster is being dropped concurrently) the
+                            // scheduled set is empty and every ingestion is
+                            // skipped. Readiness callers gate on replica health
+                            // separately, which covers that window.
+                            let scheduled_on = instance
+                                .map(|i| i.get_active_replicas_for_object(collection_id))
+                                .unwrap_or_default();
+                            if scheduled_on.is_disjoint(target_replicas) {
+                                true
+                            } else {
+                                !state.hydrated_on.is_disjoint(target_replicas)
+                            }
+                        }
                         None => {
                             // Not target replicas, so check that it's hydrated
                             // on at least one replica.

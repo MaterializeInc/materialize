@@ -41,6 +41,7 @@ use mz_cluster_controller::strategy::{
     GRACEFUL_RECONFIGURATION_STRATEGY_NAME, HYDRATION_BURST_STRATEGY_NAME,
 };
 use mz_compute_types::config::ComputeReplicaConfig;
+use mz_controller::clusters::ClusterStatus;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::task::spawn;
 use mz_repr::Timestamp;
@@ -48,7 +49,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, warn};
 
 use crate::catalog::{DropObjectInfo, Op, ReplicaCreateDropReason};
-use crate::coord::{Coordinator, Message};
+use crate::coord::{ClusterReplicaStatuses, Coordinator, Message};
 use crate::error::AdapterError;
 
 /// A request the controller task marshals to the Coordinator to satisfy one
@@ -69,7 +70,8 @@ pub enum ClusterControllerRequest {
         clusters: Vec<ClusterId>,
         tx: oneshot::Sender<(Vec<ClusterState>, Timestamp)>,
     },
-    /// Of `replicas` on `cluster`, which have all current collections hydrated.
+    /// Of `replicas` on `cluster`, which are online and have all current
+    /// collections hydrated.
     HydratedReplicas {
         cluster_id: ClusterId,
         replicas: Vec<ReplicaId>,
@@ -385,9 +387,9 @@ impl Coordinator {
 
     /// Starts per-replica hydration checks for `cluster_id`.
     ///
-    /// Returns only checks that are already storage-hydrated and known to the
-    /// compute controller. The compute receiver completes off the coordinator
-    /// loop.
+    /// Returns only checks for replicas whose processes are all online, that
+    /// are already storage-hydrated, and that are known to the compute
+    /// controller. The compute receiver completes off the coordinator loop.
     fn start_hydration_checks(
         &self,
         cluster_id: ClusterId,
@@ -419,6 +421,16 @@ impl Coordinator {
 
         let mut checks = Vec::new();
         for replica_id in replicas {
+            // Skip replicas that are not online. We wait for a replica to be
+            // online even when it has no objects that need hydration on it
+            // (e.g. a single-replica source).
+            let status = self
+                .cluster_replica_statuses
+                .try_get_cluster_replica_statuses(cluster_id, replica_id)
+                .map(ClusterReplicaStatuses::cluster_replica_status);
+            if !matches!(status, Some(ClusterStatus::Online)) {
+                continue;
+            }
             let exclude: BTreeSet<mz_repr::GlobalId> = pinned_mvs
                 .iter()
                 .filter(|(target, _)| *target != replica_id)
