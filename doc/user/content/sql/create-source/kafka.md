@@ -1,13 +1,13 @@
 ---
-title: "CREATE SOURCE: Kafka/Redpanda"
+title: "CREATE SOURCE: Kafka/Redpanda (Legacy Syntax)"
 description: "Connecting Materialize to a Kafka or Redpanda broker"
 pagerank: 40
 menu:
   main:
     parent: 'create-source'
     identifier: cs_kafka
-    name: Kafka/Redpanda
-    weight: 10
+    name: Kafka/Redpanda (Legacy Syntax)
+    weight: 11
 aliases:
     - /sql/create-source/avro-kafka
     - /sql/create-source/json-kafka
@@ -15,6 +15,9 @@ aliases:
     - /sql/create-source/text-kafka
     - /sql/create-source/csv-kafka
 ---
+
+{{< source-versioning-disambiguation is_new=false
+other_ref="[new reference page](/sql/create-source/kafka-v2/)" >}}
 
 {{% create-source/intro %}}
 

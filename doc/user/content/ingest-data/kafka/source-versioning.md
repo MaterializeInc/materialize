@@ -84,7 +84,7 @@ a `prod` schema in Materialize:
 CREATE SCHEMA prod;
 
 CREATE TABLE prod.orders
-    FROM SOURCE orders_src (REFERENCE "orders")
+    FROM SOURCE orders_src
     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
     ENVELOPE NONE;
 ```
@@ -155,7 +155,7 @@ latest schema and exposes `quantity`:
 CREATE SCHEMA staging;
 
 CREATE TABLE staging.orders
-    FROM SOURCE orders_src (REFERENCE "orders")
+    FROM SOURCE orders_src
     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
     ENVELOPE NONE;
 ```
