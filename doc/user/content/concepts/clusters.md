@@ -78,11 +78,13 @@ volumes.
 
 As your workload changes, you can [resize a cluster](/sql/alter-cluster/).
 
+{{< if-released "v26.34" >}}
 To speed up hydration without permanently paying for a larger cluster, you can
 configure an [autoscaling
-strategy](/sql/alter-cluster/#speed-up-hydration-by-bursting-to-a-larger-size)
+strategy](/sql/alter-cluster/#speed-up-hydration-by-autoscaling-to-a-larger-size)
 that temporarily bursts the cluster to a larger size while it has un-hydrated
 objects.
+{{< /if-released >}}
 
 {{< tip >}}
 

@@ -177,9 +177,11 @@ See the reference documentation for [`ALTER
 CLUSTER`](/sql/alter-cluster#zero-downtime-cluster-resizing) for more details
 on cluster resizing.
 
+{{< if-released "v26.34" >}}
 ### Autoscaling
 
 {{< include-md file="shared-content/cluster-hydration-burst.md" >}}
+{{< /if-released >}}
 
 ### Replication factor
 

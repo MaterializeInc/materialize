@@ -48,5 +48,5 @@
     - name: "`AUTO SCALING STRATEGY`"
       description: |
         Optional. Lets the cluster temporarily burst to a larger size while it
-        has un-hydrated objects, to speed up hydration. See
-        [Autoscaling](#autoscaling) for details.
+        has un-hydrated objects, to speed up hydration. Only available on managed
+        clusters.

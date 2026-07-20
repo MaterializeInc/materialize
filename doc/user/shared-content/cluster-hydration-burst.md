@@ -11,7 +11,13 @@ and rebuilds in-memory state, and its speed scales with the cluster
 The `AUTO SCALING STRATEGY` option lets a cluster **burst to a larger size while
 it has un-hydrated objects**, then automatically return to its steady size once
 hydration completes. This speeds up hydration without permanently paying for a
-larger cluster.
+larger cluster. It can also speed up deployments that hydrate new objects,
+especially [blue/green deployments](/manage/blue-green/), where a new cluster
+must hydrate before the cutover.
+
+`AUTO SCALING STRATEGY` is only available on **managed clusters**. It is not
+supported on unmanaged clusters, and it cannot be combined with a cluster
+`SCHEDULE` other than the default `MANUAL`.
 
 With the `ON HYDRATION` strategy, whenever the cluster has un-hydrated objects,
 Materialize provisions an extra replica at the configured `HYDRATION SIZE`

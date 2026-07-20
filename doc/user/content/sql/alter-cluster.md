@@ -241,9 +241,11 @@ Customizing the resize timeout with `WAIT UNTIL READY` or `WAIT FOR`
   `WAIT UNTIL READY`.
 {{< /if-released >}}
 
-#### Speed up hydration by bursting to a larger size
+{{< if-released "v26.34" >}}
+#### Speed up hydration by autoscaling to a larger size
 
 {{< include-md file="shared-content/cluster-hydration-burst.md" >}}
+{{< /if-released >}}
 
 {{< if-released "v26.34" >}}
 #### Monitoring a resize
@@ -408,9 +410,10 @@ SET (SIZE = '100cc') WITH (WAIT UNTIL READY (TIMEOUT = '10m', ON TIMEOUT = 'ROLL
 ```
 {{< /if-released >}}
 
+{{< if-released "v26.34" >}}
 ### Configure autoscaling
 
-To [speed up hydration](#speed-up-hydration-by-bursting-to-a-larger-size),
+To [speed up hydration](#speed-up-hydration-by-autoscaling-to-a-larger-size),
 configure an autoscaling strategy that bursts to a larger size while the cluster
 has un-hydrated objects:
 
@@ -427,6 +430,31 @@ To remove the strategy:
 ```mzsql
 ALTER CLUSTER c1 RESET (AUTO SCALING STRATEGY);
 ```
+
+To inspect the configured strategy and any in-flight burst, query
+[`mz_internal.mz_cluster_auto_scaling_strategies`](/reference/system-catalog/mz_internal/#mz_cluster_auto_scaling_strategies).
+The `strategy` column holds the configured policy, and the `state` column holds
+the in-flight burst, or `NULL` when no burst is running:
+
+```mzsql
+SELECT
+    c.name AS cluster,
+    s.strategy->'on_hydration'->>'hydration_size' AS hydration_size,
+    s.state->'burst'->>'burst_size' AS bursting_at
+FROM mz_internal.mz_cluster_auto_scaling_strategies AS s
+JOIN mz_clusters AS c ON c.id = s.cluster_id;
+```
+
+```nofmt
+ cluster | hydration_size | bursting_at
+---------+----------------+-------------
+ c1      | 800cc          |
+```
+
+Here, `c1` is configured to burst to `800cc` and no burst is currently running
+(`bursting_at` is `NULL`). While a burst is in flight, `bursting_at` reports the
+burst replica's size.
+{{< /if-released >}}
 
 ### Converting unmanaged to managed clusters
 
