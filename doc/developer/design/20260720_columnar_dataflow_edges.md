@@ -148,7 +148,6 @@ graph TD
     C2["C2: FlatMap input decode via the edge, fueling preserved"]
     C3["C3: TopK input columnar"]
     C4["C4: linear-join input columnar"]
-    C5["C5: delta-join input columnar"]
     C6["C6: sink columnar input API"]
     C7["C7: LetRec sanctioned decode, consume edge then into_vec"]
     C8["C8: Union temporal-bucket sanctioned decode, consume edge then into_vec"]
@@ -171,7 +170,6 @@ graph TD
   end
   C1 --> C3
   C1 --> C4
-  C1 --> C5
   Wave1 ==> Wave2
   Wave2 --> T1
   T1 --> T2
@@ -243,12 +241,14 @@ Files: `src/compute/src/render/join/linear_join.rs`.
 Test: linear-join sqllogictest.
 Base: `C1`.
 
-**C5: delta-join input columnar.**
-Rework the delta-join input path to consume the columnar batch.
-This is the most intricate operator, so it is a separate node from C4.
-Files: `src/compute/src/render/join/delta_join.rs`.
-Test: delta-join sqllogictest.
-Base: `C1`.
+**C5: delta-join input.** No work, subsumed by C1.
+The premise that delta-join has an unarranged input to rework does not hold.
+Unlike linear join, delta join requires every input pre-arranged, guarded by the "Arrangement promised by the planner is absent!" panics in `delta_join.rs`.
+`render_delta_join` reads inputs only via `inputs[..].arrangement(&key)`, never `.collection`/`as_specific_collection`/`into_vec`.
+The per-relation update stream is arrangement-derived: `build_update_stream` walks an `Arranged` trace's `stream` with a batch cursor, not a raw collection.
+The `CollectionEdge` decode for delta-join inputs therefore lives entirely in `arrange_collection`, which C1 already migrated.
+Confirmed by an adversarial trace of `delta_join.rs`; no separate node exists.
+The delta-join output flip remains real and is covered by P7.
 
 **C6: sink columnar input.**
 Change the sink input path so it consumes a columnar edge.
@@ -321,7 +321,7 @@ Confirmed feasible by the prototype, builder swaps with no blocker.
 Delta join: `half_join_internal_unsafe` is generic over its output `ContainerBuilder` (`differential-dogs3 half_join2.rs:121-140`); swap `CapacityContainerBuilder<Vec>` (`delta_join.rs:406`) for `ColumnBuilder` and the heavy operator emits `Column` directly.
 Linear join: swap the `flat_map_fallible::<ConsolidatingContainerBuilder, ..>` (`linear_join.rs:300`) for the existing `ConsolidatingColumnBuilder` (`columnar/consolidate.rs`), preserving output consolidation.
 The carried-time `(Row, T)` payload is `Columnar`.
-Join input, C4 and C5, is untouched here.
+Join input is untouched here: linear-join input is C4, and delta-join input is arrangement-only, subsumed by C1.
 Files: `src/compute/src/render/join/linear_join.rs`, `src/compute/src/render/join/delta_join.rs`.
 Base: Wave 1 complete.
 
@@ -367,14 +367,16 @@ So the DAG is flattened into a single chain, managed with gh-stack, where each b
 The chain is a topological order of the DAG, so every dependency edge points backward:
 
 ```
-C1 -> C3 -> C4 -> C5 -> F1 -> C2 -> C6 -> C7 -> C8
+C1 -> C3 -> C4 -> F1 -> C2 -> C6 -> C7 -> C8
    -> P1 -> P2 -> P3 -> P4 -> P5 -> P6 -> P7 -> P8 -> P9
    -> T1 -> T2 -> T3
 ```
 
+C5 is not in the chain: delta-join input is subsumed by C1 (see the C5 node).
+
 Order constraints honored by this chain:
 
-* C1 precedes C3, C4, C5, which reuse its columnar key-forming pattern.
+* C1 precedes C3 and C4, which reuse its columnar key-forming pattern.
 * All consumer nodes, C and F, precede all producer nodes P, per the producer-flip invariant.
 * The teardown T1, T2, T3 is last, in order.
 
@@ -450,8 +452,8 @@ The C1 arrange-input key-forming pattern was already confirmed low-risk and was 
 ## Open questions
 
 * **Join node granularity.**
-  C4, C5, and P7 assume linear-input, delta-input, and a shared output flip are the right cut.
-  Whether the output flip should also split by join kind depends on how large the diffs are, resolved when the join work starts.
+  Resolved: linear-join input is C4 (landed), delta-join input is subsumed by C1 (C5 dropped), and the output flip for both join kinds is P7.
+  Whether P7 should split by join kind depends on the diff size, resolved when the producer wave starts.
 * **LetRec and Union temporal-bucketing.**
   Resolved in the prototype: both are sanctioned decode points for now, with a native fast-follow tracked if either shows up hot.
   See the C7 and C8 nodes.
