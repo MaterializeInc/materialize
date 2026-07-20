@@ -7,16 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import {
-  Box,
-  chakra,
-  Grid,
-  HStack,
-  Text,
-  Tooltip,
-  useDisclosure,
-  useTheme,
-} from "@chakra-ui/react";
+import { Box, chakra, HStack, Text, Tooltip, useTheme } from "@chakra-ui/react";
 import { AxisBottom, AxisLeft, AxisScale } from "@visx/axis";
 import { curveMonotoneX } from "@visx/curve";
 import { localPoint } from "@visx/event";
@@ -44,7 +35,6 @@ import {
   EmptyListHeaderContents,
   EmptyListWrapper,
 } from "~/layouts/listPageComponents";
-import ChevronRightIcon from "~/svg/ChevronRightIcon";
 import { MaterializeTheme } from "~/theme";
 import { DATE_FORMAT_SHORT, formatDateInUtc } from "~/utils/dateFormat";
 import { formatCurrency, formatPercentage } from "~/utils/format";
@@ -53,11 +43,7 @@ import {
   calculateTooltipPosition,
 } from "~/utils/graph";
 
-import {
-  ACCOUNT_SPEND_FETCH_ERROR_MESSAGE,
-  baseCellStyles,
-  resourceTypePaddingLeft,
-} from "./constants";
+import { ACCOUNT_SPEND_FETCH_ERROR_MESSAGE } from "./constants";
 import {
   accountTotal,
   clusterTotal,
@@ -65,8 +51,13 @@ import {
   shortAccountId,
   StackedDailyRow,
 } from "./dailyBreakdown";
+import {
+  LedgerCaret,
+  LedgerCell,
+  LedgerGroup,
+  LedgerTable,
+} from "./LedgerTable";
 import RegionSelect from "./RegionSelect";
-import { SafariSafeCollapse } from "./SpendBreakdown";
 import TimeRangeSelect from "./TimeRangeSelect";
 
 const margin = { top: 10, right: 0, bottom: 36, left: 50 };
@@ -423,97 +414,62 @@ const AccountLedgerGroup = ({
   trend: number[];
   color: string;
 }) => {
-  const { colors } = useTheme<MaterializeTheme>();
-  const { isOpen, onToggle } = useDisclosure({ defaultIsOpen: true });
-
-  const groupHeaderStyles = {
-    ...baseCellStyles,
-    height: 16,
-    textStyle: "heading-xs",
-    borderBottom: 0,
-    borderTop: "1px solid",
-    borderColor: colors.border.secondary,
-  };
-
   return (
-    <>
-      <Box
-        display="contents"
-        role="row"
-        onClick={onToggle}
-        cursor="pointer"
-        data-testid="account-row"
-      >
-        <Box {...groupHeaderStyles} role="cell">
-          <ChevronRightIcon
-            width="4"
-            height="4"
-            transform={`rotate(${isOpen ? 90 : 0}deg)`}
-            transition="all 0.1s"
-            marginRight="2"
-          />
-          <Box
-            width="2"
-            height="2"
-            borderRadius="sm"
-            backgroundColor={color}
-            marginRight="2"
-            flexShrink={0}
-          />
-          <Tooltip label={account.external_customer_id}>
-            <Text whiteSpace="nowrap">
-              {shortAccountId(account.external_customer_id)}
-            </Text>
-          </Tooltip>
-        </Box>
-        <Box {...groupHeaderStyles} role="cell" />
-        <Box {...groupHeaderStyles} role="cell" justifyContent="end">
-          {formatPercentage(share, 1)}
-        </Box>
-        <Box {...groupHeaderStyles} role="cell">
-          <TrendSparkline points={trend} color={color} />
-        </Box>
-        <Box {...groupHeaderStyles} role="cell" justifyContent="end">
-          {formatCurrency(total)}
-        </Box>
-      </Box>
-      <SafariSafeCollapse
-        isCollapsed={!isOpen}
-        rowCount={account.clusters.length}
-      >
-        {account.clusters.map((cluster, ix) => {
-          const isLastElement = ix === account.clusters.length - 1;
-          const cellStyles = {
-            ...baseCellStyles,
-            borderColor: "transparent",
-            height: isLastElement ? 10 : baseCellStyles.height,
-            paddingBottom: isLastElement ? "8px" : "unset",
-          };
-          return (
-            <React.Fragment
-              key={`${cluster.environment_id}/${cluster.cluster_grouping_key}/${cluster.category}/${ix}`}
-            >
-              <Box
-                {...cellStyles}
-                paddingLeft={resourceTypePaddingLeft}
-                whiteSpace="nowrap"
-                role="cell"
-              >
-                {clusterLabel(cluster)}
-              </Box>
-              <Box {...cellStyles} role="cell" justifyContent="end">
-                {USAGE_PLACEHOLDER}
-              </Box>
-              <Box {...cellStyles} role="cell" />
-              <Box {...cellStyles} role="cell" />
-              <Box {...cellStyles} role="cell" justifyContent="end">
-                {formatCurrency(clusterTotal(cluster.amounts))}
-              </Box>
-            </React.Fragment>
-          );
-        })}
-      </SafariSafeCollapse>
-    </>
+    <LedgerGroup
+      rowCount={account.clusters.length}
+      data-testid="account-row"
+      renderHeader={(isOpen) => (
+        <>
+          <LedgerCell variant="groupHeader">
+            <LedgerCaret isOpen={isOpen} />
+            <Box
+              width="2"
+              height="2"
+              borderRadius="sm"
+              backgroundColor={color}
+              marginRight="2"
+              flexShrink={0}
+            />
+            <Tooltip label={account.external_customer_id}>
+              <Text whiteSpace="nowrap">
+                {shortAccountId(account.external_customer_id)}
+              </Text>
+            </Tooltip>
+          </LedgerCell>
+          <LedgerCell variant="groupHeader" />
+          <LedgerCell variant="groupHeader" numeric>
+            {formatPercentage(share, 1)}
+          </LedgerCell>
+          <LedgerCell variant="groupHeader">
+            <TrendSparkline points={trend} color={color} />
+          </LedgerCell>
+          <LedgerCell variant="groupHeader" numeric>
+            {formatCurrency(total)}
+          </LedgerCell>
+        </>
+      )}
+    >
+      {account.clusters.map((cluster, ix) => {
+        const isLastElement = ix === account.clusters.length - 1;
+        return (
+          <React.Fragment
+            key={`${cluster.environment_id}/${cluster.cluster_grouping_key}/${cluster.category}/${ix}`}
+          >
+            <LedgerCell indented isLastRow={isLastElement}>
+              {clusterLabel(cluster)}
+            </LedgerCell>
+            <LedgerCell isLastRow={isLastElement} numeric>
+              {USAGE_PLACEHOLDER}
+            </LedgerCell>
+            <LedgerCell isLastRow={isLastElement} />
+            <LedgerCell isLastRow={isLastElement} />
+            <LedgerCell isLastRow={isLastElement} numeric>
+              {formatCurrency(clusterTotal(cluster.amounts))}
+            </LedgerCell>
+          </React.Fragment>
+        );
+      })}
+    </LedgerGroup>
   );
 };
 
@@ -536,45 +492,18 @@ const UnifiedLedger = ({
   const totals = accounts.map((account) => accountTotal(account));
   const grandTotal = totals.reduce((sum, total) => sum + total, 0);
 
-  const headerStyles = {
-    ...baseCellStyles,
-    height: 10,
-    textStyle: "text-ui-med",
-    color: colors.foreground.secondary,
-    borderColor: colors.border.secondary,
-  };
-  const totalStyles = {
-    ...baseCellStyles,
-    height: 12,
-    textStyle: "text-ui-med",
-    borderBottom: 0,
-    borderTop: "1px solid",
-    borderColor: colors.border.secondary,
-  };
-
   return (
-    <Grid
+    <LedgerTable
       mt="6"
-      gridTemplateColumns="minmax(200px, 1fr) minmax(90px, auto) minmax(90px, auto) minmax(120px, 1fr) minmax(90px, auto)"
-      role="table"
-      borderBottom="1px solid"
-      borderBottomColor={colors.border.secondary}
+      templateColumns="minmax(200px, 1fr) minmax(90px, auto) minmax(90px, auto) minmax(120px, 1fr) minmax(90px, auto)"
+      columns={[
+        { label: "Account / cluster" },
+        { label: "Usage", numeric: true },
+        { label: "Share of total", numeric: true },
+        { label: "Trend" },
+        { label: "Cost", numeric: true },
+      ]}
     >
-      <Box {...headerStyles} role="columnheader">
-        Account / cluster
-      </Box>
-      <Box {...headerStyles} role="columnheader" justifyContent="end">
-        Usage
-      </Box>
-      <Box {...headerStyles} role="columnheader" justifyContent="end">
-        Share of total
-      </Box>
-      <Box {...headerStyles} role="columnheader">
-        Trend
-      </Box>
-      <Box {...headerStyles} role="columnheader" justifyContent="end">
-        Cost
-      </Box>
       {accounts.map((account, ix) => {
         const total = totals[ix];
         const share = grandTotal > 0 ? total / grandTotal : 0;
@@ -592,17 +521,15 @@ const UnifiedLedger = ({
         );
       })}
       <Box display="contents" role="row" data-testid="account-total-row">
-        <Box {...totalStyles} role="cell">
-          Total
-        </Box>
-        <Box {...totalStyles} role="cell" />
-        <Box {...totalStyles} role="cell" />
-        <Box {...totalStyles} role="cell" />
-        <Box {...totalStyles} role="cell" justifyContent="end">
+        <LedgerCell variant="total">Total</LedgerCell>
+        <LedgerCell variant="total" />
+        <LedgerCell variant="total" />
+        <LedgerCell variant="total" />
+        <LedgerCell variant="total" numeric>
           {formatCurrency(grandTotal)}
-        </Box>
+        </LedgerCell>
       </Box>
-    </Grid>
+    </LedgerTable>
   );
 };
 

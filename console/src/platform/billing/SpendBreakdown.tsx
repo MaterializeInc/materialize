@@ -11,12 +11,9 @@ import {
   Box,
   BoxProps,
   chakra,
-  Collapse,
   Fade,
-  Grid,
   Text,
   Tooltip,
-  useDisclosure,
   useTheme,
 } from "@chakra-ui/react";
 import { curveMonotoneX } from "@visx/curve";
@@ -24,21 +21,22 @@ import ParentSize from "@visx/responsive/lib/components/ParentSize";
 import { scaleLinear } from "@visx/scale";
 import { LinePath } from "@visx/shape";
 import { parseISO } from "date-fns";
-import React, { PropsWithChildren, useMemo } from "react";
+import React, { useMemo } from "react";
 
 import { DailyCostKey, DailyCosts } from "~/api/cloudGlobalApi";
-import ChevronRightIcon from "~/svg/ChevronRightIcon";
 import WarningIcon from "~/svg/WarningIcon";
 import { MaterializeTheme } from "~/theme";
-import { formatBytes, isSafari } from "~/util";
+import { formatBytes } from "~/util";
 import { DATE_FORMAT_SHORT, formatDateInUtc } from "~/utils/dateFormat";
 import { formatCurrency } from "~/utils/format";
 
+import { costUnits } from "./constants";
 import {
-  baseCellStyles,
-  costUnits,
-  resourceTypePaddingLeft,
-} from "./constants";
+  LedgerCaret,
+  LedgerCell,
+  LedgerGroup,
+  LedgerTable,
+} from "./LedgerTable";
 import { ResourceBreakdown, ResourceMeasurement } from "./types";
 import { summarizeResourceCosts } from "./utils";
 
@@ -182,35 +180,24 @@ const ResourceRow = ({
   costCaption,
 }: ResourceRowProps) => {
   const { colors } = useTheme<MaterializeTheme>();
-  const cellStyles = {
-    ...baseCellStyles,
-    borderColor: "transparent",
-    height: isLastElement ? 10 : baseCellStyles.height,
-    paddingBottom: isLastElement ? "8px" : "unset",
-  };
   const { min: usageMin, max: usageMax } = useMemo(
     () => findMinMax(resourceSummary.usagePoints),
     [resourceSummary],
   );
   return (
     <>
-      <Box
-        {...cellStyles}
-        paddingLeft={resourceTypePaddingLeft}
-        whiteSpace="nowrap"
-        role="cell"
-      >
+      <LedgerCell indented isLastRow={isLastElement}>
         {!isRegionFiltering && `${regionId} / `}
         {resourceType}
-      </Box>
-      <Box {...cellStyles} role="cell" whiteSpace="nowrap">
+      </LedgerCell>
+      <LedgerCell isLastRow={isLastElement} whiteSpace="nowrap">
         {resourceSummary.usageUnits === costUnits.storage ? (
           <StorageMetric usageGb={resourceSummary.usageValue} />
         ) : (
           <CreditsMetric credits={resourceSummary.usageValue} />
         )}
-      </Box>
-      <Box {...cellStyles} role="cell">
+      </LedgerCell>
+      <LedgerCell isLastRow={isLastElement}>
         <Box height="20px" width="100%">
           <ParentSize debounceTime={10}>
             {(parent) => (
@@ -225,13 +212,12 @@ const ResourceRow = ({
             )}
           </ParentSize>
         </Box>
-      </Box>
-      <Box
-        {...cellStyles}
+      </LedgerCell>
+      <LedgerCell
+        isLastRow={isLastElement}
         flexDirection="column"
         alignItems="end"
         justifyContent="center"
-        role="cell"
       >
         {formatCurrency(resourceSummary.totalCost)}
         {costCaption && (
@@ -245,7 +231,7 @@ const ResourceRow = ({
             /hr)
           </Text>
         )}
-      </Box>
+      </LedgerCell>
     </>
   );
 };
@@ -279,7 +265,6 @@ const ResourceGroup = ({
   warningMessage,
 }: ResourceGroupProps) => {
   const { colors } = useTheme<MaterializeTheme>();
-  const { isOpen, onToggle } = useDisclosure();
   const totalUsageMetric = selectedRegions.reduce(
     (total, [_regionId, regionSummary]) =>
       total + regionSummary[costKey].total.usageValue,
@@ -299,133 +284,75 @@ const ResourceGroup = ({
         );
     },
   );
-  const groupHeaderStyles = {
-    ...baseCellStyles,
-    height: 16,
-    textStyle: "heading-xs",
-    borderColor: !isOpen ? colors.border.secondary : "transparent",
-    borderBottom: 0,
-  };
   return (
-    <>
-      <Box
-        data-testid={`spend-breakdown-${costKey}-group-header`}
-        display="contents"
-        role="row"
-        onClick={onToggle}
-        cursor="pointer"
-      >
-        <Box {...groupHeaderStyles} role="cell" {...headerProps}>
-          <ChevronRightIcon
-            width="4"
-            height="4"
-            transform={`rotate(${!isOpen || isLoading ? 0 : 90}deg)`}
-            transition="all 0.1s"
-            marginRight="2"
+    <LedgerGroup
+      // Resource groups start collapsed, unlike account ledger groups.
+      defaultIsOpen={false}
+      isLoading={isLoading}
+      rowCount={resourceMeasurements.length}
+      data-testid={`spend-breakdown-${costKey}-group-header`}
+      contentTestId={`spend-breakdown-${costKey}-group`}
+      renderHeader={(isOpen) => (
+        <>
+          <LedgerCell variant="groupHeader" {...headerProps}>
+            <LedgerCaret isOpen={isOpen && !isLoading} />
+            {label}
+            <Fade in={!!warningMessage}>
+              <Tooltip label={warningMessage}>
+                <WarningIcon marginLeft={2} stroke={colors.accent.darkYellow} />
+              </Tooltip>
+            </Fade>
+          </LedgerCell>
+          <LedgerCell variant="groupHeader" {...headerProps}>
+            {selectedRegions.length > 0 && costKey === "storage" ? (
+              <StorageMetric usageGb={totalUsageMetric} />
+            ) : (
+              <CreditsMetric credits={totalUsageMetric} />
+            )}
+          </LedgerCell>
+          <LedgerCell variant="groupHeader" {...headerProps}>
+            <Box height="20px" width="100%">
+              <ParentSize debounceTime={10}>
+                {(parent) => (
+                  <SpendSparkline
+                    points={selectedSummary.totalPoints}
+                    min={selectedSummary.min}
+                    max={selectedSummary.max}
+                    color={colors.accent.purple}
+                    height={parent.height}
+                    width={parent.width}
+                  />
+                )}
+              </ParentSize>
+            </Box>
+          </LedgerCell>
+          <LedgerCell variant="groupHeader" numeric {...headerProps}>
+            {formatCurrency(
+              selectedRegions.reduce(
+                (total, [_regionId, regionSummary]) =>
+                  total + regionSummary[costKey].total.totalCost,
+                0,
+              ),
+            )}
+          </LedgerCell>
+        </>
+      )}
+    >
+      {resourceMeasurements.map(
+        ([regionId, resourceType, resourceSummary], ix) => (
+          <ResourceRow
+            key={ix}
+            regionId={regionId}
+            resourceType={resourceType}
+            resourceSummary={resourceSummary}
+            costCaption={costCaption}
+            isLastElement={ix === resourceMeasurements.length - 1}
+            isRegionFiltering={isRegionFiltering}
           />
-          {label}
-          <Fade in={!!warningMessage}>
-            <Tooltip label={warningMessage}>
-              <WarningIcon marginLeft={2} stroke={colors.accent.darkYellow} />
-            </Tooltip>
-          </Fade>
-        </Box>
-        <Box {...groupHeaderStyles} role="cell" {...headerProps}>
-          {selectedRegions.length > 0 && costKey === "storage" ? (
-            <StorageMetric usageGb={totalUsageMetric} />
-          ) : (
-            <CreditsMetric credits={totalUsageMetric} />
-          )}
-        </Box>
-        <Box {...groupHeaderStyles} role="cell" {...headerProps}>
-          <Box height="20px" width="100%">
-            <ParentSize debounceTime={10}>
-              {(parent) => (
-                <SpendSparkline
-                  points={selectedSummary.totalPoints}
-                  min={selectedSummary.min}
-                  max={selectedSummary.max}
-                  color={colors.accent.purple}
-                  height={parent.height}
-                  width={parent.width}
-                />
-              )}
-            </ParentSize>
-          </Box>
-        </Box>
-        <Box {...groupHeaderStyles} {...headerProps} justifyContent="end">
-          {formatCurrency(
-            selectedRegions.reduce(
-              (total, [_regionId, regionSummary]) =>
-                total + regionSummary[costKey].total.totalCost,
-              0,
-            ),
-          )}
-        </Box>
-      </Box>
-      <SafariSafeCollapse
-        isCollapsed={!isOpen || isLoading}
-        rowCount={resourceMeasurements.length}
-        data-testid={`spend-breakdown-${costKey}-group`}
-      >
-        {resourceMeasurements.map(
-          ([regionId, resourceType, resourceSummary], ix) => (
-            <ResourceRow
-              key={ix}
-              regionId={regionId}
-              resourceType={resourceType}
-              resourceSummary={resourceSummary}
-              costCaption={costCaption}
-              isLastElement={ix === resourceMeasurements.length - 1}
-              isRegionFiltering={isRegionFiltering}
-            />
-          ),
-        )}
-      </SafariSafeCollapse>
-    </>
+        ),
+      )}
+    </LedgerGroup>
   );
-};
-
-/**
- * Safari fails to layout the subgrid elements correctly if they're in a
- * Collapse component. For Safari, fall back to showing and hiding a simple
- * div. Other browsers get the nice animation.
- *
- * StackOverflow post where someone encounters a similar issue:
- *  https://stackoverflow.com/q/77927259/214197
- */
-export const SafariSafeCollapse = ({
-  children,
-  isCollapsed,
-  rowCount,
-  ...otherProps
-}: PropsWithChildren<{
-  isCollapsed: boolean;
-  rowCount: number;
-}>) => {
-  const collapseProps = {
-    display: "grid",
-    gridTemplateColumns: "subgrid",
-    gridColumn: "1 / -1",
-    maxHeight: rowCount * 32 + 8,
-  };
-  if (isSafari()) {
-    return (
-      <Box
-        {...collapseProps}
-        display={isCollapsed ? "none" : "grid"}
-        {...otherProps}
-      >
-        {children}
-      </Box>
-    );
-  } else {
-    return (
-      <Collapse in={!isCollapsed} style={collapseProps} {...otherProps}>
-        {children}
-      </Collapse>
-    );
-  }
 };
 
 const SpendBreakdown = ({
@@ -456,15 +383,6 @@ const SpendBreakdown = ({
     ([regionId, _regionSummary]) => regions.includes(regionId),
   );
 
-  const tableHeaderStyles = {
-    ...baseCellStyles,
-    py: 3,
-    textStyle: "text-ui-med",
-    color: colors.foreground.secondary,
-    borderColor: colors.border.secondary,
-    height: 10,
-  };
-
   return (
     <Box>
       <Text textStyle="heading-sm" data-testid="spend-breakdown-range">
@@ -481,36 +399,27 @@ const SpendBreakdown = ({
           </>
         )}
       </Text>
-      <Grid
+      <LedgerTable
         mt="6"
-        gridTemplateColumns="minmax(250px, 25%) repeat(3, minmax(20%, 25%))"
         gridTemplateRows="40px repeat(auto-fill, minmax(0, 64px))"
-        role="table"
-        borderBottom="1px solid"
-        borderBottomColor={colors.border.secondary}
+        templateColumns="minmax(250px, 25%) repeat(3, minmax(20%, 25%))"
+        columns={[
+          { label: "Resource type", indented: true },
+          { label: "Usage" },
+          { label: "Usage trend" },
+          { label: "Total cost", numeric: true },
+        ]}
       >
-        <Box
-          {...tableHeaderStyles}
-          paddingLeft={resourceTypePaddingLeft}
-          role="columnheader"
-        >
-          Resource type
-        </Box>
-        <Box {...tableHeaderStyles} role="columnheader">
-          Usage
-        </Box>
-        <Box {...tableHeaderStyles} role="columnheader">
-          Usage trend
-        </Box>
-        <Box {...tableHeaderStyles} role="columnheader" justifyContent="end">
-          Total cost
-        </Box>
         <ResourceGroup
           label="Compute"
           costKey="compute"
           isRegionFiltering={isRegionFiltering}
           selectedRegions={selectedRegions}
           isLoading={isLoading}
+          // The first group sits directly under the column headers, which
+          // already have their own bottom border; skip the shared top border
+          // here to avoid a doubled-up line.
+          headerProps={{ borderTop: "none" }}
         />
         <ResourceGroup
           label="Storage"
@@ -518,10 +427,6 @@ const SpendBreakdown = ({
           isRegionFiltering={isRegionFiltering}
           selectedRegions={selectedRegions}
           costCaption={true}
-          headerProps={{
-            borderTop: "1px solid",
-            borderTopColor: colors.border.secondary,
-          }}
           isLoading={isLoading}
           warningMessage={
             hasUnbucketedStorage
@@ -532,7 +437,7 @@ const SpendBreakdown = ({
               : undefined
           }
         />
-      </Grid>
+      </LedgerTable>
     </Box>
   );
 };
