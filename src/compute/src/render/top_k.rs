@@ -15,6 +15,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
+use columnar::{Columnar, Index};
 use differential_dataflow::AsCollection;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
@@ -41,10 +42,13 @@ use timely::Container;
 use timely::container::{CapacityContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
+use timely::dataflow::operators::generic::OutputBuilder;
+use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::{ClearContainer, MzReduce};
 use crate::render::Pairer;
+use crate::render::columnar::CollectionEdge;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::errors::MaybeValidatingRow;
@@ -64,7 +68,13 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
         top_k_plan: TopKPlan,
         temporal_bucketing_strategy: ArrangementStrategy,
     ) -> CollectionBundle<'scope, T> {
-        let (ok_input, err_input) = input.as_specific_collection(None, &self.config_set);
+        // Consume the input as a columnar-capable edge rather than decoding it to
+        // `Vec` up front. The arrangement key is formed off the edge below via
+        // `map_topk_key`, so no `ColumnarToVec` sits on the common input path.
+        let (ok_input, err_input) = input
+            .collection
+            .clone()
+            .expect("The unarranged collection doesn't exist.");
 
         // Bucket the per-row input stream when lowering chose `TemporalBucketing`.
         // `TopK` builds its own arrangement(s) inside the variants below, bypassing
@@ -99,6 +109,11 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                  `mz_now()` has been const-folded and no temporal bucketing is set",
             );
         }
+        // Temporal bucketing consumes and produces a `Vec` stream, so decode the
+        // edge here. This is the sanctioned leaf decode. It only
+        // fires under `ENABLE_COMPUTE_TEMPORAL_BUCKETING` and the `TemporalBucketing`
+        // strategy, both off on the common path, so the columnar edge otherwise
+        // flows straight through.
         let ok_input = if matches!(
             temporal_bucketing_strategy,
             ArrangementStrategy::TemporalBucketing
@@ -108,7 +123,11 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                 .get(&self.config_set)
                 .try_into()
                 .expect("must fit");
-            T::maybe_apply_temporal_bucketing(ok_input.inner, self.as_of_frontier.clone(), summary)
+            CollectionEdge::Vec(T::maybe_apply_temporal_bucketing(
+                ok_input.into_vec().inner,
+                self.as_of_frontier.clone(),
+                summary,
+            ))
         } else {
             ok_input
         };
@@ -138,7 +157,13 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                     // thus needs to be checked.
                     let expr = expr.clone();
                     let mut datum_vec = mz_repr::DatumVec::new();
-                    let errors = ok_input.clone().flat_map(move |row| {
+                    // A literal, non-negative limit skips this branch entirely, so this
+                    // per-row evaluation only runs for column or otherwise fallible
+                    // limits. On the `Vec` edge `into_vec` is the identity, so the
+                    // `Vec` path is unchanged. On a columnar edge it is a narrow
+                    // sanctioned decode
+                    // confined to this rare path.
+                    let errors = ok_input.clone().into_vec().flat_map(move |row| {
                         let temp_storage = mz_repr::RowArena::new();
                         let datums = datum_vec.borrow_with(&row);
                         match expr.eval(&datums[..], &temp_storage) {
@@ -201,15 +226,10 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                     }
 
                     // Map the group key along with the row and consolidate if required to do so.
-                    let mut datum_vec = mz_repr::DatumVec::new();
                     let ok_scope = ok_input.scope();
-                    let collection = ok_input
-                        .map(move |row| {
-                            let group_row = {
-                                let datums = datum_vec.borrow_with(&row);
-                                SharedRow::pack(group_key.iter().map(|i| datums[*i]))
-                            };
-                            (group_row, row)
+                    let collection =
+                        map_topk_key(ok_input, "MonotonicTopK input", move |datums, _row| {
+                            SharedRow::pack(group_key.iter().map(|i| datums[*i]))
                         })
                         .consolidate_named_if::<KeyBatcher<_, _, _>>(
                             must_consolidate,
@@ -321,7 +341,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
     /// Constructs a TopK dataflow subgraph.
     fn build_topk<'s>(
         &self,
-        collection: VecCollection<'s, T, Row, Diff>,
+        collection: CollectionEdge<'s, T>,
         group_key: Vec<usize>,
         order_key: Vec<mz_expr::ColumnOrder>,
         offset: usize,
@@ -333,17 +353,10 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
         VecCollection<'s, T, DataflowErrorSer, Diff>,
     ) {
         let pairer = Pairer::new(1);
-        let mut datum_vec = mz_repr::DatumVec::new();
-        let mut collection = collection.map({
-            move |row| {
-                let group_row = {
-                    let row_hash = row.hashed();
-                    let datums = datum_vec.borrow_with(&row);
-                    let iterator = group_key.iter().map(|i| datums[*i]);
-                    pairer.merge(std::iter::once(Datum::from(row_hash)), iterator)
-                };
-                (group_row, row)
-            }
+        let mut collection = map_topk_key(collection, "TopK input", move |datums, row| {
+            let row_hash = row.hashed();
+            let iterator = group_key.iter().map(|i| datums[*i]);
+            pairer.merge(std::iter::once(Datum::from(row_hash)), iterator)
         });
 
         let mut validating = true;
@@ -516,7 +529,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
 
     fn render_top1_monotonic<'s>(
         &self,
-        collection: VecCollection<'s, T, Row, Diff>,
+        collection: CollectionEdge<'s, T>,
         group_key: Vec<usize>,
         order_key: Vec<mz_expr::ColumnOrder>,
         arity: usize,
@@ -541,22 +554,13 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
         // corresponding to evaluating our aggregate, instead of having to do a hierarchical
         // reduction. We start by mapping the group key along with the row and consolidating
         // if required to do so.
-        let collection = collection
-            .map({
-                let mut datum_vec = mz_repr::DatumVec::new();
-                move |row| {
-                    // Scoped to allow borrow of `row` to drop.
-                    let group_key = {
-                        let datums = datum_vec.borrow_with(&row);
-                        SharedRow::pack(group_key.iter().map(|i| datums[*i]))
-                    };
-                    (group_key, row)
-                }
-            })
-            .consolidate_named_if::<KeyBatcher<_, _, _>>(
-                must_consolidate,
-                "Consolidated MonotonicTop1 input",
-            );
+        let collection = map_topk_key(collection, "MonotonicTop1 input", move |datums, _row| {
+            SharedRow::pack(group_key.iter().map(|i| datums[*i]))
+        })
+        .consolidate_named_if::<KeyBatcher<_, _, _>>(
+            must_consolidate,
+            "Consolidated MonotonicTop1 input",
+        );
 
         // It should be now possible to ensure that we have a monotonic collection and process it.
         let error_logger = self.error_logger();
@@ -601,6 +605,82 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                 },
             );
         (result, errs)
+    }
+}
+
+/// Forms the `(key, value)` arrangement input the TopK stages consume, reading
+/// directly from a columnar input edge.
+///
+/// `key` receives the borrowed datums of an input row and the owned row, and
+/// returns the arrangement key. The value is always the full input row, because
+/// every TopK stage carries the row through to its output.
+///
+/// The output is a `VecCollection<(Row, Row)>` because the TopK downstream
+/// (`KeyBatcher`, `MzReduce`) is `Vec`-based. The columnar arm therefore still
+/// decodes the value `Row` of every record inline via `Columnar::into_owned`,
+/// which costs the same as `columnar_to_vec`'s body. This is not C1's zero-copy
+/// borrowed-push: it removes the separate `ColumnarToVec` decode operator and the
+/// intermediate `Vec<(Row, T, Diff)>` container it would produce, but it does not
+/// avoid the per-record decode, because there is no columnar batcher to push
+/// borrowed rows into here. The `Vec` arm maps the collection directly and reuses
+/// the owned input row, so it is behaviorally identical to consuming the
+/// collection directly.
+fn map_topk_key<'s, T, L>(
+    edge: CollectionEdge<'s, T>,
+    name: &str,
+    mut key: L,
+) -> VecCollection<'s, T, (Row, Row), Diff>
+where
+    T: crate::render::RenderTimestamp,
+    L: FnMut(&[Datum], &Row) -> Row + 'static,
+{
+    match edge {
+        CollectionEdge::Vec(oks) => {
+            let mut datum_vec = mz_repr::DatumVec::new();
+            oks.map(move |row| {
+                let key_row = {
+                    let datums = datum_vec.borrow_with(&row);
+                    key(&datums, &row)
+                };
+                (key_row, row)
+            })
+        }
+        CollectionEdge::Columnar(oks) => {
+            let mut builder = OperatorBuilder::new(name.to_string(), oks.inner.scope());
+            let (output, stream) = builder.new_output();
+            let mut output =
+                OutputBuilder::<_, CapacityContainerBuilder<Vec<((Row, Row), T, Diff)>>>::from(
+                    output,
+                );
+            let mut input = builder.new_input(oks.inner, Pipeline);
+            builder.build(move |_capabilities| {
+                let mut datum_vec = mz_repr::DatumVec::new();
+                move |_frontiers| {
+                    let mut output = output.activate();
+                    input.for_each(|time, data| {
+                        let mut session = output.session_with_builder(&time);
+                        // The value row is decoded to an owned `Row` here because the
+                        // output is `Vec`-based. This is the same per-record cost as
+                        // `columnar_to_vec`, just without the separate decode operator
+                        // and its intermediate container. The key is formed from the
+                        // borrowed datums. Time and diff are owned per record.
+                        for (row, t, d) in data.borrow().into_index_iter() {
+                            let value_row: Row = Columnar::into_owned(row);
+                            let key_row = {
+                                let datums = datum_vec.borrow_with(&value_row);
+                                key(&datums, &value_row)
+                            };
+                            session.give((
+                                (key_row, value_row),
+                                Columnar::into_owned(t),
+                                Columnar::into_owned(d),
+                            ));
+                        }
+                    });
+                }
+            });
+            stream.as_collection()
+        }
     }
 }
 
@@ -1152,6 +1232,137 @@ pub mod monoids {
     impl IsZero for Top1MonoidLocal {
         fn is_zero(&self) -> bool {
             false
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use differential_dataflow::input::Input;
+    use mz_repr::{Datum, Timestamp};
+    use timely::dataflow::operators::Capture;
+    use timely::dataflow::operators::capture::{Event, Extract};
+
+    use super::*;
+    use crate::render::columnar::vec_to_columnar;
+
+    type KeyedUpdate = ((Row, Row), Timestamp, Diff);
+    type Captured = std::sync::mpsc::Receiver<Event<Timestamp, Vec<KeyedUpdate>>>;
+
+    fn extract_sorted(captured: Captured) -> Vec<KeyedUpdate> {
+        let mut updates: Vec<_> = captured
+            .extract()
+            .into_iter()
+            .flat_map(|(_, data)| data)
+            .collect();
+        updates.sort();
+        updates
+    }
+
+    /// Input rows tagged with distinct timestamps. Feeding several timestamps
+    /// makes both arms exercise per-record time handling. The columnar arm owns
+    /// time and diff per record via `Columnar::into_owned` on the ok path. The
+    /// two `-1` records exercise `Columnar::into_owned` on a negative diff. They
+    /// retract at a `(row, time)` that has no matching insertion, so they survive
+    /// the `InputSession`'s pre-send consolidation and reach the operator.
+    fn test_input() -> Vec<(Row, u64, Diff)> {
+        vec![
+            (
+                Row::pack_slice(&[Datum::Int32(1), Datum::String("a")]),
+                0,
+                Diff::ONE,
+            ),
+            (
+                Row::pack_slice(&[Datum::Int32(2), Datum::String("b")]),
+                1,
+                Diff::ONE,
+            ),
+            (
+                Row::pack_slice(&[Datum::Int32(1), Datum::String("a")]),
+                2,
+                Diff::ONE,
+            ),
+            (
+                Row::pack_slice(&[Datum::Int32(3), Datum::Null]),
+                2,
+                Diff::ONE,
+            ),
+            (
+                Row::pack_slice(&[Datum::Int32(2), Datum::String("b")]),
+                2,
+                -Diff::ONE,
+            ),
+            (
+                Row::pack_slice(&[Datum::Int32(4), Datum::String("d")]),
+                1,
+                -Diff::ONE,
+            ),
+        ]
+    }
+
+    /// Runs `map_topk_key` against the same input fed once as a `Vec` edge and
+    /// once as a columnar edge, forming a hash-and-group key exactly as
+    /// `build_topk` does. Returns the sorted `(key, value)` updates of each arm.
+    fn run_both_arms(input: Vec<(Row, u64, Diff)>) -> (Vec<KeyedUpdate>, Vec<KeyedUpdate>) {
+        let (vec, col) = timely::execute_directly(move |worker| {
+            worker.dataflow::<Timestamp, _, _>(|scope| {
+                let (mut handle, collection) = scope.new_collection();
+                let mut captures = Vec::new();
+                for edge in [
+                    CollectionEdge::Vec(collection.clone()),
+                    CollectionEdge::Columnar(vec_to_columnar(collection)),
+                ] {
+                    let pairer = Pairer::new(1);
+                    let group_key = [0usize];
+                    let keyed = map_topk_key(edge, "test", move |datums, row| {
+                        let hash = row.hashed();
+                        let iterator = group_key.iter().map(|i| datums[*i]);
+                        pairer.merge(std::iter::once(Datum::from(hash)), iterator)
+                    });
+                    captures.push(keyed.inner.capture());
+                }
+                let col = captures.pop().unwrap();
+                let vec = captures.pop().unwrap();
+                for (row, time, diff) in input {
+                    handle.update_at(row, Timestamp::from(time), diff);
+                }
+                handle.advance_to(Timestamp::from(3_u64));
+                handle.flush();
+                (vec, col)
+            })
+        });
+        (extract_sorted(vec), extract_sorted(col))
+    }
+
+    /// The columnar arm of `map_topk_key` forms the same `(key, value)` updates
+    /// as the `Vec` arm, across several distinct timestamps.
+    ///
+    /// This proves the columnar key-forming is correct and that the columnar arm
+    /// ran (the input is fed through `vec_to_columnar`). It does not prove the
+    /// absence of a silent `ColumnarToVec` decode on the ok path: such a decode
+    /// would yield identical contents. No-decode holds by code inspection, the
+    /// columnar arm reads via `into_index_iter` and never calls `into_vec`.
+    ///
+    /// The key closure here is infallible (projection plus hash plus pack), so
+    /// there is no fallible-key path to test, unlike the arrange operator's key.
+    /// `Columnar::into_owned` for time and diff runs on the ok path for every
+    /// record, so the multi-timestamp, mixed-sign input exercises it on both
+    /// positive and negative diffs.
+    #[mz_ore::test]
+    fn map_topk_key_arms_agree() {
+        let (vec_updates, col_updates) = run_both_arms(test_input());
+        assert!(!vec_updates.is_empty());
+        assert_eq!(vec_updates, col_updates);
+        // Retractions reach the operator, so the columnar arm decoded a negative
+        // diff via `Columnar::into_owned`.
+        assert!(vec_updates.iter().any(|(_, _, d)| *d < Diff::ZERO));
+        // The value is the full input row. The key is `(hash, group_column)`, so
+        // the group component mirrors column 0 of the value row.
+        for ((key, value), _t, _d) in &vec_updates {
+            let key_datums: Vec<_> = key.iter().collect();
+            let value_datums: Vec<_> = value.iter().collect();
+            assert_eq!(key_datums.len(), 2);
+            assert_eq!(key_datums[1], value_datums[0]);
         }
     }
 }
