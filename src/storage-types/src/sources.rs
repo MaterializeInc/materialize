@@ -93,8 +93,10 @@ pub struct IngestionDescription<S: 'static = (), C: ConnectionAccess = InlinedCo
     ///
     ///   Re-rendering/executing the source after making these modifications
     ///   adds and drops the subsource, respectively.
-    /// - This field includes the primary source's ID, which might need to be
-    ///   filtered out to understand which exports are explicit ingestion exports.
+    /// - For old-syntax sources this field includes the primary source's ID,
+    ///   which might need to be filtered out to understand which exports are
+    ///   explicit ingestion exports. New-syntax sources (with source tables)
+    ///   list only their exports here.
     /// - This field does _not_ include the remap collection, which is tracked
     ///   in its own field.
     pub source_exports: BTreeMap<GlobalId, SourceExport<S>>,

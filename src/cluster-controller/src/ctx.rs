@@ -266,9 +266,9 @@ pub trait ClusterControllerCtx: Send {
     /// The ids of all managed clusters the controller owns this tick.
     async fn managed_cluster_ids(&mut self) -> Vec<ClusterId>;
 
-    /// Of `replicas` on `cluster`, which have *all* current (non-transient)
-    /// collections on the cluster hydrated. The returned set is a subset of
-    /// `replicas`.
+    /// Of `replicas` on `cluster`, which are online and have *all* current
+    /// (non-transient) collections on the cluster hydrated. The returned set
+    /// is a subset of `replicas`.
     ///
     /// Callers should request only replicas their strategy currently needs. This
     /// keeps live-signal dependencies local to the strategies that consume them.

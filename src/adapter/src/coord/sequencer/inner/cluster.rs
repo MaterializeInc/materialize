@@ -20,7 +20,7 @@ use mz_catalog::memory::objects::{
 };
 use mz_compute_types::config::ComputeReplicaConfig;
 use mz_controller::clusters::{
-    ManagedReplicaLocation, ReplicaConfig, ReplicaLocation, ReplicaLogging,
+    ClusterStatus, ManagedReplicaLocation, ReplicaConfig, ReplicaLocation, ReplicaLogging,
 };
 use mz_controller_types::{ClusterId, DEFAULT_REPLICA_LOGGING_INTERVAL, ReplicaId};
 use mz_ore::cast::CastFrom;
@@ -56,8 +56,8 @@ use crate::config::{
 };
 use crate::coord::{
     AlterCluster, AlterClusterAwaitReconfiguration, AlterClusterFinalize,
-    AlterClusterWaitForHydrated, ClusterStage, Coordinator, Message, PlanValidity, StageResult,
-    Staged,
+    AlterClusterWaitForHydrated, ClusterReplicaStatuses, ClusterStage, Coordinator, Message,
+    PlanValidity, StageResult, Staged,
 };
 use crate::{AdapterError, ExecuteContext, ExecuteResponse, session::Session};
 
@@ -1070,8 +1070,22 @@ impl Coordinator {
         let storage_hydrated = self
             .controller
             .storage
-            .collections_hydrated_on_replicas(Some(pending_replicas), &cluster.id, &[].into())
+            .collections_hydrated_on_replicas(
+                Some(pending_replicas.clone()),
+                &cluster.id,
+                &[].into(),
+            )
             .map_err(|e| AdapterError::internal("Failed to check hydration", e))?;
+
+        // Also require every pending replica to be online, in case it has no
+        // objects that need hydration on it (e.g. a single-replica source).
+        let replicas_online = pending_replicas.iter().all(|replica_id| {
+            let status = self
+                .cluster_replica_statuses
+                .try_get_cluster_replica_statuses(cluster.id, *replica_id)
+                .map(ClusterReplicaStatuses::cluster_replica_status);
+            matches!(status, Some(ClusterStatus::Online))
+        });
 
         let span = Span::current();
         Ok(StageResult::Handle(mz_ore::task::spawn(
@@ -1081,7 +1095,7 @@ impl Coordinator {
                     .await
                     .map_err(|e| AdapterError::internal("Failed to check hydration", e))?;
 
-                if compute_hydrated && storage_hydrated {
+                if compute_hydrated && storage_hydrated && replicas_online {
                     // We're done
                     Ok(Box::new(ClusterStage::Finalize(AlterClusterFinalize {
                         validity,

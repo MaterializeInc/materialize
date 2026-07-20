@@ -143,8 +143,8 @@ pub struct ConfigSignals {
 /// only read what it declared in [`Strategy::signal_request`].
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LiveSignals {
-    /// The replicas observed this tick to have *all* current collections on the
-    /// cluster hydrated.
+    /// The replicas observed this tick to be online and to have *all* current
+    /// collections on the cluster hydrated.
     pub hydrated_replicas: BTreeSet<ReplicaId>,
     /// Whether the cluster has at least one hydratable object. `false` when not
     /// requested.
