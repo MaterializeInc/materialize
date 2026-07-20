@@ -13,6 +13,7 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
+use columnar::{Columnar, Index};
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::cursor::{BatchCursor, BatchKey, BatchVal};
@@ -32,6 +33,7 @@ use mz_ore::soft_assert_or_log;
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
 use mz_storage_types::controller::CollectionMetadata;
+use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, Col2ValPagedBatcher, columnar_exchange};
@@ -1068,7 +1070,6 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     .collection
                     .take()
                     .expect("Collection constructed above");
-                let oks = oks.into_vec();
                 // Apply temporal bucketing if the collection already existed on
                 // the bundle (e.g., from an upstream temporal Mfp or Get) and we
                 // haven't bucketed yet. This is the common path for temporal-MFP
@@ -1086,7 +1087,15 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                         .try_into()
                         .expect("must fit");
                     bucketed = true;
-                    T::maybe_apply_temporal_bucketing(oks.inner, as_of.clone(), summary)
+                    // Temporal bucketing consumes and produces a `Vec` edge, so
+                    // decode here. This is the sanctioned leaf decode where a
+                    // `Vec`-internal operator meets the columnar edge.
+                    let oks = oks.into_vec();
+                    CollectionEdge::Vec(T::maybe_apply_temporal_bucketing(
+                        oks.inner,
+                        as_of.clone(),
+                        summary,
+                    ))
                 } else {
                     oks
                 };
@@ -1099,7 +1108,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     use_paged_path,
                 );
                 let errs_concat: KeyCollection<_, _, _> = errs.clone().concat(errs_keyed).into();
-                self.collection = Some((CollectionEdge::Vec(passthrough), errs));
+                self.collection = Some((passthrough, errs));
                 let errs =
                     errs_concat.mz_arrange::<
                         ColumnationChunker<_>,
@@ -1128,62 +1137,140 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// teeing the stream.
     fn arrange_collection(
         name: &String,
-        oks: VecCollection<'scope, T, Row, Diff>,
+        oks: CollectionEdge<'scope, T>,
         key: Vec<LirScalarExpr>,
         thinning: Vec<usize>,
         use_paged_path: bool,
     ) -> (
         Arranged<'scope, RowRowAgent<T, Diff>>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
-        VecCollection<'scope, T, Row, Diff>,
+        CollectionEdge<'scope, T>,
     ) {
         // This operator implements a `map_fallible`, but produces columnar updates for the ok
         // stream. The `map_fallible` cannot be used here because the closure cannot return
         // references, which is what we need to push into columnar streams. Instead, we use a
         // bespoke operator that also optimizes reuse of allocations across individual updates.
-        let mut builder = OperatorBuilder::new("FormArrangementKey".to_string(), oks.inner.scope());
-        let (ok_output, ok_stream) = builder.new_output();
-        let mut ok_output =
-            OutputBuilder::<_, ColumnBuilder<((Row, Row), T, Diff)>>::from(ok_output);
-        let (err_output, err_stream) = builder.new_output();
-        let mut err_output = OutputBuilder::from(err_output);
-        let (passthrough_output, passthrough_stream) = builder.new_output();
-        let mut passthrough_output = OutputBuilder::from(passthrough_output);
-        let mut input = builder.new_input(oks.inner, Pipeline);
-        builder.set_notify_for(0, FrontierInterest::Never);
-        builder.build(move |_capabilities| {
-            let mut key_buf = Row::default();
-            let mut val_buf = Row::default();
-            let mut datums = DatumVec::new();
-            move |_frontiers| {
-                // Scoped to the activation so the arena's retained capacity does not outlive a
-                // single scheduling invocation; cleared per row to reuse it within the batch.
-                let mut temp_storage = RowArena::new();
-                let mut ok_output = ok_output.activate();
-                let mut err_output = err_output.activate();
-                let mut passthrough_output = passthrough_output.activate();
-                input.for_each(|time, data| {
-                    let mut ok_session = ok_output.session_with_builder(&time);
-                    let mut err_session = err_output.session(&time);
-                    for (row, time, diff) in data.iter() {
-                        temp_storage.clear();
-                        let datums = datums.borrow_with(row);
-                        let key_iter = key.iter().map(|k| k.eval(&datums, &temp_storage));
-                        match key_buf.packer().try_extend(key_iter) {
-                            Ok(()) => {
-                                let val_datum_iter = thinning.iter().map(|c| datums[*c]);
-                                val_buf.packer().extend(val_datum_iter);
-                                ok_session.give(((&*key_buf, &*val_buf), time, diff));
+        //
+        // The two arms differ only in how records are read from the input container and in the
+        // variant of the passthrough output, which preserves the input variant. The ok output is
+        // columnar in both arms, since the arrangement key/value is always columnar.
+        let (ok_stream, err_stream, passthrough) = match oks {
+            CollectionEdge::Vec(oks) => {
+                let mut builder =
+                    OperatorBuilder::new("FormArrangementKey".to_string(), oks.inner.scope());
+                let (ok_output, ok_stream) = builder.new_output();
+                let mut ok_output =
+                    OutputBuilder::<_, ColumnBuilder<((Row, Row), T, Diff)>>::from(ok_output);
+                let (err_output, err_stream) = builder.new_output();
+                let mut err_output = OutputBuilder::from(err_output);
+                let (passthrough_output, passthrough_stream) = builder.new_output();
+                let mut passthrough_output = OutputBuilder::from(passthrough_output);
+                let mut input = builder.new_input(oks.inner, Pipeline);
+                builder.set_notify_for(0, FrontierInterest::Never);
+                builder.build(move |_capabilities| {
+                    let mut key_buf = Row::default();
+                    let mut val_buf = Row::default();
+                    let mut datums = DatumVec::new();
+                    move |_frontiers| {
+                        // Scoped to the activation so the arena's retained capacity does not
+                        // outlive a single scheduling invocation; cleared per row to reuse it
+                        // within the batch.
+                        let mut temp_storage = RowArena::new();
+                        let mut ok_output = ok_output.activate();
+                        let mut err_output = err_output.activate();
+                        let mut passthrough_output = passthrough_output.activate();
+                        input.for_each(|time, data| {
+                            let mut ok_session = ok_output.session_with_builder(&time);
+                            let mut err_session = err_output.session(&time);
+                            for (row, time, diff) in data.iter() {
+                                temp_storage.clear();
+                                let datums = datums.borrow_with(row);
+                                let key_iter = key.iter().map(|k| k.eval(&datums, &temp_storage));
+                                match key_buf.packer().try_extend(key_iter) {
+                                    Ok(()) => {
+                                        let val_datum_iter = thinning.iter().map(|c| datums[*c]);
+                                        val_buf.packer().extend(val_datum_iter);
+                                        ok_session.give(((&*key_buf, &*val_buf), time, diff));
+                                    }
+                                    Err(e) => {
+                                        err_session.give((e.into(), time.clone(), *diff));
+                                    }
+                                }
                             }
-                            Err(e) => {
-                                err_session.give((e.into(), time.clone(), *diff));
-                            }
-                        }
+                            passthrough_output.session(&time).give_container(data);
+                        });
                     }
-                    passthrough_output.session(&time).give_container(data);
                 });
+                (
+                    ok_stream,
+                    err_stream,
+                    CollectionEdge::Vec(passthrough_stream.as_collection()),
+                )
             }
-        });
+            CollectionEdge::Columnar(oks) => {
+                let mut builder =
+                    OperatorBuilder::new("FormArrangementKey".to_string(), oks.inner.scope());
+                let (ok_output, ok_stream) = builder.new_output();
+                let mut ok_output =
+                    OutputBuilder::<_, ColumnBuilder<((Row, Row), T, Diff)>>::from(ok_output);
+                let (err_output, err_stream) = builder.new_output();
+                let mut err_output = OutputBuilder::from(err_output);
+                let (passthrough_output, passthrough_stream) = builder.new_output();
+                // The passthrough forwards the input `Column` unchanged; its builder's container
+                // type must match the input so `give_container` can hand the batch through.
+                let mut passthrough_output = OutputBuilder::<
+                    _,
+                    CapacityContainerBuilder<Column<(Row, T, Diff)>>,
+                >::from(passthrough_output);
+                let mut input = builder.new_input(oks.inner, Pipeline);
+                builder.set_notify_for(0, FrontierInterest::Never);
+                builder.build(move |_capabilities| {
+                    let mut key_buf = Row::default();
+                    let mut val_buf = Row::default();
+                    let mut datums = DatumVec::new();
+                    move |_frontiers| {
+                        // Scoped to the activation so the arena's retained capacity does not
+                        // outlive a single scheduling invocation; cleared per row to reuse it
+                        // within the batch.
+                        let mut temp_storage = RowArena::new();
+                        let mut ok_output = ok_output.activate();
+                        let mut err_output = err_output.activate();
+                        let mut passthrough_output = passthrough_output.activate();
+                        input.for_each(|time, data| {
+                            let mut ok_session = ok_output.session_with_builder(&time);
+                            let mut err_session = err_output.session(&time);
+                            // Rows are read from the borrowed column, never materialized as
+                            // owned `Row`s. Times and diffs are owned only on the error path.
+                            for (row, t, d) in data.borrow().into_index_iter() {
+                                temp_storage.clear();
+                                let datums = datums.borrow_with(row);
+                                let key_iter = key.iter().map(|k| k.eval(&datums, &temp_storage));
+                                match key_buf.packer().try_extend(key_iter) {
+                                    Ok(()) => {
+                                        let val_datum_iter = thinning.iter().map(|c| datums[*c]);
+                                        val_buf.packer().extend(val_datum_iter);
+                                        ok_session.give(((&*key_buf, &*val_buf), t, d));
+                                    }
+                                    Err(e) => {
+                                        err_session.give((
+                                            e.into(),
+                                            Columnar::into_owned(t),
+                                            Columnar::into_owned(d),
+                                        ));
+                                    }
+                                }
+                            }
+                            passthrough_output.session(&time).give_container(data);
+                        });
+                    }
+                });
+                (
+                    ok_stream,
+                    err_stream,
+                    CollectionEdge::Columnar(passthrough_stream.as_collection()),
+                )
+            }
+        };
 
         let exchange =
             ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, T, Diff>);
@@ -1204,11 +1291,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 RowRowSpine<_, _>,
             >(exchange, name)
         };
-        (
-            oks,
-            err_stream.as_collection(),
-            passthrough_stream.as_collection(),
-        )
+        (oks, err_stream.as_collection(), passthrough)
     }
 }
 
@@ -1397,4 +1480,168 @@ fn walk_cursor<C, F>(
         }
     }
     *fuel -= work;
+}
+
+#[cfg(test)]
+mod tests {
+    use differential_dataflow::input::Input;
+    use mz_expr::EvalError;
+    use mz_repr::{Datum, ReprScalarType, Timestamp};
+    use timely::dataflow::operators::Capture;
+    use timely::dataflow::operators::capture::{Event, Extract};
+
+    use super::*;
+    use crate::render::columnar::vec_to_columnar;
+
+    type OkUpdate = ((Row, Row), Timestamp, Diff);
+    type ErrUpdate = (DataflowErrorSer, Timestamp, Diff);
+    type Captured<D> = std::sync::mpsc::Receiver<Event<Timestamp, Vec<D>>>;
+
+    fn extract_ok(captured: Captured<OkUpdate>) -> Vec<OkUpdate> {
+        let mut updates: Vec<_> = captured
+            .extract()
+            .into_iter()
+            .flat_map(|(_, data)| data)
+            .collect();
+        updates.sort();
+        updates
+    }
+
+    // `DataflowErrorSer` is not `Ord`, so project the error to its debug string
+    // to get a stable, comparable ordering. The time and diff still ride along,
+    // so this verifies the columnar arm's `into_owned` on the error path
+    // reconstructs the same `(time, diff)` as the `Vec` arm.
+    fn extract_err(captured: Captured<ErrUpdate>) -> Vec<(String, Timestamp, Diff)> {
+        let mut updates: Vec<_> = captured
+            .extract()
+            .into_iter()
+            .flat_map(|(_, data)| data)
+            .map(|(e, t, d)| (format!("{e:?}"), t, d))
+            .collect();
+        updates.sort();
+        updates
+    }
+
+    /// Arranges `rows` (each stamped with its own time) as both a `Vec` edge and
+    /// the equivalent columnar edge, keyed by `key`, and returns the sorted ok
+    /// and err outputs of each arm plus whether the columnar arm kept the
+    /// columnar passthrough variant.
+    fn arrange_both_arms(
+        rows: Vec<(Row, u64)>,
+        key: Vec<LirScalarExpr>,
+    ) -> (
+        Vec<OkUpdate>,
+        Vec<OkUpdate>,
+        Vec<(String, Timestamp, Diff)>,
+        Vec<(String, Timestamp, Diff)>,
+        bool,
+    ) {
+        let thinning = vec![0, 1];
+        let (ok_vec, ok_col, err_vec, err_col, col_is_columnar) =
+            timely::execute_directly(move |worker| {
+                worker.dataflow::<Timestamp, _, _>(|scope| {
+                    let (mut input, collection) = scope.new_collection();
+
+                    let (vec_arranged, vec_errs, _vec_passthrough) =
+                        CollectionBundle::<Timestamp>::arrange_collection(
+                            &"vec".to_string(),
+                            CollectionEdge::Vec(collection.clone()),
+                            key.clone(),
+                            thinning.clone(),
+                            false,
+                        );
+                    let (col_arranged, col_errs, col_passthrough) =
+                        CollectionBundle::<Timestamp>::arrange_collection(
+                            &"col".to_string(),
+                            CollectionEdge::Columnar(vec_to_columnar(collection)),
+                            key,
+                            thinning,
+                            false,
+                        );
+                    let col_is_columnar = matches!(col_passthrough, CollectionEdge::Columnar(_));
+
+                    let ok_vec = vec_arranged
+                        .as_collection(|k, v| (k.to_row(), v.to_row()))
+                        .inner
+                        .capture();
+                    let ok_col = col_arranged
+                        .as_collection(|k, v| (k.to_row(), v.to_row()))
+                        .inner
+                        .capture();
+                    let err_vec = vec_errs.inner.capture();
+                    let err_col = col_errs.inner.capture();
+
+                    let max_time = rows.iter().map(|(_, t)| *t).max().unwrap_or(0);
+                    for (row, time) in rows {
+                        input.update_at(row, Timestamp::from(time), Diff::ONE);
+                    }
+                    input.advance_to(Timestamp::from(max_time + 1));
+                    input.flush();
+                    (ok_vec, ok_col, err_vec, err_col, col_is_columnar)
+                })
+            });
+        (
+            extract_ok(ok_vec),
+            extract_ok(ok_col),
+            extract_err(err_vec),
+            extract_err(err_col),
+            col_is_columnar,
+        )
+    }
+
+    // Uniform two-column rows so `Column(0)` keys and full-row thinning are in
+    // bounds for every record. Times span three distinct values so the columnar
+    // arm's per-record time handling is exercised, not just t=0.
+    fn test_rows() -> Vec<(Row, u64)> {
+        vec![
+            (Row::pack_slice(&[Datum::Int32(1), Datum::String("a")]), 0),
+            (Row::pack_slice(&[Datum::Int32(2), Datum::String("b")]), 1),
+            (Row::pack_slice(&[Datum::Int32(1), Datum::String("a")]), 1),
+            (Row::pack_slice(&[Datum::Int32(3), Datum::Null]), 2),
+        ]
+    }
+
+    /// The columnar arm of the arrange input produces the same arranged contents
+    /// as the `Vec` arm and keeps the columnar passthrough variant.
+    ///
+    /// What this proves: correctness of the columnar key-forming path (a mangled
+    /// key or dropped record would diverge from the `Vec` arm) and that the
+    /// columnar arm actually ran (the passthrough stays `Columnar`).
+    ///
+    /// What it does NOT prove: absence of a silent decode. A hypothetical
+    /// `columnar_to_vec` on the ok path would yield identical contents and still
+    /// return a `Columnar` passthrough. The no-decode property holds by code
+    /// inspection: the columnar arm reads records via `into_index_iter` on the
+    /// borrowed column and never calls `into_vec`.
+    #[mz_ore::test]
+    fn arrange_collection_arms_agree() {
+        let (ok_vec, ok_col, err_vec, err_col, col_is_columnar) =
+            arrange_both_arms(test_rows(), vec![LirScalarExpr::column(0)]);
+
+        assert!(
+            col_is_columnar,
+            "columnar arrange input must keep the columnar passthrough variant"
+        );
+        assert!(!ok_vec.is_empty());
+        assert_eq!(ok_vec, ok_col);
+        assert!(err_vec.is_empty() && err_col.is_empty());
+    }
+
+    /// A key expression that always errors drives every record onto the error
+    /// path, exercising the columnar arm's `into_owned` reconstruction of the
+    /// error's `(time, diff)`. The two arms must agree on the errors, and the ok
+    /// output must be empty on both.
+    #[mz_ore::test]
+    fn arrange_collection_arms_agree_on_error_path() {
+        let key = vec![LirScalarExpr::literal(
+            Err(EvalError::DivisionByZero),
+            ReprScalarType::Int32,
+        )];
+        let (ok_vec, ok_col, err_vec, err_col, _col_is_columnar) =
+            arrange_both_arms(test_rows(), key);
+
+        assert!(ok_vec.is_empty() && ok_col.is_empty());
+        assert!(!err_vec.is_empty());
+        assert_eq!(err_vec, err_col);
+    }
 }
