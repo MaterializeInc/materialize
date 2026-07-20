@@ -30,15 +30,21 @@ A naive migration maintains two parallel implementations per operator, or gates 
 
 ### Sanctioned decode points
 
-Two internal consumers may retain a permanent `ColumnarToVec` decode if the columnar rewrite proves infeasible.
+Two internal consumers retain a `ColumnarToVec` decode for now, deferring the native rewrite to a fast-follow.
 They do not serialize rows, so they are exceptions to the no-internal-decode criterion, not instances of it.
+The prototype (see below) confirmed both are feasible to make native but not worth the cost or risk on the critical path.
 
-* LetRec, if `branch_when` and the recursive feedback path cannot operate on a columnar stream (node C7).
-* Union temporal-bucketing, if `maybe_apply_temporal_bucketing` is inherently row-shaped (node C8).
+* LetRec (node C7).
+  `branch_when` is not the blocker, it is container-generic and type-checks on a columnar stream as-is.
+  The blocker is the feedback machinery: `Variable::set` needs `ResultsIn`, `Collection::negate` needs `Negate`, and `leave_dynamic` mutates each record's time in place, all impl'd only for `Vec`.
+  Going native means forking differential's `PointStamp` time arithmetic into our tree, a standing liability.
+  Decode is today's exact code, so it is deferred.
+* Union temporal-bucketing (node C8).
+  `maybe_apply_temporal_bucketing` hardwires `StreamVec` in and out, and its operator is the most correctness-sensitive in the migration (cap, peel, fuel).
+  The internals are already columnar, so native input would remove an internal `Vec` staging round-trip.
+  It fires only on a consolidating Union under `ENABLE_COMPUTE_TEMPORAL_BUCKETING`, so the decode cost is narrow, and native is a worthwhile fast-follow if it shows up hot.
 
-Their feasibility is resolved in the prototype phase, not at the end of the stack.
-If either goes native, it is not a decode point.
-If either stays a decode point, it is a leaf `columnar_to_vec` and is compatible with the final enum collapse.
+Both decode points are leaf `columnar_to_vec` calls, compatible with the final enum collapse.
 
 ## Out of Scope
 
@@ -144,8 +150,8 @@ graph TD
     C4["C4: linear-join input columnar"]
     C5["C5: delta-join input columnar"]
     C6["C6: sink columnar input API"]
-    C7["C7: LetRec columnar or sanctioned decode"]
-    C8["C8: Union temporal-bucket columnar or sanctioned decode"]
+    C7["C7: LetRec sanctioned decode, consume edge then into_vec"]
+    C8["C8: Union temporal-bucket sanctioned decode, consume edge then into_vec"]
   end
   subgraph Wave2["Wave 2: producers flip, every consumer already native"]
     P1["P1: as_collection_core columnar output, flips Get and Mfp"]
@@ -163,8 +169,6 @@ graph TD
     T2["T2: collapse enum to a columnar alias, into_vec becomes a leaf fn"]
     T3["T3: de-match negate, concat_many, consolidate_named"]
   end
-  F1 --> C7
-  F1 --> C8
   C1 --> C3
   C1 --> C4
   C1 --> C5
@@ -175,7 +179,10 @@ graph TD
 ```
 
 The bold edge from Wave 1 to Wave 2 is the producer-flip invariant: no producer node starts until every consumer node has landed.
-Within Wave 1, F1 gates the two consolidate-dependent nodes, and C1 gates the three nodes that reuse its columnar key-forming pattern.
+Within Wave 1, C1 gates the three nodes that reuse its columnar key-forming pattern.
+F1, C2, C6, C7, and C8 are independent roots.
+F1 gives the native columnar `consolidate_named` that Union's `concat_many` then `consolidate_named` path uses once its inputs are columnar in Wave 2.
+C7 and C8 are sanctioned decode nodes, so they do not depend on F1.
 Within Wave 2, each producer feeds only native consumers, so the nodes are mutually independent and land in any order.
 Wave 3 collapses the enum.
 Its producer half is compiler-enforced, see the completeness note.
@@ -251,24 +258,27 @@ Files: `src/compute/src/render/sinks.rs`.
 Test: subscribe and materialized-view sink sqllogictest and testdrive coverage.
 Base: `upstream/main`.
 
-**C7: LetRec columnar or sanctioned decode.**
-Consume the LetRec edge as columnar.
-The Vec-bound surface is the whole recursive feedback path, not only `branch_when`: the feedback `Variable` (`render.rs:921-924`), its set (`render.rs:990`), `leave_dynamic` (`render.rs:1001`), and the limit branch (`render.rs:961`).
-`Variable` is container-generic, so the change is type-permitted.
-LetRec's consolidation currently calls the raw `CollectionExt::consolidate_named` on an already-decoded `Vec` (`render.rs:946`), so this node must reroute it to the edge's `consolidate_named`, which is why it depends on F1.
-If `branch_when` on columnar proves infeasible, keep LetRec as a sanctioned leaf decode instead, which is compatible with T2.
+**C7: LetRec sanctioned decode.**
+Make LetRec consume the columnar edge and decode locally via `into_vec`, keeping today's `Vec` feedback logic.
+This is a sanctioned decode point, resolved by the prototype.
+`branch_when` is container-generic and would type-check on a columnar stream, but the feedback machinery is not: `Variable::set` needs `ResultsIn` (`collection.rs:1371`, `Vec` only), `Collection::negate` needs `Negate` (`collection.rs:1350`, `Vec` only), and `leave_dynamic` (`render.rs:1001`, `dynamic/mod.rs:28`) mutates each record's time in place.
+Going native means adding `impl Negate for Column`, `impl ResultsIn for Column`, and a `columnar_leave_dynamic`, all mirroring `columnar_negate` (`columnar.rs:279`), which forks differential's `PointStamp` time arithmetic into our tree.
+Deferred as a fast-follow if the per-iteration decode shows up hot.
+LetRec already decodes at `render.rs:941/997` and consolidates on `Vec`, so it does not need F1.
 Files: `src/compute/src/render.rs`.
 Test: recursive-view sqllogictest including the iteration limit and the error-distinctness path.
-Base: `F1`.
+Base: `upstream/main`.
 
-**C8: Union temporal-bucket columnar or sanctioned decode.**
-`render.rs:1358` decodes via `into_vec` to apply temporal bucketing inside a consolidating Union.
-Make `maybe_apply_temporal_bucketing` operate on the columnar stream.
-If bucketing is inherently row-shaped, keep the decode as a sanctioned leaf.
-F1 must land first, since a columnar Union consolidate would otherwise round-trip.
-Files: `src/compute/src/render.rs`, the timestamp trait sites for `maybe_apply_temporal_bucketing`.
+**C8: Union temporal-bucket sanctioned decode.**
+Keep the `into_vec` at `render.rs:1358` that feeds `maybe_apply_temporal_bucketing` inside a consolidating Union, adapted to consume the columnar edge.
+This is a sanctioned decode point, resolved by the prototype.
+`maybe_apply_temporal_bucketing` hardwires `StreamVec` in and out (`render.rs:1561`, `temporal_bucket.rs:49`), and the operator is the most correctness-sensitive in the migration.
+The internals are already columnar (`ColumnMergeBatcher`, `ColumnChunker`), so a native input would delete an internal `Vec` staging round-trip.
+Deferred as a fast-follow; the path is narrow, gated on `ENABLE_COMPUTE_TEMPORAL_BUCKETING`.
+The Union's own `concat_many` then `consolidate_named` path still goes native via F1 once its inputs are columnar.
+Files: `src/compute/src/render.rs`.
 Test: temporal and temporal-bucketing sqllogictest.
-Base: `F1`.
+Base: `upstream/main`.
 
 **P1: columnar output for the `flat_map` family.**
 Generalize `as_collection_core` to build into a `ColumnBuilder` and return a columnar edge, which flips the Get and Mfp producers.
@@ -307,6 +317,11 @@ Base: Wave 1 complete.
 
 **P7: columnar Join output.**
 Build the linear and delta join outputs into a `ColumnBuilder`.
+Confirmed feasible by the prototype, builder swaps with no blocker.
+Delta join: `half_join_internal_unsafe` is generic over its output `ContainerBuilder` (`differential-dogs3 half_join2.rs:121-140`); swap `CapacityContainerBuilder<Vec>` (`delta_join.rs:406`) for `ColumnBuilder` and the heavy operator emits `Column` directly.
+Linear join: swap the `flat_map_fallible::<ConsolidatingContainerBuilder, ..>` (`linear_join.rs:300`) for the existing `ConsolidatingColumnBuilder` (`columnar/consolidate.rs`), preserving output consolidation.
+The carried-time `(Row, T)` payload is `Columnar`.
+Join input, C4 and C5, is untouched here.
 Files: `src/compute/src/render/join/linear_join.rs`, `src/compute/src/render/join/delta_join.rs`.
 Base: Wave 1 complete.
 
@@ -347,9 +362,8 @@ Base: `T2`.
 
 The consumer wave is several short stacks off `upstream/main`.
 
-* `F1` then `C7`, `C8`.
 * `C1` then `C3`, `C4`, `C5`.
-* `C2` and `C6` are independent, off `upstream/main`.
+* `F1`, `C2`, `C6`, `C7`, `C8` are independent roots, off `upstream/main`.
 
 The producer wave starts only after the entire consumer wave has landed, which resolves the fan-in problem: the producer nodes and the teardown rebase on a single merged base, not on a live tangle of consumer stacks.
 Producer nodes are mutually independent.
@@ -372,16 +386,22 @@ gh-stack reference: https://github.github.com/gh-stack/#get-started
 
 ## Minimal Viable Prototype
 
-The prototype must de-risk the mechanisms whose feasibility is genuinely uncertain, not the well-understood ones.
-It covers three throwaway spikes before the stack is committed:
+The prototype de-risked the mechanisms whose feasibility was genuinely uncertain.
+It was a type-level analysis of the load-bearing trait bounds against timely 0.31, differential-dataflow 0.25, and differential-dogs3 0.25.1, resolving each verdict on whether a specific generic impl exists, named at file:line.
+Results:
 
-* C1 columnar arrange input, `Get` into `ArrangeBy`, asserting no `ColumnarToVec` on the path and identical results.
-  This validates the key-forming borrow pattern that C3, C4, and C5 reuse.
-* `branch_when` on a columnar stream, the load-bearing uncertainty for C7.
-* `maybe_apply_temporal_bucketing` on a columnar stream, the load-bearing uncertainty for C8.
+* C7 LetRec: feasible but deferred to a sanctioned decode.
+  The uncertainty was misattributed to `branch_when`; the real blocker is the `ResultsIn`, `Negate`, and `leave_dynamic` feedback machinery, all `Vec` only.
+  See the C7 node.
+* C8 Union temporal-bucketing: feasible but deferred to a sanctioned decode.
+  Not inherently row-shaped, the internals are already columnar, but the operator is correctness-sensitive and the path is narrow.
+  See the C8 node.
+* P7 join output: feasible, go native.
+  Builder swaps only, delta join included.
+  See the P7 node.
 
-The enum collapse can only complete if C7 and C8 either go native or are accepted as sanctioned decode points, so their feasibility belongs in the prototype rather than at the end of a long stack.
-A columnar join output, building into a `ColumnBuilder`, is worth a fourth spike, since it is a different mechanism from the arrange input and feeds the most intricate operators.
+Nothing was infeasible, so the enum collapse (T2) can complete and the stack is not gated by an unresolvable mechanism.
+The C1 arrange-input key-forming pattern was already confirmed low-risk and was not re-spiked.
 
 ## Alternatives
 
@@ -414,11 +434,8 @@ A columnar join output, building into a `ColumnBuilder`, is worth a fourth spike
 * **Join node granularity.**
   C4, C5, and P7 assume linear-input, delta-input, and a shared output flip are the right cut.
   Whether the output flip should also split by join kind depends on how large the diffs are, resolved when the join work starts.
-* **`branch_when` on columnar.**
-  Resolved in the prototype.
-  If infeasible, LetRec becomes a sanctioned decode point.
-* **Union temporal-bucketing.**
-  Resolved in the prototype.
-  If inherently row-shaped, Union temporal-bucketing becomes a sanctioned decode point.
+* **LetRec and Union temporal-bucketing.**
+  Resolved in the prototype: both are sanctioned decode points for now, with a native fast-follow tracked if either shows up hot.
+  See the C7 and C8 nodes.
 * **Introspection golden filtering.**
   Whether seam operators should be filtered from `mz_dataflow_operators` for the duration of the migration, or expected to churn per pull request, is decided when the golden inventory is done.
