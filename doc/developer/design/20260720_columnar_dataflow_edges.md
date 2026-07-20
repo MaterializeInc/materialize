@@ -14,32 +14,49 @@ PR #36507 scaffolded `CollectionEdge<'scope, T>`, an enum with `Vec` and `Column
 Today no producer emits the columnar arm, so the columnar path is dead in production, and the migration from row-based to columnar edges has no plan.
 
 The risk in migrating is complexity.
-A naive migration maintains two parallel implementations per operator, or gates the change behind a feature flag, and either approach grows code complexity to unbounded levels over the course of a long migration.
+A naive migration maintains two parallel implementations per operator, or gates the change behind a per-operator progress flag, and either approach grows code complexity to unbounded levels over the course of a long migration.
 
 ## Success Criteria
 
 * Every compute dataflow edge carries columnar `Column` batches.
 * The `Vec` arm of `CollectionEdge` is deleted, and the enum collapses to a single columnar type.
-* No internal consumer decodes an edge to rows.
-  `into_vec` survives only as a leaf helper for consumers that serialize rows anyway.
+* No internal consumer decodes an edge to rows, except for a small set of explicitly sanctioned decode points named in this document.
+  `into_vec` otherwise survives only as a leaf helper for consumers that serialize rows anyway.
 * The migration proceeds as a sequence of small, independently landable pull requests, each with a test gate.
 * No single code path maintains both representations at once.
   There is no feature flag.
-* No permanent performance regression.
-  Transient regressions during the transition are acceptable.
+* No permanent performance regression, and no seam-heavy intermediate state on `main` (see the producer-flip invariant below).
+  Transient upgrade seams are acceptable.
+
+### Sanctioned decode points
+
+Two internal consumers may retain a permanent `ColumnarToVec` decode if the columnar rewrite proves infeasible.
+They do not serialize rows, so they are exceptions to the no-internal-decode criterion, not instances of it.
+
+* LetRec, if `branch_when` and the recursive feedback path cannot operate on a columnar stream (node C7).
+* Union temporal-bucketing, if `maybe_apply_temporal_bucketing` is inherently row-shaped (node C8).
+
+Their feasibility is resolved in the prototype phase, not at the end of the stack.
+If either goes native, it is not a decode point.
+If either stays a decode point, it is a leaf `columnar_to_vec` and is compatible with the final enum collapse.
 
 ## Out of Scope
 
 * **Generalizing `CollectionExt`.**
   The trait is a dead-end.
   We do not make it container-generic.
+  This is a bet that the columnar edge method set stays small.
+  Each method the migration needs gets a parallel columnar free function, as `columnar_negate` and `vec_to_columnar` already are.
+  For the current small set this is tolerable localized duplication.
+  A future feature that wants a new `CollectionExt` method on a columnar edge will add another bespoke function.
 * **Intra-operator `Vec` use.**
   `explode_one` and `ensure_monotonic` run on `Vec` collections inside reduce and top-k.
   The compute contract lets operators materialize `Vec` collections internally.
   Only the inter-node edge format is constrained, so these stay on `VecCollection`.
 * **Generalizing batcher selection.**
-  The columnar `consolidate_named` uses the `Col2KeyBatcher` family as a temporary second variant.
+  The columnar `consolidate_named` uses the `Col2KeyBatcher` family as a second variant alongside the `Vec` `KeyBatcher` variant.
   We do not invest in a generic batcher-selection abstraction.
+  When the `Vec` arm is deleted, the columnar variant becomes the sole implementation.
 * **The columnar persist blob format.**
   Sinks change to consume columnar input, but the on-blob encoding that persist writes is unchanged.
   A sink that serializes rows may decode locally at the leaf.
@@ -49,18 +66,48 @@ A naive migration maintains two parallel implementations per operator, or gates 
 Migrate consumers first, then producers, then delete the `Vec` arm.
 The enum stays as the single locus of representation-matching for the whole migration, so operators call enum methods and stay representation-agnostic, and producers flip one at a time under type unification.
 Each operator has one code path at a time.
-We accept a temporary performance impact during the transition rather than duplicating operators or feature-flagging the change.
-The migration direction for each edge is chosen to minimize churn: we pair a producer flip with the consumer work that makes its downstream native, so no decode-back seam lingers.
-The `Vec`-arm deletion is the completeness test.
-The teardown will not compile until every producer is columnar and every internal consumer is columnar-native.
+We accept transient upgrade seams during the transition rather than duplicating operators or feature-flagging the change.
+
+### The producer-flip invariant
+
+A producer flips to columnar only after every one of its consumers is columnar-native.
+
+This invariant is the core of the plan.
+It splits the work cleanly into a consumer wave and a producer wave.
+During the consumer wave every producer still emits `Vec`, so the columnar arms are dead code and there is zero runtime change on `main`.
+During the producer wave every consumer is already native, so a producer flip inserts no `ColumnarToVec` decode.
+The only seam that can appear is a cheap `VecToColumnar` upgrade at a Union that still mixes a `Vec` input with a columnar one, which copies bytes but allocates no per-record `Row`.
+The expensive direction, a `ColumnarToVec` decode that allocates an owned `Row` per record, never appears in an intermediate state.
+
+This is why the plan needs no feature flag.
+There is no seam-heavy intermediate state to roll back from.
+The consumer wave is behaviorally identical to today, and the producer wave only ever adds cheap upgrades.
+See the rollback discussion below for the residual incident story.
+
+The invariant supersedes the earlier framing of choosing a per-edge direction to minimize churn.
+Producer-first flips maximize churn, because they force the expensive decode at every not-yet-native consumer.
+Consumer-first per subgraph is the churn minimum, so we make it a hard rule rather than a per-edge judgment call.
+
+### Rollback and incident response
+
+There is no runtime kill-switch.
+The incident response to a regression introduced by a landed pull request is to revert that pull request and cut a release.
+Because later stacked pull requests may sit on top of a reverted one, the revert can require manual conflict resolution.
+
+We judge this acceptable for this migration specifically, because the producer-flip invariant removes the seam-heavy intermediate state that would otherwise be the regression risk.
+The consumer wave changes no runtime behavior, so it cannot regress.
+The producer wave only adds cheap `VecToColumnar` upgrades, bounded to mixed-input Unions.
+The residual risk is a correctness bug in a columnar arm, which a revert addresses, not a systemic performance or availability regression that would demand a fast runtime toggle.
+If a columnar arm is found to regress memory enough to threaten a replica, the mitigation is to revert the single producer flip that introduced it, which restores the `Vec` edge for that operator.
 
 ### Current operator map
 
 The table records how each Plan node reads its input and produces its output today, and the seam that blocks columnar flow.
-Verified against the tree at `cb4b1d2e6f`.
+Verified against the tree at `cb4b1d2e6f`, the parent of the commit that adds this document.
 
 | Node | Input read | Output produced | Seam today |
 |---|---|---|---|
+| Source and index imports | persist or trace | `from_collections` into `Vec` (`render.rs:374, 474, 668`) | producer emits `Vec` |
 | Constant | none | `to_stream` into `Vec` | producer emits `Vec` |
 | Get::PassArrangements | carries the bundle | passes the bundle | none |
 | Get::Arrangement, Get::Collection, Mfp | native `flat_map` or arrangement | `as_collection_core` into `Vec` | producer output builder is `Vec` |
@@ -76,69 +123,72 @@ Verified against the tree at `cb4b1d2e6f`.
 
 Three grounding mechanism facts:
 
-* `arrange_collection` in `context.rs` already emits `ColumnBuilder<((Row, Row), T, Diff)>` and arranges via `columnar_exchange` plus `Col2ValPagedBatcher`.
+* `arrange_collection` in `context.rs` already emits `ColumnBuilder<((Row, Row), T, Diff)>` (`context.rs:1147`) and arranges via `columnar_exchange` (`context.rs:1189`).
+  The batcher is `Col2ValPagedBatcher` when `ENABLE_COLUMN_PAGED_BATCHER` is set and `Col2ValBatcher` otherwise (`context.rs:1093, 1190-1206`).
   The arrangement pipeline is already columnar internally.
   The only `Vec`-ness is the input, fed by `into_vec` at `context.rs:1071`, and the passthrough re-wrap at `context.rs:1102`.
-* `as_collection_core` and `as_specific_collection` hardwire `VecCollection<Row>` output through `SharedRow` packing.
+* `as_collection_core` (`context.rs:906`) and `as_specific_collection` (`context.rs:560`) hardwire `VecCollection<Row>` output.
   Flipping the `flat_map`-family producers means building into a `ColumnBuilder` there.
-* The columnar batcher family exists: `ColumnMergeBatcher`, `Col2KeyBatcher<K, T, R>`, and the paged chunker.
+  Note `as_specific_collection` serves both a producer role and a consumer role, so it is split during the migration, see node P1.
+* The columnar batcher family exists: `ColumnMergeBatcher` (`timely-util/src/columnar/merge_batcher.rs`), `Col2KeyBatcher<K, T, R>` which is `Col2ValBatcher<K, (), T, R>` (`timely-util/src/columnar.rs:50`), and the paged `ColumnChunker` (`timely-util/src/columnar/batcher.rs`).
 
 ### Change DAG
 
 ```mermaid
 graph TD
-  subgraph Wave1["Wave 1: native consumers, columnar arm still dead, zero runtime bounce"]
+  subgraph Wave1["Wave 1: consumers native, producers still Vec, zero runtime change"]
     F1["F1: consolidate_named columnar variant via Col2KeyBatcher"]
-    C1["C1: arrange input columnar, ensure_collections and arrange_collection accept the edge, passthrough preserves variant"]
-    C2["C2: FlatMap uses flat_map_datums, drops as_specific_collection"]
+    C1["C1: arrange input columnar"]
+    C2["C2: FlatMap input decode via the edge, fueling preserved"]
+    C3["C3: TopK input columnar"]
+    C4["C4: linear-join input columnar"]
+    C5["C5: delta-join input columnar"]
     C6["C6: sink columnar input API"]
+    C7["C7: LetRec columnar or sanctioned decode"]
+    C8["C8: Union temporal-bucket columnar or sanctioned decode"]
   end
-  subgraph Wave2["Wave 2: flip producers into now-native consumers"]
-    P1["P1: as_collection_core and as_specific_collection columnar output, flips Mfp and Get"]
+  subgraph Wave2["Wave 2: producers flip, every consumer already native"]
+    P1["P1: as_collection_core columnar output, flips Get and Mfp"]
     P2["P2: Constant columnar"]
     P3["P3: ArrangeBy passthrough columnar"]
     P4["P4: FlatMap output columnar"]
-  end
-  subgraph Wave3["Wave 3: operator input and output pairs"]
-    C3P6["C3+P6: TopK input and output columnar"]
-    C4C5P7["C4, C5, P7: linear and delta join input and output columnar"]
     P5["P5: Reduce output columnar"]
+    P6["P6: TopK output columnar"]
+    P7["P7: Join output columnar"]
     P8["P8: Threshold output columnar"]
-    C7["C7: LetRec consolidate and branch_when columnar"]
-    C8["C8: Union temporal-bucket columnar"]
+    P9["P9: source and index import producers columnar"]
   end
-  subgraph Wave4["Wave 4: teardown, compiler-enforced"]
+  subgraph Wave3["Wave 3: teardown, producer half compiler-enforced"]
     T1["T1: delete vec_to_columnar"]
     T2["T2: collapse enum to a columnar alias, into_vec becomes a leaf fn"]
     T3["T3: de-match negate, concat_many, consolidate_named"]
   end
-  C1 --> P1
-  C1 --> P3
-  C2 --> P4
-  C6 --> P1
-  C1 -.pattern.-> C3P6
-  C1 -.pattern.-> C4C5P7
   F1 --> C7
   F1 --> C8
-  P1 --> T1
-  P2 --> T1
-  P3 --> T1
-  P4 --> T1
-  C3P6 --> T1
-  C4C5P7 --> T1
-  P5 --> T1
-  P8 --> T1
+  C1 --> C3
+  C1 --> C4
+  C1 --> C5
+  Wave1 ==> Wave2
+  Wave2 --> T1
   T1 --> T2
-  C6 --> T2
-  C7 --> T2
-  C8 --> T2
   T2 --> T3
 ```
 
-Wave 1 makes the high fan-out consumers columnar-native while every producer still emits `Vec`, so the columnar arm stays dead and there is zero runtime bounce, with a single code path throughout.
-Wave 2 and later flip producers paired with their now-native consumers, so no decode-back seam lingers, which is the per-subgraph churn minimization.
-The enum stays the carrier the whole time.
-Wave 4 collapses it once T1 proves no `Vec` producer remains, and the teardown is compiler-enforced.
+The bold edge from Wave 1 to Wave 2 is the producer-flip invariant: no producer node starts until every consumer node has landed.
+Within Wave 1, F1 gates the two consolidate-dependent nodes, and C1 gates the three nodes that reuse its columnar key-forming pattern.
+Within Wave 2, each producer feeds only native consumers, so the nodes are mutually independent and land in any order.
+Wave 3 collapses the enum.
+Its producer half is compiler-enforced, see the completeness note.
+
+### Completeness and its limits
+
+Deleting the `Vec` arm removes the `CollectionEdge::Vec` constructor, so every producer site must switch to columnar or fail to compile.
+This makes the producer half of the migration compiler-enforced.
+
+The consumer half is not compiler-enforced.
+`into_vec` survives as a leaf free function after T2, so an internal consumer that still calls it compiles and runs, silently inserting a `ColumnarToVec` decode.
+Consumer nativeness is therefore verified by the introspection tests described in the testing strategy, which assert that no `ColumnarToVec` operator appears on a consumer's path, plus a whole-plan differential test that renders a plan corpus both ways and asserts identical output.
+The differential test is the behavioral safety net that the type system does not provide.
 
 ### Per-node change specification
 
@@ -148,181 +198,227 @@ The base names the parent the branch stacks on.
 **F1: columnar `consolidate_named`.**
 Replace the decode, consolidate, re-encode round-trip in the `Columnar` arm of `CollectionEdge::consolidate_named` with a native consolidation using `Col2KeyBatcher`.
 Keep the `Vec` arm unchanged.
-This is the temporary second variant.
 Files: `src/compute/src/render/columnar.rs`, possibly a helper in `src/timely-util/src/columnar.rs`.
 Test: extend `consolidate_named_preserves_columnar` to assert the operator no longer contains a `ColumnarToVec`.
 Base: `upstream/main`.
 
 **C1: columnar arrange input.**
-Generalize `ensure_collections` and `arrange_collection` to accept a `CollectionEdge`.
-The `Columnar` arm iterates `data.borrow().into_index_iter()` and borrows datums from the columnar row to form the key, mirroring `flat_map_datums`.
+Generalize `ensure_collections` and `arrange_collection` (`context.rs:1129-1186`) to accept a `CollectionEdge`.
+The `Columnar` arm iterates `data.borrow().into_index_iter()` and borrows datums from the columnar row to form the key, mirroring the proven pattern in the `flat_map_datums` Columnar arm (`columnar.rs:234-242`).
 The passthrough output preserves the input variant, so `context.rs:1102` re-wraps `Columnar` when the input was columnar.
 The key-value output builder and the batcher are unchanged, since they are already columnar.
-This unblocks ArrangeBy, index-export, and every plan-inserted arrangement.
+This unblocks ArrangeBy, index-export, Reduce, and Threshold, all of which consume a plan-inserted arrangement.
 Files: `src/compute/src/render/context.rs`.
 Test: arrangement sqllogictest, plus a unit test that a columnar input yields no `ColumnarToVec` on the arrange path.
 Base: `upstream/main`.
 
-**C2: FlatMap decode via `flat_map_datums`.**
-`render_flat_map` calls `as_specific_collection` then iterates rows.
-Switch it to consume the edge through `flat_map_datums`, which handles both arms natively.
-Files: `src/compute/src/render/flat_map.rs`.
-Test: FlatMap sqllogictest, plus cross-arm agreement as in `flat_map_datums_arms_agree`.
+**C2: FlatMap input decode via the edge, fueling preserved.**
+`render_flat_map` (`flat_map.rs:44-118`) reads its input via `as_specific_collection` and expands table functions under a fuel budget (`COMPUTE_FLAT_MAP_FUEL`) with activator-based yielding.
+The fueling must survive.
+Replace only the input decode so the bespoke `FlatMapStage` reads from the columnar edge, keeping the fuel queue and re-activation.
+Do not route FlatMap through `flat_map_datums`, which drains a full batch with no fuel and would regress availability on large `generate_series`.
+Files: `src/compute/src/render/flat_map.rs`, possibly a fuel-aware columnar input helper.
+Test: FlatMap sqllogictest, plus a large `generate_series` that asserts yielding still occurs.
 Base: `upstream/main`.
 
-**C6: columnar sink input.**
-Change the sink input path so it consumes a columnar edge.
-`sinks.rs:70` clones and calls `into_vec`.
-Persist and subscribe serialize rows, so the decode is acceptable at the leaf, but the API accepts the columnar edge and decodes locally rather than forcing `into_vec` at the boundary.
-Files: `src/compute/src/render/sinks.rs`.
-Test: subscribe and materialized-view sink sqllogictest and testdrive coverage.
-Base: `upstream/main`.
-
-**P1: columnar output for the `flat_map` family.**
-Generalize `as_collection_core` and `as_specific_collection` to build into a `ColumnBuilder` and return a columnar edge.
-This flips the Mfp and Get producers.
-Files: `src/compute/src/render/context.rs`, `src/compute/src/render.rs`.
-Test: physical-plan goldens unchanged, plus sqllogictest for Get and Mfp chains feeding an ArrangeBy or sink.
-Base: `C1`, `C6`.
-
-**P2: columnar Constant.**
-Build the constant collection into a `Column` in the `Constant` arm of `render_plan_expr`.
-Files: `src/compute/src/render.rs`.
-Test: constant-fed sqllogictest.
-Base: `C1`.
-
-**P3: columnar ArrangeBy passthrough.**
-Once C1 preserves the input variant on the passthrough, ensure the passthrough emits `Columnar` when its producer is columnar, and drop any remaining `Vec` re-wrap.
-Files: `src/compute/src/render/context.rs`.
-Test: ArrangeBy followed by a consumer that reads the passthrough collection.
-Base: `C1`.
-
-**P4: columnar FlatMap output.**
-Build the FlatMap output into a `ColumnBuilder`.
-Files: `src/compute/src/render/flat_map.rs`.
-Test: FlatMap feeding a downstream arrange or union.
-Base: `C2`.
-
-**C3+P6: TopK input and output columnar.**
-TopK reads its input via `as_specific_collection(None)` then `into_vec` and arranges by a hash and group key internally.
-Form that key off the columnar batch using the C1 pattern, and build the TopK output into a `ColumnBuilder`.
+**C3: TopK input columnar.**
+TopK reads its input via `as_specific_collection(None)` then `into_vec` (`top_k.rs:67`) and arranges by a hash and group key internally.
+Form that key off the columnar batch using the C1 pattern.
 The intra-operator `explode_one` and `ensure_monotonic` on `Vec` stay unchanged.
 Files: `src/compute/src/render/top_k.rs`.
 Test: top-k sqllogictest including monotonic and limit cases.
 Base: `C1`.
 
-**C4, C5, P7: linear and delta join input and output columnar.**
-The linear-join source-key path and the delta-join input path decode via `as_specific_collection` or local `into_vec`.
-Rework each to consume the columnar batch, and build the join output into a `ColumnBuilder`.
-Split into C4 for linear-join input, C5 for delta-join input, and P7 for the shared output flip if the diffs are large.
-Files: `src/compute/src/render/join/linear_join.rs`, `src/compute/src/render/join/delta_join.rs`.
-Test: join sqllogictest across linear and delta plans.
+**C4: linear-join input columnar.**
+The linear-join source-key path decodes via `as_specific_collection` (`linear_join.rs:245`).
+Rework it to consume the columnar batch using the C1 pattern.
+Files: `src/compute/src/render/join/linear_join.rs`.
+Test: linear-join sqllogictest.
 Base: `C1`.
+
+**C5: delta-join input columnar.**
+Rework the delta-join input path to consume the columnar batch.
+This is the most intricate operator, so it is a separate node from C4.
+Files: `src/compute/src/render/join/delta_join.rs`.
+Test: delta-join sqllogictest.
+Base: `C1`.
+
+**C6: sink columnar input.**
+Change the sink input path so it consumes a columnar edge.
+`sinks.rs:71` clones and calls `into_vec`.
+Persist and subscribe serialize rows, so the decode is acceptable at the leaf, but the API accepts the columnar edge and decodes locally rather than forcing `into_vec` at the boundary.
+Files: `src/compute/src/render/sinks.rs`.
+Test: subscribe and materialized-view sink sqllogictest and testdrive coverage.
+Base: `upstream/main`.
+
+**C7: LetRec columnar or sanctioned decode.**
+Consume the LetRec edge as columnar.
+The Vec-bound surface is the whole recursive feedback path, not only `branch_when`: the feedback `Variable` (`render.rs:921-924`), its set (`render.rs:990`), `leave_dynamic` (`render.rs:1001`), and the limit branch (`render.rs:961`).
+`Variable` is container-generic, so the change is type-permitted.
+LetRec's consolidation currently calls the raw `CollectionExt::consolidate_named` on an already-decoded `Vec` (`render.rs:946`), so this node must reroute it to the edge's `consolidate_named`, which is why it depends on F1.
+If `branch_when` on columnar proves infeasible, keep LetRec as a sanctioned leaf decode instead, which is compatible with T2.
+Files: `src/compute/src/render.rs`.
+Test: recursive-view sqllogictest including the iteration limit and the error-distinctness path.
+Base: `F1`.
+
+**C8: Union temporal-bucket columnar or sanctioned decode.**
+`render.rs:1358` decodes via `into_vec` to apply temporal bucketing inside a consolidating Union.
+Make `maybe_apply_temporal_bucketing` operate on the columnar stream.
+If bucketing is inherently row-shaped, keep the decode as a sanctioned leaf.
+F1 must land first, since a columnar Union consolidate would otherwise round-trip.
+Files: `src/compute/src/render.rs`, the timestamp trait sites for `maybe_apply_temporal_bucketing`.
+Test: temporal and temporal-bucketing sqllogictest.
+Base: `F1`.
+
+**P1: columnar output for the `flat_map` family.**
+Generalize `as_collection_core` to build into a `ColumnBuilder` and return a columnar edge, which flips the Get and Mfp producers.
+Rework its identity fast-path (`context.rs:927-929`) so it no longer delegates a `Vec` to `as_specific_collection`.
+Leave `as_specific_collection` returning `Vec` as a consumer leaf until its remaining callers are retired.
+This keeps P1's base at the arrange path and the sink, both native by Wave 2.
+Files: `src/compute/src/render/context.rs`, `src/compute/src/render.rs`.
+Test: physical-plan goldens unchanged, plus sqllogictest for Get and Mfp chains feeding an ArrangeBy or sink.
+Base: Wave 1 complete.
+
+**P2: columnar Constant.**
+Build the constant collection into a `Column` in the `Constant` arm of `render_plan_expr`.
+Files: `src/compute/src/render.rs`.
+Base: Wave 1 complete.
+
+**P3: columnar ArrangeBy passthrough.**
+Ensure the passthrough emits `Columnar` when its producer is columnar, and drop any remaining `Vec` re-wrap (`context.rs:1102`).
+Files: `src/compute/src/render/context.rs`.
+Base: Wave 1 complete.
+
+**P4: columnar FlatMap output.**
+Build the FlatMap output into a `ColumnBuilder`.
+Files: `src/compute/src/render/flat_map.rs`.
+Base: Wave 1 complete.
 
 **P5: columnar Reduce output.**
 Build the final Reduce output into a `ColumnBuilder`.
 Internals stay on `Vec`.
 Files: `src/compute/src/render/reduce.rs`.
-Test: reduce sqllogictest across accumulable, hierarchical, and basic plans.
-Base: `upstream/main`, or the Wave 3 tip if it shares helpers.
+Base: Wave 1 complete.
+
+**P6: columnar TopK output.**
+Build the TopK output into a `ColumnBuilder`.
+Files: `src/compute/src/render/top_k.rs`.
+Base: Wave 1 complete.
+
+**P7: columnar Join output.**
+Build the linear and delta join outputs into a `ColumnBuilder`.
+Files: `src/compute/src/render/join/linear_join.rs`, `src/compute/src/render/join/delta_join.rs`.
+Base: Wave 1 complete.
 
 **P8: columnar Threshold output.**
 Build the Threshold output into a `ColumnBuilder`.
 Files: `src/compute/src/render/threshold.rs`.
-Test: threshold sqllogictest.
-Base: `upstream/main`.
+Base: Wave 1 complete.
 
-**C7: columnar LetRec.**
-Run the LetRec consolidation and the `branch_when` iteration-limit logic on the columnar stream.
-Depends on F1 for the native columnar consolidate.
-This is the least-trodden path.
-If `branch_when` on columnar resists, keep LetRec as a decode point longer and record why.
+**P9: columnar import producers.**
+The source imports (`render.rs:374, 474`) and the `SnapshotMode::Exclude` index import (`render.rs:647-668`) build `from_collections` with a `VecCollection`.
+Build a `Column` at these boundaries.
+Imports read from persist or a trace, so a `vec_to_columnar` upgrade at the boundary is acceptable, symmetric to the sink leaf.
 Files: `src/compute/src/render.rs`.
-Test: recursive-view sqllogictest including the iteration limit and the error-distinctness path.
-Base: `F1`.
-
-**C8: columnar Union temporal-bucket.**
-`render.rs:1358` decodes via `into_vec` to apply temporal bucketing inside a consolidating Union.
-Make `maybe_apply_temporal_bucketing` operate on the columnar stream, or keep the decode and document it as a leaf if bucketing is inherently row-shaped.
-Files: `src/compute/src/render.rs`, the timestamp trait sites for `maybe_apply_temporal_bucketing`.
-Test: temporal and temporal-bucketing sqllogictest.
-Base: `F1` if it shares the consolidate, else `upstream/main`.
+Test: source and index import sqllogictest and testdrive coverage.
+Base: Wave 1 complete.
 
 **T1: delete `vec_to_columnar`.**
 Once every producer emits columnar, no edge carries `Vec`, so `vec_to_columnar` is dead.
 Delete it and the mixed-variant upgrade branch in `concat_many`.
 Files: `src/compute/src/render/columnar.rs`.
-Base: the merge of all P nodes and the Wave 3 consumer nodes.
+Base: all P nodes.
 
 **T2: collapse the enum.**
 Replace `CollectionEdge` with a `ColumnarCollection` type alias.
-Demote `into_vec` to a free function used only by leaf consumers that serialize rows.
+Demote `into_vec` to a free function used only by leaf consumers that serialize rows and by any sanctioned decode point.
 Update `CollectionBundle.collection` and all construction sites.
+This is the widest diff, touching `context.rs` and every construction site, so alias the enum first and land the construction-site churn as a mechanical rename reviewed separately.
 Files: `src/compute/src/render/columnar.rs`, `src/compute/src/render/context.rs`, `src/compute/src/render.rs`, and every construction site.
-Base: `T1`, `C6`, `C7`, `C8`.
+Base: `T1`.
 
 **T3: de-match the carrier methods.**
 Simplify `negate`, `concat_many`, and `consolidate_named` from arm matches to single columnar implementations.
-Remove the temporary second consolidate variant.
+The columnar `consolidate_named` becomes the sole implementation.
 Files: `src/compute/src/render/columnar.rs`.
 Base: `T2`.
 
 ### Stacked pull requests
 
-The DAG is not a single chain, so it is several stacks off `upstream/main` that converge at the teardown.
+The consumer wave is several short stacks off `upstream/main`.
 
-* Lane A, off `C1`: `P1` also needs `C6`, then `P3`.
-* Lane B: `C2` then `P4`.
-* Lane C: `C6` feeds `P1` and `T2`.
-* Lane D: `F1` then `C7`, `C8`.
-* Lane E, off `C1`: `C3+P6`, `C4`, `C5`, `P7`.
-* Independent: `P2` off `C1`, `P5` and `P8` off `upstream/main`.
-* Convergence: `T1` rebases on all producer and Wave 3 consumer lanes, then `T2`, then `T3`.
+* `F1` then `C7`, `C8`.
+* `C1` then `C3`, `C4`, `C5`.
+* `C2` and `C6` are independent, off `upstream/main`.
+
+The producer wave starts only after the entire consumer wave has landed, which resolves the fan-in problem: the producer nodes and the teardown rebase on a single merged base, not on a live tangle of consumer stacks.
+Producer nodes are mutually independent.
+The teardown is a short chain `T1`, `T2`, `T3` on top of the merged producer wave.
 
 gh-stack reference: https://github.github.com/gh-stack/#get-started
 
 ### Testing strategy
 
 * Every consumer node lands a unit test that asserts the columnar path introduces no `ColumnarToVec` operator, reusing the introspection-visible seam names.
-* Every producer node keeps physical-plan goldens unchanged, since the edge representation is not part of the plan text.
+* A whole-plan differential test renders a corpus of plans both ways and asserts identical output.
+  This is the behavioral gate that the compiler does not provide, and it must pass before T2.
+* Every producer node keeps physical-plan and EXPLAIN text goldens unchanged, since the edge representation is not part of the plan text.
+* Operator-introspection goldens are a separate concern and will churn.
+  Each node that moves a seam changes the operator set in `mz_dataflow_operators` and related views.
+  Inventory the introspection-based sqllogictest goldens and the platform-checks that assert on dataflow shape up front, decide whether seam operators should be filtered from those views, and budget the golden rewrites into each pull request.
 * Cross-arm agreement follows the `flat_map_datums_arms_agree` pattern.
   The vec and columnar arms must extract identical updates.
-* A feature-benchmark reduce and top-k run guards against a regression that outlives the transition, not against transient cost.
+* A feature-benchmark reduce and top-k run guards against a regression that outlives the transition.
 
 ## Minimal Viable Prototype
 
-The prototype validates the two load-bearing mechanisms end to end: the columnar arrange input (C1) and the `flat_map`-family producer flip (P1).
-Land C1 and P1, then render a `SELECT` that flows Get into an ArrangeBy.
-Assert that the rendered dataflow contains no `ColumnarToVec` operator on that path, and that results match the row-based rendering.
-This de-risks the C1 key-forming pattern that C3, C4, and C5 reuse, before committing to the operator-local arrange diffs.
+The prototype must de-risk the mechanisms whose feasibility is genuinely uncertain, not the well-understood ones.
+It covers three throwaway spikes before the stack is committed:
+
+* C1 columnar arrange input, `Get` into `ArrangeBy`, asserting no `ColumnarToVec` on the path and identical results.
+  This validates the key-forming borrow pattern that C3, C4, and C5 reuse.
+* `branch_when` on a columnar stream, the load-bearing uncertainty for C7.
+* `maybe_apply_temporal_bucketing` on a columnar stream, the load-bearing uncertainty for C8.
+
+The enum collapse can only complete if C7 and C8 either go native or are accepted as sanctioned decode points, so their feasibility belongs in the prototype rather than at the end of a long stack.
+A columnar join output, building into a `ColumnBuilder`, is worth a fourth spike, since it is a different mechanism from the arrange input and feeds the most intricate operators.
 
 ## Alternatives
 
 * **Two parallel implementations per operator.**
   Maintain both the `Vec` and columnar code paths at every operator until the migration completes.
   Rejected because the complexity grows to unbounded levels over a long migration.
-* **Feature-flag the change.**
-  Gate columnar edges behind a config flag.
-  Rejected for the same complexity reason, and because the flag plus the enum multiplies the states to reason about.
+* **Per-operator progress flag.**
+  Gate each operator's representation behind config.
+  Rejected because it multiplies the states to reason about, the enum times the flag.
+* **Coarse force-Vec kill-switch.**
+  A single dyncfg checked once at edge construction, disabled meaning today's exact `Vec` behavior.
+  This would give a runtime rollback for an intermediate regression.
+  Not adopted, because the producer-flip invariant removes the seam-heavy intermediate state that motivates a kill-switch: the consumer wave changes no behavior and the producer wave only adds cheap upgrades.
+  The residual risk is a correctness bug, which a revert addresses.
+  Revisit this if the prototype shows the producer wave carries a memory risk after all.
 * **Generalize `CollectionExt` over its container.**
   Make the trait container-generic so a columnar collection is a first-class implementation.
   Rejected because the trait is a dead-end.
-  Behavior-specific needs are met by keeping intra-operator `Vec` uses as they are and giving `consolidate_named` a temporary second variant.
+  Intra-operator `Vec` uses stay as they are, and `consolidate_named` gets a second variant.
 * **Collapse the enum to a columnar-only edge with local adapters now.**
   Make the edge type columnar immediately and insert `vec_to_columnar` and `columnar_to_vec` adapters at unmigrated boundaries.
   Rejected because it doubles conversions at unmigrated producer-consumer pairs, a worse transient cost, and the enum-as-carrier keeps the representation-matching in one place.
-* **Strict consumer-first with a dead columnar arm throughout.**
-  Migrate every consumer natively before any producer flips, so there is no transient perf hit.
-  Not chosen as a strict rule, since it front-loads per-operator native code before any producer benefits.
-  The chosen per-subgraph direction pairs each producer flip with its consumer work instead.
+* **Producer-first, or per-edge direction chosen ad hoc.**
+  Flip producers early, or decide direction edge by edge.
+  Rejected because producer-first flips force the expensive `ColumnarToVec` decode at every not-yet-native consumer, and an ad-hoc rule lets two sessions make conflicting choices at a shared edge.
+  The producer-flip invariant is the churn minimum and is unambiguous.
 
 ## Open questions
 
 * **Join node granularity.**
-  C4, C5, and P7 are grouped.
-  The split into linear-input, delta-input, and shared-output depends on how large the diffs are, resolved when the join work starts.
+  C4, C5, and P7 assume linear-input, delta-input, and a shared output flip are the right cut.
+  Whether the output flip should also split by join kind depends on how large the diffs are, resolved when the join work starts.
 * **`branch_when` on columnar.**
-  LetRec, C7, runs the iteration-limit `branch_when` on the stream.
-  Whether that is clean on a columnar stream, or whether LetRec stays a decode point, is unresolved until C7 is attempted.
+  Resolved in the prototype.
+  If infeasible, LetRec becomes a sanctioned decode point.
 * **Union temporal-bucketing.**
-  Whether `maybe_apply_temporal_bucketing` can operate on a columnar stream, or is inherently row-shaped and stays a leaf decode, is unresolved until C8 is attempted.
+  Resolved in the prototype.
+  If inherently row-shaped, Union temporal-bucketing becomes a sanctioned decode point.
+* **Introspection golden filtering.**
+  Whether seam operators should be filtered from `mz_dataflow_operators` for the duration of the migration, or expected to churn per pull request, is decided when the golden inventory is done.
