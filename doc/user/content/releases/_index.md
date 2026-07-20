@@ -28,7 +28,6 @@ The cluster controller is now enabled by default. `ALTER CLUSTER` for configurat
 
 ### Improvements {#v26.34-improvements}
 - **Azure SQL source support**: Materialize can now ingest data from Azure SQL databases using the SQL Server source connector.
-- **AWS Glue Schema Registry for sinks**: `CREATE SINK` now supports AWS Glue Schema Registry for Avro-encoded Kafka sinks, as an alternative to Confluent Schema Registry.
 - **Configurable Iceberg sink commit interval**: The commit interval of an existing Iceberg sink can now be altered using `ALTER ... SET COMMIT INTERVAL`, with a minimum of 1 second.
 - **MCP query tool replica routing**: The MCP developer query tool now accepts a `cluster_replica` parameter, enabling `EXPLAIN ANALYZE` on clusters with more than one replica.
 - **Smaller container images**: The `environmentd` and `clusterd` container images now use a distroless base, reducing image size and attack surface for Self-Managed deployments.
