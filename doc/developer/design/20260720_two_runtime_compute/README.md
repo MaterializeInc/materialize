@@ -286,18 +286,32 @@ replica process hosts a single instance" (`compute_state.rs:495-496`):
 
 ## Thread allocation
 
-Two runtimes of `N` workers each put `2N` worker threads on the same cores. The
-interactive runtime is mostly blocked waiting on reads and imports, so it is not `N`
-cores of steady load, but the design must not silently double the thread count
-and oversubscribe. Options (thread split, smaller interactive pool, cooperative
-yielding) are a scheduling decision left to the open questions, not fixed here.
-Stage 1 avoids this entirely (one runtime plus a bounded reader pool).
+The interactive runtime runs the same number of workers as the maintenance
+runtime, which is a correctness requirement for pairwise import (see "Topology")
+independent of scheduling. That puts `2N` worker threads on the process's cores.
+How those threads share cores (dedicated splits, oversubscription relying on the
+interactive runtime being mostly blocked on reads and imports, pinning) is a
+tuning question deferred to later measurement, not fixed by this design. Stage 1
+sidesteps it entirely: one runtime plus a bounded reader pool.
+
+## Failure model
+
+The two runtimes share fate, exactly as the replica process behaves today. They
+live in one process, so a fatal error in either brings the process down and the
+replica restarts as a whole. There is no partial-failure path, no fallback that
+reroutes interactive reads onto the maintenance runtime, and no independent
+restart of one runtime. A peek in flight when the process dies fails with the
+process and is retried by the controller against the restarted replica, which is
+the existing behavior. Shared fate is deliberate. It keeps the failure model
+identical to today and avoids a cross-runtime fallback path that would otherwise
+need its own correctness argument.
 
 ## Open questions
 
-- **Thread and core allocation between runtimes.** How many worker threads does
-  the interactive runtime get, and how are cores shared with maintenance? Needs
-  measurement.
+- **Core sharing between runtimes.** Worker counts are settled (equal, see
+  "Thread allocation"). How the resulting `2N` threads share cores, and whether
+  oversubscription is acceptable given the interactive runtime is mostly blocked
+  on reads, is deferred to later measurement.
 - **Import queue backpressure (stage 2).** The primitive's replay queue is
   bounded today only because producer and consumer share a worker step. Across
   runtimes they are independently scheduled, so a lagging interactive runtime can
@@ -312,9 +326,6 @@ Stage 1 avoids this entirely (one runtime plus a bounded reader pool).
 - **Slow-path versus stage 1.** Stage 1 offloads fast-path index peeks but not
   slow-path peeks. Is it worth teaching the coordinator to prefer the fast path
   more aggressively once stage 1 lands, deferring stage 2?
-- **Failure and restart.** If the interactive runtime dies, peeks in flight fail and
-  should be retried on maintenance as a fallback. If maintenance dies, the whole
-  replica restarts as today. The fallback path needs specifying.
 
 ## Alternatives
 
