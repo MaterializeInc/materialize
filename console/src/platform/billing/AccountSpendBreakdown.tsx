@@ -12,7 +12,6 @@ import {
   chakra,
   Grid,
   HStack,
-  Spinner,
   Text,
   Tooltip,
   useDisclosure,
@@ -39,6 +38,12 @@ import {
 } from "~/api/cloudGlobalApi";
 import ErrorBox from "~/components/ErrorBox";
 import { GraphEventOverlay, GraphTooltip } from "~/components/graphComponents";
+import { LoadingContainer } from "~/components/LoadingContainer";
+import {
+  EmptyListHeader,
+  EmptyListHeaderContents,
+  EmptyListWrapper,
+} from "~/layouts/listPageComponents";
 import ChevronRightIcon from "~/svg/ChevronRightIcon";
 import { MaterializeTheme } from "~/theme";
 import { DATE_FORMAT_SHORT, formatDateInUtc } from "~/utils/dateFormat";
@@ -650,6 +655,17 @@ function useAccountSpendPivot(
   };
 }
 
+const EmptyState = () => (
+  <EmptyListWrapper padding="4" data-testid="account-breakdown-empty">
+    <EmptyListHeader>
+      <EmptyListHeaderContents
+        title="No usage to break down"
+        helpText="There was no spend in the selected period and region."
+      />
+    </EmptyListHeader>
+  </EmptyListWrapper>
+);
+
 const AccountSpendBreakdown = ({
   days,
   isLoading,
@@ -659,7 +675,6 @@ const AccountSpendBreakdown = ({
   timeRange,
   setTimeRange,
 }: AccountSpendBreakdownProps) => {
-  const { colors } = useTheme<MaterializeTheme>();
   const { accountIds, rows, colorFor, totalSpend } = useAccountSpendPivot(
     days,
     regionFilter,
@@ -676,17 +691,13 @@ const AccountSpendBreakdown = ({
         </div>
       </HStack>
       {isLoading ? (
-        <Spinner data-testid="account-breakdown-loading" />
+        // Reserve the chart's height so the section doesn't jump when the
+        // data lands.
+        <LoadingContainer minHeight={`${chartHeightPx}px`} />
       ) : isError ? (
         <ErrorBox message={ACCOUNT_SPEND_FETCH_ERROR_MESSAGE} />
       ) : !days || accountIds.length === 0 ? (
-        <Text
-          textStyle="text-ui-reg"
-          color={colors.foreground.secondary}
-          data-testid="account-breakdown-empty"
-        >
-          No usage to break down for the selected period.
-        </Text>
+        <EmptyState />
       ) : (
         <Box mt="4">
           <Text
