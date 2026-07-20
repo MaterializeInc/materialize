@@ -15,9 +15,15 @@ use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 
 /// The merged cursor a [`TraceReader::cursor`] hands out over all of a trace's batches: a
 /// [`CursorList`] over the per-batch cursors.
-type TraceCursor<Tr> = CursorList<BatchCursor<Tr>>;
+///
+/// Shared with [`crate::compute_state::local_snapshot`], whose owned [`LocalSnapshot`] holds the
+/// same cursor/storage shape, but over batches taken once via `cursor_through` rather than
+/// borrowed live from the trace.
+///
+/// [`LocalSnapshot`]: crate::compute_state::local_snapshot::LocalSnapshot
+pub(crate) type TraceCursor<Tr> = CursorList<BatchCursor<Tr>>;
 /// Backing storage for a [`TraceCursor`]: the batches the cursor borrows from.
-type TraceStorage<Tr> = Vec<<Tr as TraceReader>::Batch>;
+pub(crate) type TraceStorage<Tr> = Vec<<Tr as TraceReader>::Batch>;
 use mz_ore::result::ResultExt;
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena};
@@ -128,6 +134,39 @@ where
         trace_reader: &mut Tr,
     ) -> Self {
         let (mut cursor, storage) = trace_reader.cursor();
+        let literals = literal_constraints
+            .map(|constraints| Literals::new(constraints, &mut cursor, &storage));
+
+        Self {
+            target_id,
+            cursor,
+            storage,
+            map_filter_project,
+            peek_timestamp,
+            row_builder: Row::default(),
+            datum_vec: DatumVec::new(),
+            literals,
+        }
+    }
+
+    /// Builds a [`PeekResultIterator`] over an owned [`LocalSnapshot`], instead of a cursor
+    /// borrowed live from the trace.
+    ///
+    /// Unlike [`Self::new`], this does not need a `&mut Tr` for the walk: the snapshot already
+    /// owns its cursor and backing `Arc` batches, so the returned iterator is `Send` and can
+    /// run on a thread other than the one maintaining the trace.
+    ///
+    /// [`LocalSnapshot`]: crate::compute_state::local_snapshot::LocalSnapshot
+    // Not called from the peek path yet; see `local_snapshot`'s module doc.
+    #[allow(dead_code)]
+    pub fn new_over_snapshot(
+        target_id: GlobalId,
+        map_filter_project: mz_expr::SafeMfpPlan,
+        peek_timestamp: mz_repr::Timestamp,
+        literal_constraints: Option<&mut [Row]>,
+        snapshot: crate::compute_state::local_snapshot::LocalSnapshot<Tr>,
+    ) -> Self {
+        let (mut cursor, storage) = snapshot.into_cursor();
         let literals = literal_constraints
             .map(|constraints| Literals::new(constraints, &mut cursor, &storage));
 

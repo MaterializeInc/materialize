@@ -46,6 +46,7 @@ prost.workspace = true
 scopeguard.workspace = true
 serde.workspace = true
 smallvec = { workspace = true, features = ["serde", "union"] }
+static_assertions.workspace = true
 timely.workspace = true
 tokio.workspace = true
 tracing.workspace = true

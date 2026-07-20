@@ -45,6 +45,14 @@ pub struct StashingPeek {
     /// We can't give a PeekResultIterator to our async upload task because the
     /// underlying trace reader is not Send/Sync. So we need to use a channel to
     /// send result rows from the worker thread to the async background task.
+    ///
+    /// The `peek_iterator` above is built with `PeekResultIterator::new`, which borrows the
+    /// cursor live off `trace_bundle` (a `PaddedTrace<RowRowAgent<..>>`, `Rc`-based and
+    /// `!Send`), so `pump_rows` has to keep walking it on this worker thread. On this branch
+    /// batches are `Arc`-backed, so an owned snapshot cursor over them (see
+    /// `crate::compute_state::local_snapshot::LocalSnapshot`, taken via `snapshot_local` and
+    /// consumed by `PeekResultIterator::new_over_snapshot`) IS `Send`: a walk built that way
+    /// could move into the async task directly, without this channel.
     rows_tx: Option<tokio::sync::mpsc::Sender<Result<Vec<(Row, NonZeroI64)>, String>>>,
     /// The result of the background task, eventually.
     pub result: oneshot::Receiver<(PeekResponse, Duration)>,

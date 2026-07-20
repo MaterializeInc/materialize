@@ -6784,6 +6784,7 @@ dependencies = [
  "scopeguard",
  "serde",
  "smallvec",
+ "static_assertions",
  "timely",
  "tokio",
  "tracing",

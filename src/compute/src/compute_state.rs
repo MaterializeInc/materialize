@@ -76,6 +76,7 @@ use crate::metrics::{CollectionMetrics, WorkerMetrics};
 use crate::render::{LinearJoinSpec, StartSignal};
 use crate::server::{ComputeInstanceContext, ResponseSender};
 
+mod local_snapshot;
 mod peek_result_iterator;
 mod peek_stash;
 
