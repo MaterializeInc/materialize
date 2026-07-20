@@ -30,7 +30,7 @@ use mz_compute_client::protocol::response::{
 };
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::{
-    ENABLE_PEEK_RESPONSE_STASH, PEEK_RESPONSE_STASH_BATCH_MAX_RUNS,
+    ENABLE_INDEX_PEEK_OFFLOAD, ENABLE_PEEK_RESPONSE_STASH, PEEK_RESPONSE_STASH_BATCH_MAX_RUNS,
     PEEK_RESPONSE_STASH_THRESHOLD_BYTES, PEEK_STASH_BATCH_SIZE, PEEK_STASH_NUM_BATCHES,
 };
 use mz_compute_types::plan::render_plan::RenderPlan;
@@ -68,13 +68,14 @@ use tokio::sync::{oneshot, watch};
 use tracing::{Level, debug, error, info, span, trace, warn};
 use uuid::Uuid;
 
-use crate::arrangement::manager::{TraceBundle, TraceManager};
+use crate::arrangement::manager::{PaddedTrace, TraceBundle, TraceManager};
 use crate::logging;
 use crate::logging::compute::{CollectionLogging, ComputeEvent, PeekEvent};
 use crate::logging::initialize::LoggingTraces;
 use crate::metrics::{CollectionMetrics, WorkerMetrics};
 use crate::render::{LinearJoinSpec, StartSignal};
 use crate::server::{ComputeInstanceContext, ResponseSender};
+use crate::typedefs::ErrAgent;
 
 mod local_snapshot;
 mod peek_result_iterator;
@@ -955,6 +956,14 @@ impl<'a> ActiveComputeState<'a> {
                 let peek_stash_threshold_bytes =
                     PEEK_RESPONSE_STASH_THRESHOLD_BYTES.get(&self.compute_state.worker_config);
 
+                // The peek stash's size-based diversion is only known once the walk has already
+                // produced enough rows to exceed its threshold, so a peek that's eligible for
+                // (and has) the stash always takes the synchronous path, which already knows how
+                // to divert to it; offload is only for peeks the stash would never apply to.
+                let enable_index_peek_offload = ENABLE_INDEX_PEEK_OFFLOAD
+                    .get(&self.compute_state.worker_config)
+                    && !(peek_stash_enabled && peek_stash_eligible);
+
                 let metrics = IndexPeekMetrics {
                     seek_fulfillment_seconds: &self
                         .compute_state
@@ -985,6 +994,8 @@ impl<'a> ActiveComputeState<'a> {
                     self.compute_state.max_result_size,
                     peek_stash_enabled && peek_stash_eligible,
                     peek_stash_threshold_bytes,
+                    enable_index_peek_offload,
+                    self.timely_worker,
                     &metrics,
                 );
 
@@ -996,6 +1007,13 @@ impl<'a> ActiveComputeState<'a> {
                 match status {
                     PeekStatus::Ready(result) => Some(result),
                     PeekStatus::NotReady => None,
+                    PeekStatus::Offloaded(offload_peek) => {
+                        let uuid = offload_peek.peek.uuid;
+                        self.compute_state
+                            .pending_peeks
+                            .insert(uuid, PendingPeek::IndexOffload(offload_peek));
+                        return;
+                    }
                     PeekStatus::UsePeekStash => {
                         let _span =
                             span!(parent: &peek.span, Level::DEBUG, "process_stash_peek").entered();
@@ -1028,6 +1046,15 @@ impl<'a> ActiveComputeState<'a> {
                     .observe(duration.as_secs_f64());
                 result
             }),
+            PendingPeek::IndexOffload(peek) => {
+                peek.result.try_recv().ok().map(|(result, duration)| {
+                    self.compute_state
+                        .metrics
+                        .index_peek_total_seconds
+                        .observe(duration.as_secs_f64());
+                    result
+                })
+            }
             PendingPeek::Stash(stashing_peek) => {
                 let num_batches = PEEK_STASH_NUM_BATCHES.get(&self.compute_state.worker_config);
                 let batch_size = PEEK_STASH_BATCH_SIZE.get(&self.compute_state.worker_config);
@@ -1209,6 +1236,8 @@ pub enum PendingPeek {
     /// A peek against an index that is being stashed in the peek stash by an
     /// async background task.
     Stash(peek_stash::StashingPeek),
+    /// A peek against an index whose cursor walk was offloaded to an async task.
+    IndexOffload(IndexOffloadPeek),
 }
 
 impl PendingPeek {
@@ -1330,6 +1359,7 @@ impl PendingPeek {
             PendingPeek::Index(p) => &p.span,
             PendingPeek::Persist(p) => &p.span,
             PendingPeek::Stash(p) => &p.span,
+            PendingPeek::IndexOffload(p) => &p.span,
         }
     }
 
@@ -1338,6 +1368,7 @@ impl PendingPeek {
             PendingPeek::Index(p) => &p.peek,
             PendingPeek::Persist(p) => &p.peek,
             PendingPeek::Stash(p) => &p.peek,
+            PendingPeek::IndexOffload(p) => &p.peek,
         }
     }
 }
@@ -1488,6 +1519,27 @@ pub struct IndexPeek {
     span: tracing::Span,
 }
 
+/// An in-progress index peek whose cursor walk was offloaded to an async task.
+///
+/// Gated by [`ENABLE_INDEX_PEEK_OFFLOAD`]. Only constructed once `IndexPeek::seek_fulfillment`
+/// has confirmed the peek is fulfillable (frontiers past `peek.timestamp`, compaction frontier
+/// not past it) and it is not eligible for the peek response stash. Mirrors `PersistPeek`: the
+/// walk runs inside a spawned task over an owned, `Send` snapshot (see `local_snapshot`), and
+/// the result comes back over a oneshot channel.
+///
+/// Note that `PendingPeek` intentionally does not implement or derive `Clone`, as each
+/// `PendingPeek` is meant to be dropped after it's responded to.
+pub struct IndexOffloadPeek {
+    pub(crate) peek: Peek,
+    /// A background task that walks the snapshot and produces the peek result. If we're no
+    /// longer interested in the results, we abort the task.
+    _abort_handle: AbortOnDropHandle<()>,
+    /// The result of the background task, eventually.
+    result: oneshot::Receiver<(PeekResponse, Duration)>,
+    /// The `tracing::Span` tracking this peek's operation.
+    span: tracing::Span,
+}
+
 /// Histogram metrics for index peek phases.
 ///
 /// This struct bundles references to the various histogram metrics used to
@@ -1521,6 +1573,8 @@ impl IndexPeek {
         max_result_size: u64,
         peek_stash_eligible: bool,
         peek_stash_threshold_bytes: usize,
+        enable_offload: bool,
+        timely_worker: &TimelyWorker,
         metrics: &IndexPeekMetrics<'_>,
     ) -> PeekStatus {
         let method_start = Instant::now();
@@ -1548,12 +1602,20 @@ impl IndexPeek {
             .frontier_check_seconds
             .observe(method_start.elapsed().as_secs_f64());
 
-        let result = self.collect_finished_data(
-            max_result_size,
-            peek_stash_eligible,
-            peek_stash_threshold_bytes,
-            metrics,
-        );
+        // Once we reach this point the peek is known-fulfillable: the frontier and
+        // compaction-frontier checks above have passed. `enable_offload` hands the walk to an
+        // async task instead of running it inline (`collect_finished_data`); see
+        // `spawn_offloaded_walk`.
+        let result = if enable_offload {
+            PeekStatus::Offloaded(self.spawn_offloaded_walk(max_result_size, timely_worker))
+        } else {
+            self.collect_finished_data(
+                max_result_size,
+                peek_stash_eligible,
+                peek_stash_threshold_bytes,
+                metrics,
+            )
+        };
 
         metrics
             .seek_fulfillment_seconds
@@ -1574,30 +1636,14 @@ impl IndexPeek {
 
         // Check if there exist any errors and, if so, return whatever one we
         // find first.
-        let (mut cursor, storage) = self.trace_bundle.errs_mut().cursor();
-        while cursor.key_valid(&storage) {
-            let mut copies = Diff::ZERO;
-            cursor.map_times(&storage, |time, diff| {
-                if time.less_equal(&self.peek.timestamp) {
-                    copies += diff;
-                }
-            });
-            if copies.is_negative() {
-                let error = cursor.key(&storage);
-                error!(
-                    target = %self.peek.target.id(), diff = %copies, %error,
-                    "index peek encountered negative multiplicities in error trace",
-                );
-                return PeekStatus::Ready(PeekResponse::Error(format!(
-                    "Invalid data in source errors, \
-                    saw retractions ({}) for row that does not exist: {}",
-                    -copies, error,
-                )));
-            }
-            if copies.is_positive() {
-                return PeekStatus::Ready(PeekResponse::Error(cursor.key(&storage).to_string()));
-            }
-            cursor.step_key(&storage);
+        let (cursor, storage) = self.trace_bundle.errs_mut().cursor();
+        if let Some(error) = Self::scan_errs_for_error::<PaddedTrace<ErrAgent<Timestamp, Diff>>>(
+            self.peek.target.id(),
+            self.peek.timestamp,
+            cursor,
+            storage,
+        ) {
+            return PeekStatus::Ready(error);
         }
 
         metrics
@@ -1612,6 +1658,54 @@ impl IndexPeek {
             peek_stash_threshold_bytes,
             metrics,
         )
+    }
+
+    /// Scans an errs cursor for any error at or before `peek_timestamp`, returning the first one
+    /// found (or `None`).
+    ///
+    /// Shared between the synchronous errs scan in `collect_finished_data` (cursor borrowed live
+    /// off the trace via `TraceReader::cursor`) and the offloaded walk in `offloaded_response`
+    /// (cursor from an owned, `Send` snapshot; see `local_snapshot`): a `(cursor, storage)` pair
+    /// looks the same to this scan either way.
+    fn scan_errs_for_error<Tr>(
+        target_id: GlobalId,
+        peek_timestamp: Timestamp,
+        mut cursor: peek_result_iterator::TraceCursor<Tr>,
+        storage: peek_result_iterator::TraceStorage<Tr>,
+    ) -> Option<PeekResponse>
+    where
+        Tr: TraceReader<Batch: Navigable>,
+        for<'a> BatchCursor<Tr>: Cursor<
+                Key<'a>: std::fmt::Display,
+                TimeGat<'a>: PartialOrder<Timestamp>,
+                DiffGat<'a> = &'a Diff,
+            >,
+    {
+        while cursor.key_valid(&storage) {
+            let mut copies = Diff::ZERO;
+            cursor.map_times(&storage, |time, diff| {
+                if time.less_equal(&peek_timestamp) {
+                    copies += diff;
+                }
+            });
+            if copies.is_negative() {
+                let error = cursor.key(&storage);
+                error!(
+                    target = %target_id, diff = %copies, %error,
+                    "index peek encountered negative multiplicities in error trace",
+                );
+                return Some(PeekResponse::Error(format!(
+                    "Invalid data in source errors, \
+                    saw retractions ({}) for row that does not exist: {}",
+                    -copies, error,
+                )));
+            }
+            if copies.is_positive() {
+                return Some(PeekResponse::Error(cursor.key(&storage).to_string()));
+            }
+            cursor.step_key(&storage);
+        }
+        None
     }
 
     /// Collects data for a known-complete peek from the ok stream.
@@ -1633,15 +1727,12 @@ impl IndexPeek {
                 DiffGat<'a> = &'a Diff,
             >,
     {
-        let max_result_size = usize::cast_from(max_result_size);
-        let count_byte_size = size_of::<NonZeroUsize>();
-
         // Cursor setup timing
         let cursor_setup_start = Instant::now();
 
         // We clone `literal_constraints` here because we don't want to move the constraints
         // out of the peek struct, and don't want to modify in-place.
-        let mut peek_iterator = peek_result_iterator::PeekResultIterator::new(
+        let peek_iterator = peek_result_iterator::PeekResultIterator::new(
             peek.target.id().clone(),
             peek.map_filter_project.clone(),
             peek.timestamp,
@@ -1652,6 +1743,47 @@ impl IndexPeek {
         metrics
             .cursor_setup_seconds
             .observe(cursor_setup_start.elapsed().as_secs_f64());
+
+        Self::drain_ok_iterator(
+            peek_iterator,
+            peek,
+            max_result_size,
+            peek_stash_eligible,
+            peek_stash_threshold_bytes,
+            Some(metrics),
+        )
+    }
+
+    /// Drains a [`peek_result_iterator::PeekResultIterator`] into a [`PeekStatus`], sorting and
+    /// truncating per `peek.finishing`.
+    ///
+    /// Shared between the synchronous walk (`collect_ok_finished_data`, iterator borrowed live
+    /// off the trace) and the offloaded walk (`offloaded_response`, iterator built over an
+    /// owned, `Send` snapshot; see `local_snapshot`): the accumulation logic is identical either
+    /// way. Only the synchronous walk records per-phase metrics: the offloaded walk runs inside
+    /// a spawned task, and threading `'static` histogram handles across that boundary isn't
+    /// worth it for phases this granular, so `metrics` is `None` there and only the overall
+    /// duration is recorded, at the call site that receives the task's result.
+    fn drain_ok_iterator<Tr>(
+        mut peek_iterator: peek_result_iterator::PeekResultIterator<Tr>,
+        peek: &Peek,
+        max_result_size: u64,
+        peek_stash_eligible: bool,
+        peek_stash_threshold_bytes: usize,
+        metrics: Option<&IndexPeekMetrics<'_>>,
+    ) -> PeekStatus
+    where
+        Tr: TraceReader<Batch: Navigable>,
+        for<'a> BatchCursor<Tr>: Cursor<
+                Key<'a>: ExtendDatums + Eq,
+                KeyContainer: BatchContainer<Owned = Row>,
+                Val<'a>: ExtendDatums,
+                TimeGat<'a>: PartialOrder<Timestamp>,
+                DiffGat<'a> = &'a Diff,
+            >,
+    {
+        let max_result_size = usize::cast_from(max_result_size);
+        let count_byte_size = size_of::<NonZeroUsize>();
 
         // Accumulated `Vec<(row, count)>` results that we are likely to return.
         let mut results = Vec::new();
@@ -1702,17 +1834,21 @@ impl IndexPeek {
                 if results.len() >= 2 * max_results {
                     if peek.finishing.order_by.is_empty() {
                         results.truncate(max_results);
-                        metrics
-                            .row_iteration_seconds
-                            .observe(row_iteration_start.elapsed().as_secs_f64());
-                        metrics
-                            .result_sort_seconds
-                            .observe(sort_time_accum.as_secs_f64());
+                        if let Some(metrics) = metrics {
+                            metrics
+                                .row_iteration_seconds
+                                .observe(row_iteration_start.elapsed().as_secs_f64());
+                            metrics
+                                .result_sort_seconds
+                                .observe(sort_time_accum.as_secs_f64());
+                        }
                         let row_collection_start = Instant::now();
                         let collection = RowCollection::new(results, &peek.finishing.order_by);
-                        metrics
-                            .row_collection_seconds
-                            .observe(row_collection_start.elapsed().as_secs_f64());
+                        if let Some(metrics) = metrics {
+                            metrics
+                                .row_collection_seconds
+                                .observe(row_collection_start.elapsed().as_secs_f64());
+                        }
                         return PeekStatus::Ready(PeekResponse::Rows(vec![collection]));
                     } else {
                         // We can sort `results` and then truncate to `max_results`.
@@ -1743,19 +1879,440 @@ impl IndexPeek {
             }
         }
 
-        metrics
-            .row_iteration_seconds
-            .observe(row_iteration_start.elapsed().as_secs_f64());
-        metrics
-            .result_sort_seconds
-            .observe(sort_time_accum.as_secs_f64());
+        if let Some(metrics) = metrics {
+            metrics
+                .row_iteration_seconds
+                .observe(row_iteration_start.elapsed().as_secs_f64());
+            metrics
+                .result_sort_seconds
+                .observe(sort_time_accum.as_secs_f64());
+        }
 
         let row_collection_start = Instant::now();
         let collection = RowCollection::new(results, &peek.finishing.order_by);
-        metrics
-            .row_collection_seconds
-            .observe(row_collection_start.elapsed().as_secs_f64());
+        if let Some(metrics) = metrics {
+            metrics
+                .row_collection_seconds
+                .observe(row_collection_start.elapsed().as_secs_f64());
+        }
         PeekStatus::Ready(PeekResponse::Rows(vec![collection]))
+    }
+
+    /// Takes an owned snapshot of the oks/errs traces and spawns a task to walk it off the
+    /// timely worker thread, mirroring `PendingPeek::persist`'s offload (oneshot + activator +
+    /// abort-on-drop). Only called once `seek_fulfillment`'s frontier and compaction-frontier
+    /// checks have already confirmed the traces are known-complete as of `self.peek.timestamp`,
+    /// so `snapshot_local`'s own since-gate can only fail here if that invariant were violated
+    /// between the two checks; on a single-threaded worker nothing runs in between, so this
+    /// cannot happen in practice, but we still handle it (rather than unwrap) defensively.
+    fn spawn_offloaded_walk(
+        &mut self,
+        max_result_size: u64,
+        timely_worker: &TimelyWorker,
+    ) -> IndexOffloadPeek {
+        // `snapshot_local` requires a batch-aligned `as_of`, i.e. one the trace has actually
+        // reached (see its doc comment); each trace's own current upper qualifies; `[]` (as used
+        // by the live cursor the synchronous path walks) does not, since it would make the
+        // snapshot's own since-gate vacuously true. The per-record filtering down to
+        // `peek.timestamp` still happens during the walk, exactly as it does synchronously.
+        let mut oks_upper = Antichain::new();
+        self.trace_bundle.oks_mut().read_upper(&mut oks_upper);
+        let mut errs_upper = Antichain::new();
+        self.trace_bundle.errs_mut().read_upper(&mut errs_upper);
+
+        let oks_snapshot = local_snapshot::snapshot_local(self.trace_bundle.oks_mut(), &oks_upper);
+        let errs_snapshot =
+            local_snapshot::snapshot_local(self.trace_bundle.errs_mut(), &errs_upper);
+
+        let activator = timely_worker.sync_activator_for([].into());
+        let peek = self.peek.clone();
+        let peek_uuid = peek.uuid;
+        let (result_tx, result_rx) = oneshot::channel();
+
+        let task_handle = mz_ore::task::spawn(|| "index_peek::offload", async move {
+            let start = Instant::now();
+            let response =
+                Self::offloaded_response(&peek, max_result_size, oks_snapshot, errs_snapshot);
+            match result_tx.send((response, start.elapsed())) {
+                Ok(()) => {}
+                Err((_response, elapsed)) => {
+                    debug!(duration =? elapsed, "dropping result for cancelled peek {peek_uuid}")
+                }
+            }
+            match activator.activate() {
+                Ok(()) => {}
+                Err(_) => {
+                    debug!(
+                        "unable to wake timely after completed offloaded index peek {peek_uuid}"
+                    );
+                }
+            }
+        });
+
+        IndexOffloadPeek {
+            peek: self.peek.clone(),
+            _abort_handle: task_handle.abort_on_drop(),
+            result: result_rx,
+            span: self.span.clone(),
+        }
+    }
+
+    /// Builds the peek response from a pair of owned snapshots, off the timely worker thread.
+    ///
+    /// Mirrors `collect_finished_data` (errs scan, then the ok walk), but drains
+    /// `PeekResultIterator::new_over_snapshot` instead of a cursor borrowed live off the trace.
+    fn offloaded_response<OksTr, ErrsTr>(
+        peek: &Peek,
+        max_result_size: u64,
+        oks_snapshot: Result<local_snapshot::LocalSnapshot<OksTr>, local_snapshot::SnapshotError>,
+        errs_snapshot: Result<local_snapshot::LocalSnapshot<ErrsTr>, local_snapshot::SnapshotError>,
+    ) -> PeekResponse
+    where
+        OksTr: TraceReader<Batch: Navigable>,
+        for<'a> BatchCursor<OksTr>: Cursor<
+                Key<'a>: ExtendDatums + Eq,
+                KeyContainer: BatchContainer<Owned = Row>,
+                Val<'a>: ExtendDatums,
+                TimeGat<'a>: PartialOrder<Timestamp>,
+                DiffGat<'a> = &'a Diff,
+            >,
+        ErrsTr: TraceReader<Batch: Navigable>,
+        for<'a> BatchCursor<ErrsTr>: Cursor<
+                Key<'a>: std::fmt::Display,
+                TimeGat<'a>: PartialOrder<Timestamp>,
+                DiffGat<'a> = &'a Diff,
+            >,
+    {
+        let target_id = peek.target.id();
+
+        let since_gate_error = || {
+            soft_panic_or_log!(
+                "index peek offload: snapshot compacted past readiness-checked timestamp {}",
+                peek.timestamp,
+            );
+            PeekResponse::Error(format!(
+                "Arrangement compaction frontier is beyond the time of the attempted read ({})",
+                peek.timestamp,
+            ))
+        };
+        let oks_snapshot = match oks_snapshot {
+            Ok(snapshot) => snapshot,
+            Err(_) => return since_gate_error(),
+        };
+        let errs_snapshot = match errs_snapshot {
+            Ok(snapshot) => snapshot,
+            Err(_) => return since_gate_error(),
+        };
+
+        let (errs_cursor, errs_storage) = errs_snapshot.into_cursor();
+        if let Some(error) = Self::scan_errs_for_error::<ErrsTr>(
+            target_id,
+            peek.timestamp,
+            errs_cursor,
+            errs_storage,
+        ) {
+            return error;
+        }
+
+        let peek_iterator = peek_result_iterator::PeekResultIterator::new_over_snapshot(
+            target_id,
+            peek.map_filter_project.clone(),
+            peek.timestamp,
+            peek.literal_constraints.clone().as_deref_mut(),
+            oks_snapshot,
+        );
+
+        // `process_peek` only sets `enable_offload` for peeks that are neither peek-stash
+        // eligible nor peek-stash enabled, so `drain_ok_iterator`'s stash diversion never
+        // triggers here, and it never returns `NotReady` (that only comes from
+        // `seek_fulfillment`'s own frontier checks, not from draining an already-taken
+        // snapshot).
+        match Self::drain_ok_iterator(peek_iterator, peek, max_result_size, false, 0, None) {
+            PeekStatus::Ready(response) => response,
+            PeekStatus::UsePeekStash | PeekStatus::NotReady | PeekStatus::Offloaded(_) => {
+                unreachable!("offloaded index peeks always resolve to `PeekStatus::Ready`")
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod index_peek_offload_tests {
+    use std::rc::Rc;
+
+    use differential_dataflow::operators::arrange::TraceAgent;
+    use differential_dataflow::trace::{Builder, Description, Trace};
+    use mz_expr::{MapFilterProject, RowSetFinishing};
+    use mz_repr::{Datum, RelationDesc, SqlScalarType};
+    use mz_row_spine::RowRowBuilder;
+    use mz_timely_util::columnation::ColumnationStack;
+    use timely::container::PushInto;
+    use timely::dataflow::operators::generic::OperatorInfo;
+    use timely::progress::Timestamp as _;
+    use uuid::Uuid;
+
+    use super::*;
+    use crate::typedefs::{ErrAgent, ErrBuilder, ErrSpine, RowRowAgent, RowRowSpine};
+
+    fn row(x: i64) -> Row {
+        Row::pack_slice(&[Datum::Int64(x)])
+    }
+
+    /// A standalone, single-thread timely `Worker`, for its `sync_activator_for` alone (no
+    /// dataflow is ever built on it). Built directly rather than via `timely::execute_directly`,
+    /// since that helper requires its whole closure (and thus anything it captures, like our
+    /// `Rc`-based `IndexPeek`/`TraceBundle`) to be `Send + Sync`, which peek state never is.
+    fn standalone_worker() -> TimelyWorker {
+        let alloc = timely::communication::Allocator::Thread(Default::default());
+        TimelyWorker::new(timely::WorkerConfig::default(), alloc, None)
+    }
+
+    /// Builds a one-batch `[0, upper)` oks trace with `rows`, wrapped exactly like a real
+    /// index's `TraceBundle.oks` (a `PaddedTrace<RowRowAgent<..>>`), but constructed directly
+    /// (bypassing rendering a dataflow) for test purposes.
+    ///
+    /// The batch is inserted through the `TraceWriter` (not `Trace::insert` on the bare spine
+    /// directly), because the writer tracks its own idea of the trace's current upper and
+    /// asserts new batches are contiguous with it; inserting straight into the spine before
+    /// wrapping desyncs that bookkeeping, and the writer's `Drop` (which seals the trace to the
+    /// empty frontier) then panics. Closing the trace this way is fine for a test snapshot: an
+    /// empty (fully closed) upper is readable at any finite peek timestamp.
+    fn oks_trace_with_rows(
+        upper: Timestamp,
+        rows: Vec<((Row, Row), Timestamp, Diff)>,
+    ) -> PaddedTrace<RowRowAgent<Timestamp, Diff>> {
+        let spine: RowRowSpine<Timestamp, Diff> =
+            Trace::new(OperatorInfo::new(0, 0, Rc::from(vec![0])), None, None);
+        let (agent, mut writer) =
+            TraceAgent::new(spine, OperatorInfo::new(1, 0, Rc::from(vec![0])), None);
+
+        let description = Description::new(
+            Antichain::from_elem(Timestamp::minimum()),
+            Antichain::from_elem(upper),
+            Antichain::from_elem(Timestamp::minimum()),
+        );
+        let mut chunk = ColumnationStack::default();
+        for row in rows {
+            chunk.push_into(row);
+        }
+        let batch = RowRowBuilder::<Timestamp, Diff>::seal(&mut vec![chunk], description);
+        writer.insert(batch, Some(Timestamp::minimum()));
+
+        agent.into()
+    }
+
+    /// Builds a one-batch `[0, upper)` errs trace with no errors, wrapped like a real index's
+    /// `TraceBundle.errs`.
+    fn errs_trace_empty(upper: Timestamp) -> PaddedTrace<ErrAgent<Timestamp, Diff>> {
+        let spine: ErrSpine<Timestamp, Diff> =
+            Trace::new(OperatorInfo::new(2, 0, Rc::from(vec![0])), None, None);
+        let (agent, mut writer) =
+            TraceAgent::new(spine, OperatorInfo::new(3, 0, Rc::from(vec![0])), None);
+
+        let description = Description::new(
+            Antichain::from_elem(Timestamp::minimum()),
+            Antichain::from_elem(upper),
+            Antichain::from_elem(Timestamp::minimum()),
+        );
+        let chunk = ColumnationStack::default();
+        let batch = ErrBuilder::<Timestamp, Diff>::seal(&mut vec![chunk], description);
+        writer.insert(batch, Some(Timestamp::minimum()));
+
+        agent.into()
+    }
+
+    fn test_metrics(registry: &mz_ore::metrics::MetricsRegistry) -> crate::metrics::ComputeMetrics {
+        crate::metrics::ComputeMetrics::register_with(registry)
+    }
+
+    fn make_peek(timestamp: Timestamp) -> Peek {
+        let result_desc = RelationDesc::builder()
+            .with_column("k", SqlScalarType::Int64.nullable(false))
+            .with_column("v", SqlScalarType::Int64.nullable(false))
+            .finish();
+        Peek {
+            target: PeekTarget::Index {
+                id: GlobalId::User(1),
+            },
+            result_desc,
+            literal_constraints: None,
+            uuid: Uuid::new_v4(),
+            timestamp,
+            finishing: RowSetFinishing::trivial(2),
+            map_filter_project: MapFilterProject::new(2)
+                .into_plan()
+                .expect("identity MFP plans")
+                .into_nontemporal()
+                .expect("identity MFP has no temporal filters"),
+            otel_ctx: OpenTelemetryContext::empty(),
+        }
+    }
+
+    /// A fast-path index peek's cursor walk, offloaded via `ENABLE_INDEX_PEEK_OFFLOAD`, returns
+    /// the same rows as the synchronous walk, and `seek_fulfillment` hands the walk off to a
+    /// task rather than draining it inline: with the flag on, `seek_fulfillment` returns
+    /// `PeekStatus::Offloaded` without ever calling `collect_finished_data`, so the row walk
+    /// provably did not run during that (synchronous, worker-step) call; it only runs once the
+    /// spawned task is polled below.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // differential-dataflow's Columnation isn't miri-clean
+    async fn offload_matches_synchronous_walk() {
+        let registry = mz_ore::metrics::MetricsRegistry::new();
+        let metrics = test_metrics(&registry).for_worker(0);
+        let index_metrics = IndexPeekMetrics {
+            seek_fulfillment_seconds: &metrics.index_peek_seek_fulfillment_seconds,
+            frontier_check_seconds: &metrics.index_peek_frontier_check_seconds,
+            error_scan_seconds: &metrics.index_peek_error_scan_seconds,
+            cursor_setup_seconds: &metrics.index_peek_cursor_setup_seconds,
+            row_iteration_seconds: &metrics.index_peek_row_iteration_seconds,
+            result_sort_seconds: &metrics.index_peek_result_sort_seconds,
+            row_collection_seconds: &metrics.index_peek_row_collection_seconds,
+        };
+
+        let rows = vec![
+            ((row(1), row(10)), Timestamp::new(1), Diff::ONE),
+            ((row(2), row(20)), Timestamp::new(2), Diff::ONE),
+            ((row(3), row(30)), Timestamp::new(3), Diff::ONE),
+        ];
+        let peek_timestamp = Timestamp::new(5);
+        let trace_upper = Timestamp::new(10);
+
+        // Flag off: the synchronous walk, run directly.
+        let mut off_peek = IndexPeek {
+            peek: make_peek(peek_timestamp),
+            trace_bundle: TraceBundle::new(
+                oks_trace_with_rows(trace_upper, rows.clone()),
+                errs_trace_empty(trace_upper),
+            ),
+            span: tracing::Span::none(),
+        };
+        let mut upper = Antichain::new();
+        let worker = standalone_worker();
+        let off_status = off_peek.seek_fulfillment(
+            &mut upper,
+            u64::MAX,
+            false,
+            0,
+            false,
+            &worker,
+            &index_metrics,
+        );
+        let off_response = match off_status {
+            PeekStatus::Ready(response) => response,
+            _ => panic!("synchronous walk must resolve directly"),
+        };
+
+        // Flag on: `seek_fulfillment` hands the walk off instead of draining it inline.
+        let mut on_peek = IndexPeek {
+            peek: make_peek(peek_timestamp),
+            trace_bundle: TraceBundle::new(
+                oks_trace_with_rows(trace_upper, rows.clone()),
+                errs_trace_empty(trace_upper),
+            ),
+            span: tracing::Span::none(),
+        };
+        let mut upper2 = Antichain::new();
+        let on_status = on_peek.seek_fulfillment(
+            &mut upper2,
+            u64::MAX,
+            false,
+            0,
+            true,
+            &worker,
+            &index_metrics,
+        );
+        let offload_peek = match on_status {
+            PeekStatus::Offloaded(offload_peek) => offload_peek,
+            _ => panic!("offloaded walk must hand off to a task, not resolve directly"),
+        };
+        let (on_response, _duration) = offload_peek
+            .result
+            .await
+            .expect("offloaded task sends a result before the sender is dropped");
+
+        assert_eq!(
+            off_response, on_response,
+            "flag on/off must return identical rows"
+        );
+    }
+
+    /// The since-gate error (a read whose timestamp has been compacted past) is identical
+    /// whether or not the offload flag is set: the check runs before `seek_fulfillment` decides
+    /// whether to offload, so both paths share the exact same error text.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn since_gate_error_unchanged_by_offload() {
+        let registry = mz_ore::metrics::MetricsRegistry::new();
+        let metrics = test_metrics(&registry).for_worker(0);
+        let index_metrics = IndexPeekMetrics {
+            seek_fulfillment_seconds: &metrics.index_peek_seek_fulfillment_seconds,
+            frontier_check_seconds: &metrics.index_peek_frontier_check_seconds,
+            error_scan_seconds: &metrics.index_peek_error_scan_seconds,
+            cursor_setup_seconds: &metrics.index_peek_cursor_setup_seconds,
+            row_iteration_seconds: &metrics.index_peek_row_iteration_seconds,
+            result_sort_seconds: &metrics.index_peek_result_sort_seconds,
+            row_collection_seconds: &metrics.index_peek_row_collection_seconds,
+        };
+
+        // A peek at time 1, against a trace that has already compacted its logical frontier to
+        // time 5: the read is beyond the trace's compaction frontier.
+        let peek_timestamp = Timestamp::new(1);
+        let trace_upper = Timestamp::new(10);
+
+        let make_compacted_bundle = || {
+            let mut bundle = TraceBundle::new(
+                oks_trace_with_rows(trace_upper, vec![]),
+                errs_trace_empty(trace_upper),
+            );
+            let compacted = Antichain::from_elem(Timestamp::new(5));
+            bundle.oks_mut().set_logical_compaction(compacted.borrow());
+            bundle.errs_mut().set_logical_compaction(compacted.borrow());
+            bundle
+        };
+
+        let mut off_peek = IndexPeek {
+            peek: make_peek(peek_timestamp),
+            trace_bundle: make_compacted_bundle(),
+            span: tracing::Span::none(),
+        };
+        let mut upper = Antichain::new();
+        let worker = standalone_worker();
+        let off_status = off_peek.seek_fulfillment(
+            &mut upper,
+            u64::MAX,
+            false,
+            0,
+            false,
+            &worker,
+            &index_metrics,
+        );
+
+        let mut on_peek = IndexPeek {
+            peek: make_peek(peek_timestamp),
+            trace_bundle: make_compacted_bundle(),
+            span: tracing::Span::none(),
+        };
+        let mut upper2 = Antichain::new();
+        let on_status = on_peek.seek_fulfillment(
+            &mut upper2,
+            u64::MAX,
+            false,
+            0,
+            true,
+            &worker,
+            &index_metrics,
+        );
+
+        let (PeekStatus::Ready(off_response), PeekStatus::Ready(on_response)) =
+            (off_status, on_status)
+        else {
+            panic!("a compacted-past read must resolve directly (never offloaded) either way");
+        };
+        assert_eq!(off_response, on_response);
+        assert!(
+            matches!(&off_response, PeekResponse::Error(msg) if msg.contains("compaction frontier")),
+            "expected a compaction-frontier error, got {off_response:?}",
+        );
     }
 }
 
@@ -1770,6 +2327,9 @@ enum PeekStatus {
     UsePeekStash,
     /// The peek result is ready.
     Ready(PeekResponse),
+    /// The peek is fulfillable, and its cursor walk was handed off to an async task; see
+    /// `IndexPeek::spawn_offloaded_walk`.
+    Offloaded(IndexOffloadPeek),
 }
 
 /// The frontiers we have reported to the controller for a collection.

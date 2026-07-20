@@ -486,6 +486,18 @@ pub const MV_SINK_ADVANCE_PERSIST_FRONTIERS: Config<bool> = Config::new(
     "Whether the MV sink's write operator advances its internal persist frontiers to the as_of.",
 );
 
+/// Whether to offload a fast-path index peek's cursor walk to an async task, instead of running
+/// it synchronously on the maintenance timely worker.
+///
+/// Disabled by default while the offloaded path is validated; the synchronous walk remains the
+/// default and is behavior-unchanged.
+pub const ENABLE_INDEX_PEEK_OFFLOAD: Config<bool> = Config::new(
+    "enable_index_peek_offload",
+    false,
+    "Whether to offload a fast-path index peek's cursor walk to an async task, instead of \
+     running it synchronously on the maintenance timely worker.",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -535,6 +547,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COMPUTE_PROMETHEUS_INTROSPECTION_SCRAPE_INTERVAL)
         .add(&SUBSCRIBE_SNAPSHOT_OPTIMIZATION)
         .add(&MV_SINK_ADVANCE_PERSIST_FRONTIERS)
+        .add(&ENABLE_INDEX_PEEK_OFFLOAD)
         .add(&ENABLE_COLUMN_PAGED_BATCHER)
         .add(&ENABLE_COLUMN_PAGED_BATCHER_SPILL)
         .add(&COLUMN_PAGED_BATCHER_BUDGET_FRACTION)

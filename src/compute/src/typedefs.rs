@@ -32,12 +32,12 @@ pub(crate) mod spines {
     use std::sync::Arc;
 
     use columnation::Columnation;
+    use differential_dataflow::trace::arc_blanket_impls::ArcBuilder;
     use differential_dataflow::trace::implementations::ord_neu::{
         OrdKeyBatch, OrdKeyBuilder, OrdValBatch, OrdValBuilder,
     };
     use differential_dataflow::trace::implementations::spine_fueled::Spine;
     use differential_dataflow::trace::implementations::{Layout, Update};
-    use differential_dataflow::trace::arc_blanket_impls::ArcBuilder;
     use mz_timely_util::columnation::ColumnationStack;
 
     use mz_row_spine::OffsetOptimized;
