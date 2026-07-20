@@ -1,6 +1,8 @@
 # Shared arrangements across timely runtimes
 
 - Associated:
+  - [Two-runtime compute](../20260720_two_runtime_compute/README.md): the
+    compute-layer design this primitive exists to serve.
   - [background.md](./background.md): how a single-runtime arrangement works
     today (the status-quo baseline this design departs from)
   - differential-dataflow branch `claude/spines-differential-arc-j93mho`
