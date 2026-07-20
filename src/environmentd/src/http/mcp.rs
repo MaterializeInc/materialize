@@ -888,7 +888,7 @@ async fn handle_tools_list(
                     "properties": {
                         "sql_query": {
                             "type": "string",
-                            "description": "PostgreSQL-compatible SELECT, SHOW, or EXPLAIN query referencing mz_* system catalog tables"
+                            "description": "PostgreSQL-compatible SELECT, SHOW, or EXPLAIN query referencing mz_*, pg_catalog, or information_schema tables"
                         }
                     },
                     "required": ["sql_query"]
@@ -1497,12 +1497,12 @@ fn validate_system_catalog_query(sql: &str) -> Result<(), McpRequestError> {
         |s: &str| SYSTEM_SCHEMAS.contains(&s) && s != namespaces::MZ_UNSAFE_SCHEMA;
 
     // Helper to check if a table reference is allowed. Unqualified references
-    // are accepted here because execution uses a tight `search_path` containing
-    // only system schemas (see `query_system_catalog`), so user-created views
-    // like `public.mz_leak` cannot be reached by an unqualified name.
+    // are accepted when they carry an unambiguous system prefix (`mz_`/`pg_`);
+    // execution pins `search_path` to system schemas (see `query_system_catalog`),
+    // so a user view like `public.mz_leak` cannot be reached by an unqualified name.
     let is_system_table = |(schema, table_name): &(Option<String>, String)| match schema {
         Some(s) => is_allowed_schema(s.as_str()),
-        None => table_name.starts_with("mz_"),
+        None => table_name.starts_with("mz_") || table_name.starts_with("pg_"),
     };
 
     // Check that all table references are system tables
@@ -1863,6 +1863,14 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    #[mz_ore::test]
+    fn test_validate_system_catalog_query_unqualified_pg_catalog() {
+        // Unqualified `pg_`-prefixed names are as unambiguously system as `mz_`
+        // ones, and resolve safely under the pinned search_path.
+        assert!(validate_system_catalog_query("SELECT * FROM pg_class").is_ok());
+        assert!(validate_system_catalog_query("SELECT nspname FROM pg_namespace").is_ok());
     }
 
     #[mz_ore::test]
