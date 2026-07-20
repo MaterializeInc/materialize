@@ -478,6 +478,11 @@ fn visit_key<Tr>(
                 continue;
             }
             let is_literal = peeks[i].literals.is_some();
+            // A duplicated literal re-evaluates the identical MFP per occurrence,
+            // mirroring the single-peek path (`PeekResultIterator`). The input is
+            // byte-for-byte identical across iterations, so this could evaluate
+            // once and push `mult` times, but duplicated literals are not a hot
+            // path and matching the single-peek path keeps the two in lockstep.
             for _ in 0..mult {
                 borrow.truncate(kv_len);
                 if is_literal {
@@ -855,6 +860,29 @@ mod tests {
             assert_eq!(
                 extract(group[1].outcome.take()),
                 vec![(vec![1, 10], 1), (vec![2, 20], 1)],
+            );
+        });
+    }
+
+    #[mz_ore::test]
+    fn coalesced_seek_shared_and_duplicate_literals() {
+        with_arrangement(vec![(1, 10), (2, 20), (3, 30)], |trace| {
+            // Pure-seek (no full scan). peek0 duplicates key 2; peek1 shares key
+            // 2 and adds key 1. The union dedups to [1, 2], but each per-peek
+            // cursor must still report its own multiplicity off the shared key.
+            let mut group = vec![
+                muxed(3, Some(vec![row(2), row(2)])),
+                muxed(3, Some(vec![row(1), row(2)])),
+            ];
+            collect_coalesced_ok_data(trace, &mut group);
+
+            assert_eq!(
+                extract(group[0].outcome.take()),
+                vec![(vec![2, 20, 2], 1), (vec![2, 20, 2], 1)],
+            );
+            assert_eq!(
+                extract(group[1].outcome.take()),
+                vec![(vec![1, 10, 1], 1), (vec![2, 20, 2], 1)],
             );
         });
     }

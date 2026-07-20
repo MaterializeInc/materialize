@@ -709,13 +709,23 @@ impl<'a> ActiveComputeState<'a> {
         // and before the next park (see `Worker::run_client`), so a deferred peek
         // is retired in the same iteration it arrived. Persist peeks retire
         // immediately as before, since they fulfill asynchronously.
+        //
+        // Deferral does not change the read the peek observes. The trace bundle
+        // was cloned above, and cloning a `TraceAgent` pins an independent
+        // logical/physical compaction capability at the current `since`. An
+        // `AllowCompaction` handled later in the same command batch downgrades
+        // only the handle in `traces`, not this clone, so the deferred peek's
+        // `readiness` sees the same `since` it would have on arrival. And even if
+        // a peek's timestamp were below `since`, the protocol requires a clean
+        // `PeekResponse::Error` rather than a corrupt read (see the `Peek`
+        // contract in `ComputeCommand`), which `readiness` enforces.
         let coalesce = ENABLE_PEEK_COALESCING.get(&self.compute_state.worker_config)
             && matches!(pending, PendingPeek::Index(_));
         if coalesce {
             let uuid = pending.peek().uuid;
             self.compute_state.pending_peeks.insert(uuid, pending);
         } else {
-            self.process_peek(&mut Antichain::new(), pending);
+            self.process_peek(&mut Antichain::new(), pending, false);
         }
     }
 
@@ -952,7 +962,18 @@ impl<'a> ActiveComputeState<'a> {
     }
 
     /// Either complete the peek (and send the response) or put it in the pending set.
-    fn process_peek(&mut self, upper: &mut Antichain<Timestamp>, mut peek: PendingPeek) {
+    ///
+    /// `known_ready` is set by callers that have already verified the peek is
+    /// ready via [`IndexPeek::readiness`] earlier in the same `process_peeks`
+    /// pass, with no intervening trace mutation. It lets the index path skip the
+    /// redundant frontier read. It only affects index peeks; persist and stash
+    /// peeks ignore it.
+    fn process_peek(
+        &mut self,
+        upper: &mut Antichain<Timestamp>,
+        mut peek: PendingPeek,
+        known_ready: bool,
+    ) {
         let response = match &mut peek {
             PendingPeek::Index(peek) => {
                 let start = Instant::now();
@@ -1006,6 +1027,7 @@ impl<'a> ActiveComputeState<'a> {
                     peek_stash_enabled && peek_stash_eligible,
                     peek_stash_threshold_bytes,
                     &metrics,
+                    known_ready,
                 );
 
                 self.compute_state
@@ -1094,7 +1116,7 @@ impl<'a> ActiveComputeState<'a> {
 
         if !ENABLE_PEEK_COALESCING.get(&self.compute_state.worker_config) {
             for (_uuid, peek) in pending_peeks {
-                self.process_peek(&mut upper, peek);
+                self.process_peek(&mut upper, peek, false);
             }
             return;
         }
@@ -1128,15 +1150,17 @@ impl<'a> ActiveComputeState<'a> {
 
         for (_key, mut peeks) in groups {
             if peeks.len() == 1 {
+                // Readiness was already verified in the partition loop above, so
+                // the single-peek path can skip the recheck.
                 let peek = peeks.pop().expect("length checked");
-                self.process_peek(&mut upper, PendingPeek::Index(peek));
+                self.process_peek(&mut upper, PendingPeek::Index(peek), true);
             } else {
                 self.process_coalesced_group(peeks);
             }
         }
 
         for peek in leftovers {
-            self.process_peek(&mut upper, peek);
+            self.process_peek(&mut upper, peek, false);
         }
     }
 
@@ -1724,6 +1748,9 @@ impl IndexPeek {
     ///
     /// This is the single-peek path; a group of coalesced peeks is served by
     /// [`peek_coalesce::collect_coalesced_ok_data`] instead.
+    ///
+    /// `known_ready` skips the readiness recheck (see [`Self::readiness`]) when
+    /// the caller already verified it in the same `process_peeks` pass.
     fn seek_fulfillment(
         &mut self,
         upper: &mut Antichain<Timestamp>,
@@ -1731,18 +1758,24 @@ impl IndexPeek {
         peek_stash_eligible: bool,
         peek_stash_threshold_bytes: usize,
         metrics: &IndexPeekMetrics<'_>,
+        known_ready: bool,
     ) -> PeekStatus {
         let method_start = Instant::now();
 
-        match self.readiness(upper) {
-            Readiness::NotReady => return PeekStatus::NotReady,
-            Readiness::Error(response) => return PeekStatus::Ready(response),
-            Readiness::Ready => {}
-        }
+        // Skip the readiness recheck when the caller already verified it earlier
+        // in the same `process_peeks` pass. Nothing mutates the trace between
+        // that check and here, so the verdict cannot have changed.
+        if !known_ready {
+            match self.readiness(upper) {
+                Readiness::NotReady => return PeekStatus::NotReady,
+                Readiness::Error(response) => return PeekStatus::Ready(response),
+                Readiness::Ready => {}
+            }
 
-        metrics
-            .frontier_check_seconds
-            .observe(method_start.elapsed().as_secs_f64());
+            metrics
+                .frontier_check_seconds
+                .observe(method_start.elapsed().as_secs_f64());
+        }
 
         let result = self.collect_finished_data(
             max_result_size,
