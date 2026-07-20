@@ -1349,7 +1349,6 @@ p+p {
         .linkbox--brokers,
         .linkbox--webhooks {
             --linkbox-divider: color-mix(in srgb, var(--sg-gray-1) 80%, transparent);
-            --linkbox-icon-bg: color-mix(in srgb, var(--linkbox-accent) 14%, var(--white));
             --linkbox-link: var(--sg-violet);
             --docs-card-surface: var(--white);
 

@@ -94,36 +94,19 @@ $rem-scale: 0.585;
     --table-surface-header: #19191f;
     --table-border: #2a2b32;
     --table-grid: #24252b;
-    --table-heading: #5e606a;
     --table-text: #d9d9de;
     --table-body: #a3a3ad;
-    --table-muted: #5f606a;
-    --table-link: #8b97ff;
     --table-green: #3ff47a;
-    --table-green-bg: #0f2a1c;
-    --table-green-border: #1b5d37;
     --table-blue: #8b97ff;
-    --table-blue-bg: #1b1d33;
-    --table-blue-border: #333b75;
     --table-orange: #ff9a3d;
-    --table-orange-bg: #332113;
-    --table-orange-border: #704017;
     --table-yellow: #fbbf24;
-    --table-yellow-bg: rgba(251, 191, 36, 0.08);
-    --table-yellow-border: rgba(251, 191, 36, 0.22);
-    --table-blue-glow: rgba(124, 143, 255, 0.9);
     --table-radius: 14px;
     --table-shadow: 0 18px 50px rgba(0, 0, 0, 0.35), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
 
-    --surface-subtle: rgba(255, 255, 255, 0.015);
     --surface-inset:  rgba(0, 0, 0, 0.25);
-    --surface-faint:  rgba(255, 255, 255, 0.01);
     --border-subtle:  rgba(255, 255, 255, 0.06);
-    --border-faint:   rgba(255, 255, 255, 0.04);
 
     // Page background mesh rhythm (theme sets colors only)
-    --docs-mesh-icons-step: #{rem(28)};
-    --docs-mesh-icons-step-sm: #{rem(24)};
     --docs-mesh-dot-size: 1px;
     --docs-mesh-dot-step: #{rem(3)};
     --docs-mesh-dot-step-sm: #{rem(2.75)};
@@ -134,13 +117,11 @@ $rem-scale: 0.585;
 
     // Style guide palette (0326-083)
     --sg-midnight: #100C21;
-    --sg-white: #FFFFFF;
     --sg-violet: #7F4EFF;
     --sg-lavender-1: #F2EDFF;
     --sg-lavender-2: #C0B2E4;
     --sg-lavender-3: #8F76CF;
     --sg-lavender-4: #472F85;
-    --sg-lavender-5: #342260;
     --sg-lavender-6: #2C1D52;
     --sg-gray-1: #DED9EE;
     --sg-gray-2: #9B97A3;
@@ -156,7 +137,6 @@ $rem-scale: 0.585;
     --sg-link: #8F76CF;
     --sg-link-hover: #B09EE0;
     --sg-divider: #2A2745;
-    --sg-page-bg: #13111E;
     --sg-teal-3: #00C2AA;
     --sg-teal-5: #007567;
 }
@@ -194,7 +174,6 @@ body.dark {
     --code-blue: var(--code-builtin);
     --code-green: var(--code-string);
     --code-highlight: var(--code-function);
-    --code-line-highlight: color-mix(in srgb, var(--highlight) 14%, transparent);
     --code-lineno: var(--caption);
     --code-preproc: color-mix(in srgb, var(--code-builtin) 82%, var(--caption));
 
@@ -218,8 +197,7 @@ body.dark {
         0 1px 0 color-mix(in srgb, var(--heading) 4%, transparent) inset,
         0 16px 40px color-mix(in srgb, var(--bg) 35%, transparent);
 
-    // Style guide background mesh (dark): grid + data icons + purple accent on the right
-    --docs-mesh-icons: url("/images/docs-mesh/data-icons-dark.svg");
+    // Style guide background mesh (dark): grid + purple accent on the right
     --docs-mesh-dot: color-mix(in srgb, #1e293b 25%, transparent);
     --docs-mesh-grid-minor: rgba(255, 255, 255, 0.033);
     --docs-mesh-grid-major: rgba(255, 255, 255, 0.055);
@@ -252,16 +230,6 @@ body.dark {
 
     --tab-bg: var(--gray-lightest);
     --tab-selected-bg: var(--tip-after);
-
-    --th-border: oklch(var(--color-teal-500-oklch) / 30%);
-
-    --offering-nested-border: var(--border-subtle);
-    --offering-nested-header-bg: color-mix(in srgb, var(--sg-lavender-6) 38%, var(--card-light));
-    --offering-nested-surface: var(--surface-inset);
-
-    --offering-edition-label: var(--sg-lavender-2);
-    --offering-edition-heading: var(--sg-lavender-2);
-    --offering-edition-value: var(--sg-lavender-3);
 }
 
 body.light {
@@ -296,7 +264,6 @@ body.light {
     --code-pink: var(--code-keyword);
     --code-blue: var(--code-builtin);
     --code-green: var(--code-string);
-    --code-line-highlight: color-mix(in srgb, var(--table-yellow) 22%, transparent);
     --code-lineno: var(--sg-gray-2);
     --code-preproc: color-mix(in srgb, var(--code-builtin) 78%, var(--sg-gray-3));
 
@@ -337,9 +304,7 @@ body.light {
     --docs-card-top-accent-mix: 30%;
     --docs-card-top-accent-center-mix: 65%;
 
-    // Style guide background mesh (light): grid + data icons
-    --docs-mesh-icons: url("/images/docs-mesh/data-icons-light.svg");
-    --docs-mesh-icons-opacity: 0.12;
+    // Style guide background mesh (light): grid
     --docs-mesh-dot: rgba(64, 61, 77, 0.085);
     --docs-mesh-grid-minor: rgba(64, 61, 77, 0.020);
     --docs-mesh-grid-major: rgba(64, 61, 77, 0.035);
@@ -370,20 +335,8 @@ body.light {
     --tab-bg: var(--gray-lighter);
     --tab-selected-bg: var(--tip);
 
-    --surface-subtle: rgba(0, 0, 0, 0.025);
     --surface-inset:  rgba(0, 0, 0, 0.04);
-    --surface-faint:  rgba(0, 0, 0, 0.015);
     --border-subtle:  rgba(0, 0, 0, 0.10);
-    --border-faint:   rgba(0, 0, 0, 0.06);
-
-    --offering-nested-border: color-mix(in srgb, var(--sg-lavender-2) 20%, var(--gray-lighter));
-    --offering-nested-header-bg: color-mix(in srgb, var(--sg-lavender-1) 75%, var(--white));
-    --offering-nested-surface: color-mix(in srgb, var(--sg-lavender-1) 32%, var(--white));
-
-    --offering-edition-label: var(--sg-violet);
-    --offering-edition-heading: var(--sg-gray-3);
-    --offering-edition-value: var(--sg-violet);
-
 }
 
 *,

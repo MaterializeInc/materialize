@@ -118,35 +118,6 @@
     --code-pre-padding-inline: #{rem(1.2)};
 }
 
-@mixin offering-row-theme($accent, $cta: null) {
-    $cta-token: if($cta, $cta, $accent);
-
-    --offering-accent: var(#{$accent});
-    --offering-badge-bg: color-mix(in srgb, var(#{$accent}) 12%, transparent);
-    --offering-badge-border: color-mix(in srgb, var(#{$accent}) 24%, transparent);
-    --offering-tile-bg: linear-gradient(
-        145deg,
-        color-mix(in srgb, var(#{$accent}) 22%, transparent),
-        color-mix(in srgb, var(#{$accent}) 7%, transparent)
-    );
-    --offering-tile-glow: 0 0 14px color-mix(in srgb, var(#{$accent}) 14%, transparent);
-    --offering-row-glow: color-mix(in srgb, var(#{$accent}) 4%, transparent);
-    --offering-cta-accent: var(#{$cta-token});
-    --offering-action-bg: color-mix(in srgb, var(#{$cta-token}) 8%, transparent);
-    --offering-action-border: color-mix(in srgb, var(#{$cta-token}) 22%, transparent);
-    --offering-action-hover: color-mix(in srgb, var(#{$cta-token}) 14%, transparent);
-}
-
-@mixin docs-page-mesh-grid-layers() {
-    background-image:
-        var(--docs-mesh-icons),
-        linear-gradient(to right, var(--docs-mesh-grid-major) 1px, transparent 1px),
-        linear-gradient(to bottom, var(--docs-mesh-grid-major) 1px, transparent 1px),
-        linear-gradient(to right, var(--docs-mesh-grid-minor) 1px, transparent 1px),
-        linear-gradient(to bottom, var(--docs-mesh-grid-minor) 1px, transparent 1px),
-        radial-gradient(circle, var(--docs-mesh-dot) var(--docs-mesh-dot-size), transparent var(--docs-mesh-dot-size));
-}
-
 @mixin docs-page-mesh-grid-layers-no-icons() {
     background-image:
         linear-gradient(to right, var(--docs-mesh-grid-major) 1px, transparent 1px),
@@ -154,27 +125,6 @@
         linear-gradient(to right, var(--docs-mesh-grid-minor) 1px, transparent 1px),
         linear-gradient(to bottom, var(--docs-mesh-grid-minor) 1px, transparent 1px),
         radial-gradient(circle, var(--docs-mesh-dot) var(--docs-mesh-dot-size), transparent var(--docs-mesh-dot-size));
-}
-
-@mixin docs-page-mesh-size($icons-step, $major-step, $minor-step, $dot-step, $accent-cover: null) {
-    @if $accent-cover {
-        background-size:
-            $accent-cover,
-            $icons-step $icons-step,
-            $major-step $major-step,
-            $major-step $major-step,
-            $minor-step $minor-step,
-            $minor-step $minor-step,
-            $dot-step $dot-step;
-    } @else {
-        background-size:
-            $icons-step $icons-step,
-            $major-step $major-step,
-            $major-step $major-step,
-            $minor-step $minor-step,
-            $minor-step $minor-step,
-            $dot-step $dot-step;
-    }
 }
 
 @mixin docs-page-mesh-grid-size($major-step, $minor-step, $dot-step) {
