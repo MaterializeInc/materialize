@@ -882,4 +882,76 @@ mod tests {
         }) = handle_get_mode().await;
         assert!(!memory_active || memory_available);
     }
+
+    /// End-to-end check of the memory-profiling lifecycle around a CPU capture:
+    /// memory profiling starts active, is suspended for the duration of a
+    /// capture (during which it cannot be re-activated), and is restored once
+    /// the capture finishes.
+    #[cfg(all(feature = "jemalloc", not(miri)))]
+    #[mz_ore::test(tokio::test)]
+    async fn cpu_capture_suspends_then_restores_memory_profiling() {
+        use super::{capture_cpu_profile, cpu_profiling_active};
+
+        let _lock = CPU_GUARD_LOCK.lock().await;
+
+        // Without a profiling-enabled jemalloc there is nothing to suspend, so
+        // the behavior under test does not exist here. Skip loudly rather than
+        // fail, so narrow local builds do not report a spurious failure.
+        let Json(ModeResponse {
+            memory_available, ..
+        }) = handle_get_mode().await;
+        if !memory_available {
+            eprintln!(
+                "skipping cpu_capture_suspends_then_restores_memory_profiling: \
+                 jemalloc memory profiling is unavailable in this build"
+            );
+            return;
+        }
+
+        // (a) Memory profiling on, CPU profiling off.
+        let Json(before) = handle_post_mode(Json(ModeUpdateRequest {
+            memory_active: Some(true),
+        }))
+        .await
+        .expect("memory activation must succeed");
+        assert!(before.memory_active, "memory profiling should start active");
+        assert!(!before.cpu_active, "cpu profiling should start inactive");
+
+        // (b) Run a capture on its own task so we can observe the live state
+        // while it holds the jemalloc control lock. `GET /mode` reads that lock
+        // and would block until the capture finished, so we observe through the
+        // lock-free CPU atomic and the fast-fail `POST /mode` path instead.
+        let capture =
+            mz_ore::task::spawn(|| "cpu-capture-test", capture_cpu_profile(false, 1, 100));
+        while !cpu_profiling_active() && !capture.is_finished() {
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            cpu_profiling_active(),
+            "the capture should have activated cpu profiling"
+        );
+        // Memory profiling is suspended: re-activating it is rejected while the
+        // capture holds the control lock.
+        let conflict = handle_post_mode(Json(ModeUpdateRequest {
+            memory_active: Some(true),
+        }))
+        .await;
+        assert_eq!(
+            expect_error(conflict, "memory activation must be rejected mid-capture"),
+            StatusCode::CONFLICT,
+        );
+
+        // (c) Once the capture finishes, memory profiling is restored and CPU
+        // profiling is off.
+        let _ = capture.await.expect("cpu capture must succeed");
+        let Json(after) = handle_get_mode().await;
+        assert!(
+            !after.cpu_active,
+            "cpu profiling should be inactive after the capture"
+        );
+        assert!(
+            after.memory_active,
+            "memory profiling should be restored after the capture"
+        );
+    }
 }
