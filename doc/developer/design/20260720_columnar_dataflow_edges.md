@@ -148,7 +148,6 @@ graph TD
     C2["C2: FlatMap input decode via the edge, fueling preserved"]
     C3["C3: TopK input columnar"]
     C4["C4: linear-join input columnar"]
-    C6["C6: sink columnar input API"]
     C7["C7: LetRec sanctioned decode, consume edge then into_vec"]
     C8["C8: Union temporal-bucket sanctioned decode, consume edge then into_vec"]
   end
@@ -178,7 +177,7 @@ graph TD
 
 The bold edge from Wave 1 to Wave 2 is the producer-flip invariant: no producer node starts until every consumer node has landed.
 Within Wave 1, C1 gates the three nodes that reuse its columnar key-forming pattern.
-F1, C2, C6, C7, and C8 are independent roots.
+F1, C2, C7, and C8 are independent roots.
 F1 gives the native columnar `consolidate_named` that Union's `concat_many` then `consolidate_named` path uses once its inputs are columnar in Wave 2.
 C7 and C8 are sanctioned decode nodes, so they do not depend on F1.
 Within Wave 2, each producer feeds only native consumers, so the nodes are mutually independent and land in any order.
@@ -250,13 +249,12 @@ The `CollectionEdge` decode for delta-join inputs therefore lives entirely in `a
 Confirmed by an adversarial trace of `delta_join.rs`; no separate node exists.
 The delta-join output flip remains real and is covered by P7.
 
-**C6: sink columnar input.**
-Change the sink input path so it consumes a columnar edge.
-`sinks.rs:71` clones and calls `into_vec`.
-Persist and subscribe serialize rows, so the decode is acceptable at the leaf, but the API accepts the columnar edge and decodes locally rather than forcing `into_vec` at the boundary.
-Files: `src/compute/src/render/sinks.rs`.
-Test: subscribe and materialized-view sink sqllogictest and testdrive coverage.
-Base: `upstream/main`.
+**C6: sink columnar input.** No work, subsumed by the #36507 scaffolding.
+The sink already consumes `bundle.collection` (the `CollectionEdge`) directly and leaf-decodes via `oks.clone().into_vec()` at `sinks.rs:71`, which is the sink render boundary right before persist/subscribe serialize rows.
+The edge stays columnar all the way to that point, with no pre-boundary `VecCollection` forced in between, so when a producer flips columnar in Wave 2 the `into_vec` decodes the columnar arm at this leaf, exactly C6's goal.
+The arranged-input branch reads an arrangement via `as_collection_core`, itself columnar-internal through C1, and produces `Vec` because the sink serializes rows, a second sanctioned leaf.
+Confirmed by inspection of `sinks.rs`; no separate node exists.
+NOTE for T2: `sinks.rs:71` is a leaf-decode call site that T2 must adapt when `into_vec` changes from an enum method to a free function.
 
 **C7: LetRec sanctioned decode.**
 Make LetRec consume the columnar edge and decode locally via `into_vec`, keeping today's `Vec` feedback logic.
@@ -367,12 +365,12 @@ So the DAG is flattened into a single chain, managed with gh-stack, where each b
 The chain is a topological order of the DAG, so every dependency edge points backward:
 
 ```
-C1 -> C3 -> C4 -> F1 -> C2 -> C6 -> C7 -> C8
+C1 -> C3 -> C4 -> F1 -> C2 -> C7 -> C8
    -> P1 -> P2 -> P3 -> P4 -> P5 -> P6 -> P7 -> P8 -> P9
    -> T1 -> T2 -> T3
 ```
 
-C5 is not in the chain: delta-join input is subsumed by C1 (see the C5 node).
+C5 and C6 are not in the chain: delta-join input is subsumed by C1, and the sink already leaf-decodes the edge (see the C5 and C6 nodes).
 
 Order constraints honored by this chain:
 
