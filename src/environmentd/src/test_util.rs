@@ -83,7 +83,6 @@ use tokio::runtime::Runtime;
 use tokio_postgres::config::{Host, SslMode};
 use tokio_postgres::{AsyncMessage, Client};
 use tokio_stream::wrappers::TcpListenerStream;
-use tower_http::cors::AllowOrigin;
 use tracing::Level;
 use tracing_capture::SharedStorage;
 use tracing_subscriber::EnvFilter;
@@ -879,7 +878,6 @@ impl Listeners {
                 metrics_registry: metrics_registry.clone(),
                 now: config.now,
                 environment_id: config.environment_id,
-                cors_allowed_origin: AllowOrigin::list([]),
                 cors_allowed_origin_list: Vec::new(),
                 cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
                 bootstrap_default_cluster_replica_size: config.default_cluster_replica_size,

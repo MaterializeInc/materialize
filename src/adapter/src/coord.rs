@@ -1251,6 +1251,9 @@ pub struct Config {
     pub aws_privatelink_availability_zones: Option<Vec<String>>,
     pub connection_context: ConnectionContext,
     pub connection_limit_callback: Box<dyn Fn(u64, u64) -> () + Send + Sync + 'static>,
+    /// Called with the raw value of the `http_additional_cors_allowed_origins`
+    /// system variable whenever it changes, and at least once at startup.
+    pub additional_cors_origins_callback: Box<dyn Fn(String) -> () + Send + Sync + 'static>,
     pub webhook_concurrency_limit: WebhookConcurrencyLimiter,
     pub http_host_name: Option<String>,
     pub tracing_handle: TracingHandle,
@@ -4671,6 +4674,7 @@ pub fn serve(
         aws_privatelink_availability_zones,
         connection_context,
         connection_limit_callback,
+        additional_cors_origins_callback,
         remote_system_parameters,
         webhook_concurrency_limit,
         http_host_name,
@@ -4986,6 +4990,17 @@ pub fn serve(
         catalog.system_config_mut().register_callback(
             &mz_sql::session::vars::SUPERUSER_RESERVED_CONNECTIONS,
             connection_limit_callback,
+        );
+
+        // Same pattern for the additional CORS origins, which the HTTP
+        // servers consult on every origin check.
+        catalog.system_config_mut().register_callback(
+            &mz_sql::session::vars::HTTP_ADDITIONAL_CORS_ALLOWED_ORIGINS,
+            Arc::new(move |system_vars: &SystemVars| {
+                (additional_cors_origins_callback)(
+                    system_vars.http_additional_cors_allowed_origins(),
+                );
+            }),
         );
 
         let (group_commit_tx, group_commit_rx) = appends::notifier();
