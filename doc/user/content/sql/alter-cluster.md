@@ -174,6 +174,12 @@ By default, a bare `ALTER CLUSTER <name> SET (SIZE = ...)` resizes the cluster
 resize proceeds in the background. See [Zero-downtime cluster
 resizing](#zero-downtime-cluster-resizing) and [Monitoring a
 resize](#monitoring-a-resize) for details.
+
+{{< note >}}
+Graceful, no-downtime resizing is the default as of **v26.34**. In earlier
+versions, a bare `ALTER CLUSTER ... SET (SIZE = ...)` could incur downtime, and
+zero-downtime resizing required the `WAIT UNTIL READY` option.
+{{< /note >}}
 {{< /if-released >}}
 
 #### Zero-downtime cluster resizing
