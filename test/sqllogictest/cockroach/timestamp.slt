@@ -529,7 +529,7 @@ SELECT * FROM regression_46973 WHERE (-9223372036854775808)::TIMESTAMP!=regressi
 statement error WHERE clause error: CAST does not support casting from bigint to timestamp with time zone
 SELECT * FROM regression_46973 WHERE (-9223372036854775808)::TIMESTAMPTZ!=regression_46973.c1
 
-statement error invalid input syntax for type timestamp: expected_dur_like_tokens can only be called with HOUR, MINUTE, SECOND; got YEAR: "294276\-12\-31 23:59:59\.999999"
+statement error invalid input syntax for type timestamp: invalid or out\-of\-range date: "294276\-12\-31 23:59:59\.999999"
 SELECT '294276-12-31 23:59:59.999999'::TIMESTAMP(0)
 
 statement ok
