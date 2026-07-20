@@ -1525,7 +1525,15 @@ mod tests {
                     let data_id = format!("{:.9}", data_id.to_string());
                     let _guard = info_span!("read_worker", %data_id, as_of).entered();
                     loop {
-                        subscribe.worker.step_or_park(None);
+                        // NB: Bound the park. The `rx` oneshot and the progress
+                        // check below are polled between steps but do not
+                        // activate the worker, so an indefinite park can miss
+                        // them. (The persist source does its listen polling in a
+                        // tokio task; a fully caught-up source with no listen
+                        // retry timer produces no further activations.)
+                        subscribe
+                            .worker
+                            .step_or_park(Some(Duration::from_millis(1)));
                         subscribe.capture_output();
                         let until = match rx.try_recv() {
                             Ok(ts) => ts,
@@ -1535,7 +1543,9 @@ mod tests {
                             Err(oneshot::error::TryRecvError::Closed) => 0,
                         };
                         while subscribe.progress() < until {
-                            subscribe.worker.step_or_park(None);
+                            subscribe
+                                .worker
+                                .step_or_park(Some(Duration::from_millis(1)));
                             subscribe.capture_output();
                         }
                         return subscribe.output().clone();
