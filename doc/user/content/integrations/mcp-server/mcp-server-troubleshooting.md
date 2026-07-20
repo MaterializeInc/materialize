@@ -89,6 +89,8 @@ provider. Most enterprise IdPs need additional configuration for MCP clients,
 such as a pre-registered OAuth client, an authentication claim in access
 tokens, and the authorization server audience in `oidc_audience`.
 
-**Fix:** See [Connecting MCP
-clients](/security/self-managed/sso/#connecting-mcp-clients) for the
-requirements and a troubleshooting table.
+**Fix:** See the [SSO troubleshooting
+table](/security/self-managed/sso/#troubleshooting) for the specific symptoms
+and resolutions, and the [Connecting MCP
+clients](/security/self-managed/sso/#connecting-mcp-clients) section for the
+full IdP configuration requirements.

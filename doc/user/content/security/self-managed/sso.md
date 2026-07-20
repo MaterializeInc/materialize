@@ -89,15 +89,7 @@ additional applications in the [Service accounts](#service-accounts) section.
 
    **Custom domains:** When the authorization server **Issuer** is set to **Dynamic (based on Request Domain)**, Okta issues tokens whose `iss` claim uses your custom domain (for example, `https://sso.your-org.com/oauth2/default`) instead of the default Okta URL. Configure the `oidc_issuer` system parameter in Materialize to match that issuer value exactly.
 
-   {{% warning %}}
-Use a **custom authorization server** (e.g., `.../oauth2/default`), not the
-Okta **org authorization server** (the bare org URL, without an
-`/oauth2/...` path). Access tokens issued by the org authorization server
-have a fixed `aud` claim and cannot carry custom claims or scopes, which
-breaks the [Client Credentials flow](#client-credentials-flow) and
-[MCP clients](#connecting-mcp-clients). Custom authorization servers,
-including `default`, require Okta's API Access Management feature.
-   {{% /warning %}}
+   {{% include-headless "/headless/okta-custom-authorization-server-warning" %}}
 
 1. Go to the **Assignments** tab and assign the users or groups that should have
    access to Materialize.
@@ -525,16 +517,21 @@ an OAuth **access token**. Access tokens have additional requirements:
 1. **Add the authorization server audience to `oidc_audience`.** The `aud`
    claim of an access token is the authorization server's audience value, not
    the client ID. For Okta's default authorization server this is
-   `api://default`:
+   `api://default`. Materialize also validates ID tokens (browser sign-in),
+   whose `aud` claim is the console client ID, so both values must be
+   present in `oidc_audience`. Add the audience entries to the array,
+   preserving any existing values:
 
    ```mzsql
-   -- YOUR_CLIENT_ID is the console app's client ID from Step 1, which is the
-   -- `aud` value on ID tokens (browser sign-in). The `api://default` entry is
-   -- the authorization server's audience, which is the `aud` value on access
-   -- tokens (MCP OAuth sign-in). Both must be present so tokens from either
-   -- flow validate; add to the array if oidc_audience is already set.
    ALTER SYSTEM SET oidc_audience = '["YOUR_CLIENT_ID", "api://default"]';
    ```
+
+   If several applications share this authorization server, consider
+   creating a Materialize-dedicated custom authorization server in Okta so
+   only tokens issued for Materialize carry the `api://materialize`-style
+   audience. Otherwise any application on the same authorization server
+   receives tokens with `aud=api://default`, which Materialize would then
+   accept.
 
 1. **Optional: define an `mcp.read` scope.** Materialize advertises the
    `mcp.read` scope in its resource metadata. The scope is not enforced by
@@ -543,17 +540,26 @@ an OAuth **access token**. Access tokens have additional requirements:
    advertised scopes fail against IdPs that reject unknown scopes, such as
    Okta, unless the scope exists on the authorization server.
 
-For example, to connect Claude Code to the `materialize-agent` MCP server with
-a pre-registered client:
+1. **Optional: add the `offline_access` scope for refresh tokens.** MCP
+   clients typically request `offline_access` so they can refresh access
+   tokens without a new browser sign-in. Okta and most enterprise IdPs
+   require this scope to exist on the authorization server. If the client
+   fails to reconnect after the first access token expires, add
+   `offline_access` to the authorization server's scopes.
 
-```shell
-claude mcp add --transport http materialize-agent \
-  https://<host>:6876/api/mcp/agent \
-  --client-id <YOUR_CLIENT_ID> --callback-port 8080
-```
+1. **Connect your MCP client.** For example, to connect Claude Code to the
+   `materialize-agent` MCP server with a pre-registered client:
 
-The `--callback-port` value must match the `http://localhost:<port>/callback`
-redirect URI registered on the OIDC client.
+   ```shell
+   claude mcp add --transport http materialize-agent \
+     https://<host>:6876/api/mcp/agent \
+     --client-id <YOUR_CLIENT_ID> --callback-port 8080
+   ```
+
+   The `--callback-port` value must match the
+   `http://localhost:<port>/callback` redirect URI registered on the OIDC
+   client. For more information, see
+   [MCP servers](/integrations/mcp-server/).
 
 {{< note >}}
 Deployments behind a load balancer or proxy that rewrites the `Host` header

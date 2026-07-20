@@ -363,6 +363,21 @@ In the following, replace `<baseURL>` with the MCP server URL from [Step
      "<baseURL>/api/mcp/agent"
    ```
 
+   For Self-Managed deployments using OAuth with a pre-registered OIDC
+   client, add `--client-id` and `--callback-port`:
+
+   ```sh
+   claude mcp add --transport http "materialize-agent" \
+     "<baseURL>/api/mcp/agent" \
+     --client-id <YOUR_CLIENT_ID> --callback-port 8080
+   ```
+
+   The `--callback-port` value must match the
+   `http://localhost:<port>/callback` redirect URI registered on the OIDC
+   client. See [Connecting MCP
+   clients](/security/self-managed/sso/#connecting-mcp-clients) for
+   the full IdP configuration.
+
 1. Restart Claude Code. On first connection, your browser opens to complete
    sign-in and connect.
 
