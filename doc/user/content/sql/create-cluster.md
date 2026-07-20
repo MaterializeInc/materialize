@@ -162,26 +162,18 @@ See also:
 You can change the size of a cluster to respond to changes in your workload
 using [`ALTER CLUSTER`](/sql/alter-cluster).
 
-{{< if-unreleased "v26.34" >}}
-Depending on the type of objects the cluster is hosting, this operation **might
-incur downtime**.
-{{< /if-unreleased >}}
-
-{{< if-released "v26.34" >}}
 By default, resizing is graceful and incurs **no downtime**: Materialize
-provisions new replicas at the target size, waits for them to hydrate, then cuts
-over. See [Monitoring a resize](/sql/alter-cluster/#monitoring-a-resize).
-{{< /if-released >}}
+provisions new replicas at the target size, waits for them to hydrate, then
+retires the old ones. See [Monitoring a
+resize](/sql/alter-cluster/#monitoring-a-resize).
 
 See the reference documentation for [`ALTER
 CLUSTER`](/sql/alter-cluster#zero-downtime-cluster-resizing) for more details
 on cluster resizing.
 
-{{< if-released "v26.34" >}}
 ### Autoscaling
 
 {{< include-md file="shared-content/cluster-hydration-burst.md" >}}
-{{< /if-released >}}
 
 ### Replication factor
 
