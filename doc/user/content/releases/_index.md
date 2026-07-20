@@ -26,6 +26,9 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 ### Background cluster reconfiguration {#v26.34-background-cluster-reconfiguration}
 The cluster controller is now enabled by default. `ALTER CLUSTER` for configuration changes (such as resizing) now returns immediately and converges in the background, rather than blocking until the new replica set is ready. `CREATE CLUSTER` and `ALTER CLUSTER` also accept the new `AUTO SCALING STRATEGY` option for configuring hydration-burst autoscaling behavior.
 
+### AWS Glue Schema Registry Support for Sinks {#v26.34-aws-glue-schema-registry-support-sinks}
+Kafka sinks can now use AWS Glue Schema Registry for Avro schema management via the new `FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY` syntax on `CREATE SINK`, as an alternative to the Confluent Schema Registry. This is currently available on Materialize Cloud only.
+
 ### Improvements {#v26.34-improvements}
 - **Azure SQL source support**: Materialize can now ingest data from Azure SQL databases using the SQL Server source connector.
 - **Configurable Iceberg sink commit interval**: The commit interval of an existing Iceberg sink can now be altered using `ALTER ... SET COMMIT INTERVAL`, with a minimum of 1 second.
