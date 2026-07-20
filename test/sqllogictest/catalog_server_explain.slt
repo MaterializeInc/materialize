@@ -4514,6 +4514,16 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_aws_privatelink_connections";
+----
+mz_catalog.mz_aws_privatelink_connections:
+  →Constant (0 rows)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
 EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_cluster_replicas";
 ----
 mz_catalog.mz_cluster_replicas:
@@ -4987,7 +4997,7 @@ mz_catalog.mz_materialized_views:
           Project: #4, #0, #5, #1, #6, #2, #9, #8, #3, #7
           Map: {=r/s1, s1=r/s1}, "s1"
       →Arrange (#1{schema_name}, #2{name})
-        →Constant (35 rows)
+        →Constant (37 rows)
       →Arrange (empty key) (#0{schema_name}) (#0{schema_name}, #1{name})
         →Fused with Child Map/Filter/Project
           Project: #4, #3, #5
@@ -5288,6 +5298,21 @@ mz_catalog.mz_system_privileges:
 
 Source mz_internal.mz_catalog_raw
   filter=(("SystemPrivileges" = (#0{data} ->> "kind")))
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_internal"."mz_aws_connections";
+----
+mz_internal.mz_aws_connections:
+  →Read mz_internal.mz_catalog_raw
+
+Source mz_internal.mz_catalog_raw
+  project=(#3..=#12, #14..=#16)
+  filter=(("Item" = (#0{data} ->> "kind")) AND ("aws" = (parse_catalog_create_sql(#1) ->> "connection_type")))
+  map=(((((#0{data} -> "value") -> "definition") -> "V1") ->> "create_sql"), parse_connection_details(#1), parse_catalog_id(((#0{data} -> "key") -> "gid")), (#2{details} ->> "endpoint"), (#2{details} ->> "region"), (#2{details} ->> "access_key_id"), (#2{details} ->> "access_key_id_secret_id"), (#2{details} ->> "secret_access_key_secret_id"), (#2{details} ->> "session_token"), (#2{details} ->> "session_token_secret_id"), (#2{details} ->> "assume_role_arn"), (#2{details} ->> "assume_role_session_name"), ("assume-role" = (#2{details} ->> "auth_kind")), case when #13 then "arn:aws:iam::123456789000:role/MaterializeConnection" else null end, case when #13 then ("mz_test-aws-external-id-prefix_" || #3) else null end, case when #13 then jsonb_build_object("Version", "2012-10-17", "Statement", jsonbable_to_jsonb(jsonb_build_array(jsonbable_to_jsonb(jsonb_build_object("Effect", "Allow", "Principal", {AWS: "arn:aws:iam::123456789000:role/MaterializeConnection"}, "Action", "sts:AssumeRole", "Condition", jsonbable_to_jsonb(jsonb_build_object("StringEquals", jsonbable_to_jsonb(jsonb_build_object("sts:ExternalId", jsonbable_to_jsonb(("mz_test-aws-external-id-prefix_" || #3))))))))))) else null end)
 
 Target cluster: mz_catalog_server
 
@@ -7937,7 +7962,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_materialized_views";
 ----
 Explained Query (fast path):
-  →Constant (35 rows)
+  →Constant (37 rows)
 
 Target cluster: mz_catalog_server
 

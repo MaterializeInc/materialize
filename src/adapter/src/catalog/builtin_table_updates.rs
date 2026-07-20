@@ -15,8 +15,7 @@ use mz_adapter_types::compaction::CompactionWindow;
 use mz_audit_log::VersionedStorageUsage;
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
-    BuiltinTable, MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AWS_CONNECTIONS,
-    MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_SIZE_INTERNAL,
+    BuiltinTable, MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_SIZE_INTERNAL,
     MZ_CLUSTER_REPLICA_SIZES, MZ_COLUMNS, MZ_EGRESS_IPS, MZ_FUNCTIONS,
     MZ_HISTORY_RETENTION_STRATEGIES, MZ_ICEBERG_SINKS, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS,
     MZ_LICENSE_KEYS, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES,
@@ -24,12 +23,11 @@ use mz_catalog::builtin::{
     MZ_ROLE_AUTH, MZ_SESSIONS, MZ_SINKS, MZ_SOURCE_REFERENCES, MZ_STORAGE_USAGE_BY_SHARD,
     MZ_SUBSCRIPTIONS, MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
 };
-use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::durable::SourceReferences;
 use mz_catalog::memory::error::Error;
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, Connection, DataSourceDesc, Func, Index, MaterializedView, Sink,
-    Table, TableDataSource, Type, View,
+    CatalogEntry, CatalogItem, DataSourceDesc, Func, Index, MaterializedView, Sink, Table,
+    TableDataSource, Type, View,
 };
 use mz_expr::MirScalarExpr;
 use mz_license_keys::ValidatedLicenseKey;
@@ -50,11 +48,8 @@ use mz_sql::ast::{CreateIndexStatement, Statement};
 use mz_sql::catalog::{CatalogType, TypeCategory};
 use mz_sql::func::FuncImplCatalogDetails;
 use mz_sql::names::SchemaSpecifier;
-use mz_sql::plan::ConnectionDetails;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::client::TableData;
-use mz_storage_types::connections::aws::{AwsAuth, AwsConnection};
-use mz_storage_types::connections::string_or_secret::StringOrSecret;
 use mz_storage_types::sinks::{IcebergSinkConnection, KafkaSinkConnection, StorageSinkConnection};
 use smallvec::smallvec;
 
@@ -207,9 +202,11 @@ impl CatalogState {
                 self.pack_func_update(id, schema_id, name, owner_id, func, diff)
             }
             CatalogItem::Log(_) | CatalogItem::Secret(_) => vec![],
-            CatalogItem::Connection(connection) => {
-                self.pack_connection_update(id, connection, diff)
-            }
+            // Connection details (mz_kafka_connections, mz_ssh_tunnel_connections,
+            // mz_aws_connections, mz_aws_privatelink_connections) are now derived
+            // from the persisted create_sql by materialized views over
+            // mz_catalog_raw, so connections need no special packing here.
+            CatalogItem::Connection(_) => vec![],
         };
 
         if !entry.item().is_temporary() {
@@ -388,137 +385,6 @@ impl CatalogState {
             ]),
             diff,
         )]
-    }
-
-    fn pack_connection_update(
-        &self,
-        id: CatalogItemId,
-        connection: &Connection,
-        diff: Diff,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let mut updates = vec![];
-        match connection.details {
-            ConnectionDetails::Aws(ref aws_config) => {
-                match self.pack_aws_connection_update(id, aws_config, diff) {
-                    Ok(update) => {
-                        updates.push(update);
-                    }
-                    Err(e) => {
-                        tracing::error!(%id, %e, "failed writing row to mz_aws_connections table");
-                    }
-                }
-            }
-            ConnectionDetails::AwsPrivatelink(_) => {
-                if let Some(aws_principal_context) = self.aws_principal_context.as_ref() {
-                    updates.push(self.pack_aws_privatelink_connection_update(
-                        id,
-                        aws_principal_context,
-                        diff,
-                    ));
-                } else {
-                    tracing::error!(%id, "missing AWS principal context; cannot write row to mz_aws_privatelink_connections table");
-                }
-            }
-            // Kafka (mz_kafka_connections) and SSH (mz_ssh_tunnel_connections)
-            // connection details are now derived from the persisted create_sql
-            // by materialized views over mz_catalog_raw, so they need no
-            // special packing here.
-            ConnectionDetails::Kafka(_)
-            | ConnectionDetails::Ssh { .. }
-            | ConnectionDetails::Csr(_)
-            | ConnectionDetails::GlueSchemaRegistry(_)
-            | ConnectionDetails::Gcp(_)
-            | ConnectionDetails::Postgres(_)
-            | ConnectionDetails::MySql(_)
-            | ConnectionDetails::SqlServer(_)
-            | ConnectionDetails::IcebergCatalog(_) => (),
-        };
-        updates
-    }
-
-    pub fn pack_aws_privatelink_connection_update(
-        &self,
-        connection_id: CatalogItemId,
-        aws_principal_context: &AwsPrincipalContext,
-        diff: Diff,
-    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
-        let id = &MZ_AWS_PRIVATELINK_CONNECTIONS;
-        let row = Row::pack_slice(&[
-            Datum::String(&connection_id.to_string()),
-            Datum::String(&aws_principal_context.to_principal_string(connection_id)),
-        ]);
-        BuiltinTableUpdate::row(id, row, diff)
-    }
-
-    pub fn pack_aws_connection_update(
-        &self,
-        connection_id: CatalogItemId,
-        aws_config: &AwsConnection,
-        diff: Diff,
-    ) -> Result<BuiltinTableUpdate<&'static BuiltinTable>, anyhow::Error> {
-        let id = &MZ_AWS_CONNECTIONS;
-
-        let mut access_key_id = None;
-        let mut access_key_id_secret_id = None;
-        let mut secret_access_key_secret_id = None;
-        let mut session_token = None;
-        let mut session_token_secret_id = None;
-        let mut assume_role_arn = None;
-        let mut assume_role_session_name = None;
-        let mut principal = None;
-        let mut external_id = None;
-        let mut example_trust_policy = None;
-        match &aws_config.auth {
-            AwsAuth::Credentials(credentials) => {
-                match &credentials.access_key_id {
-                    StringOrSecret::String(s) => access_key_id = Some(s.as_str()),
-                    StringOrSecret::Secret(s) => access_key_id_secret_id = Some(s.to_string()),
-                }
-                secret_access_key_secret_id = Some(credentials.secret_access_key.to_string());
-                match credentials.session_token.as_ref() {
-                    None => (),
-                    Some(StringOrSecret::String(s)) => session_token = Some(s.as_str()),
-                    Some(StringOrSecret::Secret(s)) => {
-                        session_token_secret_id = Some(s.to_string())
-                    }
-                }
-            }
-            AwsAuth::AssumeRole(assume_role) => {
-                assume_role_arn = Some(assume_role.arn.as_str());
-                assume_role_session_name = assume_role.session_name.as_deref();
-                principal = self
-                    .config
-                    .connection_context
-                    .aws_connection_role_arn
-                    .as_deref();
-                external_id =
-                    Some(assume_role.external_id(&self.config.connection_context, connection_id)?);
-                example_trust_policy = {
-                    let policy = assume_role
-                        .example_trust_policy(&self.config.connection_context, connection_id)?;
-                    let policy = Jsonb::from_serde_json(policy).expect("valid json");
-                    Some(policy.into_row())
-                };
-            }
-        }
-
-        let row = Row::pack_slice(&[
-            Datum::String(&connection_id.to_string()),
-            Datum::from(aws_config.endpoint.as_deref()),
-            Datum::from(aws_config.region.as_deref()),
-            Datum::from(access_key_id),
-            Datum::from(access_key_id_secret_id.as_deref()),
-            Datum::from(secret_access_key_secret_id.as_deref()),
-            Datum::from(session_token),
-            Datum::from(session_token_secret_id.as_deref()),
-            Datum::from(assume_role_arn),
-            Datum::from(assume_role_session_name),
-            Datum::from(principal),
-            Datum::from(external_id.as_deref()),
-            Datum::from(example_trust_policy.as_ref().map(|p| p.into_element())),
-        ]);
-
-        Ok(BuiltinTableUpdate::row(id, row, diff))
     }
 
     fn pack_view_update(

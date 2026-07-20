@@ -2777,36 +2777,68 @@ pub static MZ_EGRESS_IPS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable
     }),
 });
 
-pub static MZ_AWS_PRIVATELINK_CONNECTIONS: LazyLock<BuiltinTable> =
-    LazyLock::new(|| BuiltinTable {
-        name: "mz_aws_privatelink_connections",
-        schema: MZ_CATALOG_SCHEMA,
-        oid: oid::TABLE_MZ_AWS_PRIVATELINK_CONNECTIONS_OID,
-        desc: RelationDesc::builder()
-            .with_column("id", SqlScalarType::String.nullable(false))
-            .with_column("principal", SqlScalarType::String.nullable(false))
-            .finish(),
-        column_comments: BTreeMap::from_iter([
-            ("id", "The ID of the connection."),
-            (
-                "principal",
-                "The AWS Principal that Materialize will use to connect to the VPC endpoint.",
-            ),
-        ]),
-        is_retained_metrics_object: false,
-        access: vec![PUBLIC_SELECT],
-        ontology: Some(Ontology {
-            entity_name: "aws_privatelink_connection",
-            description: "AWS PrivateLink connection configuration",
-            links: &const {
-                [OntologyLink {
-                    name: "details_of",
-                    target: "connection",
-                    properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
-                }]
-            },
-            column_semantic_types: &[("id", SemanticType::CatalogItemId)],
-        }),
+// The privatelink principal is entirely context-derived (there is nothing to
+// parse out of create_sql), so this view selects the aws-privatelink
+// connections and reconstructs the principal ARN from the plan-time AWS context
+// functions. `principal` is NOT NULL and the removed packer emitted no row when
+// the AWS principal context was absent. A view cannot skip a row, but the
+// context functions fold to NULL without the context, so `WHERE principal IS
+// NOT NULL` reproduces that skip (zero rows on envs without the context).
+pub static MZ_AWS_PRIVATELINK_CONNECTIONS: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| {
+        BuiltinMaterializedView {
+            name: "mz_aws_privatelink_connections",
+            schema: MZ_CATALOG_SCHEMA,
+            oid: oid::MV_MZ_AWS_PRIVATELINK_CONNECTIONS_OID,
+            desc: RelationDesc::builder()
+                .with_column("id", SqlScalarType::String.nullable(false))
+                .with_column("principal", SqlScalarType::String.nullable(false))
+                .with_key(vec![0])
+                .finish(),
+            column_comments: BTreeMap::from_iter([
+                ("id", "The ID of the connection."),
+                (
+                    "principal",
+                    "The AWS Principal that Materialize will use to connect to the VPC endpoint.",
+                ),
+            ]),
+            // `principal` reproduces `AwsPrincipalContext::to_principal_string` in
+            // src/catalog/src/config.rs. Keep the two in sync.
+            sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL principal
+) AS
+SELECT id, principal FROM (
+    SELECT
+        mz_internal.parse_catalog_id(r.data->'key'->'gid') AS id,
+        'arn:aws:iam::' || mz_aws_account_id() || ':role/mz_'
+            || mz_aws_external_id_prefix() || '_'
+            || mz_internal.parse_catalog_id(r.data->'key'->'gid') AS principal
+    FROM mz_internal.mz_catalog_raw r
+    WHERE
+        r.data->>'kind' = 'Item' AND
+        mz_internal.parse_catalog_create_sql(
+            r.data->'value'->'definition'->'V1'->>'create_sql')->>'connection_type'
+                = 'aws-privatelink'
+)
+WHERE principal IS NOT NULL",
+            is_retained_metrics_object: false,
+            access: vec![PUBLIC_SELECT],
+            ontology: Some(Ontology {
+                entity_name: "aws_privatelink_connection",
+                description: "AWS PrivateLink connection configuration",
+                links: &const {
+                    [OntologyLink {
+                        name: "details_of",
+                        target: "connection",
+                        properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+                    }]
+                },
+                column_semantic_types: &[("id", SemanticType::CatalogItemId)],
+            }),
+        }
     });
 
 pub static MZ_CLUSTER_REPLICA_FRONTIERS: LazyLock<BuiltinSource> =

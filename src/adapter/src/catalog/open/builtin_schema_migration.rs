@@ -343,6 +343,18 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_CATALOG_SCHEMA,
             "mz_ssh_tunnel_connections",
         ),
+        MigrationStep::replacement(
+            "26.34.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_aws_connections",
+        ),
+        MigrationStep::replacement(
+            "26.34.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_aws_privatelink_connections",
+        ),
     ]
 });
 

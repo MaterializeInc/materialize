@@ -438,6 +438,15 @@ pub struct CatalogConfig {
     pub now: NowFn,
     /// Context for source and sink connections.
     pub connection_context: ConnectionContext,
+    /// The AWS account ID that Materialize runs under, if configured.
+    ///
+    /// This is the `aws_account_id` from the catalog's `AwsPrincipalContext`.
+    /// It is plumbed through here (rather than the whole context) because the
+    /// external-id prefix and connection role ARN already live on
+    /// [`ConnectionContext`], and because `AwsPrincipalContext` is defined in
+    /// `mz-catalog`, which cannot be a dependency of `mz-sql`. Folded into a
+    /// literal by `mz_aws_account_id()`; `None` on non-cloud/local envs.
+    pub aws_account_id: Option<String>,
     /// Helm chart version
     pub helm_chart_version: Option<String>,
 }

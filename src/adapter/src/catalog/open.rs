@@ -163,6 +163,10 @@ impl Catalog {
                 build_info: config.build_info,
                 now: config.now.clone(),
                 connection_context: config.connection_context,
+                aws_account_id: config
+                    .aws_principal_context
+                    .as_ref()
+                    .map(|c| c.aws_account_id.clone()),
                 helm_chart_version: config.helm_chart_version,
             },
             cluster_replica_sizes: config.cluster_replica_sizes,

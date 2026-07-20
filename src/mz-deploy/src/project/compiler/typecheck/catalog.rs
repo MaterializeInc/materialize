@@ -625,6 +625,7 @@ impl CatalogRuntime {
             connection_context: mz_storage_types::connections::ConnectionContext::for_tests(
                 secrets_reader,
             ),
+            aws_account_id: None,
             helm_chart_version: None,
         };
         let mut catalog = Self {

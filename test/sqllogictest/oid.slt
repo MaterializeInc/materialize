@@ -907,8 +907,6 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 16753  mz_sink_statuses
 16754  mz_storage_usage_by_shard
 16755  mz_egress_ips
-16756  mz_aws_privatelink_connections
-16757  mz_aws_connections
 16758  mz_cluster_replica_metrics
 16759  mz_cluster_replica_frontiers
 16760  mz_frontiers
@@ -1242,3 +1240,8 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17112  mz_kafka_connections
 17113  mz_ssh_tunnel_connections
 17114  parse_connection_details
+17115  mz_aws_connections
+17116  mz_aws_privatelink_connections
+17117  mz_aws_account_id
+17118  mz_aws_external_id_prefix
+17119  mz_aws_connection_role_arn
