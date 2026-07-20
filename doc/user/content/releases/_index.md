@@ -19,6 +19,43 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.34.0
+*Released to Materialize Cloud: 2026-07-23* <br>
+*Released to Materialize Self-Managed: 2026-07-24* <br>
+
+### Background cluster reconfiguration {#v26.34-background-cluster-reconfiguration}
+The cluster controller is now enabled by default. `ALTER CLUSTER` for configuration changes (such as resizing) now returns immediately and converges in the background, rather than blocking until the new replica set is ready. `CREATE CLUSTER` and `ALTER CLUSTER` also accept the new `AUTO SCALING STRATEGY` option for configuring hydration-burst autoscaling behavior.
+
+### Improvements {#v26.34-improvements}
+- **Azure SQL source support**: Materialize can now ingest data from Azure SQL databases using the SQL Server source connector.
+- **AWS Glue Schema Registry for sinks**: `CREATE SINK` now supports AWS Glue Schema Registry for Avro-encoded Kafka sinks, as an alternative to Confluent Schema Registry.
+- **Configurable Iceberg sink commit interval**: The commit interval of an existing Iceberg sink can now be altered using `ALTER ... SET COMMIT INTERVAL`, with a minimum of 1 second.
+- **MCP query tool replica routing**: The MCP developer query tool now accepts a `cluster_replica` parameter, enabling `EXPLAIN ANALYZE` on clusters with more than one replica.
+- **Smaller container images**: The `environmentd` and `clusterd` container images now use a distroless base, reducing image size and attack surface for Self-Managed deployments.
+
+### Agent Skills {#v26.34-agent-skills}
+- **Materialize Terraform Provider**: New agent skill covering Terraform provider configuration for Cloud and self-managed deployments, resource conventions, cross-resource patterns, import workflows, and known gotchas.
+- **Materialize Terraform Self-Managed**: New agent skill covering the Terraform modules for deploying self-managed Materialize on AWS, Azure, and GCP, including IAM-based storage auth, upgrade procedures, and project integration patterns.
+
+### Bug Fixes {#v26.34-bug-fixes}
+- Fixed a critical bug where a pending replacement materialized view could destroy the data of its live target materialized view after an environmentd restart, by advancing the shared persist shard's since to the empty frontier.
+- Fixed a correctness bug in join processing where incoming batches could be silently dropped after trace compaction, causing lost updates without error.
+- Fixed multiple soundness bugs in persist filter pushdown that could silently drop matching rows or cause `persist filter pushdown correctness violation` panics.
+- Fixed a bug in multi-statement read transactions where a timestamp-independent first statement (e.g., a query over a constant-folded view) could cause subsequent statements to read from incorrect time domains, resulting in errors or incorrect results.
+- Fixed `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT` crashing the coordinator when a temporary view or index depended on the target materialized view.
+- Fixed non-temporary objects (views, indexes, etc.) being allowed to depend on temporary objects, which could lead to dangling references when the session ended.
+- Fixed stack overflow crashes in the adapter when processing environments with deeply nested object dependencies.
+- Fixed a stack overflow when comparing deeply nested values (e.g., deeply nested JSONB) in query result ordering.
+- Fixed a stack overflow when executing read-then-write statements (e.g., `INSERT INTO ... SELECT`) over deeply chained view hierarchies.
+- Fixed stack overflow or memory exhaustion when resolving pathologically deep or wide custom types.
+- Fixed a crash on diskless replicas where restarting upsert sources could encounter stale RocksDB state.
+- Fixed environmentd crash-looping on startup when a tombstoned persist shard was still referenced in the catalog.
+- Fixed `SET TRANSACTION ... READ WRITE` silently modifying session state before returning an error.
+- `CREATE ROLE` now rejects the reserved role specification names `current_user`, `current_role`, `session_user`, `user`, and `none`.
+- Fixed a user-created schema named `information_schema` bypassing the `mz_catalog_server` cluster restriction, allowing user queries to run on a reserved system cluster.
+- Fixed `kubectl apply --server-side` failing for Materialize v1 CRDs when managed fields were originally recorded at v1alpha1, blocking GitOps tooling in Self-Managed deployments.
+- Fixed the Self-Managed Console deriving the MCP server URL from the pgwire hostname instead of the HTTP endpoint, causing MCP connections to fail when pgwire and HTTP are served on separate hostnames.
+
 ## v26.33.0
 *Released to Materialize Cloud: 2026-07-16* <br>
 *Released to Materialize Self-Managed: 2026-07-17* <br>
