@@ -5,10 +5,10 @@
 
 //! An owned, `Send` point-in-time snapshot of a local arrangement.
 //!
-//! Nothing in this module is called from the peek path yet: this is the foundation an upcoming
-//! change uses to move a fast-path index peek's cursor walk off the maintenance worker's own
-//! thread, onto its own async task. `#[allow(dead_code)]` covers that gap; the compile-time
-//! `Send` assertions in `tests` are the actual point of this module today.
+//! [`snapshot_local`] and [`LocalSnapshot::into_cursor`] back the offloaded fast-path index
+//! peek's cursor walk (`crate::compute_state::IndexOffloadPeek::spawn_offloaded_walk`), which
+//! runs on its own async task off the maintenance worker's thread. `#[allow(dead_code)]` remains
+//! for `since`/`upper`, which today are exercised only by this module's `Send` assertion tests.
 #![allow(dead_code)]
 
 use differential_dataflow::trace::{Navigable, TraceReader};

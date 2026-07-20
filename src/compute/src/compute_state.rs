@@ -999,10 +999,15 @@ impl<'a> ActiveComputeState<'a> {
                     &metrics,
                 );
 
-                self.compute_state
-                    .metrics
-                    .index_peek_total_seconds
-                    .observe(start.elapsed().as_secs_f64());
+                // The offloaded walk records its own task-duration observation into this
+                // histogram once the offload completes (see `PendingPeek::IndexOffload` below),
+                // so skip it here to avoid double-counting offloaded peeks.
+                if !matches!(status, PeekStatus::Offloaded(_)) {
+                    self.compute_state
+                        .metrics
+                        .index_peek_total_seconds
+                        .observe(start.elapsed().as_secs_f64());
+                }
 
                 match status {
                     PeekStatus::Ready(result) => Some(result),

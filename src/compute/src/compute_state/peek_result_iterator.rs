@@ -157,8 +157,6 @@ where
     /// run on a thread other than the one maintaining the trace.
     ///
     /// [`LocalSnapshot`]: crate::compute_state::local_snapshot::LocalSnapshot
-    // Not called from the peek path yet; see `local_snapshot`'s module doc.
-    #[allow(dead_code)]
     pub fn new_over_snapshot(
         target_id: GlobalId,
         map_filter_project: mz_expr::SafeMfpPlan,
