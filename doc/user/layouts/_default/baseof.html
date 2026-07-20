@@ -36,7 +36,48 @@ Apache License, Version 2.0. */}}
         : "light";
     </script>
 
-    {{ partial "header.html" . }} {{ block "body" .}}
+    {{ partial "header.html" . }}
+    <script>
+      (() => {
+        const darkMediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+
+        const syncToggles = (theme) => {
+          const isDark = theme === "dark";
+          document.querySelectorAll("button.theme-switcher").forEach((toggle) => {
+            toggle.setAttribute("aria-checked", String(isDark));
+            toggle.setAttribute(
+              "aria-label",
+              isDark ? "Switch to light theme" : "Switch to dark theme"
+            );
+          });
+          document.documentElement.dataset.theme = theme;
+        };
+
+        const applyTheme = (nextTheme, persist = true) => {
+          document.body.classList.remove("light", "dark");
+          document.body.classList.add(nextTheme);
+          if (persist) {
+            localStorage.setItem("theme", nextTheme);
+          }
+          syncToggles(nextTheme);
+        };
+
+        syncToggles(document.body.classList.contains("dark") ? "dark" : "light");
+
+        document.addEventListener("click", (event) => {
+          const toggle = event.target.closest("button.theme-switcher");
+          if (!toggle) return;
+          applyTheme(document.body.classList.contains("dark") ? "light" : "dark");
+        });
+
+        darkMediaQuery.addEventListener("change", () => {
+          if (localStorage.getItem("theme") === "system") {
+            applyTheme(darkMediaQuery.matches ? "dark" : "light", false);
+          }
+        });
+      })();
+    </script>
+    {{ block "body" .}}
     <div class="content-wrapper">
       {{ partial "sidebar.html" . }}
 
@@ -282,54 +323,6 @@ Apache License, Version 2.0. */}}
           backdrop.style.display = "none";
         }
       });
-
-      const lightButtons = [...document.querySelectorAll("button.light")];
-      const darkButtons = [...document.querySelectorAll("button.dark")];
-
-      const highlightButton = (theme) => {
-        [...lightButtons, ...darkButtons].forEach((button) => {
-          if ([...button.classList].includes(theme)) {
-            button.classList.add("active");
-          } else {
-            button.classList.remove("active");
-          }
-        });
-      };
-
-      // Reflect the theme actually applied to the page. A brand-new visitor
-      // still on the "system" default has no explicit choice, so highlight the
-      // resolved light/dark state rather than the stored "system" value.
-      const appliedTheme = document.body.classList.contains("dark") ? "dark" : "light";
-      highlightButton(appliedTheme);
-
-      const syncDocSearchTheme = () => {
-        document.documentElement.dataset.theme = document.body.classList.contains("dark")
-          ? "dark"
-          : "light";
-      };
-
-      darkMediaQuery.addEventListener("change", () => {
-        const storedTheme = localStorage.getItem("theme");
-        if (storedTheme === "system") {
-          document.body.classList.replace(darkMediaQuery.matches ? "light" : "dark", darkMediaQuery.matches ? "dark" : "light");
-          highlightButton(darkMediaQuery.matches ? "dark" : "light");
-          syncDocSearchTheme();
-        }
-      });
-
-      lightButtons.forEach((button) => button.addEventListener("click", () => {
-        document.body.classList.replace("dark", "light");
-        localStorage.setItem("theme", "light");
-        highlightButton("light");
-        syncDocSearchTheme();
-      }));
-
-      darkButtons.forEach((button) => button.addEventListener("click", () => {
-        document.body.classList.replace("light", "dark");
-        localStorage.setItem("theme", "dark");
-        highlightButton("dark");
-        syncDocSearchTheme();
-      }));
 
       const allLinks = document.querySelectorAll("a");
       console.log(allLinks.length);

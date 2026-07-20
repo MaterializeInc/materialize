@@ -12,7 +12,7 @@ $rem-scale: 0.585;
     --nav-height: #{rem(6.5)}; // Changes to height requires changes to partials/toc.html since custom scroll logic implementation
 
     // Brand typefaces (style guide): FAIRE Sprig Sans → headlines; Inter → body/UI; FAIRE Sprig Sans Mono → code
-    --font-body: "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-body: "Inter Variable", "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     --font-heading: "FAIRE Sprig Sans", "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     --font-mono: "FAIRE Sprig Sans Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
 
@@ -21,7 +21,7 @@ $rem-scale: 0.585;
     --leading-code: 1.55;
     --tracking-eyebrow: 0.05em;
     --tracking-code: 0.05em;
-    --weight-body: 400;
+    --weight-body: 350;
     --weight-body-emphasis: 500;
     --weight-body-strong: 600;
     --weight-heading: 500;

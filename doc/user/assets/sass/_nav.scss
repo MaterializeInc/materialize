@@ -25,6 +25,7 @@
     .mobile {
         display: none;
         padding: var(--micro) 0;
+        background: var(--bg);
 
         a:not(.btn) {
             padding: var(--nano) 0;
@@ -39,12 +40,20 @@
             font-weight: 500;
         }
 
+        .nav-theme-switcher {
+            margin-right: 0;
+            margin-top: var(--milli);
+        }
+
         @media(max-width: 850px) {
             height: calc(100vh - var(--nav-height));
+            box-sizing: border-box;
 
             .row {
                 display: flex;
                 flex-direction: column;
+                height: 100%;
+                padding-bottom: env(safe-area-inset-bottom, 0);
             }
         }
     }
@@ -199,6 +208,7 @@ button.close-topics {
     border-radius: 100%;
     box-shadow: var(--shadow-default);
     transition: all .2s ease-out;
+    z-index: 2;
 
     svg {
         height: 30px;
@@ -211,6 +221,10 @@ button.close-topics {
 
     @media(max-width: 850px) {
         display: flex;
+        // Straddle the panel edge so the search field can use the full width.
+        top: rem(1.2);
+        right: 0;
+        transform: translateX(calc(75% + 4px));
     }
 }
 

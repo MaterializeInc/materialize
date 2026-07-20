@@ -1,4 +1,5 @@
 {{- $parentPath := partial "relative-link.html" . -}}
+{{- $selfManagedEditions := .Site.Data.self_managed.self_managed_editions_table -}}
 <div class="table-container">
 <table>
   <thead>
@@ -21,47 +22,10 @@
       <td>
         Deploy and operate Materialize in your Kubernetes environment. Whereas Materialize Cloud gives you a fully managed service, Materialize Self-Managed allows you to deploy Materialize in your own infrastructure.
         <p>Available in two editions:</p>
-        <table>
-          <thead>
-            <tr>
-              <th scope="col"><span class="sr-only">Feature</span></th>
-              <th scope="col">Enterprise</th>
-              <th scope="col">Community</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>Memory limit</td>
-              <td>Unlimited</td>
-              <td>24 GB</td>
-            </tr>
-            <tr>
-              <td>Disk limit</td>
-              <td>Unlimited</td>
-              <td>48 GB</td>
-            </tr>
-            <tr>
-              <td>SLA support</td>
-              <td>Yes</td>
-              <td>No</td>
-            </tr>
-            <tr>
-              <td>SSO / RBAC</td>
-              <td>Yes</td>
-              <td>No</td>
-            </tr>
-            <tr>
-              <td>Audit logging</td>
-              <td>Yes</td>
-              <td>No</td>
-            </tr>
-            <tr>
-              <td>License</td>
-              <td>Commercial</td>
-              <td>BSL</td>
-            </tr>
-          </tbody>
-        </table>
+        {{ partial "yaml-tables/generic-table.html" (dict
+          "columns" $selfManagedEditions.columns
+          "rows" $selfManagedEditions.rows
+        ) }}
       </td>
       <td>
         <a href="{{ $parentPath }}{{ "/get-started/install/" | relURL }}">Install self-managed</a> and try out the <a href="{{ $parentPath }}{{ "/get-started/quickstart/" | relURL }}">Quickstart</a>, or see the <a href="{{ $parentPath }}{{ "/self-managed-deployments/" | relURL }}">deployment guide</a> to compare editions.

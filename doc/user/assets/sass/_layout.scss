@@ -777,6 +777,8 @@ body.light {
 
     @media(max-width: 850px) {
         min-width: 0;
+        max-width: 300px;
+        width: 85vw;
         padding-left: 0;
         position: fixed;
         z-index: 100;
@@ -878,7 +880,7 @@ body.light .sidebar-wrapper::before {
         max-width: 100%;
 
         @media(max-width: 850px) {
-            min-width: 260px;
+            min-width: 0;
         }
     }
 
@@ -1296,47 +1298,71 @@ body.light .sidebar-wrapper::before {
 }
 
 .theme-switcher {
-    display: inline-flex;
+    position: relative;
+    display: inline-grid;
+    grid-template-columns: 1fr 1fr;
     align-items: center;
-    gap: rem(0.2);
-    padding: rem(0.3);
+    width: rem(5.2);
+    height: rem(2.6);
+    padding: rem(0.2);
     border: 1px solid var(--divider-light);
-    border-radius: rem(2);
-    background: color-mix(in srgb, var(--divider-light) 18%, transparent);
+    border-radius: 999px;
+    background: var(--card);
+    box-sizing: border-box;
+    cursor: pointer;
+    vertical-align: middle;
+    transition: background 0.15s ease, border-color 0.15s ease;
 
-    button {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        background: transparent;
-        border: none;
-        border-radius: rem(1.6);
-        cursor: pointer;
-        padding: rem(0.4);
-        transition: background 0.15s ease;
+    &__icon {
+        position: relative;
+        z-index: 1;
+        justify-self: center;
+        width: rem(1.55);
+        height: rem(1.55);
+        fill: var(--body);
+        opacity: 0.72;
+        pointer-events: none;
+        transition: fill 0.15s ease, opacity 0.15s ease;
+    }
 
-        &:hover svg {
-            fill: var(--body);
+    &__knob {
+        position: absolute;
+        top: rem(0.2);
+        left: rem(0.2);
+        z-index: 0;
+        width: calc(50% - #{rem(0.2)});
+        height: calc(100% - #{rem(0.4)});
+        border-radius: 999px;
+        background: var(--white);
+        box-shadow: 0 1px 2px color-mix(in srgb, var(--color-black) 16%, transparent);
+        pointer-events: none;
+        transition: transform 0.15s ease;
+    }
+
+    &[aria-checked="false"] &__icon--sun {
+        fill: #e8910f;
+        opacity: 1;
+    }
+
+    &[aria-checked="true"] {
+        .theme-switcher__knob {
+            transform: translateX(100%);
         }
 
-        &.active {
-            background: var(--docs-card-inset);
+        .theme-switcher__icon--moon {
+            fill: var(--sg-violet);
+            opacity: 1;
         }
     }
 
-    svg {
-        fill: var(--gray-mid);
-        height: rem(1.5);
-        width: rem(1.5);
-        transition: fill 0.15s ease;
+    &:hover,
+    &:focus-visible {
+        border-color: color-mix(in srgb, var(--sg-violet) 40%, var(--divider-light));
     }
 
-    .light.active svg {
-        fill: orange;
-    }
-
-    .dark.active svg {
-        fill: var(--gray-light);
+    &:focus-visible {
+        outline: none;
+        box-shadow: 0 0 0 2px color-mix(in srgb, var(--sg-violet) 28%, transparent);
     }
 }
 
@@ -1399,16 +1425,26 @@ body.light {
 body.dark {
 
     .theme-switcher {
-        svg {
-            fill: var(--gray-dark);
-        }
+        background: var(--black-light);
 
-        button.active svg {
+        .theme-switcher__icon {
             fill: var(--gray-light);
+            opacity: 0.8;
         }
 
-        .light.active svg {
-            fill: orange;
+        .theme-switcher__knob {
+            background: var(--black-lighter);
+            box-shadow: 0 1px 2px color-mix(in srgb, var(--color-black) 40%, transparent);
+        }
+
+        &[aria-checked="false"] .theme-switcher__icon--sun {
+            fill: #f5a623;
+            opacity: 1;
+        }
+
+        &[aria-checked="true"] .theme-switcher__icon--moon {
+            fill: var(--white);
+            opacity: 1;
         }
     }
 }
