@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use differential_dataflow::operators::arrange::{Arrange, Arranged, TraceAgent};
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::trace::implementations::ord_neu::{
-    OrdValBatcher, OrdValSpine, ArcOrdValBuilder,
+    ArcOrdValBuilder, ArcOrdValSpine, OrdValBatcher,
 };
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use mz_persist_client::operators::shard_source::SnapshotMode;
@@ -35,7 +35,7 @@ use crate::storage_state::StorageState;
 /// The concrete trace type produced internally when arranging a sink's input.
 /// The sink never sees this directly — only the batches flowing through it —
 /// but it's the anchor for the batch type in [`SinkBatchStream`].
-pub(crate) type SinkTrace = TraceAgent<OrdValSpine<Option<Row>, Row, Timestamp, Diff>>;
+pub(crate) type SinkTrace = TraceAgent<ArcOrdValSpine<Option<Row>, Row, Timestamp, Diff>>;
 
 /// Stream of arrangement batches handed to [`SinkRender::render_sink`].
 ///
@@ -148,7 +148,7 @@ fn arrange_sink_input<'scope>(
     // Allow access to `arrange_named` because we cannot access Mz's wrapper
     // from here. TODO(database-issues#5046): Revisit with cluster unification.
     #[allow(clippy::disallowed_methods)]
-    let Arranged {stream, trace: _} = keyed.arrange_named::<OrdValBatcher<_, _, _, _>, ArcOrdValBuilder<_, _, _, _>, OrdValSpine<_, _, _, _>>("Arrange Sink");
+    let Arranged {stream, trace: _} = keyed.arrange_named::<OrdValBatcher<_, _, _, _>, ArcOrdValBuilder<_, _, _, _>, ArcOrdValSpine<_, _, _, _>>("Arrange Sink");
     stream
 }
 
