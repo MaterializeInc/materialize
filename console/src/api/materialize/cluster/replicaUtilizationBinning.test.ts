@@ -144,6 +144,26 @@ describe("rebucketUtilizationSamples", () => {
     expect(rows[0].bucketStart).toEqual(new Date(0));
   });
 
+  it("splits a replica's samples across multiple buckets, maxing within each", () => {
+    const samples = [
+      // First bucket [0, MINUTE): the higher of two samples wins.
+      mkSample({ occurredAt: new Date(10_000), cpuPercent: 0.3 }),
+      mkSample({ occurredAt: new Date(50_000), cpuPercent: 0.7 }),
+      // A sample exactly on the boundary belongs to the second bucket.
+      mkSample({ occurredAt: new Date(MINUTE), cpuPercent: 0.4 }),
+      mkSample({ occurredAt: new Date(2 * MINUTE + 1_000), cpuPercent: 0.9 }),
+    ];
+    const rows = rebucketUtilizationSamples(samples, MINUTE, 0);
+    expect(rows).toHaveLength(3);
+    expect(rows.map((r) => r.bucketStart.getTime())).toEqual([
+      0,
+      MINUTE,
+      2 * MINUTE,
+    ]);
+    expect(rows.map((r) => r.maxCpuPercent)).toEqual([0.7, 0.4, 0.9]);
+    expect(rows[0].maxCpuAt).toEqual(new Date(50_000));
+  });
+
   it("separates buckets per replica and sorts by bucket start", () => {
     const samples = [
       mkSample({ replicaId: "u2", occurredAt: new Date(MINUTE + 1_000) }),

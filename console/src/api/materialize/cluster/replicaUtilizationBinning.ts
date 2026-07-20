@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import * as Sentry from "@sentry/react";
-import { flatGroup } from "d3";
+import { flatGroup, greatest } from "d3";
 
 import { OfflineEvent as ChartOfflineEvent } from "~/platform/clusters/ClusterOverview/types";
 
@@ -136,16 +136,10 @@ export function maxByMetric(
   samples: UtilizationSample[],
   metric: (s: UtilizationSample) => number | null,
 ): UtilizationSample {
-  let best = samples[0];
-  let bestValue = metric(best) ?? Number.NEGATIVE_INFINITY;
-  for (let i = 1; i < samples.length; i++) {
-    const value = metric(samples[i]) ?? Number.NEGATIVE_INFINITY;
-    if (value > bestValue) {
-      best = samples[i];
-      bestValue = value;
-    }
-  }
-  return best;
+  return (
+    greatest(samples, (s) => metric(s) ?? Number.NEGATIVE_INFINITY) ??
+    samples[0]
+  );
 }
 
 /**

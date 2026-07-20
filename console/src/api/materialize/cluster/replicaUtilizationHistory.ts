@@ -464,15 +464,13 @@ export function buildConsoleClusterUtilizationOverviewQuery({
   view?:
     | "mz_console_cluster_utilization_overview"
     | "mz_console_cluster_utilization_overview_24h";
-  // When true, the query includes the cluster's earlier blue-green deployments
-  // (via a mz_cluster_deployment_lineage subquery) so history spans swaps. The
-  // SUBSCRIBE path needs this because it can't pre-resolve the ids in JS first.
+  // When true, expand clusterIds to past blue-green deployments in SQL. The
+  // poll path pre-resolves lineage in JS instead (it also needs the reverse
+  // map to relabel rows), so only the SUBSCRIBE paths set this.
   resolveLineage?: boolean;
 }) {
   let query = queryBuilder
-    // `_overview_24h` isn't in the generated kysely schema yet; both views share
-    // the same columns, so type against `_overview`.
-    .selectFrom(view as "mz_console_cluster_utilization_overview")
+    .selectFrom(view)
     .select([
       "bucket_start as bucketStart",
       "replica_id as replicaId",
@@ -544,28 +542,24 @@ export function buildConsoleClusterUtilizationUnbinned3hQuery({
 }: {
   clusterIds?: string[];
   replicaId?: string;
-  // When true, the query includes the cluster's earlier blue-green deployments
-  // (via a mz_cluster_deployment_lineage subquery) so history spans swaps. The
-  // SUBSCRIBE path needs this because it can't pre-resolve the ids in JS first.
+  // When true, expand clusterIds to past blue-green deployments in SQL. The
+  // poll path pre-resolves lineage in JS instead (it also needs the reverse
+  // map to relabel rows), so only the SUBSCRIBE paths set this.
   resolveLineage?: boolean;
 }) {
   let query = queryBuilder
-    // Not yet in the generated kysely schema (gen:types predates the un-binned
-    // reshape); type as the sibling view (same key columns) and select raw.
-    .selectFrom(
-      "mz_console_cluster_utilization_overview_3h" as unknown as "mz_console_cluster_utilization_overview",
-    )
+    .selectFrom("mz_console_cluster_utilization_overview_3h")
     .select([
-      sql<string>`replica_id`.as("replicaId"),
-      sql<string | null>`cluster_id`.as("clusterId"),
-      sql<string | null>`size`.as("size"),
-      sql<string | null>`name`.as("name"),
-      sql<Date>`occurred_at`.as("occurredAt"),
-      sql<number | null>`cpu_percent`.as("cpuPercent"),
-      sql<number | null>`memory_percent`.as("memoryPercent"),
-      sql<number | null>`disk_percent`.as("diskPercent"),
-      sql<number | null>`heap_percent`.as("heapPercent"),
-      sql<number | null>`memory_and_disk_percent`.as("memoryAndDiskPercent"),
+      "replica_id as replicaId",
+      "cluster_id as clusterId",
+      "size",
+      "name",
+      "occurred_at as occurredAt",
+      "cpu_percent as cpuPercent",
+      "memory_percent as memoryPercent",
+      "disk_percent as diskPercent",
+      "heap_percent as heapPercent",
+      "memory_and_disk_percent as memoryAndDiskPercent",
     ]);
 
   if (clusterIds !== undefined && clusterIds.length > 0) {

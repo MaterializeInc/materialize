@@ -414,10 +414,13 @@ describe("console cluster utilization indexed views", () => {
             cluster_name TEXT
           );
         > INSERT INTO internal_test.mz_console_cluster_utilization_overview_3h VALUES
-            ('r1', 'u1', 'small', 'r1', '2030-01-01T00:00:00Z', 0.5, 0.4, 0.3, 0.2, 0.6),
-            ('rOld', 'u1-old', 'small', 'rOld', '2030-01-01T00:00:00Z', 0.1, 0.1, 0.1, 0.1, 0.1),
-            ('r2', 'u2', 'small', 'r2', '2030-01-01T00:00:00Z', 0.9, 0.9, 0.9, 0.9, 0.9);
-        > INSERT INTO internal_test.mz_cluster_deployment_lineage VALUES ('u1-old', 'u1', 'a');
+            ('u7', 'u3', '50cc', 'r1', '2030-01-01T00:00:00Z', 0.5, 0.4, 0.3, 0.2, 0.6),
+            ('u5', 'u2', '50cc', 'r1', '2030-01-01T00:00:00Z', 0.1, 0.1, 0.1, 0.1, 0.1),
+            ('u6', 'u4', '50cc', 'r1', '2030-01-01T00:00:00Z', 0.9, 0.9, 0.9, 0.9, 0.9);
+        > INSERT INTO internal_test.mz_cluster_deployment_lineage VALUES
+            ('u2', 'u3', 'blue_green'),
+            ('u3', 'u3', 'blue_green'),
+            ('u4', 'u4', 'non_blue_green');
     `);
 
     await client.query(`SET search_path TO ${mockedSearchPath};`);
@@ -425,27 +428,27 @@ describe("console cluster utilization indexed views", () => {
     // Without lineage: only the requested cluster.
     const direct = await run(
       buildConsoleClusterUtilizationUnbinned3hQuery({
-        clusterIds: ["u1"],
+        clusterIds: ["u3"],
       }).compile(),
     );
-    expect(direct.rows.map((r) => r.clusterId)).toEqual(["u1"]);
+    expect(direct.rows.map((r) => r.clusterId)).toEqual(["u3"]);
     expect(direct.rows[0]).toMatchObject({
-      replicaId: "r1",
-      size: "small",
+      replicaId: "u7",
+      size: "50cc",
       cpuPercent: 0.5,
       memoryAndDiskPercent: 0.6,
     });
 
-    // With lineage: also the cluster's past blue-green deployment (u1-old).
+    // With lineage: also the cluster's past blue-green deployment (u2).
     const withLineage = await run(
       buildConsoleClusterUtilizationUnbinned3hQuery({
-        clusterIds: ["u1"],
+        clusterIds: ["u3"],
         resolveLineage: true,
       }).compile(),
     );
     expect(withLineage.rows.map((r) => r.clusterId).sort()).toEqual([
-      "u1",
-      "u1-old",
+      "u2",
+      "u3",
     ]);
   });
 
