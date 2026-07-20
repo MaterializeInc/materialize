@@ -148,7 +148,6 @@ graph TD
     C2["C2: FlatMap input decode via the edge, fueling preserved"]
     C3["C3: TopK input columnar"]
     C4["C4: linear-join input columnar"]
-    C7["C7: LetRec sanctioned decode, consume edge then into_vec"]
     C8["C8: Union temporal-bucket sanctioned decode, consume edge then into_vec"]
   end
   subgraph Wave2["Wave 2: producers flip, every consumer already native"]
@@ -177,9 +176,9 @@ graph TD
 
 The bold edge from Wave 1 to Wave 2 is the producer-flip invariant: no producer node starts until every consumer node has landed.
 Within Wave 1, C1 gates the three nodes that reuse its columnar key-forming pattern.
-F1, C2, C7, and C8 are independent roots.
+F1, C2, and C8 are independent roots.
 F1 gives the native columnar `consolidate_named` that Union's `concat_many` then `consolidate_named` path uses once its inputs are columnar in Wave 2.
-C7 and C8 are sanctioned decode nodes, so they do not depend on F1.
+C8 is a sanctioned decode node, so it does not depend on F1.
 Within Wave 2, each producer feeds only native consumers, so the nodes are mutually independent and land in any order.
 Wave 3 collapses the enum.
 Its producer half is compiler-enforced, see the completeness note.
@@ -256,16 +255,13 @@ The arranged-input branch reads an arrangement via `as_collection_core`, itself 
 Confirmed by inspection of `sinks.rs`; no separate node exists.
 NOTE for T2: `sinks.rs:71` is a leaf-decode call site that T2 must adapt when `into_vec` changes from an enum method to a free function.
 
-**C7: LetRec sanctioned decode.**
-Make LetRec consume the columnar edge and decode locally via `into_vec`, keeping today's `Vec` feedback logic.
-This is a sanctioned decode point, resolved by the prototype.
-`branch_when` is container-generic and would type-check on a columnar stream, but the feedback machinery is not: `Variable::set` needs `ResultsIn` (`collection.rs:1371`, `Vec` only), `Collection::negate` needs `Negate` (`collection.rs:1350`, `Vec` only), and `leave_dynamic` (`render.rs:1001`, `dynamic/mod.rs:28`) mutates each record's time in place.
-Going native means adding `impl Negate for Column`, `impl ResultsIn for Column`, and a `columnar_leave_dynamic`, all mirroring `columnar_negate` (`columnar.rs:279`), which forks differential's `PointStamp` time arithmetic into our tree.
-Deferred as a fast-follow if the per-iteration decode shows up hot.
-LetRec already decodes at `render.rs:941/997` and consolidates on `Vec`, so it does not need F1.
-Files: `src/compute/src/render.rs`.
-Test: recursive-view sqllogictest including the iteration limit and the error-distinctness path.
-Base: `upstream/main`.
+**C7: LetRec sanctioned decode.** No work, subsumed by the #36507 scaffolding.
+LetRec already consumes `bundle.collection` (the `CollectionEdge`) directly and leaf-decodes via `into_vec` at `render.rs:941/997`, then runs `consolidate_named` + `branch_when` + the iteration limit on the resulting `Vec`.
+That is exactly the desired sanctioned-decode end state: when a producer flips columnar in Wave 2, `into_vec` decodes the columnar arm at this leaf.
+The feedback machinery stays `Vec` deliberately (`branch_when` type-checks on a columnar stream, but `Variable::set`/`Collection::negate`/`leave_dynamic` are `Vec` only; going native would fork differential's `PointStamp` arithmetic, a liability), so no native rewrite is attempted.
+The consolidation uses the raw `CollectionExt::consolidate_named` on the already-decoded `Vec`, post-decode, so F1 is irrelevant here.
+Confirmed by inspection of `render.rs`; no separate node exists.
+NOTE for T2: `render.rs:941/997` are leaf-decode call sites T2 must adapt when `into_vec` becomes a free function.
 
 **C8: Union temporal-bucket sanctioned decode.**
 Keep the `into_vec` at `render.rs:1358` that feeds `maybe_apply_temporal_bucketing` inside a consolidating Union, adapted to consume the columnar edge.
@@ -365,12 +361,12 @@ So the DAG is flattened into a single chain, managed with gh-stack, where each b
 The chain is a topological order of the DAG, so every dependency edge points backward:
 
 ```
-C1 -> C3 -> C4 -> F1 -> C2 -> C7 -> C8
+C1 -> C3 -> C4 -> F1 -> C2 -> C8
    -> P1 -> P2 -> P3 -> P4 -> P5 -> P6 -> P7 -> P8 -> P9
    -> T1 -> T2 -> T3
 ```
 
-C5 and C6 are not in the chain: delta-join input is subsumed by C1, and the sink already leaf-decodes the edge (see the C5 and C6 nodes).
+C5, C6, and C7 are not in the chain: delta-join input is subsumed by C1, and the sink and LetRec already leaf-decode the edge (see the C5, C6, and C7 nodes).
 
 Order constraints honored by this chain:
 
