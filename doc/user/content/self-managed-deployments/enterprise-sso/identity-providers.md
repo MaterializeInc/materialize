@@ -311,10 +311,11 @@ curl -s -H "Authorization: Api-Key $POLIS_API_KEY" \
   "https://<your-polis-hostname>/api/v1/dsync/groups?tenant=<customer-name>&product=materialize&directoryId=$DIRECTORY_ID" | jq .
 ```
 
-Neither path today translates group membership into automatic `GRANT`
-statements on the Materialize side. Admins still run
-`GRANT role_name TO "user@email"` manually; the `groups` JWT claim is
-available for downstream tooling to consume once that automation lands.
+Group memberships flow all the way to the JWT (via the `groups` claim) and
+Materialize can automatically translate them into SQL role memberships on
+each login. Enable it via the `oidc_group_role_sync_enabled` system
+parameter; see [Enable OIDC group-to-role sync](/self-managed-deployments/enterprise-sso/operations/#enable-oidc-group-to-role-sync)
+for details and the naming convention.
 
 ## What happens when users sign in
 

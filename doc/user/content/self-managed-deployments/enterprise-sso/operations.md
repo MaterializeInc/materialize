@@ -202,6 +202,84 @@ For a production deployment, register a **separate** SAML app on the
 IdP side for admin access (rather than reusing the end-user app), so
 you can control admin membership independently.
 
+## Enable OIDC group-to-role sync
+
+Materialize can automatically grant and revoke SQL role memberships based
+on the `groups` claim in the JWT Hydra issues, so you manage a user's
+Materialize privileges by adjusting their IdP group memberships instead of
+running manual `GRANT` statements.
+
+The feature is off by default. To enable it, set the following system
+parameter on the `materialize-instance` module:
+
+```hcl
+system_parameters = {
+  # ... existing OIDC params ...
+  oidc_group_role_sync_enabled = "true"
+}
+```
+
+Bump `force_rollout` to a new UUID and re-apply so environmentd picks up the
+change.
+
+### How it works
+
+On each OIDC login, environmentd reads the `groups` claim from the JWT
+(default claim name `groups`, configurable via `oidc_group_claim`; supports
+dot-separated paths like `customClaims.groups`). For each group name it
+looks up a Materialize role with the exact same name (case-sensitive):
+
+- Roles found are granted to the user.
+- Roles previously granted by the sync that are no longer in the claim are
+  revoked.
+- Manual `GRANT`s are never touched; the sync only manages memberships it
+  granted itself, marked by an internal sentinel grantor (`mz_jwt_sync`).
+- Groups matching reserved role names (`mz_`, `pg_`, `PUBLIC`) or with no
+  matching Materialize role are silently skipped with a client notice.
+
+### Setting up roles
+
+Name IdP groups to match SQL role names one-to-one. Create the Materialize
+roles once as `mz_system`, along with whatever privileges the group should
+carry:
+
+```mzsql
+CREATE ROLE "mz-admins";
+GRANT USAGE ON CLUSTER quickstart TO "mz-admins";
+GRANT USAGE ON SCHEMA materialize.public TO "mz-admins";
+GRANT SELECT ON ALL TABLES IN SCHEMA materialize.public TO "mz-admins";
+```
+
+Any user whose JWT `groups` claim contains `mz-admins` is now automatically
+granted the role on their next login.
+
+### Verifying
+
+To see sync-managed memberships:
+
+```mzsql
+SELECT r.name AS role, m.name AS member, g.name AS grantor
+FROM mz_role_members rm
+JOIN mz_roles r ON r.id = rm.role_id
+JOIN mz_roles m ON m.id = rm.member
+JOIN mz_roles g ON g.id = rm.grantor
+WHERE g.name = 'mz_jwt_sync';
+```
+
+### Strict vs. fail-open
+
+By default (`oidc_group_role_sync_strict = false`), a sync failure during
+login is logged and delivered to the client as a notice, but the login
+still proceeds with existing memberships. Set the parameter to `"true"` to
+reject logins on sync failure (fail-closed) if you need stricter guarantees.
+
+### Deprovisioning caveat
+
+Sync is a login-time snapshot. A currently-active session keeps its role
+memberships until the user re-logs in and Materialize re-evaluates the
+claim. For instant revocation, terminate the user's session at the IdP and
+let their next login pick up the new state.
+
 ## Disable registration in Kratos
 
 By default Kratos allows users to register new identities through the
@@ -268,9 +346,6 @@ Items tracked but not yet shipped:
 - **API key management for service accounts** via Ory Talos
   is tracked as future work. When this lands, this page will gain a section
   on issuing and revoking API keys for non-interactive clients.
-- **IdP group to SQL role mapping**. Today, group memberships push to
-  Polis but don't translate to Materialize SQL role grants. The
-  end-to-end automation is open product work.
 - **Multi-IdP support on a single Polis tenant**. Polis supports
   multiple SAML connections per tenant, but the example doesn't
   document the multi-tenant Polis setup yet. Useful for customers with

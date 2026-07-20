@@ -88,6 +88,12 @@ A Google account with permission to enable the required APIs on your project and
 
 {{< /note >}}
 
+{{< tip >}}
+
+* {{% self-managed/terraform-enterprise-example-tip %}}
+
+{{< /tip >}}
+
 ### Step 1: Set Up the Environment
 
 1. Open a terminal window.
