@@ -8,7 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
+use std::sync::{Arc, Weak};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
@@ -241,9 +242,9 @@ pub trait ArrangementSize {
 /// * `logic`: Closure that calculates the heap size/capacity/allocations for a batch. The return
 ///    value are size and capacity in bytes, and number of allocations, all in absolute values.
 fn log_arrangement_size_inner<'scope, B, L>(
-    arranged: Arranged<'scope, TraceAgent<Spine<Rc<B>>>>,
+    arranged: Arranged<'scope, TraceAgent<Spine<Arc<B>>>>,
     mut logic: L,
-) -> Arranged<'scope, TraceAgent<Spine<Rc<B>>>>
+) -> Arranged<'scope, TraceAgent<Spine<Arc<B>>>>
 where
     B: Batch + 'static,
     L: FnMut(&B) -> (usize, usize, usize) + 'static,
@@ -282,8 +283,8 @@ where
                 input.for_each(|time, data| {
                     for batch in data.iter() {
                         batches
-                            .entry(Rc::as_ptr(batch))
-                            .or_insert_with(|| (Rc::downgrade(batch), logic(batch)));
+                            .entry(Arc::as_ptr(batch))
+                            .or_insert_with(|| (Arc::downgrade(batch), logic(batch)));
                     }
                     output.session(&time).give_container(data);
                 });
@@ -293,8 +294,8 @@ where
 
                 trace.borrow().trace().map_batches(|batch| {
                     batches
-                        .entry(Rc::as_ptr(batch))
-                        .or_insert_with(|| (Rc::downgrade(batch), logic(batch)));
+                        .entry(Arc::as_ptr(batch))
+                        .or_insert_with(|| (Arc::downgrade(batch), logic(batch)));
                 });
 
                 let (mut size, mut capacity, mut allocations) = (0, 0, 0);

@@ -3093,9 +3093,7 @@ checksum = "56254986775e3233ffa9c4d7d3faaf6d36a2c09d30b20687e9f88bc8bafc16c8"
 
 [[package]]
 name = "differential-dataflow"
-version = "0.25.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7140f9ee3bac19b6db1c4f589ff241148a72bdbf9eb10b51dddb0977de527813"
+version = "0.25.1"
 dependencies = [
  "columnar",
  "columnation",
@@ -3108,9 +3106,7 @@ dependencies = [
 
 [[package]]
 name = "differential-dogs3"
-version = "0.25.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "33b117006f84a58286d95be98c96d3973d016a399241c6e07004a2a8365c545a"
+version = "0.25.1"
 dependencies = [
  "differential-dataflow",
  "serde",
@@ -10732,7 +10728,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03da047801ff44bb6a4d407d4860c05fd70bb81714e6b2f3812603d5b145b042"
 dependencies = [
  "heck",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "log",
  "multimap",
  "petgraph",
@@ -10753,7 +10749,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.117",

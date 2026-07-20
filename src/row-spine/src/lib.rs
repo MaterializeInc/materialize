@@ -29,7 +29,7 @@ pub static DICTIONARY_COMPRESSION: std::sync::atomic::AtomicBool =
 
 /// Spines specialized to contain `Row` types in keys and values.
 mod spines {
-    use std::rc::Rc;
+    use std::sync::Arc;
 
     use columnation::Columnation;
     use differential_dataflow::trace::implementations::Layout;
@@ -37,7 +37,7 @@ mod spines {
     use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
     use differential_dataflow::trace::implementations::ord_neu::{OrdKeyBatch, OrdValBatch};
     use differential_dataflow::trace::implementations::spine_fueled::Spine;
-    use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
+    use differential_dataflow::trace::arc_blanket_impls::ArcBuilder;
     use mz_repr::Row;
     use mz_timely_util::columnation::{ColInternalMerger, ColumnationStack};
 
@@ -48,9 +48,9 @@ mod spines {
     type KeyValBatcher<K, V, T, D> = MergeBatcher<ColInternalMerger<(K, V), T, D>>;
     type KeyBatcher<K, T, D> = KeyValBatcher<K, (), T, D>;
 
-    pub type RowRowSpine<T, R> = Spine<Rc<OrdValBatch<RowRowLayout<((Row, Row), T, R)>>>>;
+    pub type RowRowSpine<T, R> = Spine<Arc<OrdValBatch<RowRowLayout<((Row, Row), T, R)>>>>;
     pub type RowRowBatcher<T, R> = KeyValBatcher<Row, Row, T, R>;
-    pub type RowRowBuilder<T, R> = RcBuilder<crate::dictionary::builders::RowRowBuilder<T, R>>;
+    pub type RowRowBuilder<T, R> = ArcBuilder<crate::dictionary::builders::RowRowBuilder<T, R>>;
 
     /// `RowRowBuilder` variant that consumes [`Column`] chunks. Pairs with
     /// [`Col2ValPagedBatcher`] for the spillable arrange path. Installs a
@@ -61,21 +61,21 @@ mod spines {
     /// [`Col2ValPagedBatcher`]: mz_timely_util::columnar::Col2ValPagedBatcher
     /// [`Column`]: mz_timely_util::columnar::Column
     pub type RowRowColPagedBuilder<T, R> =
-        RcBuilder<crate::dictionary::builders::RowRowColPagedBuilder<T, R>>;
+        ArcBuilder<crate::dictionary::builders::RowRowColPagedBuilder<T, R>>;
 
-    pub type RowValSpine<V, T, R> = Spine<Rc<OrdValBatch<RowValLayout<((Row, V), T, R)>>>>;
+    pub type RowValSpine<V, T, R> = Spine<Arc<OrdValBatch<RowValLayout<((Row, V), T, R)>>>>;
     pub type RowValBatcher<V, T, R> = KeyValBatcher<Row, V, T, R>;
     pub type RowValBuilder<V, T, R> =
-        RcBuilder<crate::dictionary::builders::RowValBuilder<V, T, R>>;
+        ArcBuilder<crate::dictionary::builders::RowValBuilder<V, T, R>>;
 
-    pub type RowSpine<T, R> = Spine<Rc<OrdKeyBatch<RowLayout<((Row, ()), T, R)>>>>;
+    pub type RowSpine<T, R> = Spine<Arc<OrdKeyBatch<RowLayout<((Row, ()), T, R)>>>>;
     pub type RowBatcher<T, R> = KeyBatcher<Row, T, R>;
-    pub type RowBuilder<T, R> = RcBuilder<crate::dictionary::builders::RowBuilder<T, R>>;
+    pub type RowBuilder<T, R> = ArcBuilder<crate::dictionary::builders::RowBuilder<T, R>>;
 
-    pub type ValRowSpine<K, T, R> = Spine<Rc<OrdValBatch<ValRowLayout<((K, Row), T, R)>>>>;
+    pub type ValRowSpine<K, T, R> = Spine<Arc<OrdValBatch<ValRowLayout<((K, Row), T, R)>>>>;
     pub type ValRowBatcher<K, T, R> = KeyValBatcher<K, Row, T, R>;
     pub type ValRowBuilder<K, T, R> =
-        RcBuilder<crate::dictionary::builders::ValRowBuilder<K, T, R>>;
+        ArcBuilder<crate::dictionary::builders::ValRowBuilder<K, T, R>>;
 
     /// `ValRowBuilder` variant that consumes [`Column`] chunks. Pairs with
     /// `Col2ValPagedBatcher<K, Row, T, R>` for the spillable arrange path where
@@ -86,7 +86,7 @@ mod spines {
     ///
     /// [`Column`]: mz_timely_util::columnar::Column
     pub type ValRowColPagedBuilder<K, T, R> =
-        RcBuilder<crate::dictionary::builders::ValRowColPagedBuilder<K, T, R>>;
+        ArcBuilder<crate::dictionary::builders::ValRowColPagedBuilder<K, T, R>>;
 
     /// A layout based on timely stacks
     pub struct RowRowLayout<U: Update<Key = Row, Val = Row>> {
