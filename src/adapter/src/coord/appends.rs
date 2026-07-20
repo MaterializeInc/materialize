@@ -37,23 +37,34 @@
 //!
 //! # Cross-generation safety
 //!
-//! A fenced-out process can keep this task alive for a moment, so a stale generation's txns
-//! write must never land above the new generation's system-table snapshot timestamp, where it
-//! would go unobserved. That holds because of three load-bearing invariants:
+//! The txns shard can have concurrent writers: another generation during a 0dt handover, or a
+//! fenced-out process whose committer stays alive for a moment. A stale generation's txns write
+//! must never land above the new generation's system-table snapshot timestamp, where it would go
+//! unobserved. Two mechanisms keep this safe, and neither is the catalog-upper advance of step 2.
 //!
-//! - the shared timestamp oracle is strictly increasing across generations, so a write above
-//!   the snapshot timestamp requires a timestamp allocated after the fence,
-//! - every attempt advances the catalog upper before the txns-shard write, and a post-fence
-//!   timestamp forces a durable catalog check (the stale generation's cached upper is frozen
-//!   below the fence point, growing it requires a successful durable commit), which observes
-//!   the fence and halts before the txns write,
-//! - the new generation's bootstrap registers table collections in the txns shard, an
-//!   unconditional compare-and-append, before taking its system-table snapshot, so the txns
-//!   upper is a barrier: a stale generation's write can only land below the snapshot, where it
-//!   is observed (retracted for system tables, visible to reads for user tables).
+//! Conflict-freedom comes from the shared oracle and the txns-shard compare-and-append. The
+//! oracle is strictly increasing across generations, so every write takes a unique, larger
+//! timestamp, and the compare-and-append linearizes concurrent writers: a loser sees
+//! `InvalidUppers` and retries from step 1 at a fresh timestamp. This orders writes but does not
+//! decide who may write, so on its own it does not stop a fresh write at a higher timestamp.
 //!
-//! Reordering bootstrap or making the register's compare-and-append conditional would silently
-//! reopen this hole.
+//! Authorization comes from fencing. A new generation fences the old one at the catalog shard,
+//! and the fenced generation halts: its coordinator exits the process on the next catalog
+//! operation that observes the fence, so it stops allocating timestamps. Any txns write it still
+//! has in flight was therefore allocated before the fence, below the new generation's snapshot
+//! timestamp, so it lands below the snapshot-and-reset and is observed there (retracted for
+//! system tables, visible to reads for user tables). A write above the snapshot would need a
+//! post-fence timestamp, which the halted generation does not allocate. This rests on the fenced
+//! generation winding down promptly and on the oracle being shared and strictly increasing across
+//! generations. A per-generation oracle, or a committer that kept running long past the fence,
+//! would reopen the hole.
+//!
+//! The catalog-upper advance is defense in depth on top of that contract, not a separate
+//! guarantee. Because it is a catalog write, a fenced committer that reaches its durable
+//! compare-and-append notices the fence there and halts before the txns write, one more place the
+//! outgoing generation stops. It is not a per-attempt check: the advance short-circuits when the
+//! upper is already past its target, and the coordinator's own catalog writes are the primary
+//! fence trigger.
 //!
 //! Finalization that needs coordinator state (statement-logging timestamps, retiring client
 //! responses, downgrading read holds) is handed back to the coordinator loop via

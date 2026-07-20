@@ -1906,10 +1906,12 @@ impl DurableCatalogState for PersistCatalogState {
             if self.upper >= new_upper {
                 // Someone (an on-loop catalog transaction, or another process) already advanced
                 // the upper to or past `new_upper`. Advancing is "to at least", so nothing to
-                // write. The short-circuit must not mask a fence though: a sync since the last
-                // durable check may have observed a new generation's fence token (and bumped the
-                // cached upper past our target at the same time), and callers rely on the
-                // advance to re-check leadership before user data is written.
+                // write. We still validate the fence: a sync since the last durable check may have
+                // observed a new generation's fence token (and bumped the cached upper past our
+                // target at the same time). This is a cheap defense-in-depth check on the
+                // short-circuit path, not a guarantee callers depend on (see the cross-generation
+                // section in `src/adapter/src/coord/appends.rs` for what the safety actually rests
+                // on).
                 self.fenceable_token.validate()?;
                 return Ok(());
             }
