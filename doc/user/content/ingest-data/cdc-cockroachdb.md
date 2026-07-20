@@ -136,17 +136,14 @@ guidance.
 ### 3. Start ingesting data
 
 1. Use the [`CREATE SOURCE`](/sql/create-source/kafka/) command to connect Materialize
-   to your Kafka broker and start ingesting data from the target topic:
+   to your Kafka broker and start ingesting data from the target topic.
+   CockroachDB's default envelope structure for changefeed messages is
+   compatible with the Debezium format, so you can use `ENVELOPE DEBEZIUM` to
+   interpret the data:
 
-   ```mzsql
-   CREATE SOURCE kafka_repl
-     IN CLUSTER ingest_kafka
-     FROM KAFKA CONNECTION kafka_connection (TOPIC 'my_table')
-     -- CockroachDB's default envelope structure for changefeed messages is
-     -- compatible with the Debezium format, so you can use ENVELOPE DEBEZIUM
-     -- to interpret the data.
-     ENVELOPE DEBEZIUM;
-   ```
+   {{< include-headless-with file="/headless/kafka-create-source-syntax"
+   source="kafka_repl" connection="kafka_connection" topic="my_table"
+   table="my_table" format="ENVELOPE DEBEZIUM" >}}
 
     By default, the source will be created in the active cluster; to use a
     different cluster, use the `IN CLUSTER` clause.

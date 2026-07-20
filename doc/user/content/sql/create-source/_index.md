@@ -62,7 +62,23 @@ For details, see [CREATE SOURCE: SQL Server(Legacy)](/sql/create-source/sql-serv
 
 {{< /tab >}}
 
-{{< tab "Kafka/Redpanda" >}}
+{{< tab "Kafka/Redpanda (New)" >}}
+
+```mzsql
+CREATE SOURCE <src_name>
+  FROM KAFKA CONNECTION <connection_name> (TOPIC '<topic>');
+
+CREATE TABLE <table_name>
+  FROM SOURCE <src_name>
+  FORMAT <format>
+  [INCLUDE <metadata>]
+  [ENVELOPE <envelope>];
+```
+
+For details, see [CREATE SOURCE: Kafka/Redpanda (New Syntax)](/sql/create-source/kafka-v2/).
+{{< /tab >}}
+
+{{< tab "Kafka/Redpanda (Legacy)" >}}
 
 {{< tabs >}}
 
@@ -103,7 +119,7 @@ example="syntax-protobuf" %}}
 
 {{< /tabs >}}
 
-For details, see [CREATE SOURCE: Kafka/Redpanda](/sql/create-source/kafka/).
+For details, see [CREATE SOURCE: Kafka/Redpanda (Legacy Syntax)](/sql/create-source/kafka/).
 {{< /tab >}}
 
 {{< tab "Webhook" >}}
