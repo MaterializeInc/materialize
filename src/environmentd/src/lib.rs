@@ -738,6 +738,7 @@ impl Listeners {
         );
 
         // Initialize adapter.
+        let license_key = config.license_key.clone();
         let segment_client = config.segment_api_key.map(|api_key| {
             mz_segment::Client::new(mz_segment::Config {
                 api_key,
@@ -842,6 +843,7 @@ impl Listeners {
                 segment_client,
                 adapter_client: adapter_client.clone(),
                 environment_id: config.environment_id,
+                license_key: license_key.clone(),
                 report_interval: Duration::from_secs(3600),
             });
         } else if config.test_only_dummy_segment_client {
@@ -856,6 +858,7 @@ impl Listeners {
                 segment_client,
                 adapter_client: adapter_client.clone(),
                 environment_id: config.environment_id,
+                license_key: license_key.clone(),
                 report_interval: Duration::from_secs(180),
             });
         }
