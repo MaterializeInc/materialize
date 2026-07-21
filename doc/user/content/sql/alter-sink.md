@@ -150,9 +150,10 @@ keyspaces to avoid the scenario.
 
 ### Changing the commit interval
 
-Changing the commit interval restarts the sink with the new setting. Data that
-was buffered but not yet committed at the time of the change may be committed
-immediately after the restart. All subsequent commits follow the new interval.
+Changing the commit interval restarts the sink with the new setting.
+Any data that was buffered but not yet committed at the time of the change
+is committed immediately after the restart.
+All subsequent commits follow the new interval.
 
 Setting the commit interval to its current value is a no-op and does not restart the sink.
 However, values are compared textually rather than by duration.
