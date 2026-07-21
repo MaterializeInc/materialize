@@ -1444,4 +1444,157 @@ mod test {
              max_parts_per_event={mppe} recv_events={re} (N={N}, cap={MAX_CONCURRENCY})"
         );
     }
+
+    // MICROREPRO variant: faithful topology, but the producer gives each part at
+    // a DISTINCT timestamp (like the real refined part times). Distinct times
+    // force the output to flush one part per message (matching the observed
+    // parts=1 per event on staging). Tests whether per-part timestamps collapse
+    // the fetch ramp.
+    #[mz_ore::test]
+    fn microrepro_distinct_times() {
+        use std::convert::Infallible;
+        use std::future::Future;
+        use std::pin::Pin;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use futures_util::stream::FuturesUnordered;
+        use mz_ore::cast::CastFrom;
+        use timely::dataflow::channels::pact::Exchange;
+        use timely::dataflow::operators::{
+            Capability, CapabilitySet, ConnectLoop, Enter, Feedback, Leave,
+        };
+
+        const N: usize = 200;
+        const MAX_CONCURRENCY: usize = 32;
+        const FETCH_POLLS: usize = 80;
+
+        struct FetchSim(usize);
+        impl Future for FetchSim {
+            type Output = ();
+            fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+                if self.0 == 0 {
+                    Poll::Ready(())
+                } else {
+                    self.0 -= 1;
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
+            }
+        }
+
+        let max_in_flight = Arc::new(AtomicUsize::new(0));
+        let max_parts_per_event = Arc::new(AtomicUsize::new(0));
+        let recv_events = Arc::new(AtomicUsize::new(0));
+
+        let mif = Arc::clone(&max_in_flight);
+        let mppe = Arc::clone(&max_parts_per_event);
+        let re = Arc::clone(&recv_events);
+
+        let (builders, other) = timely::CommunicationConfig::Process(2).try_build().unwrap();
+        timely::execute::execute_from(builders, other, WorkerConfig::default(), move |worker| {
+            let index = worker.index();
+            let mif = Arc::clone(&mif);
+            let mppe = Arc::clone(&mppe);
+            let re = Arc::clone(&re);
+            let tokens = worker.dataflow::<u64, _, _>(move |outer| {
+                outer.clone().scoped::<u64, _, _>("inner", move |inner| {
+                    let (fb_handle, fb_stream) = inner.feedback(Default::default());
+
+                    let mut producer = OperatorBuilder::new("producer".to_string(), outer.clone());
+                    let (descs_out, descs_stream) =
+                        producer.new_output::<CapacityContainerBuilder<Vec<(usize, usize)>>>();
+                    let mut fb_input =
+                        producer.new_disconnected_input(fb_stream.leave(outer.clone()), Pipeline);
+                    let producer_button = producer.build(move |caps| async move {
+                        let mut cap_set =
+                            CapabilitySet::from_elem(caps.into_iter().next().unwrap());
+                        if index == 0 {
+                            // Each part at a DISTINCT time => one flush (message)
+                            // per part.
+                            for i in 0..N {
+                                let t = u64::cast_from(i);
+                                descs_out.give(&cap_set.delayed(&t), (1usize, i));
+                            }
+                        }
+                        let empty: [u64; 0] = [];
+                        cap_set.downgrade(empty.iter());
+                        while (fb_input.next().await).is_some() {}
+                    });
+
+                    let descs_entered = descs_stream.enter(inner);
+                    let mut fetch = OperatorBuilder::new("fetch".to_string(), inner.clone());
+                    let (fetched_out, _fetched_stream) =
+                        fetch.new_output::<CapacityContainerBuilder<Vec<()>>>();
+                    let (_completed_out, completed_stream) =
+                        fetch.new_output::<CapacityContainerBuilder<Vec<Infallible>>>();
+                    let mut descs_input = fetch.new_input_for_many(
+                        descs_entered,
+                        Exchange::new(|&(i, _): &(usize, usize)| u64::cast_from(i)),
+                        [&fetched_out, &_completed_out],
+                    );
+                    let fetch_button = fetch.build(move |_caps| async move {
+                        let mut pending: VecDeque<[Capability<u64>; 2]> = VecDeque::new();
+                        let mut in_flight = FuturesUnordered::new();
+                        let mut input_done = false;
+                        loop {
+                            while in_flight.len() < MAX_CONCURRENCY {
+                                match pending.pop_front() {
+                                    Some(caps) => in_flight.push(async move {
+                                        FetchSim(FETCH_POLLS).await;
+                                        caps
+                                    }),
+                                    None => break,
+                                }
+                            }
+                            mif.fetch_max(in_flight.len(), Ordering::SeqCst);
+
+                            tokio::select! {
+                                biased;
+                                Some(caps) = in_flight.next(), if !in_flight.is_empty() => {
+                                    let [c0, _c1] = caps;
+                                    fetched_out.give(&c0, ());
+                                }
+                                event = descs_input.next(), if !input_done => {
+                                    match event {
+                                        Some(Event::Data(caps, data)) => {
+                                            let n = data.len();
+                                            mppe.fetch_max(n, Ordering::SeqCst);
+                                            re.fetch_add(1, Ordering::SeqCst);
+                                            for _ in data {
+                                                pending.push_back(caps.clone());
+                                            }
+                                        }
+                                        Some(Event::Progress(_)) => {}
+                                        None => input_done = true,
+                                    }
+                                }
+                                else => break,
+                            }
+                        }
+                    });
+                    completed_stream.connect_loop(fb_handle);
+
+                    (
+                        producer_button.press_on_drop(),
+                        fetch_button.press_on_drop(),
+                    )
+                })
+            });
+
+            for _ in 0..200_000 {
+                worker.step();
+            }
+            drop(tokens);
+        })
+        .expect("timely panicked");
+
+        let mif = max_in_flight.load(Ordering::SeqCst);
+        let mppe = max_parts_per_event.load(Ordering::SeqCst);
+        let re = recv_events.load(Ordering::SeqCst);
+        eprintln!(
+            "MICROREPRO DISTINCT-TIMES RESULT: max_in_flight={mif} \
+             max_parts_per_event={mppe} recv_events={re} (N={N}, cap={MAX_CONCURRENCY})"
+        );
+    }
 }
