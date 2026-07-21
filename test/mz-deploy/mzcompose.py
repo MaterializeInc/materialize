@@ -1529,6 +1529,84 @@ def workflow_promote_resume(c: Composition, parser: WorkflowArgumentParser) -> N
         assert orders_exists(), "no data loss across crash + resume"
 
 
+def workflow_metadata_rollback(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """`stage --no-rollback` must not clean up after a metadata-recording failure.
+
+    `record_stage_metadata` writes deployment rows before any staging resources
+    exist. DEX-40 made a failure there roll those rows back so a re-stage under
+    the same name is unblocked, but that rollback must still honor `--no-rollback`
+    (the operator's documented "leave resources in place for debugging"). Skipping
+    it preserves the partial records and, critically, avoids the suffix-matching
+    `DROP ... CASCADE` in `rollback_staging_resources`, which can drop a production
+    schema whose name ends in `_<deploy_id>`.
+
+    The failure is injected by revoking the deployer's INSERT on
+    `_mz_deploy.tables.objects`: the schema rows get written, then appending the
+    object rows is denied.
+    """
+    setup_base(c)
+    assert run_mz_deploy(c, "basic/v1", "apply").returncode == 0
+
+    def deployment_rows(deploy_id: str) -> int:
+        return c.sql_query(
+            "SELECT count(*) FROM _mz_deploy.tables.deployments "
+            f"WHERE deploy_id = '{deploy_id}'",
+            user="mz_system",
+            port=6877,
+        )[0][0]
+
+    def stage_fails(deploy_id: str, *flags: str) -> None:
+        r = run_mz_deploy(
+            c,
+            "basic/v1",
+            "stage",
+            "--deploy-id",
+            deploy_id,
+            "--redeploy-all",
+            "--allow-dirty",
+            *flags,
+            check=False,
+        )
+        assert (
+            r.returncode != 0
+        ), f"stage should fail when metadata recording is denied\nstdout={r.stdout}\nstderr={r.stderr}"
+
+    # deploy_user inherits INSERT through the role, so revoke it from the role.
+    c.sql(
+        "REVOKE INSERT ON TABLE _mz_deploy.tables.objects FROM materialize_deployer",
+        user="mz_system",
+        port=6877,
+    )
+
+    with c.test_case("no-rollback-preserves-state"):
+        # A production schema colliding with the `_prod` suffix, owned by
+        # deploy_user so the (buggy) rollback running as the deployer can drop it.
+        c.sql(
+            "CREATE SCHEMA app.keep_prod; CREATE TABLE app.keep_prod.t (id int)",
+            user="deploy_user",
+            database="app",
+        )
+        stage_fails("prod", "--no-rollback")
+        assert (
+            deployment_rows("prod") >= 1
+        ), "--no-rollback must not roll back the partial deployment records"
+        assert c.sql_query(
+            "SELECT 1 FROM mz_schemas s JOIN mz_databases d ON s.database_id = d.id "
+            "WHERE s.name = 'keep_prod' AND d.name = 'app'",
+            user="mz_system",
+            port=6877,
+        ), "--no-rollback must not CASCADE-drop the colliding production schema"
+
+    with c.test_case("default-rolls-back"):
+        # Control: without --no-rollback the same failure still cleans up (DEX-40).
+        # Also proves the injection reaches the rollback path, so the case above is
+        # a real RED/GREEN signal rather than a stage that quietly succeeded.
+        stage_fails("stg")
+        assert (
+            deployment_rows("stg") == 0
+        ), "the default path must roll back the orphaned deployment records"
+
+
 def workflow_redeploy_flags(c: Composition, parser: WorkflowArgumentParser) -> None:
     """`stage --redeploy-schema` / `--redeploy-all` force a redeploy.
 

@@ -259,7 +259,10 @@ pub async fn run(
     if !dry_run {
         // Metadata is written before any resources are created, so a failure
         // partway through can leave deployment rows behind that block
-        // re-staging under the same name. Roll them back on failure.
+        // re-staging under the same name. Roll them back on failure, unless
+        // --no-rollback asks to preserve state for debugging. The rollback runs
+        // a suffix-matching CASCADE drop, so honoring the flag here also avoids
+        // dropping resources the operator asked to keep.
         if let Err(e) = record_stage_metadata(
             &client,
             directory,
@@ -272,7 +275,12 @@ pub async fn run(
         )
         .await
         {
-            rollback_staging_resources(&client, &stage_name).await;
+            if no_rollback {
+                progress::error("Deployment failed (skipping rollback due to --no-rollback flag)");
+            } else {
+                progress::error("Deployment failed, rolling back...");
+                rollback_staging_resources(&client, &stage_name).await;
+            }
             return Err(e);
         }
     }
