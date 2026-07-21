@@ -39,7 +39,7 @@ use timely::dataflow::operators::vec::Map;
 use timely::progress::Antichain;
 
 use crate::render::RenderTimestamp;
-use crate::render::columnar::{CollectionEdge, vec_to_columnar};
+use crate::render::columnar::{columnar_to_vec, vec_to_columnar};
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::typedefs::{RowRowAgent, RowRowEnter};
@@ -251,7 +251,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         // The delta join is `Vec`-internal throughout, so the concatenated node output is
         // encoded once here. Non-consolidating, because the per-path finalization already
         // consolidated whatever it consolidates.
-        CollectionBundle::from_edge(CollectionEdge::Columnar(vec_to_columnar(oks)), errs)
+        CollectionBundle::from_edge(vec_to_columnar(oks), errs)
     }
 }
 
@@ -728,7 +728,12 @@ where
             .collection
             .clone()
             .expect("The unarranged collection doesn't exist.");
-        return build_update_stream_stream(oks.into_vec(), as_of, source_relation, initial_closure);
+        return build_update_stream_stream(
+            columnar_to_vec(oks),
+            as_of,
+            source_relation,
+            initial_closure,
+        );
     };
     match bundle.arrangement(&source_key) {
         Some(ArrangementFlavor::Local(oks, _errs)) => {
