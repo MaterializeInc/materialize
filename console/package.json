@@ -355,7 +355,7 @@
     "jsondiffpatch": "^0.7.2",
     "react-router": "^6.30.4",
     "react-router-dom": "^6.30.2",
-    "tar": "^7.5.16",
+    "tar": "^7.5.20",
     "uuid": "^14.0.0"
   },
   "browserslist": [
