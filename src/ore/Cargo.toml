@@ -37,7 +37,6 @@ ipnet.workspace = true
 itertools.workspace = true
 lgalloc = { workspace = true, optional = true }
 libc = { workspace = true, optional = true }
-lz4_flex = { workspace = true, optional = true }
 mz-ore-proc = { path = "../ore-proc", default-features = false }
 num.workspace = true
 num-traits = { workspace = true, optional = true }
@@ -95,6 +94,7 @@ libc = { workspace = true }
 [dev-dependencies]
 anyhow.workspace = true
 criterion.workspace = true
+lz4_flex.workspace = true
 mz-ore = { path = "../ore", features = ["id_gen", "chrono", "test"] }
 proptest.workspace = true
 scopeguard.workspace = true
@@ -153,7 +153,7 @@ assert = ["assert-no-tracing", "ctor", "tracing"]
 proptest = ["dep:proptest", "proptest-derive"]
 overflowing = ["assert"]
 pager = ["dep:bytemuck", "libc", "rand", "dep:tracing"]
-pool = ["dep:bytemuck", "libc", "dep:tracing", "dep:lz4_flex"]
+pool = ["dep:bytemuck", "libc", "dep:tracing"]
 
 [[test]]
 name = "future"

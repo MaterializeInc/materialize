@@ -96,6 +96,44 @@ use crate::pool::region::{Region, SIZE_CLASSES};
 /// heap-fallback path.
 const CLASS_CAPACITY_BYTES: usize = 1 << 40;
 
+/// A chunk-provided transform between a chunk's body bytes and the stored
+/// bytes its extent holds. The pool owns scheduling: spill threads, the
+/// residency state machine, cancellation, and the ledger. It invokes the
+/// codec on opaque bytes at the extent boundary, `encode` when backing a
+/// chunk (on a spill thread, or inline under overload) and `decode` when
+/// reading an evicted one, under the chunk's state lock. The pool itself
+/// has no opinion on the stored form: framing, compression, and validation
+/// all belong to the codec.
+///
+/// Implementations must be pure transforms: no locking, no calls back into
+/// the pool (the state lock is held at `decode` sites), and no panic on
+/// bytes their own `encode` produced. `decode` must exactly invert
+/// `encode`, and `encode`'s output must never exceed
+/// [`max_stored_len`]`(body.len())`, the bound the extent store's size
+/// classes are provisioned to.
+pub trait ExtentCodec: std::fmt::Debug + Send + Sync {
+    /// Transforms `body` into its stored form, replacing `out`'s contents.
+    /// `out`'s capacity is reused across calls; implementations size it
+    /// themselves.
+    fn encode(&self, body: &[u8], out: &mut Vec<u8>);
+
+    /// Inverts [`ExtentCodec::encode`]: reconstructs into `body` exactly
+    /// the bytes whose encoding produced `stored`. `body` is exactly the
+    /// original body's length, and implementations must panic on a length
+    /// mismatch rather than truncate or pad.
+    fn decode(&self, stored: &[u8], body: &mut [u8]);
+}
+
+/// The largest stored form [`ExtentCodec::encode`] may produce for a
+/// `body_len`-byte body: an incompressible-input expansion matching lz4's
+/// worst case plus a four-byte length prefix. The extent store's size-class
+/// ladder is provisioned to this bound, so a codec that exceeds it can
+/// strand payloads with no class to hold them (they degrade to unpageable
+/// heap fallbacks).
+pub fn max_stored_len(body_len: usize) -> usize {
+    4 + body_len + body_len / 255 + 16
+}
+
 /// Advisory placement hints for a chunk, supplied at insert and immutable
 /// thereafter (merges mint new chunks, so a chunk's generation never
 /// changes). Hints steer policy — eviction order and write-behind
@@ -402,6 +440,10 @@ struct ChunkMeta {
     /// The insert-time [`ChunkHints`] depth; immutable. Names the eviction
     /// band the chunk's queue entries belong to.
     depth: u8,
+    /// The insert-time [`ExtentCodec`]; immutable. Encodes the chunk when it
+    /// is backed and decodes its extent on reads, so it must outlive any
+    /// extent it produced, hence `'static`.
+    codec: &'static dyn ExtentCodec,
     state: Mutex<ChunkState>,
 }
 
@@ -434,6 +476,7 @@ impl ChunkMeta {
         len: usize,
         class: Option<usize>,
         depth: u8,
+        codec: &'static dyn ExtentCodec,
         residency: Residency,
         slot: Option<u32>,
         oversize: Option<Vec<u64>>,
@@ -443,6 +486,7 @@ impl ChunkMeta {
             len,
             class,
             depth,
+            codec,
             state: Mutex::new(ChunkState {
                 residency,
                 touched: false,
@@ -520,6 +564,10 @@ impl Pool {
     /// staging through caller-side buffers that fault their own pages and
     /// die immediately after.
     ///
+    /// `codec` is the chunk's [`ExtentCodec`], fixed for its lifetime: the
+    /// pool invokes it whenever the chunk moves across the extent boundary,
+    /// and takes no interest in the stored form it produces.
+    ///
     /// Relies on abort-on-panic: a panic in `fill` that was caught would
     /// leak the slot and its resident-bytes accounting. All hosting
     /// binaries abort via `mz_ore::panic::install_enhanced_handler`, and
@@ -529,6 +577,7 @@ impl Pool {
         &self,
         len: usize,
         hints: ChunkHints,
+        codec: &'static dyn ExtentCodec,
         fill: impl FnOnce(&mut [u64]),
     ) -> ChunkHandle {
         let inner = &self.0;
@@ -541,6 +590,7 @@ impl Pool {
                 0,
                 None,
                 hints.depth,
+                codec,
                 Residency::UnbackedResident,
                 None,
                 None,
@@ -592,6 +642,7 @@ impl Pool {
                     len,
                     Some(class),
                     hints.depth,
+                    codec,
                     Residency::UnbackedResident,
                     Some(slot),
                     None,
@@ -609,6 +660,7 @@ impl Pool {
                     len,
                     None,
                     hints.depth,
+                    codec,
                     Residency::Oversize,
                     None,
                     Some(payload),
@@ -1037,7 +1089,8 @@ impl PoolInner {
                 // Inline eviction runs on whichever thread tripped the
                 // budget, so the compression scratch must not stay parked
                 // on it.
-                let extent = SwapExtent::write(&self.extent_arena, data, Scratch::Shrink);
+                let extent =
+                    SwapExtent::write(&self.extent_arena, data, meta.codec, Scratch::Shrink);
                 self.counters
                     .evictions_compress
                     .fetch_add(1, Ordering::Relaxed);
@@ -1213,7 +1266,7 @@ impl PoolInner {
         let data = unsafe { self.slot_data(meta, slot) };
         // Spill threads see a steady job stream, so they keep the grown
         // compression scratch for the next job.
-        let extent = SwapExtent::write(&self.extent_arena, data, Scratch::Retain);
+        let extent = SwapExtent::write(&self.extent_arena, data, meta.codec, Scratch::Retain);
         // Commit under the lock.
         let mut state = meta.state();
         if state.freed {
@@ -1921,7 +1974,7 @@ impl ChunkHandle {
                         let slot_bytes = unsafe {
                             std::slice::from_raw_parts_mut(region.slot_ptr(slot), meta.len_bytes())
                         };
-                        extent.read_into(slot_bytes);
+                        extent.read_into(meta.codec, slot_bytes);
                         state.slot = Some(slot);
                         state.residency = Residency::BackedResident;
                         // SAFETY: the slot belongs to this chunk while the
@@ -1953,7 +2006,12 @@ impl ChunkHandle {
                         // gauge; the design doc's reader discipline).
                         dst.resize(range.end - range.start, 0);
                         let bytes: &mut [u8] = bytemuck::cast_slice_mut(dst.as_mut_slice());
-                        extent.read_range_into(range.start * 8, bytes);
+                        extent.read_range_into(
+                            meta.codec,
+                            meta.len_bytes(),
+                            range.start * 8,
+                            bytes,
+                        );
                     }
                 }
                 // TODO: a sub-range read of a rangeable stored form (file
@@ -2092,6 +2150,7 @@ impl Drop for ChunkHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pool::extent::TEST_CODEC;
 
     /// Keep test pools small: 64 MiB of virtual reservation per class.
     /// Under Miri the backing is real interpreter heap rather than lazy
@@ -2125,7 +2184,7 @@ mod tests {
     /// Copies `data` into the pool at a hinted depth and clears it.
     fn insert_at_depth(pool: &Pool, depth: u8, data: &mut Vec<u64>) -> ChunkHandle {
         let hints = ChunkHints { depth };
-        let handle = pool.insert_with(data.len(), hints, |dst| {
+        let handle = pool.insert_with(data.len(), hints, &TEST_CODEC, |dst| {
             dst.copy_from_slice(data.as_slice())
         });
         data.clear();
@@ -3543,7 +3602,7 @@ mod tests {
     fn insert_with_fills_in_place() {
         let pool = test_pool(usize::MAX);
         let want = payload(SMALL, 600);
-        let h = pool.insert_with(SMALL, ChunkHints::default(), |dst| {
+        let h = pool.insert_with(SMALL, ChunkHints::default(), &TEST_CODEC, |dst| {
             assert_eq!(dst.len(), SMALL, "fill sees exactly the chunk length");
             dst.copy_from_slice(&want);
         });
@@ -3553,10 +3612,14 @@ mod tests {
         assert_eq!(read(&h), want, "round-trips through the extent");
 
         // Empty and oversize take their fallback paths.
-        let empty = pool.insert_with(0, ChunkHints::default(), |dst| assert!(dst.is_empty()));
+        let empty = pool.insert_with(0, ChunkHints::default(), &TEST_CODEC, |dst| {
+            assert!(dst.is_empty())
+        });
         assert!(read(&empty).is_empty());
         let big_len = (SIZE_CLASSES[SIZE_CLASSES.len() - 1] / 8) + 1;
-        let big = pool.insert_with(big_len, ChunkHints::default(), |dst| dst.fill(7));
+        let big = pool.insert_with(big_len, ChunkHints::default(), &TEST_CODEC, |dst| {
+            dst.fill(7)
+        });
         assert_eq!(big.residency(), Residency::Oversize);
         assert_eq!(read(&big).len(), big_len);
     }
