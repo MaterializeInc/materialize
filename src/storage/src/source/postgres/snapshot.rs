@@ -179,7 +179,8 @@ use mz_storage_types::errors::DataflowError;
 use mz_storage_types::parameters::PgSourceSnapshotConfig;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
 use mz_timely_util::builder_async::{
-    Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+    Event as AsyncEvent, MAX_OUTSTANDING_BYTES, OperatorBuilder as AsyncOperatorBuilder,
+    PressOnDropButton,
 };
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
@@ -338,7 +339,7 @@ pub(crate) fn render<'scope>(
     table_info: BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,
     metrics: PgSnapshotMetrics,
 ) -> (
-    StackedCollection<'scope, MzOffset, (usize, Result<SourceMessage, DataflowError>)>,
+    Vec<StackedCollection<'scope, MzOffset, Result<SourceMessage, DataflowError>>>,
     StreamVec<'scope, MzOffset, RewindRequest>,
     StreamVec<'scope, MzOffset, Infallible>,
     StreamVec<'scope, MzOffset, ReplicationError>,
@@ -349,7 +350,16 @@ pub(crate) fn render<'scope>(
 
     let (feedback_handle, feedback_data) = scope.feedback(Default::default());
 
-    let (raw_handle, raw_data) = builder.new_output();
+    // One data output port per source export, in output index order. All data port capabilities
+    // are managed in lockstep, so every export observes the same frontier.
+    let export_count = config.source_exports.len();
+    let mut raw_handles = Vec::with_capacity(export_count);
+    let mut raw_streams = Vec::with_capacity(export_count);
+    for _ in 0..export_count {
+        let (handle, stream) = builder.new_output();
+        raw_handles.push(handle);
+        raw_streams.push(stream);
+    }
     let (rewinds_handle, rewinds) = builder.new_output::<CapacityContainerBuilder<_>>();
     // This output is used to signal to the replication operator that the replication slot has been
     // created. With the current state of execution serialization there isn't a lot of benefit
@@ -404,13 +414,13 @@ pub(crate) fn render<'scope>(
         Box::pin(SignaledFuture::new(busy_signal, async move {
             let id = config.id;
             let worker_id = config.worker_id;
+            let (data_cap_sets, caps) = caps.split_at_mut(export_count);
             let [
-                data_cap_set,
                 rewind_cap_set,
                 slot_ready_cap_set,
                 snapshot_cap_set,
                 definite_error_cap_set,
-            ]: &mut [_; 5] = caps.try_into().unwrap();
+            ]: &mut [_; 4] = caps.try_into().unwrap();
 
             trace!(
                 %id,
@@ -522,7 +532,7 @@ pub(crate) fn render<'scope>(
                             // nothing else to do. These errors are not retractable.
                             Err(PostgresError::PublicationMissing(publication)) => {
                                 let err = DefiniteError::PublicationDropped(publication);
-                                for (oid, outputs) in tables_to_snapshot.iter() {
+                                for outputs in tables_to_snapshot.values() {
                                     // Produce a definite error here and then exit to ensure
                                     // a missing publication doesn't generate a transient
                                     // error and restart this dataflow indefinitely.
@@ -532,13 +542,17 @@ pub(crate) fn render<'scope>(
                                     // portions of the TVC.
                                     for output_index in outputs.keys() {
                                         let update = (
-                                            (*oid, *output_index, Err(err.clone().into())),
+                                            Err(err.clone().into()),
                                             MzOffset::from(u64::MAX),
                                             Diff::ONE,
                                         );
                                         let size = update.fuel_size();
-                                        raw_handle
-                                            .give_fueled(&data_cap_set[0], update, size)
+                                        raw_handles[*output_index]
+                                            .give_fueled(
+                                                &data_cap_sets[*output_index][0],
+                                                update,
+                                                size,
+                                            )
                                             .await;
                                     }
                                 }
@@ -616,17 +630,17 @@ pub(crate) fn render<'scope>(
                 use_snapshot(&client, &snapshot_id).await?;
             }
 
+            // `give_fueled` bounds outstanding bytes per output handle. With one handle per
+            // export that bound no longer limits the aggregate buffered data, so we track the
+            // total across all handles and yield at the threshold a single handle would.
+            let mut outstanding_bytes = 0;
             for (&oid, outputs) in tables_to_snapshot.iter() {
                 for (&output_index, info) in outputs.iter() {
                     if let Err(err) = verify_schema(oid, info, &upstream_info) {
-                        let update = (
-                            (oid, output_index, Err(err.into())),
-                            MzOffset::minimum(),
-                            Diff::ONE,
-                        );
+                        let update = (Err(err.into()), MzOffset::minimum(), Diff::ONE);
                         let size = update.fuel_size();
-                        raw_handle
-                            .give_fueled(&data_cap_set[0], update, size)
+                        raw_handles[output_index]
+                            .give_fueled(&data_cap_sets[output_index][0], update, size)
                             .await;
                         continue;
                     }
@@ -682,15 +696,16 @@ pub(crate) fn render<'scope>(
 
                     let mut snapshot_staged = 0;
                     while let Some(bytes) = stream.try_next().await? {
-                        let update = (
-                            (oid, output_index, Ok(bytes)),
-                            MzOffset::minimum(),
-                            Diff::ONE,
-                        );
+                        let update = (Ok(bytes), MzOffset::minimum(), Diff::ONE);
                         let size = update.fuel_size();
-                        raw_handle
-                            .give_fueled(&data_cap_set[0], update, size)
+                        outstanding_bytes += size;
+                        raw_handles[output_index]
+                            .give_fueled(&data_cap_sets[output_index][0], update, size)
                             .await;
+                        if outstanding_bytes > MAX_OUTSTANDING_BYTES {
+                            outstanding_bytes = 0;
+                            tokio::task::yield_now().await;
+                        }
                         snapshot_staged += 1;
                         if snapshot_staged % 1000 == 0 {
                             let stat = &export_statistics[&(oid, output_index)];
@@ -749,43 +764,54 @@ pub(crate) fn render<'scope>(
         }))
     });
 
-    // We now decode the COPY protocol and apply the cast expressions
-    let mut text_row = Row::default();
-    let mut final_row = Row::default();
-    let mut datum_vec = DatumVec::new();
-    let snapshot_updates = raw_data
-        .unary(Pipeline, "PgCastSnapshotRows", |_, _| {
-            move |input, output| {
-                input.for_each_time(|time, data| {
-                    let mut session = output.session(&time);
-                    for ((oid, output_index, event), time, diff) in
-                        data.flat_map(|data| data.drain(..))
-                    {
-                        let output = &table_info
-                            .get(&oid)
-                            .and_then(|outputs| outputs.get(&output_index))
-                            .expect("table_info contains all outputs");
-
-                        let event = event
-                            .as_ref()
-                            .map_err(|e: &DataflowError| e.clone())
-                            .and_then(|bytes| {
-                                decode_copy_row(bytes, output.casts.len(), &mut text_row)?;
-                                let datums = datum_vec.borrow_with(&text_row);
-                                super::cast_row(&output.casts, &datums, &mut final_row)?;
-                                Ok(SourceMessage {
-                                    key: Row::default(),
-                                    value: final_row.clone(),
-                                    metadata: Row::default(),
-                                })
-                            });
-
-                        session.give(((output_index, event), time, diff));
+    // We now decode the COPY protocol and apply the cast expressions, with one decode operator
+    // per export.
+    let mut output_info = BTreeMap::new();
+    for outputs in table_info.into_values() {
+        for (output_index, info) in outputs {
+            output_info.insert(output_index, info);
+        }
+    }
+    let mut snapshot_updates = Vec::with_capacity(raw_streams.len());
+    for (output_index, raw_stream) in raw_streams.into_iter().enumerate() {
+        let info = output_info.get(&output_index).cloned();
+        let mut text_row = Row::default();
+        let mut final_row = Row::default();
+        let mut datum_vec = DatumVec::new();
+        let updates = raw_stream
+            .unary(
+                Pipeline,
+                &format!("PgCastSnapshotRows({output_index})"),
+                |_, _| {
+                    move |input, output| {
+                        input.for_each_time(|time, data| {
+                            let mut session = output.session(&time);
+                            for (event, time, diff) in data.flat_map(|data| data.drain(..)) {
+                                let info = info
+                                    .as_ref()
+                                    .expect("only exports with output info receive data");
+                                let event = event
+                                    .as_ref()
+                                    .map_err(|e: &DataflowError| e.clone())
+                                    .and_then(|bytes| {
+                                        decode_copy_row(bytes, info.casts.len(), &mut text_row)?;
+                                        let datums = datum_vec.borrow_with(&text_row);
+                                        super::cast_row(&info.casts, &datums, &mut final_row)?;
+                                        Ok(SourceMessage {
+                                            key: Row::default(),
+                                            value: final_row.clone(),
+                                            metadata: Row::default(),
+                                        })
+                                    });
+                                session.give((event, time, diff));
+                            }
+                        });
                     }
-                });
-            }
-        })
-        .as_collection();
+                },
+            )
+            .as_collection();
+        snapshot_updates.push(updates);
+    }
 
     let errors = definite_errors.concat(transient_errors.map(ReplicationError::from));
 
