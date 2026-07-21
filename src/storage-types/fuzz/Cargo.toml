@@ -32,7 +32,7 @@ mz-mysql-util = { path = "../../mysql-util", features = ["proptest"] }
 mz-postgres-util = { path = "../../postgres-util" }
 mz-sql-server-util = { path = "../../sql-server-util", features = ["proptest"] }
 prost = "0.14.3"
-proptest = "1"
+proptest = "1.11.0"
 
 [[bin]]
 name = "csv_decode"
