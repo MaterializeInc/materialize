@@ -323,10 +323,53 @@ fn diff_connection_options(
 /// Reconciling them would emit an `ALTER CONNECTION` that rotates the keypair on
 /// every apply, so they are excluded from the diff entirely.
 fn is_server_managed(name: ConnectionOptionName) -> bool {
-    matches!(
-        name,
-        ConnectionOptionName::PublicKey1 | ConnectionOptionName::PublicKey2
-    )
+    use ConnectionOptionName::*;
+    match name {
+        // Server-generated for SSH connections and overwritten by the planner on
+        // every `plan_create_connection`, never taken from the user.
+        PublicKey1 | PublicKey2 => true,
+        // Everything else is user-authored. Enumerated explicitly (no `_`) so a
+        // new ConnectionOptionName variant fails to compile here until it is
+        // classified. Defaulting a future server-generated option to
+        // user-authored would silently reintroduce the rotate-on-every-apply bug.
+        AccessKeyId
+        | AssumeRoleArn
+        | AssumeRoleSessionName
+        | AvailabilityZones
+        | AwsConnection
+        | AwsPrivatelink
+        | Broker
+        | Brokers
+        | Credential
+        | Database
+        | Endpoint
+        | GcpConnection
+        | Host
+        | Password
+        | Port
+        | ProgressTopic
+        | ProgressTopicReplicationFactor
+        | Region
+        | Registry
+        | SaslMechanisms
+        | SaslPassword
+        | SaslUsername
+        | Scope
+        | SecretAccessKey
+        | SecurityProtocol
+        | ServiceAccountKey
+        | ServiceName
+        | SshTunnel
+        | SslCertificate
+        | SslCertificateAuthority
+        | SslKey
+        | SslMode
+        | SessionToken
+        | CatalogType
+        | Url
+        | User
+        | Warehouse => false,
+    }
 }
 
 #[cfg(test)]
