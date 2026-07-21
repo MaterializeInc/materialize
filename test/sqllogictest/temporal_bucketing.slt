@@ -276,3 +276,114 @@ materialize.public.mv_except_distinct_buckets_at_reduce:
 Target cluster: quickstart
 
 EOF
+
+# -----------------------------------------------------------------------------
+# Runtime tests (node Ta). With `enable_compute_temporal_bucketing` on, the
+# bucketed dataflow edges are re-encoded to the columnar representation instead
+# of re-wrapping `Vec`. These tests turn the flag on and assert the bucketed
+# dataflows still produce the correct logical results, and that a consolidating
+# `Union` concatenating a bucketed input with a `Direct` input yields the right
+# output (the mixed `concat_many` case, now columnar on both legs).
+# -----------------------------------------------------------------------------
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_compute_temporal_bucketing = true
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE rt_events (k INT NOT NULL, event_time TIMESTAMP NOT NULL)
+
+# Far-future event times so the temporal predicates hold regardless of the
+# wall clock at query time, keeping the results deterministic.
+statement ok
+INSERT INTO rt_events VALUES
+  (1, '2999-01-01 00:00:00'),
+  (1, '2999-01-02 00:00:00'),
+  (2, '2999-01-03 00:00:00'),
+  (3, '2999-01-04 00:00:00')
+
+statement ok
+CREATE TABLE rt_other (k INT NOT NULL)
+
+statement ok
+INSERT INTO rt_other VALUES (2), (99)
+
+# Bucketed Reduce: temporal filter above a GROUP BY. Hits the arrangement
+# re-encode in `context.rs`.
+statement ok
+CREATE MATERIALIZED VIEW rt_reduce AS
+SELECT k, count(*)
+FROM rt_events
+WHERE event_time + INTERVAL '45 day' > mz_now()
+GROUP BY k
+
+query II rowsort
+SELECT * FROM rt_reduce
+----
+1  2
+2  1
+3  1
+
+# Bucketed TopK: temporal filter under ORDER BY ... LIMIT. Hits the re-encode
+# in `top_k.rs`.
+statement ok
+CREATE MATERIALIZED VIEW rt_topk AS
+SELECT k
+FROM rt_events
+WHERE event_time + INTERVAL '45 day' > mz_now()
+ORDER BY event_time
+LIMIT 3
+
+query I rowsort
+SELECT * FROM rt_topk
+----
+1
+1
+2
+
+# Mixed Union: `EXCEPT ALL` of a temporal-filtered leg (bucketed) against a
+# plain relation (Direct) lowers to a consolidating `Union` with per-input
+# strategies `[TemporalBucketing, Direct]`. After node Ta both legs reach
+# `concat_many` as columnar edges.
+query T multiline
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
+CREATE MATERIALIZED VIEW rt_union AS
+SELECT k FROM rt_events WHERE event_time + INTERVAL '45 day' > mz_now()
+EXCEPT ALL
+SELECT k FROM rt_other
+----
+materialize.public.rt_union:
+  Threshold::Basic ensure_arrangement={ key=[#0], permutation=id, thinning=() }
+    ArrangeBy
+      raw=false
+      arrangements[0]={ key=[#0], permutation=id, thinning=() }
+      Union consolidate_output=true
+        temporal_bucketing_strategies=[TemporalBucketing, Direct]
+        Get::Collection materialize.public.rt_events
+          raw=true
+        Negate
+          Get::PassArrangements materialize.public.rt_other
+            raw=true
+
+Source materialize.public.rt_events
+  project=(#0)
+  filter=((mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 45 days))))
+Source materialize.public.rt_other
+
+Target cluster: quickstart
+
+EOF
+
+statement ok
+CREATE MATERIALIZED VIEW rt_union AS
+SELECT k FROM rt_events WHERE event_time + INTERVAL '45 day' > mz_now()
+EXCEPT ALL
+SELECT k FROM rt_other
+
+query I rowsort
+SELECT * FROM rt_union
+----
+1
+1
+3
