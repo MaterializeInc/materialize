@@ -893,4 +893,388 @@ mod test {
         })
         .expect("timely panicked");
     }
+
+    // MICROREPRO: does a flood of N records given via an Exchange pact at one
+    // timestamp arrive at an async consumer in bulk (letting a bounded-concurrency
+    // fetch loop ramp `in_flight` to the cap), or ~1 per schedule?
+    //
+    // Mirrors shard_source_fetch: producer floods N parts at one time; consumer
+    // runs the same `tokio::select! { biased; in_flight.next(); input.next() }`
+    // loop with a simulated fetch that stays in flight for a fixed number of
+    // polls. Reports the max `in_flight` depth reached and parts-per-event.
+    #[mz_ore::test]
+    fn microrepro_exchange_delivery() {
+        use std::future::Future;
+        use std::pin::Pin;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use futures_util::stream::FuturesUnordered;
+        use timely::dataflow::channels::pact::Exchange;
+
+        const N: usize = 200;
+        const MAX_CONCURRENCY: usize = 32;
+        // Each simulated fetch stays in flight for this many polls (models blob
+        // fetch latency in units of operator schedules).
+        const FETCH_POLLS: usize = 80;
+
+        // A future that stays Pending for `0` polls, self-waking each time so the
+        // operator is rescheduled, then completes.
+        struct FetchSim(usize);
+        impl Future for FetchSim {
+            type Output = ();
+            fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+                if self.0 == 0 {
+                    Poll::Ready(())
+                } else {
+                    self.0 -= 1;
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
+            }
+        }
+
+        let max_in_flight = Arc::new(AtomicUsize::new(0));
+        let max_parts_per_event = Arc::new(AtomicUsize::new(0));
+        let schedules_with_recv = Arc::new(AtomicUsize::new(0));
+
+        let mif = Arc::clone(&max_in_flight);
+        let mppe = Arc::clone(&max_parts_per_event);
+        let swr = Arc::clone(&schedules_with_recv);
+
+        let (builders, other) = timely::CommunicationConfig::Process(2).try_build().unwrap();
+        timely::execute::execute_from(builders, other, WorkerConfig::default(), move |worker| {
+            let index = worker.index();
+            let mif = Arc::clone(&mif);
+            let mppe = Arc::clone(&mppe);
+            let swr = Arc::clone(&swr);
+            let tokens = worker.dataflow::<u64, _, _>(move |scope| {
+                let mut producer = OperatorBuilder::new("producer".to_string(), scope.clone());
+                let (output, output_stream) =
+                    producer.new_output::<CapacityContainerBuilder<Vec<usize>>>();
+                let producer_button = producer.build(move |mut caps| async move {
+                    let cap = caps.pop().unwrap();
+                    // Only worker 0 produces; all records route to worker 1.
+                    if index == 0 {
+                        for i in 0..N {
+                            output.give(&cap, i);
+                        }
+                    }
+                    // Returning drops `cap`, advancing the frontier to empty so
+                    // the consumer observes end-of-input.
+                });
+
+                let mut consumer = OperatorBuilder::new("consumer".to_string(), scope.clone());
+                // Route every record to worker 1, exercising the inter-thread
+                // exchange channel exactly like `shard_source`'s pact.
+                let mut input =
+                    consumer.new_disconnected_input(output_stream, Exchange::new(|_: &usize| 1u64));
+                let consumer_button = consumer.build(move |_caps| async move {
+                    let mut pending: VecDeque<usize> = VecDeque::new();
+                    let mut in_flight = FuturesUnordered::new();
+                    let mut input_done = false;
+                    loop {
+                        while in_flight.len() < MAX_CONCURRENCY {
+                            match pending.pop_front() {
+                                Some(_) => in_flight.push(FetchSim(FETCH_POLLS)),
+                                None => break,
+                            }
+                        }
+                        let cur = in_flight.len();
+                        mif.fetch_max(cur, Ordering::SeqCst);
+
+                        tokio::select! {
+                            biased;
+                            Some(()) = in_flight.next(), if !in_flight.is_empty() => {}
+                            event = input.next(), if !input_done => {
+                                match event {
+                                    Some(Event::Data(_cap, data)) => {
+                                        let n = data.len();
+                                        mppe.fetch_max(n, Ordering::SeqCst);
+                                        swr.fetch_add(1, Ordering::SeqCst);
+                                        for x in data {
+                                            pending.push_back(x);
+                                        }
+                                        eprintln!(
+                                            "RECV parts={n} pending_now={} in_flight={}",
+                                            pending.len(),
+                                            in_flight.len(),
+                                        );
+                                    }
+                                    Some(Event::Progress(_)) => {}
+                                    None => input_done = true,
+                                }
+                            }
+                            else => break,
+                        }
+                    }
+                });
+
+                (
+                    producer_button.press_on_drop(),
+                    consumer_button.press_on_drop(),
+                )
+            });
+
+            // Step until the dataflow quiesces (consumer finished draining and
+            // all simulated fetches completed).
+            for _ in 0..200_000 {
+                worker.step();
+            }
+            drop(tokens);
+        })
+        .expect("timely panicked");
+
+        let mif = max_in_flight.load(Ordering::SeqCst);
+        let mppe = max_parts_per_event.load(Ordering::SeqCst);
+        let swr = schedules_with_recv.load(Ordering::SeqCst);
+        eprintln!(
+            "MICROREPRO RESULT: max_in_flight={mif} max_parts_per_event={mppe} \
+             recv_events={swr} (N={N}, cap={MAX_CONCURRENCY})"
+        );
+    }
+
+    // MICROREPRO variant: producer emits ONE record per container (=> one timely
+    // Message per record), mirroring the real shard_source observation of
+    // `parts=1` per event. Tests whether N separate messages sent in one
+    // producer schedule arrive at the consumer's `accept_input` in bulk (all N
+    // ready next schedule) or trickle ~1 per `worker.step()`.
+    #[mz_ore::test]
+    fn microrepro_exchange_delivery_one_msg_per_record() {
+        use std::future::Future;
+        use std::pin::Pin;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use futures_util::stream::FuturesUnordered;
+        use timely::dataflow::channels::pact::Exchange;
+
+        const N: usize = 200;
+        const MAX_CONCURRENCY: usize = 32;
+        const FETCH_POLLS: usize = 80;
+
+        struct FetchSim(usize);
+        impl Future for FetchSim {
+            type Output = ();
+            fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+                if self.0 == 0 {
+                    Poll::Ready(())
+                } else {
+                    self.0 -= 1;
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
+            }
+        }
+
+        let max_in_flight = Arc::new(AtomicUsize::new(0));
+        let max_parts_per_event = Arc::new(AtomicUsize::new(0));
+        let recv_events = Arc::new(AtomicUsize::new(0));
+
+        let mif = Arc::clone(&max_in_flight);
+        let mppe = Arc::clone(&max_parts_per_event);
+        let re = Arc::clone(&recv_events);
+
+        let (builders, other) = timely::CommunicationConfig::Process(2).try_build().unwrap();
+        timely::execute::execute_from(builders, other, WorkerConfig::default(), move |worker| {
+            let index = worker.index();
+            let mif = Arc::clone(&mif);
+            let mppe = Arc::clone(&mppe);
+            let re = Arc::clone(&re);
+            let tokens = worker.dataflow::<u64, _, _>(move |scope| {
+                let mut producer = OperatorBuilder::new("producer".to_string(), scope.clone());
+                let (output, output_stream) =
+                    producer.new_output::<CapacityContainerBuilder<Vec<usize>>>();
+                let producer_button = producer.build(move |mut caps| async move {
+                    let cap = caps.pop().unwrap();
+                    if index == 0 {
+                        // One record per container => one timely Message each,
+                        // all at the same timestamp.
+                        for i in 0..N {
+                            let mut container = vec![i];
+                            output.give_container(&cap, &mut container);
+                        }
+                    }
+                });
+
+                let mut consumer = OperatorBuilder::new("consumer".to_string(), scope.clone());
+                let mut input =
+                    consumer.new_disconnected_input(output_stream, Exchange::new(|_: &usize| 1u64));
+                let consumer_button = consumer.build(move |_caps| async move {
+                    let mut pending: VecDeque<usize> = VecDeque::new();
+                    let mut in_flight = FuturesUnordered::new();
+                    let mut input_done = false;
+                    loop {
+                        while in_flight.len() < MAX_CONCURRENCY {
+                            match pending.pop_front() {
+                                Some(_) => in_flight.push(FetchSim(FETCH_POLLS)),
+                                None => break,
+                            }
+                        }
+                        mif.fetch_max(in_flight.len(), Ordering::SeqCst);
+
+                        tokio::select! {
+                            biased;
+                            Some(()) = in_flight.next(), if !in_flight.is_empty() => {}
+                            event = input.next(), if !input_done => {
+                                match event {
+                                    Some(Event::Data(_cap, data)) => {
+                                        let n = data.len();
+                                        mppe.fetch_max(n, Ordering::SeqCst);
+                                        re.fetch_add(1, Ordering::SeqCst);
+                                        for x in data {
+                                            pending.push_back(x);
+                                        }
+                                    }
+                                    Some(Event::Progress(_)) => {}
+                                    None => input_done = true,
+                                }
+                            }
+                            else => break,
+                        }
+                    }
+                });
+
+                (
+                    producer_button.press_on_drop(),
+                    consumer_button.press_on_drop(),
+                )
+            });
+
+            for _ in 0..200_000 {
+                worker.step();
+            }
+            drop(tokens);
+        })
+        .expect("timely panicked");
+
+        let mif = max_in_flight.load(Ordering::SeqCst);
+        let mppe = max_parts_per_event.load(Ordering::SeqCst);
+        let re = recv_events.load(Ordering::SeqCst);
+        eprintln!(
+            "MICROREPRO 1-MSG RESULT: max_in_flight={mif} max_parts_per_event={mppe} \
+             recv_events={re} (N={N}, cap={MAX_CONCURRENCY})"
+        );
+    }
+
+    // MICROREPRO variant: LARGE per-record payloads (like ExchangeableBatchPart),
+    // to see whether timely's exchange stops coalescing above a per-message byte
+    // threshold => many small receive events => does the fetch loop still ramp?
+    #[mz_ore::test]
+    fn microrepro_exchange_delivery_large_payload() {
+        use std::future::Future;
+        use std::pin::Pin;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use futures_util::stream::FuturesUnordered;
+        use timely::dataflow::channels::pact::Exchange;
+
+        const N: usize = 200;
+        const MAX_CONCURRENCY: usize = 32;
+        const FETCH_POLLS: usize = 80;
+        // ~256 KiB per record, comparable order to a real part descriptor's
+        // inline footprint being non-trivial.
+        const PAYLOAD_BYTES: usize = 256 * 1024;
+
+        struct FetchSim(usize);
+        impl Future for FetchSim {
+            type Output = ();
+            fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+                if self.0 == 0 {
+                    Poll::Ready(())
+                } else {
+                    self.0 -= 1;
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
+            }
+        }
+
+        let max_in_flight = Arc::new(AtomicUsize::new(0));
+        let max_parts_per_event = Arc::new(AtomicUsize::new(0));
+        let recv_events = Arc::new(AtomicUsize::new(0));
+
+        let mif = Arc::clone(&max_in_flight);
+        let mppe = Arc::clone(&max_parts_per_event);
+        let re = Arc::clone(&recv_events);
+
+        let (builders, other) = timely::CommunicationConfig::Process(2).try_build().unwrap();
+        timely::execute::execute_from(builders, other, WorkerConfig::default(), move |worker| {
+            let index = worker.index();
+            let mif = Arc::clone(&mif);
+            let mppe = Arc::clone(&mppe);
+            let re = Arc::clone(&re);
+            let tokens = worker.dataflow::<u64, _, _>(move |scope| {
+                let mut producer = OperatorBuilder::new("producer".to_string(), scope.clone());
+                let (output, output_stream) =
+                    producer.new_output::<CapacityContainerBuilder<Vec<Vec<u8>>>>();
+                let producer_button = producer.build(move |mut caps| async move {
+                    let cap = caps.pop().unwrap();
+                    if index == 0 {
+                        for _ in 0..N {
+                            output.give(&cap, vec![0u8; PAYLOAD_BYTES]);
+                        }
+                    }
+                });
+
+                let mut consumer = OperatorBuilder::new("consumer".to_string(), scope.clone());
+                let mut input = consumer
+                    .new_disconnected_input(output_stream, Exchange::new(|_: &Vec<u8>| 1u64));
+                let consumer_button = consumer.build(move |_caps| async move {
+                    let mut pending: VecDeque<Vec<u8>> = VecDeque::new();
+                    let mut in_flight = FuturesUnordered::new();
+                    let mut input_done = false;
+                    loop {
+                        while in_flight.len() < MAX_CONCURRENCY {
+                            match pending.pop_front() {
+                                Some(_) => in_flight.push(FetchSim(FETCH_POLLS)),
+                                None => break,
+                            }
+                        }
+                        mif.fetch_max(in_flight.len(), Ordering::SeqCst);
+
+                        tokio::select! {
+                            biased;
+                            Some(()) = in_flight.next(), if !in_flight.is_empty() => {}
+                            event = input.next(), if !input_done => {
+                                match event {
+                                    Some(Event::Data(_cap, data)) => {
+                                        let n = data.len();
+                                        mppe.fetch_max(n, Ordering::SeqCst);
+                                        re.fetch_add(1, Ordering::SeqCst);
+                                        for x in data {
+                                            pending.push_back(x);
+                                        }
+                                    }
+                                    Some(Event::Progress(_)) => {}
+                                    None => input_done = true,
+                                }
+                            }
+                            else => break,
+                        }
+                    }
+                });
+
+                (
+                    producer_button.press_on_drop(),
+                    consumer_button.press_on_drop(),
+                )
+            });
+
+            for _ in 0..200_000 {
+                worker.step();
+            }
+            drop(tokens);
+        })
+        .expect("timely panicked");
+
+        let mif = max_in_flight.load(Ordering::SeqCst);
+        let mppe = max_parts_per_event.load(Ordering::SeqCst);
+        let re = recv_events.load(Ordering::SeqCst);
+        eprintln!(
+            "MICROREPRO LARGE RESULT: max_in_flight={mif} max_parts_per_event={mppe} \
+             recv_events={re} (N={N}, payload={PAYLOAD_BYTES}B, cap={MAX_CONCURRENCY})"
+        );
+    }
 }
