@@ -791,18 +791,38 @@ where
                         Some(Event::Data(caps, data)) => {
                             // `LeasedBatchPart`es cannot be dropped at this point
                             // w/o panicking, so swap them to an owned version.
-                            let mut dbg_n: u64 = 0;
+                            let mut first_parts: u64 = 0;
                             for (_idx, part) in data {
                                 pending.push_back((caps.clone(), part));
-                                dbg_n += 1;
+                                first_parts += 1;
                             }
-                            dbg_pushed += dbg_n;
-                            // INSTR: parts delivered by ONE descs_input event.
-                            // The key number: does the Exchange surface a full
-                            // batch here, or ~1 per event?
+                            // INSTR + candidate fix: after the first event, drain
+                            // every other event already sitting in the input queue
+                            // NOW, admitting the whole backlog in one activation
+                            // instead of one event per schedule. `drained_*`
+                            // measures how deep the backlog was: near-zero means
+                            // the exchange only surfaces ~1 event per activation
+                            // (a delivery trickle); large means the backlog was
+                            // there and this drain lets `in_flight` fill.
+                            let mut drained_events: u64 = 0;
+                            let mut drained_parts: u64 = 0;
+                            loop {
+                                match descs_input.next_sync() {
+                                    Some(Event::Data(caps2, data2)) => {
+                                        drained_events += 1;
+                                        for (_idx, part) in data2 {
+                                            pending.push_back((caps2.clone(), part));
+                                            drained_parts += 1;
+                                        }
+                                    }
+                                    Some(Event::Progress(_)) => {}
+                                    None => break,
+                                }
+                            }
+                            dbg_pushed += first_parts + drained_parts;
                             tracing::info!(
                                 target: "mz_persist_client::operators::shard_source",
-                                "INSTR fetch recv: descs_event parts={dbg_n} pending_now={} in_flight={} pushed_total={dbg_pushed}",
+                                "INSTR fetch recv: first_parts={first_parts} drained_events={drained_events} drained_parts={drained_parts} pending_now={} in_flight={} pushed_total={dbg_pushed}",
                                 pending.len(),
                                 in_flight.len(),
                             );
