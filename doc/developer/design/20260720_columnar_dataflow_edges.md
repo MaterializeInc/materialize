@@ -327,7 +327,11 @@ Base: Wave 1 complete.
 Build the linear and delta join outputs into a `ColumnBuilder`.
 Confirmed feasible by the prototype, builder swaps with no blocker.
 Delta join: `half_join_internal_unsafe` is generic over its output `ContainerBuilder` (`differential-dogs3 half_join2.rs:121-140`); swap `CapacityContainerBuilder<Vec>` (`delta_join.rs:406`) for `ColumnBuilder` and the heavy operator emits `Column` directly.
-Linear join: swap the `flat_map_fallible::<ConsolidatingContainerBuilder, ..>` (`linear_join.rs:300`) for the existing `ConsolidatingColumnBuilder` (`columnar/consolidate.rs`), preserving output consolidation.
+Linear join is more intricate: `mz_join_core` emits its stage output as a `Vec` (it is bounded `C: SizableContainer + PushInto<(Item,T,Diff)>` and builds via `CapacityContainerBuilder<C>`, which `Column` does not satisfy), and this stage output is intra-operator, so it stays `Vec` (out of scope, like reduce/topk internals; a columnar `mz_join_core` is a differential-side fast-follow, not in scope here).
+Only the node's FINAL output edge is made columnar, per finalization path:
+the `Some(final_closure)` path applies the closure via `flat_map_fallible` with a `ConsolidatingColumnBuilder` output (parity, the old builder was `ConsolidatingContainerBuilder`);
+the `None` (identity) path encodes the raw stage `Vec` to `Column` via `vec_to_columnar` (the accepted leaf-encode, symmetric to P9, non-consolidating to match the old raw output).
+This adds one `VecToColumnar` operator on the common identity-closure linear join, the necessary cheap (borrowed byte-copy) cost of a `Vec`-producing operator feeding a columnar edge.
 The carried-time `(Row, T)` payload is `Columnar`.
 Join input is untouched here: linear-join input is C4, and delta-join input is arrangement-only, subsumed by C1.
 Files: `src/compute/src/render/join/linear_join.rs`, `src/compute/src/render/join/delta_join.rs`.
