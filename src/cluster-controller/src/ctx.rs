@@ -13,12 +13,11 @@
 //! the controller pulls the signals a tick examines and applies the catalog
 //! mutations it derives. The signals in are primitive and carry no per-strategy
 //! state; the decisions out are primitive catalog mutations plus per-tick audit
-//! attribution. A create carries the names of the strategies that desired it,
-//! and the on-refresh window decision when that strategy did; the environment
-//! turns these into audit events. The controller crate knows nothing about the
-//! Coordinator. The Coordinator implements this trait, which is what makes
-//! the controller testable against a fake implementation and extractable later
-//! without touching controller code.
+//! attribution. A create carries the [`CreateReason`] of the winning strategy
+//! behind it, which the environment turns into the audit event. The controller
+//! crate knows nothing about the Coordinator. The Coordinator implements this
+//! trait, which is what makes the controller testable against a fake
+//! implementation and extractable later without touching controller code.
 //!
 //! The interface is **pull-based**: a tick fetches only the signals it actually
 //! examines (no eager all-clusters-all-replicas snapshot is pushed in), and the
@@ -102,22 +101,53 @@ pub struct RefreshMvInfo {
     pub refresh_schedule: RefreshSchedule,
 }
 
-/// A strategy-specific payload a create decision carries for audit
-/// attribution, one variant per strategy that has something to say beyond its
-/// name. Opaque to the reconcile kernel, which only merges it per shape; the
-/// environment matches on the variant to render the audit event's detail.
+/// Why a strategy desires a replica slot: the audit attribution a create
+/// decision carries. When several strategies desire the same shape the
+/// highest-precedence reason wins (see [`CreateReason::precedence`]), since
+/// the audit event carries exactly one reason.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum AuditDetail {
-    /// The on-refresh window decision behind a scheduled cluster's create.
+pub enum CreateReason {
+    /// The implicit baseline: the user's own cluster config calls for the
+    /// replica. The environment audits it as a manual create.
+    Baseline,
+    /// The graceful-reconfiguration strategy converging an in-flight
+    /// background `ALTER CLUSTER`.
+    GracefulReconfiguration,
+    /// The hydration-burst strategy accelerating hydration.
+    HydrationBurst,
+    /// The on-refresh strategy holding a scheduled cluster on inside a
+    /// refresh window. Embeds the window decision behind the create, which
+    /// the environment renders into the audit event's detail. Embedding it
+    /// makes "the decision detail appears iff the create audits the schedule
+    /// reason" structural: when another reason wins the precedence, the
+    /// decision is discarded with it.
     OnRefresh(RefreshWindowDecision),
+}
+
+impl CreateReason {
+    /// The rank deciding which reason a create carries when several strategies
+    /// desire the same shape: higher wins. Hand-written rather than a derived
+    /// `Ord`, since comparing the `OnRefresh` payload would be meaningless.
+    pub fn precedence(&self) -> u8 {
+        match self {
+            // Graceful wins over burst when both desire a shape (their shapes
+            // differ in practice, so this is a stable tie-break), both win
+            // over on-refresh, and the baseline loses to everything: any
+            // strategy's reason beats the implicit "the config calls for it".
+            CreateReason::Baseline => 0,
+            CreateReason::OnRefresh(_) => 1,
+            CreateReason::HydrationBurst => 2,
+            CreateReason::GracefulReconfiguration => 3,
+        }
+    }
 }
 
 /// The on-refresh strategy's per-tick window decision: which bound REFRESH MVs
 /// keep a scheduled cluster on, and why. The window is open iff either list is
 /// non-empty, so an open window always has an explanation.
 ///
-/// Carried as the [`AuditDetail`] on the create decisions the open window
-/// produces; the environment converts it to the audit log's
+/// Carried inside [`CreateReason::OnRefresh`] on the create decisions the open
+/// window produces. The environment converts it to the audit log's
 /// `scheduling_policies` detail. Plain ids and durations so the controller crate
 /// stays free of audit-log vocabulary.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -296,15 +326,13 @@ impl StateWrite {
 #[derive(Clone, Debug)]
 pub enum Decision {
     /// Create a replica of the given shape under a deterministic fresh name.
-    /// `reasons` records which strategies desired it (for audit attribution);
-    /// `audit_detail` carries a strategy's [`AuditDetail`] payload when one
-    /// attached it to the desired shape.
+    /// `reason` is the audit attribution: the highest-precedence
+    /// [`CreateReason`] among the strategies that desired the shape.
     CreateReplica {
         cluster_id: ClusterId,
         name: String,
         shape: ReplicaShape,
-        reasons: Vec<&'static str>,
-        audit_detail: Option<AuditDetail>,
+        reason: CreateReason,
         expected: ExpectedClusterState,
     },
     /// Drop a specific existing replica. A drop happens exactly when no

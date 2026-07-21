@@ -33,8 +33,8 @@ use mz_controller_types::ReplicaId;
 use mz_repr::{Timestamp, TimestampManipulation};
 
 use crate::ctx::{
-    AuditDetail, AvailabilityZones, BurstAudit, BurstFinishCause, BurstRecord, BurstWrite,
-    ClusterSchedule, ClusterState, OnTimeout, ReconfigurationAudit, ReconfigurationRecord,
+    AvailabilityZones, BurstAudit, BurstFinishCause, BurstRecord, BurstWrite, ClusterSchedule,
+    ClusterState, CreateReason, OnTimeout, ReconfigurationAudit, ReconfigurationRecord,
     ReconfigurationStatus, ReconfigurationWrite, RefreshWindowDecision, RefreshWindowInputs,
     ReplicaShape, StateWrite,
 };
@@ -45,10 +45,10 @@ use crate::ctx::{
 #[derive(Clone, Debug)]
 pub struct DesiredReplica {
     pub shape: ReplicaShape,
-    /// A strategy-specific audit payload behind the slot (today only the
-    /// on-refresh strategy attaches one). Carried opaquely through the kernel
-    /// onto the create decision a slot may produce.
-    pub audit_detail: Option<AuditDetail>,
+    /// Why the strategy desires the slot. Carried through the kernel onto the
+    /// create decision a slot may produce (per shape, the highest-precedence
+    /// reason among the contributing slots wins).
+    pub reason: CreateReason,
 }
 
 /// One cluster-autoscaling strategy: a pair of pure functions the controller
@@ -57,10 +57,6 @@ pub struct DesiredReplica {
 /// `Send + Sync` so the controller (which holds a set of boxed strategies) can
 /// run on its own task.
 pub trait Strategy: Send + Sync {
-    /// A stable identifier used in audit attribution (which strategies desired a
-    /// create; drops carry no attribution).
-    fn name(&self) -> &'static str;
-
     /// The live signals this strategy needs to evaluate `state` this tick,
     /// declared as a pure function of the durable state and the tick's config
     /// signals. The kernel unions the requests across strategies, fetches them
@@ -185,14 +181,7 @@ pub struct LiveSignals {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct BaselineStrategy;
 
-/// The audit-attribution name of the baseline strategy.
-pub const BASELINE_STRATEGY_NAME: &str = "baseline";
-
 impl Strategy for BaselineStrategy {
-    fn name(&self) -> &'static str {
-        BASELINE_STRATEGY_NAME
-    }
-
     fn desired_replicas(
         &self,
         state: &ClusterState,
@@ -207,7 +196,7 @@ impl Strategy for BaselineStrategy {
         (0..state.replication_factor)
             .map(|_| DesiredReplica {
                 shape: shape.clone(),
-                audit_detail: None,
+                reason: CreateReason::Baseline,
             })
             .collect()
     }
@@ -231,9 +220,6 @@ impl Strategy for BaselineStrategy {
 /// exactly while an in-progress reconfiguration is present.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct GracefulReconfigurationStrategy;
-
-/// The audit-attribution name of the graceful reconfiguration strategy.
-pub const GRACEFUL_RECONFIGURATION_STRATEGY_NAME: &str = "graceful-reconfiguration";
 
 impl GracefulReconfigurationStrategy {
     /// Whether the cut-over precondition holds: at least
@@ -264,10 +250,6 @@ impl GracefulReconfigurationStrategy {
 }
 
 impl Strategy for GracefulReconfigurationStrategy {
-    fn name(&self) -> &'static str {
-        GRACEFUL_RECONFIGURATION_STRATEGY_NAME
-    }
-
     fn signal_request(&self, state: &ClusterState, _config: &ConfigSignals) -> SignalRequest {
         SignalRequest {
             hydration: state
@@ -390,7 +372,7 @@ impl Strategy for GracefulReconfigurationStrategy {
         (0..record.target.replication_factor)
             .map(|_| DesiredReplica {
                 shape: shape.clone(),
-                audit_detail: None,
+                reason: CreateReason::GracefulReconfiguration,
             })
             .collect()
     }
@@ -420,9 +402,6 @@ impl Strategy for GracefulReconfigurationStrategy {
 /// tick after a restart already decides from the same inputs as a steady tick.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct OnRefreshStrategy;
-
-/// The audit-attribution name of the on-refresh scheduling strategy.
-pub const ON_REFRESH_STRATEGY_NAME: &str = "on-refresh";
 
 impl OnRefreshStrategy {
     /// The window decision for the cluster: which bound REFRESH MVs either still
@@ -491,10 +470,6 @@ impl OnRefreshStrategy {
 }
 
 impl Strategy for OnRefreshStrategy {
-    fn name(&self) -> &'static str {
-        ON_REFRESH_STRATEGY_NAME
-    }
-
     fn signal_request(&self, state: &ClusterState, _config: &ConfigSignals) -> SignalRequest {
         SignalRequest {
             refresh_window: !matches!(state.schedule, ClusterSchedule::Manual),
@@ -566,11 +541,11 @@ impl Strategy for OnRefreshStrategy {
         }
         // One replica at the realized shape (`cluster.size` plus the cluster's AZ
         // pool and logging), matching what the legacy scheduler brings up. The
-        // window decision rides along so the create it may produce can carry the
-        // audit detail.
+        // window decision rides inside the reason so the create it may produce
+        // can carry the audit detail.
         vec![DesiredReplica {
             shape: state.realized_shape(),
-            audit_detail: Some(AuditDetail::OnRefresh(decision)),
+            reason: CreateReason::OnRefresh(decision),
         }]
     }
 }
@@ -606,9 +581,6 @@ fn duration_to_ts(duration: std::time::Duration) -> Timestamp {
 /// [`Strategy::signal_request`] while an `ON HYDRATION` policy is active.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct HydrationBurstStrategy;
-
-/// The audit-attribution name of the hydration-burst strategy.
-pub const HYDRATION_BURST_STRATEGY_NAME: &str = "hydration-burst";
 
 impl HydrationBurstStrategy {
     /// The cluster's active `ON HYDRATION` policy, but only when burst is permitted
@@ -663,10 +635,6 @@ impl HydrationBurstStrategy {
 }
 
 impl Strategy for HydrationBurstStrategy {
-    fn name(&self) -> &'static str {
-        HYDRATION_BURST_STRATEGY_NAME
-    }
-
     fn signal_request(&self, state: &ClusterState, config: &ConfigSignals) -> SignalRequest {
         // Hydration drives both the arm check and the linger lifecycle. Object
         // existence only gates arming, so it is requested only record-less.
@@ -810,7 +778,7 @@ impl Strategy for HydrationBurstStrategy {
                 logging: state.logging.clone(),
                 arrangement_compression: state.arrangement_compression,
             },
-            audit_detail: None,
+            reason: CreateReason::HydrationBurst,
         }]
     }
 }

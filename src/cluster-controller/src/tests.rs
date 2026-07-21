@@ -28,7 +28,7 @@ use mz_repr::{GlobalId, Timestamp};
 use crate::ClusterController;
 use crate::ctx::{
     ApplyOutcome, AutoScalingPolicy, AvailabilityZones, BurstAudit, ClusterControllerCtx,
-    ClusterSchedule, ClusterState, Decision, ObservedReplica, ReconfigurationAudit,
+    ClusterSchedule, ClusterState, CreateReason, Decision, ObservedReplica, ReconfigurationAudit,
     ReconfigurationStatus, RefreshWindowInputs, ReplicaShape, StateWrite,
 };
 use crate::strategy::{ConfigSignals, DesiredReplica, LiveSignals, Strategy};
@@ -537,19 +537,15 @@ async fn wrong_shape_replica_dropped() {
 
 // ----- A second, fake additive strategy, to exercise the union/diff. -----
 
-/// Desires `count` replicas at `size`, regardless of state. Stands in for a
-/// policy strategy (graceful/burst) for union/diff tests.
+/// Desires `count` replicas at `size` with `reason`, regardless of state.
+/// Stands in for a policy strategy (graceful/burst) for union/diff tests.
 struct FixedStrategy {
-    name: &'static str,
     size: String,
     count: u32,
+    reason: CreateReason,
 }
 
 impl Strategy for FixedStrategy {
-    fn name(&self) -> &'static str {
-        self.name
-    }
-
     fn desired_replicas(
         &self,
         _state: &ClusterState,
@@ -560,7 +556,7 @@ impl Strategy for FixedStrategy {
         (0..self.count)
             .map(|_| DesiredReplica {
                 shape: shape(&self.size),
-                audit_detail: None,
+                reason: self.reason.clone(),
             })
             .collect()
     }
@@ -597,9 +593,9 @@ async fn union_takes_max_not_sum_per_shape() {
     let controller = controller_with(vec![
         Box::new(BaselineStrategy),
         Box::new(FixedStrategy {
-            name: "extra",
             size: "100cc".to_string(),
             count: 1,
+            reason: CreateReason::Baseline,
         }),
     ]);
     controller.reconcile(&mut ctx).await;
@@ -612,98 +608,152 @@ async fn union_takes_max_not_sum_per_shape() {
 }
 
 #[mz_ore::test(tokio::test)]
-async fn distinct_shapes_union_and_attribute() {
-    use crate::strategy::{BASELINE_STRATEGY_NAME, BaselineStrategy};
+async fn distinct_shapes_union() {
+    use crate::strategy::BaselineStrategy;
 
     let c = cluster(1);
-    // Baseline desires 2 @ 100cc. The extra strategy desires 1 @ 200cc. Actual
-    // has the two 100cc replicas, so the controller creates one 200cc replica,
-    // attributed to "extra" only.
+    // Baseline desires 2 @ 100cc but only one exists, and the extra strategy
+    // desires 1 @ 200cc with a burst reason. Both shapes need a create, and
+    // each create must carry its own shape's reason: the burst reason on the
+    // 200cc create must not smear onto the baseline-shape create (per-shape
+    // reason isolation in the kernel).
     let states = vec![state(
         c,
         "100cc",
         2,
-        vec![
-            observed(replica(1), "r0", "100cc"),
-            observed(replica(2), "r1", "100cc"),
-        ],
+        vec![observed(replica(1), "r0", "100cc")],
     )];
     let mut ctx = FakeCtx::new(states);
 
     let controller = controller_with(vec![
         Box::new(BaselineStrategy),
         Box::new(FixedStrategy {
-            name: "extra",
             size: "200cc".to_string(),
             count: 1,
+            reason: CreateReason::HydrationBurst,
         }),
     ]);
     controller.reconcile(&mut ctx).await;
 
     let creates = ctx.creates();
-    assert_eq!(creates.len(), 1);
+    assert_eq!(creates.len(), 2);
     assert!(ctx.drops().is_empty());
-    if let Decision::CreateReplica {
-        shape,
-        reasons,
-        audit_detail,
-        ..
-    } = creates[0]
-    {
-        assert_eq!(shape.size, "200cc");
-        assert_eq!(reasons, &vec!["extra"]);
-        assert!(!reasons.contains(&BASELINE_STRATEGY_NAME));
-        assert!(
-            audit_detail.is_none(),
-            "only on-refresh creates carry a window decision"
-        );
+    for create in creates {
+        let Decision::CreateReplica { shape, reason, .. } = create else {
+            panic!("expected a CreateReplica, got {create:?}");
+        };
+        match shape.size.as_str() {
+            "100cc" => assert_eq!(reason, &CreateReason::Baseline),
+            "200cc" => assert_eq!(reason, &CreateReason::HydrationBurst),
+            other => panic!("unexpected create size {other}"),
+        }
     }
 }
 
 #[mz_ore::test]
-fn shared_shape_merge_keeps_audit_detail() {
-    use crate::ctx::{AuditDetail, RefreshWindowDecision};
-    use crate::strategy::ON_REFRESH_STRATEGY_NAME;
+fn shared_shape_merge_takes_highest_precedence_reason() {
+    use crate::ctx::RefreshWindowDecision;
 
-    // Two strategies desire the same shape, one slot with a window decision and
-    // one without (the order strategies run in puts the detail-less slot
-    // first). The merged create keeps the detail, so a shape shared with
-    // another contributor still explains its on-refresh side.
+    // Two strategies desire the same shape, one with the baseline reason and
+    // one with an on-refresh window decision (the order strategies run in puts
+    // the baseline slot first). On-refresh outranks the baseline, so the
+    // merged create carries the schedule reason with the decision intact: a
+    // shape shared with another contributor still explains its on-refresh
+    // side.
     let c = cluster(1);
     let (state, _signals) = scheduled_state(c, "100cc", 0, 0, Vec::new(), None);
-    let detail = AuditDetail::OnRefresh(RefreshWindowDecision {
+    let decision = RefreshWindowDecision {
         objects_needing_refresh: vec![GlobalId::User(7)],
         objects_needing_compaction: Vec::new(),
         hydration_time_estimate: Duration::ZERO,
-    });
-    let contributions: Vec<(&'static str, Vec<DesiredReplica>)> = vec![
-        (
-            "extra",
-            vec![DesiredReplica {
-                shape: shape("100cc"),
-                audit_detail: None,
-            }],
-        ),
-        (
-            ON_REFRESH_STRATEGY_NAME,
-            vec![DesiredReplica {
-                shape: shape("100cc"),
-                audit_detail: Some(detail.clone()),
-            }],
-        ),
+    };
+    let contributions: Vec<Vec<DesiredReplica>> = vec![
+        vec![DesiredReplica {
+            shape: shape("100cc"),
+            reason: CreateReason::Baseline,
+        }],
+        vec![DesiredReplica {
+            shape: shape("100cc"),
+            reason: CreateReason::OnRefresh(decision.clone()),
+        }],
     ];
     let decisions = crate::reconcile_replicas(&state, &contributions);
     assert_eq!(decisions.len(), 1);
-    if let Decision::CreateReplica {
-        reasons,
-        audit_detail,
-        ..
-    } = &decisions[0]
-    {
-        assert_eq!(reasons, &vec!["extra", ON_REFRESH_STRATEGY_NAME]);
-        assert_eq!(audit_detail.as_ref(), Some(&detail));
-    } else {
-        panic!("expected a CreateReplica");
+    match &decisions[0] {
+        Decision::CreateReplica { reason, .. } => {
+            assert_eq!(reason, &CreateReason::OnRefresh(decision.clone()));
+        }
+        other => panic!("expected a CreateReplica, got {other:?}"),
+    }
+
+    // Graceful reconfiguration outranks on-refresh: when both desire the
+    // shape, the merged create carries the graceful reason and the window
+    // decision is discarded with the losing reason.
+    let contributions: Vec<Vec<DesiredReplica>> = vec![
+        vec![DesiredReplica {
+            shape: shape("100cc"),
+            reason: CreateReason::GracefulReconfiguration,
+        }],
+        vec![DesiredReplica {
+            shape: shape("100cc"),
+            reason: CreateReason::OnRefresh(decision),
+        }],
+    ];
+    let decisions = crate::reconcile_replicas(&state, &contributions);
+    assert_eq!(decisions.len(), 1);
+    match &decisions[0] {
+        Decision::CreateReplica { reason, .. } => {
+            assert_eq!(reason, &CreateReason::GracefulReconfiguration);
+        }
+        other => panic!("expected a CreateReplica, got {other:?}"),
+    }
+}
+
+#[mz_ore::test]
+fn create_reason_precedence_total_order() {
+    use crate::ctx::RefreshWindowDecision;
+
+    // The precedence order is load-bearing: it decides which reason a
+    // shared-shape create carries into the audit log.
+    let decision = RefreshWindowDecision {
+        objects_needing_refresh: Vec::new(),
+        objects_needing_compaction: Vec::new(),
+        hydration_time_estimate: Duration::ZERO,
+    };
+    let baseline = CreateReason::Baseline.precedence();
+    let on_refresh = CreateReason::OnRefresh(decision).precedence();
+    let burst = CreateReason::HydrationBurst.precedence();
+    let graceful = CreateReason::GracefulReconfiguration.precedence();
+    assert!(baseline < on_refresh);
+    assert!(on_refresh < burst);
+    assert!(burst < graceful);
+}
+
+#[mz_ore::test]
+fn shared_shape_merge_baseline_and_graceful() {
+    // Baseline and graceful can genuinely share a shape in production: an
+    // rf-only background ALTER has a target shape equal to the realized shape,
+    // so both strategies desire slots at it. The merged create must audit as
+    // the reconfiguration's work, not as a manual baseline create.
+    let c = cluster(1);
+    let (state, _signals) = scheduled_state(c, "100cc", 0, 0, Vec::new(), None);
+    let contributions: Vec<Vec<DesiredReplica>> = vec![
+        vec![DesiredReplica {
+            shape: shape("100cc"),
+            reason: CreateReason::Baseline,
+        }],
+        vec![DesiredReplica {
+            shape: shape("100cc"),
+            reason: CreateReason::GracefulReconfiguration,
+        }],
+    ];
+    let decisions = crate::reconcile_replicas(&state, &contributions);
+    assert_eq!(decisions.len(), 1);
+    match &decisions[0] {
+        Decision::CreateReplica { reason, .. } => {
+            assert_eq!(reason, &CreateReason::GracefulReconfiguration);
+        }
+        other => panic!("expected a CreateReplica, got {other:?}"),
     }
 }
 
@@ -721,9 +771,6 @@ async fn caa_conflict_is_rejected_and_recovered() {
     // recomputed against the post-ALTER state.
     struct WritingStrategy;
     impl Strategy for WritingStrategy {
-        fn name(&self) -> &'static str {
-            "writing"
-        }
         fn update_state(
             &self,
             state: &ClusterState,
@@ -768,7 +815,7 @@ async fn caa_conflict_is_rejected_and_recovered() {
             (0..state.replication_factor)
                 .map(|_| DesiredReplica {
                     shape: shape.clone(),
-                    audit_detail: None,
+                    reason: CreateReason::Baseline,
                 })
                 .collect()
         }
@@ -988,9 +1035,6 @@ async fn disjoint_state_writes_merge_into_one_apply() {
     // tick: the merge unions disjoint fields under one compare-and-append.
     struct WritesSize;
     impl Strategy for WritesSize {
-        fn name(&self) -> &'static str {
-            "writes-size"
-        }
         fn update_state(
             &self,
             _state: &ClusterState,
@@ -1017,9 +1061,6 @@ async fn disjoint_state_writes_merge_into_one_apply() {
     }
     struct WritesReplicationFactor;
     impl Strategy for WritesReplicationFactor {
-        fn name(&self) -> &'static str {
-            "writes-rf"
-        }
         fn update_state(
             &self,
             _state: &ClusterState,
@@ -1075,9 +1116,6 @@ async fn conflicting_state_writes_trip_the_tripwire() {
     // panic under the test harness's soft assertions.
     struct WantsLarge;
     impl Strategy for WantsLarge {
-        fn name(&self) -> &'static str {
-            "wants-large"
-        }
         fn update_state(
             &self,
             _state: &ClusterState,
@@ -1102,9 +1140,6 @@ async fn conflicting_state_writes_trip_the_tripwire() {
     }
     struct WantsSmall;
     impl Strategy for WantsSmall {
-        fn name(&self) -> &'static str {
-            "wants-small"
-        }
         fn update_state(
             &self,
             _state: &ClusterState,
@@ -1153,7 +1188,7 @@ fn replica_name_gen_is_one_based_and_avoids_used() {
 // ----- Graceful reconfiguration strategy. -----
 
 use crate::ctx::{OnTimeout, ReconfigurationRecord, ReconfigurationTarget};
-use crate::strategy::{GRACEFUL_RECONFIGURATION_STRATEGY_NAME, GracefulReconfigurationStrategy};
+use crate::strategy::GracefulReconfigurationStrategy;
 
 /// A reconfiguration record targeting `size` at `rf` with the given `deadline`,
 /// the (default) `Rollback` timeout action, empty AZ list and default logging.
@@ -1712,9 +1747,14 @@ async fn graceful_full_flow_overlap_then_cutover() {
 
     let controller = controller();
 
-    // Tick 1: overlap, create two 200cc replicas, no drops, no cut-over.
+    // Tick 1: overlap, create two 200cc replicas, no drops, no cut-over. The
+    // creates carry the graceful reason for the audit log.
     controller.reconcile(&mut ctx).await;
     assert_eq!(ctx.creates().len(), 2);
+    assert!(ctx.creates().iter().all(|d| matches!(
+        d,
+        Decision::CreateReplica { reason, .. } if *reason == CreateReason::GracefulReconfiguration
+    )));
     assert!(ctx.drops().is_empty());
     assert_eq!(ctx.states[&c].size, "100cc", "realized config unchanged");
     assert_eq!(ctx.states[&c].replicas.len(), 4);
@@ -1800,8 +1840,6 @@ async fn graceful_alter_back_finalizes_without_churn() {
     );
     assert_eq!(ctx.states[&c].size, "100cc");
     assert_eq!(ctx.states[&c].replicas.len(), 1);
-
-    let _ = GRACEFUL_RECONFIGURATION_STRATEGY_NAME;
 }
 
 #[mz_ore::test(tokio::test)]
@@ -2057,13 +2095,13 @@ async fn resource_exhaustion_without_transient_strategy_sheds_nothing() {
 use mz_repr::refresh_schedule::RefreshSchedule;
 use timely::progress::Antichain;
 
-use crate::ctx::{AuditDetail, ClusterSchedule as Sched, RefreshMvInfo, RefreshWindowDecision};
-use crate::strategy::{ON_REFRESH_STRATEGY_NAME, OnRefreshStrategy};
+use crate::ctx::{ClusterSchedule as Sched, RefreshMvInfo, RefreshWindowDecision};
+use crate::strategy::OnRefreshStrategy;
 
-/// Unwrap an `AuditDetail` into the on-refresh window decision behind it.
-fn window_decision(detail: &Option<AuditDetail>) -> &RefreshWindowDecision {
-    let Some(AuditDetail::OnRefresh(decision)) = detail else {
-        panic!("expected an on-refresh window decision");
+/// Unwrap a [`CreateReason`] into the on-refresh window decision behind it.
+fn window_decision(reason: &CreateReason) -> &RefreshWindowDecision {
+    let CreateReason::OnRefresh(decision) = reason else {
+        panic!("expected an on-refresh create reason");
     };
     decision
 }
@@ -2204,7 +2242,7 @@ fn on_refresh_in_window_desires_one_replica() {
 
     // The slot carries the window decision: the refresh-due MV explains the
     // open window, and there is no compaction reason.
-    let detail = window_decision(&desired[0].audit_detail);
+    let detail = window_decision(&desired[0].reason);
     assert_eq!(detail.objects_needing_refresh, vec![GlobalId::User(1)]);
     assert!(detail.objects_needing_compaction.is_empty());
     assert_eq!(detail.hydration_time_estimate, Duration::ZERO);
@@ -2228,7 +2266,7 @@ fn on_refresh_window_decision_lists_due_mvs() {
     let s = OnRefreshStrategy;
     let desired = s.desired_replicas(&state, &signals, &config(), Timestamp::from(0u64));
     assert_eq!(desired.len(), 1);
-    let detail = window_decision(&desired[0].audit_detail);
+    let detail = window_decision(&desired[0].reason);
     assert_eq!(detail.objects_needing_refresh, vec![GlobalId::User(1)]);
     assert!(detail.objects_needing_compaction.is_empty());
 }
@@ -2329,7 +2367,7 @@ fn on_refresh_compaction_window_keeps_cluster_on() {
 
     // The window decision attributes the open window to compaction, not a
     // pending refresh.
-    let detail = window_decision(&desired[0].audit_detail);
+    let detail = window_decision(&desired[0].reason);
     assert!(detail.objects_needing_refresh.is_empty());
     assert_eq!(detail.objects_needing_compaction, vec![GlobalId::User(1)]);
 
@@ -2370,18 +2408,11 @@ async fn on_refresh_creates_in_window_through_seam() {
     );
     let creates = ctx.creates();
     assert_eq!(creates.len(), 1, "one in-window replica is created");
-    if let Decision::CreateReplica {
-        reasons,
-        shape,
-        audit_detail,
-        ..
-    } = creates[0]
-    {
-        assert!(reasons.contains(&ON_REFRESH_STRATEGY_NAME));
+    if let Decision::CreateReplica { reason, shape, .. } = creates[0] {
         assert_eq!(shape.size, "100cc");
-        // The create carries the window decision through the kernel for the
-        // audit log's `scheduling_policies` detail.
-        let detail = window_decision(audit_detail);
+        // The create carries the window decision inside its reason through the
+        // kernel for the audit log's `scheduling_policies` detail.
+        let detail = window_decision(reason);
         assert_eq!(detail.objects_needing_refresh, vec![GlobalId::User(1)]);
         assert!(detail.objects_needing_compaction.is_empty());
     } else {
@@ -2509,7 +2540,7 @@ fn on_refresh_compaction_window_with_refresh_every() {
         1,
         "the compaction window keeps the cluster on"
     );
-    let detail = window_decision(&desired[0].audit_detail);
+    let detail = window_decision(&desired[0].reason);
     assert!(detail.objects_needing_refresh.is_empty());
     assert_eq!(detail.objects_needing_compaction, vec![GlobalId::User(1)]);
 
@@ -2616,11 +2647,9 @@ mod hydration_burst {
     };
     use crate::ctx::{
         AutoScalingPolicy, AvailabilityZones, BurstAudit, BurstFinishCause, BurstRecord,
-        BurstWrite, ClusterState, OnHydrationPolicy, ReplicaShape,
+        BurstWrite, ClusterState, CreateReason, OnHydrationPolicy, ReplicaShape,
     };
-    use crate::strategy::{
-        ConfigSignals, HYDRATION_BURST_STRATEGY_NAME, HydrationBurstStrategy, LiveSignals, Strategy,
-    };
+    use crate::strategy::{ConfigSignals, HydrationBurstStrategy, LiveSignals, Strategy};
 
     /// A MANUAL cluster carrying an `ON HYDRATION` policy at `hydration_size` with
     /// the given linger, plus an optional in-flight burst record. Evaluate against
@@ -3074,18 +3103,11 @@ mod hydration_burst {
             .collect();
         assert_eq!(burst_creates.len(), 1, "one 400cc burst replica created");
         assert!(
-            matches!(&burst_creates[0], Decision::CreateReplica { reasons, .. } if reasons.contains(&HYDRATION_BURST_STRATEGY_NAME)),
-            "the create is attributed to the burst strategy"
-        );
-        assert!(
             matches!(
                 &burst_creates[0],
-                Decision::CreateReplica {
-                    audit_detail: None,
-                    ..
-                }
+                Decision::CreateReplica { reason, .. } if *reason == CreateReason::HydrationBurst
             ),
-            "only on-refresh creates carry a window decision"
+            "the create is attributed to the burst strategy"
         );
         assert!(
             ctx.states[&c].burst.is_some(),

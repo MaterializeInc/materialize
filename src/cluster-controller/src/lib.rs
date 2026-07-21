@@ -44,7 +44,7 @@ use mz_dyncfg::ConfigSet;
 use mz_ore::soft_panic_or_log;
 
 use crate::ctx::{
-    ApplyOutcome, AuditDetail, ClusterControllerCtx, ClusterState, Decision, ObservedReplica,
+    ApplyOutcome, ClusterControllerCtx, ClusterState, CreateReason, Decision, ObservedReplica,
     ReconfigurationAudit, ReconfigurationRecord, ReconfigurationStatus, ReconfigurationWrite,
     ReplicaShape, StateWrite,
 };
@@ -376,17 +376,10 @@ impl ClusterController {
         config: &ConfigSignals,
         now: mz_repr::Timestamp,
     ) -> Vec<Decision> {
-        // Each strategy's contribution, tagged with the strategy name for
-        // attribution.
-        let contributions: Vec<(&'static str, Vec<DesiredReplica>)> = self
+        let contributions: Vec<Vec<DesiredReplica>> = self
             .strategies
             .iter()
-            .map(|strategy| {
-                (
-                    strategy.name(),
-                    strategy.desired_replicas(state, signals, config, now),
-                )
-            })
+            .map(|strategy| strategy.desired_replicas(state, signals, config, now))
             .collect();
 
         reconcile_replicas(state, &contributions)
@@ -431,54 +424,47 @@ fn join<T: PartialEq>(
 /// - For each shape, if actual count < desired count we create the difference;
 ///   if actual count > desired count we drop the difference, picking specific
 ///   excess replicas. A replica of a shape no strategy desires is dropped.
-/// - Creates carry the names of the strategies that desired the shape, plus the
-///   merged `audit_detail` of the slots behind it (per shape, first `Some` wins;
-///   the payload is opaque to the kernel, and at most one strategy attaches one
-///   to a given shape today, so the rule is documented, not load-bearing); drops
-///   carry no attribution. A drop happens exactly when no strategy desires the
-///   replica.
+/// - Creates carry the highest-precedence [`CreateReason`] among the slots that
+///   desired the shape (see [`CreateReason::precedence`]). Drops carry no
+///   attribution. A drop happens exactly when no strategy desires the replica.
 fn reconcile_replicas(
     state: &ClusterState,
-    contributions: &[(&'static str, Vec<DesiredReplica>)],
+    contributions: &[Vec<DesiredReplica>],
 ) -> Vec<Decision> {
     // Desired count per shape = max over strategies of how many that strategy
-    // wants of the shape, the union of which strategies want it, and the merged
-    // audit detail of the slots.
+    // wants of the shape, carrying the highest-precedence reason among the
+    // slots.
     let mut desired: Vec<DesiredShape> = Vec::new();
-    for (name, slots) in contributions {
-        // How many of each shape this strategy wants, and the detail (if any) it
-        // attached to the shape's slots.
-        let mut per_shape: Vec<(ReplicaShape, usize, Option<AuditDetail>)> = Vec::new();
+    for slots in contributions {
+        // How many of each shape this strategy wants, and the winning reason
+        // among the shape's slots.
+        let mut per_shape: Vec<(ReplicaShape, usize, CreateReason)> = Vec::new();
         for slot in slots {
             match per_shape
                 .iter_mut()
                 .find(|(s, _, _)| s.matches(&slot.shape))
             {
-                Some((_, count, detail)) => {
+                Some((_, count, reason)) => {
                     *count += 1;
-                    if detail.is_none() {
-                        *detail = slot.audit_detail.clone();
+                    if slot.reason.precedence() > reason.precedence() {
+                        *reason = slot.reason.clone();
                     }
                 }
-                None => per_shape.push((slot.shape.clone(), 1, slot.audit_detail.clone())),
+                None => per_shape.push((slot.shape.clone(), 1, slot.reason.clone())),
             }
         }
-        for (shape, count, audit_detail) in per_shape {
+        for (shape, count, reason) in per_shape {
             match desired.iter_mut().find(|d| d.shape.matches(&shape)) {
                 Some(existing) => {
                     existing.count = existing.count.max(count);
-                    if !existing.reasons.contains(name) {
-                        existing.reasons.push(*name);
-                    }
-                    if existing.audit_detail.is_none() {
-                        existing.audit_detail = audit_detail;
+                    if reason.precedence() > existing.reason.precedence() {
+                        existing.reason = reason;
                     }
                 }
                 None => desired.push(DesiredShape {
                     shape,
                     count,
-                    reasons: vec![*name],
-                    audit_detail,
+                    reason,
                 }),
             }
         }
@@ -524,10 +510,9 @@ fn reconcile_replicas(
                 cluster_id: state.cluster_id,
                 name: name_gen.next_name(),
                 shape: d.shape.clone(),
-                reasons: d.reasons.clone(),
-                // Multiple creates of one shape in a tick share the same
-                // audit detail.
-                audit_detail: d.audit_detail.clone(),
+                // Multiple creates of one shape in a tick share the merged
+                // reason.
+                reason: d.reason.clone(),
                 expected: expected.clone(),
             });
         }
@@ -553,13 +538,12 @@ fn reconcile_replicas(
     decisions
 }
 
-/// A shape the union desires, how many, which strategies wanted it, and the
-/// merged audit detail of the slots behind it (opaque to the kernel).
+/// A shape the union desires, how many, and the highest-precedence reason of
+/// the strategies that wanted it.
 struct DesiredShape {
     shape: ReplicaShape,
     count: usize,
-    reasons: Vec<&'static str>,
-    audit_detail: Option<AuditDetail>,
+    reason: CreateReason,
 }
 
 /// Generates deterministic fresh replica names that avoid a set of in-use names.

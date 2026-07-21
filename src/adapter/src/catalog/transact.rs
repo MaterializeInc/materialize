@@ -374,9 +374,11 @@ pub enum ReplicaCreateDropReason {
     /// a `SCHEDULE = ON REFRESH` cluster. Audited as the `schedule` reason, carrying the tick's
     /// window decision (which MVs needed a refresh or compaction time, and the hydration-time
     /// estimate) as the `scheduling_policies` detail, the same detail the legacy scheduler's
-    /// [`ReplicaCreateDropReason::ClusterScheduling`] records. The controller always supplies
-    /// the decision; a `None` still audits `schedule`, just without the blob.
-    OnRefresh(Option<RefreshWindowDecision>),
+    /// [`ReplicaCreateDropReason::ClusterScheduling`] records. Deliberately not that variant
+    /// itself: its legacy shape carries a per-policy `Vec` and an on/off flag for auditing
+    /// off-decisions, neither of which the controller has (controller drops are uniformly
+    /// `Retired`), and it is removed together with the legacy scheduler.
+    OnRefresh(RefreshWindowDecision),
     /// The cluster controller dropped the replica because the cluster's configuration no longer
     /// calls for it. The uniform reason on every controller-emitted drop (e.g. a
     /// replication-factor decrease).
@@ -406,7 +408,7 @@ impl ReplicaCreateDropReason {
             }
             ReplicaCreateDropReason::OnRefresh(decision) => (
                 CreateOrDropClusterReplicaReasonV1::Schedule,
-                decision.map(refresh_window_decision_to_audit_log),
+                Some(refresh_window_decision_to_audit_log(decision)),
             ),
             ReplicaCreateDropReason::Retired => (CreateOrDropClusterReplicaReasonV1::Retired, None),
         }
@@ -3990,11 +3992,11 @@ mod tests {
         // decision hardcoded `on` (the controller produces a create, and so
         // this detail, only for an open window).
         let (reason, scheduling_policies) =
-            ReplicaCreateDropReason::OnRefresh(Some(RefreshWindowDecision {
+            ReplicaCreateDropReason::OnRefresh(RefreshWindowDecision {
                 objects_needing_refresh: vec![GlobalId::User(1)],
                 objects_needing_compaction: vec![GlobalId::User(2), GlobalId::User(3)],
                 hydration_time_estimate: Duration::from_secs(995),
-            }))
+            })
             .into_audit_log();
         assert_eq!(reason, CreateOrDropClusterReplicaReasonV1::Schedule);
         let blob = scheduling_policies.expect("on-refresh create carries the detail");
@@ -4002,13 +4004,6 @@ mod tests {
         assert_eq!(blob.on_refresh.objects_needing_refresh, vec!["u1"]);
         assert_eq!(blob.on_refresh.objects_needing_compaction, vec!["u2", "u3"]);
         assert_eq!(blob.on_refresh.hydration_time_estimate, "00:16:35");
-
-        // A detail-less on-refresh create still reads `schedule`, just without
-        // the blob.
-        let (reason, scheduling_policies) =
-            ReplicaCreateDropReason::OnRefresh(None).into_audit_log();
-        assert_eq!(reason, CreateOrDropClusterReplicaReasonV1::Schedule);
-        assert!(scheduling_policies.is_none());
 
         // `Retired` is the uniform word for every controller drop, with no
         // blob.

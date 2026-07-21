@@ -33,12 +33,9 @@ use mz_adapter_types::dyncfgs::{CLUSTER_CONTROLLER_TICK_INTERVAL, ENABLE_CLUSTER
 use mz_catalog::memory::objects::{ClusterConfig, ClusterVariant};
 use mz_cluster_controller::ClusterController;
 use mz_cluster_controller::ctx::{
-    ApplyOutcome, AuditDetail, AvailabilityZones, ClusterControllerCtx, ClusterState, Decision,
+    ApplyOutcome, AvailabilityZones, ClusterControllerCtx, ClusterState, CreateReason, Decision,
     ExpectedClusterState, ObservedReplica, OnTimeout, ReconfigurationRecord, ReconfigurationStatus,
     ReconfigurationTarget, RefreshMvInfo, RefreshWindowInputs, ReplicaShape, StateWrite,
-};
-use mz_cluster_controller::strategy::{
-    GRACEFUL_RECONFIGURATION_STRATEGY_NAME, HYDRATION_BURST_STRATEGY_NAME, ON_REFRESH_STRATEGY_NAME,
 };
 use mz_compute_types::config::ComputeReplicaConfig;
 use mz_controller::clusters::ClusterStatus;
@@ -701,12 +698,11 @@ impl Coordinator {
                     cluster_id,
                     name,
                     shape,
-                    reasons,
-                    audit_detail,
+                    reason,
                     ..
                 } => {
                     let replica_id = replica_ids.next().expect("one pre-allocated id per create");
-                    let reason = reason_from_strategies(&reasons, audit_detail);
+                    let reason = audit_reason_for_create(reason);
                     match self.build_create_replica_op(cluster_id, replica_id, name, &shape, reason)
                     {
                         Ok(Some(op)) => mutations.push(op),
@@ -929,35 +925,21 @@ impl Coordinator {
     }
 }
 
-/// Map a create decision's strategy-attribution to the audit reason carried on
-/// the create event. Graceful wins over burst when both desired a shape (their
-/// shapes differ in practice, so this is a stable tie-break); on-refresh maps to
-/// the `schedule` reason, carrying the create's window decision as the
-/// `scheduling_policies` detail; a baseline-held replica is `Manual`, the tag
-/// for replicas the user's own config calls for.
-///
-/// The detail is attached only when on-refresh wins the precedence, so the blob
-/// appears iff the audited reason is `schedule`, the same invariant the legacy
-/// scheduler's events had. (A shape desired by both graceful and on-refresh
-/// audits `reconfiguration` with no blob: consistent, since the blob explains a
-/// `schedule` decision.)
+/// Map a create decision's [`CreateReason`] to the audit reason carried on the
+/// create event. `Baseline` audits [`ReplicaCreateDropReason::Manual`], the tag
+/// for replicas the user's own cluster config calls for. The match is
+/// exhaustive, so a new `CreateReason` variant is a compile error here instead
+/// of a silent `Manual`.
 ///
 /// Drops never come through here: a drop happens exactly when no strategy
 /// desires the replica, so it carries no attribution and is uniformly audited
 /// [`ReplicaCreateDropReason::Retired`].
-fn reason_from_strategies(
-    reasons: &[&'static str],
-    audit_detail: Option<AuditDetail>,
-) -> ReplicaCreateDropReason {
-    if reasons.contains(&GRACEFUL_RECONFIGURATION_STRATEGY_NAME) {
-        ReplicaCreateDropReason::GracefulReconfiguration
-    } else if reasons.contains(&HYDRATION_BURST_STRATEGY_NAME) {
-        ReplicaCreateDropReason::HydrationBurst
-    } else if reasons.contains(&ON_REFRESH_STRATEGY_NAME) {
-        let decision = audit_detail.map(|AuditDetail::OnRefresh(decision)| decision);
-        ReplicaCreateDropReason::OnRefresh(decision)
-    } else {
-        ReplicaCreateDropReason::Manual
+fn audit_reason_for_create(reason: CreateReason) -> ReplicaCreateDropReason {
+    match reason {
+        CreateReason::Baseline => ReplicaCreateDropReason::Manual,
+        CreateReason::GracefulReconfiguration => ReplicaCreateDropReason::GracefulReconfiguration,
+        CreateReason::HydrationBurst => ReplicaCreateDropReason::HydrationBurst,
+        CreateReason::OnRefresh(decision) => ReplicaCreateDropReason::OnRefresh(decision),
     }
 }
 
@@ -1056,68 +1038,39 @@ fn memory_burst(
 
 #[cfg(test)]
 mod tests {
-    use mz_cluster_controller::strategy::BASELINE_STRATEGY_NAME;
-
     use super::*;
 
     #[mz_ore::test]
-    fn test_reason_from_strategies() {
+    fn test_audit_reason_for_create() {
         use ReplicaCreateDropReason as Reason;
         use mz_cluster_controller::ctx::RefreshWindowDecision;
+        use mz_repr::GlobalId;
 
-        let detail = || {
-            Some(AuditDetail::OnRefresh(RefreshWindowDecision {
-                objects_needing_refresh: Vec::new(),
-                objects_needing_compaction: Vec::new(),
-                hydration_time_estimate: Duration::ZERO,
-            }))
-        };
-
-        // Each strategy maps to its own reason; the baseline (or no
-        // attribution) is `Manual`.
+        // Each variant maps to its own audit reason, with the baseline
+        // auditing `Manual`.
         assert!(matches!(
-            reason_from_strategies(&[BASELINE_STRATEGY_NAME], None),
+            audit_reason_for_create(CreateReason::Baseline),
             Reason::Manual
         ));
-        assert!(matches!(reason_from_strategies(&[], None), Reason::Manual));
         assert!(matches!(
-            reason_from_strategies(&[GRACEFUL_RECONFIGURATION_STRATEGY_NAME], None),
+            audit_reason_for_create(CreateReason::GracefulReconfiguration),
             Reason::GracefulReconfiguration
         ));
         assert!(matches!(
-            reason_from_strategies(&[HYDRATION_BURST_STRATEGY_NAME], None),
+            audit_reason_for_create(CreateReason::HydrationBurst),
             Reason::HydrationBurst
         ));
-        // The on-refresh reason carries the create's window decision through to
-        // the audit detail.
-        assert!(matches!(
-            reason_from_strategies(&[ON_REFRESH_STRATEGY_NAME], detail()),
-            Reason::OnRefresh(Some(_))
-        ));
 
-        // Graceful wins the tie-break when several strategies desired the
-        // shape, and any strategy attribution beats the baseline's `Manual`.
-        // The window decision is attached only when on-refresh wins, so the
-        // `scheduling_policies` blob appears iff the audited reason is
-        // `schedule`.
-        assert!(matches!(
-            reason_from_strategies(
-                &[
-                    BASELINE_STRATEGY_NAME,
-                    HYDRATION_BURST_STRATEGY_NAME,
-                    ON_REFRESH_STRATEGY_NAME,
-                    GRACEFUL_RECONFIGURATION_STRATEGY_NAME,
-                ],
-                detail(),
-            ),
-            Reason::GracefulReconfiguration
-        ));
-        assert!(matches!(
-            reason_from_strategies(
-                &[BASELINE_STRATEGY_NAME, ON_REFRESH_STRATEGY_NAME],
-                detail()
-            ),
-            Reason::OnRefresh(Some(_))
-        ));
+        // The on-refresh reason carries the create's window decision through
+        // to the audit detail intact.
+        let decision = RefreshWindowDecision {
+            objects_needing_refresh: vec![GlobalId::User(1)],
+            objects_needing_compaction: vec![GlobalId::User(2)],
+            hydration_time_estimate: Duration::from_secs(7),
+        };
+        match audit_reason_for_create(CreateReason::OnRefresh(decision.clone())) {
+            Reason::OnRefresh(carried) => assert_eq!(carried, decision),
+            other => panic!("expected an on-refresh reason, got {other:?}"),
+        }
     }
 }
