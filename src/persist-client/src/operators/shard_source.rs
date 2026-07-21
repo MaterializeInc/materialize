@@ -518,6 +518,8 @@ where
             let (parts, progress) = shard_stream.next().await.expect("infinite stream");
 
             let mut batch_bytes: u64 = 0;
+            // INSTR: count parts emitted per shard_stream batch (one persist batch).
+            let mut dbg_given: u64 = 0;
 
             // Emit the part at the `(ts, 0)` time. The `granular_backpressure`
             // operator will refine this further, if its enabled.
@@ -598,6 +600,17 @@ where
                 let (part, lease) = part_desc.into_exchangeable_part();
                 leases.borrow_mut().push_at(current_ts.clone(), lease);
                 descs_output.give(&session_cap, (worker_idx, part));
+                dbg_given += 1;
+            }
+
+            // INSTR: how many parts this operator emitted in one shard_stream
+            // batch. Answers whether the source floods (single big batch) or
+            // trickles.
+            if dbg_given > 0 {
+                tracing::info!(
+                    target: "mz_persist_client::operators::shard_source",
+                    "INSTR descs emit: gave parts={dbg_given} in one shard_stream batch"
+                );
             }
 
             current_frontier.join_assign(&progress);
@@ -741,6 +754,11 @@ where
         let mut in_flight = FuturesUnordered::new();
         let mut input_done = false;
 
+        // INSTR: cumulative parts accepted from the input, plus a 1s heartbeat
+        // to sample loop depth even while parked in `descs_input.next()`.
+        let mut dbg_pushed: u64 = 0;
+        let mut dbg_tick = tokio::time::interval(std::time::Duration::from_secs(1));
+
         loop {
             // Start fetches up to the concurrency cap.
             while in_flight.len() < max_concurrency {
@@ -773,13 +791,37 @@ where
                         Some(Event::Data(caps, data)) => {
                             // `LeasedBatchPart`es cannot be dropped at this point
                             // w/o panicking, so swap them to an owned version.
+                            let mut dbg_n: u64 = 0;
                             for (_idx, part) in data {
                                 pending.push_back((caps.clone(), part));
+                                dbg_n += 1;
                             }
+                            dbg_pushed += dbg_n;
+                            // INSTR: parts delivered by ONE descs_input event.
+                            // The key number: does the Exchange surface a full
+                            // batch here, or ~1 per event?
+                            tracing::info!(
+                                target: "mz_persist_client::operators::shard_source",
+                                "INSTR fetch recv: descs_event parts={dbg_n} pending_now={} in_flight={} pushed_total={dbg_pushed}",
+                                pending.len(),
+                                in_flight.len(),
+                            );
                         }
                         Some(Event::Progress(_)) => {}
                         None => input_done = true,
                     }
+                }
+                // INSTR: 1s heartbeat. Fires when the loop is parked (idle) since
+                // biased order checks in_flight/descs first; a repeatedly-low
+                // in_flight with a nonempty pending would indict the fetch loop,
+                // low in_flight with empty pending indicts upstream delivery.
+                _ = dbg_tick.tick() => {
+                    tracing::info!(
+                        target: "mz_persist_client::operators::shard_source",
+                        "INSTR fetch loop: in_flight={} pending={} pushed_total={dbg_pushed} max_concurrency={max_concurrency}",
+                        in_flight.len(),
+                        pending.len(),
+                    );
                 }
                 // Input is exhausted and no fetches remain: we're done.
                 else => break,
