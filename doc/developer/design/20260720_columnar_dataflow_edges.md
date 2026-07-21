@@ -307,7 +307,10 @@ Base: Wave 1 complete.
 **P5: columnar arrangement-to-collection materialization (`as_specific_collection`).**
 Producers split in two: collection producers (Get/Mfp, Constant, FlatMap, TopK monotonic/top1, join outputs) build a `ColumnBuilder` directly; arrangement producers (Reduce `from_columns`, Threshold `from_expressions`, TopK-bucketed `from_columns`) emit an arrangement, not a collection.
 An arrangement producer's arrangement is already columnar-internal (C1); its output becomes `Vec` only at the shared `as_specific_collection` arrangement-materialization path (the identity-keyed path P1 deliberately left `Vec`).
-Flip that path to pack arrangement rows into a `ConsolidatingColumnBuilder` and return a columnar edge, retiring the last Vec-producing arrangement-to-collection site.
+This path READS an already-consolidated arrangement cursor (RowRowSpine yields distinct `(row,t,diff)` per time, no within-batch dups), so it is a CONSUMER read, not a producer computing new rows.
+Therefore it uses the C1/C3/C4 consumer pattern: a plain `ColumnBuilder` with a BORROWED push of the cursor's `RowRef`, NOT `ConsolidatingColumnBuilder`.
+The standing producer rule (`ConsolidatingColumnBuilder`, owned give) does not apply here: the data is already distinct, so consolidation would be pure wasted sort and would change the deliberate non-consolidating semantics (the current builder is a non-consolidating `CapacityContainerBuilder`).
+Flip the path to build a `ColumnBuilder` borrowed and return a columnar edge, retiring the last Vec-producing arrangement-to-collection site.
 This single node covers the outputs of Reduce, Threshold, and TopK-bucketed at once.
 It is real materialization logic, not a mechanical rename, so it lands before T2 (keeping T2 mechanical), and the materialized collection becomes an internal `.collection` edge that can feed any operator, so it must be columnar by T2, not a sanctioned leaf.
 Investigate-first: map `as_specific_collection`'s callers and its two paths (the `Some(key)` arrangement-materialization path is the one to flip; the `None` `into_vec` path is the unarranged-collection consumer leaf, report its remaining callers).
