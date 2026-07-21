@@ -165,7 +165,7 @@ use crate::extensions::temporal_bucket::TemporalBucketing;
 use crate::logging::compute::{
     ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors, OperatorHydration,
 };
-use crate::render::columnar::CollectionEdge;
+use crate::render::columnar::{CollectionEdge, vec_to_columnar};
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
@@ -374,8 +374,11 @@ pub fn build_compute_dataflow(
                 );
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
-                    let bundle = crate::render::CollectionBundle::from_collections(
-                        oks.enter(region),
+                    // Imports read row-shaped data from persist; encode it to the
+                    // columnar edge at the boundary. The batches are already
+                    // consolidated, so this leaf-encode is non-consolidating.
+                    let bundle = crate::render::CollectionBundle::from_edge(
+                        CollectionEdge::Columnar(vec_to_columnar(oks.enter(region))),
                         errs.enter(region),
                     );
                     // Associate collection bundle with the source identifier.
@@ -474,8 +477,11 @@ pub fn build_compute_dataflow(
                 );
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
-                    let bundle = crate::render::CollectionBundle::from_collections(
-                        oks.enter_region(region),
+                    // Imports read row-shaped data from persist; encode it to the
+                    // columnar edge at the boundary. The batches are already
+                    // consolidated, so this leaf-encode is non-consolidating.
+                    let bundle = crate::render::CollectionBundle::from_edge(
+                        CollectionEdge::Columnar(vec_to_columnar(oks.enter_region(region))),
                         errs.enter_region(region),
                     );
                     // Associate collection bundle with the source identifier.
@@ -667,7 +673,13 @@ where
                         start_signal,
                         |e, _| e.clone(),
                     );
-                    CollectionBundle::from_collections(oks, errs)
+                    // The filtered index collection is row-shaped; encode it to
+                    // the columnar edge at the boundary. It is already
+                    // consolidated, so this leaf-encode is non-consolidating.
+                    CollectionBundle::from_edge(
+                        CollectionEdge::Columnar(vec_to_columnar(oks)),
+                        errs,
+                    )
                 }
             };
             self.update_id(Id::Global(idx.on_id), bundle);
