@@ -44,6 +44,8 @@ use crate::containers::stack::FueledBuilder;
 /// Builds async operators with generic shape.
 pub struct OperatorBuilder<'scope, T: Timestamp> {
     builder: OperatorBuilderRc<'scope, T>,
+    /// The operator name, retained for diagnostics.
+    name: String,
     /// The activator for this operator
     activator: Activator,
     /// The waker set up to activate this timely operator when woken
@@ -64,8 +66,9 @@ pub struct OperatorBuilder<'scope, T: Timestamp> {
 /// A helper trait abstracting over an input handle. It facilitates keeping around type erased
 /// handles for each of the operator inputs.
 trait InputQueue<T: Timestamp> {
-    /// Accepts all available input into local queues.
-    fn accept_input(&mut self);
+    /// Accepts all available input into local queues. Returns the number of
+    /// data messages pulled from the timely channel this call.
+    fn accept_input(&mut self) -> usize;
 
     /// Drains all available input and empties the local queue.
     fn drain_input(&mut self);
@@ -81,19 +84,20 @@ where
     C: InputConnection<T> + 'static,
     P: Pull<Message<T, D>> + 'static,
 {
-    fn accept_input(&mut self) {
+    fn accept_input(&mut self) -> usize {
         let mut queue = self.queue.borrow_mut();
-        let mut new_data = false;
+        let mut pulled = 0;
         self.handle.for_each(|cap, data| {
-            new_data = true;
+            pulled += 1;
             let cap = self.connection.accept(cap);
             queue.push_back(Event::Data(cap, std::mem::take(data)));
         });
-        if new_data {
+        if pulled > 0 {
             if let Some(waker) = self.waker.take() {
                 waker.wake();
             }
         }
+        pulled
     }
 
     fn drain_input(&mut self) {
@@ -435,7 +439,7 @@ impl<T: Timestamp, CB: ContainerBuilder> OutputIndex for AsyncOutputHandle<T, CB
 impl<'scope, T: Timestamp> OperatorBuilder<'scope, T> {
     /// Allocates a new generic async operator builder from its containing scope.
     pub fn new(name: String, scope: Scope<'scope, T>) -> Self {
-        let builder = OperatorBuilderRc::new(name, scope);
+        let builder = OperatorBuilderRc::new(name.clone(), scope);
         let info = builder.operator_info();
         let activator = scope.activator_for(Rc::clone(&info.address));
         let sync_activator = scope.worker().sync_activator_for(info.address.to_vec());
@@ -448,6 +452,7 @@ impl<'scope, T: Timestamp> OperatorBuilder<'scope, T> {
 
         OperatorBuilder {
             builder,
+            name,
             activator,
             operator_waker: Arc::new(operator_waker),
             input_frontiers: Default::default(),
@@ -578,10 +583,18 @@ impl<'scope, T: Timestamp> OperatorBuilder<'scope, T> {
         let mut input_queues = self.input_queues;
         let mut output_flushes = self.output_flushes;
         let mut shutdown_handle = self.shutdown_handle;
+        // INSTR: gate delivery-probe logging to the fetch operator only.
+        let dbg_is_fetch = self.name.contains("shard_source_fetch");
         self.builder.build_reschedule(move |caps| {
             let mut logic_fut = Some(Box::pin(constructor(caps)));
+            // INSTR: cumulative schedules and messages accepted, to see whether
+            // the operator is scheduled often with ~1 message each (fabric
+            // dribble) or seldom with a bulk pull.
+            let mut dbg_schedules: u64 = 0;
+            let mut dbg_accepted_total: usize = 0;
             move |new_frontiers| {
                 operator_waker.active.store(true, Ordering::SeqCst);
+                let mut dbg_accepted_now: usize = 0;
                 for (i, queue) in input_queues.iter_mut().enumerate() {
                     // First, discover if there are any frontier notifications
                     let cur = &mut input_frontiers[i];
@@ -592,9 +605,23 @@ impl<'scope, T: Timestamp> OperatorBuilder<'scope, T> {
                     }
                     // Then accept all input into local queues. This step registers the received
                     // messages with progress tracking.
-                    queue.accept_input();
+                    dbg_accepted_now += queue.accept_input();
                 }
                 operator_waker.active.store(false, Ordering::SeqCst);
+                if dbg_is_fetch {
+                    dbg_schedules += 1;
+                    dbg_accepted_total += dbg_accepted_now;
+                    // Log only when we actually pulled data. The `schedules`
+                    // delta between consecutive logs is how many times the
+                    // operator ran without new input, i.e. how much slack there
+                    // was to pull more if the fabric had it.
+                    if dbg_accepted_now > 0 {
+                        tracing::info!(
+                            target: "mz_persist_client::operators::shard_source",
+                            "INSTR accept: pulled={dbg_accepted_now} schedules={dbg_schedules} accepted_total={dbg_accepted_total}"
+                        );
+                    }
+                }
 
                 // If our worker pressed the button we stop scheduling the logic future and/or
                 // draining the input handles to stop producing data and frontier updates
