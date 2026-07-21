@@ -270,10 +270,15 @@ Confirmed by inspection of `render.rs`; no separate node exists.
 NOTE for T2: the `into_vec` at 1358 and the `CollectionEdge::Vec` re-wrap at 1359 are leaf sites T2 adapts; the re-wrap re-encodes the bucketed `StreamVec` via `vec_to_columnar` (a sanctioned-decode return, see T1).
 
 **P1: columnar output for the `flat_map` family.**
-Generalize `as_collection_core` to build into a `ColumnBuilder` and return a columnar edge, which flips the Get and Mfp producers.
+Generalize `as_collection_core` to build into a `ConsolidatingColumnBuilder` and return a columnar edge, which flips the Get and Mfp producers.
 Rework its identity fast-path (`context.rs:927-929`) so it no longer delegates a `Vec` to `as_specific_collection`.
 Leave `as_specific_collection` returning `Vec` as a consumer leaf until its remaining callers are retired.
 This keeps P1's base at the arrange path and the sink, both native by Wave 2.
+
+STANDING PRODUCER RULE (all producer flips): use `ConsolidatingColumnBuilder`, not plain `ColumnBuilder`, for the producer output.
+The pre-migration producers used `ConsolidatingContainerBuilder`, which folded duplicates within a batch.
+A plain `ColumnBuilder` drops that, a permanent regression on the broad Mfp-to-sink class (more rows reach the sink `ColumnarToVec` and persist re-consolidation).
+The columnar builder copies row bytes into the column from a borrowed push either way, so `ConsolidatingColumnBuilder` keeps the borrowed push (no owned `Row` per record) and adds the within-batch consolidation, restoring parity.
 Files: `src/compute/src/render/context.rs`, `src/compute/src/render.rs`.
 Test: physical-plan goldens unchanged, plus sqllogictest for Get and Mfp chains feeding an ArrangeBy or sink.
 Base: Wave 1 complete.
