@@ -275,10 +275,12 @@ Rework its identity fast-path (`context.rs:927-929`) so it no longer delegates a
 Leave `as_specific_collection` returning `Vec` as a consumer leaf until its remaining callers are retired.
 This keeps P1's base at the arrange path and the sink, both native by Wave 2.
 
-STANDING PRODUCER RULE (all producer flips): use `ConsolidatingColumnBuilder`, not plain `ColumnBuilder`, for the producer output.
-The pre-migration producers used `ConsolidatingContainerBuilder`, which folded duplicates within a batch.
-A plain `ColumnBuilder` drops that, a permanent regression on the broad Mfp-to-sink class (more rows reach the sink `ColumnarToVec` and persist re-consolidation).
-The columnar builder copies row bytes into the column from a borrowed push either way, so `ConsolidatingColumnBuilder` keeps the borrowed push (no owned `Row` per record) and adds the within-batch consolidation, restoring parity.
+STANDING PRODUCER RULE (all producer flips): use `ConsolidatingColumnBuilder` with an OWNED give, not plain `ColumnBuilder`, for the producer output.
+The pre-migration producers used `ConsolidatingContainerBuilder`, which owned-staged and folded duplicates within a batch.
+A plain `ColumnBuilder` drops that consolidation, a permanent regression on the broad Mfp-to-sink class (more rows reach the sink `ColumnarToVec` and persist re-consolidation).
+Consolidation inherently needs owned staging (you cannot sort a columnar batch without materialized comparable rows), so `ConsolidatingColumnBuilder` is owned-give only.
+This is not a regression: a producer computes its output `Row` fresh (`mfp_plan.evaluate` already yields an owned `Row` per record), so the owned give is a move into staging, not a new allocation or clone, exactly as pre-P1.
+The borrowed-push, no-owned-`Row` property is a CONSUMER optimization (reading an existing columnar batch, as in C1/C3/C4), not applicable to producers that compute new rows.
 Files: `src/compute/src/render/context.rs`, `src/compute/src/render.rs`.
 Test: physical-plan goldens unchanged, plus sqllogictest for Get and Mfp chains feeding an ArrangeBy or sink.
 Base: Wave 1 complete.
