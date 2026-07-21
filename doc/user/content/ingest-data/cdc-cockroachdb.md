@@ -7,6 +7,8 @@ menu:
     name: "Using Kafka and Changefeeds"
     identifier: "crdb-kafka-changefeeds"
     weight: 5
+aliases:
+  - /self-managed/v25.2/ingest-data/cdc-cockroachdb/
 ---
 
 {{< tip >}}

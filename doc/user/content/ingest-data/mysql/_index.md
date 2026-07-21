@@ -7,6 +7,8 @@ menu:
         parent: "ingest-data"
         identifier: "mysql"
         weight: 5
+aliases:
+  - /self-managed/v25.2/ingest-data/mysql/
 ---
 
 ## Change Data Capture (CDC)

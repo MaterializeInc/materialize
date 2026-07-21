@@ -8,6 +8,8 @@ menu:
     identifier: cli
     weight: 99
 disable_list: true
+aliases:
+  - /self-managed/v25.2/integrations/cli/
 ---
 
 The Materialize command-line interface (CLI), lets you interact with

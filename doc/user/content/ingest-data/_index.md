@@ -9,6 +9,9 @@ menu:
     weight: 11
 aliases:
   - /self-managed/v25.1/ingest-data/
+  - /self-managed/v25.2/ingest-data/kafka/amazon-msk/
+  - /self-managed/v25.2/ingest-data/kafka/kafka-self-hosted/
+  - /self-managed/v25.2/ingest-data/troubleshooting/
 ---
 
 You can ingest data into Materialize from various external systems:
