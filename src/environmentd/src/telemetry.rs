@@ -89,6 +89,7 @@ use mz_repr::adt::jsonb::Jsonb;
 use mz_sql::catalog::EnvironmentId;
 use serde_json::json;
 use tokio::time::{self, Duration};
+use uuid::Uuid;
 
 /// Telemetry configuration.
 #[derive(Clone)]
@@ -218,6 +219,12 @@ async fn report_loop(
         // organization in cloud SaaS, so we report the license key's `sub`
         // (organization) and `aud` (environment) instead.
         //
+        // The `aud` is only a real environment identity when it names a
+        // specific environment. Cloud shares one wildcard key with a nil `aud`
+        // across environments, so a nil (or absent) audience is omitted rather
+        // than reported as an identity that downstream consumers would wrongly
+        // coalesce across unrelated environments.
+        //
         // Expiry is recomputed against the wall clock each interval rather than
         // reusing the flag computed once at startup, so a key that lapses while
         // environmentd keeps running is reported as expired. The
@@ -228,7 +235,13 @@ async fn report_loop(
             || (license_key.expiration != 0 && now_secs >= license_key.expiration);
         if let Some(traits) = traits.as_object_mut() {
             traits.insert("organization_id".into(), json!(license_key.organization));
-            traits.insert("environment_id".into(), json!(license_key.environment_id));
+            if license_key
+                .environment_id
+                .parse::<Uuid>()
+                .is_ok_and(|id| !id.is_nil())
+            {
+                traits.insert("environment_id".into(), json!(license_key.environment_id));
+            }
             traits.insert("license_key_id".into(), json!(license_key.id));
             traits.insert(
                 "license_expiration_timestamp".into(),
@@ -238,6 +251,10 @@ async fn report_loop(
             traits.insert(
                 "license_expiration_behavior".into(),
                 json!(license_key.expiration_behavior),
+            );
+            traits.insert(
+                "license_entitlements".into(),
+                json!(license_key.entitlements),
             );
         }
 
