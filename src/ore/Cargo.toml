@@ -176,6 +176,11 @@ name = "bytes"
 harness = false
 required-features = ["bytes", "region", "tracing"]
 
+[[bench]]
+name = "pool_steady_state"
+harness = false
+required-features = ["pool"]
+
 [package.metadata.cargo-udeps.ignore]
 # Only used in doc-tests.
 development = ["tokio-test"]
