@@ -229,6 +229,24 @@ where
     );
     tokens.push(descs_token);
 
+    // PROBE (diagnostic): consume the descs output directly on the chosen worker
+    // via Pipeline, before the scope `enter` and the fetch-input exchange. This
+    // is a pure async->async, same-worker, no-exchange delivery. Its "INSTR
+    // accept" logs (op=..._probe) localize the trickle: if this delivery is also
+    // ~1-2 per activation, the async bridge itself is the throttle; if it is
+    // bulk, the enter/exchange path downstream is.
+    {
+        let mut probe =
+            AsyncOperatorBuilder::new(format!("shard_source_fetch_probe({})", name), outer.clone());
+        let mut probe_input = probe.new_disconnected_input(descs.clone(), Pipeline);
+        let probe_button = probe.build(move |_caps| async move {
+            while let Some(event) = probe_input.next().await {
+                let _ = event;
+            }
+        });
+        tokens.push(probe_button.press_on_drop());
+    }
+
     let descs = descs.enter(scope);
     let descs = match desc_transformer {
         Some(desc_transformer) => {

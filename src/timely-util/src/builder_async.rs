@@ -597,6 +597,7 @@ impl<'scope, T: Timestamp> OperatorBuilder<'scope, T> {
         // an output, so the return operator logs nothing.
         let dbg_is_fetch = self.name.contains("shard_source_fetch");
         let dbg_is_descs = self.name.contains("shard_source_descs");
+        let dbg_name = self.name.clone();
         self.builder.build_reschedule(move |caps| {
             let mut logic_fut = Some(Box::pin(constructor(caps)));
             // INSTR: cumulative schedules and messages accepted, to see whether
@@ -635,7 +636,7 @@ impl<'scope, T: Timestamp> OperatorBuilder<'scope, T> {
                     if dbg_accepted_now > 0 {
                         tracing::info!(
                             target: "mz_persist_client::operators::shard_source",
-                            "INSTR accept: pulled={dbg_accepted_now} schedules={dbg_schedules} accepted_total={dbg_accepted_total}"
+                            "INSTR accept: op={dbg_name} pulled={dbg_accepted_now} schedules={dbg_schedules} accepted_total={dbg_accepted_total}"
                         );
                     }
                 }
