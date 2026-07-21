@@ -88,3 +88,22 @@ SHOW cluster
 ----
 baz
 COMPLETE 1
+
+# DISCARD ALL must reset session variables over the extended query protocol as
+# well as the simple one (SQL-529). Records without the `simple` directive run
+# over the extended protocol.
+statement ok
+SET extra_float_digits = 1
+
+query T
+SHOW extra_float_digits
+----
+1
+
+statement ok
+DISCARD ALL
+
+query T
+SHOW extra_float_digits
+----
+3
