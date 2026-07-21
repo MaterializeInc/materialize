@@ -137,8 +137,6 @@ async fn test_persist_advance_upper_at_least_semantics() {
 
     let upper = state.current_upper().await;
 
-    // Advancing to the current upper or behind it is a no-op, not an error: the group committer
-    // advances with timestamps that on-loop catalog transactions may have overtaken.
     assert_ok!(state.advance_upper(upper).await);
     assert_ok!(
         state
@@ -147,7 +145,6 @@ async fn test_persist_advance_upper_at_least_semantics() {
     );
     assert_eq!(state.current_upper().await, upper);
 
-    // Advancing past the upper moves it.
     let target = upper.step_forward().step_forward();
     assert_ok!(state.advance_upper(target).await);
     assert_eq!(state.current_upper().await, target);
@@ -170,9 +167,6 @@ async fn test_persist_commit_rebases_over_empty_progress() {
         .await
         .unwrap();
 
-    // Choose a commit timestamp, then advance the upper past it with empty progress, the way the
-    // group committer overtakes an on-loop timestamp allocation. The commit must rebase past the
-    // moved upper instead of failing.
     let commit_ts = state.current_upper().await;
     let overtaken = commit_ts.step_forward().step_forward();
     assert_ok!(state.advance_upper(overtaken).await);
@@ -181,7 +175,6 @@ async fn test_persist_commit_rebases_over_empty_progress() {
     let ids = state.allocate_id(id_type, 1, commit_ts).await.unwrap();
     assert_eq!(ids, vec![start_id]);
 
-    // The allocation must be readable at the new upper, which is past the overtaken timestamp.
     assert!(state.current_upper().await > overtaken);
     let next_id = state.get_next_id(id_type).await.unwrap();
     assert_eq!(next_id, start_id + 1);
@@ -207,14 +200,10 @@ async fn test_persist_conflicts_with_empty_progress_rebase() {
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
         .unwrap();
-    // Drain the queued bootstrap updates, as the adapter does after opening, so the commit-time
-    // drain below only sees this test's own updates.
+    // Exclude bootstrap updates from conflict classification below.
     let _ = state.sync_to_current_updates().await.unwrap();
 
-    // A raw write handle on the catalog shard, simulating a concurrent writer that advances the
-    // upper with empty progress behind the catalog handle's back. Unlike a second catalog open,
-    // this does not fence, so it exercises the `UpperMismatch` classification rather than the
-    // fence path.
+    // A raw handle advances the upper without fencing, exercising upper-mismatch classification.
     let mut raw_write = persist_client
         .open_writer::<SourceData, (), mz_repr::Timestamp, i64>(
             state.shard_id(),
@@ -229,8 +218,6 @@ async fn test_persist_conflicts_with_empty_progress_rebase() {
         .expect("invalid usage");
     let empty: Vec<((SourceData, ()), mz_repr::Timestamp, i64)> = Vec::new();
 
-    // Case 1: `advance_upper` hits the conflict, classifies the interval as empty progress
-    // (zero updates applied by the sync), and retries to success.
     let upper = state.current_upper().await;
     let bumped = upper.step_forward().step_forward();
     raw_write
@@ -246,8 +233,6 @@ async fn test_persist_conflicts_with_empty_progress_rebase() {
     assert_ok!(state.advance_upper(target).await);
     assert_eq!(state.current_upper().await, target);
 
-    // Case 2: a transaction commit whose compare-and-append conflicts with empty progress
-    // injected mid-transaction rebases and retries instead of failing.
     let id_type = USER_ITEM_ALLOC_KEY;
     let start_id = state.get_next_id(id_type).await.unwrap();
     let mut txn = state.transaction().await.unwrap();

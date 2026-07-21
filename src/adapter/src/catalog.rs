@@ -156,17 +156,14 @@ pub struct Catalog {
     shared_transient_revision: Arc<AtomicU64>,
 }
 
-/// A narrow handle to the durable catalog for advancing its upper from off the coordinator loop.
-///
-/// See [`Catalog::upper_handle`].
+/// A handle for advancing the durable catalog upper off the coordinator loop.
 #[derive(Debug, Clone)]
 pub struct CatalogUpperHandle {
     storage: Arc<tokio::sync::Mutex<Box<dyn mz_catalog::durable::DurableCatalogState>>>,
 }
 
 impl CatalogUpperHandle {
-    /// Advances the catalog upper to at least `new_upper`. See
-    /// [`Catalog::advance_upper`] for the semantics.
+    /// Advances the durable catalog upper to at least `new_upper`.
     pub async fn advance_upper(
         &self,
         new_upper: mz_repr::Timestamp,
@@ -1171,26 +1168,17 @@ impl Catalog {
         }
     }
 
-    /// Advances the catalog upper to at least `new_upper`, tolerating an upper that is already
-    /// past it.
+    /// Advances the catalog upper to at least `new_upper`.
     ///
-    /// A no-op when the catalog upper already reached `new_upper`: the group committer
-    /// allocates its write timestamp off the coordinator loop, so by the time it advances the
-    /// catalog upper to match,
-    /// an on-loop catalog transaction may already have advanced it past that timestamp. Content
-    /// committed by another writer in between surfaces as a `CatalogOutOfSync` error, on which we
-    /// must restart and rebuild from durable state.
+    /// Empty progress can overtake `new_upper`. A durable upper mismatch with content returns
+    /// `CatalogOutOfSync`. See [`mz_catalog::durable::DurableCatalogState::advance_upper`] for
+    /// fencing semantics.
     #[mz_ore::instrument(level = "debug")]
     pub async fn advance_upper(&self, new_upper: mz_repr::Timestamp) -> Result<(), AdapterError> {
         Ok(self.storage().await.advance_upper(new_upper).await?)
     }
 
-    /// Returns a narrow handle for advancing the catalog upper from off the coordinator loop.
-    ///
-    /// The handle shares the durable-storage mutex with catalog transactions, so advancement
-    /// stays serialized with DDL commits. It deliberately does not expose the in-memory
-    /// `CatalogState`: a clone held by a long-lived task would be a permanently stale snapshot,
-    /// inviting accidental use.
+    /// Returns a durable-upper handle that shares the catalog storage mutex.
     pub fn upper_handle(&self) -> CatalogUpperHandle {
         CatalogUpperHandle {
             storage: Arc::clone(&self.storage),

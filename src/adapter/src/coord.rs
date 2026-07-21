@@ -354,23 +354,15 @@ pub enum Message {
     },
     /// Initiates a group commit.
     GroupCommitInitiate(Span, Option<GroupCommitPermit>),
-    /// Finalizes a group commit that the committer applied off the coordinator loop. The
-    /// committer does the oracle round trips, table append, oracle write application, and
-    /// catalog upper advancement, then hands back the cheap work that needs coordinator state:
-    /// record statement
-    /// execution timestamps, retire client responses, and downgrade local read holds.
+    /// Finalizes an applied group commit.
     ///
-    /// NOTE: Statement timestamps must be recorded before the responses are retired, because
-    /// retiring ends the statement execution and drops its logging record. That is why retiring
-    /// happens here on the coordinator loop rather than in the committer.
+    /// Statement timestamps precede response retirement because retirement ends statement logging.
     GroupCommitApplied {
-        /// Client responses to retire, once statement timestamps are recorded.
+        /// Responses to retire after recording statement timestamps.
         responses: Vec<crate::util::CompletedClientTransmitter>,
-        /// Statement executions whose execution timestamp is this commit's write timestamp.
+        /// Statement executions associated with this commit.
         statement_logging_ids: Vec<StatementLoggingId>,
-        /// This commit's write timestamp. Used for statement logging, per-session
-        /// read-your-writes, and for downgrading local read holds: the committer applied it to
-        /// the oracle, so the read ts is at least this.
+        /// The applied write timestamp.
         write_ts: Timestamp,
     },
     DeferredStatementReady,
@@ -1633,23 +1625,10 @@ impl Drop for ExecuteContextGuard {
     }
 }
 
-/// Bundle of state related to statement execution.
+/// Carries the session and statement state needed to retire an execution.
 ///
-/// This struct collects a bundle of state that needs to be threaded
-/// through various functions as part of statement execution.
-/// It is used to finalize execution, by calling `retire`. Finalizing execution
-/// involves sending the session back to the pgwire layer so that it
-/// may be used to process further commands. It also involves
-/// performing some work on the main coordinator thread
-/// (e.g., recording the time at which the statement finished
-/// executing). The state necessary to perform this work is bundled in
-/// the `ExecuteContextGuard` object.
-///
-/// Dropping one without calling [`Self::retire`] (or [`Self::into_parts`]) retires the client
-/// with an error instead. That backstop matters because contexts travel through queues and
-/// tasks (the group committer, internal messages): at process shutdown they get dropped
-/// wherever they are, and a raw drop would panic in `ClientTransmitter::drop`, and a panic
-/// inside a destructor aborts the process.
+/// Dropping an unretired context fails the client synchronously. Shutdown can drop contexts from
+/// task queues, where spawning response-barrier work is no longer safe.
 #[derive(Debug)]
 pub struct ExecuteContext {
     // `None` only after `retire`/`into_parts` consumed the context.
@@ -1674,13 +1653,8 @@ impl Drop for ExecuteContext {
         let Some(inner) = self.inner.take() else {
             return;
         };
-        // We were dropped without `retire`. That legitimately happens at process shutdown,
-        // when queues and tasks holding contexts get dropped with executions still in flight.
-        // Anywhere else it is a bug (a response silently never sent), which the warning below
-        // keeps visible. Retire the client with an error, fully synchronously: we bypass
-        // `retire` because it can spawn a task (response barriers), which must not happen in a
-        // destructor during runtime shutdown. The dropped `extra` guard best-effort-reports the
-        // retirement for statement logging.
+        // Destructors cannot spawn response-barrier tasks during runtime shutdown. Send the error
+        // synchronously and let the statement guard report retirement.
         tracing::warn!("execute context dropped without retirement, failing the client");
         let ExecuteContextInner { tx, session, .. } = *inner;
         tx.send(
@@ -2037,9 +2011,6 @@ pub struct Coordinator {
     /// waiting out its tick interval. Notified after catalog transactions that
     /// change durable cluster state.
     reconcile_now: Arc<Notify>,
-    /// Hands staged group commits and DDL table registration/forgetting to the
-    /// [`appends::GroupCommitter`] task, the single in-process writer to the txns shard, which
-    /// allocates timestamps and applies the writes off the coordinator loop.
     group_committer_tx: mpsc::UnboundedSender<appends::TableWriteCmd>,
 
     /// Channel for strict serializable reads ready to commit.
@@ -2885,7 +2856,7 @@ impl Coordinator {
                 let fut = self
                     .controller
                     .storage
-                    .append_table(min_timestamp, boot_ts.step_forward(), all_appends)
+                    .append_table_for_bootstrap(min_timestamp, boot_ts.step_forward(), all_appends)
                     .expect("cannot fail to append");
                 async {
                     fut.await
@@ -3071,7 +3042,7 @@ impl Coordinator {
         let table_fence_rx = self
             .controller
             .storage
-            .append_table(write_ts.clone(), advance_to, appends)
+            .append_table_for_bootstrap(write_ts.clone(), advance_to, appends)
             .expect("invalid updates");
 
         self.apply_local_write(write_ts).await;
@@ -3430,9 +3401,6 @@ impl Coordinator {
             })
             .collect();
 
-        // Collect every storage collection we create so we can register the tables among them in
-        // the txns shard after all layers are set up (below). `register_table_collections` selects
-        // the `DataSource::Table` collections, so handing it source-fed tables and the like is fine.
         let mut created_gids = Vec::new();
 
         while !pending.is_empty() {
@@ -3494,12 +3462,10 @@ impl Coordinator {
                 .unwrap_or_terminate("cannot fail to create collections");
         }
 
-        // Register the tables in the txns shard, making them available for writes. Bootstrap runs no
-        // group commits concurrently, so this cannot conflict with the off-loop committer. In
-        // read-only mode `register_table_collections` registers only migrated tables.
+        // Register txn-wal tables before the later system-table snapshot.
         self.controller
             .storage
-            .register_table_collections(register_ts, created_gids)
+            .register_table_collections_for_bootstrap(register_ts, created_gids)
             .await
             .unwrap_or_terminate("cannot fail to register tables");
 
@@ -4049,12 +4015,9 @@ impl Coordinator {
                     // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                     // Receive a single command.
                     _ = self.advance_timelines_interval.tick() => {
-                        // Periodically bump table uppers and downgrade read holds. In read-only mode
-                        // we're not doing group commits, so we advance timelines directly. Otherwise
-                        // we trigger a keepalive group commit through the same notify+permit path as
-                        // user writes: the permit coalesces keepalives so they don't pile up behind a
-                        // slow oracle, and the committer advances timelines (via `GroupCommitApplied`)
-                        // when it's done.
+                        // Writable keepalives use the committer to advance tables and read holds.
+                        // Its permit coalesces ticks behind a slow oracle. Read-only mode advances
+                        // timelines directly.
                         if self.controller.read_only() {
                             messages.push(Message::AdvanceTimelines);
                         } else {
@@ -5169,12 +5132,7 @@ pub fn serve(
                     persist_client,
                 };
 
-                // Spawn the group committer, which applies txns-shard writes off the
-                // coordinator loop. It holds
-                // handles that stay valid for the process lifetime: the oracle is never replaced
-                // in-process, and the table write handle lives as long as the controller. Promotion
-                // out of read-only mode is a process restart, so a fresh committer is spawned then.
-                // We enter the runtime via `block_on` so the internal `task::spawn` has a reactor.
+                // Read-only promotion restarts the process and creates a fresh committer.
                 handle.block_on(async {
                     appends::spawn_group_committer(
                         group_committer_rx,

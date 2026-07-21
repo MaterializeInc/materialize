@@ -629,10 +629,7 @@ impl Coordinator {
 
         let table_gids: Vec<_> = tables.into_iter().map(|(_id, gid)| gid).collect();
 
-        // Forget the txns-shard-registered tables among them through the group committer. The
-        // committer is the single in-process txns-shard writer, so the forget is ordered after
-        // all staged appends (a staged INSERT into a table being dropped still lands before the
-        // forget), and conflicts with concurrent processes are retried there.
+        // FIFO ordering places the forget after every staged append.
         let forget_ids = self
             .controller
             .storage
@@ -642,12 +639,10 @@ impl Coordinator {
             self.forget_tables_via_committer(forget_ids).await;
         }
 
-        // With the forget durable, clean up the controller side: schedule shard finalization and
-        // drop the collections.
         let storage_metadata = self.catalog.state().storage_metadata();
         self.controller
             .storage
-            .drop_tables(storage_metadata, table_gids)
+            .schedule_drop_tables_after_txns_forget(storage_metadata, table_gids)
             .unwrap_or_terminate("cannot fail to drop tables");
     }
 

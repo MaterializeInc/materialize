@@ -303,11 +303,7 @@ impl StorageWriteOp {
     }
 }
 
-/// Metadata needed to register a table in the txns shard: the collection's data shard and its
-/// schema. Produced by [`StorageController::table_registrations`] and consumed by the table-write
-/// worker, which opens the persist write handles itself (handles are consumed by registration, so
-/// retries need fresh ones, and keeping the opening in the worker keeps that detail out of
-/// callers).
+/// Metadata required to register a table with the txns shard.
 #[derive(Debug, Clone)]
 pub struct TableRegistration {
     pub id: GlobalId,
@@ -315,34 +311,13 @@ pub struct TableRegistration {
     pub relation_desc: RelationDesc,
 }
 
-/// A cloneable, `Send + Sync` handle for writing to the txns shard from off the
-/// main storage-controller loop: table appends, table registration, and table
-/// forgetting.
+/// Queues txns-shard operations on the storage table worker.
 ///
-/// Commands issued through this handle go through the same single serializing
-/// worker as [`StorageController::append_table`], so they are applied in the
-/// order the methods are called, not the order the returned futures are polled.
-/// That ordering guarantee is load-bearing: an append containing writes for a
-/// table must reach the worker before the forget for that table, otherwise the
-/// worker has no registered shard to write to. The group committer is the only
-/// runtime caller, which makes it the single in-process serialization point for
-/// txns-shard writes.
-///
-/// A [`StorageError::InvalidUppers`] result means the timestamp was below the
-/// current txns-shard upper (another process wrote concurrently). The worker
-/// rolls its bookkeeping back in that case, and the caller must re-issue the
-/// command at a higher timestamp.
-///
-/// The handle stays valid for the lifetime of the controller (and thus the
-/// process). It does not track catalog rebuilds because the underlying worker
-/// is independent of them.
+/// The adapter's group committer is the sole runtime caller, preserving FIFO order across appends,
+/// registrations, and forgets. On [`StorageError::InvalidUppers`], the writable implementation
+/// restores its bookkeeping and the caller must retry at a fresh timestamp.
 pub trait TableWriteHandle: Debug + Send + Sync {
-    /// Appends `commands` at `write_ts`, advancing the upper of all registered
-    /// tables to `advance_to`.
-    ///
-    /// The returned receiver resolves once the append is durable, or with an
-    /// error if the write could not be applied. A dropped sender (receiver
-    /// error) means the worker has shut down.
+    /// Appends `commands` at `write_ts` and advances all registered tables to `advance_to`.
     fn append(
         &self,
         write_ts: Timestamp,
@@ -350,19 +325,14 @@ pub trait TableWriteHandle: Debug + Send + Sync {
         commands: Vec<(GlobalId, Vec<TableData>)>,
     ) -> oneshot::Receiver<Result<(), StorageError>>;
 
-    /// Registers `tables` in the txns shard at `register_ts`, making them
-    /// available for writes. Registering an empty set still advances the txns
-    /// shard to `register_ts`.
+    /// Registers `tables` at `register_ts`.
     fn register(
         &self,
         register_ts: Timestamp,
         tables: Vec<TableRegistration>,
     ) -> oneshot::Receiver<Result<(), StorageError>>;
 
-    /// Forgets `ids` in the txns shard at `forget_ts`. The tables' shards are
-    /// no longer written through the txns system afterwards. Ids that were
-    /// never registered are ignored, and if none remain the txns shard is not
-    /// touched at all.
+    /// Forgets registered `ids` at `forget_ts`, ignoring unknown IDs.
     fn forget(
         &self,
         forget_ts: Timestamp,
@@ -524,10 +494,9 @@ pub trait StorageController: Debug {
     /// must provide a Some if any of the collections is a table. A None may be given if none of the
     /// collections are a table (i.e. all materialized views, sources, etc).
     ///
-    /// This sets up storage but does not register tables in the txns shard. The caller registers
-    /// them (making them available for writes) through the group committer's
-    /// [`TableWriteHandle::register`] at runtime, or via [`Self::register_table_collections`] at
-    /// bootstrap.
+    /// This sets up storage but does not register tables in the txns shard. Runtime registration
+    /// must go through the adapter's group committer. Bootstrap uses
+    /// [`Self::register_table_collections_for_bootstrap`].
     async fn create_collections(
         &mut self,
         storage_metadata: &StorageMetadata,
@@ -585,11 +554,9 @@ pub trait StorageController: Debug {
         source_exports: BTreeMap<GlobalId, SourceExportDataConfig>,
     ) -> Result<(), StorageError>;
 
-    /// Evolves the [`RelationDesc`] of a table, creating the new collection.
+    /// Evolves a table's schema without registering the new collection in the txns shard.
     ///
-    /// This sets up the new collection but does not register it in the txns shard. The caller
-    /// registers it (making it available for writes) through the group committer's
-    /// [`TableWriteHandle::register`].
+    /// Runtime registration must go through the adapter's group committer.
     async fn alter_table_desc(
         &mut self,
         existing_collection: GlobalId,
@@ -598,44 +565,25 @@ pub trait StorageController: Debug {
         expected_version: RelationVersion,
     ) -> Result<(), StorageError>;
 
-    /// Registers tables in the txns shard, making them available for writes at `register_ts`.
+    /// Registers the `DataSource::Table` collections among `ids` during bootstrap.
     ///
-    /// This is a bootstrap-only convenience: bootstrap registers many tables at a caller-chosen
-    /// timestamp, and no group commits run concurrently, so the registration cannot conflict.
-    /// Runtime DDL must instead register through the group committer's [`TableWriteHandle`], the
-    /// single in-process serialization point for txns-shard writes, using
-    /// [`Self::table_registrations`] to obtain the registration metadata.
-    ///
-    /// Only `DataSource::Table` collections among `ids` are registered. Source-fed tables
-    /// (`IngestionExport`) and webhooks are created as table catalog items too but are written by
-    /// the storage layer, so they are ignored here. Callers may therefore pass all the collections
-    /// they created without pre-filtering. In read-only mode only migrated tables are registered,
-    /// since the read-write environment owns the rest.
-    async fn register_table_collections(
+    /// Runtime registration must go through the adapter's group committer. In read-only mode, only
+    /// migrated tables are registered.
+    async fn register_table_collections_for_bootstrap(
         &mut self,
         register_ts: Timestamp,
         ids: Vec<GlobalId>,
     ) -> Result<(), StorageError>;
 
-    /// Returns the txns-shard registration metadata for the `DataSource::Table` collections among
-    /// `ids`, which must already be set up via [`Self::create_collections`] or
-    /// [`Self::alter_table_desc`].
+    /// Returns registration metadata for the `DataSource::Table` collections among `ids`.
     ///
-    /// Non-table collections among `ids` (source-fed tables, webhooks) are silently skipped, the
-    /// data source is authoritative here, so callers can pass all the table catalog items they
-    /// have without pre-filtering. The result feeds [`TableWriteHandle::register`] and
-    /// [`TableWriteHandle::forget`].
+    /// Other data sources are ignored.
     fn table_registrations(
         &self,
         ids: Vec<GlobalId>,
     ) -> Result<Vec<TableRegistration>, StorageError>;
 
-    /// Returns the subset of `ids` that are `DataSource::Table` collections, i.e. the ones
-    /// written via the txns table-write path and registered in the txns shard.
-    ///
-    /// Like [`Self::table_registrations`], non-table collections among `ids` are silently
-    /// skipped, so callers can pass all the table catalog items they have without pre-filtering.
-    /// Use this to decide which collections need a txns-shard forget on drop.
+    /// Returns the `DataSource::Table` IDs among `ids`.
     fn txns_table_ids(&self, ids: Vec<GlobalId>) -> Result<Vec<GlobalId>, StorageError>;
 
     /// Acquire an immutable reference to the export state, should it exist.
@@ -670,13 +618,11 @@ pub trait StorageController: Debug {
         exports: BTreeMap<GlobalId, StorageSinkConnection>,
     ) -> Result<(), StorageError>;
 
-    /// Drops the read capability for the tables and allows their resources to be reclaimed.
+    /// Schedules controller cleanup for tables.
     ///
-    /// The txns-shard forget for the `DataSource::Table` collections among `identifiers` must
-    /// already have happened through the group committer's [`TableWriteHandle::forget`] before
-    /// this is called. This method only performs the controller-side cleanup: scheduling shard
-    /// finalization and dropping the collections.
-    fn drop_tables(
+    /// The txn-wal tables among `identifiers` must first be forgotten through the adapter's group
+    /// committer.
+    fn schedule_drop_tables_after_txns_forget(
         &mut self,
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
@@ -728,26 +674,18 @@ pub trait StorageController: Debug {
         identifiers: Vec<GlobalId>,
     ) -> Result<(), StorageError>;
 
-    /// Append `updates` into the local input named `id` and advance its upper to `upper`.
+    /// Appends to tables during bootstrap.
     ///
-    /// The method returns a oneshot that can be awaited to indicate completion of the write.
-    /// The method may return an error, indicating an immediately visible error, and also the
-    /// oneshot may return an error if one is encountered during the write.
-    ///
-    /// All updates in `commands` are applied atomically.
-    // TODO(petrosagg): switch upper to `Antichain<Timestamp>`
-    fn append_table(
+    /// Runtime writes must go through the adapter's group committer. The returned receiver resolves
+    /// when the atomic write completes.
+    fn append_table_for_bootstrap(
         &mut self,
         write_ts: Timestamp,
         advance_to: Timestamp,
         commands: Vec<(GlobalId, Vec<TableData>)>,
     ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError>;
 
-    /// Returns a cloneable handle for txns-shard writes (appends, registers, forgets) off the
-    /// main loop.
-    ///
-    /// See [`TableWriteHandle`]. The returned handle stays valid for the lifetime
-    /// of the controller.
+    /// Returns the process-lifetime storage mechanism used by the adapter's group committer.
     fn table_write_handle(&self) -> Arc<dyn TableWriteHandle>;
 
     /// Returns a [`MonotonicAppender`] which is a channel that can be used to monotonically

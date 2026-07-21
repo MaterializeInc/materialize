@@ -707,16 +707,11 @@ impl Catalog {
         let mut catalog_updates = vec![];
         let mut audit_events = vec![];
         let mut storage = self.storage().await;
-        // Open in-sync: content committed by another writer before this point means the ops were
-        // planned against stale catalog state, which surfaces as a graceful `CatalogOutOfSync`.
-        // The commit itself only detects writers that interleave after this open, so this check
-        // is load-bearing, see `transaction_in_sync`.
         let mut tx = storage
             .transaction_in_sync()
             .await
             .unwrap_or_terminate("starting catalog transaction");
-        // Empty progress (e.g. the group committer bumping the upper past our oracle timestamp)
-        // is safe to rebase over because it does not change catalog contents.
+        // Empty progress may have overtaken the timestamp chosen before opening the transaction.
         let commit_ts = std::cmp::max(oracle_write_ts, tx.upper());
 
         let new_state = Self::transact_inner(

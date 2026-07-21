@@ -78,10 +78,9 @@ impl PersistTableWriteCmd {
     }
 }
 
-/// Opens write handles for `tables`, concurrently since bootstrap registers many tables at once.
+/// Opens fresh table write handles concurrently.
 ///
-/// Registration consumes write handles (also on conflict), so the workers open fresh ones per
-/// register command rather than having callers thread handles through.
+/// Registration consumes handles even on conflict, so retries cannot reuse them.
 async fn open_table_write_handles(
     persist_client: &PersistClient,
     tables: Vec<TableRegistration>,
@@ -253,10 +252,8 @@ impl PersistTableWriteWorker {
     }
 }
 
-/// A cloneable [`TableWriteHandle`](mz_storage_client::controller::TableWriteHandle)
-/// backed by the [`PersistTableWriteWorker`].
-///
-/// A newtype so the trait methods do not clash with the inherent ones.
+/// A [`TableWriteHandle`](mz_storage_client::controller::TableWriteHandle) backed by the table
+/// worker.
 #[derive(Debug, Clone)]
 pub(crate) struct TableWriteWorkerHandle(pub(crate) PersistTableWriteWorker);
 
@@ -367,10 +364,8 @@ impl TxnsTableWorker {
                 Ok(())
             }
             Err(current) => {
-                // The register timestamp was behind the txns upper, most likely because the
-                // off-loop group committer advanced it between our timestamp allocation and this
-                // call. Roll back the bookkeeping we just did so the caller can retry at a fresh
-                // timestamp, and report the conflict as an `InvalidUppers`.
+                // Registration consumed the handles. Roll back the IDs so a fresh retry can
+                // register them.
                 debug!(
                     "register at {:?} conflicted with txns upper {:?}, rolling back {:?}",
                     register_ts, current, new_ids
@@ -416,8 +411,7 @@ impl TxnsTableWorker {
                     Ok(())
                 }
                 Err(current) => {
-                    // The forget timestamp was behind the txns upper (see `register`). Restore the
-                    // bookkeeping so the caller can retry at a fresh timestamp.
+                    // Restore local bookkeeping before the caller retries.
                     debug!(
                         "forget at {:?} conflicted with txns upper {:?}, restoring {:?}",
                         forget_ts, current, ids

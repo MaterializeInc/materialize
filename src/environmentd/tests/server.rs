@@ -7251,11 +7251,7 @@ fn test_inject_audit_events_malformed() {
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 }
 
-// Regression test for a shutdown abort: dropping the server while user INSERTs are in flight
-// used to drop un-retired `CompletedClientTransmitter`s, queued in `GroupCommitApplied`
-// messages that the coordinator loop never received. Dropping one panics in
-// `ClientTransmitter::drop`, and a panic in a destructor aborts the process, so this test's
-// only assertion is surviving the rounds.
+// Dropping queued write responses during shutdown must not panic in a destructor.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 #[allow(clippy::disallowed_methods)]
@@ -7277,7 +7273,6 @@ fn test_shutdown_with_inflight_writes() {
                     return;
                 };
                 while !stop.load(Ordering::Relaxed) {
-                    // Errors are expected once the server goes away.
                     if client.batch_execute("INSERT INTO t VALUES (1)").is_err() {
                         return;
                     }
@@ -7285,7 +7280,6 @@ fn test_shutdown_with_inflight_writes() {
             }));
         }
 
-        // Let the insert threads get going, then shut the server down under write load.
         thread::sleep(Duration::from_millis(500));
         drop(server);
 

@@ -572,14 +572,10 @@ impl Coordinator {
         });
     }
 
-    /// Set the `execution_timestamp` for a statement, once it's known.
+    /// Sets the execution timestamp if the statement is still active.
     ///
-    /// Unlike the other record mutations, this tolerates the execution having already ended.
-    /// Group commit records the timestamp asynchronously, after the write is durable, and the
-    /// end sink deliberately tolerates duplicate ends (see `end_statement_execution`). If a
-    /// duplicate end ever ends one of these executions early, this update is a lost update on a
-    /// record whose ended row was already emitted, not corruption, so we warn instead of
-    /// panicking.
+    /// A duplicate end can race the asynchronous group-commit update, so an ended statement is
+    /// skipped rather than treated as corruption.
     pub(crate) fn set_statement_execution_timestamp(
         &mut self,
         id: StatementLoggingId,

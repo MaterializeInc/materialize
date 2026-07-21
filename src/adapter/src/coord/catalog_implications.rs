@@ -1099,15 +1099,11 @@ impl Coordinator {
         table_collections_to_create: BTreeMap<GlobalId, CollectionDescription>,
         execution_timestamps_to_set: BTreeSet<StatementLoggingId>,
     ) -> Result<(), AdapterError> {
-        // Source-fed tables and webhooks flow through here too (they are table catalog items), but
-        // `table_registrations` below filters to the real (`DataSource::Table`) tables that need
-        // txns-shard registration, so we can hand it all of them.
+        // Storage filters table catalog items that are not managed by txn-wal.
         let table_ids: Vec<GlobalId> = table_collections_to_create.keys().copied().collect();
         let collections = table_collections_to_create.into_iter().collect_vec();
 
-        // Allocate a write timestamp and make the catalog readable at the read ts we bump to below
-        // (this also serves as the leader/fencing check, see materialize#28216). The tables' initial
-        // read frontier (since) is set to this timestamp in `create_collections`.
+        // Confirm leadership after allocating the collections' initial timestamp.
         let write_ts = self.get_local_write_ts().await;
         let register_ts = write_ts.timestamp;
         self.catalog
@@ -1124,25 +1120,15 @@ impl Coordinator {
                 .unwrap_or_terminate("cannot fail to create collections");
         }
 
-        // Register the tables in the txns shard through the group committer, making them
-        // available for writes. The committer is the single in-process txns-shard writer, so the
-        // registration is ordered after all staged appends and needs no local conflict handling.
-        // It allocates its own, possibly later timestamp and applies it to the oracle, so reads
-        // never observe a partially registered table: the read ts only passes the registration
-        // timestamp after the registration is durable.
-        //
-        // NOTE: The table since (set to `register_ts` in `create_collections` above) may end up
-        // below the final registration timestamp. That is the safe direction: txns registration
-        // does not constrain the data shard since, and reads only happen at or beyond the final
-        // timestamp.
+        // Registration can choose a later timestamp than the collections' initial since. Reads
+        // remain above the applied registration timestamp.
         let registrations = self
             .controller
             .storage
             .table_registrations(table_ids)
             .unwrap_or_terminate("cannot fail to look up table registrations");
         let table_ts = if registrations.is_empty() {
-            // Nothing to register (e.g. only source-fed tables). Bump the oracle read ts
-            // ourselves so the collections become readable at `register_ts`.
+            // Without txn-wal registration, this timestamp still makes the collections readable.
             self.apply_local_write(register_ts).await;
             register_ts
         } else {
@@ -1379,8 +1365,7 @@ impl Coordinator {
             .desc
             .at_version(RelationVersionSelector::Specific(new_version));
 
-        // Make the catalog readable at the read ts the registration below bumps to, and re-check
-        // leadership (see materialize#28216) before mutating controller state.
+        // Confirm leadership before mutating controller state.
         let write_ts = self.get_local_write_ts().await;
         self.catalog
             .advance_upper(write_ts.advance_to)
@@ -1393,9 +1378,7 @@ impl Coordinator {
             .await
             .unwrap_or_terminate("failed to alter desc of table");
 
-        // Register the evolved collection in the txns shard through the group committer, making
-        // it available for writes. As with CREATE TABLE, the committer orders the registration
-        // after all staged appends and handles conflicts with concurrent processes.
+        // FIFO registration follows all staged writes to the old collection.
         let registrations = self
             .controller
             .storage

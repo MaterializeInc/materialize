@@ -237,24 +237,20 @@ keep the change invisible to session-visible catalog reads (name resolution,
 planning). Otherwise sessions serve stale catalogs where today they would see
 the change.
 
-### The group committer is the single in-process writer to the txns shard
+### Group commit ordering and handover
 
-All txns-shard writes (group-commit appends, table registration and forgetting
-for DDL) go through the group committer task's queue, one at a time at
-monotone oracle timestamps. Do not add another runtime sender to the persist
-table-write worker. Queue order is load-bearing: an append to a table must
-reach the worker before that table's forget, or the worker has no registered
-shard to write to and panics, and only queue order provides this (DROP TABLE
-takes no write locks). Single-writer also makes in-process txns-shard
-conflicts impossible, so `InvalidUppers` from the worker always means another
-process wrote the shard, handled by retrying at a fresh oracle timestamp.
-Bootstrap is the one exception (`register_table_collections` and its direct
-table appends), safe because nothing else runs during bootstrap. The catalog
-shard's analogous conflict protocol lives in the compare-and-append itself
-(`commit_transaction` and
-`advance_upper` in `src/catalog/src/durable/persist.rs`): empty progress is
-rebased over, foreign content surfaces as the graceful `CatalogOutOfSync`.
-Full protocol in the module docs of `src/adapter/src/coord/appends.rs`.
+All runtime txns-shard operations in a process use one FIFO group committer. This ordering prevents
+an append from overtaking table registration or forgetting. Bootstrap may write directly because no local
+commands run concurrently before this process serves.
+
+Writable bootstrap fences the old catalog generation, then orders the system-table snapshot and
+reset after a txns-shard write. A stale write either lands before that barrier and is observed, or
+conflicts. Its retry takes a fresh timestamp from the shared oracle. That timestamp's advance
+frontier is above the stale catalog handle's cached upper, so catalog advancement reaches Persist
+and observes the fence before another txns write.
+
+An `advance_upper` no-op only checks a fence already observed by that handle. It is not a general
+leadership check. The fresh retry's advance frontier forces the durable handover check.
 
 ## Rejected Optimizations
 

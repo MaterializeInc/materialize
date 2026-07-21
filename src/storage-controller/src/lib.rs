@@ -1235,9 +1235,6 @@ impl StorageController for Controller {
             };
         }
 
-        // We do not register tables in the txns shard here. The caller does that as a separate
-        // step through the group committer (or `register_table_collections` at bootstrap), which
-        // owns timestamp selection and conflict handling for txns-shard writes.
         Ok(())
     }
 
@@ -1468,31 +1465,20 @@ impl StorageController for Controller {
 
         self.append_shard_mappings([new_collection].into_iter(), Diff::ONE);
 
-        // We do not register the evolved collection in the txns shard here. The caller does that
-        // through the group committer, which owns timestamp selection and conflict handling for
-        // txns-shard writes.
         Ok(())
     }
 
-    async fn register_table_collections(
+    async fn register_table_collections_for_bootstrap(
         &mut self,
         register_ts: Timestamp,
         ids: Vec<GlobalId>,
     ) -> Result<(), StorageError> {
         let mut tables = self.table_registrations(ids)?;
 
-        // In read-only mode only migrated tables are registered; the read-write environment owns
-        // the rest and we must not re-register them. The read-only table worker keeps a migrated
-        // table's shard upper tracking the txns upper so it stays readable at a recent timestamp,
-        // which lets dependent dataflows (re-)hydrate.
+        // A read-only deployment only writes its migrated builtin tables.
         if self.read_only {
             tables.retain(|table| self.migrated_storage_collections.contains(&table.id));
         }
-        // NOTE: Skipping the register when no tables remain also skips the txns-shard
-        // compare-and-append that acts as a cross-generation write barrier (see the module docs
-        // of the adapter's coord/appends.rs). That is safe only because a writable bootstrap
-        // always registers at least the builtin system tables, so its register set is never
-        // empty.
         if tables.is_empty() {
             return Ok(());
         }
@@ -1503,7 +1489,6 @@ impl StorageController for Controller {
             .await
         {
             Ok(res) => res,
-            // The worker is gone; treat as shutting down.
             Err(_recv) => Err(StorageError::ShuttingDown("persist_table_worker")),
         }
     }
@@ -1512,12 +1497,7 @@ impl StorageController for Controller {
         &self,
         ids: Vec<GlobalId>,
     ) -> Result<Vec<TableRegistration>, StorageError> {
-        // Only `DataSource::Table` collections are written via the txns table-write path and thus
-        // registered in the txns shard. Source-fed tables (`IngestionExport`) and webhooks are
-        // also created as table catalog items, but they are written by the storage layer, so we
-        // ignore them here. Keeping this decision in the storage controller, where the data
-        // source is authoritative, means callers can pass all the collections they created
-        // without having to know which ones belong in the txns shard.
+        // The storage data source decides which table catalog items use txn-wal.
         let mut tables = Vec::with_capacity(ids.len());
         for id in ids {
             let collection = self.collection(id)?;
@@ -1826,26 +1806,11 @@ impl StorageController for Controller {
         Ok(())
     }
 
-    // Dropping a table takes roughly the following flow:
-    //
-    // First determine if this is a TableWrites table or a source-fed table (an IngestionExport):
-    //
-    // If this is a TableWrites table:
-    //   1. We remove the table from the persist table write worker.
-    //   2. The table removal is awaited in an async task.
-    //   3. A message is sent to the storage controller that the table has been removed from the
-    //      table write worker.
-    //   4. The controller drains all table drop messages during `process`.
-    //   5. `process` calls `drop_sources` with the dropped tables.
-    //
-    // If this is an IngestionExport table:
-    //   1. We validate the ids and then call drop_sources_unvalidated to proceed dropping.
-    fn drop_tables(
+    fn schedule_drop_tables_after_txns_forget(
         &mut self,
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
     ) -> Result<(), StorageError> {
-        // Collect tables by their data_source
         let (table_write_ids, data_source_ids): (Vec<_>, Vec<_>) = identifiers
             .into_iter()
             .partition(|id| match self.collections[id].data_source {
@@ -1854,9 +1819,6 @@ impl StorageController for Controller {
                 _ => panic!("identifier is not a table: {}", id),
             });
 
-        // Schedule cleanup of the table-write tables. The txns-shard forget has already happened
-        // through the group committer (see the trait docs), so all that is left is finalizing the
-        // shards and dropping the collections.
         if table_write_ids.len() > 0 {
             let tx = self.pending_table_handle_drops_tx.clone();
             for identifier in table_write_ids {
@@ -1864,7 +1826,6 @@ impl StorageController for Controller {
             }
         }
 
-        // Drop source-fed tables
         if data_source_ids.len() > 0 {
             self.validate_collection_ids(data_source_ids.iter().cloned())?;
             self.drop_sources_unvalidated(storage_metadata, data_source_ids)?;
@@ -2171,7 +2132,7 @@ impl StorageController for Controller {
     }
 
     #[instrument(level = "debug")]
-    fn append_table(
+    fn append_table_for_bootstrap(
         &mut self,
         write_ts: Timestamp,
         advance_to: Timestamp,
@@ -3157,10 +3118,7 @@ where
         Ok(())
     }
 
-    /// Opens a write handle for the given `shard` and fetches a recent upper for it.
-    ///
-    /// Used for collections the controller itself writes to. Tables are not opened through this,
-    /// see `create_collections_for_bootstrap`.
+    /// Opens a write handle and synchronizes its cached upper.
     async fn open_data_handles(
         &self,
         id: &GlobalId,
@@ -3183,11 +3141,7 @@ where
             .await
             .expect("invalid persist usage");
 
-        // Fetch the most recent upper for the write handle, so callers reading the cached
-        // upper (e.g. for collection-state init) see a linearized, recent value rather than
-        // whatever the handle was opened with.
-        //
-        // Note that this returns the upper, but also sets it on the handle to be fetched later.
+        // Synchronize the cached upper before it initializes collection state.
         write.fetch_recent_upper().await;
 
         write

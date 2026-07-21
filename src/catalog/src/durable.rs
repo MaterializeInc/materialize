@@ -321,15 +321,9 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         snapshot: Snapshot,
     ) -> Result<Transaction, CatalogError>;
 
-    /// Opens a [`Transaction`] after verifying that this handle has applied all durable catalog
-    /// content, erroring with [`DurableCatalogError::CatalogOutOfSync`] otherwise.
+    /// Opens a transaction only if no durable catalog content is pending.
     ///
-    /// Opening syncs the handle to the current upper, so any content updates observed there mean
-    /// that whatever state the caller planned against is stale. Callers that maintain derived
-    /// in-memory state (the adapter) must open through this method, so staleness surfaces as an
-    /// error they can react to (today by restarting and rebuilding from durable state) instead of
-    /// being absorbed silently. Pure empty progress (upper movement without content, e.g. from
-    /// the group committer) is not an error.
+    /// Empty upper progress is accepted. Callers with derived in-memory state must use this method.
     async fn transaction_in_sync(&mut self) -> Result<Transaction, CatalogError> {
         let mut txn = self.transaction().await?;
         txn.ensure_not_out_of_sync().await?;
@@ -349,29 +343,17 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         commit_ts: Timestamp,
     ) -> Result<Timestamp, CatalogError>;
 
-    /// Advances the upper of the catalog shard to at least `new_upper`, doing nothing if the
-    /// upper is already at or past it.
+    /// Advances the catalog upper to at least `new_upper`.
     ///
-    /// This implicitly confirms leadership, as attempting to advance the catalog frontier will
-    /// fail if the writer has been fenced out.
-    ///
-    /// Callers may pass a timestamp that has been superseded since it was chosen (e.g. the group
-    /// committer's, allocated off the coordinator loop and possibly overtaken by a catalog
-    /// transaction). If another writer moved the upper with content updates in between, this
-    /// returns [`DurableCatalogError::CatalogOutOfSync`], and the caller must rebuild from
-    /// durable state.
+    /// A durable attempt observes fencing and reports concurrent non-fencing content as
+    /// [`DurableCatalogError::CatalogOutOfSync`]. A no-op only validates a fence already observed
+    /// by this handle.
     async fn advance_upper(&mut self, new_upper: Timestamp) -> Result<(), CatalogError>;
 
     /// Allocates and returns `amount` IDs of `id_type`.
     ///
-    /// Tolerates the catalog upper having moved since the caller chose `commit_ts` (the commit
-    /// rebases past empty progress, and content committed by another writer surfaces as
-    /// [`DurableCatalogError::CatalogOutOfSync`] from the commit itself). Allocation needs no
-    /// staleness check of its own: an allocated ID is fresh and unique regardless of whether the
-    /// caller's in-memory state is current, and staleness is detected by the next catalog
-    /// transaction that plans against it.
-    ///
-    /// See [`Self::commit_transaction`] for details on `commit_ts`.
+    /// Allocation rebases over empty upper progress. Fresh IDs do not require a catalog
+    /// staleness check.
     #[mz_ore::instrument(level = "debug")]
     async fn allocate_id(
         &mut self,

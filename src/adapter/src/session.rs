@@ -1832,11 +1832,12 @@ impl GroupCommitWriteLocks {
         self.locks.extend(existing);
     }
 
-    /// Absorbs the locks of another group-commit lock collection.
-    ///
-    /// Lock sets of separately staged group commits are disjoint (staging defers writes whose
-    /// locks are already held elsewhere), so this cannot end up holding a lock twice.
+    /// Absorbs a disjoint group-commit lock collection.
     pub fn extend(&mut self, mut other: GroupCommitWriteLocks) {
+        assert!(
+            self.locks.keys().all(|id| !other.locks.contains_key(id)),
+            "separately staged group commits must have disjoint lock sets"
+        );
         self.locks.extend(std::mem::take(&mut other.locks));
     }
 

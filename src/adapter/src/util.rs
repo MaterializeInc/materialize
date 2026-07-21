@@ -149,13 +149,9 @@ impl Transmittable for () {
     }
 }
 
-/// `ClientTransmitter` with a response to send.
-/// A client transmitter for a write whose commit outcome is pending, together with everything
-/// needed to finalize the response once the outcome is known.
+/// A pending write result and the context needed to deliver it.
 ///
-/// Dropping one without calling [`Self::finalize`] retires the client with an error, via the
-/// drop backstop on the inner [`ExecuteContext`]. These travel through the group committer task
-/// and its queue, which get dropped at process shutdown.
+/// Dropping it uses the [`ExecuteContext`] retirement backstop.
 #[derive(Debug)]
 pub struct CompletedClientTransmitter {
     ctx: ExecuteContext,
