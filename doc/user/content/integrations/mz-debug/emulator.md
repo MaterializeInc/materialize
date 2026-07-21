@@ -57,6 +57,8 @@ sub-directory,  the following Docker resource debug files are generated:
 
 {{% integrations/mz-debug/memory-profiles %}}
 
+{{% integrations/mz-debug/symbolize-profiles %}}
+
 ## Example
 
 ### Debug a running local emulator container
