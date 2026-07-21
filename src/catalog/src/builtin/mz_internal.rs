@@ -5399,8 +5399,7 @@ pub static MZ_SHOW_ALL_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| Builtin
     )
     SELECT schema_id, name, type, COALESCE(comment, '') AS comment
     FROM mz_catalog.mz_objects AS objs
-    LEFT JOIN comments ON objs.id = comments.id
-    WHERE (comments.object_type = objs.type OR comments.object_type IS NULL)",
+    LEFT JOIN comments ON objs.id = comments.id AND comments.object_type = objs.type",
     access: vec![PUBLIC_SELECT],
     ontology: None,
 });
@@ -5898,7 +5897,7 @@ FROM
             ON mz_catalog.mz_cluster_replicas.id = statuses.replica_id
         LEFT JOIN mz_internal.mz_comments comments
             ON mz_catalog.mz_cluster_replicas.id = comments.id
-WHERE (comments.object_type = 'cluster-replica' OR comments.object_type IS NULL)
+            AND comments.object_type = 'cluster-replica'
 ORDER BY 1, 2"#,
     access: vec![PUBLIC_SELECT],
     ontology: None,
