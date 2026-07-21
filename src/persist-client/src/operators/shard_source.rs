@@ -257,6 +257,26 @@ where
         None => descs,
     };
 
+    // PROBE (diagnostic): consume the entered descs stream inside the NESTED
+    // scope via Pipeline (no exchange, stays on the chosen worker). Compared to
+    // the outer-scope probe above (which pulls bulk) and the real fetch input
+    // (exchange, which dribbles), this isolates whether the throttle is the
+    // scope enter / nested-subgraph scheduling (this dribbles too) or the
+    // exchange redistribution (this stays bulk). Logs op=..._nprobe.
+    {
+        let mut nprobe = AsyncOperatorBuilder::new(
+            format!("shard_source_fetch_nprobe({})", name),
+            scope.clone(),
+        );
+        let mut nprobe_input = nprobe.new_disconnected_input(descs.clone(), Pipeline);
+        let nprobe_button = nprobe.build(move |_caps| async move {
+            while let Some(event) = nprobe_input.next().await {
+                let _ = event;
+            }
+        });
+        tokens.push(nprobe_button.press_on_drop());
+    }
+
     let (parts, completed_fetches_stream, fetch_token) = shard_source_fetch::<K, V, TOuter, D, T>(
         descs,
         name,
