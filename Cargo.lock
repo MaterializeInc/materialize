@@ -8340,6 +8340,7 @@ dependencies = [
  "bincode",
  "derivative",
  "itertools 0.14.0",
+ "lz4_flex",
  "mz-ore",
  "mz-rocksdb-types",
  "num_cpus",
