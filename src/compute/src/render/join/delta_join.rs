@@ -40,6 +40,7 @@ use timely::dataflow::operators::vec::Map;
 use timely::progress::Antichain;
 
 use crate::render::RenderTimestamp;
+use crate::render::columnar::{CollectionEdge, vec_to_columnar};
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::typedefs::{RowRowAgent, RowRowEnter};
@@ -309,7 +310,13 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     .leave_region(self.scope),
             )
         });
-        CollectionBundle::from_collections(oks, errs)
+        // The delta join is Vec-internal (half_join, the `ok_err` demux, the
+        // time-unpair map, and the per-path finalization all operate on `Vec`).
+        // Encode the concatenated node output to the columnar edge once here.
+        // This is the sanctioned leaf-encode; a columnar `half_join`/algorithm is
+        // a differential-side follow-up. Non-consolidating: the per-path
+        // finalization already consolidated whatever it consolidates.
+        CollectionBundle::from_edge(CollectionEdge::Columnar(vec_to_columnar(oks)), errs)
     }
 }
 
