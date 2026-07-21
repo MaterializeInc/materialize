@@ -123,7 +123,8 @@ export function aggregateDays(days: CostBreakdownDay[]): {
  * Per-account total cost for each day in the window, in `days` order — the
  * series behind the stacked-by-account chart and per-account trend sparklines.
  * Every account that appears on any day gets a full-length series, zero-filled
- * for days it had no usage.
+ * for days it had no usage. Accumulates rather than overwrites, matching
+ * `aggregateDays`, in case a day's `accounts` ever repeats the same id twice.
  */
 export function accountDailyTotals(
   days: CostBreakdownDay[],
@@ -136,7 +137,7 @@ export function accountDailyTotals(
         daily = new Array(days.length).fill(0);
         series.set(account.external_customer_id, daily);
       }
-      daily[dayIndex] = accountTotal(account);
+      daily[dayIndex] += accountTotal(account);
     }
   });
   return series;

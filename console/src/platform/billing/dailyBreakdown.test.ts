@@ -127,6 +127,31 @@ describe("accountDailyTotals", () => {
     expect(series.get("a")).toEqual([3, 0]);
     expect(series.get("b")).toEqual([0, 7]);
   });
+
+  it("sums rather than overwrites if a day repeats the same account id", () => {
+    // The backend keys each day's accounts by id before returning them, so
+    // this shouldn't happen in practice, but the series must not silently
+    // undercount (and disagree with aggregateDays's total) if it ever does.
+    const days: CostBreakdownDay[] = [
+      {
+        startDate: "2026-06-01T00:00:00Z",
+        endDate: "2026-06-02T00:00:00Z",
+        accounts: [
+          {
+            external_customer_id: "a",
+            clusters: [cluster({ amounts: { c: "3.00" } })],
+          },
+          {
+            external_customer_id: "a",
+            clusters: [cluster({ amounts: { c: "4.00" } })],
+          },
+        ],
+      },
+    ];
+
+    const series = accountDailyTotals(days);
+    expect(series.get("a")).toEqual([7]);
+  });
 });
 
 describe("accountIdsByTotal / stackedDailyRows", () => {
