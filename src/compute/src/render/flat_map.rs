@@ -61,7 +61,7 @@ impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
                 .collection
                 .clone()
                 .expect("The unarranged collection doesn't exist."),
-            Some(key) => input.as_specific_collection(Some(key), &self.config_set),
+            Some(key) => input.as_specific_collection(Some(key)),
         };
 
         let (oks, errs) = match edge {
