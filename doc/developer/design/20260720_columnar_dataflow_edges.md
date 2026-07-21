@@ -324,9 +324,9 @@ Files: `src/compute/src/render/top_k.rs`.
 Base: Wave 1 complete.
 
 **P7: columnar Join output.**
-Build the linear and delta join outputs into a `ColumnBuilder`.
-Confirmed feasible by the prototype, builder swaps with no blocker.
-Delta join: `half_join_internal_unsafe` is generic over its output `ContainerBuilder` (`differential-dogs3 half_join2.rs:121-140`); swap `CapacityContainerBuilder<Vec>` (`delta_join.rs:406`) for `ColumnBuilder` and the heavy operator emits `Column` directly.
+Both join algorithms are `Vec`-internal, intra-operator, out of scope (columnarizing `mz_join_core` and `half_join` is a differential-side fast-follow); the columnar edge is produced by a leaf-encode at each node's OUTPUT boundary.
+The prototype's "flip `half_join`'s generic output CB to `ColumnBuilder`" was wrong on both counts: `half_join`'s output carries a `Result<Row,_>` in the `could_error` branch (`delta_join.rs:432-434`) which `ColumnBuilder` cannot build (ok_err demux runs after the operator), and that output is not the node output anyway (each delta path then time-unpairs via `.map` and applies an optional finalization, both `Vec`, and `oks` at `delta_join.rs:312` is their concat).
+Delta join: leave the internals untouched; encode the node output `oks` (`delta_join.rs:312`) via `vec_to_columnar`, `from_collections` -> `from_edge`. One `VecToColumnar` for the whole delta output.
 Linear join is more intricate: `mz_join_core` emits its stage output as a `Vec` (it is bounded `C: SizableContainer + PushInto<(Item,T,Diff)>` and builds via `CapacityContainerBuilder<C>`, which `Column` does not satisfy), and this stage output is intra-operator, so it stays `Vec` (out of scope, like reduce/topk internals; a columnar `mz_join_core` is a differential-side fast-follow, not in scope here).
 Only the node's FINAL output edge is made columnar, per finalization path:
 the `Some(final_closure)` path applies the closure via `flat_map_fallible` with a `ConsolidatingColumnBuilder` output (parity, the old builder was `ConsolidatingContainerBuilder`);
