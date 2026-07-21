@@ -25,10 +25,10 @@
 //! cached catalog upper, so the advance reaches Persist and observes the fence before another txns
 //! write.
 //!
-//! During writable bootstrap, system-table snapshots cannot complete until a txns-shard write has
-//! advanced the table uppers. A stale write either linearizes before this barrier and is observed
-//! by the snapshot, or conflicts and follows the fenced retry path above. This relies on
-//! generations sharing the oracle.
+//! On `environmentd` bootstrap in read/write mode, system-table snapshots cannot complete until a
+//! txns-shard write has advanced the table uppers. A stale write either linearizes before this
+//! barrier and is observed by the snapshot, or conflicts and follows the fenced retry path above.
+//! This relies on generations sharing the oracle.
 //!
 //! Work that requires coordinator state is returned via [`Message::GroupCommitApplied`].
 

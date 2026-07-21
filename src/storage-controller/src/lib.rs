@@ -1468,7 +1468,7 @@ impl StorageController for Controller {
         Ok(())
     }
 
-    async fn register_table_collections_for_bootstrap(
+    async fn register_table_collections(
         &mut self,
         register_ts: Timestamp,
         ids: Vec<GlobalId>,
@@ -1806,7 +1806,7 @@ impl StorageController for Controller {
         Ok(())
     }
 
-    fn schedule_drop_tables_after_txns_forget(
+    fn drop_tables(
         &mut self,
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
@@ -2132,7 +2132,7 @@ impl StorageController for Controller {
     }
 
     #[instrument(level = "debug")]
-    fn append_table_for_bootstrap(
+    fn append_table(
         &mut self,
         write_ts: Timestamp,
         advance_to: Timestamp,

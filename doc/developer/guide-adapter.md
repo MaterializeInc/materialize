@@ -237,20 +237,45 @@ keep the change invisible to session-visible catalog reads (name resolution,
 planning). Otherwise sessions serve stale catalogs where today they would see
 the change.
 
-### Group commit ordering and handover
+### Group commits and generation handover
 
-All runtime txns-shard operations in a process use one FIFO group committer. This ordering prevents
-an append from overtaking table registration or forgetting. Bootstrap may write directly because no local
-commands run concurrently before this process serves.
+At runtime, one group committer per `environmentd` serializes txns-shard operations:
 
-Writable bootstrap fences the old catalog generation, then orders the system-table snapshot and
-reset after a txns-shard write. A stale write either lands before that barrier and is observed, or
-conflicts. Its retry takes a fresh timestamp from the shared oracle. That timestamp's advance
-frontier is above the stale catalog handle's cached upper, so catalog advancement reaches Persist
-and observes the fence before another txns write.
+```text
+append / register / forget -> FIFO group committer -> table-write worker -> txns shard
+```
 
-An `advance_upper` no-op only checks a fence already observed by that handle. It is not a general
-leadership check. The fresh retry's advance frontier forces the durable handover check.
+FIFO ordering prevents an append from overtaking table registration or forgetting. Bootstrap is
+the only local exception because it runs before the process serves.
+
+Each runtime command uses this protocol:
+
+```text
+shared oracle write timestamp -> advance catalog upper -> compare-and-append txns shard
+                                                       | conflict -> retry
+                                                       ` success  -> apply write to oracle
+```
+
+The successful timestamp is applied to the oracle only after the txns write is durable.
+
+On `environmentd` bootstrap in read/write mode:
+
+```text
+catalog fence -> set up and register tables -> txns write advances table uppers
+              -> snapshot and reset system tables -> start serving
+```
+
+The snapshots cannot complete until the txns write has advanced the table uppers. Therefore:
+
+```text
+pre-fence write before barrier -> ordered before the snapshot
+pre-fence write after barrier  -> `InvalidUppers` -> retry at a fresh timestamp
+                                -> catalog advance observes the fence -> old generation exits
+```
+
+A system-table write before the barrier is included in the reset. A user-table write remains
+visible to later reads. The retry's `advance_to` is above the stale catalog handle's cached upper,
+so its catalog check is durable. An `advance_upper` no-op only checks an already-observed fence.
 
 ## Rejected Optimizations
 

@@ -642,7 +642,7 @@ impl Coordinator {
         let storage_metadata = self.catalog.state().storage_metadata();
         self.controller
             .storage
-            .schedule_drop_tables_after_txns_forget(storage_metadata, table_gids)
+            .drop_tables(storage_metadata, table_gids)
             .unwrap_or_terminate("cannot fail to drop tables");
     }
 

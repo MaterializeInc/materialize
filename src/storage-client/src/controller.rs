@@ -496,7 +496,7 @@ pub trait StorageController: Debug {
     ///
     /// This sets up storage but does not register tables in the txns shard. Runtime registration
     /// must go through the adapter's group committer. Bootstrap uses
-    /// [`Self::register_table_collections_for_bootstrap`].
+    /// [`Self::register_table_collections`].
     async fn create_collections(
         &mut self,
         storage_metadata: &StorageMetadata,
@@ -569,7 +569,7 @@ pub trait StorageController: Debug {
     ///
     /// Runtime registration must go through the adapter's group committer. In read-only mode, only
     /// migrated tables are registered.
-    async fn register_table_collections_for_bootstrap(
+    async fn register_table_collections(
         &mut self,
         register_ts: Timestamp,
         ids: Vec<GlobalId>,
@@ -622,7 +622,7 @@ pub trait StorageController: Debug {
     ///
     /// The txn-wal tables among `identifiers` must first be forgotten through the adapter's group
     /// committer.
-    fn schedule_drop_tables_after_txns_forget(
+    fn drop_tables(
         &mut self,
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
@@ -678,7 +678,7 @@ pub trait StorageController: Debug {
     ///
     /// Runtime writes must go through the adapter's group committer. The returned receiver resolves
     /// when the atomic write completes.
-    fn append_table_for_bootstrap(
+    fn append_table(
         &mut self,
         write_ts: Timestamp,
         advance_to: Timestamp,

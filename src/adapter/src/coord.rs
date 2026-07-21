@@ -2856,7 +2856,7 @@ impl Coordinator {
                 let fut = self
                     .controller
                     .storage
-                    .append_table_for_bootstrap(min_timestamp, boot_ts.step_forward(), all_appends)
+                    .append_table(min_timestamp, boot_ts.step_forward(), all_appends)
                     .expect("cannot fail to append");
                 async {
                     fut.await
@@ -3042,7 +3042,7 @@ impl Coordinator {
         let table_fence_rx = self
             .controller
             .storage
-            .append_table_for_bootstrap(write_ts.clone(), advance_to, appends)
+            .append_table(write_ts.clone(), advance_to, appends)
             .expect("invalid updates");
 
         self.apply_local_write(write_ts).await;
@@ -3465,7 +3465,7 @@ impl Coordinator {
         // Register txn-wal tables before the later system-table snapshot.
         self.controller
             .storage
-            .register_table_collections_for_bootstrap(register_ts, created_gids)
+            .register_table_collections(register_ts, created_gids)
             .await
             .unwrap_or_terminate("cannot fail to register tables");
 
