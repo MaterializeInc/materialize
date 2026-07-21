@@ -52,16 +52,19 @@
 
     - name: "`AUTO SCALING STRATEGY`"
       description: |
-        Optional. Lets the cluster temporarily burst to a larger size while it
-        has un-hydrated objects, to speed up hydration. Only available on managed
-        clusters.
+        Optional. While the cluster has un-hydrated objects, provisions an extra
+        burst replica at a larger size to speed up hydration. The steady-size
+        replicas will continue to run, and hydrate in parallel. Once the
+        steady-size replicas hydrate and catch up with the burst, the burst
+        replica is retired. This helps optimize costs while speeding up
+        hydration. Only available on managed clusters.
 
         Specify a single `ON HYDRATION` sub-policy, which supports the following
         options:
 
         | Option | Description |
         |--------|-------------|
-        | `HYDRATION SIZE` | The size to burst to while the cluster has un-hydrated objects. Must differ from the cluster's steady `SIZE`. Choose a larger size to speed up hydration. For valid size values, see [Available sizes](#available-sizes). |
+        | `HYDRATION SIZE` | The size of the burst replica provisioned while the cluster has un-hydrated objects. Must differ from the cluster's steady `SIZE`. Choose a larger size to speed up hydration. For valid size values, see [Available sizes](#available-sizes). |
         | `LINGER DURATION` | Optional. How long the burst replica lingers after the steady-size replicas hydrate, before it is removed. Default: `0s`. |
 
         Set an empty strategy (`AUTO SCALING STRATEGY = ()`) to disable

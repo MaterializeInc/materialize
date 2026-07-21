@@ -1,6 +1,9 @@
-{{< public-preview >}}
+---
+headless: true
+---
+{{% public-preview %}}
 Cluster autoscaling
-{{< /public-preview >}}
+{{% /public-preview %}}
 
 When you create an index or materialized view, or when a cluster restarts, the
 cluster must [hydrate](/concepts/clusters/#consider-hydration-requirements) the
@@ -8,10 +11,11 @@ affected objects before they can serve results. Hydration reads the input data
 and rebuilds in-memory state, and its speed scales with the cluster
 [size](#available-sizes).
 
-The `AUTO SCALING STRATEGY` option lets a cluster **burst to a larger size while
-it has un-hydrated objects**, then automatically return to its steady size once
-hydration completes. This speeds up hydration without permanently paying for a
-larger cluster. It can also speed up deployments that hydrate new objects,
+The `AUTO SCALING STRATEGY` option lets a cluster **provision an extra burst
+replica at a larger size while it has un-hydrated objects**. The steady-size
+replicas keep running and hydrate in parallel, and once they catch up with the
+burst, the burst replica is retired. This speeds up hydration without
+permanently paying for a larger cluster. It can also speed up deployments that hydrate new objects,
 especially [blue/green deployments](/manage/blue-green/), where a new cluster
 must hydrate before the cutover.
 
@@ -41,13 +45,13 @@ The `AUTO SCALING STRATEGY` option accepts the following:
 
 Option | Description
 -------|------------
-`HYDRATION SIZE` | The [size](#available-sizes) to burst to while the cluster has un-hydrated objects. Must differ from the cluster's steady `SIZE`. Choose a larger size to speed up hydration.
+`HYDRATION SIZE` | The [size](#available-sizes) of the burst replica provisioned while the cluster has un-hydrated objects. Must differ from the cluster's steady `SIZE`. Choose a larger size to speed up hydration.
 `LINGER DURATION` | Optional. How long the burst replica lingers after the steady-size replicas hydrate, before it is removed. Default: `0s`.
 
-{{< note >}}
+{{% note %}}
 The burst replica is an ordinary cluster replica and is billed as such for as
 long as it runs. See [Usage & billing](/administration/billing/) for details.
-{{< /note >}}
+{{% /note %}}
 
 Provisioning the burst replica requires enough compute capacity to run it. In
 Materialize Self-Managed, this means your Kubernetes cluster must have enough
