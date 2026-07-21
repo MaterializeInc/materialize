@@ -111,10 +111,11 @@ pub static EMPTY_ITEM_USAGE: LazyLock<BTreeSet<CatalogItemType>> = LazyLock::new
 ///
 /// The `mz_mcp_data_product*` views are how the MCP agent endpoint
 /// discovers data products; blocking them defeats the isolation model.
-/// `mz_show_my_cluster_privileges` is joined by `read_data_product` to
-/// check cluster USAGE (it replaces a `has_cluster_privilege` call whose
-/// body referenced `mz_roles`) and only exposes the session role's own
-/// privileges.
+/// `mz_show_my_cluster_privileges` is referenced by those views to null the
+/// advertised cluster unless the role has USAGE on it (it uses
+/// `mz_session_role_memberships()` rather than a `has_cluster_privilege`
+/// body that referenced `mz_roles`), and is itself useful for a restricted
+/// session to inspect its own privileges.
 static RESTRICT_TO_USER_OBJECTS_ALLOWED_OIDS: LazyLock<BTreeSet<u32>> = LazyLock::new(|| {
     use mz_pgrepr::oid;
     btreeset! {

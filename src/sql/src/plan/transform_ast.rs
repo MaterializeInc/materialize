@@ -231,15 +231,63 @@ impl<'a> FuncRewriter<'a> {
                 .dangerous_resolve_name(vec![MZ_UNSAFE_SCHEMA, "mz_avg_promotion"]),
         );
         let expr_squared = expr.clone().multiply(expr.clone());
-        let sum_squares = self.plan_agg(
-            self.scx
-                .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, "sum"]),
-            expr_squared,
-            vec![],
-            filter.clone(),
-            distinct,
-            over.clone(),
-        );
+        let sum_squares = if distinct {
+            // With DISTINCT, all three component aggregates must deduplicate
+            // on the values of x, not on the values of their own inputs.
+            // sum(DISTINCT x) and count(DISTINCT x) do so naturally, but
+            // sum(DISTINCT x²) deduplicates on x², wrongly collapsing values
+            // that differ only in sign, e.g. -2 and 2. Squaring is injective
+            // on the non-negative values and, separately, on the negative
+            // values, so summing the two sign classes independently makes
+            // deduplication on x² agree with deduplication on x:
+            //
+            //     sum(DISTINCT CASE WHEN x >= 0 THEN x² END)
+            //       + sum(DISTINCT CASE WHEN x < 0 THEN x² END)
+            //
+            // Either sum is NULL when its sign class is empty, so the two are
+            // combined with COALESCE(..., 0). When there are no input rows at
+            // all this yields 0 instead of NULL, but the overall result is
+            // still NULL then because sum(DISTINCT x) below is NULL.
+            let case_squared = |condition| Expr::Case {
+                operand: None,
+                conditions: vec![condition],
+                results: vec![expr_squared.clone()],
+                else_result: None,
+            };
+            let sum_squares_nonneg = self.plan_agg(
+                self.scx
+                    .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, "sum"]),
+                case_squared(expr.clone().gt_eq(Expr::number("0"))),
+                vec![],
+                filter.clone(),
+                distinct,
+                over.clone(),
+            );
+            let sum_squares_neg = self.plan_agg(
+                self.scx
+                    .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, "sum"]),
+                case_squared(expr.clone().lt(Expr::number("0"))),
+                vec![],
+                filter.clone(),
+                distinct,
+                over.clone(),
+            );
+            let coalesce_zero = |sum| Expr::HomogenizingFunction {
+                function: HomogenizingFunction::Coalesce,
+                exprs: vec![sum, Expr::number("0")],
+            };
+            coalesce_zero(sum_squares_nonneg).binop(Op::bare("+"), coalesce_zero(sum_squares_neg))
+        } else {
+            self.plan_agg(
+                self.scx
+                    .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, "sum"]),
+                expr_squared,
+                vec![],
+                filter.clone(),
+                distinct,
+                over.clone(),
+            )
+        };
         let sum = self.plan_agg(
             self.scx
                 .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, "sum"]),

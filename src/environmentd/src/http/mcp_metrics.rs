@@ -11,14 +11,47 @@
 //!
 //! Tracks request counts, tool call counts, and tool call durations,
 //! labeled by endpoint type (`agent` / `developer`) and either the
-//! JSON-RPC method name or the MCP tool name. The status label is `ok`
-//! for successful calls and the `McpRequestError` error type
-//! (e.g. `ToolNotFound`, `DataProductNotFound`) for failures.
+//! JSON-RPC method name or the MCP tool name. The status label is one of
+//! the [`McpCallStatus`] variants: `ok`, a lifecycle outcome, or the
+//! `McpRequestError` error type (e.g. `ToolNotFound`) for failures.
 
 use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::stats::histogram_seconds_buckets;
 use prometheus::{HistogramTimer, HistogramVec, IntCounterVec};
+
+/// Closed set of outcomes recorded in the MCP `status` label. Keeping these
+/// as an enum (rather than free-form strings at the call sites) pins the
+/// metric's label cardinality and stops typos from silently creating new
+/// label values. Mirrors `oauth_metadata::MetricStatus`.
+#[derive(Debug, Clone, Copy)]
+pub enum McpCallStatus {
+    /// The request or tool call succeeded.
+    Ok,
+    /// The surrounding future was dropped before the outcome was recorded
+    /// (e.g. by the request timeout). This is the [`ToolCallGuard`] default,
+    /// so a dropped call records as cancelled rather than being lost.
+    Cancelled,
+    /// The request exceeded the configured timeout.
+    Timeout,
+    /// The endpoint is disabled by its feature flag.
+    EndpointDisabled,
+    /// The request failed with the given `McpRequestError::error_type()`. The
+    /// wrapped value comes from a closed match, so cardinality stays bounded.
+    Error(&'static str),
+}
+
+impl McpCallStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Cancelled => "cancelled",
+            Self::Timeout => "timeout",
+            Self::EndpointDisabled => "endpoint_disabled",
+            Self::Error(e) => e,
+        }
+    }
+}
 
 /// Metrics emitted by the MCP HTTP handlers.
 ///
@@ -44,7 +77,7 @@ pub struct ToolCallGuard<'a> {
     metrics: &'a McpMetrics,
     endpoint_label: &'static str,
     tool_label: String,
-    status: &'static str,
+    status: McpCallStatus,
     /// `HistogramTimer::drop` observes the duration into the histogram, so
     /// holding the timer here means we get the duration recorded for both
     /// normal completion and early drop.
@@ -63,14 +96,14 @@ impl<'a> ToolCallGuard<'a> {
             metrics,
             endpoint_label,
             tool_label,
-            status: "cancelled",
+            status: McpCallStatus::Cancelled,
             _timer: timer,
         }
     }
 
     /// Records the outcome of the call. Callers should set this on the
     /// normal completion path right before the guard is dropped.
-    pub fn set_status(&mut self, status: &'static str) {
+    pub fn set_status(&mut self, status: McpCallStatus) {
         self.status = status;
     }
 }
@@ -79,7 +112,7 @@ impl Drop for ToolCallGuard<'_> {
     fn drop(&mut self) {
         self.metrics
             .tool_calls
-            .with_label_values(&[self.endpoint_label, &self.tool_label, self.status])
+            .with_label_values(&[self.endpoint_label, &self.tool_label, self.status.as_str()])
             .inc();
     }
 }
@@ -105,12 +138,38 @@ impl McpMetrics {
             )),
         }
     }
+
+    /// Records a request in `mz_mcp_requests_total`. Encapsulates the label
+    /// ordering and the [`McpCallStatus`] to `&str` conversion so call sites
+    /// never touch raw label strings.
+    pub fn record_request(&self, endpoint_label: &str, method_label: &str, status: McpCallStatus) {
+        self.requests
+            .with_label_values(&[endpoint_label, method_label, status.as_str()])
+            .inc();
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::McpMetrics;
+    use super::{McpCallStatus, McpMetrics};
     use mz_ore::metrics::MetricsRegistry;
+
+    /// The status label strings are a wire/dashboard contract; pin them so a
+    /// rename is a deliberate, visible change.
+    #[mz_ore::test]
+    fn test_call_status_labels() {
+        assert_eq!(McpCallStatus::Ok.as_str(), "ok");
+        assert_eq!(McpCallStatus::Cancelled.as_str(), "cancelled");
+        assert_eq!(McpCallStatus::Timeout.as_str(), "timeout");
+        assert_eq!(
+            McpCallStatus::EndpointDisabled.as_str(),
+            "endpoint_disabled"
+        );
+        assert_eq!(
+            McpCallStatus::Error("ToolNotFound").as_str(),
+            "ToolNotFound"
+        );
+    }
 
     /// All three metrics register cleanly and show up in the gathered output
     /// with the expected names. `IntCounterVec` / `HistogramVec` families

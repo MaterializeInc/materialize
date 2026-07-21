@@ -1138,6 +1138,7 @@ mz_arrangement_sharing_raw  2
 mz_arrangement_sharing_raw  2
 mz_arrangement_sharing_raw  2
 mz_arrangement_sharing_raw  2
+mz_cluster_auto_scaling_strategies  1
 mz_cluster_deployment_lineage  1
 mz_cluster_prometheus_metrics  1
 mz_cluster_prometheus_metrics  1
@@ -1157,6 +1158,7 @@ mz_cluster_prometheus_metrics  4
 mz_cluster_prometheus_metrics  4
 mz_cluster_prometheus_metrics  4
 mz_cluster_prometheus_metrics  4
+mz_cluster_reconfigurations  1
 mz_cluster_replica_frontiers  1
 mz_cluster_replica_history  7
 mz_cluster_replica_metrics  1

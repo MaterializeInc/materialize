@@ -48,7 +48,9 @@ notes](/self-managed-deployments/upgrading/version-notes/).
 - **`EXPLAIN ANALYZE` on multi-replica clusters via MCP**: The Materialize MCP developer endpoint's `query` tool now accepts an optional cluster replica parameter, so `EXPLAIN ANALYZE` can target a specific replica.
 - **Faster queries on busy environments**: We've improved query latency on query-heavy clusters. We've reduced by caching the catalog snapshot for the duration of a session. In our tests, we've seen QPS improvements of up to 13%.
 - **Improved responsiveness under load**: A slow timestamp oracle no longer stalls unrelated sessions that are running `EXPLAIN TIMESTAMP` or `SUBSCRIBE`.
-- **[Agent skills](/integrations/coding-agent-skills/) — dbt support**: The coding agent skills now include skills for using dbt with Materialize, so your coding agent can help you build and manage dbt models against Materialize.
+- **New materialize-dbt [agent skill](/integrations/coding-agent-skills/)**: The
+  `materialize-dbt` skill helps coding agents build and manage dbt models for
+  Materialize.
 
 ### Bug Fixes {#v26.33-bug-fixes}
 - Fixed server crashes triggered by stack overflows while computing object dependencies and read privileges.

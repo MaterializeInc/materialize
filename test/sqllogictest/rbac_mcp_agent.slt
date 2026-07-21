@@ -440,22 +440,162 @@ COMPLETE 2
 
 # Regression pin for the lookup query that
 # `src/environmentd/src/http/mcp.rs:read_data_product` issues under
-# restriction. Joins against `mz_show_my_cluster_privileges` (allow-listed,
-# `pg_has_role` swapped for `mz_session_role_memberships()`) instead of
-# calling `has_cluster_privilege` directly, since that function's
-# `sql_impl` body references `mz_roles` and is still blocked.
+# restriction. The view now nulls the cluster when the role lacks USAGE
+# (via `mz_show_my_cluster_privileges`, allow-listed with `pg_has_role`
+# swapped for `mz_session_role_memberships()`), so the lookup just reads the
+# already-USAGE-filtered cluster back. The agent has USAGE on quickstart via
+# PUBLIC, so it is advertised.
 simple conn=agent_restricted,user=agent
-SELECT dp.cluster,
-       dp.cluster IS NULL OR cp.name IS NOT NULL AS has_cluster_usage
+SELECT dp.cluster
 FROM mz_internal.mz_mcp_data_products dp
-LEFT JOIN mz_internal.mz_show_my_cluster_privileges cp
-    ON cp.name = dp.cluster AND cp.privilege_type = 'USAGE'
 WHERE dp.object_name = '"materialize"."agent_objects"."next_arrivals"'
-ORDER BY (dp.cluster IS NOT NULL AND cp.name IS NOT NULL) DESC,
-         dp.cluster NULLS LAST
+ORDER BY dp.cluster NULLS LAST
 LIMIT 1;
 ----
-quickstart,t
+quickstart
+COMPLETE 1
+
+# =============================================================================
+# DEX-66: the advertised cluster respects cluster USAGE. A data product hosted
+# on a cluster the agent cannot use is still listed (it stays readable from a
+# serving cluster), but its `cluster` is null, so discovery never points at a
+# cluster the agent has no USAGE on.
+# =============================================================================
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER agent_compute REPLICAS (r1 (SIZE 'scale=1,workers=1'));
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE MATERIALIZED VIEW agent_objects.compute_only IN CLUSTER agent_compute AS SELECT 1 AS id;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON agent_objects.compute_only TO agent;
+----
+COMPLETE 0
+
+# The agent has SELECT but no USAGE on agent_compute, so the product is listed
+# with a null cluster.
+simple conn=agent_restricted,user=agent
+SELECT object_name, cluster FROM mz_internal.mz_mcp_data_products WHERE object_name = '"materialize"."agent_objects"."compute_only"';
+----
+"materialize"."agent_objects"."compute_only",NULL
+COMPLETE 1
+
+# The details view nulls the cluster the same way.
+simple conn=agent_restricted,user=agent
+SELECT object_name, cluster FROM mz_internal.mz_mcp_data_product_details WHERE object_name = '"materialize"."agent_objects"."compute_only"';
+----
+"materialize"."agent_objects"."compute_only",NULL
+COMPLETE 1
+
+# A product on a cluster the agent CAN use still advertises that cluster.
+simple conn=agent_restricted,user=agent
+SELECT object_name, cluster FROM mz_internal.mz_mcp_data_products WHERE object_name = '"materialize"."agent_objects"."transfer_windows"';
+----
+"materialize"."agent_objects"."transfer_windows",quickstart
+COMPLETE 1
+
+# =============================================================================
+# DEX-66: multi-cluster coverage. A materialized view indexed on both a usable
+# and an unusable cluster must appear once with the usable cluster and once
+# with a null cluster, and `read_data_product`'s lookup (ORDER BY dp.cluster
+# NULLS LAST) must prefer the usable cluster row.
+#
+# Plain (non-materialized) views on unusable clusters must be excluded from
+# discovery entirely, otherwise the fallback to the session cluster would
+# trigger a full recompute (which is the same reason non-indexed views are
+# already excluded).
+# =============================================================================
+
+simple conn=mz_system,user=mz_system
+CREATE MATERIALIZED VIEW agent_objects.multi_indexed AS SELECT 1 AS id;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE INDEX multi_idx_quickstart IN CLUSTER quickstart ON agent_objects.multi_indexed (id);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE INDEX multi_idx_agent_compute IN CLUSTER agent_compute ON agent_objects.multi_indexed (id);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON agent_objects.multi_indexed TO agent;
+----
+COMPLETE 0
+
+# The MV appears twice: once with the usable cluster (quickstart) and once
+# with a null cluster (the index on agent_compute is hidden because the agent
+# lacks USAGE).
+simple conn=agent_restricted,user=agent
+SELECT object_name, cluster FROM mz_internal.mz_mcp_data_products WHERE object_name = '"materialize"."agent_objects"."multi_indexed"' ORDER BY cluster NULLS LAST;
+----
+"materialize"."agent_objects"."multi_indexed",quickstart
+"materialize"."agent_objects"."multi_indexed",NULL
+COMPLETE 2
+
+# The details view mirrors the discovery view for the multi-cluster case.
+simple conn=agent_restricted,user=agent
+SELECT object_name, cluster FROM mz_internal.mz_mcp_data_product_details WHERE object_name = '"materialize"."agent_objects"."multi_indexed"' ORDER BY cluster NULLS LAST;
+----
+"materialize"."agent_objects"."multi_indexed",quickstart
+"materialize"."agent_objects"."multi_indexed",NULL
+COMPLETE 2
+
+# Regression pin for the `read_data_product` cluster lookup: it must prefer
+# the usable cluster (quickstart) over the null row via `NULLS LAST`. If this
+# regressed, the read would silently fall back to the session cluster even
+# when a usable index exists.
+simple conn=agent_restricted,user=agent
+SELECT dp.cluster FROM mz_internal.mz_mcp_data_products dp WHERE dp.object_name = '"materialize"."agent_objects"."multi_indexed"' ORDER BY dp.cluster NULLS LAST LIMIT 1;
+----
+quickstart
+COMPLETE 1
+
+# A plain (non-materialized) indexed view whose only index sits on a cluster
+# the agent lacks USAGE on must not appear in discovery: falling back to the
+# session cluster would recompute the view.
+simple conn=mz_system,user=mz_system
+CREATE VIEW agent_objects.plain_view_on_agent_compute AS SELECT 1 AS id;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE INDEX plain_view_idx IN CLUSTER agent_compute ON agent_objects.plain_view_on_agent_compute (id);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON agent_objects.plain_view_on_agent_compute TO agent;
+----
+COMPLETE 0
+
+simple conn=agent_restricted,user=agent
+SELECT count(*) FROM mz_internal.mz_mcp_data_products WHERE object_name = '"materialize"."agent_objects"."plain_view_on_agent_compute"';
+----
+0
+COMPLETE 1
+
+simple conn=agent_restricted,user=agent
+SELECT count(*) FROM mz_internal.mz_mcp_data_product_details WHERE object_name = '"materialize"."agent_objects"."plain_view_on_agent_compute"';
+----
+0
+COMPLETE 1
+
+# Sanity check: the index really was created on agent_compute. If the CREATE
+# INDEX above had silently gone somewhere else, the exclusion assertion above
+# would pass vacuously.
+simple conn=mz_system,user=mz_system
+SELECT c.name FROM mz_indexes i JOIN mz_clusters c ON c.id = i.cluster_id WHERE i.name = 'plain_view_idx';
+----
+agent_compute
 COMPLETE 1
 
 # mz_session_role_memberships() is callable in a restricted session (it only
@@ -875,6 +1015,11 @@ DROP SCHEMA agent_objects CASCADE;
 
 simple conn=mz_system,user=mz_system
 DROP CLUSTER agent_serving CASCADE;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP CLUSTER agent_compute CASCADE;
 ----
 COMPLETE 0
 

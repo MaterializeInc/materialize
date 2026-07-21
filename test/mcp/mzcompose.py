@@ -461,19 +461,19 @@ def workflow_endpoints(c: Composition) -> None:
             f"(dex27_other), but activity log shows cluster_name = {observed_cluster!r}"
         )
 
-    # -- read_data_product fails loud when role lacks USAGE on home cluster ---
+    # -- read_data_product falls back to the serving cluster without USAGE ----
     #
-    # `mz_mcp_data_products` filters by SELECT on the object but not by
-    # cluster privileges, so a role may see a data product hosted on a
-    # cluster it can't use. Auto-routing without a USAGE check would
-    # emit `SET CLUSTER = <home>; SELECT ...` and the SELECT would fail
-    # with `permission denied for CLUSTER`. Silently falling back to the
-    # session default would hide the missing privilege as "slow reads
-    # forever," so we instead surface a clear `ClusterPrivilegeMissing`
-    # error and let the caller decide: grant USAGE, or pass an explicit
-    # `cluster` override to read from a cluster they can use.
+    # `mz_mcp_data_products` nulls the advertised cluster unless the role has
+    # USAGE on it (DEX-66), so a role that lacks USAGE on a data product's home
+    # cluster sees a null cluster rather than one it cannot use. A no-override
+    # read then routes to the session's default (serving) cluster instead of
+    # failing: materialized views serve from persist, so the read succeeds with
+    # correct results, just without index benefit. An explicit `cluster`
+    # override still lets the caller target a specific cluster.
 
-    with c.test_case("agent_read_data_product_fails_when_lacking_cluster_usage"):
+    with c.test_case(
+        "agent_read_data_product_falls_back_to_serving_cluster_without_usage"
+    ):
         # Provision a "compute" cluster that hosts the MV's dataflow, and
         # a "serving" cluster the HTTP user has USAGE on. Grant SELECT on
         # the MV but withhold USAGE on the compute cluster.
@@ -511,8 +511,9 @@ def workflow_endpoints(c: Composition) -> None:
             ),
         )
 
-        # No-override read: must fail with ClusterPrivilegeMissing and an
-        # actionable message naming the missing cluster.
+        # No-override read: the advertised cluster is null (the role lacks
+        # USAGE on the home cluster), so the read runs on the session's serving
+        # cluster and succeeds.
         r = post_mcp(
             c,
             "agent",
@@ -530,20 +531,14 @@ def workflow_endpoints(c: Composition) -> None:
         )
         assert r.status_code == 200, f"unexpected status: {r.status_code} {r.text}"
         body = r.json()
-        err = body.get("error")
-        assert err is not None, (
-            "no-override read should fail loud when the role lacks USAGE on "
-            f"the home cluster, but got: {body}"
+        assert "error" not in body, (
+            "no-override read should fall back to the serving cluster when the "
+            f"role lacks USAGE on the home cluster, but got: {body}"
         )
-        assert (
-            err["data"]["error_type"] == "ClusterPrivilegeMissing"
-        ), f"unexpected error_type: {err}"
-        assert (
-            "restricted_compute" in err["message"]
-        ), f"error message should name the missing cluster: {err['message']!r}"
+        rows = json.loads(body["result"]["content"][0]["text"])
+        assert rows == [["9", "override"]], f"unexpected no-override rows: {rows}"
 
-        # With an explicit `cluster` override to a usable cluster, the
-        # read succeeds. Confirms the documented recovery path.
+        # An explicit `cluster` override to a usable cluster also works.
         r = post_mcp(
             c,
             "agent",
