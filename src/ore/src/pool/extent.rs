@@ -359,6 +359,24 @@ impl SwapExtent {
     /// is resident again afterwards; the caller owns the accounting for that
     /// transition (the pool re-counts and re-enqueues it for the RSS target).
     pub(crate) fn read_into(&mut self, dst: &mut [u8]) {
+        let full = self.uncompressed_len();
+        assert_eq!(
+            full,
+            dst.len(),
+            "destination must match the extent's uncompressed length"
+        );
+        self.read_range_into(0, dst);
+    }
+
+    /// Decompresses the byte range `[offset, offset + dst.len())` of the
+    /// extent's uncompressed body into `dst`. The range must lie within the
+    /// body. Residency effects are those of [`SwapExtent::read_into`]
+    /// regardless of the range: the stored form is a whole lz4 block, so any
+    /// read faults and decompresses the entire extent, and a sub-range only
+    /// narrows the final copy. A backend whose stored form is rangeable (file
+    /// extents reading with `pread`, a sub-block-framed codec) can serve the
+    /// range with proportional I/O behind this same signature.
+    pub(crate) fn read_range_into(&mut self, offset: usize, dst: &mut [u8]) {
         self.resident = true;
         // The decompress faults every page back in, so prior incomplete
         // pageout passes no longer describe the mapping and the retry
@@ -368,16 +386,50 @@ impl SwapExtent {
         // SAFETY: the extent exclusively owns its backing, and the first
         // `comp_len` bytes were initialized by `write`.
         let buf = unsafe { std::slice::from_raw_parts(self.ptr, self.comp_len) };
-        let prefix: [u8; SIZE_PREFIX] = buf[..SIZE_PREFIX].try_into().expect("prefix length");
-        let uncompressed_len = usize::cast_from(u32::from_le_bytes(prefix));
-        assert_eq!(
-            uncompressed_len,
-            dst.len(),
-            "destination must match the extent's uncompressed length"
+        let uncompressed_len = self.uncompressed_len();
+        let end = offset
+            .checked_add(dst.len())
+            .expect("range end overflows usize");
+        assert!(
+            end <= uncompressed_len,
+            "range end {end} exceeds the extent's uncompressed length {uncompressed_len}",
         );
-        let written = lz4_flex::block::decompress_into(&buf[SIZE_PREFIX..], dst)
-            .expect("extent holds a valid lz4 block");
-        assert_eq!(written, dst.len(), "decompressed length mismatch");
+        if offset == 0 && dst.len() == uncompressed_len {
+            let written = lz4_flex::block::decompress_into(&buf[SIZE_PREFIX..], dst)
+                .expect("extent holds a valid lz4 block");
+            assert_eq!(written, dst.len(), "decompressed length mismatch");
+            return;
+        }
+        // A sub-range still decompresses the whole block, into a reused
+        // thread-local scratch, and copies the range out. Reads run on
+        // worker threads, so the scratch mirrors the write side's `Shrink`
+        // policy: capacity beyond the ~2 MiB chunk target is released after
+        // the copy rather than parked per worker.
+        use std::cell::RefCell;
+        thread_local! {
+            static SCRATCH: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+        }
+        SCRATCH.with(|cell| {
+            let mut scratch = cell.borrow_mut();
+            scratch.resize(uncompressed_len, 0);
+            let written = lz4_flex::block::decompress_into(&buf[SIZE_PREFIX..], &mut scratch)
+                .expect("extent holds a valid lz4 block");
+            assert_eq!(written, uncompressed_len, "decompressed length mismatch");
+            dst.copy_from_slice(&scratch[offset..end]);
+            if scratch.capacity() > 2 << 20 {
+                scratch.clear();
+                scratch.shrink_to_fit();
+            }
+        });
+    }
+
+    /// The uncompressed body length recorded in the extent's size prefix.
+    fn uncompressed_len(&self) -> usize {
+        // SAFETY: the extent exclusively owns its backing, and the prefix
+        // was initialized by `write`.
+        let buf = unsafe { std::slice::from_raw_parts(self.ptr, SIZE_PREFIX) };
+        let prefix: [u8; SIZE_PREFIX] = buf.try_into().expect("prefix length");
+        usize::cast_from(u32::from_le_bytes(prefix))
     }
 }
 
@@ -554,6 +606,43 @@ mod tests {
         assert_eq!(arena.fallbacks(), 1, "freed slot is reused, no fallback");
         drop(c);
         drop(b);
+    }
+
+    /// A ranged read returns exactly the corresponding slice of a full
+    /// read, at aligned and unaligned offsets, across page boundaries, and
+    /// at the body's edges.
+    #[mz_ore::test]
+    fn ranged_read_matches_full_read_slice() {
+        let arena = arena();
+        let data: Vec<u64> = (0..10_000u64).map(|i| i.wrapping_mul(0x9E37)).collect();
+        let bytes: &[u8] = bytemuck::cast_slice(&data);
+        let mut extent = SwapExtent::write(&arena, &data, Scratch::Shrink);
+        let mut full = vec![0u8; bytes.len()];
+        extent.read_into(&mut full);
+        assert_eq!(full, bytes);
+        let page = region::page_size();
+        let ranges = [
+            (0, 8),
+            (8, 16),
+            (page - 3, page + 7),
+            (bytes.len() - 24, 24),
+            (0, bytes.len()),
+        ];
+        for (offset, len) in ranges {
+            let mut out = vec![0u8; len];
+            extent.read_range_into(offset, &mut out);
+            assert_eq!(out, &full[offset..offset + len], "range ({offset}, {len})");
+        }
+    }
+
+    #[mz_ore::test]
+    #[should_panic(expected = "range end")]
+    fn ranged_read_out_of_bounds_panics() {
+        let arena = arena();
+        let data = vec![5u64; 64];
+        let mut extent = SwapExtent::write(&arena, &data, Scratch::Shrink);
+        let mut out = vec![0u8; 16];
+        extent.read_range_into(64 * 8 - 8, &mut out);
     }
 
     #[mz_ore::test]

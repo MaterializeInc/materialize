@@ -79,6 +79,7 @@ mod extent;
 mod region;
 
 use std::collections::VecDeque;
+use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
@@ -1827,7 +1828,20 @@ impl ChunkHandle {
     /// is no reader it could race. The admitting variant is
     /// [`ChunkHandle::read_into_admit`].
     pub fn read_into(&self, dst: &mut Vec<u64>) {
-        self.read_impl(dst, false);
+        self.read_impl(0..self.meta.len, dst, false);
+    }
+
+    /// As [`ChunkHandle::read_into`], restricted to the word range `range`
+    /// of the chunk's contents, which must lie within them. `dst` receives
+    /// exactly the range.
+    ///
+    /// The range narrows only the copy into `dst`: the swap backend's
+    /// stored form is a whole compressed block, so a cold read still
+    /// faults and decompresses the entire extent, and accounting is that
+    /// of a whole-chunk read. A backend with a rangeable stored form can
+    /// serve the same call with range-proportional I/O.
+    pub fn read_range_into(&self, range: Range<usize>, dst: &mut Vec<u64>) {
+        self.read_impl(range, dst, false);
     }
 
     /// As [`ChunkHandle::read_into`], except that an evicted chunk is
@@ -1844,16 +1858,31 @@ impl ChunkHandle {
     /// churns the clean-victim stock that eager backing exists to build,
     /// evicting probe targets to house data about to die.
     pub fn read_into_admit(&self, dst: &mut Vec<u64>) {
-        self.read_impl(dst, true);
+        self.read_impl(0..self.meta.len, dst, true);
     }
 
-    /// Shared body of the copy-out reads: fills `dst` under the chunk's
-    /// state lock, re-admitting an evicted chunk when `admit` is set and a
-    /// slot is available.
-    fn read_impl(&self, dst: &mut Vec<u64>, admit: bool) {
+    /// As [`ChunkHandle::read_into_admit`], restricted to the word range
+    /// `range` per [`ChunkHandle::read_range_into`]. Admission is
+    /// whole-chunk regardless of the range: the acquired slot holds the
+    /// entire body.
+    pub fn read_range_into_admit(&self, range: Range<usize>, dst: &mut Vec<u64>) {
+        self.read_impl(range, dst, true);
+    }
+
+    /// Shared body of the copy-out reads: fills `dst` with the word range
+    /// `range` of the chunk's contents under the chunk's state lock,
+    /// re-admitting an evicted chunk when `admit` is set and a slot is
+    /// available. An empty range returns without locking or touching the
+    /// chunk, like the whole-chunk read of an empty chunk always has.
+    fn read_impl(&self, range: Range<usize>, dst: &mut Vec<u64>, admit: bool) {
         dst.clear();
         let meta = &*self.meta;
-        if meta.len == 0 {
+        assert!(
+            range.start <= range.end && range.end <= meta.len,
+            "range {range:?} exceeds the chunk's {} words",
+            meta.len,
+        );
+        if range.is_empty() {
             return;
         }
         let mut state = meta.state();
@@ -1862,7 +1891,7 @@ impl ChunkHandle {
         match state.residency {
             Residency::Oversize => {
                 let payload = state.oversize.as_ref().expect("oversize chunk has payload");
-                dst.extend_from_slice(payload);
+                dst.extend_from_slice(&payload[range]);
             }
             Residency::Evicted => {
                 let slot = if admit {
@@ -1899,7 +1928,7 @@ impl ChunkHandle {
                         // state lock is held (eviction and free both take
                         // it).
                         let src = unsafe { meta.pool.slot_data(meta, slot) };
-                        dst.extend_from_slice(src);
+                        dst.extend_from_slice(&src[range.start..range.end]);
                         // Resident again: rejoin the eviction candidates.
                         // A leftover entry from before the chunk's eviction
                         // stays sound (each entry is validated against the
@@ -1922,11 +1951,15 @@ impl ChunkHandle {
                         // reused buffer otherwise ratchets to the largest
                         // chunk it ever carried, invisible to every pool
                         // gauge; the design doc's reader discipline).
-                        dst.resize(meta.len, 0);
+                        dst.resize(range.end - range.start, 0);
                         let bytes: &mut [u8] = bytemuck::cast_slice_mut(dst.as_mut_slice());
-                        extent.read_into(bytes);
+                        extent.read_range_into(range.start * 8, bytes);
                     }
                 }
+                // TODO: a sub-range read of a rangeable stored form (file
+                // extents, a sub-block-framed codec) revives only part of
+                // the extent; the whole-extent accounting below would then
+                // overcount and needs a partial-revival variant.
                 if !was_resident {
                     // Revived from the device: the decompress reset any
                     // retry budget, so the extent re-enters reclaimable.
@@ -1954,7 +1987,7 @@ impl ChunkHandle {
                 // SAFETY: the slot belongs to this chunk while the state lock
                 // is held (eviction and free both take it).
                 let src = unsafe { meta.pool.slot_data(meta, slot) };
-                dst.extend_from_slice(src);
+                dst.extend_from_slice(&src[range.start..range.end]);
             }
         }
         drop(state);
@@ -1982,6 +2015,15 @@ impl ChunkHandle {
             let extent = state.extent.as_ref().expect("evicted chunk has an extent");
             extent.prefetch();
         }
+    }
+
+    /// As [`ChunkHandle::prefetch`], scoped to the word range `range` of the
+    /// chunk's contents. The range is advisory: a backend hints at whatever
+    /// granularity its stored form permits, and the swap backend's stored
+    /// form is a whole compressed block, so it hints the entire extent.
+    pub fn prefetch_range(&self, range: Range<usize>) {
+        let _ = range;
+        self.prefetch();
     }
 
     /// Test hook: the byte size of the chunk's size class, or `None` for
@@ -2153,6 +2195,61 @@ mod tests {
         // Dropping the handle uncounts the resident extent.
         drop(handle);
         assert_eq!(pool.stats().extent_resident_bytes, 0);
+    }
+
+    /// A ranged read returns exactly the corresponding slice of a
+    /// whole-chunk read in every residency state, and changes residency
+    /// exactly as the equivalent whole-chunk read would.
+    #[mz_ore::test]
+    fn ranged_reads_match_full_read_slice() {
+        let pool = test_pool(256 << 20);
+        pool.set_rss_target(1 << 30);
+        let orig = payload(SMALL, 33);
+        let handle = insert(&pool, &mut orig.clone());
+        let ranges = [
+            (0usize, 7usize),
+            (13, 100),
+            (SMALL - 9, 9),
+            (0, SMALL),
+            (5, 0),
+        ];
+        let check = |label: &str| {
+            for (start, len) in ranges {
+                let mut out = Vec::new();
+                handle.read_range_into(start..start + len, &mut out);
+                assert_eq!(
+                    out,
+                    &orig[start..start + len],
+                    "{label} range ({start}, {len})"
+                );
+            }
+        };
+        assert_eq!(handle.residency(), Residency::UnbackedResident);
+        check("resident");
+        pool.evict(&handle);
+        assert_eq!(handle.residency(), Residency::Evicted);
+        check("evicted");
+        assert_eq!(
+            handle.residency(),
+            Residency::Evicted,
+            "plain ranged reads do not admit"
+        );
+        // An admitting ranged read returns the range and admits the whole
+        // chunk.
+        let mut out = Vec::new();
+        handle.read_range_into_admit(3..19, &mut out);
+        assert_eq!(out, &orig[3..19]);
+        assert_eq!(handle.residency(), Residency::BackedResident);
+        check("backed");
+    }
+
+    #[mz_ore::test]
+    #[should_panic(expected = "exceeds the chunk's")]
+    fn ranged_read_out_of_bounds_panics() {
+        let pool = test_pool(256 << 20);
+        let handle = insert(&pool, &mut payload(SMALL, 34));
+        let mut out = Vec::new();
+        handle.read_range_into(SMALL - 1..SMALL + 1, &mut out);
     }
 
     /// With no RSS target (the default), the compressed tier has zero
