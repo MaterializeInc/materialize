@@ -1953,10 +1953,10 @@ mod tests {
         // just the peak (an initial flood can spike the peak while steady state
         // trickles).
         let samples = Arc::new(std::sync::Mutex::new(Vec::<usize>::new()));
-        let sampler = {
+        let _sampler = {
             let concurrent = Arc::clone(&concurrent);
             let samples = Arc::clone(&samples);
-            tokio::spawn(async move {
+            mz_ore::task::spawn(|| "latency-fetch-sampler", async move {
                 loop {
                     tokio::time::sleep(Duration::from_millis(200)).await;
                     samples
@@ -1965,6 +1965,7 @@ mod tests {
                         .push(concurrent.load(Ordering::SeqCst));
                 }
             })
+            .abort_on_drop()
         };
 
         let client_for_source = persist_client.clone();
@@ -2009,7 +2010,6 @@ mod tests {
             eprintln!("LATENCY-FETCH hydration timed_out={timed_out}");
         });
 
-        sampler.abort();
         let mc = max_concurrent.load(Ordering::SeqCst);
         let g = gets.load(Ordering::SeqCst);
         let s = samples.lock().unwrap();
