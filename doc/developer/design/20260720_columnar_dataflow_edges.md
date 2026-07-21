@@ -153,10 +153,9 @@ graph TD
     P1["P1: as_collection_core columnar output, flips Get and Mfp"]
     P2["P2: Constant columnar"]
     P4["P4: FlatMap output columnar"]
-    P5["P5: Reduce output columnar"]
-    P6["P6: TopK output columnar"]
+    P5["P5: as_specific_collection arrangement materialization columnar (covers Reduce/Threshold/TopK-bucketed)"]
+    P6["P6: TopK from_collections output columnar (monotonic/top1)"]
     P7["P7: Join output columnar"]
-    P8["P8: Threshold output columnar"]
     P9["P9: source and index import producers columnar"]
   end
   subgraph Wave3["Wave 3: teardown, producer half compiler-enforced"]
@@ -305,14 +304,19 @@ Build the FlatMap output into a `ColumnBuilder`.
 Files: `src/compute/src/render/flat_map.rs`.
 Base: Wave 1 complete.
 
-**P5: columnar Reduce output.**
-Build the final Reduce output into a `ColumnBuilder`.
-Internals stay on `Vec`.
-Files: `src/compute/src/render/reduce.rs`.
+**P5: columnar arrangement-to-collection materialization (`as_specific_collection`).**
+Producers split in two: collection producers (Get/Mfp, Constant, FlatMap, TopK monotonic/top1, join outputs) build a `ColumnBuilder` directly; arrangement producers (Reduce `from_columns`, Threshold `from_expressions`, TopK-bucketed `from_columns`) emit an arrangement, not a collection.
+An arrangement producer's arrangement is already columnar-internal (C1); its output becomes `Vec` only at the shared `as_specific_collection` arrangement-materialization path (the identity-keyed path P1 deliberately left `Vec`).
+Flip that path to pack arrangement rows into a `ConsolidatingColumnBuilder` and return a columnar edge, retiring the last Vec-producing arrangement-to-collection site.
+This single node covers the outputs of Reduce, Threshold, and TopK-bucketed at once.
+It is real materialization logic, not a mechanical rename, so it lands before T2 (keeping T2 mechanical), and the materialized collection becomes an internal `.collection` edge that can feed any operator, so it must be columnar by T2, not a sanctioned leaf.
+Investigate-first: map `as_specific_collection`'s callers and its two paths (the `Some(key)` arrangement-materialization path is the one to flip; the `None` `into_vec` path is the unarranged-collection consumer leaf, report its remaining callers).
+Files: `src/compute/src/render/context.rs`.
 Base: Wave 1 complete.
 
-**P6: columnar TopK output.**
-Build the TopK output into a `ColumnBuilder`.
+**P6: columnar TopK output (`from_collections` paths).**
+The TopK monotonic and top1 variants build a result collection via `from_collections` (`top_k.rs:303/329`); flip these to `ConsolidatingColumnBuilder`.
+The bucketed variant emits an arrangement (`from_columns`, `top_k.rs:206`), covered by P5's shared materialization, not here.
 Files: `src/compute/src/render/top_k.rs`.
 Base: Wave 1 complete.
 
@@ -326,10 +330,9 @@ Join input is untouched here: linear-join input is C4, and delta-join input is a
 Files: `src/compute/src/render/join/linear_join.rs`, `src/compute/src/render/join/delta_join.rs`.
 Base: Wave 1 complete.
 
-**P8: columnar Threshold output.**
-Build the Threshold output into a `ColumnBuilder`.
-Files: `src/compute/src/render/threshold.rs`.
-Base: Wave 1 complete.
+**P8: Threshold output.** No separate work, subsumed by P5.
+Threshold emits an arrangement (`from_expressions`, `threshold.rs:85/94`), columnar-internal via C1.
+Its output materializes to a collection only through the shared `as_specific_collection` path flipped in P5, so there is no Threshold-specific output-collection site.
 
 **P9: columnar import producers.**
 The source imports (`render.rs:374, 474`) and the `SnapshotMode::Exclude` index import (`render.rs:647-668`) build `from_collections` with a `VecCollection`.
@@ -373,12 +376,14 @@ The chain is a topological order of the DAG, so every dependency edge points bac
 
 ```
 C1 -> C3 -> C4 -> F1 -> C2
-   -> P1 -> P2 -> P4 -> P5 -> P6 -> P7 -> P8 -> P9
+   -> P1 -> P2 -> P4 -> P5 -> P6 -> P7 -> P9
    -> T1 -> T2 -> T3
 ```
 
-C5, C6, C7, and C8 are not in the chain: delta-join input is subsumed by C1; the sink, LetRec, and Union temporal-bucketing already leaf-decode the edge (see their nodes).
-Wave 1 is complete: C1, C3, C4, F1, C2 landed and C5, C6, C7, C8 subsumed, so the chain from here is the producer wave plus teardown.
+C5, C6, C7, C8, P3, and P8 are not in the chain (subsumed, see their nodes): delta-join input by C1; the sink, LetRec, and Union temporal-bucketing already leaf-decode the edge; the ArrangeBy passthrough by C1+P1; and the Threshold output by P5's shared arrangement materialization.
+Wave 1 is complete: C1, C3, C4, F1, C2 landed and C5, C6, C7, C8 subsumed.
+Producer wave in progress: P1, P2, P4 landed; P3, P8 subsumed; P5, P6, P7, P9 remain.
+The taxonomy: collection producers (P1, P2, P4, P6, P7) build a `ColumnBuilder` directly; arrangement producers (Reduce, Threshold, TopK-bucketed) are covered by P5's single `as_specific_collection` materialization flip.
 
 Order constraints honored by this chain:
 
