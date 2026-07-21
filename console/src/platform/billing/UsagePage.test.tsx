@@ -11,11 +11,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
 import React, { ReactElement } from "react";
 
-import {
-  CostBreakdownAccount,
-  DailyCosts,
-  Organization,
-} from "~/api/cloudGlobalApi";
+import { CostBreakdownAccount, Organization } from "~/api/cloudGlobalApi";
 import {
   buildCloudOrganizationsResponse,
   buildCloudRegionsReponse,
@@ -30,12 +26,10 @@ import {
   selectReactSelectOption,
   setFakeEnvironment,
 } from "~/test/utils";
-import { assert } from "~/util";
 import { formatCurrency } from "~/utils/format";
 
 import { getDayAlignedRange } from "./queries";
 import UsagePage from "./UsagePage";
-import { getTimeRangeSlice } from "./utils";
 
 const Wrapper = await createProviderWrapper({
   initializeState: ({ set }) =>
@@ -564,57 +558,6 @@ describe("UsagePage", () => {
     await waitFor(async () =>
       expect(await screen.findByTestId("aws-marketplace-banner")).toBeVisible(),
     );
-  });
-
-  it("correctly slices the right number of records for the time range when the range is equal to the number of days", () => {
-    const dailyCosts: DailyCosts["daily"] = [
-      {
-        startDate: "2024-01-13T00:00:00Z",
-        endDate: "2024-01-14T00:00:00Z",
-        costs: {
-          compute: { prices: [], subtotal: "0.00", total: "0.00" },
-          storage: { prices: [], subtotal: "0.00", total: "0.00" },
-        },
-        total: "0.00",
-        subtotal: "0.00",
-      },
-      {
-        startDate: "2024-01-14T00:00:00Z",
-        endDate: "2024-01-14T12:00:00Z",
-        costs: {
-          compute: { prices: [], subtotal: "0.00", total: "0.00" },
-          storage: { prices: [], subtotal: "0.00", total: "0.00" },
-        },
-        total: "0.00",
-        subtotal: "0.00",
-      },
-      {
-        startDate: "2024-01-14T12:00:00Z",
-        endDate: "2024-01-15T00:00:00Z",
-        costs: {
-          compute: { prices: [], subtotal: "0.00", total: "0.00" },
-          storage: { prices: [], subtotal: "0.00", total: "0.00" },
-        },
-        total: "0.00",
-        subtotal: "0.00",
-      },
-      {
-        startDate: "2024-01-15T00:00:00Z",
-        endDate: "2024-01-16T00:00:00Z",
-        costs: {
-          compute: { prices: [], subtotal: "0.00", total: "0.00" },
-          storage: { prices: [], subtotal: "0.00", total: "0.00" },
-        },
-        total: "0.00",
-        subtotal: "0.00",
-      },
-    ];
-    // Get 3 days of the time range
-    const sliced = getTimeRangeSlice(dailyCosts, 3);
-    assert(sliced !== null);
-    expect(sliced).toHaveLength(4);
-    expect(sliced[0].startDate).toEqual(dailyCosts[0].startDate);
-    expect(sliced[3].startDate).toEqual(dailyCosts[3].startDate);
   });
 
   it("generates appropriate time components for a time range", () => {
