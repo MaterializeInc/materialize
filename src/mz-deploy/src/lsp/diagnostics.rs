@@ -341,11 +341,13 @@ pub(crate) fn offset_to_position(offset: usize, rope: &Rope) -> Option<Position>
 }
 
 /// Convert an LSP [`Position`] into a byte offset using a [`Rope`].
+///
+/// Returns `None` if the position lies past the end of the document.
 pub(crate) fn position_to_offset(position: Position, rope: &Rope) -> Option<usize> {
     let line = usize::try_from(position.line).ok()?;
     let target_col = usize::try_from(position.character).ok()?;
     let line_start_char = rope.try_line_to_char(line).ok()?;
-    let line_text = rope.line(line);
+    let line_text = rope.get_line(line)?;
 
     let mut utf16_col = 0usize;
     let mut char_delta = 0usize;
@@ -432,6 +434,14 @@ mod tests {
             position_to_offset(Position::new(0, 12), &rope),
             Some(text.len())
         );
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `llvm.aarch64.neon.uaddlv.i32.v16i8` on OS `linux`
+    fn position_to_offset_at_line_past_end_returns_none() {
+        let rope = Rope::from_str("a\nb");
+        let past_end = u32::try_from(rope.len_lines()).unwrap();
+        assert_eq!(position_to_offset(Position::new(past_end, 0), &rope), None);
     }
 
     #[mz_ore::test]
