@@ -148,3 +148,70 @@ SELECT replica, comment FROM mz_internal.mz_show_cluster_replicas
 WHERE cluster = 'c'
 ----
 r1  replica_note
+
+# ----------------------------------------------------------------------------
+# MCP views: on an id collision these must not show the wrong object's comment
+# as the description, and must not duplicate the data-product row. The comment
+# joins are LEFT JOINs into a COALESCE (not a WHERE), so a collision never drops
+# rows. Without an object_type predicate it shows the wrong comment instead, or
+# doubles the row when both comments exist.
+# ----------------------------------------------------------------------------
+
+reset-server
+
+# User cluster c: replica u2, commented.
+statement ok
+CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'))
+
+statement ok
+COMMENT ON CLUSTER REPLICA c.r1 IS 'replica_note'
+
+# First item u1 (throwaway), then a materialized view at u2 that collides with
+# cluster c's replica id. The MV has no comment of its own.
+statement ok
+CREATE TABLE seed (a int)
+
+statement ok
+CREATE MATERIALIZED VIEW mv IN CLUSTER c AS SELECT * FROM seed
+
+# Confirm the collision this block depends on: replica id == MV id.
+query T
+SELECT (
+    SELECT r.id FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id
+    WHERE c.name = 'c'
+) = (SELECT id FROM mz_materialized_views WHERE name = 'mv')
+----
+true
+
+# Pre-fix: description would be the replica's comment 'replica_note' (wrong
+# object). Post-fix: the MV has no comment of its own, so NULL, and exactly one
+# row (no duplication).
+query TT
+SELECT object_name, description FROM mz_internal.mz_mcp_data_products
+WHERE object_name = '"materialize"."public"."mv"'
+----
+"materialize"."public"."mv"  NULL
+
+query TT
+SELECT object_name, description FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."public"."mv"'
+----
+"materialize"."public"."mv"  NULL
+
+# With the MV commented and the replica also commented on the same id, the
+# data product shows only the MV's own comment, exactly once. Pre-fix this
+# would duplicate the row (both comments join) and/or show 'replica_note'.
+statement ok
+COMMENT ON MATERIALIZED VIEW mv IS 'mv_note'
+
+query TT
+SELECT object_name, description FROM mz_internal.mz_mcp_data_products
+WHERE object_name = '"materialize"."public"."mv"'
+----
+"materialize"."public"."mv"  mv_note
+
+query TT
+SELECT object_name, description FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."public"."mv"'
+----
+"materialize"."public"."mv"  mv_note
