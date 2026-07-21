@@ -155,8 +155,8 @@ was buffered but not yet committed at the time of the change may be committed
 immediately after the restart. All subsequent commits follow the new interval.
 
 Setting the commit interval to its current value is a no-op and does not restart the sink.
-However, the value is compared as written, so setting `'1m'` when the current value is `'60s'`
-counts as a change and restarts the sink.
+However, values are compared textually rather than by duration.
+For example, setting `'1m'` when the current value is `'60s'` counts as a change and restarts the sink.
 
 See [Commit interval tradeoffs](/sql/create-sink/iceberg/#commit-interval-tradeoffs)
 for guidance on choosing a value.

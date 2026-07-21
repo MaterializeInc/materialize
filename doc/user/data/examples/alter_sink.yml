@@ -12,7 +12,7 @@
         The name of the relation you want to sink from.
 - name: "syntax-set-commit-interval"
   code: |
-    ALTER SINK <name> SET (COMMIT INTERVAL = <interval>);
+    ALTER SINK <name> SET (COMMIT INTERVAL = '<interval>');
   syntax_elements:
     - name: |
         `<name>`
