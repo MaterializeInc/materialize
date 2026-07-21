@@ -1776,4 +1776,212 @@ mod tests {
 
         read_handle.downgrade_since(&since).await;
     }
+
+    /// Measures the peak concurrent `blob.get` the fetch operator achieves while
+    /// hydrating a many-part snapshot, with artificial per-get latency injected.
+    ///
+    /// The staging hydration slowness is S3-only (file/minio do not reproduce
+    /// it): the fetch operator settles at ~1 concurrent get. This test injects a
+    /// fixed per-get delay into an in-mem blob (wrapped in `Tasked` just like
+    /// prod, so each get spawns) and reports the peak concurrency reached. If it
+    /// reaches the fetch-concurrency cap, latency alone does not reproduce the
+    /// throttle on a single worker; if it settles near 1, latency-coupling of
+    /// the descs->fetch delivery is reproduced locally.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 8))]
+    #[ignore = "diagnostic: the execute_directly + step_or_park harness cannot sustain \
+                async-operator throughput under real per-get latency, so it does not \
+                faithfully measure steady-state fetch concurrency"]
+    async fn test_shard_source_fetch_concurrency_under_latency() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::{Duration, Instant};
+
+        use async_trait::async_trait;
+        use bytes::Bytes;
+        use mz_ore::bytes::SegmentedBytes;
+        use mz_ore::metrics::MetricsRegistry;
+        use mz_persist::location::{BlobMetadata, ExternalError, Tasked};
+        use mz_persist::mem::{MemBlob, MemBlobConfig, MemConsensus};
+
+        use crate::async_runtime::IsolatedRuntime;
+        use crate::cache::StateCache;
+        use crate::cfg::SOURCE_FETCH_CONCURRENCY;
+        use crate::internal::metrics::Metrics;
+        use crate::rpc::NoopPubSubSender;
+        use crate::{PersistClient, PersistConfig};
+
+        /// Blob wrapper that sleeps on every `get`, tracking the peak number of
+        /// gets in flight simultaneously.
+        #[derive(Debug)]
+        struct LatencyBlob {
+            inner: Arc<dyn Blob>,
+            delay: Duration,
+            concurrent: Arc<AtomicUsize>,
+            max_concurrent: Arc<AtomicUsize>,
+            gets: Arc<AtomicUsize>,
+        }
+
+        #[async_trait]
+        impl Blob for LatencyBlob {
+            async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
+                let n = self.concurrent.fetch_add(1, Ordering::SeqCst) + 1;
+                self.max_concurrent.fetch_max(n, Ordering::SeqCst);
+                self.gets.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(self.delay).await;
+                let r = self.inner.get(key).await;
+                self.concurrent.fetch_sub(1, Ordering::SeqCst);
+                r
+            }
+            async fn list_keys_and_metadata(
+                &self,
+                key_prefix: &str,
+                f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
+            ) -> Result<(), ExternalError> {
+                self.inner.list_keys_and_metadata(key_prefix, f).await
+            }
+            async fn set(&self, key: &str, value: Bytes) -> Result<(), ExternalError> {
+                self.inner.set(key, value).await
+            }
+            async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
+                self.inner.delete(key).await
+            }
+            async fn restore(&self, key: &str) -> Result<(), ExternalError> {
+                self.inner.restore(key).await
+            }
+        }
+
+        const N_BATCHES: u64 = 200;
+        const FETCH_CONCURRENCY: usize = 64;
+
+        let concurrent = Arc::new(AtomicUsize::new(0));
+        let max_concurrent = Arc::new(AtomicUsize::new(0));
+        let gets = Arc::new(AtomicUsize::new(0));
+
+        let mut cfg = PersistConfig::new_for_tests();
+        // Keep every batch a distinct part, mirroring a held-back `since`.
+        cfg.compaction_enabled = false;
+        cfg.set_config(&SOURCE_FETCH_CONCURRENCY, FETCH_CONCURRENCY);
+        // Force every write to a blob part (not inline in consensus), so the
+        // fetch operator actually issues `blob.get`s we can meter.
+        cfg.set_config(&INLINE_WRITES_SINGLE_MAX_BYTES, 0);
+        cfg.set_config(&INLINE_WRITES_TOTAL_MAX_BYTES, 0);
+        let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
+
+        let mem_blob: Arc<dyn Blob> = Arc::new(MemBlob::open(MemBlobConfig::default()));
+        let latency_blob = Arc::new(LatencyBlob {
+            inner: mem_blob,
+            delay: Duration::from_millis(25),
+            concurrent: Arc::clone(&concurrent),
+            max_concurrent: Arc::clone(&max_concurrent),
+            gets: Arc::clone(&gets),
+        });
+        // Wrap in `Tasked` exactly as `PersistClientCache::open` does, so each
+        // get runs on its own spawned task and can run in parallel.
+        let blob = Arc::new(Tasked(latency_blob));
+        let consensus = Arc::new(MemConsensus::default());
+
+        let persist_client = PersistClient::new(
+            cfg,
+            blob,
+            consensus,
+            metrics,
+            Arc::new(IsolatedRuntime::new_for_tests()),
+            Arc::new(StateCache::new_no_metrics()),
+            Arc::new(NoopPubSubSender),
+        )
+        .expect("client construction failed");
+
+        let shard_id = ShardId::new();
+        let mut write = persist_client
+            .open_writer::<String, String, u64, u64>(
+                shard_id,
+                Arc::new(StringSchema),
+                Arc::new(StringSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("invalid usage");
+        // `N_BATCHES` distinct single-timestamp batches => a snapshot with that
+        // many parts.
+        for t in 0..N_BATCHES {
+            let row = ((format!("k{t}"), format!("v{t}")), t, 1u64);
+            write.expect_compare_and_append(&[row], t, t + 1).await;
+        }
+
+        // Ignore any gets issued during setup; measure only the hydration read.
+        max_concurrent.store(0, Ordering::SeqCst);
+        gets.store(0, Ordering::SeqCst);
+
+        // Sample in-flight gets over time to see STEADY-STATE concurrency, not
+        // just the peak (an initial flood can spike the peak while steady state
+        // trickles).
+        let samples = Arc::new(std::sync::Mutex::new(Vec::<usize>::new()));
+        let sampler = {
+            let concurrent = Arc::clone(&concurrent);
+            let samples = Arc::clone(&samples);
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    samples
+                        .lock()
+                        .unwrap()
+                        .push(concurrent.load(Ordering::SeqCst));
+                }
+            })
+        };
+
+        let client_for_source = persist_client.clone();
+        timely::execute::execute_directly(move |worker| {
+            let (probe, _token) = worker.dataflow::<u64, _, _>(|outer| {
+                let (stream, token) = outer.scoped::<u64, _, _>("hybrid", |scope| {
+                    let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _>(
+                        outer,
+                        scope,
+                        "test_source",
+                        move || std::future::ready(client_for_source.clone()),
+                        shard_id,
+                        // Snapshot at the last written time: the whole history
+                        // is one snapshot flood of ~N_BATCHES parts.
+                        Some(Antichain::from_elem(N_BATCHES - 1)),
+                        SnapshotMode::Include,
+                        Antichain::from_elem(N_BATCHES),
+                        Some(move |_, descs, _| (descs, vec![])),
+                        Arc::new(StringSchema),
+                        Arc::new(StringSchema),
+                        FilterResult::keep_all,
+                        false.then_some(|| unreachable!()),
+                        async {},
+                        ErrorHandler::Halt("test"),
+                    );
+                    (stream.leave(outer), tokens)
+                });
+                let probe = ProbeHandle::new();
+                let _stream = stream.probe_with(&probe);
+                (probe, token)
+            });
+
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let mut timed_out = false;
+            while !probe.with_frontier(|f| f.is_empty()) {
+                if Instant::now() >= deadline {
+                    timed_out = true;
+                    break;
+                }
+                worker.step_or_park(Some(Duration::from_millis(1)));
+            }
+            eprintln!("LATENCY-FETCH hydration timed_out={timed_out}");
+        });
+
+        sampler.abort();
+        let mc = max_concurrent.load(Ordering::SeqCst);
+        let g = gets.load(Ordering::SeqCst);
+        let s = samples.lock().unwrap();
+        eprintln!(
+            "LATENCY-FETCH RESULT: max_concurrent_gets={mc} total_gets={g} \
+             (N_BATCHES={N_BATCHES}, delay=25ms, fetch_concurrency={FETCH_CONCURRENCY})"
+        );
+        eprintln!(
+            "LATENCY-FETCH in-flight-gets samples (every 200ms): {:?}",
+            &*s
+        );
+    }
 }
