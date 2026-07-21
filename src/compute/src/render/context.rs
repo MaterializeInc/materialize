@@ -51,7 +51,7 @@ use timely::progress::{Antichain, Timestamp};
 
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange, MzArrangeCore};
-use crate::render::columnar::CollectionEdge;
+use crate::render::columnar::{CollectionEdge, vec_to_columnar};
 use crate::render::errors::{DataflowErrorSer, ErrorLogger};
 use crate::render::{LinearJoinSpec, MaybeBucketByTime, RenderTimestamp};
 use crate::typedefs::{
@@ -1083,14 +1083,15 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     .try_into()
                     .expect("must fit");
                 bucketed = true;
-                // Temporal bucketing consumes and produces a `Vec` edge, so
-                // decode here. This is the sanctioned leaf decode where a
-                // `Vec`-internal operator meets the columnar edge.
-                CollectionEdge::Vec(T::maybe_apply_temporal_bucketing(
+                // Temporal bucketing is `Vec`-internal: it consumes and
+                // produces a `Vec` stream. Decode the edge into it, then re-encode
+                // the `Vec` result to columnar at the boundary so the bucketed
+                // output edge stays columnar like every other producer.
+                CollectionEdge::Columnar(vec_to_columnar(T::maybe_apply_temporal_bucketing(
                     oks.into_vec().inner,
                     as_of.clone(),
                     summary,
-                ))
+                )))
             } else {
                 oks
             };
@@ -1114,26 +1115,26 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 } else {
                     strategy
                 };
-                let oks = if matches!(effective_strategy, ArrangementStrategy::TemporalBucketing)
-                    && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(config_set)
-                {
-                    let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
-                        .get(config_set)
-                        .try_into()
-                        .expect("must fit");
-                    bucketed = true;
-                    // Temporal bucketing consumes and produces a `Vec` edge, so
-                    // decode here. This is the sanctioned leaf decode where a
-                    // `Vec`-internal operator meets the columnar edge.
-                    let oks = oks.into_vec();
-                    CollectionEdge::Vec(T::maybe_apply_temporal_bucketing(
-                        oks.inner,
-                        as_of.clone(),
-                        summary,
-                    ))
-                } else {
-                    oks
-                };
+                let oks =
+                    if matches!(effective_strategy, ArrangementStrategy::TemporalBucketing)
+                        && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(config_set)
+                    {
+                        let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
+                            .get(config_set)
+                            .try_into()
+                            .expect("must fit");
+                        bucketed = true;
+                        // Temporal bucketing is `Vec`-internal: it consumes
+                        // and produces a `Vec` stream. Decode the edge into it, then
+                        // re-encode the `Vec` result to columnar at the boundary so the
+                        // bucketed output edge stays columnar like every other producer.
+                        let oks = oks.into_vec();
+                        CollectionEdge::Columnar(vec_to_columnar(
+                            T::maybe_apply_temporal_bucketing(oks.inner, as_of.clone(), summary),
+                        ))
+                    } else {
+                        oks
+                    };
                 let use_paged_path = ENABLE_COLUMN_PAGED_BATCHER.get(config_set);
                 let (oks, errs_keyed, passthrough) = Self::arrange_collection(
                     &name,
