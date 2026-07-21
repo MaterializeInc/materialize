@@ -281,6 +281,11 @@ A plain `ColumnBuilder` drops that consolidation, a permanent regression on the 
 Consolidation inherently needs owned staging (you cannot sort a columnar batch without materialized comparable rows), so `ConsolidatingColumnBuilder` is owned-give only.
 This is not a regression: a producer computes its output `Row` fresh (`mfp_plan.evaluate` already yields an owned `Row` per record), so the owned give is a move into staging, not a new allocation or clone, exactly as pre-P1.
 The borrowed-push, no-owned-`Row` property is a CONSUMER optimization (reading an existing columnar batch, as in C1/C3/C4), not applicable to producers that compute new rows.
+
+FAST-FOLLOW (tracked, not blocking): owned-give staging holds N live owned `Row`s per batch (one heap buffer each), same as pre-P1.
+A ref-accepting consolidating builder that stages row bytes into a `Column` arena on a borrowed push and consolidates via a sorted `Vec<usize>` permutation (`RowRef: Ord`) would hold ~1 live owned `Row` plus the arena, a real allocator-churn and peak-memory win on the broad Mfp-to-sink path.
+It is a new `mz-timely-util` consolidation primitive with its own correctness surface (merge, zero-drop, stable order), so it lands as its own focused, adversarially-reviewed PR, after which the producer output-builder choice (localized) swaps to it.
+Deferred so the new-primitive risk does not block the producer wave.
 Files: `src/compute/src/render/context.rs`, `src/compute/src/render.rs`.
 Test: physical-plan goldens unchanged, plus sqllogictest for Get and Mfp chains feeding an ArrangeBy or sink.
 Base: Wave 1 complete.
