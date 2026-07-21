@@ -41,6 +41,12 @@ use timely::{Bincode, Container, ContainerBuilder, PartialOrder};
 
 use crate::containers::stack::FueledBuilder;
 
+thread_local! {
+    /// INSTR: counts messages pushed to timely outputs on this worker thread.
+    /// Read as a per-schedule delta to measure the descs->fabric send rate.
+    static DBG_OUTPUT_PUSHES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 /// Builds async operators with generic shape.
 pub struct OperatorBuilder<'scope, T: Timestamp> {
     builder: OperatorBuilderRc<'scope, T>,
@@ -230,6 +236,7 @@ impl<T: Timestamp, CB: ContainerBuilder> AsyncOutputHandleInner<T, CB> {
         while let Some(container) = self.builder.finish() {
             self.output
                 .give(self.capability.as_ref().expect("must exist"), container);
+            DBG_OUTPUT_PUSHES.with(|c| c.set(c.get() + 1));
         }
     }
 
@@ -260,6 +267,7 @@ impl<T: Timestamp, CB: ContainerBuilder> AsyncOutputHandleInner<T, CB> {
         while let Some(container) = self.builder.extract() {
             self.output
                 .give(self.capability.as_ref().expect("must exist"), container);
+            DBG_OUTPUT_PUSHES.with(|c| c.set(c.get() + 1));
         }
     }
 }
@@ -279,6 +287,7 @@ where
         let mut inner = self.inner.borrow_mut();
         inner.flush();
         inner.output.give(cap, container);
+        DBG_OUTPUT_PUSHES.with(|c| c.set(c.get() + 1));
     }
 }
 
@@ -583,8 +592,11 @@ impl<'scope, T: Timestamp> OperatorBuilder<'scope, T> {
         let mut input_queues = self.input_queues;
         let mut output_flushes = self.output_flushes;
         let mut shutdown_handle = self.shutdown_handle;
-        // INSTR: gate delivery-probe logging to the fetch operator only.
+        // INSTR: gate delivery-probe logging. `descs` name matches both
+        // shard_source_descs and shard_source_descs_return; only the former has
+        // an output, so the return operator logs nothing.
         let dbg_is_fetch = self.name.contains("shard_source_fetch");
+        let dbg_is_descs = self.name.contains("shard_source_descs");
         self.builder.build_reschedule(move |caps| {
             let mut logic_fut = Some(Box::pin(constructor(caps)));
             // INSTR: cumulative schedules and messages accepted, to see whether
@@ -592,6 +604,11 @@ impl<'scope, T: Timestamp> OperatorBuilder<'scope, T> {
             // dribble) or seldom with a bulk pull.
             let mut dbg_schedules: u64 = 0;
             let mut dbg_accepted_total: usize = 0;
+            // INSTR (send side): messages this operator pushes to the fabric per
+            // schedule. Answers whether descs flushes the whole flood in one
+            // poll (fabric then buffers) or dribbles it out over many polls.
+            let mut dbg_send_schedules: u64 = 0;
+            let mut dbg_send_pushed_total: u64 = 0;
             move |new_frontiers| {
                 operator_waker.active.store(true, Ordering::SeqCst);
                 let mut dbg_accepted_now: usize = 0;
@@ -639,6 +656,8 @@ impl<'scope, T: Timestamp> OperatorBuilder<'scope, T> {
                         true
                     }
                 } else {
+                    // INSTR: fabric pushes before this schedule's poll+flush.
+                    let dbg_pushes_before = DBG_OUTPUT_PUSHES.with(|c| c.get());
                     // Schedule the logic future if any of the wakers above marked the task as ready
                     if let Some(fut) = logic_fut.as_mut() {
                         if operator_waker.task_ready.load(Ordering::SeqCst) {
@@ -653,6 +672,23 @@ impl<'scope, T: Timestamp> OperatorBuilder<'scope, T> {
                             for flush in output_flushes.iter_mut() {
                                 (flush)();
                             }
+                        }
+                    }
+                    if dbg_is_descs {
+                        let dbg_pushed = DBG_OUTPUT_PUSHES
+                            .with(|c| c.get())
+                            .wrapping_sub(dbg_pushes_before);
+                        dbg_send_schedules += 1;
+                        // Log when this schedule pushed anything. `pushes` per
+                        // log is how many messages left the operator in one poll;
+                        // if descs ever logs ~1333 the send is bulk and the fabric
+                        // buffers, if it dribbles ~1 the send itself is paced.
+                        if dbg_pushed > 0 {
+                            dbg_send_pushed_total += dbg_pushed;
+                            tracing::info!(
+                                target: "mz_persist_client::operators::shard_source",
+                                "INSTR send: pushes={dbg_pushed} send_schedules={dbg_send_schedules} pushed_total={dbg_send_pushed_total}"
+                            );
                         }
                     }
 
