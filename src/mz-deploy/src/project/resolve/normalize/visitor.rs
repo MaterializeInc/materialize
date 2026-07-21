@@ -442,10 +442,11 @@ impl<'a> NormalizingVisitor<OverlayTransformer<'a>> {
     /// Create a visitor that rewrites references for `mz-deploy dev` overlay
     /// compilation.
     ///
-    /// Applies the two-step schema-level resolution rule:
+    /// Applies the two-step resolution rule:
     /// - External databases (not in `in_project_databases`) → emit verbatim.
-    /// - Dirty `(database, schema)` pairs → rewrite database component to
-    ///   `<database>__<profile_name>`.
+    /// - References to overlaid objects → rewrite database component to
+    ///   `<database>__<profile_name>`; all other in-project references stay at
+    ///   their production address.
     ///
     /// Any configured `profile_suffix` is applied to in-project names by
     /// the project planner before `dev` calls this constructor, so the
@@ -460,21 +461,21 @@ impl<'a> NormalizingVisitor<OverlayTransformer<'a>> {
     ///   `project.toml` (or equivalent ownership declaration). References
     ///   to databases outside this set are treated as external and emitted
     ///   verbatim.
-    /// * `dirty_schemas` - Dirty `(database, schema)` pairs.
+    /// * `overlay_objects` - The fully qualified objects being overlaid.
     /// * `target_cluster` - Cluster name to rewrite every `IN CLUSTER` clause
     ///   on overlay materialized views and indexes to.
     pub fn overlay(
         fqn: &'a FullyQualifiedName,
         profile_name: &'a str,
         in_project_databases: &'a std::collections::BTreeSet<String>,
-        dirty_schemas: &'a std::collections::BTreeSet<crate::project::SchemaQualifier>,
+        overlay_objects: &'a std::collections::BTreeSet<ObjectId>,
         target_cluster: &'a str,
     ) -> Self {
         Self::new(OverlayTransformer {
             fqn,
             profile_name,
             in_project_databases,
-            dirty_schemas,
+            overlay_objects,
             target_cluster,
         })
     }
@@ -519,7 +520,6 @@ impl<'a> NormalizingVisitor<StagingTransformer<'a>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::SchemaQualifier;
     use crate::project::ir::object_id::ObjectId;
     use mz_sql_parser::ast::Ident;
     use std::collections::BTreeSet;
@@ -533,15 +533,21 @@ mod tests {
         )
         .into();
         let in_project: BTreeSet<String> = ["app".to_string()].into_iter().collect();
-        let dirty: BTreeSet<SchemaQualifier> = [SchemaQualifier::new(
+        let overlay_objects: BTreeSet<ObjectId> = [ObjectId::new(
             "app".to_string(),
             "public".to_string(),
+            "orders".to_string(),
         )]
         .into_iter()
         .collect();
 
-        let visitor =
-            NormalizingVisitor::overlay(&fqn, "alice", &in_project, &dirty, "quickstart_dev");
+        let visitor = NormalizingVisitor::overlay(
+            &fqn,
+            "alice",
+            &in_project,
+            &overlay_objects,
+            "quickstart_dev",
+        );
 
         let mut name = UnresolvedItemName(vec![
             Ident::new("app").unwrap(),
