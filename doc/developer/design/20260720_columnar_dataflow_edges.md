@@ -152,7 +152,6 @@ graph TD
   subgraph Wave2["Wave 2: producers flip, every consumer already native"]
     P1["P1: as_collection_core columnar output, flips Get and Mfp"]
     P2["P2: Constant columnar"]
-    P3["P3: ArrangeBy passthrough columnar"]
     P4["P4: FlatMap output columnar"]
     P5["P5: Reduce output columnar"]
     P6["P6: TopK output columnar"]
@@ -295,10 +294,11 @@ Build the constant collection into a `Column` in the `Constant` arm of `render_p
 Files: `src/compute/src/render.rs`.
 Base: Wave 1 complete.
 
-**P3: columnar ArrangeBy passthrough.**
-Ensure the passthrough emits `Columnar` when its producer is columnar, and drop any remaining `Vec` re-wrap (`context.rs:1102`).
-Files: `src/compute/src/render/context.rs`.
-Base: Wave 1 complete.
+**P3: columnar ArrangeBy passthrough.** No work, subsumed by C1 + P1.
+The `Vec` force-wraps this node targeted no longer exist: C1 made `arrange_collection` return a variant-preserving passthrough (Vec arm to `CollectionEdge::Vec`, columnar arm forwards the input `Column` via `give_container` to `CollectionEdge::Columnar`), and P1's raw-collection-store rework dropped the last `CollectionEdge::Vec(oks)` wrap so `as_collection_core`'s edge is stored as-is.
+With P1 live the ArrangeBy path is columnar end to end (columnar Get/Mfp to `as_collection_core` columnar to the columnar arrange arm to a columnar passthrough), no `ColumnarToVec`.
+Covered by `arrange_collection_arms_agree` (C1) and `get_arrange_by_carries_columnar_end_to_end` (P1); T2's compiler check is the backstop.
+Confirmed by inspection of `context.rs`; no separate node exists.
 
 **P4: columnar FlatMap output.**
 Build the FlatMap output into a `ColumnBuilder`.
@@ -373,7 +373,7 @@ The chain is a topological order of the DAG, so every dependency edge points bac
 
 ```
 C1 -> C3 -> C4 -> F1 -> C2
-   -> P1 -> P2 -> P3 -> P4 -> P5 -> P6 -> P7 -> P8 -> P9
+   -> P1 -> P2 -> P4 -> P5 -> P6 -> P7 -> P8 -> P9
    -> T1 -> T2 -> T3
 ```
 
