@@ -507,3 +507,24 @@ The C1 arrange-input key-forming pattern was already confirmed low-risk and was 
   See the C7 and C8 nodes.
 * **Introspection golden filtering.**
   Whether seam operators should be filtered from `mz_dataflow_operators` for the duration of the migration, or expected to churn per pull request, is decided when the golden inventory is done.
+
+## Fast-follows
+
+All optional, none blocking the migration. Each is its own future gh-stack node with its own review.
+Ordered by expected leverage.
+
+* **Ref/permutation consolidating builder** (producer output).
+  The producer output uses `ConsolidatingColumnBuilder` with an owned give, which stages N live owned `Row`s per batch (same as the pre-migration `ConsolidatingContainerBuilder`).
+  A ref-accepting builder that stages row bytes into a `Column` arena on a borrowed push and consolidates via a sorted `Vec<usize>` permutation (`RowRef: Ord`) would hold ~1 live owned `Row` plus the arena, an allocator-churn and peak-memory win on the broad Mfp-to-sink path (better than both pre-migration and the current owned-give).
+  It is a new `mz-timely-util` consolidation primitive with its own correctness surface (merge, zero-drop, stable order), so it lands as a focused, adversarially-reviewed PR, after which the localized producer output-builder choice swaps to it.
+
+* **Columnar `mz_join_core` and `half_join`** (join algorithms).
+  Both joins are `Vec`-internal, so their output is currently a leaf-encode: linear-join's identity-closure path and the whole delta-join output each pay one `VecToColumnar`.
+  Making the differential-side `mz_join_core` and `half_join` emit `Column` directly would remove those leaf-encodes.
+  This is a differential-dogs change (their output is bounded `SizableContainer + PushInto<(Item,T,Diff)>` / carries a `Result<Row,_>` payload before the ok_err demux), out of scope for the compute-only migration.
+
+* **Native LetRec (C7) and native temporal-bucketing (C8).**
+  C7 LetRec and C8 Union temporal-bucketing are sanctioned decode points: they decode to `Vec`, operate on `Vec`-only machinery, and re-encode.
+  Native C7 needs `impl Negate for Column`, `impl ResultsIn for Column`, and a `columnar_leave_dynamic` (mirroring `columnar_negate`), which forks differential's `PointStamp` time arithmetic into our tree, a standing liability.
+  Native C8 needs `maybe_apply_temporal_bucketing` to operate on a columnar stream (its internals are already columnar, so native input would delete an internal `Vec` staging round-trip), gated on `ENABLE_COMPUTE_TEMPORAL_BUCKETING`.
+  Pursue either only if the per-iteration / per-bucket decode shows up hot.
