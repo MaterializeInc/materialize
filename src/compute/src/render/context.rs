@@ -21,10 +21,7 @@ use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 use differential_dataflow::{AsCollection, VecCollection};
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::dyncfgs::{
-    ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION, ENABLE_COMPUTE_TEMPORAL_BUCKETING,
-    TEMPORAL_BUCKETING_SUMMARY,
-};
+use mz_compute_types::dyncfgs::{ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY};
 use mz_compute_types::plan::scalar::{LirScalarExpr, mfp_mir_to_lir_plan, mfp_plan_lir_to_mir};
 use mz_compute_types::plan::{ArrangementStrategy, AvailableCollections};
 use mz_dyncfg::ConfigSet;
@@ -60,7 +57,7 @@ use crate::render::{LinearJoinSpec, MaybeBucketByTime, RenderTimestamp};
 use crate::typedefs::{
     ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, RowRowAgent, RowRowEnter, RowRowSpine,
 };
-use mz_row_spine::{DatumSeq, RowRowBuilder, RowRowColPagedBuilder};
+use mz_row_spine::{RowRowBuilder, RowRowColPagedBuilder};
 
 /// Dataflow-local collections and arrangements.
 ///
@@ -239,40 +236,6 @@ pub enum ArrangementFlavor<'scope, T: RenderTimestamp> {
 }
 
 impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
-    /// Presents `self` as a stream of updates.
-    ///
-    /// Deprecated: This function is not fueled and hence risks flattening the whole arrangement.
-    ///
-    /// This method presents the contents as they are, without further computation.
-    /// If you have logic that could be applied to each record, consider using the
-    /// `flat_map` methods which allows this and can reduce the work done.
-    #[deprecated(note = "Use `flat_map` instead.")]
-    pub fn as_collection(
-        &self,
-    ) -> (
-        VecCollection<'scope, T, Row, Diff>,
-        VecCollection<'scope, T, DataflowErrorSer, Diff>,
-    ) {
-        let mut datums = DatumVec::new();
-        let logic = move |k: DatumSeq, v: DatumSeq| {
-            let temp_storage = RowArena::new();
-            let mut datums_borrow = datums.borrow();
-            k.extend_datums(&temp_storage, &mut datums_borrow, None);
-            v.extend_datums(&temp_storage, &mut datums_borrow, None);
-            SharedRow::pack(&**datums_borrow)
-        };
-        match &self {
-            ArrangementFlavor::Local(oks, errs) => (
-                oks.clone().as_collection(logic),
-                errs.clone().as_collection(|k, &()| k.clone()),
-            ),
-            ArrangementFlavor::Trace(_, oks, errs) => (
-                oks.clone().as_collection(logic),
-                errs.clone().as_collection(|k, &()| k.clone()),
-            ),
-        }
-    }
-
     /// Constructs and applies logic to elements of `self` and returns the results.
     ///
     /// The `logic` callback receives a borrow of the decoded datum vector, a timestamp, a
@@ -639,16 +602,14 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// Therefore, it should be used when the appropriate transformation
     /// was planned as part of a following MFP.
     ///
-    /// If `key` is specified, the function converts the arrangement to a collection. It uses either
-    /// the fueled `flat_map` or `as_collection` method, depending on the flag
-    /// [`ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION`].
+    /// If `key` is specified, the function converts the arrangement to a collection using a
+    /// fueled `flat_map` operator.
     ///
     /// The keyed path materializes the arrangement as the columnar edge. The unkeyed path
     /// returns the unarranged `.collection` edge with its variant intact.
     pub fn as_specific_collection(
         &self,
         key: Option<&[LirScalarExpr]>,
-        config_set: &ConfigSet,
     ) -> (
         CollectionEdge<'scope, T>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
@@ -667,30 +628,21 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 let arranged = self.arranged.get(key).unwrap_or_else(|| {
                     panic!("The collection arranged by {:?} doesn't exist.", key)
                 });
-                if ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION.get(config_set) {
-                    // Output is 1:1 from the already-consolidated cursor, so a
-                    // non-consolidating `ColumnBuilder` suffices. `max_demand` is
-                    // `usize::MAX` because the materialized collection carries every column.
-                    let (ok, err) = arranged.flat_map_ok::<ColumnBuilder<(Row, T, Diff)>, _>(
-                        None,
-                        usize::MAX,
-                        {
-                            // `give` copies the bytes into the column, so one buffer
-                            // serves every record.
-                            let mut row_buf = Row::default();
-                            move |borrow, t, r, ok_session| {
-                                row_buf.packer().extend(borrow.iter());
-                                ok_session.give((&row_buf, &t, &r));
-                                1
-                            }
-                        },
-                    );
-                    (CollectionEdge::Columnar(ok.as_collection()), err)
-                } else {
-                    #[allow(deprecated)]
-                    let (oks, errs) = arranged.as_collection();
-                    (CollectionEdge::Vec(oks), errs)
-                }
+                // Output is 1:1 from the already-consolidated cursor, so a
+                // non-consolidating `ColumnBuilder` suffices. `max_demand` is
+                // `usize::MAX` because the materialized collection carries every column.
+                let (ok, err) =
+                    arranged.flat_map_ok::<ColumnBuilder<(Row, T, Diff)>, _>(None, usize::MAX, {
+                        // `give` copies the bytes into the column, so one buffer
+                        // serves every record.
+                        let mut row_buf = Row::default();
+                        move |borrow, t, r, ok_session| {
+                            row_buf.packer().extend(borrow.iter());
+                            ok_session.give((&row_buf, &t, &r));
+                            1
+                        }
+                    });
+                (CollectionEdge::Columnar(ok.as_collection()), err)
             }
         }
     }
@@ -994,7 +946,6 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         mfp_plan: MfpPlan<LirScalarExpr>,
         key_val: Option<(Vec<LirScalarExpr>, Option<StableRow>)>,
         until: Antichain<mz_repr::Timestamp>,
-        config_set: &ConfigSet,
     ) -> (
         CollectionEdge<'scope, T>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
@@ -1022,7 +973,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     .collection
                     .clone()
                     .expect("The unarranged collection doesn't exist."),
-                Some(key) => self.as_specific_collection(Some(&key), config_set),
+                Some(key) => self.as_specific_collection(Some(&key)),
             };
         }
 
@@ -1135,7 +1086,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         let form_raw_collection = collections.raw || will_create_arrangement;
         if form_raw_collection && self.collection.is_none() {
             let (oks, errs) =
-                self.as_collection_core(input_mfp, input_key.map(|k| (k, None)), until, config_set);
+                self.as_collection_core(input_mfp, input_key.map(|k| (k, None)), until);
             // Apply temporal bucketing when the lowering selected `TemporalBucketing` and
             // we will build at least one arrangement. This path fires when the collection
             // must be formed from scratch (e.g., from an arrangement via as_collection_core).
@@ -1575,7 +1526,6 @@ fn walk_cursor<C, F>(
 #[cfg(test)]
 mod tests {
     use differential_dataflow::input::Input;
-    use mz_compute_types::dyncfgs::all_dyncfgs;
     use mz_expr::{EvalError, MapFilterProject};
     use mz_repr::{Datum, ReprScalarType, Timestamp};
     use timely::dataflow::operators::Capture;
@@ -1753,15 +1703,13 @@ mod tests {
             .collect();
         expected.sort();
 
-        let config_set = ConfigSet::default();
         let (producer_is_columnar, passthrough_is_columnar, produced) =
             timely::execute_directly(move |worker| {
                 worker.dataflow::<Timestamp, _, _>(|scope| {
                     let (mut input, collection) = scope.new_collection();
                     let (_err_input, errs) = scope.new_collection::<DataflowErrorSer, Diff>();
                     let bundle = CollectionBundle::from_edge(CollectionEdge::Vec(collection), errs);
-                    let (edge, _errs) =
-                        bundle.as_collection_core(mfp, None, Antichain::new(), &config_set);
+                    let (edge, _errs) = bundle.as_collection_core(mfp, None, Antichain::new());
                     let producer_is_columnar = matches!(edge, CollectionEdge::Columnar(_));
                     let produced = edge.clone().into_vec().inner.capture();
                     let (_arranged, _arrange_errs, passthrough) =
@@ -1802,7 +1750,6 @@ mod tests {
     #[mz_ore::test]
     fn as_collection_core_identity_passes_edge_through() {
         for columnar_input in [false, true] {
-            let config_set = ConfigSet::default();
             let is_columnar = timely::execute_directly(move |worker| {
                 worker.dataflow::<Timestamp, _, _>(|scope| {
                     let (mut input, collection) = scope.new_collection::<Row, Diff>();
@@ -1816,8 +1763,7 @@ mod tests {
                     let identity = MapFilterProject::<LirScalarExpr>::new(1)
                         .into_plan()
                         .expect("identity mfp");
-                    let (out, _errs) =
-                        bundle.as_collection_core(identity, None, Antichain::new(), &config_set);
+                    let (out, _errs) = bundle.as_collection_core(identity, None, Antichain::new());
                     let is_columnar = matches!(out, CollectionEdge::Columnar(_));
                     input.update(Row::pack_slice(&[Datum::Int64(1)]), Diff::ONE);
                     input.advance_to(Timestamp::from(1u64));
@@ -1863,14 +1809,12 @@ mod tests {
             ),
         ];
 
-        let config_set = ConfigSet::default();
         let captured = timely::execute_directly(move |worker| {
             worker.dataflow::<Timestamp, _, _>(|scope| {
                 let (mut input, collection) = scope.new_collection();
                 let (_err_input, errs) = scope.new_collection::<DataflowErrorSer, Diff>();
                 let bundle = CollectionBundle::from_edge(CollectionEdge::Vec(collection), errs);
-                let (edge, _errs) =
-                    bundle.as_collection_core(mfp, None, Antichain::new(), &config_set);
+                let (edge, _errs) = bundle.as_collection_core(mfp, None, Antichain::new());
                 assert!(
                     matches!(edge, CollectionEdge::Columnar(_)),
                     "a non-identity MFP must produce a columnar edge"
@@ -1902,8 +1846,6 @@ mod tests {
             .collect();
         expected.sort();
 
-        // A populated set, because `ConfigSet::default()` panics on lookup.
-        let config_set = all_dyncfgs(ConfigSet::default());
         let (is_columnar, captured) = timely::execute_directly(move |worker| {
             worker.dataflow::<Timestamp, _, _>(|scope| {
                 let (mut input, collection) = scope.new_collection();
@@ -1929,7 +1871,7 @@ mod tests {
                     0..1,
                     ArrangementFlavor::Local(arranged, err_arranged),
                 );
-                let (edge, _errs) = bundle.as_specific_collection(Some(&key), &config_set);
+                let (edge, _errs) = bundle.as_specific_collection(Some(&key));
                 let is_columnar = matches!(edge, CollectionEdge::Columnar(_));
                 let captured = edge.into_vec().inner.capture();
 

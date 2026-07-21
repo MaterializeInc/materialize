@@ -251,7 +251,6 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_compute_half_join2
     enable_compute_index_peek_offload
     enable_compute_peek_row_iteration_limit
-    enable_compute_render_fueled_as_specific_collection
     enable_date_bin_hopping
     enable_default_connection_validation
     enable_dequadratic_eqprop_map

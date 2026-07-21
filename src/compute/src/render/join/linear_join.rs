@@ -259,8 +259,9 @@ where
                         .expect("The unarranged collection doesn't exist."),
                     // A source key materializes an existing arrangement, which
                     // `as_specific_collection` presents as a columnar edge.
-                    Some(key) => inputs[linear_plan.source_relation]
-                        .as_specific_collection(Some(key), &self.config_set),
+                    Some(key) => {
+                        inputs[linear_plan.source_relation].as_specific_collection(Some(key))
+                    }
                 };
                 errors.push(errs.enter_region(inner));
                 let joined = joined.enter_region(inner);
