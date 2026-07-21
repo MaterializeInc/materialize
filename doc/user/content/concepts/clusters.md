@@ -8,6 +8,7 @@ menu:
     identifier: 'concepts-clusters'
 aliases:
   - /get-started/key-concepts/#clusters
+  - /self-managed/v25.2/concepts/clusters/
 ---
 
 ## Overview
