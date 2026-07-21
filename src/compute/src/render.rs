@@ -937,9 +937,19 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                 let (err_v, err_collection) =
                     Variable::new(self.scope, Product::new(Default::default(), inner));
 
+                // Re-encode the read-edge to columnar so `Get`s on this rec
+                // binding (e.g. as a Union input) see a columnar edge. The
+                // feedback `Variable` itself stays `Vec` (set at `oks_v.set`
+                // below); the recursive value flows `Vec` through the loop, and
+                // only the externally-visible collection is re-containered. The
+                // re-encode is a stateless, timestamp-agnostic pass-through, so
+                // it does not alter the iterative frontier or fixpoint behavior.
                 self.insert_id(
                     Id::Local(*id),
-                    CollectionBundle::from_collections(oks_collection, err_collection),
+                    CollectionBundle::from_edge(
+                        CollectionEdge::Columnar(vec_to_columnar(oks_collection)),
+                        err_collection,
+                    ),
                 );
                 variables.insert(Id::Local(*id), (oks_v, err_v));
             }
@@ -1009,10 +1019,14 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                 let bundle = self.remove_id(Id::Local(id)).unwrap();
                 let (oks, err) = bundle.collection.unwrap();
                 let oks = oks.into_vec();
+                // Extract into the outer scope and re-encode the read-edge to
+                // columnar, so `Get`s on the extracted binding see a columnar
+                // edge. `leave_dynamic` has already stripped the iteration
+                // coordinate, so this runs in the parent scope.
                 self.insert_id(
                     Id::Local(id),
-                    CollectionBundle::from_collections(
-                        oks.leave_dynamic(level + 1),
+                    CollectionBundle::from_edge(
+                        CollectionEdge::Columnar(vec_to_columnar(oks.leave_dynamic(level + 1))),
                         err.leave_dynamic(level + 1),
                     ),
                 );
