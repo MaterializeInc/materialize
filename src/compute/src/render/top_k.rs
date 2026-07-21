@@ -49,7 +49,7 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::{ClearContainer, MzReduce};
 use crate::render::Pairer;
-use crate::render::columnar::CollectionEdge;
+use crate::render::columnar::{CollectionEdge, vec_to_columnar};
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::errors::MaybeValidatingRow;
@@ -110,11 +110,12 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                  `mz_now()` has been const-folded and no temporal bucketing is set",
             );
         }
-        // Temporal bucketing consumes and produces a `Vec` stream, so decode the
-        // edge here. This is the sanctioned leaf decode. It only
-        // fires under `ENABLE_COMPUTE_TEMPORAL_BUCKETING` and the `TemporalBucketing`
-        // strategy, both off on the common path, so the columnar edge otherwise
-        // flows straight through.
+        // Temporal bucketing is `Vec`-internal: it consumes and produces a `Vec`
+        // stream. Decode the edge into it, then re-encode the `Vec` result to
+        // columnar at the boundary so the bucketed input edge stays columnar. It
+        // only fires under `ENABLE_COMPUTE_TEMPORAL_BUCKETING` and the
+        // `TemporalBucketing` strategy, both off on the common path, so the
+        // columnar edge otherwise flows straight through.
         let ok_input = if matches!(
             temporal_bucketing_strategy,
             ArrangementStrategy::TemporalBucketing
@@ -124,11 +125,11 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                 .get(&self.config_set)
                 .try_into()
                 .expect("must fit");
-            CollectionEdge::Vec(T::maybe_apply_temporal_bucketing(
+            CollectionEdge::Columnar(vec_to_columnar(T::maybe_apply_temporal_bucketing(
                 ok_input.into_vec().inner,
                 self.as_of_frontier.clone(),
                 summary,
-            ))
+            )))
         } else {
             ok_input
         };
@@ -160,9 +161,8 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                     let mut datum_vec = mz_repr::DatumVec::new();
                     // A literal, non-negative limit skips this branch entirely, so this
                     // per-row evaluation only runs for column or otherwise fallible
-                    // limits. On the `Vec` edge `into_vec` is the identity, so the
-                    // `Vec` path is unchanged. On a columnar edge it is a narrow
-                    // sanctioned decode
+                    // limits. On the `Vec` edge `into_vec` is the identity, so Wave 1 is
+                    // unchanged. On a columnar edge it is a narrow sanctioned decode
                     // confined to this rare path.
                     let errors = ok_input.clone().into_vec().flat_map(move |row| {
                         let temp_storage = mz_repr::RowArena::new();
@@ -622,8 +622,8 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
 /// avoid the per-record decode, because there is no columnar batcher to push
 /// borrowed rows into here. The `Vec` arm maps the collection directly and reuses
 /// the owned input row, so it is behaviorally identical to consuming the
-/// collection directly. The columnar arm runs whenever the TopK input edge is
-/// columnar.
+/// collection as before this migration. The columnar arm runs whenever the TopK
+/// input edge is columnar, which the upstream producers now emit.
 fn map_topk_key<'s, T, L>(
     edge: CollectionEdge<'s, T>,
     name: &str,
