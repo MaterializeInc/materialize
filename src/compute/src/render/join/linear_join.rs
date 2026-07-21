@@ -250,13 +250,10 @@ where
                         .collection
                         .clone()
                         .expect("The unarranged collection doesn't exist."),
-                    // A source key reads from an existing arrangement, columnar internally,
-                    // whose decoded rows are wrapped as a `Vec` edge.
-                    Some(key) => {
-                        let (oks, errs) = inputs[linear_plan.source_relation]
-                            .as_specific_collection(Some(key), &self.config_set);
-                        (CollectionEdge::Vec(oks), errs)
-                    }
+                    // A source key materializes an existing arrangement, which
+                    // `as_specific_collection` presents as a columnar edge.
+                    Some(key) => inputs[linear_plan.source_relation]
+                        .as_specific_collection(Some(key), &self.config_set),
                 };
                 errors.push(errs.enter_region(inner));
                 let joined = joined.enter_region(inner);
