@@ -26,7 +26,10 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 use crate::docker_dumper::DockerDumper;
-use crate::internal_http_dumper::{dump_emulator_http_resources, dump_self_managed_http_resources};
+use crate::internal_http_dumper::{
+    PROFILES_DIR, dump_emulator_http_resources, dump_self_managed_http_resources,
+    write_symbolize_script,
+};
 use crate::k8s_dumper::K8sDumper;
 use crate::kubectl_port_forwarder::{PortForwardConnection, create_pg_wire_port_forwarder};
 use crate::utils::{
@@ -459,6 +462,10 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
         }
     };
 
+    if let Err(e) = write_symbolize_script(&context.base_path).await {
+        warn!("Failed to write the profile symbolization script: {:#}", e);
+    }
+
     if context.dump_system_catalog {
         let connection_url = match &context.debug_mode_context {
             DebugModeContext::SelfManaged(self_managed_context) => {
@@ -524,6 +531,14 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
         warn!("Failed to zip debug directory: {:#}", e);
     } else {
         info!("Created zip debug at {:#}", &zip_file_name);
+    }
+
+    if context.base_path.join(PROFILES_DIR).exists() {
+        info!(
+            "To symbolize the dumped profiles: cd {}/{} && bash ./symbolize.sh",
+            context.base_path.display(),
+            PROFILES_DIR
+        );
     }
 
     Ok(())
