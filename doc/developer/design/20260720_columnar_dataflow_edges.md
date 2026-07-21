@@ -158,17 +158,21 @@ graph TD
     P7["P7: Join output columnar"]
     P9["P9: source and index import producers columnar"]
   end
-  subgraph Wave3["Wave 3: teardown, producer half compiler-enforced"]
-    T1["T1: retire concat_many mixed-variant upgrade branch"]
-    T2["T2: collapse enum to a columnar alias, into_vec becomes a leaf fn"]
-    T3["T3: de-match negate, concat_many, consolidate_named"]
+  subgraph Wave3["Wave 3: teardown (expanded by the pre-teardown review)"]
+    Ta["Ta: temporal-bucketing re-encode (into_vec to vec_to_columnar)"]
+    Tb["Tb: linear-join accumulator off the edge (M1)"]
+    Tc["Tc: retire as_specific_collection flag-off branch (M2)"]
+    Td["Td: retire concat_many mixed-variant branch (needs Ta)"]
+    Te["Te: collapse enum to a columnar alias + de-match methods"]
   end
   C1 --> C3
   C1 --> C4
   Wave1 ==> Wave2
-  Wave2 --> T1
-  T1 --> T2
-  T2 --> T3
+  Wave2 --> Ta
+  Ta --> Tb
+  Tb --> Tc
+  Tc --> Td
+  Td --> Te
 ```
 
 The bold edge from Wave 1 to Wave 2 is the producer-flip invariant: no producer node starts until every consumer node has landed.
@@ -349,29 +353,43 @@ Files: `src/compute/src/render.rs`.
 Test: source and index import sqllogictest and testdrive coverage.
 Base: Wave 1 complete.
 
-**T1: retire the `concat_many` mixed-variant upgrade branch.**
-Once every producer emits columnar, no edge carries `Vec`, so `concat_many` never sees a mixed set of arms.
-Delete its mixed-variant upgrade branch.
-Do NOT delete `vec_to_columnar`.
-It survives as a leaf ENCODE primitive for producers whose source data is genuinely row-shaped and must be placed on the columnar edge: P9 imports (row data from persist or a trace), and the sanctioned-decode returns C7 LetRec and C8 Union temporal-bucketing, which decode to `Vec`, operate via `branch_when` / `maybe_apply_temporal_bucketing` (both `Vec`-only), then re-encode to the columnar edge.
-Symmetrically `into_vec` / `columnar_to_vec` survive as leaf DECODE primitives (sinks, the same sanctioned decodes).
-The teardown collapses the enum, not the leaf conversions.
-Files: `src/compute/src/render/columnar.rs`.
+The whole-branch pre-teardown review (GO, no correctness defects) refined the teardown into five ordered steps.
+Deleting the `Vec` arm compiler-reveals several legitimate internal `Vec` sites, so those are retired proactively first, keeping the final collapse mechanical.
+`into_vec` / `columnar_to_vec` (leaf decode) and `vec_to_columnar` (leaf encode) are NEVER deleted: they remain leaf conversions for sinks, the sanctioned LetRec / temporal-bucketing points, and row-shaped producers (imports, join no-closure). The teardown collapses the enum, not the leaf conversions.
+
+**Ta: temporal-bucketing re-encode.**
+The temporal-bucketing island (flag `ENABLE_COMPUTE_TEMPORAL_BUCKETING`, default off) currently `into_vec`-decodes then re-wraps `CollectionEdge::Vec` at four sites (`context.rs:1089/1130`, `render.rs:1382`, `top_k.rs:127`), feeding `Vec` inputs into a Union's `concat_many`.
+Convert each to `vec_to_columnar` re-encode so bucketed outputs are `Columnar`.
+This is the leaf-encode of a genuine `Vec`-producing island (`maybe_apply_temporal_bucketing` is `StreamVec`-only, out of scope). It unblocks Td and removes the `arrange_collection` `Vec`-arm reachability that bucketing dragged in.
+Files: `src/compute/src/render.rs`, `src/compute/src/render/context.rs`, `src/compute/src/render/top_k.rs`.
 Base: all P nodes.
 
-**T2: collapse the enum.**
-Replace `CollectionEdge` with a `ColumnarCollection` type alias.
-Demote `into_vec` / `columnar_to_vec` (leaf decode) and `vec_to_columnar` (leaf encode) to free functions used at leaves: consumers that serialize rows, the sanctioned decode-and-re-encode points, and row-shaped producers. These leaf conversions are NOT deleted; only the enum and its arms collapse.
-Update `CollectionBundle.collection` and all construction sites.
-This is the widest diff, touching `context.rs` and every construction site, so alias the enum first and land the construction-site churn as a mechanical rename reviewed separately.
-Files: `src/compute/src/render/columnar.rs`, `src/compute/src/render/context.rs`, `src/compute/src/render.rs`, and every construction site.
-Base: `T1`.
+**Tb: linear-join intra-operator accumulator off the edge (M1).**
+`mz_join_core` is `Vec`-internal, so `JoinedFlavor::Collection` currently carries a `CollectionEdge` whose `Vec` arm is the live multi-stage accumulator (`linear_join.rs:299/318`, consumed at `:559`).
+Change the accumulator to a bare `VecCollection`, encoding to a `CollectionEdge` only at the node output (P7's finalization).
+This removes the intra-operator use of the `Vec` arm ahead of the collapse.
+Files: `src/compute/src/render/join/linear_join.rs`.
+Base: `Ta`.
 
-**T3: de-match the carrier methods.**
-Simplify `negate`, `concat_many`, and `consolidate_named` from arm matches to single columnar implementations.
-The columnar `consolidate_named` becomes the sole implementation.
+**Tc: retire the `as_specific_collection` flag-off branch (M2).**
+The `ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION`-off branch (`context.rs:612`) returns a real-data `CollectionEdge::Vec` via the deprecated `as_collection`.
+The flag defaults true, so production already takes the columnar fueled path; delete the else-branch and retire the flag.
+Files: `src/compute/src/render/context.rs`, `src/compute-types/src/dyncfgs.rs`.
+Base: `Tb`.
+
+**Td: retire the `concat_many` mixed-variant upgrade branch.**
+After Ta, no producer feeds a `Vec` edge into a `concat_many`, so the mixed-variant upgrade branch (`columnar.rs:143-146`) is dead.
+Delete it (and the now-unreachable all-`Vec` branch).
+Blocked before Ta: temporal-bucketing was the last source of mixed inputs.
 Files: `src/compute/src/render/columnar.rs`.
-Base: `T2`.
+Base: `Tc`.
+
+**Te: collapse the enum and de-match the carrier methods.**
+Replace `CollectionEdge` with a `ColumnarCollection` type alias; demote `into_vec`/`columnar_to_vec`/`vec_to_columnar` to leaf free fns; update `CollectionBundle.collection` and every construction/match site; simplify `negate`, `concat_many`, `consolidate_named`, `flat_map_datums` from arm matches to single columnar implementations (the columnar `consolidate_named` becomes the sole impl).
+With Ta-Td done, the remaining `Vec` arms are only the carrier-method matches and leaf sites, so this is now mechanical, and the compiler confirms completeness (no producer emits `Vec`).
+Also fix the stale enum doc comments (`columnar.rs:16-31/67/69-71`, "Vec is today's default", "Columnar unused") the review flagged.
+Files: `src/compute/src/render/columnar.rs`, `src/compute/src/render/context.rs`, `src/compute/src/render.rs`, and every construction site.
+Base: `Td`.
 
 ### One linear gh-stack chain
 
@@ -384,7 +402,7 @@ The chain is a topological order of the DAG, so every dependency edge points bac
 ```
 C1 -> C3 -> C4 -> F1 -> C2
    -> P1 -> P2 -> P4 -> P5 -> P6 -> P7 -> P9
-   -> T1 -> T2 -> T3
+   -> Ta -> Tb -> Tc -> Td -> Te
 ```
 
 C5, C6, C7, C8, P3, and P8 are not in the chain (subsumed, see their nodes): delta-join input by C1; the sink, LetRec, and Union temporal-bucketing already leaf-decode the edge; the ArrangeBy passthrough by C1+P1; and the Threshold output by P5's shared arrangement materialization.
@@ -396,7 +414,7 @@ Order constraints honored by this chain:
 
 * C1 precedes C3 and C4, which reuse its columnar key-forming pattern.
 * All consumer nodes, C and F, precede all producer nodes P, per the producer-flip invariant.
-* The teardown T1, T2, T3 is last, in order.
+* The teardown Ta, Tb, Tc, Td, Te is last, in order (expanded from T1/T2/T3 by the pre-teardown review; Td needs Ta).
 
 The `Base` field in each node spec records the nearest semantic dependency.
 In the chain, a branch's git base is simply the entry before it, which transitively includes every earlier dependency.
