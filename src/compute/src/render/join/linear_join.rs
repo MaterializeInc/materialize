@@ -266,8 +266,9 @@ where
                     // columnar edge. `differential_join` forms the source key off
                     // this edge below, so the columnar source has no `ColumnarToVec`
                     // hop.
-                    Some(key) => inputs[linear_plan.source_relation]
-                        .as_specific_collection(Some(key), &self.config_set),
+                    Some(key) => {
+                        inputs[linear_plan.source_relation].as_specific_collection(Some(key))
+                    }
                 };
                 errors.push(errs.enter_region(inner));
                 let joined = joined.enter_region(inner);
