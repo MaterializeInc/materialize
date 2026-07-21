@@ -102,6 +102,7 @@ async fn test_allocate_id(state_builder: TestCatalogStateBuilder) {
 
     let start_id = state.get_next_id(id_type).await.unwrap();
     let commit_ts = state.current_upper().await;
+    // Allocation does not require the initial update queue to be drained.
     let ids = state.allocate_id(id_type, 3, commit_ts).await.unwrap();
     assert_eq!(ids, (start_id..(start_id + 3)).collect::<Vec<_>>());
 
@@ -119,6 +120,29 @@ async fn test_allocate_id(state_builder: TestCatalogStateBuilder) {
         name: id_type.to_string(),
         next_id: start_id + 3,
     }));
+    Box::new(state).expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_persist_transaction_rejects_pending_catalog_content() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let mut state = TestCatalogStateBuilder::new(persist_client)
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+
+    let err = state.transaction().await.unwrap_err();
+    match err {
+        CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { update_count, .. }) => {
+            assert!(update_count > 0)
+        }
+        err => panic!("unexpected error: {err:?}"),
+    }
+
     Box::new(state).expire().await;
 }
 
@@ -229,6 +253,11 @@ async fn test_persist_conflicts_with_empty_progress_rebase() {
         .await
         .expect("invalid usage")
         .expect("no conflict");
+
+    let txn = state.transaction().await.unwrap();
+    assert_eq!(txn.upper(), bumped);
+    drop(txn);
+
     let target = bumped.step_forward();
     assert_ok!(state.advance_upper(target).await);
     assert_eq!(state.current_upper().await, target);
@@ -580,6 +609,8 @@ async fn test_non_writer_commits(state_builder: TestCatalogStateBuilder) {
 
     // Read-only catalog can successfully commit empty transaction.
     {
+        let updates = reader_state.sync_to_current_updates().await.unwrap();
+        assert!(!updates.is_empty());
         let txn = reader_state.transaction().await.unwrap();
         let commit_ts = txn.upper();
         txn.commit(commit_ts).await.unwrap();

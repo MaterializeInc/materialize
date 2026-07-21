@@ -119,7 +119,7 @@ pub struct Transaction<'a> {
 }
 
 impl<'a> Transaction<'a> {
-    pub fn new(
+    pub(super) fn new(
         durable_catalog: &'a mut dyn DurableCatalogState,
         Snapshot {
             databases,
@@ -2573,7 +2573,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Verifies that this process has not missed catalog content updates.
-    pub async fn ensure_not_out_of_sync(&mut self) -> Result<(), CatalogError> {
+    pub(super) async fn ensure_not_out_of_sync(&mut self) -> Result<(), CatalogError> {
         self.durable_catalog
             .ensure_not_out_of_sync(self.upper)
             .await
@@ -4400,12 +4400,16 @@ mod tests {
             .into_element();
         assert!(a.is_user());
 
+        let initial_updates = state.sync_to_current_updates().await.unwrap();
+        assert!(!initial_updates.is_empty());
+
         // Step 2: insert a replica with that explicit id and commit.
         let mut txn = state.transaction().await.unwrap();
         txn.insert_cluster_replica_with_id(cluster_id, a, "explicit", config, owner_id)
             .unwrap();
         let commit_ts = txn.upper();
         txn.commit_internal(commit_ts).await.unwrap();
+        let _ = state.sync_to_current_updates().await.unwrap();
 
         // Step 3: allocate one more user replica id.
         let commit_ts = state.current_upper().await;

@@ -12,7 +12,7 @@
 use std::fmt::Debug;
 use std::num::NonZeroI64;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use mz_audit_log::VersionedEvent;
@@ -308,7 +308,9 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     /// Marks the bootstrap process as complete.
     async fn mark_bootstrap_complete(&mut self);
 
-    /// Creates a new durable catalog state transaction.
+    /// Creates a transaction only if no durable catalog content is pending.
+    ///
+    /// Empty upper progress is accepted.
     async fn transaction(&mut self) -> Result<Transaction, CatalogError>;
 
     /// Creates a new transaction initialized from the given [`Snapshot`]
@@ -320,15 +322,6 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         &mut self,
         snapshot: Snapshot,
     ) -> Result<Transaction, CatalogError>;
-
-    /// Opens a transaction only if no durable catalog content is pending.
-    ///
-    /// Empty upper progress is accepted. Callers with derived in-memory state must use this method.
-    async fn transaction_in_sync(&mut self) -> Result<Transaction, CatalogError> {
-        let mut txn = self.transaction().await?;
-        txn.ensure_not_out_of_sync().await?;
-        Ok(txn)
-    }
 
     /// Commits a durable catalog state transaction. The transaction will be committed at
     /// `commit_ts`.
@@ -354,25 +347,12 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     ///
     /// Allocation rebases over empty upper progress. Fresh IDs do not require a catalog
     /// staleness check.
-    #[mz_ore::instrument(level = "debug")]
     async fn allocate_id(
         &mut self,
         id_type: &str,
         amount: u64,
         commit_ts: Timestamp,
-    ) -> Result<Vec<u64>, CatalogError> {
-        let start = Instant::now();
-        if amount == 0 {
-            return Ok(Vec::new());
-        }
-        let mut txn = self.transaction().await?;
-        let ids = txn.get_and_increment_id_by(id_type.to_string(), amount)?;
-        txn.commit_internal(commit_ts).await?;
-        self.metrics()
-            .allocate_id_seconds
-            .observe(start.elapsed().as_secs_f64());
-        Ok(ids)
-    }
+    ) -> Result<Vec<u64>, CatalogError>;
 
     /// Allocates and returns `amount` many user [`CatalogItemId`] and [`GlobalId`].
     ///

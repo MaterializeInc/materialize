@@ -708,7 +708,7 @@ impl Catalog {
         let mut audit_events = vec![];
         let mut storage = self.storage().await;
         let mut tx = storage
-            .transaction_in_sync()
+            .transaction()
             .await
             .unwrap_or_terminate("starting catalog transaction");
         // Empty progress may have overtaken the timestamp chosen before opening the transaction.

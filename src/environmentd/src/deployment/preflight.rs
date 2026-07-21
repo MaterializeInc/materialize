@@ -257,6 +257,11 @@ async fn check_ddl_changes(
         .await
         .unwrap_or_terminate("can open in savepoint mode");
 
+    // This savepoint reader has no derived state to consume the initial updates.
+    let _ = catalog
+        .sync_to_current_updates()
+        .await
+        .unwrap_or_terminate("unexpected error while draining initial catalog updates");
     let tx = catalog
         .transaction()
         .await
@@ -344,6 +349,11 @@ async fn get_next_ids(
         .await
         .unwrap_or_terminate("can open in savepoint mode");
 
+    // This savepoint reader has no derived state to consume the initial updates.
+    let _ = catalog
+        .sync_to_current_updates()
+        .await
+        .unwrap_or_terminate("unexpected error while draining initial catalog updates");
     let tx = catalog
         .transaction()
         .await

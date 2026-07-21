@@ -1310,7 +1310,7 @@ impl UnopenedPersistCatalogState {
 
         let catalog_content_version = catalog.catalog_content_version.to_string();
         let txn = if is_initialized {
-            let mut txn = catalog.transaction().await?;
+            let mut txn = catalog.transaction_unchecked().await?;
 
             // Ad-hoc migration: Initialize the `migration_version` expected by adapter to be
             // present in existing catalogs.
@@ -1337,7 +1337,7 @@ impl UnopenedPersistCatalogState {
                 catalog.snapshot
             );
 
-            let mut txn = catalog.transaction().await?;
+            let mut txn = catalog.transaction_unchecked().await?;
             initialize::initialize(
                 &mut txn,
                 bootstrap_args,
@@ -1647,6 +1647,16 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
 /// so that it can expire its leases. If/when rust gets AsyncDrop, this will be done automatically.
 type PersistCatalogState = PersistHandle<StateUpdateKind, CatalogStateInner>;
 
+impl PersistHandle<StateUpdateKind, CatalogStateInner> {
+    /// Creates a transaction without validating pending catalog updates.
+    async fn transaction_unchecked(&mut self) -> Result<Transaction<'_>, CatalogError> {
+        self.metrics.transactions_started.inc();
+        let snapshot = self.snapshot().await?;
+        let commit_ts = self.upper;
+        Transaction::new(self, snapshot, commit_ts)
+    }
+}
+
 #[async_trait]
 impl ReadOnlyDurableCatalogState for PersistCatalogState {
     fn epoch(&self) -> Epoch {
@@ -1785,10 +1795,9 @@ impl DurableCatalogState for PersistCatalogState {
 
     #[mz_ore::instrument(level = "debug")]
     async fn transaction(&mut self) -> Result<Transaction, CatalogError> {
-        self.metrics.transactions_started.inc();
-        let snapshot = self.snapshot().await?;
-        let commit_ts = self.upper.clone();
-        Transaction::new(self, snapshot, commit_ts)
+        let mut txn = self.transaction_unchecked().await?;
+        txn.ensure_not_out_of_sync().await?;
+        Ok(txn)
     }
 
     fn transaction_from_snapshot(
@@ -1797,6 +1806,26 @@ impl DurableCatalogState for PersistCatalogState {
     ) -> Result<Transaction, CatalogError> {
         let commit_ts = self.upper.clone();
         Transaction::new(self, snapshot, commit_ts)
+    }
+
+    #[mz_ore::instrument(level = "debug")]
+    async fn allocate_id(
+        &mut self,
+        id_type: &str,
+        amount: u64,
+        commit_ts: Timestamp,
+    ) -> Result<Vec<u64>, CatalogError> {
+        let start = Instant::now();
+        if amount == 0 {
+            return Ok(Vec::new());
+        }
+        let mut txn = self.transaction_unchecked().await?;
+        let ids = txn.get_and_increment_id_by(id_type.to_string(), amount)?;
+        txn.commit_internal(commit_ts).await?;
+        self.metrics
+            .allocate_id_seconds
+            .observe(start.elapsed().as_secs_f64());
+        Ok(ids)
     }
 
     #[mz_ore::instrument(level = "debug")]
