@@ -24,7 +24,7 @@ export type Organization = components["schemas"]["OrganizationResponse"];
 export type PlanType = components["schemas"]["PlanType"];
 export type Invoice = components["schemas"]["Invoice"];
 export type Region = components["schemas"]["Region"];
-export type Regions = components["schemas"]["Regions"];
+export type Regions = components["schemas"]["Paginated_Region"];
 export type CreditBlock = components["schemas"]["CreditBlock"];
 export type DailyCosts = components["schemas"]["DailyCostResponse"];
 export type AllCosts = components["schemas"]["AllCosts"];
@@ -266,7 +266,7 @@ export async function issueCommunityLicenseKey(
 }
 
 export async function getSelfManagedSubscription(
-  useCaseId: string | null,
+  environmentId: string | null,
   requestOptions: OpenApiRequestOptions = {},
 ) {
   const { headers, ...options } = requestOptions;
@@ -275,7 +275,7 @@ export async function getSelfManagedSubscription(
     {
       params: {
         path: {
-          useCaseId,
+          environmentId,
         },
       },
       signal: requestOptions?.signal,
