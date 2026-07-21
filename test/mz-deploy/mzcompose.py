@@ -49,6 +49,7 @@ SERVICES = [
     Materialized(
         additional_system_parameter_defaults={
             "enable_create_table_from_source": "true",
+            "enable_auto_scaling_strategy": "true",
         },
     ),
     # Kafka broker for the sinks workflow. Only started by workflows that
@@ -2296,3 +2297,98 @@ def workflow_concurrent_deploys(c: Composition, parser: WorkflowArgumentParser) 
             "SELECT name FROM mz_clusters WHERE name LIKE '%\\_ca' OR name LIKE '%\\_cb'"
         )
         assert len(rows) == 0, f"Expected no staging clusters, got {rows}"
+
+
+def workflow_autoscaling(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """AUTO SCALING STRATEGY lifecycle over the ``autoscaling/*`` projects.
+
+    Covers the three mz-deploy touchpoints for cluster autoscaling policies:
+    creation from a cluster definition file, reconciliation of policy drift
+    (alter and reset) by ``apply``, and policy inheritance when ``stage``
+    clones a production cluster."""
+    setup_base(c)
+
+    def live_strategy(cluster: str) -> tuple[str, int] | None:
+        """The (hydration_size, linger secs) of a cluster's configured
+        policy, or None when no policy is configured."""
+        rows = c.sql_query(
+            "SELECT s.strategy->'on_hydration'->>'hydration_size', "
+            "(s.strategy->'on_hydration'->'linger_duration'->>'secs')::int "
+            "FROM mz_internal.mz_cluster_auto_scaling_strategies s "
+            "JOIN mz_clusters cl ON cl.id = s.cluster_id "
+            f"WHERE cl.name = '{cluster}' AND s.strategy != 'null'::jsonb"
+        )
+        if len(rows) == 0:
+            return None
+        assert len(rows) == 1, f"expected at most one policy row, got {rows}"
+        return (rows[0][0], int(rows[0][1]))
+
+    with c.test_case("autoscaling-create"):
+        # Creating the cluster from the definition file carries the policy.
+        result = run_mz_deploy(c, "autoscaling/v1", "apply")
+        assert result.returncode == 0, f"apply v1 failed: {result.stderr}"
+        assert live_strategy("scaled") == ("scale=1,workers=2", 60)
+
+    with c.test_case("autoscaling-idempotent"):
+        # An unchanged definition reconciles to up-to-date, not altered.
+        result = run_mz_deploy(
+            c, "autoscaling/v1", "apply", "--dry-run", "--output", "json"
+        )
+        dry_run = parse_dry_run_json(result)
+        clusters_phase = find_phase(dry_run["phases"], "clusters")
+        assert (
+            len(phase_actions(clusters_phase, "altered")) == 0
+        ), f"expected no altered clusters on re-apply, got {clusters_phase}"
+        assert (
+            len(phase_actions(clusters_phase, "up_to_date")) == 1
+        ), f"expected the cluster to be up-to-date, got {clusters_phase}"
+
+    with c.test_case("autoscaling-stage-copy"):
+        # Staging clones the LIVE production cluster config, including the
+        # policy, so staged hydration bursts like production would.
+        result = run_mz_deploy(
+            c, "autoscaling/v2", "stage", "--deploy-id", "as1", "--allow-dirty"
+        )
+        assert result.returncode == 0, f"stage as1 failed: {result.stderr}"
+        assert live_strategy("scaled_as1") == live_strategy(
+            "scaled"
+        ), "staging cluster must inherit the production autoscaling policy"
+        result = run_mz_deploy(c, "autoscaling/v2", "abort", "as1")
+        assert result.returncode == 0, f"abort as1 failed: {result.stderr}"
+
+    with c.test_case("autoscaling-alter"):
+        # A policy edit in the definition file is drift and reconciles.
+        result = run_mz_deploy(
+            c, "autoscaling/v2", "apply", "--dry-run", "--output", "json"
+        )
+        dry_run = parse_dry_run_json(result)
+        clusters_phase = find_phase(dry_run["phases"], "clusters")
+        altered = phase_actions(clusters_phase, "altered")
+        assert len(altered) == 1, f"expected 1 altered cluster, got {clusters_phase}"
+        statements = " ".join(altered[0].get("statements", []))
+        assert (
+            "AUTO SCALING STRATEGY" in statements
+        ), f"expected an AUTO SCALING STRATEGY alter, got {statements}"
+
+        result = run_mz_deploy(c, "autoscaling/v2", "apply")
+        assert result.returncode == 0, f"apply v2 failed: {result.stderr}"
+        assert live_strategy("scaled") == ("scale=1,workers=4", 120)
+
+    with c.test_case("autoscaling-reset"):
+        # Removing the option from the file resets the live policy
+        # (reconciliation is declarative).
+        result = run_mz_deploy(
+            c, "autoscaling/v3", "apply", "--dry-run", "--output", "json"
+        )
+        dry_run = parse_dry_run_json(result)
+        clusters_phase = find_phase(dry_run["phases"], "clusters")
+        altered = phase_actions(clusters_phase, "altered")
+        assert len(altered) == 1, f"expected 1 altered cluster, got {clusters_phase}"
+        statements = " ".join(altered[0].get("statements", []))
+        assert (
+            "RESET (AUTO SCALING STRATEGY)" in statements
+        ), f"expected an AUTO SCALING STRATEGY reset, got {statements}"
+
+        result = run_mz_deploy(c, "autoscaling/v3", "apply")
+        assert result.returncode == 0, f"apply v3 failed: {result.stderr}"
+        assert live_strategy("scaled") is None, "expected the policy to be reset"

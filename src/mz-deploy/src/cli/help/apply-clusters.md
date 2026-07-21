@@ -14,17 +14,14 @@ idempotently.
 1. Loads all `.sql` files from the `clusters/` directory.
 2. For each cluster definition:
    - If the cluster does not exist, creates it.
-   - If the cluster exists but size or replication factor has drifted,
-     alters it to match.
+   - If the cluster exists but size, replication factor, or the
+     auto scaling strategy policy has drifted, alters it to match.
    - Applies associated `GRANT` statements.
    - Applies associated `COMMENT` statements.
 3. Reports status per cluster:
    - `+` created
    - `~` altered (drift detected)
    - `=` up-to-date (no changes needed)
-
-The command is **idempotent** — running it multiple times produces the
-same result. Grants and comments are safe to re-apply.
 
 ## Examples
 

@@ -14,9 +14,14 @@ use crate::cli::commands::grants;
 use crate::cli::executor::{
     ApplyPlan, ApplyResult, DeploymentExecutor, ObjectAction, ObjectResult, connect_apply_client,
 };
-use crate::client::{Client, ClusterOptions, quote_identifier};
+use crate::client::{Client, Cluster, ConnectionError, quote_identifier};
 use crate::config::Settings;
-use crate::project::clusters::{self, ClusterDefinition, extract_replication_factor, extract_size};
+use crate::project::clusters::{
+    self, ClusterDefinition, extract_auto_scaling_strategy, extract_replication_factor,
+    extract_size,
+};
+use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::{ClusterOption, ClusterOptionName, CreateClusterStatement, Raw};
 
 /// Plan cluster changes without executing or printing.
 pub async fn plan(
@@ -93,44 +98,41 @@ async fn plan_cluster(
             ObjectAction::Created
         }
         Some(existing_cluster) => {
-            let desired_size = extract_size(&def.create_stmt);
-            let desired_rf = extract_replication_factor(&def.create_stmt);
+            // Policy drift is only diffable when the region supports autoscaling
+            // strategies. On older regions the live policy is unknowable, so
+            // reconciliation leaves it alone.
+            let supports_auto_scaling = client.supports_auto_scaling_strategies().await?;
+            let (to_set, to_reset) =
+                diff_cluster_options(def, &existing_cluster, supports_auto_scaling).map_err(
+                    |reason| {
+                        CliError::Connection(ConnectionError::Message(format!(
+                            "invalid AUTO SCALING STRATEGY for cluster '{}': {}",
+                            cluster_name, reason
+                        )))
+                    },
+                )?;
 
-            let needs_alter = {
-                let size_differs = desired_size.as_deref() != existing_cluster.size.as_deref();
-                let rf_differs = desired_rf.map(i64::from) != existing_cluster.replication_factor;
-                size_differs || rf_differs
-            };
-
-            if needs_alter {
-                let size = desired_size.unwrap_or_else(|| {
-                    existing_cluster
-                        .size
-                        .clone()
-                        .unwrap_or_else(|| "25cc".to_string())
-                });
-                let rf = desired_rf.unwrap_or_else(|| {
-                    existing_cluster
-                        .replication_factor
-                        .unwrap_or(1)
-                        .try_into()
-                        .unwrap_or(1)
-                });
-
-                let options = ClusterOptions {
-                    size,
-                    replication_factor: rf,
-                };
-                let alter_sql = format!(
-                    "ALTER CLUSTER {} SET (SIZE = '{}', REPLICATION FACTOR = {})",
-                    quote_identifier(cluster_name),
-                    options.size,
-                    options.replication_factor
-                );
-                executor.execute_sql(&alter_sql).await?;
-                ObjectAction::Altered
-            } else {
+            if to_set.is_empty() && to_reset.is_empty() {
                 ObjectAction::UpToDate
+            } else {
+                if !to_set.is_empty() {
+                    let alter_sql = format!(
+                        "ALTER CLUSTER {} SET ({})",
+                        quote_identifier(cluster_name),
+                        render_option_list(&to_set)
+                    );
+                    executor.execute_sql(&alter_sql).await?;
+                }
+                // SET and RESET cannot be combined in one statement.
+                if !to_reset.is_empty() {
+                    let reset_sql = format!(
+                        "ALTER CLUSTER {} RESET ({})",
+                        quote_identifier(cluster_name),
+                        render_option_list(&to_reset)
+                    );
+                    executor.execute_sql(&reset_sql).await?;
+                }
+                ObjectAction::Altered
             }
         }
     };
@@ -158,4 +160,219 @@ async fn plan_cluster(
         transaction_group: None,
         post_statements: vec![],
     })
+}
+
+/// One managed cluster option, reduced to the facts the reconciler needs.
+struct OptionDiff {
+    name: ClusterOptionName,
+    /// The file's value diverges from the live cluster's.
+    changed: bool,
+    /// The file specifies a concrete value, as opposed to omitting the option
+    /// or, for `AUTO SCALING STRATEGY`, disabling it with an empty block.
+    present: bool,
+    /// Reset the option to its server default when the file omits it. `false`
+    /// only for `SIZE`, the one required option: a managed cluster must have a
+    /// size, so it is only ever set to the value the file declares.
+    reset_when_absent: bool,
+}
+
+/// The managed cluster options mz-deploy reconciles: `SIZE`, `REPLICATION
+/// FACTOR`, and `AUTO SCALING STRATEGY`. Compares the definition against the
+/// live cluster and returns the options to `SET` and the option names to
+/// `RESET` so the caller can converge live state onto the file.
+///
+/// A changed option whose value the file declares is `SET` to that value. A
+/// changed option the file omits is `RESET` only when the option resets on
+/// absence. `AUTO SCALING STRATEGY` is reconciled only when
+/// `supports_auto_scaling` is set, since on older regions the live policy is
+/// unknowable.
+fn diff_cluster_options(
+    def: &ClusterDefinition,
+    existing: &Cluster,
+    supports_auto_scaling: bool,
+) -> Result<(Vec<ClusterOption<Raw>>, Vec<ClusterOptionName>), String> {
+    let create = &def.create_stmt;
+
+    let desired_size = extract_size(create);
+    let desired_rf = extract_replication_factor(create).map(i64::from);
+    let mut diffs = vec![
+        OptionDiff {
+            name: ClusterOptionName::Size,
+            changed: desired_size.as_deref() != existing.size.as_deref(),
+            present: desired_size.is_some(),
+            reset_when_absent: false,
+        },
+        OptionDiff {
+            name: ClusterOptionName::ReplicationFactor,
+            changed: desired_rf != existing.replication_factor,
+            present: desired_rf.is_some(),
+            reset_when_absent: true,
+        },
+    ];
+    if supports_auto_scaling {
+        let desired = extract_auto_scaling_strategy(create)?;
+        diffs.push(OptionDiff {
+            name: ClusterOptionName::AutoScalingStrategy,
+            changed: desired != existing.auto_scaling_strategy,
+            present: desired.is_some(),
+            reset_when_absent: true,
+        });
+    }
+
+    let mut to_set = Vec::new();
+    let mut to_reset = Vec::new();
+    for diff in diffs {
+        if !diff.changed {
+            continue;
+        }
+        if diff.present {
+            // A present desired value means the option is declared in the file.
+            if let Some(option) = find_cluster_option(create, diff.name) {
+                to_set.push(option.clone());
+            }
+        } else if diff.reset_when_absent {
+            to_reset.push(diff.name);
+        }
+    }
+
+    Ok((to_set, to_reset))
+}
+
+/// Render cluster options (or option names) as a comma-separated `ALTER CLUSTER`
+/// argument list.
+fn render_option_list<T: AstDisplay>(items: &[T]) -> String {
+    items
+        .iter()
+        .map(AstDisplay::to_ast_string_simple)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Find a `CREATE CLUSTER` option by name.
+fn find_cluster_option(
+    create: &CreateClusterStatement<Raw>,
+    name: ClusterOptionName,
+) -> Option<&ClusterOption<Raw>> {
+    create.options.iter().find(|option| option.name == name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mz_sql_parser::ast::Statement;
+    use mz_sql_parser::parser::parse_statements;
+
+    fn definition(sql: &str) -> ClusterDefinition {
+        let create_stmt = match parse_statements(sql).unwrap().pop().unwrap().ast {
+            Statement::CreateCluster(stmt) => stmt,
+            other => panic!("expected CREATE CLUSTER, got {:?}", other),
+        };
+        ClusterDefinition {
+            name: create_stmt.name.to_string(),
+            create_stmt,
+            grants: vec![],
+            comments: vec![],
+        }
+    }
+
+    fn cluster(size: &str, replication_factor: i64) -> Cluster {
+        Cluster {
+            id: "u1".to_string(),
+            name: "scaled".to_string(),
+            size: Some(size.to_string()),
+            replication_factor: Some(replication_factor),
+            auto_scaling_strategy: None,
+        }
+    }
+
+    /// Render a diff as `(SET statement parts, RESET names)` for concise asserts.
+    fn diff(def: &ClusterDefinition, existing: &Cluster) -> (Vec<String>, Vec<String>) {
+        let (to_set, to_reset) = diff_cluster_options(def, existing, true).unwrap();
+        (
+            to_set
+                .iter()
+                .map(AstDisplay::to_ast_string_simple)
+                .collect(),
+            to_reset
+                .iter()
+                .map(AstDisplay::to_ast_string_simple)
+                .collect(),
+        )
+    }
+
+    #[mz_ore::test]
+    fn test_diff_up_to_date() {
+        let def = definition(
+            "CREATE CLUSTER scaled (SIZE = '25cc', REPLICATION FACTOR = 2, \
+             AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = '100cc')))",
+        );
+        let mut existing = cluster("25cc", 2);
+        existing.auto_scaling_strategy = extract_auto_scaling_strategy(&def.create_stmt).unwrap();
+        assert_eq!(diff(&def, &existing), (vec![], Vec::<String>::new()));
+    }
+
+    #[mz_ore::test]
+    fn test_diff_size_only() {
+        let def = definition("CREATE CLUSTER scaled (SIZE = '50cc', REPLICATION FACTOR = 2)");
+        assert_eq!(
+            diff(&def, &cluster("25cc", 2)),
+            (vec!["SIZE = '50cc'".to_string()], Vec::<String>::new())
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_diff_replication_factor_reset_when_omitted() {
+        // The file omits REPLICATION FACTOR, so it resets to the server
+        // default. SIZE, the one required option, is left alone when it matches.
+        let def = definition("CREATE CLUSTER scaled (SIZE = '25cc')");
+        assert_eq!(
+            diff(&def, &cluster("25cc", 2)),
+            (vec![], vec!["REPLICATION FACTOR".to_string()])
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_diff_strategy_set() {
+        let def = definition(
+            "CREATE CLUSTER scaled (SIZE = '25cc', REPLICATION FACTOR = 2, \
+             AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = '100cc')))",
+        );
+        assert_eq!(
+            diff(&def, &cluster("25cc", 2)),
+            (
+                vec![
+                    "AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = '100cc'))".to_string()
+                ],
+                Vec::<String>::new()
+            )
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_diff_strategy_reset() {
+        let def = definition("CREATE CLUSTER scaled (SIZE = '25cc', REPLICATION FACTOR = 2)");
+        let mut existing = cluster("25cc", 2);
+        existing.auto_scaling_strategy = extract_auto_scaling_strategy(
+            &definition(
+                "CREATE CLUSTER scaled (SIZE = '25cc', AUTO SCALING STRATEGY = \
+                 (ON HYDRATION (HYDRATION SIZE = '100cc')))",
+            )
+            .create_stmt,
+        )
+        .unwrap();
+        assert_eq!(
+            diff(&def, &existing),
+            (vec![], vec!["AUTO SCALING STRATEGY".to_string()])
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_diff_unsupported_region_skips_strategy() {
+        // With autoscaling unsupported, a live policy is never diffed even
+        // though the file drops it.
+        let def = definition("CREATE CLUSTER scaled (SIZE = '25cc', REPLICATION FACTOR = 2)");
+        let existing = cluster("25cc", 2);
+        let (to_set, to_reset) = diff_cluster_options(&def, &existing, false).unwrap();
+        assert!(to_set.is_empty() && to_reset.is_empty());
+    }
 }
