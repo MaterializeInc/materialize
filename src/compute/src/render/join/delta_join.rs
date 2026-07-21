@@ -40,7 +40,7 @@ use timely::dataflow::operators::vec::Map;
 use timely::progress::Antichain;
 
 use crate::render::RenderTimestamp;
-use crate::render::columnar::{CollectionEdge, vec_to_columnar};
+use crate::render::columnar::vec_to_columnar;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::typedefs::{RowRowAgent, RowRowEnter};
@@ -316,7 +316,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         // This is the sanctioned leaf-encode; a columnar `half_join`/algorithm is
         // a differential-side follow-up. Non-consolidating: the per-path
         // finalization already consolidated whatever it consolidates.
-        CollectionBundle::from_edge(CollectionEdge::Columnar(vec_to_columnar(oks)), errs)
+        CollectionBundle::from_edge(vec_to_columnar(oks), errs)
     }
 }
 
