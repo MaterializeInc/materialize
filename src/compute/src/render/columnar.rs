@@ -64,7 +64,10 @@ pub type ColumnarCollection<'scope, T, D, R> = Collection<'scope, T, Column<(D, 
 /// `concat`s repack the row-based inputs and produce the columnar variant.
 #[derive(Clone)]
 pub enum CollectionEdge<'scope, T: RenderTimestamp> {
-    /// Row-formatted collection. Today's default for every producer.
+    /// Row-formatted collection. No producer constructs this after the
+    /// migration; the variant and its remaining match arms are removed when the
+    /// enum collapses to a columnar alias.
+    #[allow(dead_code)]
     Vec(VecCollection<'scope, T, Row, Diff>),
     /// Columnar collection. Currently unused by any producer; reserved for the
     /// producer flip at the end of the migration.
@@ -122,28 +125,23 @@ impl<'scope, T: RenderTimestamp> CollectionEdge<'scope, T> {
 
     /// Concatenates a collection of edges.
     ///
-    /// Edges of one shared variant concatenate natively. Mixed inputs upgrade
-    /// the row-based edges through [`vec_to_columnar`] and produce the
-    /// columnar variant. Repacking rows into columns copies bytes but
-    /// allocates no per-record `Row`s, so upgrading is the cheap direction.
+    /// Every producer emits the columnar variant, so the inputs concatenate
+    /// natively into the columnar variant.
     pub fn concat_many<I>(scope: Scope<'scope, T>, edges: I) -> Self
     where
         I: IntoIterator<Item = Self>,
     {
-        let mut vecs = Vec::new();
-        let mut cols = Vec::new();
-        for edge in edges {
-            match edge {
-                CollectionEdge::Vec(c) => vecs.push(c),
-                CollectionEdge::Columnar(c) => cols.push(c),
-            }
-        }
-        if cols.is_empty() {
-            CollectionEdge::Vec(differential_dataflow::collection::concatenate(scope, vecs))
-        } else {
-            cols.extend(vecs.into_iter().map(vec_to_columnar));
-            CollectionEdge::Columnar(differential_dataflow::collection::concatenate(scope, cols))
-        }
+        let cols = edges.into_iter().map(|edge| match edge {
+            CollectionEdge::Columnar(c) => c,
+            // No producer emits `Vec` after the migration, so a `Vec` input
+            // cannot reach here. The `Vec` arm and this `unreachable!` are
+            // removed together when the enum collapses to a columnar alias.
+            CollectionEdge::Vec(_) => unreachable!("no producer emits a `Vec` edge"),
+        });
+        CollectionEdge::Columnar(differential_dataflow::collection::concatenate(
+            scope,
+            cols.collect::<Vec<_>>(),
+        ))
     }
 
     /// Applies `logic` to each record in this edge, exposing the record as a
