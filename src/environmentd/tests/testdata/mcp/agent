@@ -121,3 +121,36 @@ mcp-agent
 {"jsonrpc":"2.0","id":null,"method":"tools/list"}
 ----
 200 OK
+
+# =============================================================================
+# HTTP method enforcement
+# =============================================================================
+
+# MCP spec 2025-11-25: GET on the POST-only endpoint returns 405.
+mcp-agent get
+----
+405 Method Not Allowed
+
+# =============================================================================
+# Origin validation (DNS rebinding defense)
+# =============================================================================
+
+# Browser-style requests with an Origin header are rejected unless the origin
+# is on the CORS allowlist (empty in this test harness). Requests without an
+# Origin header (every other test in this file) are allowed.
+mcp-agent origin
+{"jsonrpc":"2.0","id":40,"method":"tools/list"}
+----
+403 Forbidden
+
+# =============================================================================
+# read_data_product - name validation
+# =============================================================================
+
+# A data product name that does not parse as a single object name (e.g. an
+# SQL injection attempt) is rejected by validation, not interpolated into SQL.
+mcp-agent
+{"jsonrpc":"2.0","id":41,"method":"tools/call","params":{"name":"read_data_product","arguments":{"name":"users\"; DROP TABLE users; --"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":41,"error":{"code":-32602,"message":"Query validation failed: Invalid data product name: users\"; DROP TABLE users; --. Expected a valid object name, e.g. '\"database\".\"schema\".\"name\"' or 'my_view'","data":{"error_type":"ValidationError"}}}
