@@ -852,6 +852,13 @@ where
                         cap_set.downgrade(as_of.iter());
                     }
                     Ok(ListenMessage::Parts { ts, parts }) => {
+                        // DEBUG INSTRUMENTATION (mh/deasync-instr): how many parts
+                        // the descs operator emits per message. Reveals whether
+                        // the source floods all snapshot parts at once or trickles.
+                        tracing::info!(
+                            parts = parts.len(),
+                            "INSTR shard_source_descs emitting parts"
+                        );
                         let session_cap = cap_set.delayed(&ts);
                         let mut output = descs_output.activate();
                         let mut session = output.session(&session_cap);
@@ -1031,12 +1038,32 @@ where
             let mut ready: VecDeque<(TInner, Result<FetchedBlob<K, V, T, D>, (BlobKey, String)>)> =
                 VecDeque::new();
             let mut input_done = false;
+            // DEBUG INSTRUMENTATION (mh/deasync-instr): reveal whether the fetch
+            // loop is starved of descs (in_flight/outstanding stay low while the
+            // cap is high) or actually saturating. Logged once a second; the tick
+            // fires even while the loop is blocked in `desc_rx.recv()`.
+            let mut dbg_pushed: u64 = 0;
+            let mut dbg_completed: u64 = 0;
+            let mut dbg_tick = tokio::time::interval(std::time::Duration::from_secs(1));
             loop {
                 // Downloading plus downloaded-but-not-yet-forwarded. This, not
                 // the result channel capacity, is what bounds resident parts.
                 let outstanding = in_flight.len() + ready.len();
                 tokio::select! {
                     biased;
+                    // DEBUG: periodic depth snapshot.
+                    _ = dbg_tick.tick() => {
+                        tracing::info!(
+                            shard = %shard_id,
+                            in_flight = in_flight.len(),
+                            ready = ready.len(),
+                            outstanding,
+                            max_concurrency,
+                            pushed = dbg_pushed,
+                            completed = dbg_completed,
+                            "INSTR shard_source_fetch depth"
+                        );
+                    }
                     // Forward a completed fetch once the channel has room.
                     // `reserve` leaves this arm pending (rather than blocking the
                     // loop) when the channel is full, so `in_flight` keeps being
@@ -1055,13 +1082,17 @@ where
                     // rather than forwarding inline is what keeps a full result
                     // channel from freezing the poll of `in_flight`.
                     Some((time, fetched)) = in_flight.next(), if !in_flight.is_empty() => {
+                        dbg_completed += 1;
                         ready.push_back((time, fetched));
                     }
                     // Start another fetch while there is spare concurrency and
                     // the desc channel is still open.
                     maybe = desc_rx.recv(), if !input_done && outstanding < max_concurrency => {
                         match maybe {
-                            Some((time, part)) => in_flight.push(fetch_one(time, part)),
+                            Some((time, part)) => {
+                                dbg_pushed += 1;
+                                in_flight.push(fetch_one(time, part));
+                            }
                             None => input_done = true,
                         }
                     }
@@ -1095,6 +1126,10 @@ where
         // operator stops doing work but retains its capabilities so the frontier
         // does not advance past data we did not emit.
         let mut failed = false;
+        // DEBUG INSTRUMENTATION (mh/deasync-instr): how many descs the operator
+        // forwards to the fetch task per activation, and cumulatively. Reveals
+        // whether descs arrive in bulk (one big activation) or trickle.
+        let mut dbg_forwarded_total: u64 = 0;
 
         move |frontiers| {
             // Keep the fetch task alive for as long as the operator runs.
@@ -1131,12 +1166,14 @@ where
 
             // Forward incoming descs to the fetch task, retaining a capability
             // pair per time and counting the fetch as outstanding.
+            let mut dbg_forwarded_now: u64 = 0;
             descs_input.for_each(|cap, data| {
                 for (_idx, part) in data.drain(..) {
                     let entry = outstanding.entry(cap.time().clone()).or_insert_with(|| {
                         (cap.delayed(cap.time(), 0), cap.delayed(cap.time(), 1), 0)
                     });
                     entry.2 += 1;
+                    dbg_forwarded_now += 1;
                     desc_tx
                         .as_ref()
                         .expect("desc_tx alive while operator is running")
@@ -1144,6 +1181,14 @@ where
                         .expect("fetch task unexpectedly gone");
                 }
             });
+            if dbg_forwarded_now > 0 {
+                dbg_forwarded_total += dbg_forwarded_now;
+                tracing::info!(
+                    forwarded_now = dbg_forwarded_now,
+                    forwarded_total = dbg_forwarded_total,
+                    "INSTR shard_source_fetch operator forwarded descs"
+                );
+            }
 
             // Drain completed fetches, emitting each at the capability for its
             // time.
