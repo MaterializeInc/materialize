@@ -97,7 +97,9 @@ use mz_adapter_types::dyncfgs::{
 };
 use mz_auth::password::Password;
 use mz_build_info::BuildInfo;
-use mz_catalog::builtin::{BUILTINS, BUILTINS_STATIC, MZ_STORAGE_USAGE_BY_SHARD};
+use mz_catalog::builtin::{
+    BUILTINS, BUILTINS_STATIC, MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY, MZ_STORAGE_USAGE_BY_SHARD,
+};
 use mz_catalog::config::{AwsPrincipalContext, BuiltinItemMigrationConfig, ClusterReplicaSizeMap};
 use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_catalog::expr_cache::{GlobalExpressions, LocalExpressions};
@@ -316,6 +318,17 @@ impl IdPool {
     }
 }
 
+/// A row for `mz_object_arrangement_size_history`, prepared off-thread by the
+/// arrangement sizes snapshot task and stamped with a collection timestamp at
+/// write time.
+#[derive(Debug)]
+pub struct ArrangementSizeRecord {
+    pub replica_id: String,
+    pub object_id: String,
+    pub size: i64,
+    pub hydration_complete: bool,
+}
+
 #[derive(Debug)]
 pub enum Message {
     Command(OpenTelemetryContext, Command),
@@ -359,6 +372,7 @@ pub enum Message {
     StorageUsagePrune(Vec<BuiltinTableUpdate>),
     ArrangementSizesSchedule,
     ArrangementSizesSnapshot,
+    ArrangementSizesWrite(Vec<ArrangementSizeRecord>),
     ArrangementSizesPrune(Vec<BuiltinTableUpdate>),
     /// Performs any cleanup and logging actions necessary for
     /// finalizing a statement execution.
@@ -510,6 +524,7 @@ impl Message {
             Message::StorageUsagePrune(_) => "storage_usage_prune",
             Message::ArrangementSizesSchedule => "arrangement_sizes_schedule",
             Message::ArrangementSizesSnapshot => "arrangement_sizes_snapshot",
+            Message::ArrangementSizesWrite(_) => "arrangement_sizes_write",
             Message::ArrangementSizesPrune(_) => "arrangement_sizes_prune",
             Message::RetireExecute { .. } => "retire_execute",
             Message::ExecuteSingleStatementTransaction { .. } => {
@@ -3009,21 +3024,29 @@ impl Coordinator {
         debug!("coordinator init: resetting system tables");
         let read_ts = self.get_local_read_ts().await;
 
-        // Filter out the 'mz_storage_usage_by_shard' table since we need to retain that info for
-        // billing purposes.
+        // Filter out tables whose contents must survive restarts:
+        // 'mz_storage_usage_by_shard' for billing, and
+        // 'mz_object_arrangement_size_history', which accumulates history that
+        // is pruned by its own retention period instead.
         let mz_storage_usage_by_shard_schema: SchemaSpecifier = self
             .catalog()
             .resolve_system_schema(MZ_STORAGE_USAGE_BY_SHARD.schema)
             .into();
-        let is_storage_usage_by_shard = |meta: &TableMetadata| -> bool {
-            meta.name.item == MZ_STORAGE_USAGE_BY_SHARD.name
-                && meta.name.qualifiers.schema_spec == mz_storage_usage_by_shard_schema
+        let arrangement_size_history_schema: SchemaSpecifier = self
+            .catalog()
+            .resolve_system_schema(MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY.schema)
+            .into();
+        let is_retained_across_restarts = |meta: &TableMetadata| -> bool {
+            (meta.name.item == MZ_STORAGE_USAGE_BY_SHARD.name
+                && meta.name.qualifiers.schema_spec == mz_storage_usage_by_shard_schema)
+                || (meta.name.item == MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY.name
+                    && meta.name.qualifiers.schema_spec == arrangement_size_history_schema)
         };
 
         let mut retraction_tasks = Vec::new();
         let system_tables: Vec<_> = table_metas
             .iter()
-            .filter(|meta| meta.id.is_system() && !is_storage_usage_by_shard(meta))
+            .filter(|meta| meta.id.is_system() && !is_retained_across_restarts(meta))
             .collect();
 
         for system_table in system_tables {
