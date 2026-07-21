@@ -5,3 +5,4 @@
 - [Google Cloud SQL for PostgreSQL](/ingest-data/postgres/cloud-sql/)
 - [Neon](/ingest-data/postgres/neon/)
 - [Self-hosted PostgreSQL](/ingest-data/postgres/self-hosted/)
+- [Guide: Upgrade the major version of your PostgreSQL source](/ingest-data/postgres/major-version-upgrade/)
