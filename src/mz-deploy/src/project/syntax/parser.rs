@@ -214,6 +214,52 @@ mod test {
 
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
+    fn statement_offset_inside_substitution_clamps_to_reference() {
+        // A variable value containing `;` injects a statement separator absent
+        // from the raw file, so the following statement begins *inside* the
+        // substitution's resolved span. Its offset must clamp back to the `:x`
+        // reference and stay within the raw file's bounds rather than running
+        // off the end.
+        let raw = "SELECT :x;";
+        let mut variables = BTreeMap::new();
+        variables.insert("x".to_string(), "1; SELECT 2".to_string());
+
+        let stmts =
+            parse_statements_with_context(raw, PathBuf::from("v.sql"), &variables, true).unwrap();
+        assert_eq!(stmts.len(), 2);
+        let offset = stmts[1].byte_offset;
+        assert_eq!(offset, raw.find(":x").unwrap());
+        assert!(
+            offset < raw.len(),
+            "clamped offset {} must stay within raw bounds ({})",
+            offset,
+            raw.len(),
+        );
+        assert!(raw[offset..].starts_with(":x"));
+    }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    #[mz_ore::test]
+    fn statement_offset_accounts_for_multiple_substitutions() {
+        // Two substitutions of differing length in the first statement build up
+        // a cumulative delta the second statement's raw offset must undo.
+        let raw = "SELECT :a + :b;\nSELECT 3;";
+        let mut variables = BTreeMap::new();
+        variables.insert("a".to_string(), "100".to_string());
+        variables.insert("b".to_string(), "2000".to_string());
+
+        let stmts =
+            parse_statements_with_context(raw, PathBuf::from("v.sql"), &variables, true).unwrap();
+        assert_eq!(stmts.len(), 2);
+        assert!(
+            raw[stmts[1].byte_offset..].starts_with("SELECT 3"),
+            "offset {} should index the second statement in raw text",
+            stmts[1].byte_offset,
+        );
+    }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    #[mz_ore::test]
     fn test_mv_in_cluster() {
         let result = parse_statements(vec![
             "CREATE MATERIALIZED VIEW mv IN CLUSTER quickstart AS SELECT 1",
