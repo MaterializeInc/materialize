@@ -162,7 +162,8 @@ graph TD
     Ta["Ta: temporal-bucketing re-encode (into_vec to vec_to_columnar)"]
     Tb["Tb: linear-join accumulator off the edge (M1)"]
     Tc["Tc: retire as_specific_collection flag-off branch (M2)"]
-    Td["Td: retire concat_many mixed-variant branch (needs Ta)"]
+    Tp["Tp: LetRec read-edge re-encode (2nd mixed-input source)"]
+    Td["Td: retire concat_many mixed-variant branch (needs Ta + Tp)"]
     Te["Te: collapse enum to a columnar alias + de-match methods"]
   end
   C1 --> C3
@@ -171,7 +172,8 @@ graph TD
   Wave2 --> Ta
   Ta --> Tb
   Tb --> Tc
-  Tc --> Td
+  Tc --> Tp
+  Tp --> Td
   Td --> Te
 ```
 
@@ -377,12 +379,22 @@ The flag defaults true, so production already takes the columnar fueled path; de
 Files: `src/compute/src/render/context.rs`, `src/compute-types/src/dyncfgs.rs`.
 Base: `Tb`.
 
-**Td: retire the `concat_many` mixed-variant upgrade branch.**
-After Ta, no producer feeds a `Vec` edge into a `concat_many`, so the mixed-variant upgrade branch (`columnar.rs:143-146`) is dead.
-Delete it (and the now-unreachable all-`Vec` branch).
-Blocked before Ta: temporal-bucketing was the last source of mixed inputs.
-Files: `src/compute/src/render/columnar.rs`.
+**Tp: LetRec read-edge re-encode.**
+The pre-teardown review missed that LetRec is a second source of `Vec` inputs into `concat_many` (temporal-bucketing was not the last one).
+A rec binding's bundle read-edge is `CollectionEdge::Vec` (`from_collections` at `render.rs:942` in-loop feedback and `:1014` extraction; the feedback machinery `Variable::set` / `branch_when` / `leave_dynamic` is `Vec`-only, the C7 reason).
+Union reads its inputs' `.collection` raw (`render.rs:1359`), so an identity `Get` on a rec binding delivers that `Vec` edge straight into `concat_many` (proven: `WITH MUTUALLY RECURSIVE foo … Union[Get l0 raw=true, Constant]`).
+Re-encode the bundle read-edge to `Columnar` via `vec_to_columnar` at `render.rs:942` and `:1014` (wrap the `leave_dynamic` result) so `Get`s on rec bindings see `Columnar`.
+The feedback `Variable` itself (`oks_v.set` at `:1004`) STAYS `Vec` (only the read-edge is re-encoded).
+This adds a `VecToColumnar` on the feedback-read (per iteration, inside the dynamic scope) and the extraction paths, so it needs its own iterative-scope soundness check (the feedback path is delicate).
+Files: `src/compute/src/render.rs`.
 Base: `Tc`.
+
+**Td: retire the `concat_many` mixed-variant upgrade branch.**
+After Ta (temporal-bucketing) and Tp (LetRec), no producer feeds a `Vec` edge into a `concat_many`, so the mixed-variant upgrade branch (`columnar.rs:143-146`) and the now-unreachable all-`Vec` branch are dead.
+Delete them, leaving the all-`Columnar` concatenation.
+Blocked before Ta and Tp: temporal-bucketing and LetRec were the two sources of mixed inputs.
+Files: `src/compute/src/render/columnar.rs`.
+Base: `Tp`.
 
 **Te: collapse the enum and de-match the carrier methods.**
 Replace `CollectionEdge` with a `ColumnarCollection` type alias; demote `into_vec`/`columnar_to_vec`/`vec_to_columnar` to leaf free fns; update `CollectionBundle.collection` and every construction/match site; simplify `negate`, `concat_many`, `consolidate_named`, `flat_map_datums` from arm matches to single columnar implementations (the columnar `consolidate_named` becomes the sole impl).
@@ -402,7 +414,7 @@ The chain is a topological order of the DAG, so every dependency edge points bac
 ```
 C1 -> C3 -> C4 -> F1 -> C2
    -> P1 -> P2 -> P4 -> P5 -> P6 -> P7 -> P9
-   -> Ta -> Tb -> Tc -> Td -> Te
+   -> Ta -> Tb -> Tc -> Tp -> Td -> Te
 ```
 
 C5, C6, C7, C8, P3, and P8 are not in the chain (subsumed, see their nodes): delta-join input by C1; the sink, LetRec, and Union temporal-bucketing already leaf-decode the edge; the ArrangeBy passthrough by C1+P1; and the Threshold output by P5's shared arrangement materialization.
@@ -414,7 +426,7 @@ Order constraints honored by this chain:
 
 * C1 precedes C3 and C4, which reuse its columnar key-forming pattern.
 * All consumer nodes, C and F, precede all producer nodes P, per the producer-flip invariant.
-* The teardown Ta, Tb, Tc, Td, Te is last, in order (expanded from T1/T2/T3 by the pre-teardown review; Td needs Ta).
+* The teardown Ta, Tb, Tc, Tp, Td, Te is last, in order (expanded from T1/T2/T3 by the pre-teardown review, then Tp added when Td's investigation found LetRec is a second mixed-input source; Td needs both Ta and Tp).
 
 The `Base` field in each node spec records the nearest semantic dependency.
 In the chain, a branch's git base is simply the entry before it, which transitively includes every earlier dependency.
