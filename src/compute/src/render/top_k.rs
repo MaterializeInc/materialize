@@ -36,6 +36,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::soft_assert_or_log;
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{Datum, DatumVec, Diff, ReprScalarType, Row, SharedRow};
+use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnation::ColumnationChunker;
 use mz_timely_util::operator::CollectionExt;
 use timely::Container;
@@ -301,10 +302,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                         "requested no validation, but received error collection"
                     );
 
-                    CollectionBundle::from_collections(
-                        result.map(|(_key_hash, row)| row),
-                        err_collection,
-                    )
+                    CollectionBundle::from_edge(topk_result_to_columnar(result), err_collection)
                 }
                 TopKPlan::Basic(BasicTopKPlan {
                     group_key,
@@ -327,7 +325,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                         ok_input, group_key, order_key, offset, limit, arity, buckets,
                     );
                     err_collection = err_collection.concat(errs);
-                    CollectionBundle::from_collections(oks, err_collection)
+                    CollectionBundle::from_edge(oks, err_collection)
                 }
             };
 
@@ -349,7 +347,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
         arity: usize,
         buckets: Vec<u64>,
     ) -> (
-        VecCollection<'s, T, Row, Diff>,
+        CollectionEdge<'s, T>,
         VecCollection<'s, T, DataflowErrorSer, Diff>,
     ) {
         let pairer = Pairer::new(1);
@@ -425,7 +423,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
             err_collection = errs;
         }
         (
-            collection.map(|(_key_hash, row)| row),
+            topk_result_to_columnar(collection),
             err_collection.expect("at least one stage validated its inputs"),
         )
     }
@@ -624,7 +622,8 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
 /// avoid the per-record decode, because there is no columnar batcher to push
 /// borrowed rows into here. The `Vec` arm maps the collection directly and reuses
 /// the owned input row, so it is behaviorally identical to consuming the
-/// collection directly.
+/// collection directly. The columnar arm runs whenever the TopK input edge is
+/// columnar.
 fn map_topk_key<'s, T, L>(
     edge: CollectionEdge<'s, T>,
     name: &str,
@@ -682,6 +681,35 @@ where
             stream.as_collection()
         }
     }
+}
+
+/// Drops the hash-key pairing from a consolidated `(hash_key, row)` TopK result,
+/// producing the columnar output edge.
+///
+/// The input is consolidated upstream and the hash key is a function of the row,
+/// so distinct `(hash_key, row)` entries have distinct rows. Dropping the key is
+/// therefore injective and the output carries no within-batch duplicates, so a
+/// non-consolidating `ColumnBuilder` matches the prior `map`. The row is pushed
+/// borrowed, materializing no owned `Row` per record.
+fn topk_result_to_columnar<'s, T>(
+    collection: VecCollection<'s, T, (Row, Row), Diff>,
+) -> CollectionEdge<'s, T>
+where
+    T: crate::render::RenderTimestamp,
+{
+    let stream = collection
+        .inner
+        .unary::<ColumnBuilder<(Row, T, Diff)>, _, _, _>(Pipeline, "TopKUnkey", |_cap, _info| {
+            move |input, output| {
+                input.for_each(|time, data| {
+                    let mut session = output.session_with_builder(&time);
+                    for ((_key_hash, row), t, d) in data.drain(..) {
+                        session.give((&row, &t, &d));
+                    }
+                });
+            }
+        });
+    CollectionEdge::Columnar(stream.as_collection())
 }
 
 /// Build a stage of a topk reduction. Maintains the _retractions_ of the output instead of emitted
@@ -1364,5 +1392,62 @@ mod tests {
             assert_eq!(key_datums.len(), 2);
             assert_eq!(key_datums[1], value_datums[0]);
         }
+    }
+
+    /// `topk_result_to_columnar` drops the hash-key pairing and produces a
+    /// columnar edge whose rows are the value component, preserving times and
+    /// diffs. This is the output flip for the monotonic and basic TopK plans.
+    #[mz_ore::test]
+    fn topk_result_to_columnar_drops_key() {
+        let key = Row::pack_slice(&[Datum::Int64(7)]);
+        let rows = vec![
+            (
+                (key.clone(), Row::pack_slice(&[Datum::Int32(1)])),
+                0u64,
+                Diff::ONE,
+            ),
+            (
+                (key.clone(), Row::pack_slice(&[Datum::Int32(2)])),
+                1u64,
+                Diff::ONE,
+            ),
+            // Retracts at a `(row, time)` with no insertion, so it survives the
+            // `InputSession`'s pre-send consolidation and exercises a borrowed
+            // negative diff.
+            (
+                (key.clone(), Row::pack_slice(&[Datum::Int32(1)])),
+                2u64,
+                -Diff::ONE,
+            ),
+        ];
+        let mut expected: Vec<(Row, Timestamp, Diff)> = rows
+            .iter()
+            .map(|((_, v), t, d)| (v.clone(), Timestamp::from(*t), *d))
+            .collect();
+        expected.sort();
+
+        let (is_columnar, captured) = timely::execute_directly(move |worker| {
+            worker.dataflow::<Timestamp, _, _>(|scope| {
+                let (mut handle, collection) = scope.new_collection();
+                let edge = topk_result_to_columnar(collection);
+                let is_columnar = matches!(edge, CollectionEdge::Columnar(_));
+                let captured = edge.into_vec().inner.capture();
+                for (kv, time, diff) in rows {
+                    handle.update_at(kv, Timestamp::from(time), diff);
+                }
+                handle.advance_to(Timestamp::from(3u64));
+                handle.flush();
+                (is_columnar, captured)
+            })
+        });
+        assert!(is_columnar, "the TopK output must be a columnar edge");
+
+        let mut got: Vec<(Row, Timestamp, Diff)> = captured
+            .extract()
+            .into_iter()
+            .flat_map(|(_, data)| data)
+            .collect();
+        got.sort();
+        assert_eq!(got, expected);
     }
 }
