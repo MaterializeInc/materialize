@@ -1,7 +1,9 @@
 version: 2
 updates:
 - package-ecosystem: cargo
-  directory: /
+  directories:
+    - /
+    - /test/cargo-fuzz
   schedule:
     interval: weekly
     day: sunday
