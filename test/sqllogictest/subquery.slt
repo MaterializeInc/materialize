@@ -766,8 +766,8 @@ EOF
 
 # FROM-less correlated existence subqueries collapse to a plain Filter, closing
 # database-issues#2613 (semijoin) and database-issues#2969 (antijoin). Gated by
-# the `enable_simplify_from_less_existence` feature flag (default off in
-# production, on in CI/test). The `NOT EXISTS` rewrite must be null-safe
+# the `enable_simplify_from_less_existence` feature flag (default on, kept as a
+# fail-safe kill switch). The `NOT EXISTS` rewrite must be null-safe
 # (`IS NOT TRUE`, not `NOT`), so a row whose predicate evaluates to NULL is
 # preserved.
 statement ok
@@ -841,7 +841,7 @@ Target cluster: quickstart
 
 EOF
 
-# With the flag ON (the CI/test default), the same queries collapse to a plain
+# With the flag ON (the default), the same queries collapse to a plain
 # Filter and the rows are unchanged.
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_simplify_from_less_existence TO true;
@@ -936,6 +936,6 @@ SELECT f1 FROM flw WHERE f1 = ALL (SELECT row_number() OVER ())
 
 # Restore the default so later files see production behavior.
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_simplify_from_less_existence TO false;
+ALTER SYSTEM RESET enable_simplify_from_less_existence;
 ----
 COMPLETE 0

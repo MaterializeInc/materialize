@@ -2314,7 +2314,7 @@ feature_flags!(
     {
         name: enable_simplify_from_less_existence,
         desc: "Allow the optimizer to collapse EXISTS/NOT EXISTS over a FROM-less correlated subquery into a plain Filter during HIR-to-MIR lowering.",
-        default: false,
+        default: true,
         enable_for_item_parsing: false,
     },
     {

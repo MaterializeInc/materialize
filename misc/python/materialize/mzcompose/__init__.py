@@ -108,7 +108,6 @@ def get_minimal_system_parameters(
             "true" if version >= MzVersion.parse_mz("v26.29.0-dev") else "false"
         ),
         "enable_s3_tables_region_check": "false",
-        "enable_simplify_from_less_existence": "true",
         "enable_statement_lifecycle_logging": "true",
         "enable_storage_introspection_logs": "true",
         "enable_compute_temporal_bucketing": "true",
@@ -277,7 +276,7 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter(
             "enable_simplify_from_less_existence",
-            "false",
+            "true",
             ["true", "false"],
         ),
         VariableSystemParameter(
