@@ -74,6 +74,40 @@ describe("aggregateDays", () => {
     expect(accountTotal(accounts[0])).toBeCloseTo(14.5);
   });
 
+  it("sums a cluster's usage across days, not just the first day's (SAS-166)", () => {
+    const days: CostBreakdownDay[] = [
+      {
+        startDate: "2026-06-01T00:00:00Z",
+        endDate: "2026-06-02T00:00:00Z",
+        accounts: [
+          {
+            external_customer_id: "acct",
+            name: "",
+            clusters: [
+              cluster({ amounts: { "price-compute": "10.00" }, usage: 5 }),
+            ],
+          },
+        ],
+      },
+      {
+        startDate: "2026-06-02T00:00:00Z",
+        endDate: "2026-06-03T00:00:00Z",
+        accounts: [
+          {
+            external_customer_id: "acct",
+            name: "",
+            clusters: [
+              cluster({ amounts: { "price-compute": "4.50" }, usage: 3 }),
+            ],
+          },
+        ],
+      },
+    ];
+
+    const { accounts } = aggregateDays(days);
+    expect(accounts[0].clusters[0].usage).toBe(8);
+  });
+
   it("keeps storage and egress (same empty cluster key) as distinct rows by category", () => {
     const clusters = [
       cluster({
