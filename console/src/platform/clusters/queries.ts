@@ -489,7 +489,7 @@ function useReplicaUtilizationHistorySubscribe(
     );
   }, [enabled, clusterIdsKey, timePeriodMinutes]);
 
-  const { data, isError, snapshotComplete } = useSubscribe({
+  const { data, isError, snapshotComplete, resubscribing } = useSubscribe({
     subscribe,
     upsertKey: (row) => `${row.data.replicaId} ${row.data.occurredAt}`,
     select: (row) => ({
@@ -520,6 +520,7 @@ function useReplicaUtilizationHistorySubscribe(
   return {
     data: result,
     isLoading: enabled && !snapshotComplete,
+    isRefreshing: enabled && resubscribing,
     isError,
   };
 }
@@ -549,7 +550,7 @@ function useReplicaUtilizationHistoryBinnedSubscribe(
     );
   }, [enabled, clusterIdsKey, timePeriodMinutes]);
 
-  const { data, isError, snapshotComplete } = useSubscribe({
+  const { data, isError, snapshotComplete, resubscribing } = useSubscribe({
     subscribe,
     upsertKey: (row) => `${row.data.replicaId} ${row.data.bucketStart}`,
     select: (row) => parseBinnedSubscribeRow(row.data),
@@ -559,9 +560,13 @@ function useReplicaUtilizationHistoryBinnedSubscribe(
     const endDate = new Date();
     const startDate = subMinutes(endDate, timePeriodMinutes);
 
-    const rows = replicaId
-      ? data.filter((row) => row.replicaId === replicaId)
-      : [...data];
+    // Clip to the window like the SQL does. Held rows from a previous wider
+    // window would otherwise stretch the chart domain past the selected range.
+    const rows = data.filter(
+      (row) =>
+        row.bucketStart.getTime() >= startDate.getTime() &&
+        (!replicaId || row.replicaId === replicaId),
+    );
     // ENVELOPE UPSERT yields an unordered keyed set; the chart needs time order.
     rows.sort((a, b) => a.bucketStart.getTime() - b.bucketStart.getTime());
 
@@ -575,6 +580,7 @@ function useReplicaUtilizationHistoryBinnedSubscribe(
   return {
     data: result,
     isLoading: enabled && !snapshotComplete,
+    isRefreshing: enabled && resubscribing,
     isError,
   };
 }
@@ -647,6 +653,11 @@ export function useReplicaUtilizationHistory(
     data: active.data,
     isLoading: active.isLoading,
     isError: active.isError,
+    isRefreshing: useUnbinnedSubscribe
+      ? unbinnedResult.isRefreshing
+      : useBinnedSubscribe
+        ? binnedResult.isRefreshing
+        : false,
   };
 }
 

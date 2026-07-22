@@ -91,7 +91,8 @@ const ClusterOverview = () => {
     replicaId,
   });
 
-  const { data, isLoading, isError } = replicaUtilizationHistoryData;
+  const { data, isLoading, isRefreshing, isError } =
+    replicaUtilizationHistoryData;
 
   const { graphData } = data ?? {};
 
@@ -164,6 +165,9 @@ const ClusterOverview = () => {
               Resource Usage
             </Text>
             <HStack>
+              {isRefreshing && (
+                <Spinner size="sm" data-testid="refreshing-spinner" />
+              )}
               {cluster && (
                 <LabeledSelect
                   label="Replicas"
