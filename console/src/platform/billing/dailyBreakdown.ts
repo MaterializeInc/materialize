@@ -114,6 +114,7 @@ export function aggregateDays(days: CostBreakdownDay[]): {
           const prev = parseFloat(existing.amounts[priceId] ?? "0");
           existing.amounts[priceId] = (prev + parseFloat(amount)).toString();
         }
+        existing.usage += cluster.usage;
       }
     }
   }
