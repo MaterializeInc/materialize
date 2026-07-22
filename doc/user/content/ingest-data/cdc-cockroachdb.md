@@ -143,7 +143,7 @@ guidance.
 
    {{< include-headless-with file="/headless/kafka-create-source-syntax"
    source="kafka_repl" connection="kafka_connection" topic="my_table"
-   table="my_table" format="ENVELOPE DEBEZIUM" >}}
+   table="my_table" format="FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection ENVELOPE DEBEZIUM" >}}
 
     By default, the source will be created in the active cluster; to use a
     different cluster, use the `IN CLUSTER` clause.
