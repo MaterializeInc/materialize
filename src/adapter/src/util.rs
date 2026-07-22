@@ -325,6 +325,7 @@ impl ShouldTerminateGracefully for DurableCatalogError {
             | DurableCatalogError::Proto(_)
             | DurableCatalogError::Uninitialized
             | DurableCatalogError::NotWritable(_)
+            | DurableCatalogError::DryRunTransaction
             | DurableCatalogError::DuplicateKey
             | DurableCatalogError::UniquenessViolation
             | DurableCatalogError::Storage(_)

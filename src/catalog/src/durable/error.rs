@@ -68,6 +68,9 @@ pub enum DurableCatalogError {
     /// Catalog is not in a writable state.
     #[error("{0}")]
     NotWritable(String),
+    /// A dry-run transaction reached a commit path.
+    #[error("cannot commit a dry-run catalog transaction")]
+    DryRunTransaction,
     /// Unable to serialize/deserialize Protobuf message.
     #[error("proto: {0}")]
     Proto(TryFromProtoError),

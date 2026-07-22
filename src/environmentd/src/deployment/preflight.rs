@@ -257,7 +257,8 @@ async fn check_ddl_changes(
         .await
         .unwrap_or_terminate("can open in savepoint mode");
 
-    // This savepoint reader has no derived state to consume the initial updates.
+    // `transaction` rejects unapplied catalog content. This reader has no derived catalog to
+    // update, so discard the initial update stream before opening the transaction.
     let _ = catalog
         .sync_to_current_updates()
         .await
@@ -349,7 +350,8 @@ async fn get_next_ids(
         .await
         .unwrap_or_terminate("can open in savepoint mode");
 
-    // This savepoint reader has no derived state to consume the initial updates.
+    // `transaction` rejects unapplied catalog content. This reader has no derived catalog to
+    // update, so discard the initial update stream before opening the transaction.
     let _ = catalog
         .sync_to_current_updates()
         .await

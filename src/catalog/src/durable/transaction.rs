@@ -74,6 +74,9 @@ use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
 
 type Timestamp = u64;
 
+#[derive(Debug, PartialEq)]
+struct CommitCapability;
+
 /// A [`Transaction`] batches multiple catalog operations together and commits them atomically.
 /// An operation also logically groups multiple catalog updates together.
 #[derive(Derivative)]
@@ -116,6 +119,34 @@ pub struct Transaction<'a> {
     upper: mz_repr::Timestamp,
     /// The ID of the current operation of this transaction.
     op_id: Timestamp,
+    // `DryRunTransaction` removes this token. Commit entry points check it.
+    // Decomposition transfers it to `TransactionBatch` before exposing the
+    // durable handle.
+    commit_capability: Option<CommitCapability>,
+}
+
+/// A catalog transaction that can be evaluated but cannot be committed.
+#[derive(Debug)]
+pub struct DryRunTransaction<'a> {
+    transaction: Transaction<'a>,
+}
+
+impl<'a> DryRunTransaction<'a> {
+    /// Permanently revokes commit permission and returns a dry-run transaction.
+    pub fn new(mut transaction: Transaction<'a>) -> Self {
+        transaction.commit_capability = None;
+        Self { transaction }
+    }
+
+    /// Returns a mutable view for evaluating catalog operations.
+    pub fn transaction_mut(&mut self) -> &mut Transaction<'a> {
+        &mut self.transaction
+    }
+
+    /// Exports the current dry-run state as a [`Snapshot`].
+    pub fn current_snapshot(&self) -> Snapshot {
+        self.transaction.current_snapshot()
+    }
 }
 
 impl<'a> Transaction<'a> {
@@ -230,6 +261,7 @@ impl<'a> Transaction<'a> {
             audit_log_updates: Vec::new(),
             upper,
             op_id: 0,
+            commit_capability: Some(CommitCapability),
         })
     }
 
@@ -2443,6 +2475,7 @@ impl<'a> Transaction<'a> {
             txn_wal_shard: _,
             upper,
             op_id: _,
+            commit_capability: _,
         } = &self;
 
         let updates = std::iter::empty()
@@ -2572,6 +2605,13 @@ impl<'a> Transaction<'a> {
         self.upper
     }
 
+    fn ensure_committable(&self) -> Result<(), CatalogError> {
+        match self.commit_capability {
+            Some(_) => Ok(()),
+            None => Err(DurableCatalogError::DryRunTransaction.into()),
+        }
+    }
+
     /// Verifies that this process has not missed catalog content updates.
     pub(super) async fn ensure_not_out_of_sync(&mut self) -> Result<(), CatalogError> {
         self.durable_catalog
@@ -2579,7 +2619,12 @@ impl<'a> Transaction<'a> {
             .await
     }
 
-    pub(crate) fn into_parts(self) -> (TransactionBatch, &'a mut dyn DurableCatalogState) {
+    pub(crate) fn into_parts(
+        self,
+    ) -> Result<(TransactionBatch, &'a mut dyn DurableCatalogState), CatalogError> {
+        let commit_capability = self
+            .commit_capability
+            .ok_or(DurableCatalogError::DryRunTransaction)?;
         let audit_log_updates = self
             .audit_log_updates
             .into_iter()
@@ -2612,14 +2657,19 @@ impl<'a> Transaction<'a> {
             txn_wal_shard: self.txn_wal_shard.pending(),
             audit_log_updates,
             upper: self.upper,
+            _commit_capability: commit_capability,
         };
-        (txn_batch, self.durable_catalog)
+        Ok((txn_batch, self.durable_catalog))
     }
 
-    /// Commits the storage transaction to durable storage. Any error returned outside read-only
-    /// mode indicates the catalog may be in an indeterminate state and needs to be fully re-read
-    /// before proceeding. In general, this must be fatal to the calling process. We do not
-    /// panic/halt inside this function itself so that errors can bubble up during initialization.
+    /// Commits the storage transaction to durable storage.
+    ///
+    /// [`DurableCatalogError::DryRunTransaction`] is a pre-effect
+    /// programming error that leaves durable state unchanged. Any other error
+    /// outside read-only mode indicates the catalog may be in an indeterminate
+    /// state and needs to be fully re-read before proceeding. In general, such
+    /// errors must be fatal to the calling process. We do not panic/halt here so
+    /// initialization can report them.
     ///
     /// The transaction is committed at `commit_ts`.
     ///
@@ -2632,7 +2682,8 @@ impl<'a> Transaction<'a> {
         self,
         commit_ts: mz_repr::Timestamp,
     ) -> Result<(&'a mut dyn DurableCatalogState, mz_repr::Timestamp), CatalogError> {
-        let (mut txn_batch, durable_catalog) = self.into_parts();
+        self.ensure_committable()?;
+        let (mut txn_batch, durable_catalog) = self.into_parts()?;
         let TransactionBatch {
             databases,
             schemas,
@@ -2659,6 +2710,7 @@ impl<'a> Transaction<'a> {
             txn_wal_shard,
             audit_log_updates,
             upper: _,
+            _commit_capability: _,
         } = &mut txn_batch;
         // Consolidate in memory because it will likely be faster than consolidating after the
         // transaction has been made durable.
@@ -2693,10 +2745,14 @@ impl<'a> Transaction<'a> {
         Ok((durable_catalog, upper))
     }
 
-    /// Commits the storage transaction to durable storage. Any error returned outside read-only
-    /// mode indicates the catalog may be in an indeterminate state and needs to be fully re-read
-    /// before proceeding. In general, this must be fatal to the calling process. We do not
-    /// panic/halt inside this function itself so that errors can bubble up during initialization.
+    /// Commits the storage transaction to durable storage.
+    ///
+    /// [`DurableCatalogError::DryRunTransaction`] is a pre-effect
+    /// programming error that leaves durable state unchanged. Any other error
+    /// outside read-only mode indicates the catalog may be in an indeterminate
+    /// state and needs to be fully re-read before proceeding. In general, such
+    /// errors must be fatal to the calling process. We do not panic/halt here so
+    /// initialization can report them.
     ///
     /// In read-only mode, this will return an error for non-empty transactions indicating that the
     /// catalog is not writeable.
@@ -2711,6 +2767,7 @@ impl<'a> Transaction<'a> {
     /// about the caller in this method, in practice it results in duplicate work on every commit.
     #[mz_ore::instrument(level = "debug")]
     pub async fn commit(self, commit_ts: mz_repr::Timestamp) -> Result<(), CatalogError> {
+        self.ensure_committable()?;
         let op_updates = self.get_op_updates();
         assert!(
             op_updates.is_empty(),
@@ -2725,8 +2782,9 @@ impl<'a> Transaction<'a> {
         // Read-only catalogs can only commit empty transactions, so they don't need to consume all
         // updates before committing.
         //
-        // NOTE: The commit may have rebased over empty progress to a timestamp past `commit_ts`,
-        // so we check against the upper the commit reported rather than `commit_ts` exactly.
+        // The off-loop group committer can advance the catalog upper without content while this
+        // transaction is open. The commit then rebases above `commit_ts`. Its returned `upper` is
+        // the exclusive upper of the successful write.
         soft_assert_no_log!(
             durable_storage.is_read_only()
                 || updates
@@ -2849,7 +2907,7 @@ impl StorageTxn for Transaction<'_> {
 }
 
 /// Describes a set of changes to apply as the result of a catalog transaction.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct TransactionBatch {
     pub(crate) databases: Vec<(proto::DatabaseKey, proto::DatabaseValue, Diff)>,
     pub(crate) schemas: Vec<(proto::SchemaKey, proto::SchemaValue, Diff)>,
@@ -2909,6 +2967,9 @@ pub struct TransactionBatch {
     pub(crate) audit_log_updates: Vec<(proto::AuditLogKey, (), Diff)>,
     /// The upper of the catalog when the transaction started.
     pub(crate) upper: mz_repr::Timestamp,
+    // A private, non-cloneable capability keeps batches constructible only by
+    // transaction decomposition.
+    _commit_capability: CommitCapability,
 }
 
 impl TransactionBatch {
@@ -2939,6 +3000,7 @@ impl TransactionBatch {
             txn_wal_shard,
             audit_log_updates,
             upper: _,
+            _commit_capability: _,
         } = self;
         databases.is_empty()
             && schemas.is_empty()
@@ -4348,6 +4410,116 @@ mod tests {
         assert_eq!(db_name, db.name);
         assert_eq!(db_owner, db.owner_id);
         assert_eq!(db_privileges, db.privileges);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_dry_run_transaction_rejects_internal_commit() {
+        const VERSION: Version = Version::new(26, 0, 0);
+        let mut persist_cache = PersistClientCache::new_no_metrics();
+        persist_cache.cfg.build_version = VERSION;
+        let persist_client = persist_cache
+            .open(PersistLocation::new_in_mem())
+            .await
+            .unwrap();
+        let mut state = TestCatalogStateBuilder::new(persist_client)
+            .with_default_deploy_generation()
+            .with_version(VERSION)
+            .unwrap_build()
+            .await
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+            .await
+            .unwrap();
+        let _ = state.sync_to_current_updates().await.unwrap();
+
+        let initial_id = state.get_next_id(USER_ITEM_ALLOC_KEY).await.unwrap();
+        let initial_upper = state.current_upper().await;
+        let snapshot = state.snapshot().await.unwrap();
+        let mut dry_run = state.transaction_from_snapshot(snapshot).unwrap();
+        let ids = dry_run
+            .transaction_mut()
+            .get_and_increment_id_by(USER_ITEM_ALLOC_KEY.to_string(), 1)
+            .unwrap();
+        assert_eq!(ids, vec![initial_id]);
+
+        let transaction = dry_run.transaction;
+        let err = transaction
+            .commit_internal(initial_upper)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            CatalogError::Durable(DurableCatalogError::DryRunTransaction)
+        ));
+        assert_eq!(state.current_upper().await, initial_upper);
+        assert_eq!(
+            state.get_next_id(USER_ITEM_ALLOC_KEY).await.unwrap(),
+            initial_id
+        );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_dry_run_transaction_rejects_into_parts_escape() {
+        const VERSION: Version = Version::new(26, 0, 0);
+        let mut persist_cache = PersistClientCache::new_no_metrics();
+        persist_cache.cfg.build_version = VERSION;
+        let persist_client = persist_cache
+            .open(PersistLocation::new_in_mem())
+            .await
+            .unwrap();
+        let mut dry_run_state = TestCatalogStateBuilder::new(persist_client.clone())
+            .with_default_deploy_generation()
+            .with_version(VERSION)
+            .unwrap_build()
+            .await
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+            .await
+            .unwrap();
+        let mut replacement_state = TestCatalogStateBuilder::new(persist_client)
+            .with_default_deploy_generation()
+            .with_version(VERSION)
+            .unwrap_build()
+            .await
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+            .await
+            .unwrap();
+        let _ = dry_run_state.sync_to_current_updates().await.unwrap();
+        let _ = replacement_state.sync_to_current_updates().await.unwrap();
+
+        let initial_id = dry_run_state
+            .get_next_id(USER_ITEM_ALLOC_KEY)
+            .await
+            .unwrap();
+        let initial_upper = dry_run_state.current_upper().await;
+        let snapshot = dry_run_state.snapshot().await.unwrap();
+        let mut dry_run = dry_run_state.transaction_from_snapshot(snapshot).unwrap();
+        let ids = dry_run
+            .transaction_mut()
+            .get_and_increment_id_by(USER_ITEM_ALLOC_KEY.to_string(), 1)
+            .unwrap();
+        assert_eq!(ids, vec![initial_id]);
+
+        let replacement = replacement_state.transaction().await.unwrap();
+        let escaped = std::mem::replace(dry_run.transaction_mut(), replacement);
+        drop(dry_run);
+
+        let err = match escaped.into_parts() {
+            Ok(_) => panic!("dry-run transaction decomposed into committable parts"),
+            Err(err) => err,
+        };
+        assert!(matches!(
+            err,
+            CatalogError::Durable(DurableCatalogError::DryRunTransaction)
+        ));
+        assert_eq!(dry_run_state.current_upper().await, initial_upper);
+        assert_eq!(
+            dry_run_state
+                .get_next_id(USER_ITEM_ALLOC_KEY)
+                .await
+                .unwrap(),
+            initial_id
+        );
     }
 
     /// Regression test for DB-147: inserting a replica with an explicit id must not consume the

@@ -62,9 +62,9 @@ use crate::durable::objects::{AuditLogKey, FenceToken, Snapshot};
 use crate::durable::transaction::TransactionBatch;
 use crate::durable::upgrade::upgrade;
 use crate::durable::{
-    BootstrapArgs, CATALOG_CONTENT_VERSION_KEY, CatalogError, DurableCatalogError,
-    DurableCatalogState, Epoch, OpenableDurableCatalogState, ReadOnlyDurableCatalogState,
-    Transaction, initialize, persist_desc,
+    BootstrapArgs, CATALOG_CONTENT_VERSION_KEY, CatalogError, DryRunTransaction,
+    DurableCatalogError, DurableCatalogState, Epoch, OpenableDurableCatalogState,
+    ReadOnlyDurableCatalogState, Transaction, initialize, persist_desc,
 };
 use crate::memory;
 
@@ -1349,7 +1349,7 @@ impl UnopenedPersistCatalogState {
         };
 
         if read_only {
-            let (txn_batch, _) = txn.into_parts();
+            let (txn_batch, _) = txn.into_parts()?;
             // The upper here doesn't matter because we are only applying the updates in memory.
             let updates = StateUpdate::from_txn_batch_ts(txn_batch, catalog.upper);
             catalog.apply_updates_and_consolidate(updates)?;
@@ -1767,6 +1767,29 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
         Ok(updates)
     }
 
+    #[mz_ore::instrument(level = "debug")]
+    async fn ensure_not_out_of_sync(
+        &mut self,
+        target_upper: Timestamp,
+    ) -> Result<(), CatalogError> {
+        self.sync(target_upper).await?;
+        let update_count = self
+            .update_applier
+            .updates
+            .iter()
+            .take_while(|update| update.ts < target_upper)
+            .count();
+        if update_count == 0 {
+            Ok(())
+        } else {
+            Err(DurableCatalogError::CatalogOutOfSync {
+                update_count,
+                upper: target_upper,
+            }
+            .into())
+        }
+    }
+
     async fn current_upper(&mut self) -> Timestamp {
         self.current_upper().await
     }
@@ -1803,9 +1826,9 @@ impl DurableCatalogState for PersistCatalogState {
     fn transaction_from_snapshot(
         &mut self,
         snapshot: Snapshot,
-    ) -> Result<Transaction, CatalogError> {
-        let commit_ts = self.upper.clone();
-        Transaction::new(self, snapshot, commit_ts)
+    ) -> Result<DryRunTransaction, CatalogError> {
+        let commit_ts = self.upper;
+        Transaction::new(self, snapshot, commit_ts).map(DryRunTransaction::new)
     }
 
     #[mz_ore::instrument(level = "debug")]

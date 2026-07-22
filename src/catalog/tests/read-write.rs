@@ -135,15 +135,86 @@ async fn test_persist_transaction_rejects_pending_catalog_content() {
         .await
         .unwrap();
 
-    let err = state.transaction().await.unwrap_err();
-    match err {
-        CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { update_count, .. }) => {
-            assert!(update_count > 0)
+    let mut update_counts = Vec::new();
+    for _ in 0..2 {
+        let err = state.transaction().await.unwrap_err();
+        match err {
+            CatalogError::Durable(DurableCatalogError::CatalogOutOfSync {
+                update_count, ..
+            }) => {
+                assert!(update_count > 0);
+                update_counts.push(update_count);
+            }
+            err => panic!("unexpected error: {err:?}"),
         }
-        err => panic!("unexpected error: {err:?}"),
     }
+    assert_eq!(update_counts[0], update_counts[1]);
+
+    let updates = state.sync_to_current_updates().await.unwrap();
+    assert_eq!(updates.len(), update_counts[0]);
+
+    let txn = state.transaction().await.unwrap();
+    drop(txn);
 
     Box::new(state).expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_dry_run_transaction_rejects_mem_replace_escape() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let mut dry_run_state = TestCatalogStateBuilder::new(persist_client.clone())
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    let mut replacement_state = TestCatalogStateBuilder::new(persist_client)
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    let _ = dry_run_state.sync_to_current_updates().await.unwrap();
+    let _ = replacement_state.sync_to_current_updates().await.unwrap();
+
+    let initial_id = dry_run_state
+        .get_next_id(USER_ITEM_ALLOC_KEY)
+        .await
+        .unwrap();
+    let initial_upper = dry_run_state.current_upper().await;
+    let snapshot = dry_run_state.snapshot().await.unwrap();
+    let mut dry_run = dry_run_state.transaction_from_snapshot(snapshot).unwrap();
+    let ids = dry_run
+        .transaction_mut()
+        .get_and_increment_id_by(USER_ITEM_ALLOC_KEY.to_string(), 1)
+        .unwrap();
+    assert_eq!(ids, vec![initial_id]);
+    let _ = dry_run.transaction_mut().get_and_commit_op_updates();
+
+    let replacement = replacement_state.transaction().await.unwrap();
+    let escaped = std::mem::replace(dry_run.transaction_mut(), replacement);
+    drop(dry_run);
+
+    let commit_ts = escaped.upper();
+    let err = escaped.commit(commit_ts).await.unwrap_err();
+    assert!(matches!(
+        err,
+        CatalogError::Durable(DurableCatalogError::DryRunTransaction)
+    ));
+    assert_eq!(dry_run_state.current_upper().await, initial_upper);
+    assert_eq!(
+        dry_run_state
+            .get_next_id(USER_ITEM_ALLOC_KEY)
+            .await
+            .unwrap(),
+        initial_id
+    );
+
+    Box::new(dry_run_state).expire().await;
+    Box::new(replacement_state).expire().await;
 }
 
 #[mz_ore::test(tokio::test)]

@@ -33,7 +33,7 @@ use mz_audit_log::{
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::BuiltinLog;
-use mz_catalog::durable::{NetworkPolicy, Snapshot, Transaction};
+use mz_catalog::durable::{DryRunTransaction, NetworkPolicy, Snapshot, Transaction};
 use mz_catalog::expr_cache::LocalExpressions;
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
@@ -798,10 +798,11 @@ impl Catalog {
         } else {
             // First statement: fresh transaction from durable storage, which
             // is in sync with the real catalog state.
-            storage
+            let tx = storage
                 .transaction()
                 .await
-                .unwrap_or_terminate("starting catalog transaction")
+                .unwrap_or_terminate("starting catalog transaction");
+            DryRunTransaction::new(tx)
         };
 
         // Process only the new ops against the accumulated state in dry-run mode.
@@ -815,7 +816,7 @@ impl Catalog {
             &mut builtin_table_updates,
             &mut catalog_updates,
             &mut audit_events,
-            &mut tx,
+            tx.transaction_mut(),
             base_state,
         )
         .await?;

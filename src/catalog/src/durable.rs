@@ -41,8 +41,8 @@ pub use crate::durable::objects::{
 };
 pub use crate::durable::persist::shard_id;
 use crate::durable::persist::{Timestamp, UnopenedPersistCatalogState};
-pub use crate::durable::transaction::Transaction;
 use crate::durable::transaction::TransactionBatch;
+pub use crate::durable::transaction::{DryRunTransaction, Transaction};
 pub use crate::durable::upgrade::CATALOG_VERSION;
 use crate::memory;
 
@@ -274,22 +274,11 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send + Sync {
         target_upper: Timestamp,
     ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError>;
 
-    /// Returns an error if syncing to `target_upper` observes unapplied catalog updates.
-    async fn ensure_not_out_of_sync(
-        &mut self,
-        target_upper: Timestamp,
-    ) -> Result<(), CatalogError> {
-        let updates = self.sync_updates(target_upper).await?;
-        if updates.is_empty() {
-            Ok(())
-        } else {
-            Err(DurableCatalogError::CatalogOutOfSync {
-                update_count: updates.len(),
-                upper: target_upper,
-            }
-            .into())
-        }
-    }
+    /// Checks for unapplied catalog content before `target_upper` without consuming it.
+    ///
+    /// Returns an error if this instance has been fenced out.
+    async fn ensure_not_out_of_sync(&mut self, target_upper: Timestamp)
+    -> Result<(), CatalogError>;
 
     /// Fetch the current upper of the catalog state.
     async fn current_upper(&mut self) -> Timestamp;
@@ -313,15 +302,13 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     /// Empty upper progress is accepted.
     async fn transaction(&mut self) -> Result<Transaction, CatalogError>;
 
-    /// Creates a new transaction initialized from the given [`Snapshot`]
-    /// instead of reading from durable storage. Used for incremental DDL
-    /// dry runs where the transaction state from a previous dry run has been
-    /// saved and needs to be restored so it stays in sync with the accumulated
-    /// `CatalogState`.
+    /// Creates a non-committable dry-run transaction from the given [`Snapshot`].
+    ///
+    /// The snapshot may include changes accumulated by earlier incremental dry runs.
     fn transaction_from_snapshot(
         &mut self,
         snapshot: Snapshot,
-    ) -> Result<Transaction, CatalogError>;
+    ) -> Result<DryRunTransaction, CatalogError>;
 
     /// Commits a durable catalog state transaction. The transaction will be committed at
     /// `commit_ts`.
