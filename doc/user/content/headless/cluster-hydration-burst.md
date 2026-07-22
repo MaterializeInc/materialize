@@ -11,19 +11,24 @@ affected objects before they can serve results. Hydration reads the input data
 and rebuilds in-memory state, and its speed scales with the cluster
 [size](#available-sizes).
 
-The `AUTO SCALING STRATEGY` option lets a cluster **provision an extra burst
-replica at a larger size while it has un-hydrated objects**. The steady-size
-replicas keep running and hydrate in parallel, and once they catch up with the
-burst, the burst replica is retired. This speeds up hydration without
-permanently paying for a larger cluster. It can also speed up deployments that hydrate new objects,
-especially [blue/green deployments](/manage/blue-green/), where a new cluster
-must hydrate before the cutover.
+The `AUTO SCALING STRATEGY` option lets a cluster **automatically provision an
+extra burst replica at a larger size while it has un-hydrated objects**. This
+speeds up hydration without manually scaling the cluster up before hydration and
+back down afterward. The steady-size replicas continue hydrating in parallel,
+and once one of them catches up with the burst, the burst replica is retired.
+The burst replica is an ordinary cluster replica, billed only for the time it is
+provisioned. See [Usage & billing](/administration/billing/) for details.
+
+The burst can also speed up deployments that hydrate new objects, especially
+[blue/green deployments](/manage/blue-green/), where a new cluster must hydrate
+before the cutover.
 
 `AUTO SCALING STRATEGY` is only available on **managed clusters**. It is not
 supported on unmanaged clusters, and it cannot be combined with a cluster
 `SCHEDULE` other than the default `MANUAL`.
 
-With the `ON HYDRATION` strategy, whenever the cluster has un-hydrated objects,
+`AUTO SCALING STRATEGY` currently supports a single sub-strategy, `ON
+HYDRATION`. With `ON HYDRATION`, whenever the cluster has un-hydrated objects,
 Materialize provisions an extra replica at the configured `HYDRATION SIZE`
 alongside the steady-size replicas. The burst replica hydrates faster and can
 serve results before the steady replicas finish. Once the steady replicas
@@ -41,17 +46,12 @@ CREATE CLUSTER fast_start (
 );
 ```
 
-The `AUTO SCALING STRATEGY` option accepts the following:
+The `ON HYDRATION` strategy accepts the following:
 
 Option | Description
 -------|------------
 `HYDRATION SIZE` | The [size](#available-sizes) of the burst replica provisioned while the cluster has un-hydrated objects. Must differ from the cluster's steady `SIZE`. Choose a larger size to speed up hydration.
-`LINGER DURATION` | Optional. How long the burst replica lingers after the steady-size replicas hydrate, before it is removed. Default: `0s`.
-
-{{% note %}}
-The burst replica is an ordinary cluster replica and is billed as such for as
-long as it runs. See [Usage & billing](/administration/billing/) for details.
-{{% /note %}}
+`LINGER DURATION` | Optional. How long the burst replica lingers after a steady-size replica catches up, before it is removed. Default: `0s`.
 
 Provisioning the burst replica requires enough compute capacity to run it. In
 Materialize Self-Managed, this means your Kubernetes cluster must have enough

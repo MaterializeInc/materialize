@@ -405,6 +405,9 @@ seconds, and no burst is currently running (`inflight_burst_size` is `NULL`).
 While a burst is in flight, `inflight_burst_size` reports the burst replica's
 size.
 
+[`SHOW CLUSTERS`](/sql/show-clusters/) also summarizes any in-flight hydration
+burst in its `activity` column.
+
 ### Converting unmanaged to managed clusters
 
 {{< note >}}
