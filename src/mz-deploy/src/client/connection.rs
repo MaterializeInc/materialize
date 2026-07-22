@@ -54,6 +54,7 @@ use tokio_postgres::{Client as PgClient, NoTls, Row, SimpleQueryMessage, Transac
 pub struct Client {
     client: PgClient,
     profile: Profile,
+    auto_scaling_support: std::sync::OnceLock<bool>,
 }
 
 /// Domain sub-client for deployment lifecycle operations.
@@ -189,7 +190,36 @@ impl Client {
             }
         });
 
-        Ok(Client { client, profile })
+        Ok(Client {
+            client,
+            profile,
+            auto_scaling_support: std::sync::OnceLock::new(),
+        })
+    }
+
+    /// Whether the region exposes the autoscaling-strategy introspection view.
+    pub(crate) async fn supports_auto_scaling_strategies(&self) -> Result<bool, ConnectionError> {
+        if let Some(supported) = self.auto_scaling_support.get() {
+            return Ok(*supported);
+        }
+        let row = self
+            .query_one(
+                r#"
+                SELECT EXISTS(
+                    SELECT 1
+                    FROM mz_catalog.mz_objects AS o
+                    JOIN mz_catalog.mz_schemas AS s ON o.schema_id = s.id
+                    WHERE o.name = 'mz_cluster_auto_scaling_strategies'
+                      AND o.type = 'materialized-view'
+                      AND s.name = 'mz_internal'
+                ) AS exists
+                "#,
+                &[],
+            )
+            .await?;
+        let supported: bool = row.get("exists");
+        let _ = self.auto_scaling_support.set(supported);
+        Ok(supported)
     }
 
     /// Get the profile used for this connection.

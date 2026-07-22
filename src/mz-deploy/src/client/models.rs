@@ -13,6 +13,7 @@
 //! a type-safe interface over raw database rows.
 
 use chrono::{DateTime, Utc};
+use mz_sql::plan::AutoScalingStrategy;
 use std::fmt;
 use std::str::FromStr;
 
@@ -100,18 +101,20 @@ pub struct Cluster {
     pub size: Option<String>,
     /// Number of replicas for fault tolerance (stored as i64 to handle postgres uint4 type)
     pub replication_factor: Option<i64>,
+    /// The configured autoscaling policy. `None` for unmanaged clusters,
+    /// clusters without a policy, and regions that predate the feature.
+    pub auto_scaling_strategy: Option<AutoScalingStrategy>,
 }
 
-/// Options for creating a new cluster.
-///
-/// Only size and replication factor are configurable - all other settings
-/// use Materialize defaults.
+/// Options for creating a new managed cluster.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClusterOptions {
     /// Cluster size (e.g., "M.1-large", "M.1-small")
     pub size: String,
     /// Number of replicas (default: 1)
     pub replication_factor: u32,
+    /// The autoscaling policy, if one is configured.
+    pub auto_scaling_strategy: Option<AutoScalingStrategy>,
 }
 
 impl ClusterOptions {
@@ -133,6 +136,7 @@ impl ClusterOptions {
         Ok(Self {
             size,
             replication_factor,
+            auto_scaling_strategy: cluster.auto_scaling_strategy.clone(),
         })
     }
 }
@@ -163,9 +167,9 @@ pub struct ObjectGrant {
 /// including its replicas (for unmanaged clusters) and privilege grants.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClusterConfig {
-    /// Managed cluster with SIZE and REPLICATION FACTOR
+    /// Managed cluster with a size, replication factor, and optional autoscaling policy
     Managed {
-        /// Cluster options (size, replication factor)
+        /// Cluster options (size, replication factor, autoscaling policy)
         options: ClusterOptions,
         /// Privilege grants on the cluster
         grants: Vec<ObjectGrant>,
@@ -462,6 +466,7 @@ mod tests {
             name: "quickstart".to_string(),
             size: Some("25cc".to_string()),
             replication_factor: Some(2),
+            auto_scaling_strategy: None,
         };
 
         let options = ClusterOptions::from_cluster(&cluster).unwrap();
@@ -476,6 +481,7 @@ mod tests {
             name: "quickstart".to_string(),
             size: Some("25cc".to_string()),
             replication_factor: None, // Should default to 1
+            auto_scaling_strategy: None,
         };
 
         let options = ClusterOptions::from_cluster(&cluster).unwrap();
@@ -490,6 +496,7 @@ mod tests {
             name: "unmanaged".to_string(),
             size: None, // Unmanaged cluster
             replication_factor: Some(1),
+            auto_scaling_strategy: None,
         };
 
         let result = ClusterOptions::from_cluster(&cluster);
@@ -506,6 +513,7 @@ mod tests {
             name: "test".to_string(),
             size: Some("25cc".to_string()),
             replication_factor: Some(-1), // Invalid negative value
+            auto_scaling_strategy: None,
         };
 
         let result = ClusterOptions::from_cluster(&cluster);
@@ -520,6 +528,7 @@ mod tests {
             name: "test".to_string(),
             size: Some("25cc".to_string()),
             replication_factor: Some(1),
+            auto_scaling_strategy: None,
         };
 
         let cluster2 = Cluster {
@@ -527,6 +536,7 @@ mod tests {
             name: "test".to_string(),
             size: Some("25cc".to_string()),
             replication_factor: Some(1),
+            auto_scaling_strategy: None,
         };
 
         let cluster3 = Cluster {
@@ -534,6 +544,7 @@ mod tests {
             name: "test".to_string(),
             size: Some("25cc".to_string()),
             replication_factor: Some(1),
+            auto_scaling_strategy: None,
         };
 
         assert_eq!(cluster1, cluster2);
@@ -545,16 +556,19 @@ mod tests {
         let opts1 = ClusterOptions {
             size: "25cc".to_string(),
             replication_factor: 2,
+            auto_scaling_strategy: None,
         };
 
         let opts2 = ClusterOptions {
             size: "25cc".to_string(),
             replication_factor: 2,
+            auto_scaling_strategy: None,
         };
 
         let opts3 = ClusterOptions {
             size: "50cc".to_string(),
             replication_factor: 2,
+            auto_scaling_strategy: None,
         };
 
         assert_eq!(opts1, opts2);
@@ -612,6 +626,7 @@ mod tests {
             options: ClusterOptions {
                 size: "25cc".to_string(),
                 replication_factor: 2,
+                auto_scaling_strategy: None,
             },
             grants: vec![ObjectGrant {
                 grantee: "reader".to_string(),

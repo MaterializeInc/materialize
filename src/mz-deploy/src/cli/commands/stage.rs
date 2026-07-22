@@ -930,6 +930,7 @@ async fn create_staging_clusters(
                 options: ClusterOptions {
                     size: String::new(),
                     replication_factor: 1,
+                    auto_scaling_strategy: None,
                 },
                 grants: Vec::new(),
             };
@@ -983,10 +984,15 @@ fn log_cluster_creation(staging_cluster: &str, prod_cluster: &str, config: &Clus
     match config {
         ClusterConfig::Managed { options, grants } => {
             verbose!(
-                "  Created managed cluster '{}' (size: {}, replication_factor: {}, {} grant(s), cloned from '{}')",
+                "  Created managed cluster '{}' (size: {}, replication_factor: {}{}, {} grant(s), cloned from '{}')",
                 staging_cluster,
                 options.size,
                 options.replication_factor,
+                if options.auto_scaling_strategy.is_some() {
+                    ", autoscaling policy copied"
+                } else {
+                    ""
+                },
                 grants.len(),
                 prod_cluster
             );

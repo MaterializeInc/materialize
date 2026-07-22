@@ -29,7 +29,9 @@ can be promoted with `promote` or cleaned up with `abort`.
    materialized views).
 6. Creates staging resources:
    - Staging schemas with `_<deploy_id>` suffix (e.g., `public_abc123`).
-   - Staging clusters cloned from production cluster configuration.
+   - Staging clusters cloned from production cluster configuration,
+     including any `AUTO SCALING STRATEGY` policy, so staged objects
+     hydrate with the same burst acceleration as production.
 7. Applies schema setup statements (transformed for staging names).
 8. Deploys changed objects (except tables and sources) to staging schemas.
 9. On failure, automatically rolls back staging schemas and clusters
