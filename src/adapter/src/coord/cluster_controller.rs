@@ -554,11 +554,11 @@ impl Coordinator {
                 continue;
             };
             let id_ts = self.get_catalog_write_ts().await;
-            match self
+            let result = self
                 .catalog()
                 .allocate_replica_ids(*cluster_id, 1, id_ts)
-                .await
-            {
+                .await;
+            match result {
                 Ok(ids) => {
                     replica_ids.push(ids.into_iter().next().expect("allocated one replica id"))
                 }

@@ -7250,3 +7250,43 @@ fn test_inject_audit_events_malformed() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 }
+
+// Dropping queued write responses during shutdown must not panic in a destructor.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_shutdown_with_inflight_writes() {
+    for round in 0..3 {
+        let server = test_util::TestHarness::default().start_blocking();
+        {
+            let mut client = server.connect(postgres::NoTls).unwrap();
+            client.batch_execute("CREATE TABLE t (a int)").unwrap();
+        }
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut handles = Vec::new();
+        for _ in 0..4 {
+            let pg_config = server.pg_config();
+            let stop = Arc::clone(&stop);
+            handles.push(thread::spawn(move || {
+                let Ok(mut client) = pg_config.connect(postgres::NoTls) else {
+                    return;
+                };
+                while !stop.load(Ordering::Relaxed) {
+                    if client.batch_execute("INSERT INTO t VALUES (1)").is_err() {
+                        return;
+                    }
+                }
+            }));
+        }
+
+        thread::sleep(Duration::from_millis(500));
+        drop(server);
+
+        stop.store(true, Ordering::Relaxed);
+        for handle in handles {
+            let _ = handle.join();
+        }
+        tracing::info!("round {round} survived");
+    }
+}

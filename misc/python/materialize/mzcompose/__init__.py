@@ -702,6 +702,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "sql_server_cdc_cleanup_change_table",
     "sql_server_cdc_cleanup_change_table_max_deletes",
     "allow_user_sessions",
+    "group_commit_max_attempts",
     "with_0dt_deployment_ddl_check_interval",
     "enable_0dt_caught_up_check",
     "with_0dt_caught_up_check_allowed_lag",

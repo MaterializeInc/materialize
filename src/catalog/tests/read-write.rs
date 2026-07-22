@@ -102,6 +102,7 @@ async fn test_allocate_id(state_builder: TestCatalogStateBuilder) {
 
     let start_id = state.get_next_id(id_type).await.unwrap();
     let commit_ts = state.current_upper().await;
+    // Allocation does not require the initial update queue to be drained.
     let ids = state.allocate_id(id_type, 3, commit_ts).await.unwrap();
     assert_eq!(ids, (start_id..(start_id + 3)).collect::<Vec<_>>());
 
@@ -119,6 +120,239 @@ async fn test_allocate_id(state_builder: TestCatalogStateBuilder) {
         name: id_type.to_string(),
         next_id: start_id + 3,
     }));
+    Box::new(state).expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_persist_transaction_rejects_pending_catalog_content() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let mut state = TestCatalogStateBuilder::new(persist_client)
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+
+    let mut update_counts = Vec::new();
+    for _ in 0..2 {
+        let err = state.transaction().await.unwrap_err();
+        match err {
+            CatalogError::Durable(DurableCatalogError::CatalogOutOfSync {
+                update_count, ..
+            }) => {
+                assert!(update_count > 0);
+                update_counts.push(update_count);
+            }
+            err => panic!("unexpected error: {err:?}"),
+        }
+    }
+    assert_eq!(update_counts[0], update_counts[1]);
+
+    let updates = state.sync_to_current_updates().await.unwrap();
+    assert_eq!(updates.len(), update_counts[0]);
+
+    let txn = state.transaction().await.unwrap();
+    drop(txn);
+
+    Box::new(state).expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_dry_run_transaction_rejects_mem_replace_escape() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let mut dry_run_state = TestCatalogStateBuilder::new(persist_client.clone())
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    let mut replacement_state = TestCatalogStateBuilder::new(persist_client)
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    let _ = dry_run_state.sync_to_current_updates().await.unwrap();
+    let _ = replacement_state.sync_to_current_updates().await.unwrap();
+
+    let initial_id = dry_run_state
+        .get_next_id(USER_ITEM_ALLOC_KEY)
+        .await
+        .unwrap();
+    let initial_upper = dry_run_state.current_upper().await;
+    let snapshot = dry_run_state.snapshot().await.unwrap();
+    let mut dry_run = dry_run_state.transaction_from_snapshot(snapshot).unwrap();
+    let ids = dry_run
+        .transaction_mut()
+        .get_and_increment_id_by(USER_ITEM_ALLOC_KEY.to_string(), 1)
+        .unwrap();
+    assert_eq!(ids, vec![initial_id]);
+    let _ = dry_run.transaction_mut().get_and_commit_op_updates();
+
+    let replacement = replacement_state.transaction().await.unwrap();
+    let escaped = std::mem::replace(dry_run.transaction_mut(), replacement);
+    drop(dry_run);
+
+    let commit_ts = escaped.upper();
+    let err = escaped.commit(commit_ts).await.unwrap_err();
+    assert!(matches!(
+        err,
+        CatalogError::Durable(DurableCatalogError::DryRunTransaction)
+    ));
+    assert_eq!(dry_run_state.current_upper().await, initial_upper);
+    assert_eq!(
+        dry_run_state
+            .get_next_id(USER_ITEM_ALLOC_KEY)
+            .await
+            .unwrap(),
+        initial_id
+    );
+
+    Box::new(dry_run_state).expire().await;
+    Box::new(replacement_state).expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_persist_advance_upper_at_least_semantics() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    let state_builder = state_builder.with_default_deploy_generation();
+    let mut state = state_builder
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+
+    let upper = state.current_upper().await;
+
+    assert_ok!(state.advance_upper(upper).await);
+    assert_ok!(
+        state
+            .advance_upper(upper.step_back().unwrap_or_default())
+            .await
+    );
+    assert_eq!(state.current_upper().await, upper);
+
+    let target = upper.step_forward().step_forward();
+    assert_ok!(state.advance_upper(target).await);
+    assert_eq!(state.current_upper().await, target);
+
+    Box::new(state).expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_persist_commit_rebases_over_empty_progress() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    let state_builder = state_builder.with_default_deploy_generation();
+
+    let id_type = USER_ITEM_ALLOC_KEY;
+    let mut state = state_builder
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+
+    let commit_ts = state.current_upper().await;
+    let overtaken = commit_ts.step_forward().step_forward();
+    assert_ok!(state.advance_upper(overtaken).await);
+
+    let start_id = state.get_next_id(id_type).await.unwrap();
+    let ids = state.allocate_id(id_type, 1, commit_ts).await.unwrap();
+    assert_eq!(ids, vec![start_id]);
+
+    assert!(state.current_upper().await > overtaken);
+    let next_id = state.get_next_id(id_type).await.unwrap();
+    assert_eq!(next_id, start_id + 1);
+
+    Box::new(state).expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_persist_conflicts_with_empty_progress_rebase() {
+    use mz_catalog::durable::persist_desc;
+    use mz_persist_client::Diagnostics;
+    use mz_persist_types::codec_impls::UnitSchema;
+    use mz_storage_types::sources::SourceData;
+    use timely::progress::Antichain;
+
+    let persist_client = PersistClient::new_for_tests().await;
+    let state_builder =
+        TestCatalogStateBuilder::new(persist_client.clone()).with_default_deploy_generation();
+    let mut state = state_builder
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    // Exclude bootstrap updates from conflict classification below.
+    let _ = state.sync_to_current_updates().await.unwrap();
+
+    // A raw handle advances the upper without fencing, exercising upper-mismatch classification.
+    let mut raw_write = persist_client
+        .open_writer::<SourceData, (), mz_repr::Timestamp, i64>(
+            state.shard_id(),
+            Arc::new(persist_desc()),
+            Arc::new(UnitSchema::default()),
+            Diagnostics {
+                shard_name: "catalog".to_string(),
+                handle_purpose: "test concurrent empty progress".to_string(),
+            },
+        )
+        .await
+        .expect("invalid usage");
+    let empty: Vec<((SourceData, ()), mz_repr::Timestamp, i64)> = Vec::new();
+
+    let upper = state.current_upper().await;
+    let bumped = upper.step_forward().step_forward();
+    raw_write
+        .compare_and_append(
+            empty.clone(),
+            Antichain::from_elem(upper),
+            Antichain::from_elem(bumped),
+        )
+        .await
+        .expect("invalid usage")
+        .expect("no conflict");
+
+    let txn = state.transaction().await.unwrap();
+    assert_eq!(txn.upper(), bumped);
+    drop(txn);
+
+    let target = bumped.step_forward();
+    assert_ok!(state.advance_upper(target).await);
+    assert_eq!(state.current_upper().await, target);
+
+    let id_type = USER_ITEM_ALLOC_KEY;
+    let start_id = state.get_next_id(id_type).await.unwrap();
+    let mut txn = state.transaction().await.unwrap();
+    let commit_ts = txn.upper();
+    let ids = txn.get_and_increment_id_by(id_type.to_string(), 1).unwrap();
+    assert_eq!(ids, vec![start_id]);
+    let _updates = txn.get_and_commit_op_updates();
+    raw_write
+        .compare_and_append(
+            empty,
+            Antichain::from_elem(target),
+            Antichain::from_elem(target.step_forward()),
+        )
+        .await
+        .expect("invalid usage")
+        .expect("no conflict");
+    assert_ok!(txn.commit(commit_ts).await);
+    let next_id = state.get_next_id(id_type).await.unwrap();
+    assert_eq!(next_id, start_id + 1);
+
     Box::new(state).expire().await;
 }
 
@@ -446,6 +680,8 @@ async fn test_non_writer_commits(state_builder: TestCatalogStateBuilder) {
 
     // Read-only catalog can successfully commit empty transaction.
     {
+        let updates = reader_state.sync_to_current_updates().await.unwrap();
+        assert!(!updates.is_empty());
         let txn = reader_state.transaction().await.unwrap();
         let commit_ts = txn.upper();
         txn.commit(commit_ts).await.unwrap();

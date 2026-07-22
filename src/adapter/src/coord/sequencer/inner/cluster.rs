@@ -1948,10 +1948,11 @@ impl Coordinator {
         // round-trip just to allocate nothing.
         let mut new_replica_ids = if needed_replica_ids > 0 {
             let id_ts = self.get_catalog_write_ts().await;
-            self.catalog()
+            let ids = self
+                .catalog()
                 .allocate_replica_ids(cluster_id, u64::from(needed_replica_ids), id_ts)
-                .await?
-                .into_iter()
+                .await?;
+            ids.into_iter()
         } else {
             Vec::<ReplicaId>::new().into_iter()
         };
