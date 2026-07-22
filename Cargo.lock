@@ -7425,6 +7425,7 @@ dependencies = [
  "prost",
  "prost-build",
  "prost-reflect",
+ "prost-types",
  "seahash",
  "serde",
  "serde_json",

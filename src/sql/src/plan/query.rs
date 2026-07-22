@@ -3693,11 +3693,12 @@ fn expand_select_item<'a>(
             // uncommon operation and the PostgreSQL docs have a warning that
             // this operation is slow in Postgres too.
             let expr = plan_expr(ecx, sql_expr)?.type_as_any(ecx)?;
-            let fields = match ecx.scalar_type(&expr) {
-                SqlScalarType::Record { fields, .. } => fields,
+            let ty = ecx.scalar_type(&expr);
+            let fields = match &ty {
+                SqlScalarType::Record { fields, .. } => fields.clone(),
                 ty => sql_bail!(
                     "type {} is not composite",
-                    ecx.humanize_sql_scalar_type(&ty, false)
+                    ecx.humanize_sql_scalar_type(ty, false)
                 ),
             };
             let mut skip_cols: BTreeSet<ColumnName> = BTreeSet::new();

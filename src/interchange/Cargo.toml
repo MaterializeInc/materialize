@@ -26,7 +26,7 @@ maplit.workspace = true
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-aws-glue-schema-registry = { path = "../aws-glue-schema-registry" }
 mz-ccsr = { path = "../ccsr" }
-mz-ore = { path = "../ore", features = ["network", "cli"] }
+mz-ore = { path = "../ore", features = ["network", "cli", "stack"] }
 mz-repr = { path = "../repr" }
 mz-pgrepr = { path = "../pgrepr" }
 ordered-float.workspace = true
@@ -42,6 +42,7 @@ uuid = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 criterion.workspace = true
+prost-types.workspace = true
 tokio.workspace = true
 
 [build-dependencies]

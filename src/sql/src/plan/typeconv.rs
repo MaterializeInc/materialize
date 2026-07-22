@@ -1179,7 +1179,10 @@ pub fn to_string(ecx: &ExprContext, expr: HirScalarExpr) -> Result<HirScalarExpr
 pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> Result<HirScalarExpr, PlanError> {
     use SqlScalarType::*;
 
-    Ok(match ecx.scalar_type(&expr) {
+    // Match on a reference: `SqlScalarType` implements `Drop`, so its fields
+    // cannot be moved out of a value.
+    let scalar_type = ecx.scalar_type(&expr);
+    Ok(match &scalar_type {
         Bool | Jsonb | Numeric { .. } => {
             expr.call_unary(UnaryFunc::CastJsonbableToJsonb(func::CastJsonbableToJsonb))
         }
@@ -1206,10 +1209,7 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> Result<HirScalarExpr,
             }
             HirScalarExpr::call_variadic(JsonbBuildObject, exprs)
         }
-        ref ty @ List {
-            ref element_type, ..
-        }
-        | ref ty @ Array(ref element_type) => {
+        ty @ List { element_type, .. } | ty @ Array(element_type) => {
             // Construct a new expression context with one column whose type
             // is the container's element type.
             let qcx = QueryContext::root(ecx.qcx.scx, ecx.qcx.lifetime);
@@ -1551,15 +1551,18 @@ pub fn plan_cast(
     //   src/backend/parser/parse_coerce.c#L3205-L3223
     let from_category = TypeCategory::from_type(&from);
     let to_category = TypeCategory::from_type(to);
+    // A named local because `SqlScalarType` implements `Drop`, which rules
+    // out promoting `&SqlScalarType::String` beyond its statement.
+    let string_type = SqlScalarType::String;
     if from_category == TypeCategory::String && to_category != TypeCategory::String {
         // Converting from stringlike to something non-stringlike. Handle as if
         // `from` were a `SqlScalarType::String.
-        cast_inner(&SqlScalarType::String, to, expr)
+        cast_inner(&string_type, to, expr)
     } else if from_category != TypeCategory::String && to_category == TypeCategory::String {
         // Converting from non-stringlike to something stringlike. Convert to a
         // `SqlScalarType::String` and then to the desired type.
-        let expr = cast_inner(&from, &SqlScalarType::String, expr)?;
-        cast_inner(&SqlScalarType::String, to, expr)
+        let expr = cast_inner(&from, &string_type, expr)?;
+        cast_inner(&string_type, to, expr)
     } else {
         // Standard cast.
         cast_inner(&from, to, expr)

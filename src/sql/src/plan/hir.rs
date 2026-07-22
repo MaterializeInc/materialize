@@ -1566,7 +1566,7 @@ impl AggregateFunc {
                 custom_id: None,
             },
             AggregateFunc::ArrayConcat { .. } | AggregateFunc::ListConcat { .. } => {
-                match input_type.scalar_type {
+                match &input_type.scalar_type {
                     // The input is wrapped in a Record if there's an ORDER BY, so extract it out.
                     SqlScalarType::Record { fields, .. } => fields[0].1.scalar_type.clone(),
                     _ => unreachable!(),

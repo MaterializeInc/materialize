@@ -1138,14 +1138,30 @@ impl Codec for SourceData {
     }
 
     fn encode_schema(schema: &Self::Schema) -> Bytes {
-        schema.into_proto().encode_to_vec().into()
+        // A `RelationDesc` can contain arbitrarily deeply nested record types
+        // (e.g. derived from Protobuf schemas). The `RustType` conversions
+        // grow the stack on demand, but prost's generated encode/decode and
+        // the drop of the intermediate proto tree recurse once per nesting
+        // level without doing so. Give them one large stack up front. The
+        // size supports nesting depths in the millions, far deeper than any
+        // schema that fits through the SQL or schema-registry entry points.
+        mz_ore::stack::grow(SCHEMA_CODEC_STACK_SIZE, || {
+            schema.into_proto().encode_to_vec().into()
+        })
     }
 
     fn decode_schema(buf: &Bytes) -> Self::Schema {
-        let proto = ProtoRelationDesc::decode(buf.as_ref()).expect("valid schema");
-        proto.into_rust().expect("valid schema")
+        // See `encode_schema` for why this grows the stack.
+        mz_ore::stack::grow(SCHEMA_CODEC_STACK_SIZE, || {
+            let proto = ProtoRelationDesc::decode(buf.as_ref()).expect("valid schema");
+            proto.into_rust().expect("valid schema")
+        })
     }
 }
+
+/// Stack size for [`SourceData::encode_schema`] and
+/// [`SourceData::decode_schema`], see there for rationale.
+const SCHEMA_CODEC_STACK_SIZE: usize = 1 << 30;
 
 /// Given a [`RelationDesc`] returns an arbitrary [`SourceData`].
 #[cfg(any(test, feature = "proptest"))]
@@ -1732,8 +1748,9 @@ mod tests {
     use mz_persist_types::schema::{Migration, backward_compatible};
     use mz_persist_types::stats::{PartStats, PartStatsMetrics};
     use mz_repr::{
-        ColumnIndex, DatumVec, PropRelationDescDiff, ProtoRelationDesc, RelationDescBuilder,
-        RowArena, SqlScalarType, arb_relation_desc_diff, arb_relation_desc_projection,
+        ColumnIndex, ColumnName, DatumVec, PropRelationDescDiff, ProtoRelationDesc,
+        RelationDescBuilder, RowArena, SqlScalarType, arb_relation_desc_diff,
+        arb_relation_desc_projection,
     };
     use proptest::prelude::*;
     use proptest::strategy::{Union, ValueTree};
@@ -1741,6 +1758,47 @@ mod tests {
     use crate::stats::RelationPartStats;
 
     use super::*;
+
+    // Regression: a `RelationDesc` with a deeply nested record type (e.g.
+    // derived from a Protobuf schema) must roundtrip through
+    // `{encode,decode}_schema` without overflowing the stack. Prost's
+    // generated encode/decode and the proto tree's drop glue recurse once per
+    // nesting level, so both functions run on a dedicated large stack.
+    //
+    // The depth is more modest than in the related mz-repr and mz-interchange
+    // tests only because prost recomputes nested lengths at every level, so
+    // encoding is quadratic in the nesting depth and a deeper test spends
+    // minutes of CPU. The stack guard itself is depth-independent.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn deeply_nested_schema_roundtrips() {
+        const DEPTH: usize = 5_000;
+
+        // Iterative construction, which needs no stack guard.
+        let mut ty = SqlScalarType::Int32;
+        for _ in 0..DEPTH {
+            ty = SqlScalarType::Record {
+                fields: vec![(ColumnName::from("f"), ty.nullable(true))].into(),
+                custom_id: None,
+            };
+        }
+        let desc = RelationDesc::builder()
+            .with_column("c", ty.nullable(true))
+            .finish();
+
+        let encoded = SourceData::encode_schema(&desc);
+        let roundtripped = SourceData::decode_schema(&encoded);
+
+        // Iterative depth check; the derived `PartialEq` would recurse on a
+        // fixed stack, so no equality assertion on the whole desc here.
+        let mut ty = &roundtripped.typ().column_types[0].scalar_type;
+        let mut depth = 0;
+        while let SqlScalarType::Record { fields, .. } = ty {
+            depth += 1;
+            ty = &fields[0].1.scalar_type;
+        }
+        assert_eq!(depth, DEPTH);
+    }
 
     #[mz_ore::test]
     fn test_timeline_parsing() {
