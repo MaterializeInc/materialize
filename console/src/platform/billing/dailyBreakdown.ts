@@ -87,19 +87,27 @@ export function filterDaysByRegion(
 export function aggregateDays(days: CostBreakdownDay[]): {
   accounts: CostBreakdownAccount[];
 } {
-  const accounts = new Map<string, Map<string, CostBreakdownCluster>>();
+  const accounts = new Map<
+    string,
+    { name: string; clusters: Map<string, CostBreakdownCluster> }
+  >();
   for (const day of days) {
     for (const account of day.accounts) {
-      let clusters = accounts.get(account.external_customer_id);
-      if (!clusters) {
-        clusters = new Map();
-        accounts.set(account.external_customer_id, clusters);
+      let entry = accounts.get(account.external_customer_id);
+      if (!entry) {
+        // Every day bucket carries the same per-account name (SAS-141), so
+        // the first occurrence's name is as good as any other's.
+        entry = { name: account.name, clusters: new Map() };
+        accounts.set(account.external_customer_id, entry);
       }
       for (const cluster of account.clusters) {
         const key = clusterKey(cluster);
-        const existing = clusters.get(key);
+        const existing = entry.clusters.get(key);
         if (!existing) {
-          clusters.set(key, { ...cluster, amounts: { ...cluster.amounts } });
+          entry.clusters.set(key, {
+            ...cluster,
+            amounts: { ...cluster.amounts },
+          });
           continue;
         }
         for (const [priceId, amount] of Object.entries(cluster.amounts)) {
@@ -111,8 +119,9 @@ export function aggregateDays(days: CostBreakdownDay[]): {
   }
   return {
     accounts: Array.from(accounts.entries()).map(
-      ([external_customer_id, clusters]) => ({
+      ([external_customer_id, { name, clusters }]) => ({
         external_customer_id,
+        name,
         clusters: Array.from(clusters.values()),
       }),
     ),
