@@ -199,8 +199,8 @@ enum JoinedFlavor<'scope, T: RenderTimestamp> {
     /// columnar source flows in without a `ColumnarToVec` decode.
     Edge(CollectionEdge<'scope, T>),
     /// The intra-operator multi-stage accumulator. `mz_join_core` is
-    /// `Vec`-internal, so the accumulator is a bare `VecCollection`, not an
-    /// inter-node edge.
+    /// `Vec`-internal, so the accumulator is a bare `VecCollection`, not a
+    /// collection edge.
     Collection(VecCollection<'scope, T, Row, Diff>),
     /// A dataflow-local arrangement.
     Local(Arranged<'scope, RowRowAgent<T, Diff>>),
@@ -723,7 +723,7 @@ where
 /// Forms the arrangement for the intra-operator `Vec` accumulator of a linear
 /// join. Unlike [`arrange_join_input`], the accumulator is a bare `VecCollection`
 /// rather than a collection edge: `mz_join_core` is `Vec`-internal, so the
-/// accumulator never carries the inter-node edge type.
+/// accumulator never carries the collection edge type.
 fn arrange_join_collection<'s, T>(
     collection: VecCollection<'s, T, Row, Diff>,
     stream_key: Vec<LirScalarExpr>,
