@@ -70,9 +70,9 @@ FROM SOURCE <src_name>
 ];
 ```
 
-The `CREATE SOURCE` statement does not name a topic reference on the table: a
-Kafka source exposes a single topic, so `CREATE TABLE ... FROM SOURCE` resolves
-to it automatically.
+Unlike other source types, `CREATE TABLE ... FROM SOURCE` does not need a
+`(REFERENCE ...)` clause. A Kafka source exposes a single topic, and the table
+reads from it automatically.
 
 The available `FORMAT`, `INCLUDE`, and `ENVELOPE` options are the same as for the
 [legacy syntax](/sql/create-source/kafka/#syntax). For the full catalog of
