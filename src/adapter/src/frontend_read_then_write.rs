@@ -755,14 +755,12 @@ impl PeekClient {
                         WriteResult::TargetChanged => {
                             break Err(AdapterError::Unstructured(anyhow::anyhow!(
                                 "target table changed while read-then-write was executing",
-                            )))
+                            )));
                         }
-                        WriteResult::Indeterminate => {
-                            break Err(AdapterError::Internal(
-                                "write outcome is indeterminate because the group committer shut down"
-                                    .into(),
-                            ))
-                        }
+                        WriteResult::Indeterminate => break Err(AdapterError::Internal(
+                            "write outcome is indeterminate because the group committer shut down"
+                                .into(),
+                        )),
                     }
                 }
                 Err(_) => {
@@ -791,9 +789,9 @@ impl PeekClient {
                                     ProcessResult::Continue { .. } => {}
                                     ProcessResult::NoRowsMatched => {
                                         break Some(
-                                        build_no_rows_response(&kind, &returning)
-                                            .map(|response| (response, None)),
-                                    );
+                                            build_no_rows_response(&kind, &returning)
+                                                .map(|response| (response, None)),
+                                        );
                                     }
                                     ProcessResult::Error(e) => {
                                         break Some(Err(e));
@@ -902,14 +900,12 @@ impl PeekClient {
                         WriteResult::TargetChanged => {
                             break Err(AdapterError::Unstructured(anyhow::anyhow!(
                                 "target table changed while read-then-write was executing",
-                            )))
+                            )));
                         }
-                        WriteResult::Indeterminate => {
-                            break Err(AdapterError::Internal(
-                                "write outcome is indeterminate because the group committer shut down"
-                                    .into(),
-                            ))
-                        }
+                        WriteResult::Indeterminate => break Err(AdapterError::Internal(
+                            "write outcome is indeterminate because the group committer shut down"
+                                .into(),
+                        )),
                     }
                 }
                 ProcessResult::NoRowsMatched => {
