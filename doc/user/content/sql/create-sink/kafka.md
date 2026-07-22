@@ -119,7 +119,7 @@ For example, consider a table with two columns named `col-a` and `col@a`.
 Materialize will use the names `col_a` and `col_a1`, respectively, in the
 generated Avro schema.
 
-#### When using a Confluent Schema Registry:
+#### Using Confluent Schema Registry
 
   * Materialize will automatically publish Avro schemas for the key, if present,
     and the value to the registry.
@@ -139,7 +139,7 @@ generated Avro schema.
     The level is applied only when the subject has no compatibility level yet. If
     the subject already has one, it is left unchanged.
 
-#### When using an [AWS Glue Schema Registry](/sql/create-connection/#aws-glue-schema-registry):
+#### Using [AWS Glue Schema Registry](/sql/create-connection/#aws-glue-schema-registry)
 
 {{< private-preview />}}
 
@@ -728,6 +728,8 @@ CREATE SINK avro_sink
 ```
 {{< /tab >}}
 {{< tab "Avro AWS Glue">}}
+
+{{< private-preview />}}
 
 The registry named by the connection must already exist. The IAM role assumed
 by the AWS connection must have the schema-write permissions listed under [AWS
