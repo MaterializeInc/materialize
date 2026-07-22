@@ -7741,6 +7741,7 @@ dependencies = [
  "axum-server",
  "clap",
  "futures",
+ "gcp_auth",
  "http 1.4.2",
  "humantime",
  "k8s-controller",

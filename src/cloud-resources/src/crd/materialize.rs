@@ -463,6 +463,29 @@ pub mod v1alpha1 {
             self.spec.request_rollout
         }
 
+        /// The value used to force the generated per-generation resources to
+        /// be detected as changed even when nothing else in the spec changed,
+        /// so that a requested rollout actually creates a new generation of
+        /// pods rather than completing as a no-op.
+        ///
+        /// Combines `spec.forceRollout` with the
+        /// [`FORCE_ROLLOUT_ANNOTATION`] annotation; changing either forces a
+        /// new generation. The annotation exists so that automation (e.g. the
+        /// GCP node upgrade watcher in orchestratord) can force a rollout
+        /// without touching spec fields that may be managed by tools like
+        /// Terraform.
+        pub fn force_rollout_value(&self) -> String {
+            match self
+                .meta()
+                .annotations
+                .as_ref()
+                .and_then(|annotations| annotations.get(FORCE_ROLLOUT_ANNOTATION))
+            {
+                Some(annotation) => format!("{}/{}", self.spec.force_rollout, annotation),
+                None => self.spec.force_rollout.to_string(),
+            }
+        }
+
         pub fn rollout_requested(&self) -> bool {
             self.requested_reconciliation_id()
                 != self
@@ -2762,7 +2785,50 @@ mod tests {
     use semver::Version;
 
     use super::v1alpha1::{Materialize, MaterializeSpec, MaterializeStatus};
-    use super::{DEFAULT_ROLLOUT_REQUEST_TIMEOUT, RolloutRequestTimeout};
+    use super::{DEFAULT_ROLLOUT_REQUEST_TIMEOUT, FORCE_ROLLOUT_ANNOTATION, RolloutRequestTimeout};
+
+    #[mz_ore::test]
+    fn force_rollout_annotation_forces_new_generation() {
+        // The force-rollout annotation must feed into both the v1 rollout
+        // hash (so that a rollout is requested) and the v1alpha1 force
+        // rollout value stamped onto the generated statefulset (so that the
+        // requested rollout actually creates a new generation rather than
+        // completing as a no-op).
+        let mut mz = super::v1::Materialize {
+            spec: super::v1::MaterializeSpec {
+                environmentd_image_ref: "materialize/environmentd:v26.0.0".to_owned(),
+                ..Default::default()
+            },
+            metadata: ObjectMeta::default(),
+            status: None,
+        };
+        let hash_without_annotation = mz.generate_rollout_hash();
+        let force_without_annotation = Materialize::from(mz.clone()).force_rollout_value();
+
+        mz.metadata.annotations = Some(std::collections::BTreeMap::from_iter([(
+            FORCE_ROLLOUT_ANNOTATION.to_owned(),
+            "a4b56cbb-a13e-4f95-8a9d-425c9ba28576".to_owned(),
+        )]));
+        assert_ne!(mz.generate_rollout_hash(), hash_without_annotation);
+        assert_ne!(
+            Materialize::from(mz.clone()).force_rollout_value(),
+            force_without_annotation
+        );
+
+        // Changing the annotation's value changes both again.
+        let hash = mz.generate_rollout_hash();
+        let force = Materialize::from(mz.clone()).force_rollout_value();
+        mz.metadata
+            .annotations
+            .as_mut()
+            .unwrap()
+            .insert(
+                FORCE_ROLLOUT_ANNOTATION.to_owned(),
+                "3f61bf8d-0714-462c-8b3b-3d9a68d0bcba".to_owned(),
+            );
+        assert_ne!(mz.generate_rollout_hash(), hash);
+        assert_ne!(Materialize::from(mz.clone()).force_rollout_value(), force);
+    }
 
     #[mz_ore::test]
     fn meets_minimum_version() {
