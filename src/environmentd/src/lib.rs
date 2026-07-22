@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+#![recursion_limit = "256"]
+
 //! A SQL stream processor built on top of [timely dataflow] and
 //! [differential dataflow].
 //!
@@ -166,6 +168,9 @@ pub struct Config {
     /// An SDK key for LaunchDarkly. Enables system parameter synchronization
     /// with LaunchDarkly.
     pub launchdarkly_sdk_key: Option<String>,
+    /// Overrides the LaunchDarkly service endpoints with a single base URL, as
+    /// for a relay proxy or a mock server in tests.
+    pub launchdarkly_base_uri: Option<String>,
     /// An invertible map from system parameter names to LaunchDarkly feature
     /// keys to use when propagating values from the latter to the former.
     pub launchdarkly_key_map: BTreeMap<String, String>,
@@ -480,6 +485,7 @@ impl Listeners {
                     config.launchdarkly_key_map,
                     SystemParameterSyncClientConfig::LaunchDarkly {
                         sdk_key: key,
+                        base_uri: config.launchdarkly_base_uri,
                         now_fn: config.now.clone(),
                     },
                 )),
@@ -675,19 +681,19 @@ impl Listeners {
         };
 
         // Load the adapter durable storage.
-        let (adapter_storage, audit_logs_iterator) = if read_only {
+        let adapter_storage = if read_only {
             // TODO: behavior of migrations when booting in savepoint mode is
             // not well defined.
-            let (adapter_storage, audit_logs_iterator) = openable_adapter_storage
+            let adapter_storage = openable_adapter_storage
                 .open_savepoint(boot_ts, &bootstrap_args)
                 .await?;
             // In read-only mode, we intentionally do not call `set_is_leader`,
             // because we are by definition not the leader if we are in
             // read-only mode.
 
-            (adapter_storage, audit_logs_iterator)
+            adapter_storage
         } else {
-            let (adapter_storage, audit_logs_iterator) = openable_adapter_storage
+            let adapter_storage = openable_adapter_storage
                 .open(boot_ts, &bootstrap_args)
                 .await?;
 
@@ -696,7 +702,7 @@ impl Listeners {
             // fenced out all other environments using the adapter storage.
             deployment_state.set_is_leader();
 
-            (adapter_storage, audit_logs_iterator)
+            adapter_storage
         };
 
         // Enable Persist compaction if we're not in read only.
@@ -732,6 +738,7 @@ impl Listeners {
         );
 
         // Initialize adapter.
+        let license_key = config.license_key.clone();
         let segment_client = config.segment_api_key.map(|api_key| {
             mz_segment::Client::new(mz_segment::Config {
                 api_key,
@@ -750,7 +757,6 @@ impl Listeners {
             controller_config: config.controller,
             controller_envd_epoch: envd_epoch,
             storage: adapter_storage,
-            audit_logs_iterator,
             timestamp_oracle_url: config.timestamp_oracle_url,
             unsafe_mode: config.unsafe_mode,
             all_features: config.all_features,
@@ -837,6 +843,7 @@ impl Listeners {
                 segment_client,
                 adapter_client: adapter_client.clone(),
                 environment_id: config.environment_id,
+                license_key: license_key.clone(),
                 report_interval: Duration::from_secs(3600),
             });
         } else if config.test_only_dummy_segment_client {
@@ -851,6 +858,7 @@ impl Listeners {
                 segment_client,
                 adapter_client: adapter_client.clone(),
                 environment_id: config.environment_id,
+                license_key: license_key.clone(),
                 report_interval: Duration::from_secs(180),
             });
         }

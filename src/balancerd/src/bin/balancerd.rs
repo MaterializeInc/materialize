@@ -15,14 +15,14 @@
 use std::error::Error;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use domain::resolv::StubResolver;
 use jsonwebtoken::DecodingKey;
 use mz_balancerd::{
-    BUILD_INFO, BalancerConfig, BalancerService, CancellationResolver, FronteggResolver, Resolver,
-    SniResolver,
+    BUILD_INFO, BalancerConfig, BalancerResolver, BalancerService, CancellationResolver,
+    FronteggResolver, SniTemplate, TenantDnsResolver,
 };
 use mz_frontegg_auth::{
     Authenticator, AuthenticatorConfig, DEFAULT_REFRESH_DROP_FACTOR,
@@ -172,6 +172,14 @@ pub struct ServiceArgs {
 fn main() {
     let args: Args = cli::parse_args(CliConfig::default());
 
+    // Pin the rustls crypto provider to aws-lc-rs. The LaunchDarkly SDK uses
+    // hyper-rustls, so building its client resolves the process-default rustls
+    // provider. The workspace also links rustls' `ring` feature (pulled by
+    // other hyper-rustls chains), and with both provider features enabled
+    // rustls cannot choose a default on its own and panics. The call is
+    // idempotent, so ignore the result.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     // Mirror the tokio Runtime configuration in our production binaries.
     let ncpus_useful = usize::max(1, std::cmp::min(num_cpus::get(), num_cpus::get_physical()));
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -245,13 +253,15 @@ pub async fn run(
             if !cancellation_resolver_dir.is_dir() {
                 anyhow::bail!("{cancellation_resolver_dir:?} is not a directory");
             }
+
             (
-                Resolver::MultiTenant(
-                    FronteggResolver {
+                BalancerResolver::MultiTenant {
+                    dns: Arc::new(TenantDnsResolver::new()?),
+                    frontegg: FronteggResolver {
                         auth,
                         addr_template,
                     },
-                    match args.pgwire_sni_resolver_template {
+                    sni: match args.pgwire_sni_resolver_template {
                         None => None,
                         Some(template) => {
                             let (template, port) = template
@@ -265,14 +275,10 @@ pub async fn run(
                                     )
                                 })
                                 .expect("invalid port for pgwire_sni_resolver_template");
-                            Some(SniResolver {
-                                resolver: StubResolver::new(),
-                                template,
-                                port,
-                            })
+                            Some(SniTemplate { template, port })
                         }
                     },
-                ),
+                },
                 CancellationResolver::Directory(cancellation_resolver_dir),
             )
         }
@@ -289,7 +295,7 @@ pub async fn run(
             drop(addrs);
 
             (
-                Resolver::Static(addr.clone()),
+                BalancerResolver::Static(addr.clone()),
                 CancellationResolver::Static(addr),
             )
         }

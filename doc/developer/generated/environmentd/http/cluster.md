@@ -1,6 +1,6 @@
 ---
 source: src/environmentd/src/http/cluster.rs
-revision: 8b77a4950e
+revision: dbd2c3fc06
 ---
 
 # environmentd::http::cluster

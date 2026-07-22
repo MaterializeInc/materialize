@@ -169,6 +169,7 @@ cleanup() {
   {
     bin/ci-builder run stable trufflehog --no-update --no-verification --filter-entropy 5.0 --json --exclude-detectors=coda,dockerhub,box,npmtoken,github,snykkey,eightxeight,sumologickey,miro,fmfw,logzio,qase,cannyio,uplead,tatumio filesystem "${artifacts[@]}" | trufflehog_jq_filter_logs > trufflehog.log
   } &
+  TRUFFLEHOG_PID=$!
   artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
 
   unset CI_EXTRA_ARGS # We don't want extra args for the annotation
@@ -176,12 +177,23 @@ cleanup() {
   CI_ANNOTATE_ERRORS_RESULT=0
   # We have to upload artifacts before ci-annotate-errors, so that the annotations can link to the artifacts
   buildkite-agent artifact upload "$artifacts_str" &
-  wait
+  UPLOAD_PID=$!
+  # Wait only for the background jobs spawned above, by explicit PID. A bare
+  # `wait` never returns when this cleanup runs as the SIGTERM trap of a
+  # timed-out job: the trap interrupted the script's outer `wait "$pid"`, whose
+  # stale job-table entry makes bare `wait` hang, eating the cancellation grace
+  # period before error annotation and cleanup ever run.
+  wait "$TRUFFLEHOG_PID" "$UPLOAD_PID"
   bin/ci-builder run stable bin/ci-annotate-errors --test-cmd="$TEST_CMD" --test-result="$TEST_RESULT" "${artifacts[@]}" trufflehog.log > ci-annotate-errors.log || CI_ANNOTATE_ERRORS_RESULT=$?
   buildkite-agent artifact upload "ci-annotate-errors.log" &
 
-  # File should not be empty, see database-issues#7569
-  test -s kubectl-get-logs-previous.log
+  # File should not be empty, see database-issues#7569. An empty file means no
+  # pods were found at all, which is a broken environment. This runs under
+  # `set +e`, so enforce it explicitly instead of relying on the exit status.
+  if [ ! -s kubectl-get-logs-previous.log ]; then
+      echo "+++ kubectl-get-logs-previous.log is empty, failing (see database-issues#7569)"
+      CI_ANNOTATE_ERRORS_RESULT=1
+  fi
 
   ci_unimportant_heading "cloudtest: Resetting..."
   bin/ci-builder run stable test/cloudtest/reset

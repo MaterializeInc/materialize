@@ -9,6 +9,8 @@
 
 $ set-regex match=cluster1|quickstart replacement=<CLUSTER_NAME>
 
+$ set-arg-default single-replica-cluster=quickstart
+
 > CREATE VIEW v AS VALUES (1, 'foo'), (2, 'bar'), (3, 'foo'), (1, 'bar')
 
 > SELECT * FROM v
@@ -237,3 +239,54 @@ contains:unknown catalog item 'temp_v'
 
 ! CREATE TEMP VIEW mz_catalog.a AS SELECT 1
 contains:cannot create temporary item in non-temporary schema
+
+# Regression test: a persistent (non-temporary) item must not be allowed to
+# depend on a TEMPORARY object. Temporary objects live only in the in-memory,
+# session-scoped catalog and are never persisted, so a persisted item that
+# references one is a dangling catalog entry. The coordinator applies durable
+# items before temporary ones (it assumes the invariant holds, see
+# apply.rs), so on the next catalog rebuild deserializing the persisted item
+# fails to resolve the temporary id and panics with
+# PlanError(InvalidId(...)): invalid persisted SQL.
+#
+# CREATE enforces this via ErrorKind::InvalidTemporaryDependency. ALTER SINK
+# ... SET FROM went through a separate catalog path that skipped the check,
+# so it could repoint a persistent sink at a temporary object and brick the
+# environment. This test pins the invariant across both paths.
+
+> CREATE TABLE realt (a int)
+> CREATE MATERIALIZED VIEW realmv AS SELECT * FROM realt
+
+> CREATE TEMPORARY TABLE tempt (a int)
+
+# CREATE paths already reject a persistent dependency on a temporary object.
+! CREATE MATERIALIZED VIEW mv_on_temp AS SELECT * FROM tempt
+contains: non-temporary items cannot depend on temporary item
+
+! CREATE VIEW v_on_temp AS SELECT * FROM tempt
+contains: non-temporary items cannot depend on temporary item
+
+! CREATE SINK s_on_temp
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM tempt
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-on-temp-${testdrive.seed}')
+  FORMAT JSON
+  ENVELOPE DEBEZIUM
+contains: non-temporary items cannot depend on temporary item
+
+# ALTER SINK ... SET FROM must reject it too. Before the fix this succeeded,
+# leaving `s_setfrom` depending on the temporary `tempt` and panicking the
+# coordinator on the next catalog apply.
+> CREATE SINK s_setfrom
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM realmv
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-setfrom-${testdrive.seed}')
+  FORMAT JSON
+  ENVELOPE DEBEZIUM
+
+! ALTER SINK s_setfrom SET FROM tempt
+contains: non-temporary items cannot depend on temporary item
+
+# The sink still reads from the original, non-temporary object.
+> SELECT count(*) FROM (SHOW SINKS) WHERE name = 's_setfrom'
+1

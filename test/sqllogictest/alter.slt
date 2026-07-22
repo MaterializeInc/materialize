@@ -216,6 +216,11 @@ ALTER SYSTEM SET default_timestamp_interval = '0';
 db error: ERROR: parameter "default_timestamp_interval" cannot have value "0ns": only supports non-zero durations
 
 simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET storage_statistics_interval = '0s';
+----
+db error: ERROR: parameter "storage_statistics_interval" cannot have value "0ns": only supports non-zero durations
+
+simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET default_timestamp_interval = '-1';
 ----
 db error: ERROR: parameter "default_timestamp_interval" requires a "duration" value

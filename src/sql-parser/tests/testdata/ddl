@@ -1978,14 +1978,14 @@ CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Cluster
 parse-statement
 CREATE CLUSTER cluster WITH REPLICAS ()
 ----
-error: Expected one of AVAILABILITY or DISK or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE or SCHEDULE or WORKLOAD, found WITH
+error: Expected one of AUTO or AVAILABILITY or DISK or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE or SCHEDULE or WORKLOAD, found WITH
 CREATE CLUSTER cluster WITH REPLICAS ()
                        ^
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS (), BADOPT
 ----
-error: Expected one of AVAILABILITY or DISK or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE or SCHEDULE or WORKLOAD, found identifier "badopt"
+error: Expected one of AUTO or AVAILABILITY or DISK or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE or SCHEDULE or WORKLOAD, found identifier "badopt"
 CREATE CLUSTER cluster REPLICAS (), BADOPT
                                     ^
 
@@ -2163,6 +2163,55 @@ CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRA
 error: Expected right parenthesis, found EOF
 CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour')
                                                                                                               ^
+
+parse-statement
+CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = '400cc', LINGER DURATION = '600s')))
+----
+CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = '400cc', LINGER DURATION = '600s')))
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }, ClusterOption { name: AutoScalingStrategy, value: Some(ClusterAutoScalingStrategyOptionValue(ClusterAutoScalingStrategyOptionValue { on_hydration: Some(OnHydrationOptionValue { hydration_size: String("400cc"), linger_duration: Some(String("600s")) }) })) }], features: [] })
+
+parse-statement
+CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = '400cc')))
+----
+CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = '400cc')))
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }, ClusterOption { name: AutoScalingStrategy, value: Some(ClusterAutoScalingStrategyOptionValue(ClusterAutoScalingStrategyOptionValue { on_hydration: Some(OnHydrationOptionValue { hydration_size: String("400cc"), linger_duration: None }) })) }], features: [] })
+
+parse-statement
+CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', AUTO SCALING STRATEGY = ())
+----
+CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', AUTO SCALING STRATEGY = ())
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }, ClusterOption { name: AutoScalingStrategy, value: Some(ClusterAutoScalingStrategyOptionValue(ClusterAutoScalingStrategyOptionValue { on_hydration: None })) }], features: [] })
+
+parse-statement
+ALTER CLUSTER cluster SET (AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = '400cc')))
+----
+ALTER CLUSTER cluster SET (AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = '400cc')))
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions { options: [ClusterOption { name: AutoScalingStrategy, value: Some(ClusterAutoScalingStrategyOptionValue(ClusterAutoScalingStrategyOptionValue { on_hydration: Some(OnHydrationOptionValue { hydration_size: String("400cc"), linger_duration: None }) })) }], with_options: [] } })
+
+parse-statement
+ALTER CLUSTER cluster RESET (AUTO SCALING STRATEGY)
+----
+ALTER CLUSTER cluster RESET (AUTO SCALING STRATEGY)
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: ResetOptions([AutoScalingStrategy]) })
+
+parse-statement
+CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION))
+----
+error: Expected left parenthesis, found right parenthesis
+CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION))
+                                                                                         ^
+
+parse-statement
+CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = '400cc'), ON HYDRATION (HYDRATION SIZE = '800cc')))
+----
+error: ON HYDRATION specified more than once
+CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = '400cc'), ON HYDRATION (HYDRATION SIZE = '800cc')))
+                                                                                                                                                            ^
 
 parse-statement
 CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', WORKLOAD CLASS NULL)
@@ -3709,3 +3758,12 @@ CREATE TABLE t FROM SOURCE foo (REFERENCE = bar) KEY FORMAT AVRO USING AWS GLUE 
 CREATE TABLE t FROM SOURCE foo (REFERENCE = bar) KEY FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (SCHEMA NAME = 'key-schema') SEED VALUE SCHEMA '{"k": "key"}' VALUE FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (SCHEMA NAME = 'val-schema') SEED VALUE SCHEMA '{"v": "value"}' ENVELOPE UPSERT
 =>
 CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: NotSpecified, constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: Some(UnresolvedItemName([Ident("bar")])), with_options: [], include_metadata: [], format: Some(KeyValue { key: Avro(Glue { connection: Name(UnresolvedItemName([Ident("glue_conn")])), with_options: [GlueAvroOption { name: SchemaName, value: Some(Value(String("key-schema"))) }], seed: Some(GlueAvroSeed { value_schema: "{\"k\": \"key\"}" }) }), value: Avro(Glue { connection: Name(UnresolvedItemName([Ident("glue_conn")])), with_options: [GlueAvroOption { name: SchemaName, value: Some(Value(String("val-schema"))) }], seed: Some(GlueAvroSeed { value_schema: "{\"v\": \"value\"}" }) }) }), envelope: Some(Upsert { value_decode_err_policy: [] }) })
+
+# Glue sink clause mirrors the CSR clause: per-side schema names and
+# compatibility levels, all optional.
+parse-statement
+CREATE SINK snk FROM t INTO KAFKA CONNECTION conn1 (TOPIC 'topic') FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (KEY SCHEMA NAME = 'k', VALUE SCHEMA NAME = 'v', KEY COMPATIBILITY LEVEL = 'BACKWARD', VALUE COMPATIBILITY LEVEL = 'FULL') ENVELOPE UPSERT
+----
+CREATE SINK snk FROM t INTO KAFKA CONNECTION conn1 (TOPIC = 'topic') FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (KEY SCHEMA NAME = 'k', VALUE SCHEMA NAME = 'v', KEY COMPATIBILITY LEVEL = 'BACKWARD', VALUE COMPATIBILITY LEVEL = 'FULL') ENVELOPE UPSERT
+=>
+CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("snk")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("t")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None, headers: None }, format: Some(Bare(Avro(Glue { connection: Name(UnresolvedItemName([Ident("glue_conn")])), with_options: [GlueAvroOption { name: KeySchemaName, value: Some(Value(String("k"))) }, GlueAvroOption { name: ValueSchemaName, value: Some(Value(String("v"))) }, GlueAvroOption { name: KeyCompatibilityLevel, value: Some(Value(String("BACKWARD"))) }, GlueAvroOption { name: ValueCompatibilityLevel, value: Some(Value(String("FULL"))) }], seed: None }))), envelope: Some(Upsert), mode: None, with_options: [] })

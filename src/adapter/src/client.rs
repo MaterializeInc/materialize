@@ -44,6 +44,7 @@ use mz_sql::session::user::SUPPORT_USER;
 use mz_sql::session::vars::{
     CLUSTER, ENABLE_FRONTEND_PEEK_SEQUENCING, OwnedVarInput, SystemVars, Var,
 };
+use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
 use prometheus::Histogram;
 use serde_json::json;
@@ -289,6 +290,7 @@ impl Client {
 
         let peek_client = PeekClient::new(
             self.clone(),
+            &catalog,
             storage_collections,
             transient_id_gen,
             optimizer_metrics,
@@ -557,7 +559,11 @@ Issue a SQL query to get started. Need help?
     }
 
     /// Returns a snapshot of the catalog.
-    pub async fn catalog_snapshot(&self) -> Arc<Catalog> {
+    ///
+    /// Does a Coordinator round-trip. Session-bound callers should
+    /// prefer [`SessionClient::catalog_snapshot`], which serves from the
+    /// session's snapshot cache.
+    pub async fn catalog_snapshot_expensive(&self) -> Arc<Catalog> {
         let (tx, rx) = oneshot::channel();
         self.send(Command::CatalogSnapshot { tx });
         let CatalogSnapshot { catalog } = rx.await.expect("coordinator unexpectedly gone");
@@ -785,13 +791,12 @@ impl SessionClient {
         // would route differently from the same statement issued
         // directly.
         //
-        // On a successful unroll, `unroll_sql_execute` also returns a
-        // catalog snapshot (threaded through to avoid taking a second
-        // one) and begins EXECUTE-level statement logging on the outer
-        // portal — so `mz_statement_execution_history` records
-        // `EXECUTE foo (...)`, not the inner SQL — installing the
-        // resulting `ExecuteContextGuard` into `outer_ctx_extra`.
-        let (portal_name, catalog) = self
+        // On a successful unroll, `unroll_sql_execute` also begins
+        // EXECUTE-level statement logging on the outer portal, so that
+        // `mz_statement_execution_history` records `EXECUTE foo (...)`
+        // rather than the inner SQL, and installs the resulting
+        // `ExecuteContextGuard` into `outer_ctx_extra`.
+        let portal_name = self
             .unroll_sql_execute(portal_name, &mut outer_ctx_extra)
             .await?;
 
@@ -799,7 +804,7 @@ impl SessionClient {
         // If unsupported, fall back to the Coordinator path.
         // TODO(peek-seq): wire up cancel_future
         let peek_result = self
-            .try_frontend_peek(&portal_name, catalog, &mut outer_ctx_extra)
+            .try_frontend_peek(&portal_name, &mut outer_ctx_extra)
             .await?;
         if let Some(resp) = peek_result {
             debug!("frontend peek succeeded");
@@ -839,22 +844,19 @@ impl SessionClient {
     /// surfaces an internal error if that invariant is ever violated.
     ///
     /// When the portal does not bind an `EXECUTE` — the common case —
-    /// returns the original portal name and `None`, costing only a portal
-    /// lookup. On unroll, also returns the catalog snapshot taken here so
-    /// the caller can thread it into `try_frontend_peek`, which reuses it
-    /// instead of taking its own.
+    /// returns the original portal name, costing only a portal lookup.
     async fn unroll_sql_execute(
         &mut self,
         portal_name: String,
         outer_ctx_extra: &mut Option<ExecuteContextGuard>,
-    ) -> Result<(String, Option<Arc<Catalog>>), AdapterError> {
+    ) -> Result<String, AdapterError> {
         let (stmt, params, outer_logging, outer_lifecycle_timestamps) = {
             let session = self.session.as_ref().expect("SessionClient invariant");
             let portal = match session.get_portal_unverified(&portal_name) {
                 Some(p) => p,
                 // No portal: let `try_frontend_peek` surface the
                 // standard "missing portal" error.
-                None => return Ok((portal_name, None)),
+                None => return Ok(portal_name),
             };
             match &portal.stmt {
                 Some(stmt) => (
@@ -863,14 +865,14 @@ impl SessionClient {
                     Arc::clone(&portal.logging),
                     portal.lifecycle_timestamps.clone(),
                 ),
-                None => return Ok((portal_name, None)),
+                None => return Ok(portal_name),
             }
         };
 
         // Only EXECUTE statements need unrolling. Bail out before taking a
         // catalog snapshot in the (overwhelmingly common) non-EXECUTE case.
         if !matches!(&*stmt, Statement::Execute(_)) {
-            return Ok((portal_name, None));
+            return Ok(portal_name);
         }
 
         let catalog = self.catalog_snapshot("unroll_sql_execute").await;
@@ -973,7 +975,7 @@ impl SessionClient {
             *outer_ctx_extra = Some(ExecuteContextGuard::new(logging_id, dummy_tx));
         }
 
-        Ok((new_portal_name, Some(catalog)))
+        Ok(new_portal_name)
     }
 
     /// Helper for [`Self::unroll_sql_execute`]: plans the outer
@@ -1112,26 +1114,25 @@ impl SessionClient {
         self.session = Some(session);
     }
 
-    /// Fetches the catalog.
+    /// Fetches the catalog, served from the session-side snapshot cache when
+    /// the catalog is unchanged since the cached snapshot was taken. See
+    /// [`PeekClient::catalog_snapshot`].
     #[instrument(level = "debug")]
-    pub async fn catalog_snapshot(&self, context: &str) -> Arc<Catalog> {
-        let start = std::time::Instant::now();
-        let CatalogSnapshot { catalog } = self
-            .send_without_session(|tx| Command::CatalogSnapshot { tx })
-            .await;
-        self.inner()
-            .metrics()
-            .catalog_snapshot_seconds
-            .with_label_values(&[context])
-            .observe(start.elapsed().as_secs_f64());
-        catalog
+    pub async fn catalog_snapshot(&mut self, context: &str) -> Arc<Catalog> {
+        self.peek_client.catalog_snapshot(context).await
+    }
+
+    /// Reports whether `enable_statement_arrival_logging` is on.
+    pub async fn statement_arrival_logging_enabled(&mut self) -> bool {
+        let catalog = self.catalog_snapshot("statement_arrival_logging").await;
+        catalog.system_config().enable_statement_arrival_logging()
     }
 
     /// Dumps the catalog to a JSON string.
     ///
     /// No authorization is performed, so access to this function must be limited to internal
     /// servers or superusers.
-    pub async fn dump_catalog(&self) -> Result<CatalogDump, AdapterError> {
+    pub async fn dump_catalog(&mut self) -> Result<CatalogDump, AdapterError> {
         let catalog = self.catalog_snapshot("dump_catalog").await;
         catalog.dump().map_err(AdapterError::from)
     }
@@ -1141,7 +1142,7 @@ impl SessionClient {
     ///
     /// No authorization is performed, so access to this function must be limited to internal
     /// servers or superusers.
-    pub async fn check_catalog(&self) -> Result<(), serde_json::Value> {
+    pub async fn check_catalog(&mut self) -> Result<(), serde_json::Value> {
         let catalog = self.catalog_snapshot("check_catalog").await;
         catalog.check_consistency()
     }
@@ -1376,6 +1377,7 @@ impl SessionClient {
                 | Command::CopyToPreflight { .. }
                 | Command::ExecuteCopyTo { .. }
                 | Command::ExecuteSideEffectingFunc { .. }
+                | Command::LookupConnection { .. }
                 | Command::RegisterFrontendPeek { .. }
                 | Command::UnregisterFrontendPeek { .. }
                 | Command::ExplainTimestamp { .. }
@@ -1463,13 +1465,12 @@ impl SessionClient {
     pub(crate) async fn try_frontend_peek(
         &mut self,
         portal_name: &str,
-        catalog: Option<Arc<Catalog>>,
         outer_ctx_extra: &mut Option<ExecuteContextGuard>,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         if self.enable_frontend_peek_sequencing {
             let session = self.session.as_mut().expect("SessionClient invariant");
             self.peek_client
-                .try_frontend_peek(portal_name, catalog, session, outer_ctx_extra)
+                .try_frontend_peek(portal_name, session, outer_ctx_extra)
                 .await
         } else {
             Ok(None)
@@ -1492,6 +1493,23 @@ impl Drop for SessionClient {
                 })
             }
         }
+    }
+}
+
+/// Renders SQL for statement arrival logging: parsed and displayed with its
+/// literals redacted, which is the same redaction the statement log applies.
+/// When the text does not parse or exceeds the statement batch size limit, a
+/// placeholder with the byte length is returned. Raw text is never returned,
+/// so a statement that crashes the parser is not captured, an accepted
+/// limitation.
+pub fn redact_sql_for_logging(sql: &str) -> String {
+    match mz_sql_parser::parser::parse_statements_with_limit(sql) {
+        Ok(Ok(stmts)) => stmts
+            .into_iter()
+            .map(|stmt| stmt.ast.to_ast_string_redacted())
+            .join("; "),
+        Ok(Err(_)) => format!("<unparseable ({} bytes)>", sql.len()),
+        Err(_) => format!("<too large ({} bytes)>", sql.len()),
     }
 }
 

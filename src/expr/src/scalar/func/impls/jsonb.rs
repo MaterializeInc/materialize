@@ -18,7 +18,11 @@ use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::role_id::RoleId;
 use mz_repr::{ArrayRustType, Datum, Row, RowPacker, SqlColumnType, SqlScalarType, strconv};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::{AstInfo, Format, FormatSpecifier, RawClusterName, RawItemName};
+use mz_sql_parser::ast::{
+    AstInfo, Format, FormatSpecifier, KafkaSourceConfigOptionName, PgConfigOptionName,
+    RawClusterName, RawItemName, Value, WithOptionValue,
+};
+use prost::Message as _;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -556,4 +560,335 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
     let val = parse().map_err(|e| EvalError::InvalidCatalogJson(e.into()))?;
     let jsonb = Jsonb::from_serde_json(val).expect("valid JSONB");
     Ok(jsonb)
+}
+
+/// Minimal decoder for `ProtoPostgresSourcePublicationDetails`. The
+/// canonical proto lives in `mz-storage-types`, which depends on
+/// `mz-expr`, so we redeclare the two tags we read here. Upstream tag
+/// renumbers slip past silently. The `mz_postgres_sources` lockdown
+/// SLTs catch them.
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct PostgresPublicationDetailsSubset {
+    #[prost(string, tag = "2")]
+    slot: String,
+    #[prost(uint64, optional, tag = "3")]
+    timeline_id: Option<u64>,
+}
+
+/// Extracts postgres source publication details (slot, timeline_id) from a
+/// catalog `create_sql`. Returns:
+///
+/// - jsonb `{"slot": <text>, "timeline_id": <u64 | null>}` for
+///   `CREATE SOURCE ... FROM POSTGRES CONNECTION ... (DETAILS = ...)` statements.
+/// - jsonb `null` for any other statement.
+///
+/// Errors if the statement fails to parse, is a postgres source without
+/// a `DETAILS` option, or if the `DETAILS` value can't be hex- and
+/// proto-decoded.
+#[sqlfunc]
+fn parse_postgres_source_details<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
+    let parse = || -> Result<serde_json::Value, String> {
+        let mut stmts = mz_sql_parser::parser::parse_statements(a)
+            .map_err(|e| format!("failed to parse create_sql: {e}"))?;
+        let stmt = match stmts.len() {
+            1 => stmts.remove(0).ast,
+            n => return Err(format!("expected a single statement, found {n}")),
+        };
+
+        use mz_sql_parser::ast::CreateSourceConnection;
+        use mz_sql_parser::ast::Statement::CreateSource;
+        let options = match stmt {
+            CreateSource(stmt) => match stmt.connection {
+                CreateSourceConnection::Postgres { options, .. } => options,
+                _ => return Ok(serde_json::Value::Null),
+            },
+            _ => return Ok(serde_json::Value::Null),
+        };
+
+        let details_hex = options
+            .into_iter()
+            .find(|opt| opt.name == PgConfigOptionName::Details)
+            .and_then(|opt| match opt.value {
+                Some(WithOptionValue::Value(Value::String(s))) => Some(s),
+                _ => None,
+            })
+            .ok_or("missing DETAILS option on postgres source")?;
+
+        let details_bytes =
+            hex::decode(&details_hex).map_err(|e| format!("DETAILS is not valid hex: {e}"))?;
+
+        let details = PostgresPublicationDetailsSubset::decode(&*details_bytes)
+            .map_err(|e| format!("DETAILS is not a valid publication-details proto: {e}"))?;
+
+        Ok(json!({
+            "slot": details.slot,
+            "timeline_id": details.timeline_id,
+        }))
+    };
+
+    let val = parse().map_err(|e| EvalError::InvalidCatalogJson(e.into()))?;
+    let jsonb = Jsonb::from_serde_json(val).expect("valid JSONB");
+    Ok(jsonb)
+}
+
+/// Extracts kafka source configuration (topic, group id prefix, connection
+/// id) from a catalog `create_sql`. Returns:
+///
+/// - jsonb `{"topic": <text>, "group_id_prefix": <text | null>, "connection_id": <text>}`
+///   for `CREATE SOURCE ... FROM KAFKA CONNECTION ... (TOPIC = ..., [GROUP ID PREFIX = ...])`
+///   statements.
+/// - jsonb `null` for any other statement.
+///
+/// Errors if the statement fails to parse, is a kafka source without a
+/// `TOPIC` option, or references an unresolved connection name (i.e. one
+/// that hasn't been through purification).
+#[sqlfunc]
+fn parse_kafka_source_details<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
+    fn get_item_id(item: RawItemName) -> Result<String, &'static str> {
+        match item {
+            RawItemName::Id(id, _, _) => Ok(id),
+            RawItemName::Name(_) => Err("unresolved item name"),
+        }
+    }
+
+    let parse = || -> Result<serde_json::Value, String> {
+        let mut stmts = mz_sql_parser::parser::parse_statements(a)
+            .map_err(|e| format!("failed to parse create_sql: {e}"))?;
+        let stmt = match stmts.len() {
+            1 => stmts.remove(0).ast,
+            n => return Err(format!("expected a single statement, found {n}")),
+        };
+
+        use mz_sql_parser::ast::CreateSourceConnection;
+        use mz_sql_parser::ast::Statement::CreateSource;
+        let (connection, options) = match stmt {
+            CreateSource(stmt) => match stmt.connection {
+                CreateSourceConnection::Kafka {
+                    connection,
+                    options,
+                } => (connection, options),
+                _ => return Ok(serde_json::Value::Null),
+            },
+            _ => return Ok(serde_json::Value::Null),
+        };
+
+        let connection_id = get_item_id(connection)?;
+
+        let mut topic: Option<String> = None;
+        let mut group_id_prefix: Option<String> = None;
+        for opt in options {
+            let string_value = match opt.value {
+                Some(WithOptionValue::Value(Value::String(s))) => Some(s),
+                _ => None,
+            };
+            match opt.name {
+                KafkaSourceConfigOptionName::Topic => topic = string_value,
+                KafkaSourceConfigOptionName::GroupIdPrefix => group_id_prefix = string_value,
+                _ => {}
+            }
+        }
+
+        let topic = topic.ok_or("missing TOPIC option on kafka source")?;
+
+        Ok(json!({
+            "topic": topic,
+            "group_id_prefix": group_id_prefix,
+            "connection_id": connection_id,
+        }))
+    };
+
+    let val = parse().map_err(|e| EvalError::InvalidCatalogJson(e.into()))?;
+    let jsonb = Jsonb::from_serde_json(val).expect("valid JSONB");
+    Ok(jsonb)
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_repr::adt::jsonb::Jsonb;
+    use prost::Message as _;
+    use serde_json::json;
+
+    use crate::EvalError;
+
+    /// Encode the two proto fields our decoder cares about, using the same
+    /// tag numbering as the canonical proto.
+    fn encode_pg_details(slot: &str, timeline_id: Option<u64>) -> String {
+        let details = super::PostgresPublicationDetailsSubset {
+            slot: slot.to_string(),
+            timeline_id,
+        };
+        hex::encode(details.encode_to_vec())
+    }
+
+    fn pg_source_sql(details_hex: &str) -> String {
+        format!(
+            "CREATE SOURCE \"materialize\".\"public\".\"pg_src\" \
+             IN CLUSTER [u42] \
+             FROM POSTGRES CONNECTION [u10 AS \"materialize\".\"public\".\"pg_conn\"] \
+             (DETAILS = '{details_hex}', PUBLICATION = 'mz_source') \
+             FOR ALL TABLES"
+        )
+    }
+
+    fn kafka_source_sql(with_prefix: bool) -> String {
+        let prefix_opt = if with_prefix {
+            ", GROUP ID PREFIX 'my-prefix-'"
+        } else {
+            ""
+        };
+        format!(
+            "CREATE SOURCE \"materialize\".\"public\".\"k_src\" \
+             IN CLUSTER [u42] \
+             FROM KAFKA CONNECTION [u11 AS \"materialize\".\"public\".\"k_conn\"] \
+             (TOPIC 'test'{prefix_opt}) FORMAT TEXT"
+        )
+    }
+
+    fn as_serde(jsonb: Jsonb) -> serde_json::Value {
+        jsonb.as_ref().to_serde_json()
+    }
+
+    // --- parse_postgres_source_details ---------------------------------------
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+    fn pg_happy_path_with_timeline() {
+        let hex = encode_pg_details("materialize_abc", Some(42));
+        let sql = pg_source_sql(&hex);
+        let out = super::parse_postgres_source_details(&sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({ "slot": "materialize_abc", "timeline_id": 42 }),
+        );
+    }
+
+    #[mz_ore::test]
+    fn pg_happy_path_null_timeline() {
+        // Pre-2024 sources have no timeline_id field. The decoder must
+        // surface that as JSON null, not error.
+        let hex = encode_pg_details("materialize_legacy", None);
+        let sql = pg_source_sql(&hex);
+        let out = super::parse_postgres_source_details(&sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({ "slot": "materialize_legacy", "timeline_id": null }),
+        );
+    }
+
+    #[mz_ore::test]
+    fn pg_non_postgres_source_returns_null_jsonb() {
+        let sql = "CREATE SOURCE \"materialize\".\"public\".\"lg\" \
+             IN CLUSTER [u42] FROM LOAD GENERATOR COUNTER";
+        let out = super::parse_postgres_source_details(sql).expect("ok");
+        assert_eq!(as_serde(out), serde_json::Value::Null);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn pg_non_create_source_returns_null_jsonb() {
+        let sql = "CREATE VIEW v AS SELECT 1";
+        let out = super::parse_postgres_source_details(sql).expect("ok");
+        assert_eq!(as_serde(out), serde_json::Value::Null);
+    }
+
+    #[mz_ore::test]
+    fn pg_missing_details_option_errors() {
+        let sql = "CREATE SOURCE \"materialize\".\"public\".\"pg_src\" \
+             IN CLUSTER [u42] \
+             FROM POSTGRES CONNECTION [u10 AS \"materialize\".\"public\".\"pg_conn\"] \
+             (PUBLICATION = 'mz_source') FOR ALL TABLES";
+        let err = super::parse_postgres_source_details(sql).unwrap_err();
+        assert!(
+            matches!(err, EvalError::InvalidCatalogJson(msg) if msg.contains("missing DETAILS")),
+            "wrong error variant/message"
+        );
+    }
+
+    #[mz_ore::test]
+    fn pg_malformed_hex_errors() {
+        let sql = pg_source_sql("not-hex!!");
+        let err = super::parse_postgres_source_details(&sql).unwrap_err();
+        assert!(
+            matches!(err, EvalError::InvalidCatalogJson(msg) if msg.contains("valid hex")),
+            "wrong error variant/message"
+        );
+    }
+
+    #[mz_ore::test]
+    fn pg_malformed_proto_errors() {
+        // Valid hex, garbage bytes. Prost decoding fails on unexpected wire
+        // format.
+        let sql = pg_source_sql("ffff");
+        let err = super::parse_postgres_source_details(&sql).unwrap_err();
+        assert!(
+            matches!(err, EvalError::InvalidCatalogJson(msg) if msg.contains("publication-details proto")),
+            "wrong error variant/message"
+        );
+    }
+
+    // --- parse_kafka_source_details ------------------------------------------
+
+    #[mz_ore::test]
+    fn kafka_happy_path_with_prefix() {
+        let sql = kafka_source_sql(true);
+        let out = super::parse_kafka_source_details(&sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "topic": "test",
+                "group_id_prefix": "my-prefix-",
+                "connection_id": "u11",
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    fn kafka_happy_path_without_prefix() {
+        let sql = kafka_source_sql(false);
+        let out = super::parse_kafka_source_details(&sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "topic": "test",
+                "group_id_prefix": null,
+                "connection_id": "u11",
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    fn kafka_non_kafka_source_returns_null_jsonb() {
+        let sql = "CREATE SOURCE \"materialize\".\"public\".\"lg\" \
+             IN CLUSTER [u42] FROM LOAD GENERATOR COUNTER";
+        let out = super::parse_kafka_source_details(sql).expect("ok");
+        assert_eq!(as_serde(out), serde_json::Value::Null);
+    }
+
+    #[mz_ore::test]
+    fn kafka_missing_topic_errors() {
+        let sql = "CREATE SOURCE \"materialize\".\"public\".\"k_src\" \
+             IN CLUSTER [u42] \
+             FROM KAFKA CONNECTION [u11 AS \"materialize\".\"public\".\"k_conn\"] \
+             FORMAT TEXT";
+        let err = super::parse_kafka_source_details(sql).unwrap_err();
+        assert!(
+            matches!(err, EvalError::InvalidCatalogJson(msg) if msg.contains("missing TOPIC")),
+            "wrong error variant/message"
+        );
+    }
+
+    #[mz_ore::test]
+    fn kafka_unresolved_connection_errors() {
+        // A bare-name connection reference never happens after purification,
+        // but the decoder must reject it explicitly rather than silently
+        // dropping the connection_id.
+        let sql = "CREATE SOURCE \"materialize\".\"public\".\"k_src\" \
+             IN CLUSTER [u42] \
+             FROM KAFKA CONNECTION k_conn (TOPIC 'test') FORMAT TEXT";
+        let err = super::parse_kafka_source_details(sql).unwrap_err();
+        assert!(
+            matches!(err, EvalError::InvalidCatalogJson(msg) if msg.contains("unresolved item name")),
+            "wrong error variant/message"
+        );
+    }
 }

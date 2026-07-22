@@ -17,6 +17,33 @@ use crate::{
     BinaryFunc, Eval, EvalError, MapFilterProject, MfpPlan, MirScalarExpr, UnaryFunc,
     UnmaterializableFunc, VariadicFunc, func,
 };
+/// Whether a datum is a floating-point or numeric `NaN`.
+///
+/// `NaN` sorts as the maximum of the numeric/float [Datum] ordering, but it is
+/// a fixed point of most functions we treat as monotone (e.g. negation maps
+/// `NaN` to `NaN` while flipping the sign of every other value). A range whose
+/// bounds include `NaN` therefore breaks the monotonicity assumption that
+/// [ResultSpec::flat_map] relies on, so the range-narrowing shortcut must be
+/// skipped in that case.
+fn datum_is_nan(datum: Datum) -> bool {
+    match datum {
+        Datum::Float32(f) => f.is_nan(),
+        Datum::Float64(f) => f.is_nan(),
+        Datum::Numeric(n) => n.0.is_nan(),
+        _ => false,
+    }
+}
+
+/// Whether a datum is a floating-point or numeric infinity.
+fn datum_is_infinite(datum: Datum) -> bool {
+    match datum {
+        Datum::Float32(f) => f.is_infinite(),
+        Datum::Float64(f) => f.is_infinite(),
+        Datum::Numeric(n) => n.0.is_infinite(),
+        _ => false,
+    }
+}
+
 /// An inclusive range of non-null datum values.
 #[derive(Clone, Eq, PartialEq, Debug)]
 enum Values<'a> {
@@ -100,8 +127,14 @@ impl<'a> Values<'a> {
             }
             (Values::All, v) => v,
             (v, Values::All) => v,
-            (Values::Nested(_), Values::Within(_, _)) => Values::Empty,
-            (Values::Within(_, _), Values::Nested(_)) => Values::Empty,
+            // A `Within` range and a `Nested` (map) spec can genuinely overlap:
+            // `Datum` order places `Map` between `List` and `Numeric`, so a
+            // range straddling those tags contains map values. We can't compute
+            // the precise intersection, so return the (more structured) `Nested`
+            // side as a sound over-approximation. Returning `Empty` here would
+            // drop real values and let pushdown wrongly discard a part.
+            (nested @ Values::Nested(_), Values::Within(_, _))
+            | (Values::Within(_, _), nested @ Values::Nested(_)) => nested,
         }
     }
 
@@ -285,6 +318,28 @@ impl<'a> ResultSpec<'a> {
         self.fallible
     }
 
+    /// Whether this spec is pinned to a single concrete (non-null) value.
+    ///
+    /// When it is, evaluating a function on the input is exact rather than an
+    /// endpoint-sampled approximation of a range, so the interpreter can trust
+    /// the sampled fallibility. When it isn't, endpoint sampling cannot prove a
+    /// `could_error` function infallible over the range (see the fallibility
+    /// handling in [`ColumnSpecs::unary`] and friends).
+    fn is_single_value(&self) -> bool {
+        self.values.as_single().is_some()
+    }
+
+    /// Whether the value range might include a floating-point or numeric
+    /// infinity. Infinities sort at the extremes of the order, so a `Within`
+    /// range includes one only as an endpoint.
+    fn may_be_infinite(&self) -> bool {
+        match &self.values {
+            Values::Within(min, max) => datum_is_infinite(*min) || datum_is_infinite(*max),
+            Values::All => true,
+            Values::Empty | Values::Nested(_) => false,
+        }
+    }
+
     /// This method "maps" a function across the `ResultSpec`.
     ///
     /// As mentioned above, `ResultSpec` represents an approximate set of results.
@@ -330,29 +385,46 @@ impl<'a> ResultSpec<'a> {
                 result_map(Ok(Datum::False)).union(result_map(Ok(Datum::True)))
             }
             // Otherwise, if our function is monotonic, we can try mapping the input
-            // range to an output range.
-            Values::Within(min, max) if is_monotone => {
+            // range to an output range. A range whose bounds include `NaN` is
+            // excluded: `NaN` is ordered as the maximum but is a fixed point of
+            // most monotone functions, so evaluating the endpoints does not
+            // bound the interior. Such ranges fall through to the
+            // overapproximation below.
+            Values::Within(min, max) if is_monotone && !datum_is_nan(min) && !datum_is_nan(max) => {
                 let min_result = result_map(Ok(min));
                 let max_result = result_map(Ok(max));
+                // Value, null, and error are orthogonal channels. Monotonicity
+                // lets us bound the *values* by the endpoints, but only when both
+                // endpoints actually produced a value; null and error can't be
+                // bounded from value endpoints, so we just union whatever the
+                // endpoints reported on those channels. (A function that errors
+                // on an interior value while the endpoints don't is handled by
+                // the fallibility guard in `unary`/`binary`/`variadic`, not
+                // here.)
                 match (min_result, max_result) {
-                    // If both endpoints give us a range, the result is a union of those ranges.
+                    // Both endpoints produced a value: bound the interior values
+                    // by their union, and carry any null/error from the endpoints.
                     (
                         ResultSpec {
-                            nullable: false,
-                            fallible: false,
-                            values: a_values,
+                            nullable: n1,
+                            fallible: f1,
+                            values: a_values @ Values::Within(..),
                         },
                         ResultSpec {
-                            nullable: false,
-                            fallible: false,
-                            values: b_values,
+                            nullable: n2,
+                            fallible: f2,
+                            values: b_values @ Values::Within(..),
                         },
                     ) => ResultSpec {
-                        nullable: false,
-                        fallible: false,
+                        nullable: n1 || n2,
+                        fallible: f1 || f2,
                         values: a_values.union(b_values),
                     },
-                    // If both endpoints are null, we assume the whole range maps to null.
+                    // If both endpoints map purely to null, assume the whole
+                    // range maps to null. (Both endpoints *erroring* is NOT
+                    // enough: an interior input can still produce a value, e.g.
+                    // a cast that rejects both bounds but accepts a value
+                    // between them.)
                     (
                         ResultSpec {
                             nullable: true,
@@ -365,7 +437,7 @@ impl<'a> ResultSpec<'a> {
                             values: Values::Empty,
                         },
                     ) => ResultSpec::null(),
-                    // Otherwise we can't assume anything about the output.
+                    // Otherwise we can't bound the interior values.
                     _ => ResultSpec::anything(),
                 }
             }
@@ -931,6 +1003,14 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
 
     fn unary(&self, func: &UnaryFunc, summary: Self::Summary) -> Self::Summary {
         let fallible = func.could_error() || summary.range.fallible;
+        // Endpoint sampling proves a monotone function's output value range, but
+        // it cannot prove the function never errors on an interior value of a
+        // multi-valued range: monotonicity says nothing about where errors
+        // occur (e.g. `round(_, scale)` overflows on inputs whose exponent hits
+        // a bad branch, `numeric::mz_timestamp` rejects fractional inputs). So
+        // we do not let it conclude a could-error function is infallible over
+        // such a range.
+        let input_multivalued = !summary.range.is_single_value();
         let mapped_spec = if let Some(special) = SpecialUnary::for_func(func) {
             (special.map_fn)(self, summary.range)
         } else {
@@ -947,7 +1027,13 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
 
         let col_type = func.output_type(summary.col_type);
 
-        let range = mapped_spec.intersect(ResultSpec::has_type(&col_type, fallible));
+        let mut range = mapped_spec.intersect(ResultSpec::has_type(&col_type, fallible));
+        // `intersect` only ANDs the fallible flag, so `has_type` above narrows
+        // the value and null domain but cannot surface an error that endpoint
+        // sampling missed. Force it for a could-error function over a range.
+        if fallible && input_multivalued {
+            range.fallible = true;
+        }
         ColumnSpec { col_type, range }
     }
 
@@ -958,6 +1044,10 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
         right: Self::Summary,
     ) -> Self::Summary {
         let fallible = func.could_error() || left.range.fallible || right.range.fallible;
+        // See the note in `unary`: endpoint sampling cannot rule out an interior
+        // error, so a could-error function is fallible over a multi-valued range.
+        let inputs_multivalued = !left.range.is_single_value() || !right.range.is_single_value();
+        let operand_may_be_infinite = left.range.may_be_infinite() || right.range.may_be_infinite();
 
         let special = AbstractFunc::for_func(func);
         let (left_monotonic, right_monotonic) = match &special {
@@ -991,12 +1081,28 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
 
         let col_type = func.output_type(&[left.col_type, right.col_type]);
 
-        let range = mapped_spec.intersect(ResultSpec::has_type(&col_type, fallible));
+        let mut range = mapped_spec.intersect(ResultSpec::has_type(&col_type, fallible));
+        // `intersect` only ANDs the fallible flag, so force the interior
+        // fallibility it cannot add (see the note in `unary`).
+        if fallible && inputs_multivalued {
+            range.fallible = true;
+        }
+        // Some functions (multiplication, division) are not corner-sampleable
+        // when an operand may be infinite: their indeterminate forms (`∞ * 0`,
+        // `∞ / ∞`) evaluate to a value the endpoints don't bound, and that value
+        // can be reached only from the interior (e.g. `[-∞, +∞] * 0` maps both
+        // endpoints to `NaN` while its finite interior maps to `0`, and
+        // `finite / ∞ = 0` is stepped over when both endpoints are `∞ / ∞ =
+        // NaN`). Fall back to the full value domain for them.
+        if operand_may_be_infinite && !func.is_infinity_monotone() {
+            range.values = Values::All;
+        }
         ColumnSpec { col_type, range }
     }
 
     fn variadic(&self, func: &VariadicFunc, args: Vec<Self::Summary>) -> Self::Summary {
         let fallible = func.could_error() || args.iter().any(|s| s.range.fallible);
+        let inputs_multivalued = args.iter().any(|s| !s.range.is_single_value());
         if func.is_associative() && args.len() > 2 {
             // To avoid a combinatorial explosion, evaluate large variadic calls as a series of
             // smaller ones, since associativity guarantees we'll get compatible results.
@@ -1041,7 +1147,12 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
         let col_types = args.into_iter().map(|spec| spec.col_type).collect();
         let col_type = func.output_type(col_types);
 
-        let range = mapped_spec.intersect(ResultSpec::has_type(&col_type, fallible));
+        let mut range = mapped_spec.intersect(ResultSpec::has_type(&col_type, fallible));
+        // `intersect` only ANDs the fallible flag, so force the interior
+        // fallibility it cannot add (see the note in `unary`).
+        if fallible && inputs_multivalued {
+            range.fallible = true;
+        }
 
         ColumnSpec { col_type, range }
     }
@@ -1056,7 +1167,11 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
             .range
             .flat_map(true, |datum| match datum {
                 Ok(Datum::True) => then.range.clone(),
-                Ok(Datum::False) => els.range.clone(),
+                // A false OR null condition takes the `els` branch, matching
+                // `MirScalarExpr::eval` (`Datum::False | Datum::Null => els`).
+                // Mapping null to `fails()` here would drop `els` from the value
+                // channel and let pushdown wrongly rule out the else result.
+                Ok(Datum::False) | Ok(Datum::Null) => els.range.clone(),
                 _ => ResultSpec::fails(),
             })
             .intersect(ResultSpec::has_type(&col_type, true));
@@ -1270,16 +1385,22 @@ mod tests {
         ReprScalarType::Bool,
         ReprScalarType::Jsonb,
         NUM_TYPE,
+        ReprScalarType::Int32,
+        ReprScalarType::Float32,
+        ReprScalarType::Float64,
         ReprScalarType::Date,
         ReprScalarType::Timestamp,
         ReprScalarType::MzTimestamp,
+        ReprScalarType::Interval,
         ReprScalarType::String,
     ];
 
     const INTERESTING_UNARY_FUNCS: &[UnaryFunc] = {
         &[
             UnaryFunc::CastNumericToMzTimestamp(CastNumericToMzTimestamp),
+            UnaryFunc::CastTimestampToMzTimestamp(CastTimestampToMzTimestamp),
             UnaryFunc::NegNumeric(NegNumeric),
+            UnaryFunc::NegFloat64(NegFloat64),
             UnaryFunc::CastJsonbToNumeric(CastJsonbToNumeric(None)),
             UnaryFunc::CastJsonbToBool(CastJsonbToBool),
             UnaryFunc::CastJsonbToString(CastJsonbToString),
@@ -1297,6 +1418,8 @@ mod tests {
         use UnaryFunc::*;
         match func {
             CastNumericToMzTimestamp(_) | NegNumeric(_) => arg.scalar_type == NUM_TYPE,
+            NegFloat64(_) => arg.scalar_type == ReprScalarType::Float64,
+            CastTimestampToMzTimestamp(_) => arg.scalar_type == ReprScalarType::Timestamp,
             CastJsonbToNumeric(_) | CastJsonbToBool(_) | CastJsonbToString(_) => {
                 arg.scalar_type == ReprScalarType::Jsonb
             }
@@ -1318,6 +1441,13 @@ mod tests {
             SubNumeric.into(),
             MulNumeric.into(),
             DivNumeric.into(),
+            AddFloat64.into(),
+            SubFloat64.into(),
+            MulFloat64.into(),
+            DivFloat64.into(),
+            MulFloat32.into(),
+            DivFloat32.into(),
+            RoundNumericBinary.into(),
             Eq.into(),
             Lt.into(),
             Gt.into(),
@@ -1338,6 +1468,17 @@ mod tests {
             }
             AddNumeric(_) | SubNumeric(_) | MulNumeric(_) | DivNumeric(_) => {
                 arg0.scalar_type == NUM_TYPE && arg1.scalar_type == NUM_TYPE
+            }
+            AddFloat64(_) | SubFloat64(_) | MulFloat64(_) | DivFloat64(_) => {
+                arg0.scalar_type == ReprScalarType::Float64
+                    && arg1.scalar_type == ReprScalarType::Float64
+            }
+            MulFloat32(_) | DivFloat32(_) => {
+                arg0.scalar_type == ReprScalarType::Float32
+                    && arg1.scalar_type == ReprScalarType::Float32
+            }
+            RoundNumeric(_) => {
+                arg0.scalar_type == NUM_TYPE && arg1.scalar_type == ReprScalarType::Int32
             }
             Eq(_) | Lt(_) | Gt(_) | Lte(_) | Gte(_) => arg0.scalar_type == arg1.scalar_type,
             DateTruncTimestamp(_) => {
@@ -1487,7 +1628,7 @@ mod tests {
                     .boxed();
                 let variadic_gen = (
                     select(INTERESTING_VARIADIC_FUNCS),
-                    prop::collection::vec(self_gen, 1..4),
+                    prop::collection::vec(self_gen.clone(), 1..4),
                 )
                     .prop_filter_map("variadic func", |(func, exprs)| {
                         let (exprs_in, type_in): (_, Vec<_>) = exprs.into_iter().unzip();
@@ -1502,11 +1643,42 @@ mod tests {
                         Some((expr_out, type_out))
                     })
                     .boxed();
+                // Generate `If` nodes without the heavy rejection that filtering
+                // three independent subexprs for a bool condition and matching
+                // branch types would incur. The condition is a boolean literal
+                // (so it can be `True`, `False`, or `Null` — exercising `cond`'s
+                // value channel, including the null-takes-`els` path), and `els`
+                // is a literal of `then`'s type so the branches always unify.
+                let if_gen = {
+                    let bool_type = ReprScalarType::Bool.nullable(true);
+                    let cond_gen = gen_datums_for_type(&bool_type).prop_map(move |datum| {
+                        MirScalarExpr::Literal(Ok(Row::pack_slice(&[datum])), bool_type.clone())
+                    });
+                    (cond_gen, self_gen.clone())
+                        .prop_flat_map(|(cond_expr, (then_expr, then_type))| {
+                            let out_type = then_type.clone();
+                            gen_datums_for_type(&then_type).prop_map(move |datum| {
+                                let els_expr = MirScalarExpr::Literal(
+                                    Ok(Row::pack_slice(&[datum])),
+                                    out_type.clone(),
+                                );
+                                let expr_out = MirScalarExpr::If {
+                                    cond: Box::new(cond_expr.clone()),
+                                    then: Box::new(then_expr.clone()),
+                                    els: Box::new(els_expr),
+                                };
+                                (expr_out, out_type.clone())
+                            })
+                        })
+                        .boxed()
+                };
 
                 unary_gen
                     .prop_union(binary_gen)
                     .boxed()
                     .prop_union(variadic_gen)
+                    .boxed()
+                    .prop_union(if_gen)
             })
             .boxed()
     }
@@ -1588,6 +1760,344 @@ mod tests {
         proptest!(|(data in gen_expr_data())| {
             check(data)?;
         });
+    }
+
+    /// A column whose spec is a genuine `value_between(lo, hi)` range with
+    /// `lo < hi`, paired with a concrete row value `mid` drawn from strictly
+    /// inside `[lo, hi]`. This is the shape persist filter pushdown actually
+    /// feeds the interpreter: min/max stats become a `Values::Within` range,
+    /// and the interpreter narrows it through each function (relying on
+    /// monotonicity) without ever seeing the interior values. `gen_column`
+    /// only ever produces single-value or `anything` specs, so it never
+    /// exercises the range-narrowing path.
+    fn gen_range_column()
+    -> impl Strategy<Value = (ReprColumnType, Datum<'static>, ResultSpec<'static>)> {
+        select(SCALAR_TYPES)
+            .prop_map(|t| t.nullable(false))
+            .prop_filter("need at least two distinct values for a range", |c| {
+                let mut datums: Vec<Datum> = SqlScalarType::from_repr(&c.scalar_type)
+                    .interesting_datums()
+                    .filter(|d| !d.is_null())
+                    .collect();
+                datums.sort();
+                datums.dedup();
+                datums.len() >= 2
+            })
+            .prop_flat_map(|col| {
+                let mut datums: Vec<Datum<'static>> = SqlScalarType::from_repr(&col.scalar_type)
+                    .interesting_datums()
+                    .filter(|d| !d.is_null())
+                    .collect();
+                datums.sort();
+                datums.dedup();
+                (
+                    Just(col),
+                    Just(datums),
+                    any::<Index>(),
+                    any::<Index>(),
+                    any::<Index>(),
+                )
+                    .prop_map(|(col, datums, a, b, c)| {
+                        let n = datums.len();
+                        let mut idxs = [a.index(n), b.index(n), c.index(n)];
+                        idxs.sort();
+                        let lo = datums[idxs[0]];
+                        let mid = datums[idxs[1]];
+                        let hi = datums[idxs[2]];
+                        let spec = ResultSpec::value_between(lo, hi);
+                        (col, mid, spec)
+                    })
+            })
+    }
+
+    fn gen_range_expr_data() -> impl Strategy<Value = ExpressionData> {
+        let columns = prop::collection::vec(gen_range_column(), 1..10);
+        columns.prop_flat_map(|data| {
+            let (columns, datums, specs): (Vec<_>, Vec<_>, Vec<_>) = data.into_iter().multiunzip();
+            let relation = ReprRelationType::new(columns);
+            let row = Row::pack_slice(&datums);
+            gen_expr_for_relation(&relation).prop_map(move |(expr, _)| ExpressionData {
+                relation_type: relation.clone(),
+                specs: specs.clone(),
+                rows: vec![row.clone()],
+                expr,
+            })
+        })
+    }
+
+    /// Regression test for database-issues#9656 (PER-50).
+    ///
+    /// Like [`test_equivalence`], but the column specs are genuine
+    /// `value_between(lo, hi)` ranges rather than single values. This is the
+    /// input shape persist filter pushdown produces from min/max stats, and it
+    /// is the one that drives the interpreter's monotonicity-based range
+    /// narrowing. If a function narrows a range to a spec that does not contain
+    /// the value the concrete evaluator produces for an interior input, the
+    /// interpreter can wrongly rule out a matching row and pushdown discards a
+    /// part it should have kept, triggering the audit panic.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+    fn test_equivalence_ranges() {
+        fn check(data: ExpressionData) -> Result<(), TestCaseError> {
+            let ExpressionData {
+                relation_type,
+                specs,
+                rows,
+                expr,
+            } = data;
+
+            let arena = RowArena::new();
+            let mut interpreter = ColumnSpecs::new(&relation_type, &arena);
+            for (id, spec) in specs.into_iter().enumerate() {
+                interpreter.push_column(id, spec);
+            }
+
+            let spec = interpreter.expr(&expr);
+
+            for row in &rows {
+                let datums: Vec<_> = row.iter().collect();
+                let eval_result = expr.eval(&datums, &arena);
+                match eval_result {
+                    Ok(value) => {
+                        prop_assert!(
+                            spec.range.may_contain(value),
+                            "interpreter ruled out a value the evaluator produced \
+                             for an interior input: expr={expr:?} row={row:?} \
+                             value={value:?} spec={:?}",
+                            spec.range,
+                        );
+                    }
+                    Err(_) => {
+                        prop_assert!(
+                            spec.range.may_fail(),
+                            "interpreter ruled out an error the evaluator produced \
+                             for an interior input: expr={expr:?} row={row:?}",
+                        );
+                    }
+                }
+            }
+
+            Ok(())
+        }
+
+        // The expression generator rejects many function/type combinations
+        // (see the `prop_filter_map`s in `gen_expr_for_relation`), so the
+        // per-run local-reject budget has to be raised well above proptest's
+        // default to let enough cases through.
+        let config = ProptestConfig {
+            cases: 2048,
+            max_local_rejects: 1 << 20,
+            ..ProptestConfig::default()
+        };
+        proptest!(config, |(data in gen_range_expr_data())| {
+            check(data)?;
+        });
+    }
+
+    /// The abstract-domain lattice laws `ColumnSpecs` relies on: `union` must
+    /// over-approximate (contain everything either operand contains), and
+    /// `intersect` must contain every value BOTH operands contain. An
+    /// intersect-law violation is a false negative — a value the interpreter
+    /// silently drops. The interpreter forms straddling `Within` ranges
+    /// internally (e.g. `Values::union` of differently-typed endpoints in `cond`
+    /// branches or `eq`), so this is not purely hypothetical. See
+    /// database-issues#9656.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+    fn test_result_spec_lattice_laws() {
+        // A recipe for a `ResultSpec`, carrying owned `PropDatum`s so the spec
+        // (which borrows `Datum`s) can be materialized inside the test.
+        #[derive(Debug, Clone)]
+        enum Recipe {
+            Nothing,
+            Null,
+            Fails,
+            Anything,
+            ValueAll,
+            Value(PropDatum),
+            Between(PropDatum, PropDatum),
+            Map(Vec<(PropDatum, Recipe)>),
+            Union(Box<Recipe>, Box<Recipe>),
+        }
+
+        fn materialize(recipe: &Recipe) -> ResultSpec<'_> {
+            match recipe {
+                Recipe::Nothing => ResultSpec::nothing(),
+                Recipe::Null => ResultSpec::null(),
+                Recipe::Fails => ResultSpec::fails(),
+                Recipe::Anything => ResultSpec::anything(),
+                Recipe::ValueAll => ResultSpec::value_all(),
+                Recipe::Value(pd) => ResultSpec::value(pd.into()),
+                Recipe::Between(a, b) => {
+                    let (a, b): (Datum, Datum) = (a.into(), b.into());
+                    if a.is_null() || b.is_null() {
+                        ResultSpec::nothing()
+                    } else if a <= b {
+                        ResultSpec::value_between(a, b)
+                    } else {
+                        ResultSpec::value_between(b, a)
+                    }
+                }
+                Recipe::Map(entries) => {
+                    let mut map = BTreeMap::new();
+                    for (key, val) in entries {
+                        let key: Datum = key.into();
+                        if !key.is_null() {
+                            map.insert(key, materialize(val));
+                        }
+                    }
+                    ResultSpec::map_spec(map)
+                }
+                Recipe::Union(a, b) => materialize(a).union(materialize(b)),
+            }
+        }
+
+        fn recipe_strategy() -> impl Strategy<Value = Recipe> {
+            let leaf = proptest::strategy::Union::new(vec![
+                Just(Recipe::Nothing).boxed(),
+                Just(Recipe::Null).boxed(),
+                Just(Recipe::Fails).boxed(),
+                Just(Recipe::Anything).boxed(),
+                Just(Recipe::ValueAll).boxed(),
+                mz_repr::arb_datum(false).prop_map(Recipe::Value).boxed(),
+                (mz_repr::arb_datum(false), mz_repr::arb_datum(false))
+                    .prop_map(|(a, b)| Recipe::Between(a, b))
+                    .boxed(),
+            ]);
+            leaf.prop_recursive(3, 24, 4, |inner| {
+                proptest::strategy::Union::new(vec![
+                    prop::collection::vec((mz_repr::arb_datum(false), inner.clone()), 0..3)
+                        .prop_map(Recipe::Map)
+                        .boxed(),
+                    (inner.clone(), inner.clone())
+                        .prop_map(|(a, b)| Recipe::Union(Box::new(a), Box::new(b)))
+                        .boxed(),
+                ])
+            })
+        }
+
+        fn check(a: Recipe, b: Recipe, v: PropDatum) -> Result<(), TestCaseError> {
+            let a_spec = materialize(&a);
+            let b_spec = materialize(&b);
+            let v: Datum = (&v).into();
+
+            let in_a = a_spec.may_contain(v);
+            let in_b = b_spec.may_contain(v);
+
+            if in_a || in_b {
+                prop_assert!(
+                    a_spec.clone().union(b_spec.clone()).may_contain(v),
+                    "union dropped a value: a={a:?} b={b:?} v={v:?}",
+                );
+            }
+            if in_a && in_b {
+                prop_assert!(
+                    a_spec.intersect(b_spec).may_contain(v),
+                    "intersect dropped a common value: a={a:?} b={b:?} v={v:?}",
+                );
+            }
+            Ok(())
+        }
+
+        proptest!(
+            ProptestConfig::with_cases(4096),
+            |(a in recipe_strategy(), b in recipe_strategy(), v in mz_repr::arb_datum(true))| {
+                check(a, b, v)?;
+            }
+        );
+    }
+
+    /// Deterministic regression test for database-issues#9656 (PER-50), the
+    /// minimal case [`test_equivalence_ranges`] shrinks to.
+    ///
+    /// A numeric column whose stats range spans `[-Infinity, NaN]` (NaN is the
+    /// maximum of the numeric Datum order) feeds `-column`. `NegNumeric` is
+    /// declared monotone, so the interpreter would narrow the output to
+    /// `[neg(-Infinity), neg(NaN)] = [Infinity, NaN]` and wrongly rule out the
+    /// value `1` that the evaluator produces for the interior input `-1`. That
+    /// false negative is exactly what makes persist filter pushdown discard a
+    /// part it should keep, tripping the audit panic.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+    fn test_neg_numeric_nan_range() {
+        use mz_repr::adt::numeric::Numeric;
+
+        let neg = MirScalarExpr::CallUnary {
+            func: UnaryFunc::NegNumeric(NegNumeric),
+            expr: Box::new(MirScalarExpr::column(0)),
+        };
+
+        let relation = ReprRelationType::new(vec![ReprScalarType::Numeric.nullable(false)]);
+        let arena = RowArena::new();
+        let mut interpreter = ColumnSpecs::new(&relation, &arena);
+        interpreter.push_column(
+            0,
+            ResultSpec::value_between(
+                Datum::from(Numeric::from(f64::NEG_INFINITY)),
+                Datum::from(Numeric::from(f64::NAN)),
+            ),
+        );
+
+        let spec = interpreter.expr(&neg);
+
+        // `-1` is an interior value of the input range, and `-(-1) = 1`.
+        let actual = neg
+            .eval(&[Datum::from(Numeric::from(-1.0f64))], &arena)
+            .expect("eval succeeds");
+        assert!(
+            spec.range.may_contain(actual),
+            "interpreter must not rule out {actual:?}, which the evaluator \
+             produces for an interior input; got spec {:?}",
+            spec.range,
+        );
+    }
+
+    /// Deterministic regression test for database-issues#9656 (PER-50), the
+    /// fallibility variant [`test_equivalence_ranges`] also surfaces.
+    ///
+    /// `cast_numeric_to_mz_timestamp` is declared monotone but errors on
+    /// fractional inputs, which are dense in the interior of any range. The
+    /// range `[0, 2]` has integer endpoints that both cast cleanly, so the
+    /// interpreter's endpoint sampling never observes an error. It must instead
+    /// surface the function's own `could_error`, otherwise persist filter
+    /// pushdown discards a part whose interior rows (e.g. `1.5`) produce error
+    /// rows.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+    fn test_fallible_monotone_interior_error() {
+        use mz_repr::adt::numeric::Numeric;
+
+        let cast = MirScalarExpr::CallUnary {
+            func: UnaryFunc::CastNumericToMzTimestamp(CastNumericToMzTimestamp),
+            expr: Box::new(MirScalarExpr::column(0)),
+        };
+
+        let relation = ReprRelationType::new(vec![ReprScalarType::Numeric.nullable(false)]);
+        let arena = RowArena::new();
+        let mut interpreter = ColumnSpecs::new(&relation, &arena);
+        interpreter.push_column(
+            0,
+            ResultSpec::value_between(
+                Datum::from(Numeric::from(0.0f64)),
+                Datum::from(Numeric::from(2.0f64)),
+            ),
+        );
+
+        let spec = interpreter.expr(&cast);
+
+        // `1.5` is an interior value of `[0, 2]`, and casting a fractional
+        // numeric to mz_timestamp errors.
+        let interior = Datum::from(Numeric::from(1.5f64));
+        assert!(
+            cast.eval(&[interior], &arena).is_err(),
+            "precondition: a fractional numeric fails to cast to mz_timestamp",
+        );
+        assert!(
+            spec.range.may_fail(),
+            "interpreter must surface that a monotone-but-fallible function may \
+             error on an interior value it never sampled; got spec {:?}",
+            spec.range,
+        );
     }
 
     /// Regression test for database-issues#9656.
@@ -1757,7 +2267,17 @@ mod tests {
 
     #[mz_ore::test]
     fn test_eval_range() {
-        // Example inspired by the tumbling windows temporal filter in the docs
+        // Example inspired by the tumbling windows temporal filter in the docs.
+        //
+        // NOTE: `may_fail()` is `true` in both cases below. `DivInt64`,
+        // `MulInt64`, and `CastInt64ToMzTimestamp` can all error, and the
+        // interpreter no longer infers infallibility from endpoint sampling for
+        // an erroring function over a multi-valued range (it cannot prove the
+        // function doesn't error on an interior value). For this data none of
+        // them actually errors, so this is a conservative over-approximation
+        // that keeps the part rather than pruning it. The value channel is still
+        // narrowed precisely (`may_contain` below is exact), so a follow-up that
+        // makes the fallibility flag argument-aware could recover pruning here.
         let period_ms = MirScalarExpr::literal_ok(Datum::Int64(10), ReprScalarType::Int64);
         let expr = MirScalarExpr::CallBinary {
             func: Gte.into(),
@@ -1796,7 +2316,7 @@ mod tests {
             assert!(range_out.may_contain(Datum::False));
             assert!(!range_out.may_contain(Datum::True));
             assert!(!range_out.may_contain(Datum::Null));
-            assert!(!range_out.may_fail());
+            assert!(range_out.may_fail());
         }
 
         {
@@ -1816,7 +2336,7 @@ mod tests {
             assert!(range_out.may_contain(Datum::False));
             assert!(range_out.may_contain(Datum::True));
             assert!(!range_out.may_contain(Datum::Null));
-            assert!(!range_out.may_fail());
+            assert!(range_out.may_fail());
         }
     }
 

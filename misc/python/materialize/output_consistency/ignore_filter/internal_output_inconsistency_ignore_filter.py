@@ -156,13 +156,13 @@ class PostExecutionInternalOutputInconsistencyIgnoreFilter(
                 [query_template.where_expression], contains_aggregation
             )
         ):
-            return YesIgnore("database-issues#4972")
+            return YesIgnore("STG-54")
 
         if dfr_succeeds_but_ctf_fails or dfr_fails_but_ctf_succeeds:
             if query_template.has_where_condition():
                 # An evaluation strategy may touch further rows than the selected subset and thereby run into evaluation
                 # errors (while the other uses another order).
-                return YesIgnore("database-issues#4972")
+                return YesIgnore("STG-54")
 
             if (
                 query_template.has_where_condition()
@@ -171,10 +171,10 @@ class PostExecutionInternalOutputInconsistencyIgnoreFilter(
                 # Where expression, or row filter, or join constraint are set. They might be evaluated in a different
                 # order. Furthermore, constant folding may detect that the join constraint cannot be satisfied without
                 # evaluating it (which will fail).
-                return YesIgnore("database-issues#4972: evaluation order")
+                return YesIgnore("STG-54: evaluation order")
 
         if self._uses_eager_evaluation(query_template):
-            return YesIgnore("database-issues#4972")
+            return YesIgnore("STG-54")
 
         if dfr_succeeds_but_ctf_fails:
             assert isinstance(ctf_outcome, QueryFailure)
@@ -218,20 +218,20 @@ class PostExecutionInternalOutputInconsistencyIgnoreFilter(
         if self._uses_shortcut_optimization(
             query_template.select_expressions, contains_aggregation
         ):
-            return YesIgnore("database-issues#4972: evaluation order")
+            return YesIgnore("STG-54: evaluation order")
 
         if self._uses_eager_evaluation(query_template):
-            return YesIgnore("database-issues#4972: evaluation order")
+            return YesIgnore("STG-54: evaluation order")
 
         if query_template.has_where_condition() or query_template.uses_join():
             # The error message may depend on the evaluation order of the where expression or join constraint.
-            return YesIgnore("database-issues#4972: evaluation order")
+            return YesIgnore("STG-54: evaluation order")
 
         if (
             ExpressionCharacteristics.INFINITY in all_characteristics
             and ExpressionCharacteristics.MAX_VALUE in all_characteristics
         ):
-            return YesIgnore("database-issues#4972: evaluation order")
+            return YesIgnore("STG-54: evaluation order")
 
         if query_template.matches_any_expression(
             is_table_function,
@@ -248,7 +248,7 @@ class PostExecutionInternalOutputInconsistencyIgnoreFilter(
             ),
             True,
         ):
-            return YesIgnore("database-issues#4972: evaluation order")
+            return YesIgnore("STG-54: evaluation order")
 
         return NoIgnore()
 

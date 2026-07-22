@@ -17,7 +17,6 @@ use std::time::Instant;
 use differential_dataflow::lattice::antichain_join;
 use differential_dataflow::operators::arrange::{Arranged, ShutdownButton, TraceAgent};
 use differential_dataflow::trace::TraceReader;
-use differential_dataflow::trace::implementations::WithLayout;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use mz_repr::{Diff, GlobalId, Timestamp};
 use timely::PartialOrder;
@@ -159,23 +158,15 @@ where
     }
 }
 
-impl<Tr: TraceReader> WithLayout for PaddedTrace<Tr> {
-    type Layout = Tr::Layout;
-}
-
 impl<Tr> TraceReader for PaddedTrace<Tr>
 where
     Tr: TraceReader,
 {
+    type Time = Tr::Time;
     type Batch = Tr::Batch;
-    type Storage = Tr::Storage;
-    type Cursor = Tr::Cursor;
 
-    fn cursor_through(
-        &mut self,
-        upper: AntichainRef<Self::Time>,
-    ) -> Option<(Self::Cursor, Self::Storage)> {
-        self.trace.cursor_through(upper)
+    fn batches_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<Vec<Self::Batch>> {
+        self.trace.batches_through(upper)
     }
 
     fn set_logical_compaction(&mut self, frontier: AntichainRef<Self::Time>) {

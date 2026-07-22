@@ -526,3 +526,67 @@ $ s3-verify-data bucket=copytos3 key=parquet_test/10 sort-rows=true
 
 > SELECT COUNT(*) FROM (SELECT * FROM t_wide_from EXCEPT SELECT * FROM t_wide) AS diff
 0
+
+# Regression: an array column must survive a parquet round-trip. COPY TO
+# parquet encodes an array as an Arrow struct {items, dimensions}, but the
+# COPY FROM parquet reader has no decoder for SqlScalarType::Array, so the
+# COPY INTO below currently fails with "parquet error".
+> CREATE TABLE t_arr_src (arr INT[])
+> INSERT INTO t_arr_src VALUES (ARRAY[1, 2, 3])
+
+> COPY t_arr_src TO 's3://copytos3/roundtrip/arr_parquet'
+  WITH (AWS CONNECTION = aws_conn, FORMAT = 'parquet')
+
+> CREATE TABLE t_arr_from_parquet (arr INT[])
+
+> COPY INTO t_arr_from_parquet FROM 's3://copytos3/roundtrip/arr_parquet' (FORMAT PARQUET, AWS CONNECTION = aws_conn)
+
+> SELECT arr FROM t_arr_from_parquet
+{1,2,3}
+
+# Regression (SS-341): oid, time (microsecond resolution), timestamptz, char,
+# varchar, and mz_timestamp must survive a parquet round-trip. COPY TO parquet
+# writes all six, but the COPY FROM parquet reader previously had no decode arm
+# for them, so COPY INTO failed with "parquet error: <column>". Verification is
+# a symmetric EXCEPT (as in the wide-table test above) so it does not depend on
+# display formatting like char padding or the timestamptz text representation.
+> CREATE TABLE t_scalars_src (
+    id INT,
+    oid_col OID,
+    time_col TIME,
+    timestamptz_col TIMESTAMPTZ,
+    char_col CHAR(5),
+    varchar_col VARCHAR(20),
+    mz_ts_col MZ_TIMESTAMP
+  )
+
+> INSERT INTO t_scalars_src VALUES
+  (1, 42, '12:34:56.789012', '2010-10-10 10:10:10.123456+02', 'abc', 'hello world', 123456),
+  (2, 4294967295, '00:00:00', '1970-01-01 00:00:00+00', 'z', '', 999999999999),
+  (3, NULL, NULL, NULL, NULL, NULL, NULL)
+
+> COPY t_scalars_src TO 's3://copytos3/roundtrip/scalars_parquet'
+  WITH (AWS CONNECTION = aws_conn, FORMAT = 'parquet')
+
+> CREATE TABLE t_scalars_from_parquet (
+    id INT,
+    oid_col OID,
+    time_col TIME,
+    timestamptz_col TIMESTAMPTZ,
+    char_col CHAR(5),
+    varchar_col VARCHAR(20),
+    mz_ts_col MZ_TIMESTAMP
+  )
+
+> COPY INTO t_scalars_from_parquet FROM 's3://copytos3/roundtrip/scalars_parquet' (FORMAT PARQUET, AWS CONNECTION = aws_conn)
+
+> SELECT COUNT(*) FROM t_scalars_from_parquet
+3
+
+# Exact round-trip: symmetric EXCEPT must be empty in both directions, including
+# the all-NULL row (EXCEPT treats NULLs as equal).
+> SELECT COUNT(*) FROM (SELECT * FROM t_scalars_src EXCEPT SELECT * FROM t_scalars_from_parquet) AS diff
+0
+
+> SELECT COUNT(*) FROM (SELECT * FROM t_scalars_from_parquet EXCEPT SELECT * FROM t_scalars_src) AS diff
+0

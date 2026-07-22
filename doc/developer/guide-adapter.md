@@ -224,6 +224,17 @@ If you need conflict detection, evaluate the precondition atomically with the
 commit, a real compare-and-append against the durable store. A check that merely
 precedes the write on the loop is not that, even when it reads the right state.
 
+### Catalog mutations must bump the transient revision or stay invisible
+
+Sessions cache catalog snapshots and reuse them while
+`Catalog::transient_revision` is unchanged (see
+`doc/developer/design/20260709_session_catalog_snapshot_cache.md`). Only
+`Catalog::transact` bumps the revision. So when adding a new way to mutate
+the Coordinator's in-memory catalog, either route it through `transact` or
+keep the change invisible to session-visible catalog reads (name resolution,
+planning). Otherwise sessions serve stale catalogs where today they would see
+the change.
+
 ## Rejected Optimizations
 
 This section records specific optimizations that have been attempted and found

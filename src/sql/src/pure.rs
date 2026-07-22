@@ -2577,8 +2577,27 @@ async fn purify_glue_connection_avro(
     // Pull `SCHEMA NAME` out of the option bag. Required. Use the shared
     // extractor (rather than a hand-rolled match) so non-string values get a
     // proper "invalid value" error instead of being silently dropped.
-    let crate::plan::statement::ddl::GlueAvroOptionExtracted { schema_name, .. } =
-        with_options.to_vec().try_into()?;
+    let crate::plan::statement::ddl::GlueAvroOptionExtracted {
+        schema_name,
+        key_schema_name,
+        value_schema_name,
+        key_compatibility_level,
+        value_compatibility_level,
+        seen: _,
+    } = with_options.to_vec().try_into()?;
+    // The per-side and compatibility options are sink-only. A source reads a
+    // single writer schema, so reject them here rather than silently ignoring.
+    if key_schema_name.is_some()
+        || value_schema_name.is_some()
+        || key_compatibility_level.is_some()
+        || value_compatibility_level.is_some()
+    {
+        sql_bail!(
+            "KEY SCHEMA NAME, VALUE SCHEMA NAME, KEY COMPATIBILITY LEVEL, and VALUE \
+             COMPATIBILITY LEVEL are not supported for AWS Glue Schema Registry sources, \
+             use SCHEMA NAME instead"
+        );
+    }
     let schema_name = schema_name.ok_or(GluePurificationError::MissingSchemaName)?;
 
     if seed.is_some() {

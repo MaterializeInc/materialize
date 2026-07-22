@@ -1213,6 +1213,17 @@ impl CatalogState {
                             // which temporary items are a bit weird. So, here
                             // we are ...
                             catalog_item.set_conn_id(conn_id);
+                            // Deserializing replans the SQL, and the planner's
+                            // canonical printing can differ from `create_sql`,
+                            // for example when a feature flag changed how
+                            // references are printed since `create_sql` was
+                            // produced. Keep the exact input. A later op in the
+                            // same transaction retracts this item by
+                            // re-serializing it, and that retraction must
+                            // cancel byte-for-byte against this addition during
+                            // consolidation, else two retractions of the same
+                            // id survive and applying them panics.
+                            catalog_item.set_create_sql(create_sql);
                             retraction.item = catalog_item;
                         }
 
@@ -1242,6 +1253,9 @@ impl CatalogState {
                         // in here, but it's but one of the ways in which
                         // temporary items are a bit weird. So, here we are ...
                         catalog_item.set_conn_id(conn_id);
+                        // Keep the exact input create_sql, not the replanned
+                        // printing. See the comment on the reparse above.
+                        catalog_item.set_create_sql(create_sql);
 
                         CatalogEntry {
                             item: catalog_item,
@@ -1464,22 +1478,6 @@ impl CatalogState {
         }
     }
 
-    /// Generate a list of `BuiltinTableUpdate`s that correspond to a list of updates made to the
-    /// durable catalog.
-    #[instrument]
-    pub(crate) fn generate_builtin_table_updates(
-        &self,
-        updates: Vec<StateUpdate>,
-    ) -> Vec<BuiltinTableUpdate> {
-        let mut builtin_table_updates = Vec::new();
-        for StateUpdate { kind, ts: _, diff } in updates {
-            let builtin_table_update = self.generate_builtin_table_update(kind, diff);
-            let builtin_table_update = self.resolve_builtin_table_updates(builtin_table_update);
-            builtin_table_updates.extend(builtin_table_update);
-        }
-        builtin_table_updates
-    }
-
     /// Generate a list of `BuiltinTableUpdate`s that correspond to a single update made to the
     /// durable catalog.
     #[instrument(level = "debug")]
@@ -1536,12 +1534,10 @@ impl CatalogState {
             StateUpdateKind::SourceReferences(source_references) => {
                 self.pack_source_references_update(&source_references, diff)
             }
-            StateUpdateKind::AuditLog(audit_log) => {
-                vec![
-                    self.pack_audit_log_update(&audit_log.event, diff)
-                        .expect("could not pack audit log update"),
-                ]
-            }
+            // mz_audit_events is a MaterializedView backed by
+            // mz_internal.mz_catalog_raw, so audit log rows do not produce
+            // builtin table updates here.
+            StateUpdateKind::AuditLog(_) => Vec::new(),
             StateUpdateKind::Database(_)
             | StateUpdateKind::Schema(_)
             | StateUpdateKind::NetworkPolicy(_)
@@ -2542,53 +2538,40 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     let temp_item_retractions = sort_temp_item_updates(temp_item_retractions);
     let temp_item_additions = sort_temp_item_updates(temp_item_additions);
 
-    /// Merge sorted temporary and non-temp items.
+    /// Concatenate sorted persistent and temporary item updates, persistent
+    /// first.
+    ///
+    /// Both inputs are already in dependency (type-group) order internally. A
+    /// non-temporary item can never depend on a temporary one (enforced at
+    /// creation, see `ErrorKind::InvalidTemporaryDependency`), so emitting every
+    /// persistent item before every temporary item keeps dependencies ahead of
+    /// dependents for additions. (Retractions reuse this via a reversal by the
+    /// caller, which puts temporary items first. Also, a retraction only drops
+    /// the item and does not re-resolve `create_sql`.)
+    ///
+    /// NOTE: Do not interleave the two by raw id. The inputs are ordered by
+    /// dependency group, which is not id order, so an id merge can place a
+    /// temporary dependent ahead of the persistent item it references and panic
+    /// apply with an unresolvable id.
     fn merge_item_updates(
-        mut item_updates: VecDeque<(mz_catalog::durable::Item, Timestamp, StateDiff)>,
-        mut temp_item_updates: VecDeque<(TemporaryItem, Timestamp, StateDiff)>,
+        item_updates: VecDeque<(mz_catalog::durable::Item, Timestamp, StateDiff)>,
+        temp_item_updates: VecDeque<(TemporaryItem, Timestamp, StateDiff)>,
     ) -> Vec<StateUpdate> {
         let mut state_updates = Vec::with_capacity(item_updates.len() + temp_item_updates.len());
-
-        while let (Some((item, _, _)), Some((temp_item, _, _))) =
-            (item_updates.front(), temp_item_updates.front())
-        {
-            if item.id < temp_item.id {
-                let (item, ts, diff) = item_updates.pop_front().expect("non-empty");
-                state_updates.push(StateUpdate {
-                    kind: StateUpdateKind::Item(item),
-                    ts,
-                    diff,
-                });
-            } else if item.id > temp_item.id {
-                let (temp_item, ts, diff) = temp_item_updates.pop_front().expect("non-empty");
-                state_updates.push(StateUpdate {
-                    kind: StateUpdateKind::TemporaryItem(temp_item),
-                    ts,
-                    diff,
-                });
-            } else {
-                unreachable!(
-                    "two items cannot have the same ID: item={item:?}, temp_item={temp_item:?}"
-                );
-            }
-        }
-
-        while let Some((item, ts, diff)) = item_updates.pop_front() {
+        for (item, ts, diff) in item_updates {
             state_updates.push(StateUpdate {
                 kind: StateUpdateKind::Item(item),
                 ts,
                 diff,
             });
         }
-
-        while let Some((temp_item, ts, diff)) = temp_item_updates.pop_front() {
+        for (temp_item, ts, diff) in temp_item_updates {
             state_updates.push(StateUpdate {
                 kind: StateUpdateKind::TemporaryItem(temp_item),
                 ts,
                 diff,
             });
         }
-
         state_updates
     }
     let item_retractions = merge_item_updates(item_retractions, temp_item_retractions);

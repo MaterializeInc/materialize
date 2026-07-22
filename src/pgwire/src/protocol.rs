@@ -20,7 +20,7 @@ use byteorder::{ByteOrder, NetworkEndian};
 use csv_core::ReadRecordResult;
 use futures::future::{BoxFuture, FutureExt, pending};
 use itertools::Itertools;
-use mz_adapter::client::RecordFirstRowStream;
+use mz_adapter::client::{RecordFirstRowStream, redact_sql_for_logging};
 use mz_adapter::session::{
     EndTransactionAction, InProgressRows, LifecycleTimestamps, PortalRefMut, PortalState, Session,
     SessionConfig, TransactionStatus,
@@ -67,7 +67,7 @@ use tokio::select;
 use tokio::time::{self};
 use tokio_metrics::TaskMetrics;
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tracing::{Instrument, debug, debug_span, warn};
+use tracing::{Instrument, debug, debug_span, info, warn};
 use uuid::Uuid;
 
 use crate::codec::{
@@ -540,6 +540,10 @@ where
     };
 
     let system_vars = adapter_client.get_system_vars().await;
+    // Startup parameters that were successfully applied. They additionally
+    // become the session's default values below, once role defaults have been
+    // applied too.
+    let mut applied_params = vec![];
     for (name, value) in params {
         let settings = match name.as_str() {
             "options" => match &options {
@@ -560,14 +564,17 @@ where
             // (silently ignore errors on set), but erroring the connection
             // might be the better behavior. We maybe need to support more
             // options sent by psql and drivers before we can safely do this.
-            if let Err(err) = session
+            match session
                 .vars_mut()
                 .set(&system_vars, key, VarInput::Flat(val), LOCAL)
             {
-                session.add_notice(AdapterNotice::BadStartupSetting {
-                    name: key.clone(),
-                    reason: err.to_string(),
-                });
+                Ok(()) => applied_params.push((key.clone(), val.clone())),
+                Err(err) => {
+                    session.add_notice(AdapterNotice::BadStartupSetting {
+                        name: key.clone(),
+                        reason: err.to_string(),
+                    });
+                }
             }
         }
     }
@@ -588,6 +595,24 @@ where
         Ok(adapter_client) => adapter_client,
         Err(e) => return conn.send(e.into_response(Severity::Fatal)).await,
     };
+
+    // Make the startup parameters the session's default values, so that RESET
+    // and DISCARD ALL restore them rather than the server defaults. This
+    // matches PostgreSQL, where client-supplied startup parameters take
+    // precedence over role defaults (which startup registration applied) both
+    // as the current value and as the reset value. Connection poolers rely on
+    // this. For example, pgbouncer's default server_reset_query is DISCARD
+    // ALL, which must not rebind a pooled connection to the default database.
+    for (key, val) in applied_params {
+        if let Err(err) = adapter_client
+            .session()
+            .vars_mut()
+            .set_default(&key, VarInput::Flat(&val))
+        {
+            // Unexpected, since the same value was accepted by set() above.
+            mz_ore::soft_panic_or_log!("failed to apply startup parameter as default: {err:?}");
+        }
+    }
 
     let mut buf = vec![BackendMessage::AuthenticationOk];
     for var in adapter_client.session().vars().notify_set() {
@@ -922,6 +947,10 @@ where
         // only a few message types seem useful.
         let message_name = message.as_ref().map(|m| m.name()).unwrap_or_default();
 
+        if let Some(message) = &message {
+            self.maybe_log_message_arrival(message).await;
+        }
+
         let start = message.as_ref().map(|_| Instant::now());
         let next_state = match message {
             Some(FrontendMessage::Query { sql }) => {
@@ -1005,10 +1034,17 @@ where
             Some(FrontendMessage::Sync) => self.sync().await?,
             Some(FrontendMessage::Terminate) => State::Done,
 
+            // Accept but ignore stray COPY subprotocol messages, mirroring
+            // PostgreSQL. Clients stream COPY data optimistically, so when a
+            // COPY statement fails before COPY mode is entered, its pipelined
+            // CopyData/CopyDone/CopyFail arrive here. Draining instead would
+            // discard unrelated messages until the next Sync, hanging simple
+            // protocol clients that never send one.
             Some(FrontendMessage::CopyData(_))
             | Some(FrontendMessage::CopyDone)
-            | Some(FrontendMessage::CopyFail(_))
-            | Some(FrontendMessage::Password { .. })
+            | Some(FrontendMessage::CopyFail(_)) => State::Ready,
+
+            Some(FrontendMessage::Password { .. })
             | Some(FrontendMessage::RawAuthentication(_))
             | Some(FrontendMessage::SASLInitialResponse { .. })
             | Some(FrontendMessage::SASLResponse(_)) => State::Drain,
@@ -1149,6 +1185,98 @@ where
             .with_label_values(&[message_type])
             .observe(start.elapsed().as_secs_f64());
         Ok(())
+    }
+
+    /// Logs an arriving frontend message at info level, when
+    /// `enable_statement_arrival_logging` is on. Runs before the message is
+    /// processed, so a message whose processing crashes the process still
+    /// appears in the log. The `kind` field says which message it is, and
+    /// thereby also whether the statement came in through the simple protocol
+    /// (`query`) or the extended protocol (`parse`, `bind`, `execute`, ...).
+    /// The prepared statement and portal names, together with the connection
+    /// id, allow connecting a `bind` or `execute` back to the `parse` that
+    /// carried the SQL text.
+    ///
+    /// SQL text is parsed and logged with its literals redacted, the same
+    /// redaction the statement log applies. This means a statement that
+    /// crashes the parser is not captured, an accepted limitation. Bind
+    /// parameter values are data that redaction cannot reach, so only their
+    /// count is logged. Authentication payloads are never logged. COPY data
+    /// is logged as its length only, and only when it arrives as a stray
+    /// message in the ready state: messages consumed by the COPY subprotocol
+    /// or the post-error drain loop don't pass through here at all.
+    async fn maybe_log_message_arrival(&mut self, message: &FrontendMessage) {
+        if !self
+            .adapter_client
+            .statement_arrival_logging_enabled()
+            .await
+        {
+            return;
+        }
+        let session = self.adapter_client.session();
+        let conn_id = session.conn_id();
+        let session_uuid = session.uuid();
+        let kind = message.name();
+        match message {
+            FrontendMessage::Query { sql } => {
+                info!(
+                    %conn_id, %session_uuid, kind, sql = %redact_sql_for_logging(sql),
+                    "statement arrival"
+                );
+            }
+            FrontendMessage::Parse { name, sql, .. } => {
+                info!(
+                    %conn_id, %session_uuid, kind, name, sql = %redact_sql_for_logging(sql),
+                    "statement arrival"
+                );
+            }
+            FrontendMessage::Bind {
+                portal_name,
+                statement_name,
+                raw_params,
+                ..
+            } => {
+                info!(
+                    %conn_id, %session_uuid, kind, portal_name, statement_name,
+                    num_params = raw_params.len(),
+                    "statement arrival"
+                );
+            }
+            // COPY payloads would flood the log. Log only their length.
+            FrontendMessage::CopyData(data) => {
+                info!(%conn_id, %session_uuid, kind, len = data.len(), "statement arrival");
+            }
+            // Authentication payloads must never be logged.
+            FrontendMessage::Password { .. }
+            | FrontendMessage::RawAuthentication(_)
+            | FrontendMessage::SASLInitialResponse { .. }
+            | FrontendMessage::SASLResponse(_) => {
+                info!(%conn_id, %session_uuid, kind, "statement arrival");
+            }
+            // CopyFail carries a client-supplied free-text error message,
+            // which we don't log.
+            FrontendMessage::CopyFail(_) => {
+                info!(%conn_id, %session_uuid, kind, "statement arrival");
+            }
+            // Log the full Debug representation for all other variants, which
+            // carry only object names or no payload.
+            FrontendMessage::DescribeStatement { .. }
+            | FrontendMessage::DescribePortal { .. }
+            | FrontendMessage::Execute { .. }
+            | FrontendMessage::Flush
+            | FrontendMessage::Sync
+            | FrontendMessage::CloseStatement { .. }
+            | FrontendMessage::ClosePortal { .. }
+            | FrontendMessage::Terminate
+            | FrontendMessage::CopyDone => {
+                // WARNING: When adding a variant here, consider whether its payload is sensitive or
+                // bulky!
+                //
+                // (The field must not be named `message`, that name is
+                // reserved for the event text in tracing.)
+                info!(%conn_id, %session_uuid, kind, contents = ?message, "statement arrival");
+            }
+        }
     }
 
     fn parse_sql<'b>(&self, sql: &'b str) -> Result<Vec<StatementParseResult<'b>>, ErrorResponse> {
@@ -1406,12 +1534,18 @@ where
                         }
                     },
                     Err(err) => {
-                        let msg = format!("unable to decode parameter: {}", err);
-                        return self
-                            .send_error_and_get_state(ErrorResponse::error(
+                        // NUL characters get the same SQLSTATE that PostgreSQL
+                        // reports for them.
+                        let (code, msg) = if err.is::<mz_pgrepr::NulCharacterError>() {
+                            (SqlState::CHARACTER_NOT_IN_REPERTOIRE, err.to_string())
+                        } else {
+                            (
                                 SqlState::INVALID_PARAMETER_VALUE,
-                                msg,
-                            ))
+                                format!("unable to decode parameter: {}", err),
+                            )
+                        };
+                        return self
+                            .send_error_and_get_state(ErrorResponse::error(code, msg))
                             .await;
                     }
                 },

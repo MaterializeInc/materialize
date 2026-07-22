@@ -190,6 +190,14 @@ fn process_ordinal_from_hostname(hostname: &str) -> Option<&str> {
 pub fn main() {
     mz_ore::panic::install_enhanced_handler();
 
+    // Pin the rustls crypto provider to aws-lc-rs. The LaunchDarkly SDK uses
+    // hyper-rustls, so building its client resolves the process-default rustls
+    // provider. The workspace also links rustls' `ring` feature (pulled by
+    // other hyper-rustls chains), and with both provider features enabled
+    // rustls cannot choose a default on its own and panics. The call is
+    // idempotent, so ignore the result.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     // Derive `CLUSTERD_PROCESS` (the process ordinal) from the pod hostname
     // when running under Kubernetes and it was not set explicitly. The
     // distroless image has no shell entrypoint to do this, so clusterd does it
@@ -438,7 +446,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         Arc::clone(&tracing_handle),
         SYSTEM_TIME.clone(),
         connection_context.clone(),
-        StorageInstanceContext::new(args.scratch_directory.clone(), args.announce_memory_limit)?,
+        StorageInstanceContext::new(args.scratch_directory.clone(), args.announce_memory_limit),
         storage_log_writers,
     )
     .await?;

@@ -300,43 +300,76 @@ pub static MZ_KAFKA_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| Built
         column_semantic_types: &[("id", SemanticType::CatalogItemId)],
     }),
 });
-pub static MZ_KAFKA_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_kafka_sources",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_KAFKA_SOURCES_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("group_id_prefix", SqlScalarType::String.nullable(false))
-        .with_column("topic", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "id",
-            "The ID of the Kafka source. Corresponds to `mz_catalog.mz_sources.id`.",
-        ),
-        (
-            "group_id_prefix",
-            "The value of the `GROUP ID PREFIX` connection option.",
-        ),
-        (
-            "topic",
-            "The name of the Kafka topic the source is reading from.",
-        ),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "kafka_source",
-        description: "Kafka-specific source configuration (topic, group ID)",
-        links: &const {
-            [OntologyLink {
-                name: "details_of",
-                target: "source",
-                properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
-            }]
-        },
-        column_semantic_types: &[("id", SemanticType::CatalogItemId)],
-    }),
+pub static MZ_KAFKA_SOURCES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_kafka_sources",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_KAFKA_SOURCES_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("group_id_prefix", SqlScalarType::String.nullable(false))
+            .with_column("topic", SqlScalarType::String.nullable(false))
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "id",
+                "The ID of the Kafka source. Corresponds to `mz_catalog.mz_sources.id`.",
+            ),
+            (
+                "group_id_prefix",
+                "The value of the `GROUP ID PREFIX` connection option.",
+            ),
+            (
+                "topic",
+                "The name of the Kafka topic the source is reading from.",
+            ),
+        ]),
+        // NOTE: the `group_id_prefix` column is misnamed. It holds the
+        // full computed `group.id` (see `KafkaSourceConnection::group_id`
+        // / `KafkaConnection::id_base`), not just the user-supplied
+        // prefix. The MV reproduces that behaviour verbatim.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL group_id_prefix,
+    ASSERT NOT NULL topic
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+    COALESCE(details->>'group_id_prefix', '')
+        || 'materialize-' || mz_environment_id()
+        || '-' || (details->>'connection_id')
+        || '-' || mz_internal.parse_catalog_id(data->'value'->'global_id')
+        AS group_id_prefix,
+    details->>'topic' AS topic
+FROM
+    mz_internal.mz_catalog_raw,
+    LATERAL (
+        SELECT mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')
+    ) AS l(parsed),
+    LATERAL (
+        SELECT mz_internal.parse_kafka_source_details(data->'value'->'definition'->'V1'->>'create_sql')
+    ) AS d(details)
+WHERE
+    data->>'kind' = 'Item' AND
+    parsed->>'source_type' = 'kafka'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "kafka_source",
+            description: "Kafka-specific source configuration (topic, group ID)",
+            links: &const {
+                [OntologyLink {
+                    name: "details_of",
+                    target: "source",
+                    properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+                }]
+            },
+            column_semantic_types: &[("id", SemanticType::CatalogItemId)],
+        }),
+    }
 });
 
 pub static MZ_DATABASES: LazyLock<BuiltinMaterializedView> =
@@ -2516,61 +2549,134 @@ pub static MZ_CLUSTER_REPLICA_SIZES: LazyLock<BuiltinTable> = LazyLock::new(|| B
     }),
 });
 
-pub static MZ_AUDIT_EVENTS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_audit_events",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_AUDIT_EVENTS_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::UInt64.nullable(false))
-        .with_column("event_type", SqlScalarType::String.nullable(false))
-        .with_column("object_type", SqlScalarType::String.nullable(false))
-        .with_column("details", SqlScalarType::Jsonb.nullable(false))
-        .with_column("user", SqlScalarType::String.nullable(true))
-        .with_column(
-            "occurred_at",
-            SqlScalarType::TimestampTz { precision: None }.nullable(false),
-        )
-        .with_key(vec![0])
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "id",
-            "Materialize's unique, monotonically increasing ID for the event.",
-        ),
-        (
-            "event_type",
-            "The type of the event: `create`, `drop`, or `alter`.",
-        ),
-        (
-            "object_type",
-            "The type of the affected object: `cluster`, `cluster-replica`, `connection`, `database`, `function`, `index`, `materialized-view`, `role`, `schema`, `secret`, `sink`, `source`, `table`, `type`, or `view`.",
-        ),
-        (
-            "details",
-            "Additional details about the event. The shape of the details varies based on `event_type` and `object_type`.",
-        ),
-        (
-            "user",
-            "The user who triggered the event, or `NULL` if triggered by the system.",
-        ),
-        (
-            "occurred_at",
-            "The time at which the event occurred. Guaranteed to be in order of event creation. Events created in the same transaction will have identical values.",
-        ),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "audit_event",
-        description: "An audit log entry recording a DDL operation",
-        links: &const { [] },
-        column_semantic_types: &const {
-            [
-                ("object_type", SemanticType::ObjectType),
-                ("occurred_at", SemanticType::WallclockTimestamp),
-            ]
-        },
-    }),
+pub static MZ_AUDIT_EVENTS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_audit_events",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_AUDIT_EVENTS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::UInt64.nullable(false))
+            .with_column("event_type", SqlScalarType::String.nullable(false))
+            .with_column("object_type", SqlScalarType::String.nullable(false))
+            .with_column("details", SqlScalarType::Jsonb.nullable(false))
+            .with_column("user", SqlScalarType::String.nullable(true))
+            .with_column(
+                "occurred_at",
+                SqlScalarType::TimestampTz { precision: None }.nullable(false),
+            )
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "id",
+                "Materialize's unique, monotonically increasing ID for the event.",
+            ),
+            (
+                "event_type",
+                "The type of the event: `create`, `drop`, `alter`, `grant`, `revoke`, or `comment`.",
+            ),
+            (
+                "object_type",
+                "The type of the affected object: `cluster`, `cluster-replica`, `connection`, `continual-task`, `database`, `func`, `index`, `materialized-view`, `network-policy`, `role`, `schema`, `secret`, `sink`, `source`, `system`, `table`, `type`, or `view`.",
+            ),
+            (
+                "details",
+                "Additional details about the event. The shape of the details varies based on `event_type` and `object_type`.",
+            ),
+            (
+                "user",
+                "The user who triggered the event, or `NULL` if triggered by the system.",
+            ),
+            (
+                "occurred_at",
+                "The time at which the event occurred. Guaranteed to be in order of event creation. Events created in the same transaction will have identical values.",
+            ),
+        ]),
+        // `event_type` and `object_type` are stored in `mz_catalog_raw` as the
+        // numeric `Serialize_repr` of `proto::audit_log_event_v1::{EventType,
+        // ObjectType}`. The CASE expressions map them to the kebab strings
+        // that `audit_log::{EventType, ObjectType}`'s Display impls produce.
+        //
+        // `event` is `AuditLogEvent::V1(AuditLogEventV1)`, externally tagged,
+        // so we reach through `key.event.V1` for the inner struct.
+        //
+        // `user` is `Option<StringWrapper>`: JSON null when absent, otherwise
+        // `{"inner": "<name>"}`. `->'user'->>'inner'` collapses both to a
+        // PostgreSQL NULL or the text.
+        //
+        // `details` in `mz_catalog_raw` is the externally-tagged proto
+        // `Details` enum. `parse_catalog_audit_log_details` reshapes it into
+        // `audit_log::EventDetails::as_json`'s output, the format the prior
+        // BuiltinTable populator wrote. See that function's docstring and
+        // the round-trip test in `src/catalog/tests/audit_log_details.rs`.
+        //
+        // `occurred_at` is `EpochMillis` (u64). Dividing by 1000.0 and feeding
+        // to `to_timestamp` matches `mz_ore::now::to_datetime`'s round-trip
+        // through `chrono::DateTime::from_timestamp_millis`.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL event_type,
+    ASSERT NOT NULL object_type,
+    ASSERT NOT NULL details,
+    ASSERT NOT NULL occurred_at
+) AS
+WITH ev AS (
+    SELECT data->'key'->'event'->'V1' AS e
+    FROM mz_internal.mz_catalog_raw
+    WHERE data->>'kind' = 'AuditLog'
+)
+SELECT
+    (e->>'id')::uint8                                                       AS id,
+    CASE (e->>'event_type')
+        WHEN '1' THEN 'create'
+        WHEN '2' THEN 'drop'
+        WHEN '3' THEN 'alter'
+        WHEN '4' THEN 'grant'
+        WHEN '5' THEN 'revoke'
+        WHEN '6' THEN 'comment'
+    END                                                                     AS event_type,
+    CASE (e->>'object_type')
+        WHEN '1'  THEN 'cluster'
+        WHEN '2'  THEN 'cluster-replica'
+        WHEN '3'  THEN 'connection'
+        WHEN '4'  THEN 'database'
+        WHEN '5'  THEN 'func'
+        WHEN '6'  THEN 'index'
+        WHEN '7'  THEN 'materialized-view'
+        WHEN '8'  THEN 'role'
+        WHEN '9'  THEN 'secret'
+        WHEN '10' THEN 'schema'
+        WHEN '11' THEN 'sink'
+        WHEN '12' THEN 'source'
+        WHEN '13' THEN 'table'
+        WHEN '14' THEN 'type'
+        WHEN '15' THEN 'view'
+        WHEN '16' THEN 'system'
+        WHEN '17' THEN 'continual-task'
+        WHEN '18' THEN 'network-policy'
+    END                                                                     AS object_type,
+    mz_internal.parse_catalog_audit_log_details(e->'details')               AS details,
+    e->'user'->>'inner'                                                     AS \"user\",
+    -- `occurred_at` is serialized by `proto::EpochMillis` as
+    -- `{\"millis\": <u64>}`; reach through `'millis'` to get the integer.
+    to_timestamp(((e->'occurred_at'->>'millis')::float8) / 1000.0)          AS occurred_at
+FROM ev",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "audit_event",
+            description: "An audit log entry recording a DDL operation",
+            links: &const { [] },
+            column_semantic_types: &const {
+                [
+                    ("object_type", SemanticType::ObjectType),
+                    ("occurred_at", SemanticType::WallclockTimestamp),
+                ]
+            },
+        }),
+    }
 });
 
 pub static MZ_EGRESS_IPS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {

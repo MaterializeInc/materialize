@@ -100,6 +100,9 @@ ERROR_RE = re.compile(
     # \s\S is any character including newlines, so this matches multiline strings
     # non-greedy using ? so that we don't match all the result comparison issues into one block
     | ----------\ RESULT\ COMPARISON\ ISSUE\ START\ ----------[\s\S]*?----------\ RESULT\ COMPARISON\ ISSUE\ END\ ------------
+    # cargo-fuzz crash, emitted by the cargo-fuzz mzcompose runner (one block
+    # per failing target, with the crash input and a reproduce command)
+    | ----------\ CARGO-FUZZ\ FAILURE\ START\ ----------[\s\S]*?----------\ CARGO-FUZZ\ FAILURE\ END\ ----------
     # output consistency tests
     # | possibly\ invalid\ operation\ specification # disabled
     # for miri test summary
@@ -145,7 +148,7 @@ IGNORE_RE = re.compile(
     # Expected in restart test
     ( restart-materialized-1\ \ \|\ thread\ 'coordinator'\ panicked\ at\ 'can't\ persist\ timestamp
     # Expected in restart test
-    | restart-materialized-1\ *|\ thread\ 'coordinator'\ panicked\ at\ 'external\ operation\ .*\ failed\ unrecoverably.*
+    | restart-materialized-1\ *\|\ thread\ 'coordinator'\ panicked\ at\ 'external\ operation\ .*\ failed\ unrecoverably.*
     # Expected in cluster test
     | cluster-clusterd[12]-1\ .*\ halting\ process:\ new\ timely\ configuration\ does\ not\ match\ existing\ timely\ configuration
     | cluster-clusterd1-1\ .*\ replica\ expired
@@ -437,6 +440,14 @@ and finds associated open GitHub issues in Materialize repository.""",
     parser.add_argument("--test-cmd", type=str)
     parser.add_argument("--test-desc", type=str, default="")
     parser.add_argument("--test-result", type=int, default=0)
+    parser.add_argument(
+        "--log-start-at-last",
+        type=str,
+        help=(
+            "For each log containing this marker, only scan from its last "
+            "occurrence. Logs without the marker are scanned in full."
+        ),
+    )
     parser.add_argument("log_files", nargs="+", help="log files to search in")
     args = parser.parse_args()
 
@@ -454,6 +465,7 @@ and finds associated open GitHub issues in Materialize repository.""",
         args.test_cmd,
         args.test_desc,
         args.test_result,
+        args.log_start_at_last,
     )
 
     try:
@@ -578,6 +590,7 @@ def annotate_logged_errors(
     test_cmd: str,
     test_desc: str,
     test_result: int,
+    log_start_at_last: str | None = None,
 ) -> tuple[int, bool]:
     """
     Returns the number of unknown errors, 0 when all errors are known or there
@@ -588,7 +601,7 @@ def annotate_logged_errors(
     executor = ThreadPoolExecutor()
     artifacts_future = executor.submit(ci_util.get_artifacts)
 
-    errors = get_errors(log_files)
+    errors = get_errors(log_files, log_start_at_last)
 
     if not errors:
         # No error pattern was detected in the logs and no junit report
@@ -668,8 +681,10 @@ def annotate_logged_errors(
                 if match and issue.info["state"] == "CLOSED":
                     if issue.apply_to and issue.apply_to not in (
                         step_key.lower(),
-                        buildkite_label.lower(),
+                        buildkite_label.lower().rstrip("01234567889 "),
                     ):
+                        continue
+                    if issue.location and issue.location != location:
                         continue
 
                     if issue.info["number"] not in already_reported_issue_numbers:
@@ -719,7 +734,12 @@ def annotate_logged_errors(
                     location: str = error.file
                     location_url = None
 
-                handle_error(error.match.decode("utf-8"), None, location, location_url)
+                handle_error(
+                    error.match.decode("utf-8", errors="replace"),
+                    None,
+                    location,
+                    location_url,
+                )
             elif isinstance(error, JunitError):
                 if "in Code Coverage" in error.text or "covered" in error.message:
                     msg = "\n".join(filter(None, [error.message, error.text]))
@@ -817,7 +837,9 @@ def annotate_logged_errors(
     return (len(unknown_errors), ignore_failure)
 
 
-def get_errors(log_file_names: list[str]) -> list[ErrorLog | JunitError | Secret]:
+def get_errors(
+    log_file_names: list[str], log_start_at_last: str | None = None
+) -> list[ErrorLog | JunitError | Secret]:
     error_logs = []
     for log_file_name in log_file_names:
         if "junit_" in log_file_name:
@@ -825,7 +847,9 @@ def get_errors(log_file_names: list[str]) -> list[ErrorLog | JunitError | Secret
         elif log_file_name == "trufflehog.log":
             error_logs.extend(_get_errors_from_trufflehog(log_file_name))
         else:
-            error_logs.extend(_get_errors_from_log_file(log_file_name))
+            error_logs.extend(
+                _get_errors_from_log_file(log_file_name, log_start_at_last)
+            )
 
     return error_logs
 
@@ -877,7 +901,9 @@ def _get_errors_from_trufflehog(log_file_name: str) -> list[Secret]:
     return error_logs
 
 
-def _get_errors_from_log_file(log_file_name: str) -> list[ErrorLog]:
+def _get_errors_from_log_file(
+    log_file_name: str, log_start_at_last: str | None = None
+) -> list[ErrorLog]:
     error_logs = []
     with open(log_file_name, "r+") as f:
         try:
@@ -886,17 +912,26 @@ def _get_errors_from_log_file(log_file_name: str) -> list[ErrorLog]:
             # empty file, ignore
             return error_logs
 
-        error_logs.extend(_collect_errors_in_logs(data, log_file_name))
-        data.seek(0)
-        error_logs.extend(_collect_service_panics_in_logs(data, log_file_name))
+        start_position = 0
+        if log_start_at_last is not None:
+            marker_position = data.rfind(log_start_at_last.encode())
+            if marker_position >= 0:
+                start_position = marker_position
+
+        error_logs.extend(_collect_errors_in_logs(data, log_file_name, start_position))
+        error_logs.extend(
+            _collect_service_panics_in_logs(data, log_file_name, start_position)
+        )
 
     return error_logs
 
 
-def _collect_errors_in_logs(data: Any, log_file_name: str) -> list[ErrorLog]:
+def _collect_errors_in_logs(
+    data: Any, log_file_name: str, start_position: int = 0
+) -> list[ErrorLog]:
     collected_errors = []
 
-    for match in ERROR_RE.finditer(data):
+    for match in ERROR_RE.finditer(data, start_position):
         error = match.group(0)
         if IGNORE_RE.search(error):
             continue
@@ -923,18 +958,30 @@ def _collect_errors_in_logs(data: Any, log_file_name: str) -> list[ErrorLog]:
     return collected_errors
 
 
-def _collect_service_panics_in_logs(data: Any, log_file_name: str) -> list[ErrorLog]:
+def _collect_service_panics_in_logs(
+    data: Any, log_file_name: str, start_position: int = 0
+) -> list[ErrorLog]:
     collected_panics = []
 
-    open_panics = {}
+    open_panics: dict[bytes, bytes] = {}
+    data.seek(start_position)
+
+    def flush_open_panic(service: bytes) -> None:
+        # A panic whose following log line we never saw: a second panic of the
+        # same service interleaving, or a panic at end of file. Emit it without
+        # its trailing message rather than crashing the annotator. Both cases
+        # are otherwise rare enough that losing the message is acceptable.
+        panic_without_ts = TIMESTAMP_IN_PANIC_RE.sub(b"", open_panics.pop(service))
+        if not IGNORE_RE.search(panic_without_ts):
+            collected_panics.append(ErrorLog(panic_without_ts, log_file_name))
+
     for line in iter(data.readline, b""):
         # Don't try to match regexes on HUGE lines, since it can take too long
         line = line.rstrip(b"\n")[:8192]
         if match := PANIC_IN_SERVICE_START_RE.match(line):
             service = match.group("service")
-            assert (
-                service not in open_panics
-            ), f"Two panics of same service {service} interleaving: {line}"
+            if service in open_panics:
+                flush_open_panic(service)
             open_panics[service] = line
         elif open_panics:
             if match := SERVICES_LOG_LINE_RE.match(line):
@@ -951,7 +998,8 @@ def _collect_service_panics_in_logs(data: Any, log_file_name: str) -> list[Error
                             panic_without_ts + b" " + match.group("msg"), log_file_name
                         )
                     )
-    assert not open_panics, f"Panic log never finished: {open_panics}"
+    for service in list(open_panics):
+        flush_open_panic(service)
 
     return collected_panics
 
@@ -1001,9 +1049,20 @@ def get_failures_on_main(test_analytics: TestAnalyticsDb) -> BuildHistory:
         test_analytics.on_data_retrieval_failed(e)
 
     print("Loading build history from buildkite instead")
-    return _get_failures_on_main_from_buildkite(
-        pipeline_slug=pipeline_slug, step_key=step_key, parallel_job=parallel_job
-    )
+    try:
+        return _get_failures_on_main_from_buildkite(
+            pipeline_slug=pipeline_slug, step_key=step_key, parallel_job=parallel_job
+        )
+    except Exception as e:
+        # Build history is informational, so a failure here (e.g. a Buildkite
+        # API hiccup) must not crash the annotator and turn an otherwise
+        # green job red.
+        print(
+            f"Loading build history from buildkite failed, continuing without it: {e}"
+        )
+        return BuildHistory(
+            pipeline=pipeline_slug, branch="main", last_build_step_outcomes=[]
+        )
 
 
 def _get_failures_on_main_from_buildkite(

@@ -206,6 +206,51 @@ statement ok
 DROP MATERIALIZED VIEW mv CASCADE
 
 
+# Regression test (SQL-504): applying a replacement must rewrite TEMPORARY dependents
+# of the target, not only durable ones. `tx_replace_item` rewrites the target's
+# dependents to point at the survivor, but temporary objects live only in the
+# in-memory catalog, never in the durable catalog transaction, so an earlier version
+# skipped them. The temporary view was then left referencing the removed target,
+# tripping the catalog consistency check (MissingUses) and aborting the coordinator.
+# A non-temporary dependent has always been rewritten correctly; the temporary one is
+# the regression.
+
+statement ok
+CREATE TABLE tt (a int, b int)
+
+statement ok
+INSERT INTO tt VALUES (1, 10)
+
+statement ok
+CREATE MATERIALIZED VIEW mv504 AS SELECT a, b FROM tt
+
+statement ok
+CREATE REPLACEMENT MATERIALIZED VIEW rp504 FOR mv504 AS SELECT a + 1 AS a, b FROM tt
+
+statement ok
+CREATE TEMPORARY VIEW tv504 AS SELECT a FROM mv504
+
+# Before the fix this aborted the coordinator with a MissingUses consistency panic.
+statement ok
+ALTER MATERIALIZED VIEW mv504 APPLY REPLACEMENT rp504
+
+# The temporary view survives and was rewritten to read through the applied
+# replacement (a + 1), rather than dangling on the now-removed target.
+query I
+SELECT a FROM tv504
+----
+2
+
+statement ok
+DROP VIEW tv504
+
+statement ok
+DROP MATERIALIZED VIEW mv504 CASCADE
+
+statement ok
+DROP TABLE tt
+
+
 # Test: privileges are preserved after replacement
 
 statement ok

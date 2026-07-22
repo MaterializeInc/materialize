@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use columnar::{Columnar, Index, Ref};
 use differential_dataflow::VecCollection;
 use differential_dataflow::collection::AsCollection;
-use differential_dataflow::trace::{BatchReader, Cursor};
+use differential_dataflow::trace::{BatchReader, Cursor, Navigable};
 use mz_compute_types::plan::LirId;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowRef, Timestamp};
@@ -1453,7 +1453,8 @@ where
 impl<'scope, T, B> LogDataflowErrors for StreamVec<'scope, T, B>
 where
     T: timely::progress::Timestamp,
-    for<'a> B: BatchReader<DiffGat<'a> = &'a Diff> + Clone + 'static,
+    B: BatchReader + Navigable + Clone + 'static,
+    for<'a> B::Cursor: Cursor<DiffGat<'a> = &'a Diff>,
 {
     fn log_dataflow_errors(self, logger: Logger, export_id: GlobalId) -> Self {
         self.unary(Pipeline, "LogDataflowErrorsStream", |_cap, _info| {
@@ -1477,7 +1478,8 @@ where
 /// batches might become large.
 fn sum_batch_diffs<B>(batch: &B) -> Diff
 where
-    for<'a> B: BatchReader<DiffGat<'a> = &'a Diff>,
+    B: BatchReader + Navigable,
+    for<'a> B::Cursor: Cursor<DiffGat<'a> = &'a Diff>,
 {
     let mut sum = Diff::ZERO;
     let mut cursor = batch.cursor();

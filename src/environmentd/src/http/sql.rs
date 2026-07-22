@@ -25,7 +25,7 @@ use futures::future::BoxFuture;
 
 use http::StatusCode;
 use itertools::Itertools;
-use mz_adapter::client::RecordFirstRowStream;
+use mz_adapter::client::{RecordFirstRowStream, redact_sql_for_logging};
 use mz_adapter::session::{EndTransactionAction, TransactionStatus};
 use mz_adapter::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use mz_adapter::{
@@ -180,12 +180,17 @@ async fn execute_promsql_query(
         });
 
     for row in rows {
+        // Non-value columns become Prometheus label values. A SQL `NULL`
+        // arrives as JSON `null` and yields `None` from `as_str()`; fall back
+        // to an empty label rather than panicking. The query author is
+        // responsible for `COALESCE`ing nullable columns to a meaningful
+        // value; this is a defensive backstop.
         let mut label_values = desc
             .columns
             .iter()
             .zip_eq(row)
             .filter(|(col, _)| col.name != query.value_column_name)
-            .map(|(_, val)| val.as_str().expect("must be string"))
+            .map(|(_, val)| val.as_str().unwrap_or(""))
             .collect::<Vec<_>>();
 
         let value = desc
@@ -1239,6 +1244,32 @@ pub(in crate::http) async fn execute_request<S: ResultSender>(
     sender: &mut S,
 ) -> Result<(), Error> {
     let client = &mut client.client;
+
+    if client.statement_arrival_logging_enabled().await {
+        let session = client.session();
+        let conn_id = session.conn_id();
+        let session_uuid = session.uuid();
+        match &request {
+            SqlRequest::Simple { query } => {
+                info!(
+                    %conn_id, %session_uuid, kind = "http_simple",
+                    sql = %redact_sql_for_logging(query.as_str()),
+                    "statement arrival"
+                );
+            }
+            SqlRequest::Extended { queries } => {
+                for ExtendedRequest { query, params } in queries {
+                    // Parameter values are data that redaction cannot reach,
+                    // so only their count is logged.
+                    info!(
+                        %conn_id, %session_uuid, kind = "http_extended",
+                        sql = %redact_sql_for_logging(query), num_params = params.len(),
+                        "statement arrival"
+                    );
+                }
+            }
+        }
+    }
 
     // This API prohibits executing statements with responses whose
     // semantics are at odds with an HTTP response.

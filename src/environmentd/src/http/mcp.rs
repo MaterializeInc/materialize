@@ -24,7 +24,6 @@
 //! Data products are discovered via `mz_internal.mz_mcp_data_products` system view.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::anyhow;
 use axum::Extension;
@@ -32,24 +31,25 @@ use axum::Json;
 use axum::response::IntoResponse;
 use http::{HeaderMap, HeaderValue, StatusCode};
 use mz_adapter_types::dyncfgs::{
-    ENABLE_MCP_AGENT, ENABLE_MCP_AGENT_QUERY_TOOL, ENABLE_MCP_DEVELOPER,
-    ENABLE_MCP_DEVELOPER_QUERY_TOOL, MCP_MAX_RESPONSE_SIZE,
+    ENABLE_MCP_AGENT, ENABLE_MCP_AGENT_QUERY_TOOL, ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL,
+    ENABLE_MCP_DEVELOPER, ENABLE_MCP_DEVELOPER_QUERY_TOOL, MCP_MAX_RESPONSE_SIZE,
+    MCP_REQUEST_TIMEOUT,
 };
+use mz_ore::cast::CastLossy;
 use mz_repr::namespaces::{self, SYSTEM_SCHEMAS};
-use mz_sql::parse::parse;
+use mz_sql::parse::{parse_item_name_with_limit, parse_with_limit};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::{APPLICATION_NAME, Var, VarInput};
 use mz_sql_parser::ast::display::{AstDisplay, escaped_string_literal};
 use mz_sql_parser::ast::visit::{self, Visit};
 use mz_sql_parser::ast::{Raw, RawItemName};
-use mz_sql_parser::parser::parse_item_name;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use thiserror::Error;
 use tracing::{debug, warn};
 
 use crate::http::AuthedClient;
-use crate::http::mcp_metrics::{McpMetrics, ToolCallGuard};
+use crate::http::mcp_metrics::{McpCallStatus, McpMetrics, ToolCallGuard};
 use crate::http::sql::{SqlRequest, SqlResponse, SqlResult, execute_request};
 
 // To add a new tool: add entry to tools/list, add handler function, add dispatch case.
@@ -60,12 +60,6 @@ const JSONRPC_VERSION: &str = "2.0";
 /// MCP protocol version returned in the `initialize` response.
 /// Spec: <https://modelcontextprotocol.io/specification/2025-11-25>
 const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
-
-/// Maximum time an MCP tool call can run before the HTTP response is returned.
-/// Note: this returns a clean JSON-RPC error to the caller, but the underlying
-/// query may continue running on the cluster until it completes or is cancelled
-/// separately (see database-issues#9947 for SELECT timeout gaps).
-const MCP_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 // Discovery uses the lightweight view (no JSON schema computation).
 const DISCOVERY_QUERY: &str = "SELECT * FROM mz_internal.mz_mcp_data_products";
@@ -84,8 +78,6 @@ enum McpRequestError {
     ToolNotFound(String),
     #[error("Data product not found: {0}")]
     DataProductNotFound(String),
-    #[error("{0}")]
-    ClusterPrivilegeMissing(String),
     #[error("Query validation failed: {0}")]
     QueryValidationFailed(String),
     #[error("Query execution failed: {0}")]
@@ -101,7 +93,6 @@ impl McpRequestError {
             Self::MethodNotFound(_) => error_codes::METHOD_NOT_FOUND,
             Self::ToolNotFound(_) => error_codes::INVALID_PARAMS,
             Self::DataProductNotFound(_) => error_codes::INVALID_PARAMS,
-            Self::ClusterPrivilegeMissing(_) => error_codes::INVALID_PARAMS,
             Self::QueryValidationFailed(_) => error_codes::INVALID_PARAMS,
             Self::QueryExecutionFailed(_) | Self::Internal(_) => error_codes::INTERNAL_ERROR,
         }
@@ -113,7 +104,6 @@ impl McpRequestError {
             Self::MethodNotFound(_) => "MethodNotFound",
             Self::ToolNotFound(_) => "ToolNotFound",
             Self::DataProductNotFound(_) => "DataProductNotFound",
-            Self::ClusterPrivilegeMissing(_) => "ClusterPrivilegeMissing",
             Self::QueryValidationFailed(_) => "ValidationError",
             Self::QueryExecutionFailed(_) => "ExecutionError",
             Self::Internal(_) => "InternalError",
@@ -222,13 +212,19 @@ struct ReadDataProductParams {
     cluster: Option<String>,
 }
 
+/// Default row cap for `read_data_product` when the caller omits `limit`.
+const DEFAULT_READ_LIMIT: u32 = 500;
+
 fn default_read_limit() -> u32 {
-    500
+    DEFAULT_READ_LIMIT
 }
 
 #[derive(Debug, Deserialize)]
 struct QueryParams {
     cluster: String,
+    /// Only honored on the developer endpoint. The agent endpoint's dispatch
+    /// arm drops it, since replica pinning is not part of the agent surface.
+    cluster_replica: Option<String>,
     sql_query: String,
 }
 
@@ -245,6 +241,28 @@ struct McpResponse {
     result: Option<McpResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<McpError>,
+}
+
+impl McpResponse {
+    /// A successful JSON-RPC response carrying `result`.
+    fn success(id: serde_json::Value, result: McpResult) -> Self {
+        Self {
+            jsonrpc: JSONRPC_VERSION.to_string(),
+            id,
+            result: Some(result),
+            error: None,
+        }
+    }
+
+    /// A JSON-RPC error response carrying `error`.
+    fn error(id: serde_json::Value, error: McpError) -> Self {
+        Self {
+            jsonrpc: JSONRPC_VERSION.to_string(),
+            id,
+            result: None,
+            error: Some(error),
+        }
+    }
 }
 
 /// Typed MCP response results.
@@ -451,12 +469,8 @@ async fn handle_mcp_request(
 ) -> impl IntoResponse {
     let endpoint_label = endpoint_type.as_label();
     let method_label = request.method.to_string();
-    let record_request = |status: &str| {
-        metrics
-            .requests
-            .with_label_values(&[endpoint_label, &method_label, status])
-            .inc();
-    };
+    let record_request =
+        |status: McpCallStatus| metrics.record_request(endpoint_label, &method_label, status);
 
     // Check the per-endpoint feature flag via a catalog snapshot, similar to frontend_peek.rs.
     let catalog = client.client.catalog_snapshot("mcp").await;
@@ -467,7 +481,7 @@ async fn handle_mcp_request(
     };
     if !enabled {
         debug!(endpoint = %endpoint_type, "MCP endpoint disabled by feature flag");
-        record_request("endpoint_disabled");
+        record_request(McpCallStatus::EndpointDisabled);
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
 
@@ -479,7 +493,12 @@ async fn handle_mcp_request(
         McpEndpointType::Agent => ENABLE_MCP_AGENT_QUERY_TOOL.get(dyncfgs),
         McpEndpointType::Developer => ENABLE_MCP_DEVELOPER_QUERY_TOOL.get(dyncfgs),
     };
+    // Only meaningful on the agent endpoint; the developer endpoint doesn't
+    // expose `read_data_product`. Read it unconditionally so the plumbing
+    // matches `query_tool_enabled` above.
+    let read_data_product_tool_enabled = ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL.get(dyncfgs);
     let max_response_size = MCP_MAX_RESPONSE_SIZE.get(dyncfgs);
+    let request_timeout = MCP_REQUEST_TIMEOUT.get(dyncfgs);
 
     // Tag MCP-originated sessions so they're distinguishable in
     // mz_session_history / mz_statement_execution_history. set_default lets a
@@ -509,7 +528,7 @@ async fn handle_mcp_request(
     // Handle notifications (no response needed)
     if is_notification {
         debug!(method = %request.method, "Received notification (no response will be sent)");
-        record_request("ok");
+        record_request(McpCallStatus::Ok);
         return StatusCode::OK.into_response();
     }
 
@@ -518,16 +537,17 @@ async fn handle_mcp_request(
     // Spawn task for fault isolation, with a timeout safety net.
     // `abort_on_drop` propagates the timeout to the task itself; without
     // it the task orphans and the SQL query keeps running in the
-    // background after the client gives up.
+    // background after the client gives up (see database-issues#9947).
     let metrics_inner = metrics.clone();
     let result = tokio::time::timeout(
-        MCP_REQUEST_TIMEOUT,
+        request_timeout,
         mz_ore::task::spawn(|| "mcp_request", async move {
             handle_mcp_request_inner(
                 &mut client,
                 request,
                 endpoint_type,
                 query_tool_enabled,
+                read_data_product_tool_enabled,
                 max_response_size,
                 metrics_inner,
             )
@@ -537,27 +557,23 @@ async fn handle_mcp_request(
     )
     .await;
 
-    let (response, status_label): (McpResponse, &'static str) = match result {
+    let (response, status_label): (McpResponse, McpCallStatus) = match result {
         Ok(inner) => inner,
         Err(_elapsed) => {
             warn!(
                 endpoint = %endpoint_type,
-                timeout = ?MCP_REQUEST_TIMEOUT,
+                timeout = ?request_timeout,
                 "MCP request timed out",
             );
-            let response = McpResponse {
-                jsonrpc: JSONRPC_VERSION.to_string(),
-                id: request_id,
-                result: None,
-                error: Some(
-                    McpRequestError::QueryExecutionFailed(format!(
-                        "Request timed out after {} seconds.",
-                        MCP_REQUEST_TIMEOUT.as_secs(),
-                    ))
-                    .into(),
-                ),
-            };
-            (response, "timeout")
+            let response = McpResponse::error(
+                request_id,
+                McpRequestError::QueryExecutionFailed(format!(
+                    "Request timed out after {} seconds.",
+                    request_timeout.as_secs(),
+                ))
+                .into(),
+            );
+            (response, McpCallStatus::Timeout)
         }
     };
 
@@ -570,9 +586,10 @@ async fn handle_mcp_request_inner(
     request: McpRequest,
     endpoint_type: McpEndpointType,
     query_tool_enabled: bool,
+    read_data_product_tool_enabled: bool,
     max_response_size: usize,
     metrics: McpMetrics,
-) -> (McpResponse, &'static str) {
+) -> (McpResponse, McpCallStatus) {
     // Extract request ID (guaranteed to be Some since notifications are filtered earlier)
     let request_id = request.id.clone().unwrap_or(serde_json::Value::Null);
 
@@ -581,23 +598,16 @@ async fn handle_mcp_request_inner(
         &request,
         endpoint_type,
         query_tool_enabled,
+        read_data_product_tool_enabled,
         max_response_size,
         &metrics,
     )
     .await;
 
-    let status_label = match &result {
-        Ok(_) => "ok",
-        Err(e) => e.error_type(),
-    };
+    let status_label = call_status(&result);
 
     let response = match result {
-        Ok(result_value) => McpResponse {
-            jsonrpc: JSONRPC_VERSION.to_string(),
-            id: request_id,
-            result: Some(result_value),
-            error: None,
-        },
+        Ok(result_value) => McpResponse::success(request_id, result_value),
         Err(e) => {
             // Log non-trivial errors
             if !matches!(
@@ -606,12 +616,7 @@ async fn handle_mcp_request_inner(
             ) {
                 warn!(error = %e, method = %request.method, "MCP method execution failed");
             }
-            McpResponse {
-                jsonrpc: JSONRPC_VERSION.to_string(),
-                id: request_id,
-                result: None,
-                error: Some(e.into()),
-            }
+            McpResponse::error(request_id, e.into())
         }
     };
 
@@ -623,6 +628,7 @@ async fn handle_mcp_method(
     request: &McpRequest,
     endpoint_type: McpEndpointType,
     query_tool_enabled: bool,
+    read_data_product_tool_enabled: bool,
     max_response_size: usize,
     metrics: &McpMetrics,
 ) -> Result<McpResult, McpRequestError> {
@@ -635,11 +641,22 @@ async fn handle_mcp_method(
     match &request.method {
         McpMethod::Initialize(_) => {
             debug!(endpoint = %endpoint_type, "Processing initialize");
-            handle_initialize(endpoint_type, query_tool_enabled).await
+            handle_initialize(
+                endpoint_type,
+                query_tool_enabled,
+                read_data_product_tool_enabled,
+            )
+            .await
         }
         McpMethod::ToolsList => {
             debug!(endpoint = %endpoint_type, "Processing tools/list");
-            handle_tools_list(endpoint_type, query_tool_enabled, max_response_size).await
+            handle_tools_list(
+                endpoint_type,
+                query_tool_enabled,
+                read_data_product_tool_enabled,
+                max_response_size,
+            )
+            .await
         }
         McpMethod::ToolsCall(params) => {
             debug!(tool = %params, endpoint = %endpoint_type, "Processing tools/call");
@@ -648,6 +665,7 @@ async fn handle_mcp_method(
                 params,
                 endpoint_type,
                 query_tool_enabled,
+                read_data_product_tool_enabled,
                 max_response_size,
                 metrics,
             )
@@ -664,26 +682,51 @@ async fn handle_mcp_method(
 fn endpoint_instructions(
     endpoint_type: McpEndpointType,
     query_tool_enabled: bool,
+    read_data_product_tool_enabled: bool,
 ) -> Option<String> {
     match endpoint_type {
-        McpEndpointType::Agent => Some(
-            concat!(
-                "You have access to Materialize data products via MCP. ",
-                "Prefer indexed objects (served from memory) over unindexed materialized views ",
-                "(read from persistent storage). `read_data_product` automatically routes the ",
-                "read to the cluster recorded in the data product catalog so indexes are used; ",
-                "you only need to set the `cluster` parameter if you intentionally want the ",
-                "read to run on a different cluster (e.g. one with larger or more replicas). ",
-                "`get_data_product_details` returns a `hydration` object with `hydrated`, ",
-                "`replica_count`, and `hydrated_replica_count` fields. Reads never return ",
-                "partial data: a read against a not-yet-hydrated product blocks until the ",
-                "dataflow catches up, and may hit the request timeout. Check `hydrated` ",
-                "before reading: if it is false and `replica_count` is greater than 0, the ",
-                "dataflow is still warming up, so wait and retry; if `replica_count` is 0 the ",
-                "cluster has no replicas and the read cannot make progress until one is added.",
-            )
-            .to_string(),
-        ),
+        McpEndpointType::Agent => {
+            // Only reference tools that are actually exposed by tools/list.
+            // Both flags off is a valid (if unusual) config where the agent
+            // can only discover products, not read them — we say so instead
+            // of pointing at a hidden tool.
+            let read_paragraph = match (read_data_product_tool_enabled, query_tool_enabled) {
+                (true, _) => {
+                    "`read_data_product` automatically routes the \
+                     read to the cluster recorded in the data product catalog so indexes are used; \
+                     you only need to set the `cluster` parameter if you intentionally want the \
+                     read to run on a different cluster (e.g. one with larger or more replicas). \
+                     A null `cluster` in discovery means your role lacks USAGE on the object's \
+                     index/compute cluster; `read_data_product` without an override then reads on \
+                     your session's default cluster (safe: only materialized views appear this way, \
+                     and they serve from persist). "
+                }
+                (false, true) => {
+                    "Use the `query` tool to read data products, passing the cluster from \
+                     `get_data_product_details` so indexed reads hit the arrangement. If \
+                     `get_data_product_details` returns a null `cluster`, your role lacks USAGE on \
+                     the object's index/compute cluster; run the `query` against any cluster your \
+                     role can use (the read still works, just without the index arrangement). "
+                }
+                (false, false) => {
+                    "This server is configured for discovery only: no read tool is exposed. \
+                     Use `get_data_products` and `get_data_product_details` to inspect what \
+                     is available. "
+                }
+            };
+            Some(format!(
+                "You have access to Materialize data products via MCP. \
+                 Prefer indexed objects (served from memory) over unindexed materialized views \
+                 (read from persistent storage). {read_paragraph}\
+                 `get_data_product_details` returns a `hydration` object with `hydrated`, \
+                 `replica_count`, and `hydrated_replica_count` fields. Reads never return \
+                 partial data: a read against a not-yet-hydrated product blocks until the \
+                 dataflow catches up, and may hit the request timeout. Check `hydrated` \
+                 before reading: if it is false and `replica_count` is greater than 0, the \
+                 dataflow is still warming up, so wait and retry; if `replica_count` is 0 the \
+                 cluster has no replicas and the read cannot make progress until one is added.",
+            ))
+        }
         McpEndpointType::Developer => {
             // Only advertise the `query` tool when it is actually exposed:
             // otherwise the instructions would point agents at a tool that
@@ -717,6 +760,7 @@ fn endpoint_instructions(
 async fn handle_initialize(
     endpoint_type: McpEndpointType,
     query_tool_enabled: bool,
+    read_data_product_tool_enabled: bool,
 ) -> Result<McpResult, McpRequestError> {
     Ok(McpResult::Initialize(InitializeResult {
         protocol_version: MCP_PROTOCOL_VERSION.to_string(),
@@ -725,16 +769,24 @@ async fn handle_initialize(
             name: format!("materialize-mcp-{}", endpoint_type),
             version: env!("CARGO_PKG_VERSION").to_string(),
         },
-        instructions: endpoint_instructions(endpoint_type, query_tool_enabled),
+        instructions: endpoint_instructions(
+            endpoint_type,
+            query_tool_enabled,
+            read_data_product_tool_enabled,
+        ),
     }))
 }
 
 async fn handle_tools_list(
     endpoint_type: McpEndpointType,
     query_tool_enabled: bool,
+    read_data_product_tool_enabled: bool,
     max_response_size: usize,
 ) -> Result<McpResult, McpRequestError> {
-    let size_hint = format!("Response limit: {} MB.", max_response_size / 1_000_000);
+    let size_hint = format!(
+        "Response limit: {:.1} MB.",
+        f64::cast_lossy(max_response_size) / 1_000_000.0
+    );
 
     let tools = match endpoint_type {
         McpEndpointType::Agent => {
@@ -766,10 +818,12 @@ async fn handle_tools_list(
                     }),
                     annotations: Some(READ_ONLY_ANNOTATIONS),
                 },
-                ToolDefinition {
+            ];
+            if read_data_product_tool_enabled {
+                tools.push(ToolDefinition {
                     name: "read_data_product".to_string(),
                     title: Some("Read Data Product".to_string()),
-                    description: format!("Read rows from a specific data product. Returns up to `limit` rows (default 500). The data product must exist in the catalog (use get_data_products() to discover available products). Use this to retrieve actual data from a known data product. {size_hint}"),
+                    description: format!("Read rows from a specific data product. Returns up to `limit` rows (default {DEFAULT_READ_LIMIT}). The data product must exist in the catalog (use get_data_products() to discover available products). Use this to retrieve actual data from a known data product. {size_hint}"),
                     input_schema: json!({
                         "type": "object",
                         "properties": {
@@ -779,19 +833,19 @@ async fn handle_tools_list(
                             },
                             "limit": {
                                 "type": "integer",
-                                "description": "Maximum number of rows to return (default 500)",
-                                "default": 500
+                                "description": format!("Maximum number of rows to return (default {DEFAULT_READ_LIMIT})"),
+                                "default": DEFAULT_READ_LIMIT
                             },
                             "cluster": {
                                 "type": "string",
-                                "description": "Optional override. By default, the read runs on the cluster recorded in the data product catalog (where the index or materialized view dataflow lives), so indexed reads actually hit their arrangement. Set this only to intentionally run the same read on a different cluster — e.g. one with more or larger replicas, or to compare cost/latency."
+                                "description": "Optional override. By default, the read runs on the cluster recorded in the data product catalog (where the index or materialized view dataflow lives), so indexed reads actually hit their arrangement. A null `cluster` in discovery means your role lacks USAGE on the object's index/compute cluster; without an override, the read then runs on your session's default cluster (safe: only materialized views appear this way, and they serve from persist). Set this only to intentionally run the same read on a different cluster — e.g. one with more or larger replicas, or to compare cost/latency."
                             }
                         },
                         "required": ["name"]
                     }),
                     annotations: Some(READ_ONLY_ANNOTATIONS),
-                },
-            ];
+                });
+            }
             if query_tool_enabled {
                 tools.push(ToolDefinition {
                     name: "query".to_string(),
@@ -830,7 +884,7 @@ async fn handle_tools_list(
                     "properties": {
                         "sql_query": {
                             "type": "string",
-                            "description": "PostgreSQL-compatible SELECT, SHOW, or EXPLAIN query referencing mz_* system catalog tables"
+                            "description": "PostgreSQL-compatible SELECT, SHOW, or EXPLAIN query referencing mz_*, pg_catalog, or information_schema tables"
                         }
                     },
                     "required": ["sql_query"]
@@ -850,6 +904,10 @@ async fn handle_tools_list(
                             "cluster": {
                                 "type": "string",
                                 "description": "Exact cluster name the query should run on. Required: EXPLAIN ANALYZE and queries against indexed user objects need a specific cluster to execute on."
+                            },
+                            "cluster_replica": {
+                                "type": "string",
+                                "description": "Optional replica name (e.g. 'r1') to target one replica of the cluster. Required for EXPLAIN ANALYZE on clusters with more than one replica. Find replica names in mz_catalog.mz_cluster_replicas."
                             },
                             "sql_query": {
                                 "type": "string",
@@ -873,6 +931,7 @@ async fn handle_tools_call(
     params: &ToolsCallParams,
     endpoint_type: McpEndpointType,
     query_tool_enabled: bool,
+    read_data_product_tool_enabled: bool,
     max_response_size: usize,
     metrics: &McpMetrics,
 ) -> Result<McpResult, McpRequestError> {
@@ -885,6 +944,14 @@ async fn handle_tools_call(
         }
         (McpEndpointType::Agent, ToolsCallParams::GetDataProductDetails(p)) => {
             get_data_product_details(client, &p.name, max_response_size).await
+        }
+        (McpEndpointType::Agent, ToolsCallParams::ReadDataProduct(_))
+            if !read_data_product_tool_enabled =>
+        {
+            Err(McpRequestError::ToolNotFound(
+                "read_data_product tool is not available. Use the query tool to read data products."
+                    .to_string(),
+            ))
         }
         (McpEndpointType::Agent, ToolsCallParams::ReadDataProduct(p)) => {
             read_data_product(
@@ -902,7 +969,9 @@ async fn handle_tools_call(
             ))
         }
         (McpEndpointType::Agent, ToolsCallParams::Query(p)) => {
-            execute_query(client, &p.cluster, &p.sql_query, max_response_size).await
+            // Replica pinning is deliberately not part of the agent surface:
+            // drop `cluster_replica` even if a client supplies it.
+            execute_query(client, &p.cluster, None, &p.sql_query, max_response_size).await
         }
         (McpEndpointType::Developer, ToolsCallParams::QuerySystemCatalog(p)) => {
             query_system_catalog(client, &p.sql_query, max_response_size).await
@@ -913,7 +982,14 @@ async fn handle_tools_call(
             ))
         }
         (McpEndpointType::Developer, ToolsCallParams::Query(p)) => {
-            execute_query(client, &p.cluster, &p.sql_query, max_response_size).await
+            execute_query(
+                client,
+                &p.cluster,
+                p.cluster_replica.as_deref(),
+                &p.sql_query,
+                max_response_size,
+            )
+            .await
         }
         // Tool called on wrong endpoint
         (endpoint, tool) => Err(McpRequestError::ToolNotFound(format!(
@@ -922,12 +998,18 @@ async fn handle_tools_call(
         ))),
     };
 
-    guard.set_status(match &result {
-        Ok(_) => "ok",
-        Err(e) => e.error_type(),
-    });
+    guard.set_status(call_status(&result));
 
     result
+}
+
+/// Maps a handler result to its metric [`McpCallStatus`]. Errors carry the
+/// closed `error_type()` label; anything else is `Ok`.
+fn call_status<T>(result: &Result<T, McpRequestError>) -> McpCallStatus {
+    match result {
+        Ok(_) => McpCallStatus::Ok,
+        Err(e) => McpCallStatus::Error(e.error_type()),
+    }
 }
 
 /// Execute SQL via `execute_request` from sql.rs.
@@ -947,11 +1029,28 @@ async fn execute_sql(
     .await
     .map_err(|e| McpRequestError::QueryExecutionFailed(e.to_string()))?;
 
-    // Extract the result with rows (the user's single SELECT/SHOW query)
-    // Other results will be OK (from BEGIN, SET, COMMIT) or Err
-    for result in response.results {
+    select_single_rows(response.results)
+}
+
+/// Returns the rows of the single row-returning statement in a response.
+///
+/// A read's framing statements (`BEGIN`, `SET`, `COMMIT`) report `Ok`, so only
+/// the user's statement returns rows. Surfaces the first error, and a second
+/// row-returning statement is an error rather than a dropped result.
+fn select_single_rows(
+    results: Vec<SqlResult>,
+) -> Result<Vec<Vec<serde_json::Value>>, McpRequestError> {
+    let mut rows = None;
+    for result in results {
         match result {
-            SqlResult::Rows { rows, .. } => return Ok(rows),
+            SqlResult::Rows { rows: r, .. } => {
+                if rows.is_some() {
+                    return Err(McpRequestError::Internal(anyhow!(
+                        "MCP query returned multiple row-producing statements"
+                    )));
+                }
+                rows = Some(r);
+            }
             SqlResult::Err { error, .. } => {
                 return Err(McpRequestError::QueryExecutionFailed(error.message));
             }
@@ -959,9 +1058,9 @@ async fn execute_sql(
         }
     }
 
-    Err(McpRequestError::QueryExecutionFailed(
-        "Query did not return any results".to_string(),
-    ))
+    rows.ok_or_else(|| {
+        McpRequestError::QueryExecutionFailed("Query did not return any results".to_string())
+    })
 }
 
 /// Serialize rows to JSON and enforce the response size cap.
@@ -1038,13 +1137,17 @@ fn safe_data_product_name(name: &str) -> Result<String, McpRequestError> {
         ));
     }
 
-    let parsed = parse_item_name(name).map_err(|_| {
-        McpRequestError::QueryValidationFailed(format!(
-            "Invalid data product name: {}. Expected a valid object name, \
-             e.g. '\"database\".\"schema\".\"name\"' or 'my_view'",
-            name
-        ))
-    })?;
+    // `parse_item_name_with_limit` enforces the 1 MB guard on the raw input
+    // (DEX-64) before lexing.
+    let parsed = parse_item_name_with_limit(name)
+        .map_err(McpRequestError::QueryValidationFailed)?
+        .map_err(|_| {
+            McpRequestError::QueryValidationFailed(format!(
+                "Invalid data product name: {}. Expected a valid object name, \
+                 e.g. '\"database\".\"schema\".\"name\"' or 'my_view'",
+                name
+            ))
+        })?;
 
     // Stable formatting forces all identifiers to be double-quoted,
     // so SQL keywords and special characters cannot escape.
@@ -1053,18 +1156,18 @@ fn safe_data_product_name(name: &str) -> Result<String, McpRequestError> {
 
 /// Read rows from a data product. Issues a single read-only query.
 ///
-/// By default the read is routed to the cluster recorded in the data product
-/// catalog (`mz_mcp_data_products.cluster`), so reads of indexed views
-/// actually hit the index's in-memory arrangement instead of falling back to
-/// a full recompute through persist on whatever cluster the session happens
-/// to default to. `cluster_override` bypasses that routing and runs the
-/// same read on a named cluster instead — useful for running the read on a
-/// differently-sized or differently-replicated cluster.
+/// The read routes to the cluster recorded in `mz_mcp_data_products.cluster`
+/// when the role has USAGE on it, so reads of indexed objects hit the index's
+/// in-memory arrangement. That column is null when the role lacks USAGE on the
+/// object's cluster (DEX-66); in that case, and absent an override, the read
+/// runs on the session's default (serving) cluster instead. Only materialized
+/// views can appear this way, since plain views without at least one usable
+/// index cluster are excluded from `mz_mcp_data_products` entirely; the
+/// fallback is therefore safe (materialized views serve from persist without
+/// recompute).
 ///
-/// Without an override, the role must have `USAGE` on the catalog cluster
-/// — otherwise the call fails with [`McpRequestError::ClusterPrivilegeMissing`]
-/// rather than silently degrading to a slower path that would mask the
-/// missing privilege.
+/// `cluster_override` forces the read onto a named cluster instead — useful for
+/// a differently-sized or differently-replicated cluster.
 ///
 /// The name is expected to come from `get_data_products()` /
 /// `get_data_product_details()`. The query runs inside a READ ONLY
@@ -1081,24 +1184,15 @@ async fn read_data_product(
     // Parse and safely quote the name for SQL interpolation.
     let safe_name = safe_data_product_name(name)?;
 
-    // Existence check + recover the cluster for auto-routing. The view
-    // filters by SELECT on the object but not by cluster privileges, so we
-    // also fetch USAGE on the cluster and prefer a usable one in ORDER BY
-    // (an MV indexed on multiple clusters can appear more than once). Uses
-    // `mz_show_my_cluster_privileges` instead of `has_cluster_privilege`
-    // because the latter's body references `mz_roles` and trips
-    // `restrict_to_user_objects`.
+    // Existence check and cluster routing. `mz_mcp_data_products.cluster` is
+    // non-null only when the role has USAGE on that cluster, so any value here
+    // is safe to route to. `NULLS LAST` prefers such a usable cluster when an
+    // object appears both with a usable cluster and as null (an object indexed
+    // on several clusters, some of which the role cannot use).
     let lookup_query = format!(
-        "SELECT \
-             dp.cluster, \
-             dp.cluster IS NULL OR cp.name IS NOT NULL AS has_cluster_usage \
-         FROM mz_internal.mz_mcp_data_products dp \
-         LEFT JOIN mz_internal.mz_show_my_cluster_privileges cp \
-             ON cp.name = dp.cluster AND cp.privilege_type = 'USAGE' \
+        "SELECT dp.cluster FROM mz_internal.mz_mcp_data_products dp \
          WHERE dp.object_name = {} \
-         ORDER BY \
-             (dp.cluster IS NOT NULL AND cp.name IS NOT NULL) DESC, \
-             dp.cluster NULLS LAST \
+         ORDER BY dp.cluster NULLS LAST \
          LIMIT 1",
         escaped_string_literal(name)
     );
@@ -1106,43 +1200,17 @@ async fn read_data_product(
     if lookup_rows.is_empty() {
         return Err(McpRequestError::DataProductNotFound(name.to_string()));
     }
-    let lookup_row = lookup_rows.first();
-    let catalog_cluster: Option<&str> = lookup_row
+    let catalog_cluster: Option<&str> = lookup_rows
+        .first()
         .and_then(|row| row.first())
         .and_then(|v| v.as_str());
-    // Treat anything other than an explicit `true` as a missing privilege,
-    // including the unexpected `NULL` case.
-    let has_cluster_usage: bool = lookup_row
-        .and_then(|row| row.get(1))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
 
-    // Override beats everything. Otherwise the read auto-routes to the
-    // catalog cluster, but only if the role has USAGE on it: silently
-    // falling back to the session default would mask a missing privilege
-    // as "slow reads forever", so we fail loud with an actionable error
-    // instead.
-    let target_cluster = match cluster_override {
-        Some(c) => c,
-        None => match catalog_cluster {
-            Some(c) if has_cluster_usage => c,
-            Some(c) => {
-                return Err(McpRequestError::ClusterPrivilegeMissing(format!(
-                    "Data product {name} is hosted on cluster {c:?}, which your role \
-                     does not have USAGE on. Pass `cluster: \"<a-cluster-you-have-USAGE-on>\"` \
-                     to read it from a different cluster (slower, no index), or have USAGE \
-                     granted on {c:?}.",
-                )));
-            }
-            None => {
-                // Defensive: every legitimate row in `mz_mcp_data_products`
-                // has a non-NULL cluster, so this is an internal error.
-                return Err(McpRequestError::Internal(anyhow!(
-                    "data product {name} has no cluster in the catalog"
-                )));
-            }
-        },
-    };
+    // An override wins. Otherwise route to the catalog cluster when the role
+    // can use it (non-null); when it is null the role lacks USAGE on the
+    // object's cluster, so leave the cluster unset and read on the session's
+    // default (serving) cluster. That still works: materialized views serve
+    // from persist and views recompute, just without index benefit.
+    let target_cluster: Option<&str> = cluster_override.or(catalog_cluster);
 
     // No row cap is applied here: the response is bounded by the size cap
     // enforced in format_rows_response (MCP_MAX_RESPONSE_SIZE), and by
@@ -1158,17 +1226,29 @@ async fn read_data_product(
 /// Builds the SQL the agent runs for `read_data_product`.
 ///
 /// `safe_name` must already be the validated, quoted form produced by
-/// [`safe_data_product_name`]. `target_cluster` is escaped as a SQL
-/// string literal and wrapped in `SET CLUSTER` inside a `BEGIN READ
-/// ONLY` transaction so the cluster choice is scoped to this read and
-/// does not leak into the session.
-fn build_read_query(safe_name: &str, limit: u32, target_cluster: &str) -> String {
-    format!(
-        "BEGIN READ ONLY; SET CLUSTER = {}; SELECT * FROM {} LIMIT {}\n; COMMIT;",
-        escaped_string_literal(target_cluster),
-        safe_name,
-        limit,
-    )
+/// [`safe_data_product_name`]. When `target_cluster` is `Some`, it is escaped
+/// as a SQL string literal and wrapped in `SET CLUSTER` inside the `BEGIN READ
+/// ONLY` transaction so the cluster choice is scoped to this read and does not
+/// leak into the session. When it is `None`, no `SET CLUSTER` is emitted and
+/// the read runs on the session's default (serving) cluster.
+fn build_read_query(safe_name: &str, limit: u32, target_cluster: Option<&str>) -> String {
+    let body = format!("SELECT * FROM {safe_name} LIMIT {limit}");
+    match target_cluster {
+        Some(cluster) => read_only_txn(
+            &format!("SET CLUSTER = {}", escaped_string_literal(cluster)),
+            &body,
+        ),
+        None => format!("BEGIN READ ONLY; {body}\n; COMMIT;"),
+    }
+}
+
+/// Wraps `body` in a `BEGIN READ ONLY; <set_clause>; <body>; COMMIT;` frame so
+/// `set_clause` is scoped to this read and does not leak into the session.
+///
+/// NOTE: the newline before `; COMMIT;` stops a trailing `--` comment in `body`
+/// from swallowing the `COMMIT`.
+fn read_only_txn(set_clause: &str, body: &str) -> String {
+    format!("BEGIN READ ONLY; {set_clause}; {body}\n; COMMIT;")
 }
 
 /// Validates query is a single SELECT, SHOW, or EXPLAIN statement.
@@ -1180,10 +1260,14 @@ fn validate_readonly_query(sql: &str) -> Result<(), McpRequestError> {
         ));
     }
 
-    // Parse the SQL to get AST
-    let stmts = parse(sql).map_err(|e| {
-        McpRequestError::QueryValidationFailed(format!("Failed to parse SQL: {}", e))
-    })?;
+    // Parse the SQL to get AST. `parse_with_limit` rejects inputs larger
+    // than `MAX_STATEMENT_BATCH_SIZE` before lexing so the MCP endpoint
+    // enforces the same 1 MB guard as the SQL HTTP path (DEX-64).
+    let stmts = parse_with_limit(sql)
+        .map_err(McpRequestError::QueryValidationFailed)?
+        .map_err(|e| {
+            McpRequestError::QueryValidationFailed(format!("Failed to parse SQL: {}", e))
+        })?;
 
     // Only allow a single statement
     if stmts.len() != 1 {
@@ -1219,24 +1303,53 @@ fn validate_readonly_query(sql: &str) -> Result<(), McpRequestError> {
 async fn execute_query(
     client: &mut AuthedClient,
     cluster: &str,
+    cluster_replica: Option<&str>,
     sql_query: &str,
     max_response_size: usize,
 ) -> Result<McpResult, McpRequestError> {
-    debug!(cluster = %cluster, "Executing user query");
+    debug!(cluster = %cluster, cluster_replica = ?cluster_replica, "Executing user query");
 
     validate_readonly_query(sql_query)?;
+    validate_cluster_replica(cluster_replica)?;
 
-    // Use READ ONLY transaction to prevent modifications
-    // Combine with SET CLUSTER (prometheus.rs:29-33 pattern)
-    let combined_query = format!(
-        "BEGIN READ ONLY; SET CLUSTER = {}; {}\n; COMMIT;",
-        escaped_string_literal(cluster),
-        sql_query
-    );
+    // READ ONLY prevents mutations; SET CLUSTER (and, when requested,
+    // SET CLUSTER_REPLICA) scope the placement to this read.
+    let combined_query = read_only_txn(&query_set_clause(cluster, cluster_replica), sql_query);
 
     let rows = execute_sql(client, &combined_query).await?;
 
     format_rows_response(rows, max_response_size)
+}
+
+/// Builds the `SET` clause for `execute_query`: always `SET CLUSTER`, plus
+/// `SET CLUSTER_REPLICA` when a replica is requested (e.g. for
+/// `EXPLAIN ANALYZE` on a cluster with multiple replicas). Both names pass
+/// through `escaped_string_literal` since they are interpolated into SQL
+/// string literals.
+fn query_set_clause(cluster: &str, cluster_replica: Option<&str>) -> String {
+    let mut set_clause = format!("SET CLUSTER = {}", escaped_string_literal(cluster));
+    if let Some(replica) = cluster_replica {
+        set_clause.push_str(&format!(
+            "; SET CLUSTER_REPLICA = {}",
+            escaped_string_literal(replica)
+        ));
+    }
+    set_clause
+}
+
+/// Rejects an empty or whitespace-only `cluster_replica`. Such a name would
+/// otherwise produce `SET CLUSTER_REPLICA = ''`, which fails deep in the engine
+/// as a generic execution error rather than a clean validation error. `None`
+/// (no replica pin requested) is always valid.
+fn validate_cluster_replica(cluster_replica: Option<&str>) -> Result<(), McpRequestError> {
+    if let Some(replica) = cluster_replica {
+        if replica.trim().is_empty() {
+            return Err(McpRequestError::QueryValidationFailed(
+                "cluster_replica must not be empty or whitespace-only".to_string(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 async fn query_system_catalog(
@@ -1257,9 +1370,9 @@ async fn query_system_catalog(
     // from resolving to user-created objects (e.g. a view `public.mz_leak`) via
     // the session's search_path (mirrors the `BEGIN READ ONLY; SET ...` pattern
     // used by the agent `query` tool).
-    let combined_query = format!(
-        "BEGIN READ ONLY; SET search_path = mz_catalog, mz_internal, pg_catalog, information_schema; {}; COMMIT;",
-        sql_query
+    let combined_query = read_only_txn(
+        "SET search_path = mz_catalog, mz_internal, pg_catalog, information_schema",
+        sql_query,
     );
 
     let rows = execute_sql(client, &combined_query).await?;
@@ -1330,10 +1443,13 @@ impl<'ast> Visit<'ast, Raw> for TableReferenceCollector {
 /// to prevent misuse of the developer endpoint for arbitrary computation).
 /// SHOW and EXPLAIN statements are allowed without table references.
 fn validate_system_catalog_query(sql: &str) -> Result<(), McpRequestError> {
-    // Parse the SQL to validate it
-    let stmts = parse(sql).map_err(|e| {
-        McpRequestError::QueryValidationFailed(format!("Failed to parse SQL: {}", e))
-    })?;
+    // Parse the SQL to validate it. `parse_with_limit` enforces the 1 MB
+    // guard shared with the SQL HTTP path (DEX-64).
+    let stmts = parse_with_limit(sql)
+        .map_err(McpRequestError::QueryValidationFailed)?
+        .map_err(|e| {
+            McpRequestError::QueryValidationFailed(format!("Failed to parse SQL: {}", e))
+        })?;
 
     if stmts.is_empty() {
         return Err(McpRequestError::QueryValidationFailed(
@@ -1353,12 +1469,12 @@ fn validate_system_catalog_query(sql: &str) -> Result<(), McpRequestError> {
         |s: &str| SYSTEM_SCHEMAS.contains(&s) && s != namespaces::MZ_UNSAFE_SCHEMA;
 
     // Helper to check if a table reference is allowed. Unqualified references
-    // are accepted here because execution uses a tight `search_path` containing
-    // only system schemas (see `query_system_catalog`), so user-created views
-    // like `public.mz_leak` cannot be reached by an unqualified name.
+    // are accepted when they carry an unambiguous system prefix (`mz_`/`pg_`);
+    // execution pins `search_path` to system schemas (see `query_system_catalog`),
+    // so a user view like `public.mz_leak` cannot be reached by an unqualified name.
     let is_system_table = |(schema, table_name): &(Option<String>, String)| match schema {
         Some(s) => is_allowed_schema(s.as_str()),
-        None => table_name.starts_with("mz_"),
+        None => table_name.starts_with("mz_") || table_name.starts_with("pg_"),
     };
 
     // Check that all table references are system tables
@@ -1396,6 +1512,129 @@ fn validate_system_catalog_query(sql: &str) -> Result<(), McpRequestError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::sql::{Description, SqlError};
+
+    fn rows_result(rows: Vec<Vec<serde_json::Value>>) -> SqlResult {
+        SqlResult::Rows {
+            tag: String::new(),
+            rows,
+            desc: Description { columns: vec![] },
+            notices: vec![],
+        }
+    }
+
+    fn ok_result() -> SqlResult {
+        SqlResult::Ok {
+            ok: String::new(),
+            notices: vec![],
+            parameters: vec![],
+        }
+    }
+
+    fn err_result(message: &str) -> SqlResult {
+        SqlResult::Err {
+            error: SqlError {
+                message: message.to_string(),
+                code: String::new(),
+                detail: None,
+                hint: None,
+                position: None,
+            },
+            notices: vec![],
+        }
+    }
+
+    /// The row-returning statement's rows are returned, ignoring the `Ok`
+    /// framing statements around it.
+    #[mz_ore::test]
+    fn test_select_single_rows_extracts_rows() {
+        let rows = vec![vec![serde_json::json!(1)]];
+        let results = vec![
+            ok_result(),
+            ok_result(),
+            rows_result(rows.clone()),
+            ok_result(),
+        ];
+        assert_eq!(select_single_rows(results).unwrap(), rows);
+    }
+
+    /// A response with no row-returning statement is an error.
+    #[mz_ore::test]
+    fn test_select_single_rows_requires_rows() {
+        let err = select_single_rows(vec![ok_result(), ok_result()]).unwrap_err();
+        assert!(
+            matches!(err, McpRequestError::QueryExecutionFailed(_)),
+            "{err:?}"
+        );
+    }
+
+    /// The invariant is enforced: a second row-returning statement is an
+    /// internal error rather than a silently dropped result.
+    #[mz_ore::test]
+    fn test_select_single_rows_rejects_multiple() {
+        let results = vec![rows_result(vec![]), rows_result(vec![])];
+        let err = select_single_rows(results).unwrap_err();
+        assert!(matches!(err, McpRequestError::Internal(_)), "{err:?}");
+    }
+
+    /// A statement error is surfaced.
+    #[mz_ore::test]
+    fn test_select_single_rows_surfaces_error() {
+        let err = select_single_rows(vec![ok_result(), err_result("boom")]).unwrap_err();
+        match err {
+            McpRequestError::QueryExecutionFailed(msg) => assert_eq!(msg, "boom"),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    /// The DNS-rebinding defense: a disallowed `Origin` is rejected with 403,
+    /// an allowed one passes, and a missing one passes (non-browser clients).
+    #[mz_ore::test]
+    fn test_validate_origin() {
+        let allowed = [HeaderValue::from_static("https://good.example")];
+
+        assert!(validate_origin(&HeaderMap::new(), &allowed).is_none());
+
+        let mut ok = HeaderMap::new();
+        ok.insert(http::header::ORIGIN, allowed[0].clone());
+        assert!(validate_origin(&ok, &allowed).is_none());
+
+        let mut bad = HeaderMap::new();
+        bad.insert(
+            http::header::ORIGIN,
+            HeaderValue::from_static("https://evil.example"),
+        );
+        let rejected = validate_origin(&bad, &allowed);
+        assert_eq!(
+            rejected
+                .expect("disallowed origin must be rejected")
+                .status(),
+            StatusCode::FORBIDDEN,
+        );
+    }
+
+    /// The two constructors set the JSON-RPC version and put the payload in
+    /// the right one of the mutually-exclusive `result` / `error` fields.
+    #[mz_ore::test]
+    fn test_mcp_response_constructors() {
+        let id = serde_json::json!(1);
+
+        let ok = McpResponse::success(
+            id.clone(),
+            McpResult::ToolContent(ToolContentResult {
+                content: vec![],
+                is_error: false,
+            }),
+        );
+        assert_eq!(ok.jsonrpc, JSONRPC_VERSION);
+        assert!(ok.result.is_some());
+        assert!(ok.error.is_none());
+
+        let err = McpResponse::error(id, McpRequestError::ToolNotFound("t".to_string()).into());
+        assert_eq!(err.jsonrpc, JSONRPC_VERSION);
+        assert!(err.result.is_none());
+        assert!(err.error.is_some());
+    }
 
     #[mz_ore::test]
     fn test_validate_readonly_query_select() {
@@ -1485,6 +1724,39 @@ mod tests {
         assert!(validate_readonly_query("   ").is_err());
     }
 
+    /// Regression test for DEX-64: without the 1 MB parser guard, the MCP
+    /// validators would happily lex and parse multi-megabyte input. Both
+    /// `validate_readonly_query` and `validate_system_catalog_query` now go
+    /// through `parse_with_limit`, so an oversized batch is rejected with the
+    /// same "statement batch size cannot exceed" message the SQL HTTP path
+    /// emits.
+    #[mz_ore::test]
+    fn test_validate_readonly_query_enforces_size_limit() {
+        use mz_sql_parser::parser::MAX_STATEMENT_BATCH_SIZE;
+        // Just over the limit so the guard is the *only* thing that rejects.
+        let oversized: String =
+            "SELECT 1;".repeat((MAX_STATEMENT_BATCH_SIZE / "SELECT 1;".len()) + 1);
+        let err = validate_readonly_query(&oversized).expect_err("should be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("statement batch size cannot exceed"),
+            "expected size-guard error, got: {msg}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_validate_system_catalog_query_enforces_size_limit() {
+        use mz_sql_parser::parser::MAX_STATEMENT_BATCH_SIZE;
+        let stmt = "SELECT * FROM mz_tables;";
+        let oversized: String = stmt.repeat((MAX_STATEMENT_BATCH_SIZE / stmt.len()) + 1);
+        let err = validate_system_catalog_query(&oversized).expect_err("should be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("statement batch size cannot exceed"),
+            "expected size-guard error, got: {msg}"
+        );
+    }
+
     #[mz_ore::test]
     fn test_validate_system_catalog_query_accepts_mz_tables() {
         assert!(validate_system_catalog_query("SELECT * FROM mz_tables").is_ok());
@@ -1563,6 +1835,14 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    #[mz_ore::test]
+    fn test_validate_system_catalog_query_unqualified_pg_catalog() {
+        // Unqualified `pg_`-prefixed names are as unambiguously system as `mz_`
+        // ones, and resolve safely under the pinned search_path.
+        assert!(validate_system_catalog_query("SELECT * FROM pg_class").is_ok());
+        assert!(validate_system_catalog_query("SELECT nspname FROM pg_namespace").is_ok());
     }
 
     #[mz_ore::test]
@@ -1801,7 +2081,7 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     async fn test_tools_list_agent_query_tool_disabled() {
-        let result = handle_tools_list(McpEndpointType::Agent, false, 1_000_000)
+        let result = handle_tools_list(McpEndpointType::Agent, false, true, 1_000_000)
             .await
             .unwrap();
         let McpResult::ToolsList(list) = result else {
@@ -1818,7 +2098,7 @@ mod tests {
         );
         assert!(
             tool_names.contains(&"read_data_product"),
-            "read_data_product should always be present"
+            "read_data_product should be present when its flag is on"
         );
         assert!(
             !tool_names.contains(&"query"),
@@ -1828,7 +2108,7 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     async fn test_tools_list_agent_query_tool_enabled() {
-        let result = handle_tools_list(McpEndpointType::Agent, true, 1_000_000)
+        let result = handle_tools_list(McpEndpointType::Agent, true, true, 1_000_000)
             .await
             .unwrap();
         let McpResult::ToolsList(list) = result else {
@@ -1845,7 +2125,7 @@ mod tests {
         );
         assert!(
             tool_names.contains(&"read_data_product"),
-            "read_data_product should always be present"
+            "read_data_product should be present when its flag is on"
         );
         assert!(
             tool_names.contains(&"query"),
@@ -1854,8 +2134,77 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    async fn test_tools_list_agent_read_data_product_tool_disabled() {
+        let result = handle_tools_list(McpEndpointType::Agent, true, false, 1_000_000)
+            .await
+            .unwrap();
+        let McpResult::ToolsList(list) = result else {
+            panic!("Expected ToolsList result");
+        };
+        let tool_names: Vec<&str> = list.tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(
+            tool_names.contains(&"get_data_products"),
+            "get_data_products should always be present"
+        );
+        assert!(
+            tool_names.contains(&"get_data_product_details"),
+            "get_data_product_details should always be present"
+        );
+        assert!(
+            !tool_names.contains(&"read_data_product"),
+            "read_data_product should be hidden when disabled"
+        );
+        assert!(
+            tool_names.contains(&"query"),
+            "query tool should remain present when enabled"
+        );
+    }
+
+    /// Both read tools off is a valid (if unusual) config where the agent
+    /// is discovery-only. Pin the behavior: only get_data_products and
+    /// get_data_product_details are advertised, and the initialize
+    /// instructions do not tell the agent to use a tool that isn't listed.
+    #[mz_ore::test(tokio::test)]
+    async fn test_tools_list_agent_both_read_tools_disabled() {
+        let result = handle_tools_list(McpEndpointType::Agent, false, false, 1_000_000)
+            .await
+            .unwrap();
+        let McpResult::ToolsList(list) = result else {
+            panic!("Expected ToolsList result");
+        };
+        let tool_names: Vec<&str> = list.tools.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(
+            tool_names
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>(),
+            ["get_data_product_details", "get_data_products"]
+                .into_iter()
+                .collect(),
+            "only discovery tools should be advertised when both read flags are off",
+        );
+
+        let instructions = endpoint_instructions(McpEndpointType::Agent, false, false)
+            .expect("agent instructions must be present");
+        assert!(
+            !instructions.contains("Use the `query` tool"),
+            "instructions must not point at query when it is hidden: {instructions}",
+        );
+        assert!(
+            !instructions.contains("`read_data_product` automatically"),
+            "instructions must not point at read_data_product when it is hidden: {instructions}",
+        );
+        assert!(
+            instructions.contains("discovery only"),
+            "instructions must tell the agent it is discovery-only: {instructions}",
+        );
+    }
+
+    #[mz_ore::test(tokio::test)]
     async fn test_tools_list_developer_query_tool_disabled() {
-        let result = handle_tools_list(McpEndpointType::Developer, false, 1_000_000)
+        // Developer endpoint doesn't expose read_data_product; the flag is
+        // orthogonal, so pass whichever value.
+        let result = handle_tools_list(McpEndpointType::Developer, false, true, 1_000_000)
             .await
             .unwrap();
         let McpResult::ToolsList(list) = result else {
@@ -1874,7 +2223,7 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     async fn test_tools_list_developer_query_tool_enabled() {
-        let result = handle_tools_list(McpEndpointType::Developer, true, 1_000_000)
+        let result = handle_tools_list(McpEndpointType::Developer, true, true, 1_000_000)
             .await
             .unwrap();
         let McpResult::ToolsList(list) = result else {
@@ -1957,6 +2306,21 @@ mod tests {
         assert!(safe_data_product_name("   ").is_err());
     }
 
+    /// DEX-64: `parse_item_name` is unbounded on its own; the MCP path
+    /// switches to `parse_item_name_with_limit` so a pathological name (e.g.
+    /// millions of `(` characters) is rejected before lexing.
+    #[mz_ore::test]
+    fn test_safe_data_product_name_enforces_size_limit() {
+        use mz_sql_parser::parser::MAX_STATEMENT_BATCH_SIZE;
+        let oversized: String = "(".repeat(MAX_STATEMENT_BATCH_SIZE + 1);
+        let err = safe_data_product_name(&oversized).expect_err("should be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("statement batch size cannot exceed"),
+            "expected size-guard error, got: {msg}"
+        );
+    }
+
     #[mz_ore::test]
     fn test_safe_data_product_name_rejects_sql_injection() {
         // Attempted injection via semicolon
@@ -1969,6 +2333,73 @@ mod tests {
         assert!(safe_data_product_name("my_view WHERE 1=1 --").is_err());
     }
 
+    /// A trailing `--` comment in the body must not swallow the `; COMMIT;`.
+    #[mz_ore::test]
+    fn test_read_only_txn_comment_cannot_swallow_commit() {
+        let sql = read_only_txn("SET CLUSTER = 'c'", "SELECT 1 --");
+        assert!(
+            sql.contains("\n; COMMIT;"),
+            "COMMIT must sit on its own line: {sql}",
+        );
+    }
+
+    // ── query_set_clause tests (QAR-136) ───────────────────────────────
+
+    /// Without a replica, only `SET CLUSTER` is emitted.
+    #[mz_ore::test]
+    fn test_query_set_clause_without_replica() {
+        let clause = query_set_clause("prod_cluster", None);
+        assert_eq!(clause, "SET CLUSTER = 'prod_cluster'");
+    }
+
+    /// With a replica, `SET CLUSTER_REPLICA` follows `SET CLUSTER`, scoping
+    /// the read to one replica (what makes EXPLAIN ANALYZE usable on
+    /// clusters with multiple replicas).
+    #[mz_ore::test]
+    fn test_query_set_clause_with_replica() {
+        let clause = query_set_clause("prod_cluster", Some("r1"));
+        assert_eq!(
+            clause,
+            "SET CLUSTER = 'prod_cluster'; SET CLUSTER_REPLICA = 'r1'"
+        );
+    }
+
+    /// Replica names are interpolated into a SQL string literal, so they get
+    /// the same escaping treatment as cluster names. Defends against
+    /// injection via adversarial replica names.
+    #[mz_ore::test]
+    fn test_query_set_clause_escapes_replica_name() {
+        let clause = query_set_clause("c", Some("evil'; DROP TABLE secrets; --"));
+        assert_eq!(
+            clause,
+            "SET CLUSTER = 'c'; SET CLUSTER_REPLICA = 'evil''; DROP TABLE secrets; --'"
+        );
+    }
+
+    /// A `None` replica (no pinning requested) is always valid, and a normal
+    /// replica name passes validation.
+    #[mz_ore::test]
+    fn test_validate_cluster_replica_accepts_none_and_names() {
+        assert!(validate_cluster_replica(None).is_ok());
+        assert!(validate_cluster_replica(Some("r1")).is_ok());
+    }
+
+    /// An empty or whitespace-only replica name is rejected as a validation
+    /// error up front, rather than producing `SET CLUSTER_REPLICA = ''` that
+    /// fails deep in the engine as a generic execution error.
+    #[mz_ore::test]
+    fn test_validate_cluster_replica_rejects_empty() {
+        for name in ["", "   ", "\t\n"] {
+            assert!(
+                matches!(
+                    validate_cluster_replica(Some(name)),
+                    Err(McpRequestError::QueryValidationFailed(_))
+                ),
+                "expected validation error for {name:?}",
+            );
+        }
+    }
+
     // ── build_read_query tests (DEX-27) ────────────────────────────────
 
     /// The read is wrapped in a `BEGIN READ ONLY` transaction so the
@@ -1976,9 +2407,23 @@ mod tests {
     /// into the rest of the session.
     #[mz_ore::test]
     fn test_build_read_query_with_cluster() {
-        let sql = build_read_query("\"db\".\"sch\".\"v\"", 50, "prod_cluster");
+        let sql = build_read_query("\"db\".\"sch\".\"v\"", 50, Some("prod_cluster"));
         assert!(sql.contains("BEGIN READ ONLY"), "{sql}");
         assert!(sql.contains("SET CLUSTER = 'prod_cluster'"), "{sql}");
+        assert!(
+            sql.contains("SELECT * FROM \"db\".\"sch\".\"v\" LIMIT 50"),
+            "{sql}",
+        );
+        assert!(sql.contains("COMMIT"), "{sql}");
+    }
+
+    /// With no cluster (the role lacks USAGE on the object's cluster, DEX-66),
+    /// the read omits `SET CLUSTER` and runs on the session's serving cluster.
+    #[mz_ore::test]
+    fn test_build_read_query_without_cluster() {
+        let sql = build_read_query("\"db\".\"sch\".\"v\"", 50, None);
+        assert!(sql.contains("BEGIN READ ONLY"), "{sql}");
+        assert!(!sql.contains("SET CLUSTER"), "{sql}");
         assert!(
             sql.contains("SELECT * FROM \"db\".\"sch\".\"v\" LIMIT 50"),
             "{sql}",
@@ -1992,7 +2437,11 @@ mod tests {
     /// adversarial cluster names.
     #[mz_ore::test]
     fn test_build_read_query_escapes_cluster_name() {
-        let sql = build_read_query("\"db\".\"sch\".\"v\"", 10, "evil'; DROP TABLE secrets; --");
+        let sql = build_read_query(
+            "\"db\".\"sch\".\"v\"",
+            10,
+            Some("evil'; DROP TABLE secrets; --"),
+        );
         // The single quote in `evil'` must be doubled inside the literal.
         assert!(
             sql.contains("SET CLUSTER = 'evil''; DROP TABLE secrets; --'"),

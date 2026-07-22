@@ -1061,7 +1061,8 @@ pub static SSH_CHECK_INTERVAL: VarDefinition = VarDefinition::new(
     value!(Duration; mz_ssh_util::tunnel::DEFAULT_CHECK_INTERVAL),
     "Controls the check interval for connections to SSH bastions via `mz_ssh_util`.",
     false,
-);
+)
+.with_constraint(&NON_ZERO_DURATION);
 
 /// Controls the connect timeout for connections to SSH bastions via `mz_ssh_util`.
 pub static SSH_CONNECT_TIMEOUT: VarDefinition = VarDefinition::new(
@@ -1193,7 +1194,8 @@ pub static STORAGE_STATISTICS_INTERVAL: VarDefinition = VarDefinition::new(
     "The interval to submit statistics to `mz_source_statistics_per_worker` \
         and `mz_sink_statistics` (Materialize).",
     false,
-);
+)
+.with_constraint(&NON_ZERO_DURATION);
 
 /// The interval to collect statistics for `mz_source_statistics_per_worker` and `mz_sink_statistics_per_worker` in
 /// clusterd. Controls the accuracy of metrics.
@@ -1390,6 +1392,28 @@ pub static ENABLE_INTERNAL_STATEMENT_LOGGING: VarDefinition = VarDefinition::new
     "enable_internal_statement_logging",
     value!(bool; false),
     "Whether to log statements from the `mz_system` user.",
+    false,
+);
+
+/// When on, the SQL frontends log incoming statements and other frontend
+/// messages at info level as soon as they arrive, before processing them
+/// (except that SQL text is parsed, for redaction). Messages consumed by
+/// pgwire's COPY subprotocol or its post-error drain loop are not logged.
+///
+/// This is an emergency diagnostic for statements that crash the process
+/// before they reach the statement log (or before its contents are written
+/// out to persist). It adds a lot of log volume, so use it only in emergencies,
+/// i.e. to debug active incidents.
+///
+/// SQL text is logged with its literals redacted, which is the same redaction
+/// the statement log applies, see `redact_sql_for_logging`.
+pub static ENABLE_STATEMENT_ARRIVAL_LOGGING: VarDefinition = VarDefinition::new(
+    "enable_statement_arrival_logging",
+    value!(bool; false),
+    "Whether to log incoming statements and other frontend messages at info \
+    level as they arrive at the SQL frontends, before processing. SQL text is \
+    logged with its literals redacted, as in the statement log. Use it only in \
+    emergencies, i.e. debugging active incidents.",
     false,
 );
 
@@ -1947,6 +1971,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: unsafe_enable_unbounded_custom_type_resolution,
+        desc: "resolving custom types without the depth and complexity limits that bound resolution work",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_within_timestamp_order_by_in_subscribe,
         desc: "`WITHIN TIMESTAMP ORDER BY ..`",
         default: false,
@@ -1967,12 +1997,6 @@ feature_flags!(
     {
         name: enable_kafka_broker_matching_rules,
         desc: "MATCHING broker rules in BROKERS for Kafka PrivateLink connections",
-        default: false,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_glue_schema_registry,
-        desc: "CREATE CONNECTION ... TO AWS GLUE SCHEMA REGISTRY",
         default: false,
         enable_for_item_parsing: true,
     },
@@ -2036,6 +2060,13 @@ feature_flags!(
         default: true,
         enable_for_item_parsing: false,
         scope: ParameterScope::Cluster,
+    },
+    {
+        name: enable_fixed_correlated_cte_lowering,
+        desc: "CTE-aware branch keys in HIR-to-MIR lowering, fixing references to \
+               correlated CTEs from nested correlated scopes",
+        default: true,
+        enable_for_item_parsing: false,
     },
     {
         name: enable_time_at_time_zone,
@@ -2103,6 +2134,12 @@ feature_flags!(
         name: enable_cluster_schedule_refresh,
         desc: "`SCHEDULE = ON REFRESH` cluster option",
         default: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_auto_scaling_strategy,
+        desc: "`AUTO SCALING STRATEGY` cluster option",
+        default: true,
         enable_for_item_parsing: true,
     },
     {
@@ -2318,6 +2355,7 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_simplify_quantified_comparisons: vars.enable_simplify_quantified_comparisons(),
             enable_coalesce_case_transform: vars.enable_coalesce_case_transform(),
             enable_will_distinct_propagation: vars.enable_will_distinct_propagation(),
+            enable_fixed_correlated_cte_lowering: vars.enable_fixed_correlated_cte_lowering(),
         }
     }
 }
@@ -2360,6 +2398,7 @@ mod tests {
             enable_simplify_quantified_comparisons,
             enable_coalesce_case_transform,
             enable_will_distinct_propagation,
+            enable_fixed_correlated_cte_lowering,
         } = false_features;
 
         let mut vars = SystemVars::new();
@@ -2390,6 +2429,7 @@ mod tests {
         set_var!(enable_simplify_quantified_comparisons);
         set_var!(enable_coalesce_case_transform);
         set_var!(enable_will_distinct_propagation);
+        set_var!(enable_fixed_correlated_cte_lowering);
 
         // Enable for item parsing, then ensure we still get the same optimizer features.
         vars.enable_for_item_parsing();

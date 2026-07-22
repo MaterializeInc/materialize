@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,162 +9,287 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/drop_user
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/drop_user
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
-
-# not supported yet
-halt
 
 mode cockroach
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER user1
 
-query T colnames
+# Not supported by Materialize.
+onlyif cockroach
+query TTT colnames
 SHOW USERS
 ----
-user_name
-root
-testuser
-user1
+username  options  member_of
+admin     ·        {}
+root      ·        {admin}
+testuser  ·        {}
+user1     ·        {}
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP USER user1
 
-query T colnames
+# Not supported by Materialize.
+onlyif cockroach
+query TTT colnames
 SHOW USERS
 ----
-user_name
-root
-testuser
+username  options  member_of
+admin     ·        {}
+root      ·        {admin}
+testuser  ·        {}
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER user1
 
-query T colnames
+# Not supported by Materialize.
+onlyif cockroach
+query TTT colnames
 SHOW USERS
 ----
-user_name
-root
-testuser
-user1
+username  options  member_of
+admin     ·        {}
+root      ·        {admin}
+testuser  ·        {}
+user1     ·        {}
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP USER USEr1
 
-query T colnames
+# Not supported by Materialize.
+onlyif cockroach
+query TTT colnames
 SHOW USERS
 ----
-user_name
-root
-testuser
+username  options  member_of
+admin     ·        {}
+root      ·        {admin}
+testuser  ·        {}
 
-statement error user user1 does not exist
+statement error unknown role 'user1'
 DROP USER user1
 
-statement error user user1 does not exist
+statement error unknown role 'user1'
 DROP USER usER1
 
 statement ok
 DROP USER IF EXISTS user1
 
-statement error username "node" reserved
+statement error pgcode 42939 unknown role 'node'
 DROP USER node
 
-statement error pq: username "foo☂" invalid; usernames are case insensitive, must start with a letter or underscore, may contain letters, digits, dashes, or underscores, and must not exceed 63 characters
+statement error pgcode 42939 role name "public" is reserved
+DROP USER public
+
+statement error pgcode 42939 unknown role 'none'
+DROP USER "none"
+
+statement error pgcode 22023 unknown role 'current_user'
+DROP ROLE CURRENT_USER
+
+statement error pgcode 22023 unknown role 'user4'
+DROP ROLE user4, SESSION_USER
+
+statement error unknown role 'foo☂'
 DROP USER foo☂
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER user1
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER user2
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER user3
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER user4
 
-query T colnames
+# Not supported by Materialize.
+onlyif cockroach
+query TTT colnames
 SHOW USERS
 ----
-user_name
-root
-testuser
-user1
-user2
-user3
-user4
+username  options  member_of
+admin     ·        {}
+root      ·        {admin}
+testuser  ·        {}
+user1     ·        {}
+user2     ·        {}
+user3     ·        {}
+user4     ·        {}
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP USER user1,user2
 
-query T colnames
+# Not supported by Materialize.
+onlyif cockroach
+query TTT colnames
 SHOW USERS
 ----
-user_name
-root
-testuser
-user3
-user4
+username  options  member_of
+admin     ·        {}
+root      ·        {admin}
+testuser  ·        {}
+user3     ·        {}
+user4     ·        {}
 
-statement error user user1 does not exist
+statement error unknown role 'user1'
 DROP USER user1,user3
 
-query T colnames
+# Not supported by Materialize.
+onlyif cockroach
+query TTT colnames
 SHOW USERS
 ----
-user_name
-root
-testuser
-user3
-user4
+username  options  member_of
+admin     ·        {}
+root      ·        {admin}
+testuser  ·        {}
+user3     ·        {}
+user4     ·        {}
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER user1
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE foo(x INT);
- GRANT SELECT ON foo TO user3;
- GRANT SELECT ON DATABASE test TO user1
+GRANT SELECT ON foo TO user3;
+GRANT CONNECT ON DATABASE test TO user1
 
-statement error cannot drop users or roles user1, user3: grants still exist on test, test.public.foo
+# Not supported by Materialize.
+onlyif cockroach
+statement error cannot drop roles/users user1, user3: grants still exist on test, test.public.foo
 DROP USER IF EXISTS user1,user3
 
-statement error cannot drop users or roles user1, user3: grants still exist on test
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
 REVOKE SELECT ON foo FROM user3;
-  DROP USER IF EXISTS user1,user3
+
+# Not supported by Materialize.
+onlyif cockroach
+statement error cannot drop roles/users user1, user3: grants still exist on test
+DROP USER IF EXISTS user1,user3
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+REVOKE CONNECT ON DATABASE test FROM user1;
 
 statement ok
-REVOKE SELECT ON DATABASE test FROM user1;
-  DROP USER IF EXISTS user1,user3
+DROP USER IF EXISTS user1,user3
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
-PREPARE du AS DROP USER $1;
- EXECUTE du('user4')
+PREPARE du AS DROP USER user4;
+EXECUTE du
 
-query T colnames
+# Not supported by Materialize.
+onlyif cockroach
+query TTT colnames
 SHOW USERS
 ----
-user_name
-root
-testuser
+username  options  member_of
+admin     ·        {}
+root      ·        {admin}
+testuser  ·        {}
 
 user testuser
 
-statement error pq: user testuser does not have DELETE privilege on relation users
+statement error unknown role 'user2'
 DROP USER user2
 
 user root
 
-statement error pq: cannot drop user or role root: grants still exist on .*
+statement error unknown role 'root'
 DROP USER root
 
-statement error pq: cannot drop user or role admin: grants still exist on .*
+statement error unknown role 'admin'
 DROP USER admin
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE USER user1
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+INSERT INTO system.scheduled_jobs (schedule_name, owner, executor_type,execution_args) values('schedule', 'user1', 'invalid', '');
+
+statement error unknown role 'user1'
+DROP USER user1
+
+# Verify that schemas are fully qualified in the error message.
+subtest same_schema_name
+
+statement ok
+CREATE ROLE schema_owner
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+GRANT admin TO schema_owner
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+SET ROLE schema_owner
+
+statement ok
+CREATE SCHEMA the_schema
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+USE defaultdb
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE SCHEMA the_schema
+
+statement ok
+RESET ROLE;
+RESET DATABASE
+
+# Not supported by Materialize.
+onlyif cockroach
+statement error role schema_owner cannot be dropped because some objects depend on it\nowner of schema defaultdb.the_schema\nowner of schema test.the_schema
+DROP ROLE schema_owner
+
+subtest end

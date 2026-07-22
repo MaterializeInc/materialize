@@ -5412,8 +5412,22 @@ fn run_mcp_datadriven_inner(
                 other => panic!("unknown directive: {}", other),
             };
 
-            let json: serde_json::Value = serde_json::from_str(&tc.input).unwrap();
-            let res = Client::new().post(url).json(&json).send().unwrap();
+            // Directive args: `get` sends a GET request instead of POST (the
+            // input is ignored), and `origin` attaches a non-allowlisted
+            // Origin header to exercise the DNS-rebinding defense. (Datadriven
+            // arg values cannot contain `:` or `/`, so the origin value is a
+            // fixed constant here rather than a directive parameter.)
+            let client = Client::new();
+            let mut req = if tc.args.contains_key("get") {
+                client.get(url)
+            } else {
+                let json: serde_json::Value = serde_json::from_str(&tc.input).unwrap();
+                client.post(url).json(&json)
+            };
+            if tc.args.contains_key("origin") {
+                req = req.header("origin", "https://evil.example.com");
+            }
+            let res = req.send().unwrap();
 
             let status = res.status();
             let body = res.text().unwrap();
@@ -5504,15 +5518,28 @@ fn test_mcp_developer_disabled() {
     run_mcp_datadriven("tests/testdata/mcp/developer_disabled", harness);
 }
 
+/// Tests that MCP tool responses larger than `mcp_max_response_size` are
+/// rejected with an error telling the agent to narrow the query, instead of
+/// returning an unbounded payload.
+#[mz_ore::test]
+fn test_mcp_developer_response_size_limit() {
+    let harness = test_util::TestHarness::default()
+        .with_mcp_routes(false, true)
+        .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string())
+        .with_system_parameter_default("mcp_max_response_size".to_string(), "1024".to_string());
+    run_mcp_datadriven("tests/testdata/mcp/developer_response_limit", harness);
+}
+
 /// Regression test for database-issues#11320.
 ///
-/// The developer endpoint validator allows unqualified `mz_*` table names as
-/// a UX convenience. Before the fix, an attacker with CREATE privileges could
-/// create `public.mz_leak` pointing at sensitive data and the session's
-/// `search_path` would resolve the unqualified name to that view, bypassing
-/// the system-catalog-only restriction. The fix sets a tight `search_path`
-/// containing only system schemas before executing the query, so `mz_leak`
-/// cannot resolve to a user-created object.
+/// The developer endpoint validator allows unqualified `mz_*` and `pg_*` table
+/// names as a UX convenience. Before the fix, an attacker with CREATE
+/// privileges could create `public.mz_leak` (or `public.pg_leak`) pointing at
+/// sensitive data and the session's `search_path` would resolve the
+/// unqualified name to that view, bypassing the system-catalog-only
+/// restriction. The fix sets a tight `search_path` containing only system
+/// schemas before executing the query, so neither `mz_leak` nor `pg_leak` can
+/// resolve to a user-created object.
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_mcp_developer_search_path_defense() {
@@ -5555,13 +5582,19 @@ fn test_mcp_developer_search_path_defense() {
             ))
             .unwrap();
 
-        // Attacker-created view with the `mz_` prefix.
+        // Attacker-created views with `mz_` and `pg_` prefixes. Distinct
+        // payloads so any leak is unambiguously attributed to one attack.
         super_user
             .batch_execute("CREATE VIEW public.mz_leak AS SELECT 'leaked_secret'::text AS payload")
             .unwrap();
         super_user
+            .batch_execute(
+                "CREATE VIEW public.pg_leak AS SELECT 'pg_leaked_secret'::text AS payload",
+            )
+            .unwrap();
+        super_user
             .batch_execute(&format!(
-                "GRANT SELECT ON public.mz_leak TO {}",
+                "GRANT SELECT ON public.mz_leak, public.pg_leak TO {}",
                 &HTTP_DEFAULT_USER.name
             ))
             .unwrap();
@@ -5624,13 +5657,65 @@ fn test_mcp_developer_search_path_defense() {
         "public.mz_leak should be rejected by the validator, got: {body}"
     );
 
+    // Same attack via the `pg_` prefix: unqualified `pg_leak` must not
+    // resolve to `public.pg_leak` under the pinned search_path.
+    let (status, body) = mcp_post(
+        &developer_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "query_system_catalog",
+                "arguments": {"sql_query": "SELECT * FROM pg_leak"}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"].is_object(),
+        "unqualified pg_leak should not resolve to the user view, got: {body}"
+    );
+    let result_text = body
+        .get("result")
+        .and_then(|r| r["content"].get(0))
+        .and_then(|c| c["text"].as_str())
+        .unwrap_or("");
+    assert!(
+        !result_text.contains("pg_leaked_secret"),
+        "user view contents must not leak through MCP, got: {body}"
+    );
+
+    // And qualified `public.pg_leak` is rejected by the validator, same as
+    // the mz_ variant.
+    let (status, body) = mcp_post(
+        &developer_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": {
+                "name": "query_system_catalog",
+                "arguments": {"sql_query": "SELECT * FROM public.pg_leak"}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("non-system"),
+        "public.pg_leak should be rejected by the validator, got: {body}"
+    );
+
     // Legitimate unqualified system queries must still work: the tight
     // search_path resolves `mz_tables` to `mz_catalog.mz_tables`.
     let (status, body) = mcp_post(
         &developer_url,
         serde_json::json!({
             "jsonrpc": "2.0",
-            "id": 3,
+            "id": 5,
             "method": "tools/call",
             "params": {
                 "name": "query_system_catalog",

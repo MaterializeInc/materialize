@@ -116,20 +116,41 @@ impl WithOptionName for AvroSchemaOptionName {
 }
 
 /// Options accepted on the `USING AWS GLUE SCHEMA REGISTRY CONNECTION <name> (…)`
-/// form. Today there is only `SCHEMA NAME`, which is required (the Glue
-/// purification step needs it to fetch the writer schema's latest
-/// version at `CREATE SOURCE` time).
+/// form.
+///
+/// The clause is shared between sources and sinks, but the options are
+/// context-specific and enforced in the planner and purifier, not here.
+/// Sources use the singular `SCHEMA NAME` (required, names the writer schema
+/// to read). Sinks mirror the CSR clause with per-side `KEY`/`VALUE` options
+/// naming the schemas to register and their evolution policy.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum GlueAvroOptionName {
-    /// The `SCHEMA NAME [=] '<name>'` option. Names the schema within a
-    /// Glue registry whose latest version is fetched during purification.
+    /// The `SCHEMA NAME [=] '<name>'` option. Source-only. Names the schema
+    /// within a Glue registry whose latest version is fetched during
+    /// purification.
     SchemaName,
+    /// The `KEY SCHEMA NAME [=] '<name>'` option. Sink-only. Names the schema
+    /// under which the key schema is registered.
+    KeySchemaName,
+    /// The `VALUE SCHEMA NAME [=] '<name>'` option. Sink-only. Names the schema
+    /// under which the value schema is registered.
+    ValueSchemaName,
+    /// The `KEY COMPATIBILITY LEVEL [=] '<level>'` option. Sink-only. Sets the
+    /// key schema's compatibility policy when the schema is first created.
+    KeyCompatibilityLevel,
+    /// The `VALUE COMPATIBILITY LEVEL [=] '<level>'` option. Sink-only. Sets the
+    /// value schema's compatibility policy when the schema is first created.
+    ValueCompatibilityLevel,
 }
 
 impl AstDisplay for GlueAvroOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             GlueAvroOptionName::SchemaName => f.write_str("SCHEMA NAME"),
+            GlueAvroOptionName::KeySchemaName => f.write_str("KEY SCHEMA NAME"),
+            GlueAvroOptionName::ValueSchemaName => f.write_str("VALUE SCHEMA NAME"),
+            GlueAvroOptionName::KeyCompatibilityLevel => f.write_str("KEY COMPATIBILITY LEVEL"),
+            GlueAvroOptionName::ValueCompatibilityLevel => f.write_str("VALUE COMPATIBILITY LEVEL"),
         }
     }
 }
@@ -142,9 +163,14 @@ impl WithOptionName for GlueAvroOptionName {
     /// on the conservative side and return `true`.
     fn redact_value(&self) -> bool {
         match self {
-            // A schema *name* is a user-chosen identifier, no more
-            // sensitive than a table name.
-            Self::SchemaName => false,
+            // Schema *names* are user-chosen identifiers, no more sensitive than
+            // a table name. Compatibility levels are a fixed enum. None carry
+            // secrets.
+            Self::SchemaName
+            | Self::KeySchemaName
+            | Self::ValueSchemaName
+            | Self::KeyCompatibilityLevel
+            | Self::ValueCompatibilityLevel => false,
         }
     }
 }
@@ -908,6 +934,52 @@ pub enum ConnectionOptionName {
     Warehouse,
 }
 
+impl ConnectionOptionName {
+    pub(crate) fn value_contains_sensitive_data(&self) -> bool {
+        match self {
+            ConnectionOptionName::AccessKeyId
+            | ConnectionOptionName::Credential
+            | ConnectionOptionName::Password
+            | ConnectionOptionName::SaslPassword
+            | ConnectionOptionName::SaslUsername
+            | ConnectionOptionName::SecretAccessKey
+            | ConnectionOptionName::ServiceAccountKey
+            | ConnectionOptionName::SessionToken
+            | ConnectionOptionName::SslCertificate
+            | ConnectionOptionName::SslCertificateAuthority
+            | ConnectionOptionName::SslKey
+            | ConnectionOptionName::User => true,
+            ConnectionOptionName::AssumeRoleArn
+            | ConnectionOptionName::AssumeRoleSessionName
+            | ConnectionOptionName::AvailabilityZones
+            | ConnectionOptionName::AwsConnection
+            | ConnectionOptionName::AwsPrivatelink
+            | ConnectionOptionName::Broker
+            | ConnectionOptionName::Brokers
+            | ConnectionOptionName::Database
+            | ConnectionOptionName::Endpoint
+            | ConnectionOptionName::GcpConnection
+            | ConnectionOptionName::Host
+            | ConnectionOptionName::Port
+            | ConnectionOptionName::ProgressTopic
+            | ConnectionOptionName::ProgressTopicReplicationFactor
+            | ConnectionOptionName::PublicKey1
+            | ConnectionOptionName::PublicKey2
+            | ConnectionOptionName::Region
+            | ConnectionOptionName::Registry
+            | ConnectionOptionName::SaslMechanisms
+            | ConnectionOptionName::Scope
+            | ConnectionOptionName::SecurityProtocol
+            | ConnectionOptionName::ServiceName
+            | ConnectionOptionName::SshTunnel
+            | ConnectionOptionName::SslMode
+            | ConnectionOptionName::CatalogType
+            | ConnectionOptionName::Url
+            | ConnectionOptionName::Warehouse => false,
+        }
+    }
+}
+
 impl AstDisplay for ConnectionOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
@@ -964,47 +1036,11 @@ impl WithOptionName for ConnectionOptionName {
     /// this value could contain sensitive user data. If you're uncertain, err
     /// on the conservative side and return `true`.
     fn redact_value(&self) -> bool {
-        match self {
-            ConnectionOptionName::AccessKeyId
-            | ConnectionOptionName::AvailabilityZones
-            | ConnectionOptionName::AwsConnection
-            | ConnectionOptionName::AwsPrivatelink
-            | ConnectionOptionName::Broker
-            | ConnectionOptionName::Brokers
-            | ConnectionOptionName::Credential
-            | ConnectionOptionName::Database
-            | ConnectionOptionName::Endpoint
-            | ConnectionOptionName::GcpConnection
-            | ConnectionOptionName::Host
-            | ConnectionOptionName::Password
-            | ConnectionOptionName::Port
-            | ConnectionOptionName::ProgressTopic
-            | ConnectionOptionName::ProgressTopicReplicationFactor
-            | ConnectionOptionName::PublicKey1
-            | ConnectionOptionName::PublicKey2
-            | ConnectionOptionName::Region
-            | ConnectionOptionName::Registry
-            | ConnectionOptionName::AssumeRoleArn
-            | ConnectionOptionName::AssumeRoleSessionName
-            | ConnectionOptionName::SaslMechanisms
-            | ConnectionOptionName::SaslPassword
-            | ConnectionOptionName::SaslUsername
-            | ConnectionOptionName::Scope
-            | ConnectionOptionName::SecurityProtocol
-            | ConnectionOptionName::SecretAccessKey
-            | ConnectionOptionName::ServiceAccountKey
-            | ConnectionOptionName::ServiceName
-            | ConnectionOptionName::SshTunnel
-            | ConnectionOptionName::SslCertificate
-            | ConnectionOptionName::SslCertificateAuthority
-            | ConnectionOptionName::SslKey
-            | ConnectionOptionName::SslMode
-            | ConnectionOptionName::SessionToken
-            | ConnectionOptionName::CatalogType
-            | ConnectionOptionName::Url
-            | ConnectionOptionName::User
-            | ConnectionOptionName::Warehouse => false,
-        }
+        // Credential-bearing options keep their values in redacted mode, so an
+        // inline credential literal renders as `'<REDACTED>'`. A `SECRET`
+        // reference is unaffected either way. It renders as its catalog name
+        // via `WithOptionValue::Secret`.
+        self.value_contains_sensitive_data()
     }
 }
 

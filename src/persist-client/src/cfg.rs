@@ -312,6 +312,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::cfg::USE_CRITICAL_SINCE_CATALOG)
         .add(&crate::cfg::USE_CRITICAL_SINCE_SOURCE)
         .add(&crate::cfg::USE_CRITICAL_SINCE_SNAPSHOT)
+        .add(&crate::cfg::SOURCE_HYDRATION_FRONTIER_COALESCE_BYTES)
+        .add(&crate::cfg::SOURCE_FETCH_CONCURRENCY)
         .add(&BATCH_BUILDER_MAX_OUTSTANDING_PARTS)
         .add(&COMPACTION_HEURISTIC_MIN_INPUTS)
         .add(&COMPACTION_HEURISTIC_MIN_PARTS)
@@ -487,6 +489,28 @@ pub const USE_CRITICAL_SINCE_SOURCE: Config<bool> = Config::new(
     "persist_use_critical_since_source",
     false,
     "Use the critical since (instead of the overall since) in the Persist source.",
+);
+
+/// While the source is catching up to the shard upper observed at hydration,
+/// coalesce per-batch frontier downgrades until at least this many encoded
+/// bytes have been emitted at the held capability. `0` disables coalescing and
+/// restores the per-batch behavior.
+pub const SOURCE_HYDRATION_FRONTIER_COALESCE_BYTES: Config<usize> = Config::new(
+    "persist_source_hydration_frontier_coalesce_bytes",
+    0,
+    "While catching up to the hydration-time upper, the persist source coalesces \
+     frontier downgrades until this many encoded bytes have been emitted (0 disables).",
+);
+
+/// Maximum number of part fetches the persist source issues concurrently, per
+/// worker. Concurrent fetches amortize the blob-store round-trip, which
+/// dominates when there are many small parts (e.g. a fine-grained hydration
+/// replay). `1` keeps the previous serial behavior.
+pub const SOURCE_FETCH_CONCURRENCY: Config<usize> = Config::new(
+    "persist_source_fetch_concurrency",
+    1,
+    "Maximum number of part fetches the persist source issues concurrently per worker \
+     (1 = serial).",
 );
 
 /// Migrate snapshots to use the critical since when opening a new read handle.

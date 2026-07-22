@@ -1,6 +1,6 @@
 ---
 source: src/mz-deploy/src/project/ir/object_id.rs
-revision: a647094cc4
+revision: 8ee3def844
 ---
 
 # mz-deploy::project::ir::object_id

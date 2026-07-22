@@ -20,6 +20,7 @@ from materialize.cloudtest.k8s.environmentd import EnvironmentdStatefulSet
 from materialize.cloudtest.util.cluster import cluster_pod_name, cluster_service_name
 from materialize.cloudtest.util.exists import exists, not_exists
 from materialize.cloudtest.util.wait import wait
+from materialize.mzcompose import cluster_replica_size_map
 
 LOGGER = logging.getLogger(__name__)
 
@@ -142,53 +143,36 @@ def test_disk_label(mz: MaterializeApplication) -> None:
     mz.environmentd.sql("DROP CLUSTER disk CASCADE")
 
 
-@pytest.mark.skip(
-    reason="Keeps flaking, see https://linear.app/materializeinc/issue/SQL-410"
-)
 def test_cluster_replica_sizes(mz: MaterializeApplication) -> None:
     """Test that --cluster-replica-sizes mapping is respected"""
     # Some time for existing cluster drops to complete so we don't try to spin them up again
     time.sleep(5)
-    cluster_replica_size_map = {
-        "small": {
-            "scale": 1,
-            "workers": 1,
-            "cpu_limit": None,
-            "memory_limit": None,
-            "disk_limit": None,
-            "credits_per_hour": "1",
-            "disabled": False,
-            "selectors": {"key1": "value1"},
-        },
-        "medium": {
-            "scale": 1,
-            "workers": 1,
-            "cpu_limit": None,
-            "memory_limit": None,
-            "disk_limit": None,
-            "credits_per_hour": "1",
-            "disabled": False,
-            "selectors": {"key2": "value2", "key3": "value3"},
-        },
-        # for existing clusters
-        "1": {
-            "scale": 1,
-            "workers": 1,
-            "cpu_limit": None,
-            "memory_limit": None,
-            "disk_limit": None,
-            "disabled": False,
-            "credits_per_hour": "1",
-        },
-        "2-1": {
-            "scale": 2,
-            "workers": 2,
-            "cpu_limit": None,
-            "memory_limit": None,
-            "disk_limit": None,
-            "disabled": False,
-            "credits_per_hour": "2",
-        },
+    # Start from the real replica-size map used at bootstrap. The default
+    # cluster and the builtin system clusters are created with the `bootstrap`
+    # size and persisted in the catalog, so they must still resolve after we
+    # restart environmentd below. Restarting with a map that drops their size
+    # makes environmentd panic in catalog apply. Overlay two custom sizes that
+    # carry node `selectors`, which is the mapping this test exercises.
+    size_map = cluster_replica_size_map()
+    size_map["small"] = {
+        "scale": 1,
+        "workers": 1,
+        "cpu_limit": None,
+        "memory_limit": None,
+        "disk_limit": None,
+        "credits_per_hour": "1",
+        "disabled": False,
+        "selectors": {"key1": "value1"},
+    }
+    size_map["medium"] = {
+        "scale": 1,
+        "workers": 1,
+        "cpu_limit": None,
+        "memory_limit": None,
+        "disk_limit": None,
+        "credits_per_hour": "1",
+        "disabled": False,
+        "selectors": {"key2": "value2", "key3": "value3"},
     }
 
     stateful_set = [
@@ -198,14 +182,13 @@ def test_cluster_replica_sizes(mz: MaterializeApplication) -> None:
     ]
     assert len(stateful_set) == 1
     stateful_set = copy.deepcopy(stateful_set[0])
-    stateful_set.env["MZ_CLUSTER_REPLICA_SIZES"] = json.dumps(cluster_replica_size_map)
-    stateful_set.extra_args.append("--bootstrap-default-cluster-replica-size=1")
+    stateful_set.env["MZ_CLUSTER_REPLICA_SIZES"] = json.dumps(size_map)
     stateful_set.replace()
     mz.wait_for_sql()
 
     for key, value in {
-        "small": cluster_replica_size_map["small"],
-        "medium": cluster_replica_size_map["medium"],
+        "small": size_map["small"],
+        "medium": size_map["medium"],
     }.items():
         mz.environmentd.sql(f"CREATE CLUSTER scale_{key} MANAGED, SIZE = '{key}'")
         cluster_id, replica_id = mz.environmentd.sql_query(
@@ -215,14 +198,22 @@ def test_cluster_replica_sizes(mz: MaterializeApplication) -> None:
         assert replica_id is not None
 
         expected = value.get("selectors", {}) | {"materialize.cloud/disk": "true"}
-        node_selectors_raw = ""
+        # get_node_selector wraps the kubectl jsonpath output in single quotes,
+        # so a pod that has not appeared in the Kubernetes API yet yields the
+        # two-character string "''", not an empty string. Strip the quotes
+        # before deciding whether the nodeSelector is populated, otherwise the
+        # retry below breaks on the first attempt and json.loads chokes on an
+        # empty value.
+        node_selectors_stripped = ""
         for i in range(1, 10):
-            node_selectors_raw = get_node_selector(mz, cluster_id, replica_id)
-            if node_selectors_raw:
+            node_selectors_stripped = get_node_selector(
+                mz, cluster_id, replica_id
+            ).strip("'")
+            if node_selectors_stripped:
                 break
             print("No node selectors available yet, sleeping")
             time.sleep(5)
-        node_selectors = json.loads(node_selectors_raw[1:-1])
+        node_selectors = json.loads(node_selectors_stripped)
         assert (
             node_selectors == expected
         ), f"actual: {node_selectors}, but expected {expected}"

@@ -27,7 +27,7 @@ mcp-developer
 {"jsonrpc":"2.0","id":2,"method":"tools/list"}
 ----
 200 OK
-{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"query_system_catalog","title":"Query System Catalog","description":"Query Materialize system catalog tables for troubleshooting and observability. Only mz_*, pg_catalog, and information_schema tables are accessible. Use the mz_internal.mz_ontology_* tables to discover tables, columns, and join paths before writing queries. Response limit: 1 MB.","inputSchema":{"type":"object","properties":{"sql_query":{"type":"string","description":"PostgreSQL-compatible SELECT, SHOW, or EXPLAIN query referencing mz_* system catalog tables"}},"required":["sql_query"]},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}}]}}
+{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"query_system_catalog","title":"Query System Catalog","description":"Query Materialize system catalog tables for troubleshooting and observability. Only mz_*, pg_catalog, and information_schema tables are accessible. Use the mz_internal.mz_ontology_* tables to discover tables, columns, and join paths before writing queries. Response limit: 1.0 MB.","inputSchema":{"type":"object","properties":{"sql_query":{"type":"string","description":"PostgreSQL-compatible SELECT, SHOW, or EXPLAIN query referencing mz_*, pg_catalog, or information_schema tables"}},"required":["sql_query"]},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}}]}}
 
 # =============================================================================
 # query_system_catalog - valid system catalog queries
@@ -193,7 +193,7 @@ mcp-developer
 {"jsonrpc":"2.0","id":"my-request-42","method":"tools/list"}
 ----
 200 OK
-{"jsonrpc":"2.0","id":"my-request-42","result":{"tools":[{"name":"query_system_catalog","title":"Query System Catalog","description":"Query Materialize system catalog tables for troubleshooting and observability. Only mz_*, pg_catalog, and information_schema tables are accessible. Use the mz_internal.mz_ontology_* tables to discover tables, columns, and join paths before writing queries. Response limit: 1 MB.","inputSchema":{"type":"object","properties":{"sql_query":{"type":"string","description":"PostgreSQL-compatible SELECT, SHOW, or EXPLAIN query referencing mz_* system catalog tables"}},"required":["sql_query"]},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}}]}}
+{"jsonrpc":"2.0","id":"my-request-42","result":{"tools":[{"name":"query_system_catalog","title":"Query System Catalog","description":"Query Materialize system catalog tables for troubleshooting and observability. Only mz_*, pg_catalog, and information_schema tables are accessible. Use the mz_internal.mz_ontology_* tables to discover tables, columns, and join paths before writing queries. Response limit: 1.0 MB.","inputSchema":{"type":"object","properties":{"sql_query":{"type":"string","description":"PostgreSQL-compatible SELECT, SHOW, or EXPLAIN query referencing mz_*, pg_catalog, or information_schema tables"}},"required":["sql_query"]},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}}]}}
 
 # =============================================================================
 # query_system_catalog - additional rejection cases
@@ -233,3 +233,43 @@ mcp-developer
 ----
 200 OK
 {"jsonrpc":"2.0","id":54,"error":{"code":-32602,"message":"Query validation failed: Query references non-system tables: public.user_data. Only system catalog tables (mz_*, pg_catalog, information_schema) are allowed.","data":{"error_type":"ValidationError"}}}
+
+# =============================================================================
+# HTTP method enforcement and Origin validation
+# =============================================================================
+
+# MCP spec 2025-11-25: GET on the POST-only endpoint returns 405.
+mcp-developer get
+----
+405 Method Not Allowed
+
+# Browser-style requests with an Origin header are rejected unless the origin
+# is on the CORS allowlist (empty in this test harness). Requests without an
+# Origin header (every other test in this file) are allowed.
+mcp-developer origin
+{"jsonrpc":"2.0","id":60,"method":"tools/list"}
+----
+403 Forbidden
+
+# =============================================================================
+# query_system_catalog - mz_unsafe exclusion
+# =============================================================================
+
+# mz_unsafe is not on the system catalog allowlist even though it is a system
+# schema, so references to it are rejected at validation.
+mcp-developer
+{"jsonrpc":"2.0","id":61,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT * FROM mz_unsafe.mz_sleep_forever"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":61,"error":{"code":-32602,"message":"Query validation failed: Query references non-system tables: mz_unsafe.mz_sleep_forever. Only system catalog tables (mz_*, pg_catalog, information_schema) are allowed.","data":{"error_type":"ValidationError"}}}
+
+# =============================================================================
+# Null id notification
+# =============================================================================
+
+# Null id is treated as a notification by serde (Option<Value> deserializes
+# null as None): 200 with no response body.
+mcp-developer
+{"jsonrpc":"2.0","id":null,"method":"tools/list"}
+----
+200 OK

@@ -133,7 +133,7 @@ INSERT INTO another_schema.another_table VALUES ('123');
 # Sneak in a test for mysql_source_snapshot_max_execution_time
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 $ postgres-execute connection=mz_system
-ALTER SYSTEM SET mysql_source_snapshot_max_execution_time = 1000
+ALTER SYSTEM SET mysql_source_snapshot_max_execution_time = 10000
 
 > CREATE SOURCE "test_slot_source"
   IN CLUSTER cdc_cluster
@@ -555,6 +555,304 @@ true
 true
 
 > DROP SOURCE large_cluster_source CASCADE;
+
+$ mysql-execute name=mysql
+DROP TABLE IF EXISTS pk_range_test;
+CREATE TABLE pk_range_test (id BIGINT PRIMARY KEY, val BIGINT);
+SET @i := 0;
+INSERT INTO pk_range_test SELECT @i := @i + 1, @i * 7 FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 1000;
+
+> CREATE CLUSTER pk_range_cluster SIZE 'scale=1,workers=4'
+
+> CREATE SOURCE pk_range_source
+  IN CLUSTER pk_range_cluster
+  FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE pk_range_table FROM SOURCE pk_range_source (REFERENCE public.pk_range_test);
+
+# Exact row count
+> SELECT COUNT(*) FROM pk_range_table;
+1000
+
+# No duplicates: distinct count must equal total count
+> SELECT COUNT(DISTINCT id) = COUNT(*) FROM pk_range_table;
+true
+
+# Full key range present (ids 1..1000)
+> SELECT MIN(id), MAX(id) FROM pk_range_table;
+1 1000
+
+# Checksum: val = id * 7, so SUM(val) = 7 * SUM(1..1000) = 7 * 500500
+> SELECT SUM(val) FROM pk_range_table;
+3503500
+
+> DROP SOURCE pk_range_source CASCADE;
+> DROP CLUSTER pk_range_cluster CASCADE;
+
+$ mysql-execute name=mysql
+DROP TABLE pk_range_test;
+
+#
+# Same, but for a single-column non-integer (char) PK.
+#
+
+$ mysql-execute name=mysql
+DROP TABLE IF EXISTS pk_char_test;
+CREATE TABLE pk_char_test (id CHAR(26) PRIMARY KEY, val BIGINT);
+SET @i := 0;
+INSERT INTO pk_char_test SELECT LPAD(CONV(@i := @i + 1, 10, 36), 26, '0'), @i FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 1000;
+
+> CREATE CLUSTER pk_char_cluster SIZE 'scale=1,workers=4'
+
+> CREATE SOURCE pk_char_source
+  IN CLUSTER pk_char_cluster
+  FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE pk_char_table FROM SOURCE pk_char_source (REFERENCE public.pk_char_test);
+
+# Exact count and no duplicate/missing keys
+> SELECT COUNT(*), COUNT(DISTINCT id) FROM pk_char_table;
+1000 1000
+
+# Checksum: val = row number, so SUM(val) = SUM(1..1000) = 500500
+> SELECT SUM(val) FROM pk_char_table;
+500500
+
+> DROP SOURCE pk_char_source CASCADE;
+> DROP CLUSTER pk_char_cluster CASCADE;
+
+$ mysql-execute name=mysql
+DROP TABLE pk_char_test;
+
+#
+# Same, but for a composite (char, int) primary key.
+#
+
+$ mysql-execute name=mysql
+DROP TABLE IF EXISTS pk_comp_test;
+CREATE TABLE pk_comp_test (region CHAR(2) NOT NULL, id INT NOT NULL, val BIGINT, PRIMARY KEY (region, id));
+SET @i := 0;
+INSERT INTO pk_comp_test SELECT ELT((@i := @i + 1) % 5 + 1, 'aa', 'bb', 'cc', 'dd', 'ee'), @i, @i FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 1000;
+
+> CREATE CLUSTER pk_comp_cluster SIZE 'scale=1,workers=4'
+
+> CREATE SOURCE pk_comp_source
+  IN CLUSTER pk_comp_cluster
+  FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE pk_comp_table FROM SOURCE pk_comp_source (REFERENCE public.pk_comp_test);
+
+# Exact count and no duplicate/missing keys (id alone is unique here)
+> SELECT COUNT(*), COUNT(DISTINCT id) FROM pk_comp_table;
+1000 1000
+
+# Every region partition is present and complete
+> SELECT region, COUNT(*) FROM pk_comp_table GROUP BY region ORDER BY region;
+aa 200
+bb 200
+cc 200
+dd 200
+ee 200
+
+# Checksum: val = row number, so SUM(val) = SUM(1..1000) = 500500
+> SELECT SUM(val) FROM pk_comp_table;
+500500
+
+> DROP SOURCE pk_comp_source CASCADE;
+> DROP CLUSTER pk_comp_cluster CASCADE;
+
+$ mysql-execute name=mysql
+DROP TABLE pk_comp_test;
+
+$ mysql-execute name=mysql
+DROP TABLE IF EXISTS pk_surplus_test;
+CREATE TABLE pk_surplus_test (id CHAR(26) PRIMARY KEY, val BIGINT);
+SET @i := 0;
+INSERT INTO pk_surplus_test SELECT LPAD(CONV(@i := @i + 1, 10, 36), 26, '0'), @i FROM mysql.time_zone t1 LIMIT 3;
+
+> CREATE CLUSTER pk_surplus_cluster SIZE 'scale=1,workers=16'
+
+> CREATE SOURCE pk_surplus_source
+  IN CLUSTER pk_surplus_cluster
+  FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE pk_surplus_table FROM SOURCE pk_surplus_source (REFERENCE public.pk_surplus_test);
+
+# All rows present exactly once
+> SELECT COUNT(*), COUNT(DISTINCT id) FROM pk_surplus_table;
+3 3
+
+# Checksum: val = row number, so SUM(val) = 1 + 2 + 3 = 6
+> SELECT SUM(val) FROM pk_surplus_table;
+6
+
+> DROP SOURCE pk_surplus_source CASCADE;
+> DROP CLUSTER pk_surplus_cluster CASCADE;
+
+$ mysql-execute name=mysql
+DROP TABLE pk_surplus_test;
+
+#
+# Empty table.
+#
+
+$ mysql-execute name=mysql
+DROP TABLE IF EXISTS pk_empty_test;
+CREATE TABLE pk_empty_test (id CHAR(26) PRIMARY KEY, val BIGINT);
+
+> CREATE CLUSTER pk_empty_cluster SIZE 'scale=1,workers=4'
+
+> CREATE SOURCE pk_empty_source
+  IN CLUSTER pk_empty_cluster
+  FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE pk_empty_table FROM SOURCE pk_empty_source (REFERENCE public.pk_empty_test);
+
+> SELECT COUNT(*) FROM pk_empty_table;
+0
+
+> DROP SOURCE pk_empty_source CASCADE;
+> DROP CLUSTER pk_empty_cluster CASCADE;
+
+$ mysql-execute name=mysql
+DROP TABLE pk_empty_test;
+
+#
+# BIGINT UNSIGNED PK with keys spanning the full unsigned domain, including
+# values above i64::MAX.
+#
+
+$ mysql-execute name=mysql
+DROP TABLE IF EXISTS pk_uint_test;
+CREATE TABLE pk_uint_test (id BIGINT UNSIGNED PRIMARY KEY, val BIGINT);
+SET @i := 0;
+INSERT INTO pk_uint_test SELECT @i := @i + 1, @i FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 500;
+SET @j := 0;
+INSERT INTO pk_uint_test SELECT 18446744073709551115 + (@j := @j + 1), -@j FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 500;
+
+> CREATE CLUSTER pk_uint_cluster SIZE 'scale=1,workers=4'
+
+> CREATE SOURCE pk_uint_source
+  IN CLUSTER pk_uint_cluster
+  FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE pk_uint_table FROM SOURCE pk_uint_source (REFERENCE public.pk_uint_test);
+
+# Exact count and no duplicate/missing keys
+> SELECT COUNT(*), COUNT(DISTINCT id) FROM pk_uint_table;
+1000 1000
+
+# Keys span from 1 to the top of the u64 domain
+> SELECT MIN(id), MAX(id) FROM pk_uint_table;
+1 18446744073709551615
+
+# Checksum cancels: val = 1..500 for the low keys and -(1..500) for the high keys
+> SELECT SUM(val) FROM pk_uint_table;
+0
+
+> DROP SOURCE pk_uint_source CASCADE;
+> DROP CLUSTER pk_uint_cluster CASCADE;
+
+$ mysql-execute name=mysql
+DROP TABLE pk_uint_test;
+
+#
+# Multibyte utf8mb4 PK with a binary collation. Keys mix 2-, 3-, and 4-byte code
+# points (accented Latin, Greek, CJK, and emoji), assembled from their utf8 bytes
+# so the test file stays ASCII.
+#
+
+$ mysql-execute name=mysql
+DROP TABLE IF EXISTS pk_charset_test;
+CREATE TABLE pk_charset_test (id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin PRIMARY KEY, val BIGINT);
+SET @i := 0;
+INSERT INTO pk_charset_test SELECT CONCAT(ELT((n % 6) + 1, CHAR(0xC3B1 USING utf8mb4), CHAR(0xCEA9 USING utf8mb4), CHAR(0xE4B8AD USING utf8mb4), CHAR(0xE7958C USING utf8mb4), CHAR(0xF09F9880 USING utf8mb4), CHAR(0xF09D958F USING utf8mb4)), LPAD(CONV(n, 10, 36), 8, '0')), n FROM (SELECT @i := @i + 1 AS n FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 1000) seq;
+
+> CREATE CLUSTER pk_charset_cluster SIZE 'scale=1,workers=4'
+
+> CREATE SOURCE pk_charset_source
+  IN CLUSTER pk_charset_cluster
+  FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE pk_charset_table FROM SOURCE pk_charset_source (REFERENCE public.pk_charset_test);
+
+# Exact count and no duplicate/missing keys
+> SELECT COUNT(*), COUNT(DISTINCT id) FROM pk_charset_table;
+1000 1000
+
+# Checksum: val = row number, so SUM(val) = SUM(1..1000) = 500500
+> SELECT SUM(val) FROM pk_charset_table;
+500500
+
+> DROP SOURCE pk_charset_source CASCADE;
+> DROP CLUSTER pk_charset_cluster CASCADE;
+
+$ mysql-execute name=mysql
+DROP TABLE pk_charset_test;
+
+#
+# Non-utf8mb4 charset PK: a latin1 column with a binary collation. Keys carry
+# high-byte latin1 characters (the 0xC0-0xDF range), built from their bytes.
+#
+
+$ mysql-execute name=mysql
+DROP TABLE IF EXISTS pk_latin1_test;
+CREATE TABLE pk_latin1_test (id VARCHAR(64) CHARACTER SET latin1 COLLATE latin1_bin PRIMARY KEY, val BIGINT);
+SET @i := 0;
+INSERT INTO pk_latin1_test SELECT CONCAT(CHAR(0xC0 + (n % 32) USING latin1), CONVERT(LPAD(CONV(n, 10, 36), 8, '0') USING latin1)), n FROM (SELECT @i := @i + 1 AS n FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 1000) seq;
+
+> CREATE CLUSTER pk_latin1_cluster SIZE 'scale=1,workers=4'
+
+> CREATE SOURCE pk_latin1_source
+  IN CLUSTER pk_latin1_cluster
+  FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE pk_latin1_table FROM SOURCE pk_latin1_source (REFERENCE public.pk_latin1_test);
+
+# Exact count and no duplicate/missing keys
+> SELECT COUNT(*), COUNT(DISTINCT id) FROM pk_latin1_table;
+1000 1000
+
+# Checksum: val = row number, so SUM(val) = SUM(1..1000) = 500500
+> SELECT SUM(val) FROM pk_latin1_table;
+500500
+
+> DROP SOURCE pk_latin1_source CASCADE;
+> DROP CLUSTER pk_latin1_cluster CASCADE;
+
+$ mysql-execute name=mysql
+DROP TABLE pk_latin1_test;
+
+#
+# Concurrent DML on a multibyte-keyed table. Inserts and deletes are issued right
+# after the source starts, so they race the snapshot. Whatever the interleaving,
+# the output must converge to the final upstream state exactly once per key.
+#
+
+$ mysql-execute name=mysql
+DROP TABLE IF EXISTS pk_conc_test;
+CREATE TABLE pk_conc_test (id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin PRIMARY KEY, val BIGINT);
+SET @i := 0;
+INSERT INTO pk_conc_test SELECT CONCAT(ELT((n % 6) + 1, CHAR(0xC3B1 USING utf8mb4), CHAR(0xCEA9 USING utf8mb4), CHAR(0xE4B8AD USING utf8mb4), CHAR(0xE7958C USING utf8mb4), CHAR(0xF09F9880 USING utf8mb4), CHAR(0xF09D958F USING utf8mb4)), LPAD(CONV(n, 10, 36), 8, '0')), n FROM (SELECT @i := @i + 1 AS n FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 1000) seq;
+
+> CREATE CLUSTER pk_conc_cluster SIZE 'scale=1,workers=4'
+
+> CREATE SOURCE pk_conc_source
+  IN CLUSTER pk_conc_cluster
+  FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE pk_conc_table FROM SOURCE pk_conc_source (REFERENCE public.pk_conc_test);
+
+# Insert 1000 more rows (sequence continues at 1001..2000) and delete the first 500,
+# all while the snapshot is likely still in flight.
+$ mysql-execute name=mysql
+INSERT INTO pk_conc_test SELECT CONCAT(ELT((n % 6) + 1, CHAR(0xC3B1 USING utf8mb4), CHAR(0xCEA9 USING utf8mb4), CHAR(0xE4B8AD USING utf8mb4), CHAR(0xE7958C USING utf8mb4), CHAR(0xF09F9880 USING utf8mb4), CHAR(0xF09D958F USING utf8mb4)), LPAD(CONV(n, 10, 36), 8, '0')), n FROM (SELECT @i := @i + 1 AS n FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 1000) seq;
+DELETE FROM pk_conc_test WHERE val <= 500;
+
+# Final upstream state is val 501..2000, each key exactly once.
+> SELECT COUNT(*), COUNT(DISTINCT id) FROM pk_conc_table;
+1500 1500
+
+# Checksum: SUM(501..2000) = SUM(1..2000) - SUM(1..500) = 2001000 - 125250
+> SELECT SUM(val) FROM pk_conc_table;
+1875750
+
+> DROP SOURCE pk_conc_source CASCADE;
+> DROP CLUSTER pk_conc_cluster CASCADE;
+
+$ mysql-execute name=mysql
+DROP TABLE pk_conc_test;
 
 #
 # Remove all data on the Postgres side

@@ -41,6 +41,17 @@ contains:column referenced in KEY does not exist: f2
   ENVELOPE DEBEZIUM
 contains:LEGACY IDs option is not supported
 
+! CREATE SINK zero_interval_sink
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM v1
+  INTO KAFKA CONNECTION kafka_conn (
+    TOPIC 'testdrive-kafka-sink-zero-interval-${testdrive.seed}',
+    TOPIC METADATA REFRESH INTERVAL '0s'
+  )
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
+contains:TOPIC METADATA REFRESH INTERVAL must be at least 1 second
+
 #
 # Sink dependencies
 #

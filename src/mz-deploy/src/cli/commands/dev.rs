@@ -28,6 +28,7 @@ use crate::project::analysis::changeset::ChangeSet;
 use crate::project::analysis::deployment_snapshot;
 use crate::project::ast::Statement;
 use crate::project::ir::compiled::FullyQualifiedName;
+use crate::project::ir::object_id::ObjectId;
 use crate::project::resolve::normalize::NormalizingVisitor;
 use crate::{info, verbose};
 
@@ -295,13 +296,18 @@ pub(crate) async fn create_phase(
             .await?;
     }
 
+    let overlay_object_ids: BTreeSet<ObjectId> = overlay_objects
+        .iter()
+        .map(|(id, _)| (*id).clone())
+        .collect();
+
     for (object_id, typed_object) in overlay_objects {
         let original_fqn: FullyQualifiedName = object_id.clone().into();
         let mut visitor = NormalizingVisitor::overlay(
             &original_fqn,
             profile_name,
             in_project_databases,
-            dirty_schemas,
+            &overlay_object_ids,
             target_cluster,
         );
 

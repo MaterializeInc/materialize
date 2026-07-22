@@ -181,10 +181,12 @@ Explained Query:
         raw=true
         arrangements[0]={ key=[#0], permutation=id, thinning=(#1, #2) }
         Union
-          Get::Collection l0
+          Get::Arrangement l0
             project=(#0..=#2)
             map=(true)
-            raw=true
+            key=#0
+            raw=false
+            arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
           Mfp
             project=(#0..=#2)
             map=(null, null)
@@ -195,9 +197,11 @@ Explained Query:
                 arrangements[0]={ key=[#0], permutation=id, thinning=() }
                 Union consolidate_output=true
                   Negate
-                    Get::Collection l0
+                    Get::Arrangement l0
                       project=(#0)
-                      raw=true
+                      key=#0
+                      raw=false
+                      arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
                   ArrangeBy
                     input_key=[#0]
                     raw=true

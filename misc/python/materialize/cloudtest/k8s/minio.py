@@ -7,10 +7,16 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from materialize import MZ_ROOT
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 
-MINIO_YAML_DIRECTORY_URL = "https://raw.githubusercontent.com/kubernetes/examples/1b8cbf894ead6b25e9e870af6ae04f49dfdedfc9/staging/storage/minio"
+# Vendored from
+# https://github.com/kubernetes/examples/tree/1b8cbf894ead6b25e9e870af6ae04f49dfdedfc9/staging/storage/minio
+# rather than fetched at runtime. Fetching from raw.githubusercontent.com on
+# every application boot intermittently trips GitHub's per-IP rate limit (HTTP
+# 429), which failed cloudtest setup.
+MINIO_YAML_DIRECTORY = MZ_ROOT / "misc/python/materialize/cloudtest/k8s/minio-yaml"
 
 
 class Minio(K8sResource):
@@ -37,7 +43,7 @@ class Minio(K8sResource):
             self.kubectl(
                 "create",
                 "-f",
-                f"{MINIO_YAML_DIRECTORY_URL}/{yaml_file}.yaml",
+                str(MINIO_YAML_DIRECTORY / f"{yaml_file}.yaml"),
             )
 
         if self.apply_node_selectors:
@@ -55,7 +61,7 @@ class Minio(K8sResource):
         self.kubectl(
             "create",
             "-f",
-            f"{MINIO_YAML_DIRECTORY_URL}/minio-standalone-pvc.yaml",
+            str(MINIO_YAML_DIRECTORY / "minio-standalone-pvc.yaml"),
         )
 
         self.wait(

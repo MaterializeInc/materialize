@@ -133,7 +133,7 @@ def kill_clusterd(
 
     try:
         mz.kubectl(
-            "exec", pod_name, "--", "bash", "-c", f"kill -{signal} `pidof clusterd`"
+            "exec", pod_name, "--", "sh", "-c", f"kill -{signal} `pidof clusterd`"
         )
     except subprocess.CalledProcessError:
         # The clusterd process or container most likely has stopped already or is on its way

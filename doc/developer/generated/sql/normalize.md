@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/normalize.rs
-revision: 721951ce66
+revision: 68852854f4
 ---
 
 # mz-sql::normalize

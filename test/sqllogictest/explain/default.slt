@@ -536,7 +536,8 @@ Explained Query:
         →Stream l0
       →Arrange (#0)
         →Union
-          →Stream l3
+          →Unarranged Raw Stream
+            →Arranged l3
           →Map/Filter/Project
             Project: #0, #1
             Map: null
@@ -544,12 +545,14 @@ Explained Query:
                 →Negate Diffs
                   →Fused with Child Map/Filter/Project
                     Project: #0
-                      →Read l3
+                      →Arranged l3
+                        Key: (#0)
                 →Unarranged Raw Stream
                   →Arranged l1
       →Arrange (#0)
         →Union
-          →Stream l4
+          →Unarranged Raw Stream
+            →Arranged l4
           →Map/Filter/Project
             Project: #0, #1
             Map: null
@@ -557,7 +560,8 @@ Explained Query:
                 →Negate Diffs
                   →Fused with Child Map/Filter/Project
                     Project: #0
-                      →Read l4
+                      →Arranged l4
+                        Key: (#0)
                 →Unarranged Raw Stream
                   →Arranged l1
 

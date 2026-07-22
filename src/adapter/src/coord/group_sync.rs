@@ -458,6 +458,19 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn test_reserved_role_specification_names() {
+        assert!(is_reserved_role_name("current_user"));
+        assert!(is_reserved_role_name("current_role"));
+        assert!(is_reserved_role_name("session_user"));
+        assert!(is_reserved_role_name("user"));
+        assert!(is_reserved_role_name("none"));
+        // Only the lowercase spellings are reserved, matching what unquoted
+        // identifiers normalize to.
+        assert!(!is_reserved_role_name("CURRENT_USER"));
+        assert!(!is_reserved_role_name("None"));
+    }
+
+    #[mz_ore::test]
     fn test_normal_role_names_not_reserved() {
         assert!(!is_reserved_role_name("analytics"));
         assert!(!is_reserved_role_name("platform_eng"));

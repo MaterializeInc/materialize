@@ -414,9 +414,9 @@ impl Cluster {
                 replication_factor,
                 optimizer_feature_overrides,
                 schedule,
-                // Not surfaced in the create plan: these are controller-managed
-                // runtime state and (for the policy) a separate SQL surface.
-                auto_scaling_strategy: _,
+                auto_scaling_strategy,
+                // In-flight runtime records, controller-managed and not part of
+                // the create statement.
                 reconfiguration: _,
                 burst: _,
             }) => {
@@ -441,6 +441,7 @@ impl Cluster {
                     compute,
                     optimizer_feature_overrides: optimizer_feature_overrides.clone(),
                     schedule: schedule.clone(),
+                    auto_scaling_strategy: auto_scaling_strategy.clone(),
                 })
             }
             ClusterVariant::Unmanaged => {
@@ -2000,6 +2001,32 @@ impl CatalogItem {
         }
     }
 
+    /// Overwrites the `create_sql` of this item, without replanning.
+    ///
+    /// Only used when applying temporary item updates. A temporary item's
+    /// in-memory `create_sql` must stay byte-identical to the update that
+    /// created it, so that re-serializing the item, for example when a later
+    /// op in the same transaction retracts it, yields a value that
+    /// consolidates away against that update. Persistent items get this
+    /// guarantee from the durable catalog, which stores the exact bytes.
+    pub fn set_create_sql(&mut self, create_sql: String) {
+        match self {
+            CatalogItem::View(view) => view.create_sql = create_sql,
+            CatalogItem::Index(index) => index.create_sql = create_sql,
+            CatalogItem::Table(table) => table.create_sql = Some(create_sql),
+            CatalogItem::Log(_)
+            | CatalogItem::Source(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::MaterializedView(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Connection(_) => {
+                unreachable!("only views, indexes, and tables can be temporary")
+            }
+        }
+    }
+
     /// Indicates whether this item is temporary or not.
     pub fn is_temporary(&self) -> bool {
         self.conn_id().is_some()
@@ -2421,6 +2448,27 @@ impl CatalogItem {
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_) => None,
+        }
+    }
+
+    /// Whether this item runs a dataflow on its cluster's replicas and so has
+    /// hydration state: an index, materialized view, sink, or ingestion
+    /// source. Non-ingestion sources (webhooks, ingestion exports) are bound
+    /// to a cluster but run no dataflow on any replica.
+    pub fn is_hydratable(&self) -> bool {
+        match self {
+            CatalogItem::Index(_) | CatalogItem::MaterializedView(_) | CatalogItem::Sink(_) => true,
+            CatalogItem::Source(source) => matches!(
+                source.data_source,
+                DataSourceDesc::Ingestion { .. } | DataSourceDesc::OldSyntaxIngestion { .. }
+            ),
+            CatalogItem::Table(_)
+            | CatalogItem::Log(_)
+            | CatalogItem::View(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_) => false,
         }
     }
 
@@ -3302,10 +3350,92 @@ pub struct ClusterVariantManaged {
     /// User-configured autoscaling policy, distinct from the in-flight runtime
     /// records below. Shared with the durable layer, like [`ClusterSchedule`].
     pub auto_scaling_strategy: Option<AutoScalingStrategy>,
-    /// In-flight graceful reconfiguration the controller is converging on.
+    /// Latest graceful reconfiguration record, if one has been written.
     pub reconfiguration: Option<ReconfigurationState>,
     /// In-flight hydration burst the controller is running.
     pub burst: Option<BurstState>,
+}
+
+/// Per-replica config shape of a managed cluster.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ManagedReplicaConfigShape<'a> {
+    pub size: &'a str,
+    pub availability_zones: &'a [String],
+    pub logging: &'a ReplicaLogging,
+}
+
+impl<'a> ManagedReplicaConfigShape<'a> {
+    /// Returns a per-replica config shape from its component fields.
+    pub fn new(
+        size: &'a str,
+        availability_zones: &'a [String],
+        logging: &'a ReplicaLogging,
+    ) -> Self {
+        Self {
+            size,
+            availability_zones,
+            logging,
+        }
+    }
+}
+
+impl ClusterVariantManaged {
+    /// Returns the per-replica config shape of this managed cluster.
+    pub fn replica_config_shape(&self) -> ManagedReplicaConfigShape<'_> {
+        let ClusterVariantManaged {
+            size,
+            availability_zones,
+            logging,
+            replication_factor: _,
+            optimizer_feature_overrides: _,
+            schedule: _,
+            auto_scaling_strategy: _,
+            reconfiguration: _,
+            burst: _,
+        } = self;
+        ManagedReplicaConfigShape::new(size, availability_zones, logging)
+    }
+
+    /// Returns this managed cluster's realized shape as a reconfiguration target.
+    pub fn realized_reconfiguration_target(&self) -> ReconfigurationTarget {
+        let ClusterVariantManaged {
+            size,
+            availability_zones,
+            logging,
+            replication_factor,
+            optimizer_feature_overrides: _,
+            schedule: _,
+            auto_scaling_strategy: _,
+            reconfiguration: _,
+            burst: _,
+        } = self;
+        ReconfigurationTarget {
+            size: size.clone(),
+            replication_factor: *replication_factor,
+            availability_zones: availability_zones.clone(),
+            logging: logging.clone(),
+        }
+    }
+
+    /// Whether the in-flight `burst` record is no longer warranted by this
+    /// config: the `ON HYDRATION` policy was removed or re-sized away from the
+    /// record's size, or the cluster was turned off (`replication_factor` 0).
+    /// `false` when there is no record.
+    pub fn has_unwarranted_burst_record(&self) -> bool {
+        let Some(record) = &self.burst else {
+            return false;
+        };
+        let hydration_size = self
+            .auto_scaling_strategy
+            .as_ref()
+            .and_then(|strategy| strategy.on_hydration.as_ref())
+            .map(|policy| policy.hydration_size.as_str());
+        !mz_adapter_types::cluster_state::burst_record_warranted(
+            &record.burst_size,
+            self.replication_factor,
+            hydration_size,
+        )
+    }
 }
 
 impl From<ClusterVariantManaged> for durable::ClusterVariantManaged {
@@ -3377,6 +3507,78 @@ pub struct ReconfigurationState {
     pub target: ReconfigurationTarget,
     pub deadline: Timestamp,
     pub on_timeout: OnTimeoutAction,
+    pub status: ReconfigurationStatus,
+}
+
+/// In-memory mirror of [`durable::ReconfigurationStatus`].
+///
+/// The lifecycle of a cluster's `reconfiguration` record. Writers only ever
+/// move the record along these transitions:
+///
+/// | from          | to                                                    | audited as          |
+/// |---------------|-------------------------------------------------------|---------------------|
+/// | no record     | `InProgress`                                          | `started`           |
+/// | `InProgress`  | `InProgress` (re-target)                              | `started`           |
+/// | `InProgress`  | `Finalized`                                           | `finalized`         |
+/// | `InProgress`  | `TimedOut`                                            | `timed-out`         |
+/// | `InProgress`  | `Cancelled`                                           | `cancelled`         |
+/// | `InProgress`  | `ResourceExhausted`                                   | `resource-exhausted`|
+/// | any terminal  | no record (drop), or `InProgress` (fresh record)      | none / `started`    |
+///
+/// The terminal statuses never transition into one another and a record is
+/// never revived in place: a new reconfiguration overwrites the settled record
+/// with a fresh `InProgress` one.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Serialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord
+)]
+pub enum ReconfigurationStatus {
+    InProgress,
+    Finalized,
+    TimedOut,
+    Cancelled,
+    ResourceExhausted,
+}
+
+impl From<ReconfigurationStatus> for durable::ReconfigurationStatus {
+    fn from(status: ReconfigurationStatus) -> Self {
+        match status {
+            ReconfigurationStatus::InProgress => durable::ReconfigurationStatus::InProgress,
+            ReconfigurationStatus::Finalized => durable::ReconfigurationStatus::Finalized,
+            ReconfigurationStatus::TimedOut => durable::ReconfigurationStatus::TimedOut,
+            ReconfigurationStatus::Cancelled => durable::ReconfigurationStatus::Cancelled,
+            ReconfigurationStatus::ResourceExhausted => {
+                durable::ReconfigurationStatus::ResourceExhausted
+            }
+        }
+    }
+}
+
+impl From<durable::ReconfigurationStatus> for ReconfigurationStatus {
+    fn from(status: durable::ReconfigurationStatus) -> Self {
+        match status {
+            durable::ReconfigurationStatus::InProgress => ReconfigurationStatus::InProgress,
+            durable::ReconfigurationStatus::Finalized => ReconfigurationStatus::Finalized,
+            durable::ReconfigurationStatus::TimedOut => ReconfigurationStatus::TimedOut,
+            durable::ReconfigurationStatus::Cancelled => ReconfigurationStatus::Cancelled,
+            durable::ReconfigurationStatus::ResourceExhausted => {
+                ReconfigurationStatus::ResourceExhausted
+            }
+        }
+    }
+}
+
+impl ReconfigurationState {
+    pub fn is_in_progress(&self) -> bool {
+        matches!(self.status, ReconfigurationStatus::InProgress)
+    }
 }
 
 impl From<ReconfigurationState> for durable::ReconfigurationState {
@@ -3387,11 +3589,13 @@ impl From<ReconfigurationState> for durable::ReconfigurationState {
             target,
             deadline,
             on_timeout,
+            status,
         } = state;
         Self {
             target: target.into(),
             deadline,
             on_timeout,
+            status: status.into(),
         }
     }
 }
@@ -3404,11 +3608,13 @@ impl From<durable::ReconfigurationState> for ReconfigurationState {
             target,
             deadline,
             on_timeout,
+            status,
         } = state;
         Self {
             target: target.into(),
             deadline,
             on_timeout,
+            status: status.into(),
         }
     }
 }
@@ -3420,6 +3626,13 @@ pub struct ReconfigurationTarget {
     pub replication_factor: u32,
     pub availability_zones: Vec<String>,
     pub logging: ReplicaLogging,
+}
+
+impl ReconfigurationTarget {
+    /// Whether this target matches the realized config shape of `managed`.
+    pub fn matches_realized_config(&self, managed: &ClusterVariantManaged) -> bool {
+        self == &managed.realized_reconfiguration_target()
+    }
 }
 
 impl From<ReconfigurationTarget> for durable::ReconfigurationTarget {
@@ -3575,7 +3788,10 @@ impl mz_sql::catalog::CatalogSchema for Schema {
     }
 
     fn has_items(&self) -> bool {
-        !self.items.is_empty()
+        // A schema holds items, types, and functions in separate maps (see
+        // `item_ids`). All three keep the schema non-empty, so e.g. DROP SCHEMA
+        // without CASCADE must be rejected when only a type or function remains.
+        !self.items.is_empty() || !self.types.is_empty() || !self.functions.is_empty()
     }
 
     fn item_ids(&self) -> Box<dyn Iterator<Item = CatalogItemId> + '_> {
@@ -3701,6 +3917,15 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
         }
     }
 
+    fn auto_scaling_strategy(&self) -> Option<&AutoScalingStrategy> {
+        match &self.config.variant {
+            ClusterVariant::Managed(ClusterVariantManaged {
+                auto_scaling_strategy,
+                ..
+            }) => auto_scaling_strategy.as_ref(),
+            ClusterVariant::Unmanaged => None,
+        }
+    }
     fn try_to_plan(&self) -> Result<CreateClusterPlan, PlanError> {
         self.try_to_plan()
     }

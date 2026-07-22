@@ -97,22 +97,39 @@ class Executor:
         if self.logging_exe is not None:
             self.logging_exe.log(query)
 
-        try:
-            (
-                cur.execute(query.encode())
-                if isinstance(cur, psycopg.Cursor)
-                else cur.execute(query)
-            )
-        except OperationalError:
-            # Can happen after Mz disruptions if we are running queries against Mz
-            print("Network error, retrying")
-            time.sleep(0.01)
-            self.reconnect()
-            with self.mz_conn.cursor() as cur:
-                self.execute(cur, query)
-        except Exception as e:
-            print(f"Query failed: {query} {e}")
-            raise QueryError(str(e), query)
+        # Bounded retries, endless retrying turns a permanent failure into a
+        # RecursionError/hang.
+        for _ in range(1000):
+            try:
+                (
+                    cur.execute(query.encode())
+                    if isinstance(cur, psycopg.Cursor)
+                    else cur.execute(query)
+                )
+                return
+            except OperationalError as e:
+                # Server-side operational errors (e.g. resource limits) carry
+                # a SQLSTATE and are permanent. Only connection-level failures
+                # (no SQLSTATE) are worth retrying, they happen after Mz
+                # disruptions.
+                if e.sqlstate is not None:
+                    print(f"Query failed: {query} {e}")
+                    raise QueryError(str(e), query)
+                # Only queries against Mz can be retried this way, an upstream
+                # connection must not be redirected to the Mz connection.
+                if (
+                    not isinstance(cur, psycopg.Cursor)
+                    or cur.connection is not self.mz_conn
+                ):
+                    raise
+                print("Network error, retrying")
+                time.sleep(0.01)
+                self.reconnect()
+                cur = self.mz_conn.cursor()
+            except Exception as e:
+                print(f"Query failed: {query} {e}")
+                raise QueryError(str(e), query)
+        raise QueryError("Persistent network errors", query)
 
     def execute_with_retry_on_error(
         self,
@@ -136,6 +153,12 @@ class Executor:
 
 
 class PrintExecutor(Executor):
+    def reconnect(self) -> None:
+        # Only prints transactions, needs no Materialize connection. The
+        # random service pick in the base implementation could also hit a
+        # service that is not running yet.
+        pass
+
     def create(self, logging_exe: Any | None = None) -> None:
         pass
 

@@ -110,6 +110,7 @@ IGNORE_FILENAME_RE = re.compile(
     ( .*\.(svg|png|jpg|jpeg|avif|avro|ico|woff)
     | doc/developer/design/20230223_stabilize_with_mutually_recursive.md
     | \.(agents|claude)/skills/.*
+    | test/sqllogictest/cockroach/.*
     )
     """,
     re.VERBOSE,
@@ -289,7 +290,10 @@ def filter_changed_lines(issue_refs: list[IssueRef]) -> list[IssueRef]:
         if issue_ref.text is not None
         and any(
             (issue_ref.filename, issue_ref.line_number + i) in changed_lines
-            for i in range(issue_ref.text.count("\n"))
+            # text is stripped, so an N-line comment block has N-1 newlines.
+            # range(count + 1) covers all N lines, including a single-line ref
+            # (0 newlines) and the last line of a multi-line block.
+            for i in range(issue_ref.text.count("\n") + 1)
         )
     ]
 

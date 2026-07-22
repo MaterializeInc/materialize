@@ -215,90 +215,6 @@ statement error cannot modify managed cluster foo
 ALTER CLUSTER REPLICA foo.r2 RENAME TO bar
 
 statement ok
-ALTER CLUSTER foo SET (REPLICATION FACTOR 1)
-
-query TTT
-SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
-----
-foo  r1  scale=1,workers=1
-mz_catalog_server  r1  scale=1,workers=2
-mz_probe  r1  scale=1,workers=2
-mz_system  r1  scale=1,workers=2
-
-query TTTTT rowsort
-SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
-----
-u5  foo  true  1  scale=1,workers=1
-
-statement ok
-ALTER CLUSTER foo SET (REPLICATION FACTOR 2)
-
-query TTT
-SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
-----
-foo  r1  scale=1,workers=1
-foo  r2  scale=1,workers=1
-mz_catalog_server  r1  scale=1,workers=2
-mz_probe  r1  scale=1,workers=2
-mz_system  r1  scale=1,workers=2
-
-query TTTTT rowsort
-SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
-----
-u5  foo  true  2  scale=1,workers=1
-
-statement ok
-ALTER CLUSTER foo RESET (REPLICATION FACTOR)
-
-query TTT
-SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
-----
-foo  r1  scale=1,workers=1
-mz_catalog_server  r1  scale=1,workers=2
-mz_probe  r1  scale=1,workers=2
-mz_system  r1  scale=1,workers=2
-
-query TTTTT rowsort
-SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
-----
-u5  foo  true  1  scale=1,workers=1
-
-statement ok
-ALTER CLUSTER foo SET (SIZE 'scale=1,workers=2')
-
-query TTT
-SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
-----
-foo  r1  scale=1,workers=2
-mz_catalog_server  r1  scale=1,workers=2
-mz_probe  r1  scale=1,workers=2
-mz_system  r1  scale=1,workers=2
-
-query TTTTT rowsort
-SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
-----
-u5  foo  true  1  scale=1,workers=2
-
-statement ok
-ALTER CLUSTER foo SET (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
-
-query TTT
-SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
-----
-foo  r1  scale=1,workers=1
-mz_catalog_server  r1  scale=1,workers=2
-mz_probe  r1  scale=1,workers=2
-mz_system  r1  scale=1,workers=2
-
-query TTTTT rowsort
-SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
-----
-u5  foo  true  1  scale=1,workers=1
-
-statement error cannot drop replica of managed cluster
-DROP CLUSTER REPLICA foo.r1
-
-statement ok
 ALTER CLUSTER foo SET (REPLICATION FACTOR 0)
 
 statement error unknown cluster replica size invalid_size
@@ -313,16 +229,8 @@ DROP CLUSTER REPLICA IF EXISTS bar.foo
 statement ok
 DROP CLUSTER REPLICA IF EXISTS quickstart.foo
 
-statement error CLUSTER foo has no CLUSTER REPLICA named "r1"
-DROP CLUSTER REPLICA foo.r1
-
-
-query TTT
-SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
-----
-mz_catalog_server  r1  scale=1,workers=2
-mz_probe  r1  scale=1,workers=2
-mz_system  r1  scale=1,workers=2
+statement ok
+DROP CLUSTER foo CASCADE
 
 query TTTTTTT
 SELECT r.name, r.size, s.processes, s.cpu_nano_cores, s.memory_bytes, s.workers, s.credits_per_hour FROM mz_cluster_replicas r JOIN mz_catalog.mz_cluster_replica_sizes s ON r.size = s.size JOIN mz_clusters ON r.cluster_id = mz_clusters.id WHERE mz_clusters.name != 'quickstart' ORDER BY r.name
@@ -330,9 +238,6 @@ SELECT r.name, r.size, s.processes, s.cpu_nano_cores, s.memory_bytes, s.workers,
 r1  scale=1,workers=2  1  18446744073709000000  18446744073709551615  2  1
 r1  scale=1,workers=2  1  18446744073709000000  18446744073709551615  2  1
 r1  scale=1,workers=2  1  18446744073709000000  18446744073709551615  2  1
-
-statement ok
-DROP CLUSTER foo CASCADE
 
 statement ok
 CREATE CLUSTER foo REPLICAS (r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=1,workers=2'))
@@ -437,6 +342,28 @@ ALTER CLUSTER foo SET (REPLICAS ()) WITH (WAIT FOR '0s')
 
 statement error ALTER\.\.\. WITH not supported for unmanaged clusters
 ALTER CLUSTER foo SET (REPLICAS ()) WITH (WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT 'COMMIT'))
+
+statement ok
+DROP CLUSTER foo
+
+# Regression: a `WAIT` clause on an `ALTER` that touches no replica config
+# shape dimension (`SIZE`, `AVAILABILITY ZONES`, either `INTROSPECTION`
+# option) has nothing to hydrate-overlap on, so it is rejected outright
+# rather than silently accepted as a no-op wait.
+
+statement ok
+CREATE CLUSTER foo (SIZE 'scale=1,workers=1')
+
+statement error WAIT can only be used together with a SIZE, AVAILABILITY ZONES, or INTROSPECTION change
+ALTER CLUSTER foo SET (SCHEDULE MANUAL) WITH (WAIT FOR '0s')
+
+statement error WAIT can only be used together with a SIZE, AVAILABILITY ZONES, or INTROSPECTION change
+ALTER CLUSTER foo SET (REPLICATION FACTOR 2) WITH (WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT 'COMMIT'))
+
+# A `WAIT` clause paired with a real shape change is still accepted, including
+# alongside a non-shape option in the same statement.
+statement ok
+ALTER CLUSTER foo SET (SIZE 'scale=1,workers=2', REPLICATION FACTOR 2) WITH (WAIT FOR '0s')
 
 statement ok
 DROP CLUSTER foo

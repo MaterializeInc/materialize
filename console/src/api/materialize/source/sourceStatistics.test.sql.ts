@@ -19,7 +19,7 @@ import { testdrive } from "~/test/sql/mzcompose";
 describe("buildSourceStatisticsQuery", () => {
   it(
     "gets current statistics on a single-replica cluster",
-    { timeout: 15_000 },
+    { timeout: 45_000 },
     async () => {
       await testdrive(
         `

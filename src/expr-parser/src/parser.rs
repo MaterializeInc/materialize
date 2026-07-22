@@ -725,9 +725,7 @@ mod relation {
 
 /// Support for parsing [mz_expr::MirScalarExpr].
 mod scalar {
-    use mz_expr::{
-        BinaryFunc, ColumnOrder, MirScalarExpr, UnaryFunc, UnmaterializableFunc, VariadicFunc, func,
-    };
+    use mz_expr::{BinaryFunc, ColumnOrder, MirScalarExpr, UnaryFunc, VariadicFunc, func};
     use mz_repr::{
         AsColumnType, Datum, ReprColumnType, ReprScalarType, Row, RowArena, SqlScalarType,
     };
@@ -1145,9 +1143,6 @@ mod scalar {
         let inner;
         syn::parenthesized!(inner in input);
 
-        let parse_nullary = |func: UnmaterializableFunc| -> Result {
-            Ok(MirScalarExpr::CallUnmaterializable(func))
-        };
         let parse_unary = |func: UnaryFunc| -> Result {
             let expr = Box::new(parse_expr(&inner)?);
             Ok(MirScalarExpr::CallUnary { func, expr })
@@ -1169,8 +1164,6 @@ mod scalar {
         // most notably one cannot handle overloaded function names because we don't want to do
         // name resolution in the parser.
         match ident.to_string().to_lowercase().as_str() {
-            // Supported unmaterializable (a.k.a. nullary) functions:
-            "mz_environment_id" => parse_nullary(UnmaterializableFunc::MzEnvironmentId),
             // Supported unary functions:
             "abs" => parse_unary(func::AbsInt64.into()),
             "not" => parse_unary(func::Not.into()),

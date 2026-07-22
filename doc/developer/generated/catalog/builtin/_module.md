@@ -1,13 +1,13 @@
 ---
 source: src/catalog/src/builtin.rs
-revision: 3953456a45
+revision: 34813f0a3f
 ---
 
 # catalog::builtin
 
 Defines every built-in catalog object hardcoded into Materialize: system tables (`BuiltinTable`), views (`BuiltinView`), materialized views (`BuiltinMaterializedView`), indexes (`BuiltinIndex`), types (`BuiltinType`), sources (`BuiltinSource`), logs (`BuiltinLog`), connections (`BuiltinConnection`), cluster configs, roles, and schemas.
 Key types include `Builtin<T>` (a generic enum with variants Log, Table, View, MaterializedView, Type, Func, Source, Index, and Connection, each wrapping the corresponding builtin struct), `BUILTINS` (the exhaustive static list used at catalog open time), and constants like `BUILTIN_PREFIXES` and `RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL`.
-`MZ_DATABASES`, `MZ_CLUSTERS`, `MZ_CLUSTER_REPLICAS`, and `MZ_CLUSTER_SCHEDULES` are all `BuiltinMaterializedView` objects backed by queries over the catalog. `MZ_CLUSTER_REPLICA_SIZE_INTERNAL` is a `BuiltinTable` that retains size-map entries including disabled sizes, allowing the `MZ_CLUSTER_REPLICAS` materialized view to resolve the `disk` column via LEFT JOIN even for replicas whose sizes have been disabled.
+`MZ_DATABASES`, `MZ_CLUSTERS`, `MZ_CLUSTER_REPLICAS`, `MZ_CLUSTER_SCHEDULES`, `MZ_CLUSTER_RECONFIGURATIONS`, `MZ_CLUSTER_AUTO_SCALING_STRATEGIES`, `MZ_KAFKA_SOURCES`, and `MZ_POSTGRES_SOURCES` are all `BuiltinMaterializedView` objects backed by queries over the catalog. `MZ_CLUSTER_RECONFIGURATIONS` and `MZ_CLUSTER_AUTO_SCALING_STRATEGIES` each have a corresponding `BuiltinIndex` (`MZ_CLUSTER_RECONFIGURATIONS_IND` and `MZ_CLUSTER_AUTO_SCALING_STRATEGIES_IND` respectively) on `cluster_id`, registered in `BUILTINS_STATIC` alongside the other index entries. `MZ_CLUSTER_REPLICA_SIZE_INTERNAL` is a `BuiltinTable` that retains size-map entries including disabled sizes, allowing the `MZ_CLUSTER_REPLICAS` materialized view to resolve the `disk` column via LEFT JOIN even for replicas whose sizes have been disabled.
 `MZ_CONNECTIONS`, `MZ_SECRETS`, `MZ_SOURCES`, `MZ_DEFAULT_PRIVILEGES`, and `MZ_SYSTEM_PRIVILEGES` are `BuiltinMaterializedView` objects backed by queries over `mz_internal.mz_catalog_raw`. `MZ_SOURCES` is generated dynamically via `make_mz_sources()` in the `builtin` submodule rather than declared as a static, since its SQL must enumerate all builtin and log sources.
 `MZ_INDEXES` is also a `BuiltinMaterializedView` generated dynamically via `make_mz_indexes()` in the `mz_catalog` submodule; it inlines the full set of builtin indexes and logs as `VALUES` so that its SQL fingerprint changes whenever a builtin index or log is added or removed, triggering an automatic `MigrationStep::replacement`.
 Each builtin struct carries an optional `ontology` field of type `Option<Ontology>` that marks the object as a catalog ontology entity and provides entity-level metadata.

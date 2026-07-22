@@ -11,7 +11,6 @@
 
 use std::time::Duration;
 
-use hyper_tls::HttpsConnector;
 use launchdarkly_server_sdk as ld;
 use mz_build_info::BuildInfo;
 use mz_dyncfg::{ConfigSet, ConfigUpdates, ConfigVal};
@@ -50,13 +49,31 @@ where
         let _ = dyn_into_flag(entry.val())?;
     }
     let ld_client = if let Some(key) = launchdarkly_sdk_key {
+        // The 300s streaming read timeout must stay above LaunchDarkly's
+        // streaming heartbeat interval (roughly 3 minutes per LD's
+        // documentation), or a healthy idle stream would trip the timeout and
+        // reconnect spuriously. The same constant lives in the adapter's
+        // `SystemParameterFrontend`.
+        //
+        // NOTE: `HyperTransport` auto-detects the `HTTP_PROXY`/`HTTPS_PROXY`/
+        // `NO_PROXY` env vars and routes through a configured proxy. No
+        // exposure today (balancerd's cloud pods set no proxy vars), but worth
+        // knowing if proxy vars ever appear on a pod.
+        let transport = launchdarkly_sdk_transport::HyperTransport::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .read_timeout(Duration::from_secs(300))
+            .build_https()
+            .expect("failed to create HTTPS transport");
+
+        let mut data_source = ld::StreamingDataSourceBuilder::new();
+        data_source.transport(transport.clone());
+
+        let mut event_processor = ld::EventProcessorBuilder::new();
+        event_processor.transport(transport);
+
         let config = ld::ConfigBuilder::new(key)
-            .event_processor(
-                ld::EventProcessorBuilder::new().https_connector(HttpsConnector::new()),
-            )
-            .data_source(
-                ld::StreamingDataSourceBuilder::new().https_connector(HttpsConnector::new()),
-            )
+            .data_source(&data_source)
+            .event_processor(&event_processor)
             .build()
             .expect("valid config");
         let client = ld::Client::build(config)?;

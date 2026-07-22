@@ -69,10 +69,6 @@ class Statistics:
         self.wallclock = wallclock
         self.explain_wallclock = explain_wallclock
 
-    def __str__(self) -> str:
-        return f"""  wallclock: {self.wallclock:>7.2f}
-  explain_wallclock: {self.explain_wallclock:>7.2f}ms"""
-
 
 class Generator:
     """A common class for all the individual Generators.
@@ -123,7 +119,10 @@ class Generator:
         raise NotImplementedError
 
     @classmethod
-    def store_explain_and_run(cls, query: str) -> str | None:
+    def store_explain_and_run(cls, query: str) -> None:
+        """Print `query` as a testdrive command and record it for EXPLAIN
+        timing. Each call overwrites the previous one, so only the last
+        query of a scenario is timed."""
         cls.EXPLAIN = f"EXPLAIN {query}"
         print(f"> {query}")
 
@@ -317,6 +316,11 @@ class ArrangementSizesHistory(Generator):
             ")"
         )
         print("true")
+
+        # Restore the default cadence, otherwise all later scenarios run
+        # with 5s introspection collection churn.
+        print("$ postgres-execute connection=mz_system")
+        print("ALTER SYSTEM RESET arrangement_size_history_collection_interval;")
 
 
 class KafkaTopics(Generator):
@@ -688,6 +692,7 @@ class KafkaSinksSameSource(Generator):
 
 class IcebergSinks(Generator):
     COUNT = min(Generator.COUNT, 100)  # polaris gets overloaded easily
+    VERSION = "1.1.0"
 
     @classmethod
     def body(cls) -> None:
@@ -711,7 +716,7 @@ class IcebergSinks(Generator):
             $ set-from-sql var=iceberg_key
             SELECT key FROM public2.iceberg_credentials
 
-            > CREATE CONNECTION aws_conn TO AWS (ACCESS KEY ID = '{iceberg_user}', SECRET ACCESS KEY = SECRET public2.iceberg_secret, ENDPOINT = 'http://minio:9000/', REGION = 'us-east-1');
+            > CREATE CONNECTION aws_conn TO AWS (ACCESS KEY ID = '${iceberg_user}', SECRET ACCESS KEY = SECRET public2.iceberg_secret, ENDPOINT = 'http://minio:9000/', REGION = 'us-east-1');
 
             > CREATE CONNECTION polaris_conn TO ICEBERG CATALOG (CATALOG TYPE = 'REST', URL = 'http://polaris:8181/api/catalog', CREDENTIAL = 'root:root', WAREHOUSE = 'default_catalog', SCOPE = 'PRINCIPAL_ROLE:ALL');
 
@@ -743,9 +748,6 @@ class IcebergSinks(Generator):
                        WHERE mz_sinks.name = 's{i}';
                      true
 
-                     $ set-from-sql var=iceberg_user
-                     SELECT user FROM public2.iceberg_credentials
-
                      $ duckdb-query name=iceberg
                      SELECT * FROM iceberg_scan('s3://test-bucket/default_namespace/sink-{i}')
                      {i}
@@ -754,6 +756,7 @@ class IcebergSinks(Generator):
 
 class IcebergSinksSameSource(Generator):
     COUNT = min(Generator.COUNT, 100)  # polaris gets overloaded easily
+    VERSION = "1.1.0"
 
     @classmethod
     def body(cls) -> None:
@@ -772,7 +775,7 @@ class IcebergSinksSameSource(Generator):
             $ set-from-sql var=iceberg_key
             SELECT key FROM public2.iceberg_credentials
 
-            > CREATE CONNECTION aws_conn TO AWS (ACCESS KEY ID = '{iceberg_user}', SECRET ACCESS KEY = SECRET public2.iceberg_secret, ENDPOINT = 'http://minio:9000/', REGION = 'us-east-1');
+            > CREATE CONNECTION aws_conn TO AWS (ACCESS KEY ID = '${iceberg_user}', SECRET ACCESS KEY = SECRET public2.iceberg_secret, ENDPOINT = 'http://minio:9000/', REGION = 'us-east-1');
 
             > CREATE CONNECTION polaris_conn TO ICEBERG CATALOG (CATALOG TYPE = 'REST', URL = 'http://polaris:8181/api/catalog', CREDENTIAL = 'root:root', WAREHOUSE = 'default_catalog', SCOPE = 'PRINCIPAL_ROLE:ALL');
 
@@ -804,9 +807,6 @@ class IcebergSinksSameSource(Generator):
                        JOIN mz_sinks ON mz_sink_statistics.id = mz_sinks.id
                        WHERE mz_sinks.name = 's{i}';
                      true
-
-                     $ set-from-sql var=iceberg_user
-                     SELECT user FROM public2.iceberg_credentials
 
                      $ duckdb-query name=iceberg
                      SELECT * FROM iceberg_scan('s3://test-bucket/default_namespace/sink-{i}')
@@ -1067,6 +1067,32 @@ class ViewsMaterializedNested(Generator):
 
         cls.store_explain_and_run(f"SELECT * FROM v{cls.COUNT};")
         print(f"{cls.COUNT}")
+
+
+class ReadThenWriteNestedViews(Generator):
+    # A read-then-write (DELETE ... WHERE ... IN (SELECT ... FROM deep_view))
+    # validates the transitive dependencies of its read set. That validation
+    # must not recurse over the view chain (SQL-426: it used to, overflowing the
+    # coordinator stack). This is a smoke test of the read-then-write path over
+    # a nested-view read set. The inner SELECT is a one-shot peek that inlines
+    # the chain, so COUNT is capped like ViewsNested. The deep-chain validation
+    # itself is covered by a Rust unit test.
+    COUNT = min(Generator.COUNT, 10)
+
+    @classmethod
+    def body(cls) -> None:
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
+        print("> CREATE TABLE t (a INTEGER);")
+        print("> INSERT INTO t VALUES (1);")
+        print("> CREATE VIEW c0 AS SELECT a FROM t;")
+
+        for i in cls.all():
+            print(f"> CREATE VIEW c{i} AS SELECT a FROM c{i-1};")
+
+        print(f"> DELETE FROM t WHERE a IN (SELECT a FROM c{cls.COUNT});")
+        cls.store_explain_and_run("SELECT count(*) FROM t;")
+        print("0")
 
 
 class CTEs(Generator):
@@ -1687,6 +1713,7 @@ class PostgresSources(Generator):
 
     @classmethod
     def body(cls) -> None:
+        print("$ set-sql-timeout duration=300s")
         print("> SET statement_timeout='300s'")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_sources = {cls.COUNT * 10};")
@@ -1727,6 +1754,7 @@ class PostgresSources(Generator):
 class PostgresTables(Generator):
     @classmethod
     def body(cls) -> None:
+        print("$ set-sql-timeout duration=300s")
         print("> SET statement_timeout='300s'")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
@@ -1763,8 +1791,11 @@ class PostgresTables(Generator):
 
 
 class PostgresTablesOldSyntax(Generator):
+    MAX_COUNT = 8000  # Too long-running with count=16000
+
     @classmethod
     def body(cls) -> None:
+        print("$ set-sql-timeout duration=300s")
         print("> SET statement_timeout='300s'")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_sources = {cls.COUNT * 10};")
@@ -1795,7 +1826,6 @@ class PostgresTablesOldSyntax(Generator):
           """)
         print("> SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';")
         for i in cls.all():
-            print("$ set-sql-timeout duration=300s")
             cls.store_explain_and_run(f"SELECT * FROM t{i}")
             print(f"{i}")
 
@@ -2126,7 +2156,7 @@ def setup(c: Composition, workers: int) -> None:
                 WORKERS 1
             )
         );
-        GRANT ALL PRIVILEGES ON CLUSTER single_replica_cluster TO materialize;
+        GRANT ALL PRIVILEGES ON CLUSTER single_worker_cluster TO materialize;
         GRANT ALL PRIVILEGES ON CLUSTER single_replica_cluster TO "{ADMIN_USER}";
         GRANT ALL PRIVILEGES ON CLUSTER quickstart TO "{ADMIN_USER}";
 
@@ -2281,6 +2311,7 @@ def run_scenarios(
         if find_limit:
             good_count = None
             bad_count = None
+            first_failure = None
             while True:
                 print(
                     f"--- Running scenario {scenario.__name__} with count {scenario.COUNT}"
@@ -2297,6 +2328,12 @@ def run_scenarios(
                     print(
                         f"Failed scenario {scenario.__name__} with count {scenario.COUNT}: {e}"
                     )
+                    if first_failure is None:
+                        first_failure = TestFailureDetails(
+                            message=str(e),
+                            details=traceback.format_exc(),
+                            test_class_name_override=f"{scenario.__name__} with count {scenario.COUNT}",
+                        )
                     i = 0
                     while True:
                         try:
@@ -2310,7 +2347,7 @@ def run_scenarios(
                             i += 1
                             print(
                                 re.sub(
-                                    r"mzp_[a-z1-9]*",
+                                    r"mzp_[a-z0-9]*",
                                     "[REDACTED]",
                                     traceback.format_exc(),
                                 )
@@ -2320,21 +2357,18 @@ def run_scenarios(
                     setup(c, workers)
 
                     bad_count = scenario.COUNT
-                    previous_count = scenario.COUNT
                     scenario.COUNT = (
                         scenario.COUNT // 2
                         if good_count is None
                         else (good_count + bad_count) // 2
                     )
-                    if scenario.COUNT >= bad_count:
-                        if not good_count:
-                            failures.append(
-                                TestFailureDetails(
-                                    message=str(e),
-                                    details=traceback.format_exc(),
-                                    test_class_name_override=f"{scenario.__name__} with count {previous_count}",
-                                )
-                            )
+                    # Never bisect below 1. A COUNT=0 run is degenerate, it
+                    # either fails with a meaningless syntax error or trivially
+                    # succeeds, hiding a scenario that fails at every count.
+                    # Report the original failure instead.
+                    if scenario.COUNT < 1 or scenario.COUNT >= bad_count:
+                        if good_count is None:
+                            failures.append(first_failure)
                         break
                     continue
                 else:

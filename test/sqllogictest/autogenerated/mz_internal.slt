@@ -123,6 +123,23 @@ type  text  `on-refresh`,␠or␠`manual`.␠Default:␠`manual`
 refresh_hydration_time_estimate  interval  The␠interval␠given␠in␠the␠`HYDRATION␠TIME␠ESTIMATE`␠option.
 
 query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_reconfigurations' ORDER BY position
+----
+cluster_id  text  The␠ID␠of␠the␠cluster.␠Corresponds␠to␠`mz_clusters.id`.
+status  text  The␠lifecycle␠status␠of␠the␠reconfiguration:␠`in-progress`␠while␠the␠controller␠converges␠on␠the␠target,␠then␠a␠terminal␠`finalized`,␠`timed-out`,␠`cancelled`,␠or␠`resource-exhausted`.␠The␠record␠is␠retained␠after␠it␠settles,␠so␠the␠latest␠outcome␠stays␠inspectable␠until␠a␠later␠reconfiguration␠overwrites␠it.
+deadline  mz_timestamp  The␠deadline␠by␠which␠the␠reconfiguration␠must␠complete.␠After␠it␠passes,␠the␠`on_timeout`␠action␠applies.
+on_timeout  text  The␠action␠applied␠if␠`deadline`␠passes␠before␠the␠target␠hydrates:␠`commit`␠(cut␠over␠to␠the␠not-yet-hydrated␠target)␠or␠`rollback`␠(revert␠to␠the␠pre-reconfiguration␠shape).
+target  jsonb  The␠config␠shape␠the␠cluster␠is␠reconfiguring␠to,␠as␠JSON:␠`size`,␠`replication_factor`,␠`availability_zones`,␠and␠`logging`.␠The␠realized␠(current)␠shape␠is␠in␠`mz_clusters`.
+changes  jsonb  The␠dimensions␠in␠which␠`target`␠differs␠from␠the␠cluster's␠realized␠configuration,␠as␠a␠JSON␠object␠holding␠the␠target␠value␠per␠changed␠dimension.␠Empty␠(`{}`)␠once␠a␠record␠settles␠with␠its␠target␠applied.␠A␠rolled-back␠record␠keeps␠the␠abandoned␠diff.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_auto_scaling_strategies' ORDER BY position
+----
+cluster_id  text  The␠ID␠of␠the␠cluster.␠Corresponds␠to␠`mz_clusters.id`.
+strategy  jsonb  **Unstable**␠The␠configured␠autoscaling␠policy,␠as␠JSON.␠Currently␠an␠`on_hydration`␠sub-policy␠carrying␠its␠`hydration_size`␠and␠optional␠`linger_duration`.
+state  jsonb  **Unstable**␠The␠in-flight␠autoscaling␠runtime␠state,␠as␠JSON␠keyed␠by␠strategy,␠or␠`NULL`␠when␠nothing␠is␠running.␠Currently␠a␠`burst`␠key␠carrying␠the␠active␠hydration␠burst:␠its␠`burst_size`,␠`linger_duration`,␠and␠`steady_hydrated_at`.
+
+query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_metrics' ORDER BY position
 ----
 replica_id  text  The␠ID␠of␠a␠cluster␠replica.
@@ -317,14 +334,14 @@ query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_mcp_data_products' ORDER BY position
 ----
 object_name  text  Fully␠qualified␠object␠name␠(database.schema.name).
-cluster  text  Cluster␠where␠the␠object␠computes␠or␠its␠index␠is␠hosted.␠Reads␠from␠any␠cluster␠work,␠but␠only␠reads␠on␠this␠cluster␠benefit␠from␠the␠index.
+cluster  text  Cluster␠hosting␠the␠object's␠index␠or␠compute.␠Reads␠still␠work␠from␠any␠cluster␠you␠can␠use,␠but␠only␠reads␠on␠this␠cluster␠benefit␠from␠the␠index.␠Shown␠only␠when␠your␠role␠has␠USAGE␠on␠it␠(otherwise␠null).
 description  text  Index␠comment␠if␠available,␠otherwise␠object␠comment.␠Used␠as␠data␠product␠description.
 
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_mcp_data_product_details' ORDER BY position
 ----
 object_name  text  Fully␠qualified␠object␠name␠(database.schema.name).
-cluster  text  Cluster␠where␠the␠object␠computes␠or␠its␠index␠is␠hosted.␠Reads␠from␠any␠cluster␠work,␠but␠only␠reads␠on␠this␠cluster␠benefit␠from␠the␠index.
+cluster  text  Cluster␠hosting␠the␠object's␠index␠or␠compute.␠Reads␠still␠work␠from␠any␠cluster␠you␠can␠use,␠but␠only␠reads␠on␠this␠cluster␠benefit␠from␠the␠index.␠Shown␠only␠when␠your␠role␠has␠USAGE␠on␠it␠(otherwise␠null).
 description  text  Index␠comment␠if␠available,␠otherwise␠object␠comment.␠Used␠as␠data␠product␠description.
 schema  jsonb  JSON␠Schema␠describing␠the␠object's␠columns␠and␠types.
 hydration  jsonb  Readiness␠summary␠as␠a␠JSON␠object␠with␠`hydrated`␠(bool),␠`replica_count`␠(int),␠and␠`hydrated_replica_count`␠(int).␠`hydrated`␠is␠true␠only␠when␠the␠cluster␠has␠at␠least␠one␠replica␠and␠the␠dataflow␠is␠hydrated␠on␠every␠replica.␠Reads␠against␠a␠non-hydrated␠data␠product␠block␠until␠the␠dataflow␠catches␠up␠(they␠never␠return␠partial␠data).␠Check␠this␠before␠reading:␠if␠`hydrated`␠is␠false␠and␠`replica_count␠>␠0`,␠wait␠and␠retry;␠if␠`replica_count`␠is␠0,␠the␠cluster␠has␠no␠replicas␠and␠that␠needs␠operator␠action,␠not␠a␠retry.
@@ -764,7 +781,9 @@ mz_aws_privatelink_connection_statuses
 mz_builtin_materialized_views
 mz_builtin_sources
 mz_catalog_raw
+mz_cluster_auto_scaling_strategies
 mz_cluster_deployment_lineage
+mz_cluster_reconfigurations
 mz_cluster_replica_history
 mz_cluster_replica_metrics
 mz_cluster_replica_metrics_history

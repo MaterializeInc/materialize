@@ -1,0 +1,51 @@
+# Fuzz crate for mz-transform optimizer transforms (shape/`typ` preservation).
+#
+# Excluded from the main workspace because libFuzzer requires nightly Rust.
+# Run via the repo-wide runner, or locally:
+#     cd src/transform/fuzz
+#     cargo +nightly fuzz run mir_relation_transforms -- -max_total_time=60
+
+[package]
+workspace = "../../../test/cargo-fuzz"
+name = "mz-transform-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+mz-expr = { path = "../../expr" }
+mz-repr = { path = "../../repr" }
+mz-transform = { path = ".." }
+
+# Shared generators and oracle helpers used by every target below.
+[lib]
+name = "mz_transform_fuzz"
+path = "src/lib.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mir_relation_transforms"
+path = "fuzz_targets/mir_relation_transforms.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "full_optimizer_equiv"
+path = "fuzz_targets/full_optimizer_equiv.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "optimizer_symbolic_equiv"
+path = "fuzz_targets/optimizer_symbolic_equiv.rs"
+test = false
+doc = false
+bench = false

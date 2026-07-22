@@ -1,6 +1,6 @@
 ---
 source: src/repr/src/scalar.rs
-revision: 2bd0f58824
+revision: 7670b3e4d3
 ---
 
 # mz-repr::scalar
@@ -14,6 +14,6 @@ Introduces a dual-type system for scalar types:
 
 `SqlContainerType` is a trait implemented by container datum types (`Array`, `Range`) to provide compile-time element-type unwrap/wrap on `SqlScalarType`, used by the `#[sqlfunc]` proc macro.
 
-`AsColumnType`, `InputDatumType`, and `OutputDatumType` traits bridge between native Rust types and their SQL column type representations.
+`AsColumnType`, `InputDatumType`, and `OutputDatumType` traits bridge between native Rust types and their SQL column type representations. String-like Rust types (`&str`, `String`) implement `AsColumnType` returning `SqlScalarType::VarChar { max_length: None }` (not `Char`).
 `Int2Vector` provides PostgreSQL `int2vector` compatibility; `ExcludeNull`, `OptionalArg`, and `Variadic` are markers for scalar function signatures.
 Proptest support types (`PropDatum`, `PropArray`, `PropList`, `PropDict`) and strategies (`arb_datum`, `arb_datum_for_scalar`, `arb_datum_for_column`, `arb_range_type`) are gated behind `#[cfg(any(test, feature = "proptest"))]` and support property-based testing.

@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,20 +9,20 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/builtin_function
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/builtin_function
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
 mode cockroach
 
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET unsafe_enable_table_keys = true
-----
-COMPLETE 0
+# tenant-capability-override-opt: can_check_consistency=true
 
 statement ok
 CREATE TABLE foo (a int)
@@ -30,18 +30,25 @@ CREATE TABLE foo (a int)
 statement ok
 INSERT INTO foo (a) VALUES (1)
 
-query error unknown function: foo.bar
+query error unknown schema 'foo'
 SELECT foo.bar()
 
-query error unknown function: defaults
+query error function "pg_catalog\.defaults" does not exist
+SELECT pg_catalog.defaults()
+
+query error function "defaults" does not exist
 SELECT defaults()
 
+# Not supported by Materialize.
+onlyif cockroach
 query II colnames
 SELECT length('roach7'), length(b'roach77')
 ----
 length length
 6      7
 
+# Not supported by Materialize.
+onlyif cockroach
 query IIIIII
 SELECT length('Hello, 世界'), length(b'Hello, 世界'),
        char_length('Hello, 世界'), char_length(b'Hello, 世界'),
@@ -49,14 +56,18 @@ SELECT length('Hello, 世界'), length(b'Hello, 世界'),
 ----
 9 13 9 13 9 13
 
-statement error unknown signature: length\(int\)
+statement error function length\(integer\) does not exist
 SELECT length(23)
 
+# Not supported by Materialize.
+onlyif cockroach
 query III
 SELECT octet_length('Hello'), octet_length('世界'), octet_length(b'世界')
 ----
 5 6 6
 
+# Not supported by Materialize.
+onlyif cockroach
 query III
 SELECT bit_length('Hello'), bit_length('世界'), bit_length(b'世界')
 ----
@@ -69,13 +80,17 @@ SELECT quote_ident('abc'), quote_ident('ab.c'), quote_ident('ab"c'), quote_ident
        quote_ident('bigint'), -- col name keyword
        quote_ident('alter') -- unreserved keyword
 ----
-abc  "ab.c"  "ab""c"  世界  "array"  "family"  "bigint"  alter
+abc  "ab.c"  "ab""c"  "世界"  "array"  family  bigint  alter
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTT
 SELECT quote_literal('abc'), quote_literal('ab''c'), quote_literal('ab"c'), quote_literal(e'ab\nc')
 ----
 'abc'  e'ab\'c'  'ab"c'  e'ab\nc'
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTTTTT
 SELECT
  quote_literal(123::string), quote_nullable(123::string),
@@ -85,14 +100,18 @@ SELECT
 ----
 '123'  '123'  '123'  '123'  'true'  'true'  '123.3'  '123.3'
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTTT
 SELECT
  quote_literal('1d'::interval),	quote_nullable('1d'::interval),
  quote_literal('2018-06-11 12:13:14'::timestamp), quote_nullable('2018-06-11 12:13:14'::timestamp),
  quote_literal('2018-06-11'::date), quote_nullable('2018-06-11'::date)
 ----
-'1 day'  '1 day'  '2018-06-11 12:13:14+00:00'  '2018-06-11 12:13:14+00:00'  '2018-06-11'  '2018-06-11'
+'1 day'  '1 day'  '2018-06-11 12:13:14'  '2018-06-11 12:13:14'  '2018-06-11'  '2018-06-11'
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTBB
 SELECT
  quote_literal(null::int), quote_nullable(null::int),
@@ -102,22 +121,25 @@ NULL  NULL  true  false
 
 # Check that quote_literal is properly sensitive to bytea_output.
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SELECT quote_literal(b'abc'), quote_nullable(b'abc')
 ----
 e'\\x616263'  e'\\x616263'
 
-# TODO: Support bytea
-#statement ok
-#SET bytea_output = 'escape'
-#
-#query TT
-#SELECT quote_literal(b'abc'), quote_nullable(b'abc')
-#----
-#'abc'  'abc'
-#
-#statement ok
-#RESET bytea_output
+statement ok
+SET bytea_output = 'escape'
+
+# Not supported by Materialize.
+onlyif cockroach
+query TT
+SELECT quote_literal(b'abc'), quote_nullable(b'abc')
+----
+'abc'  'abc'
+
+statement ok
+RESET bytea_output
 
 query T colnames
 SELECT upper('roacH7')
@@ -125,7 +147,24 @@ SELECT upper('roacH7')
 upper
 ROACH7
 
-statement error unknown signature: upper\(decimal\)
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT unaccent(str) FROM ( VALUES
+   ('no_special_CHARACTERS1!'),
+   ('Żółć'),
+   ('⃞h̀ＥＬＬＯ`̀́⃞'),
+   ('Softhyphen­separator'),
+   ('some ̂thing')
+) tbl(str)
+----
+no_special_CHARACTERS1!
+Zolc
+hELLO`
+Softhyphen-separator
+something
+
+statement error function upper\(numeric\) does not exist
 SELECT upper(2.2)
 
 query T colnames
@@ -134,15 +173,19 @@ SELECT lower('RoacH7')
 lower
 roach7
 
-statement error unknown signature: lower\(int\)
+statement error function lower\(integer\) does not exist
 SELECT lower(32)
 
+# Not supported by Materialize.
+onlyif cockroach
 # Multiplying by zero so the result is deterministic.
 query R
 SELECT random() * 0.0
 ----
 0
 
+# Not supported by Materialize.
+onlyif cockroach
 # Concatenating 'empty' because the empty string doesn't work in these tests.
 query T
 SELECT concat() || 'empty'
@@ -154,6 +197,8 @@ SELECT concat('RoacH', NULL)
 ----
 RoacH
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error unknown signature: concat\(string, bool, decimal, bool\)
 SELECT concat('RoacH', false, 64.532, TRUE)
 
@@ -177,6 +222,8 @@ SELECT substring('RoacH' from 2 for 3)
 ----
 oac
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT substring('RoacH' for 3 from 2)
 ----
@@ -217,9 +264,11 @@ SELECT substr('12345', -2, 77)
 ----
 12345
 
-statement error substr\(\): negative substring length -1 not allowed
+statement error negative substring length not allowed
 SELECT substr('12345', 2, -1)
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT substr('string', 4827075662841736053, 5123273972570225659) || 'empty'
 ----
@@ -230,28 +279,173 @@ SELECT substring('12345' for 3)
 ----
 123
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT substring('foobar' from 'o.b')
 ----
 oob
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT substring('f(oabaroob' from '\(o(.)b')
 ----
 a
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT substring('f(oabaroob' from '+(o(.)b' for '+')
 ----
 a
 
-query error substring\(\): error parsing regexp: missing closing \): `\\\\\(o\(.\)b`
+query error invalid input syntax for type integer: invalid digit found in string: "\\\(o\(\.\)b"
 SELECT substring('f(oabaroob' from '\(o(.)b' for '+')
 
+# Not supported by Materialize.
+onlyif cockroach
 query error unknown signature: substring\(\)
 SELECT substring()
 
-query error unknown signature: concat_ws\(\)
+# Adding testcases for substring against bit array.
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTT
+SELECT substring(B'11110000', 0), substring(B'11110000', -1), substring(B'11110000', 5)
+----
+11110000 11110000 0000
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTT
+SELECT substring(B'11110000', 8), substring(B'11110000', 10), substring(B'', 0)
+----
+0  ·  ·
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTT
+SELECT substring('11100011'::bit(8), 4), substring('11100011'::bit(6), 4), substring(B'', 0, 1)
+----
+00011 000  ·
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTT
+SELECT substring(B'11110000', 0, 4), substring(B'11110000', -1, 4), substring(B'11110000', 5, 10)
+----
+111 11 0000
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTT
+SELECT substring(B'11110000', 8, 1), substring(B'11110000', 8, 0), substring(B'11110000', 10, 5)
+----
+0  ·  ·
+
+# Not supported by Materialize.
+onlyif cockroach
+query TT
+SELECT substring('11100011'::bit(10), 4, 10), substring('11100011'::bit(8), 1, 8)
+----
+0001100 11100011
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTT
+SELECT substring(B'10001000' FOR 4 FROM 0), substring(B'10001000' FROM 0 FOR 4), substring(B'10001000' FOR 4)
+----
+100 100 1000
+
+query error type "bit" does not exist
+SELECT substring('11100011'::bit(10), 4, -1)
+
+# Adding testcases for substring against byte array.
+
+# Not supported by Materialize.
+onlyif cockroach
+query TT
+SELECT substring(b'abc', 0), substring(b'\x61\x62\x63', -1)
+----
+abc abc
+
+# Not supported by Materialize.
+onlyif cockroach
+query TT
+SELECT substring(b'abc', 3), substring(b'abc', 5)
+----
+c  ·
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT substring('abc'::bytea, 0)
+----
+abc
+
+# Not supported by Materialize.
+onlyif cockroach
+query TT
+SELECT substring(b'\x61\x62\x63', 0, 4), substring(b'abc', -1, 4)
+----
+abc ab
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTT
+SELECT substring(b'abc', 3, 1), substring(b'abc', 3, 0), substring(b'abc', 4, 3)
+----
+c  ·  ·
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT substring('abc'::bytea, 0, 4)
+----
+abc
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTT
+SELECT substring(b'abc' FOR 3 FROM 1), substring(b'abc' FROM 1 FOR 3), substring(b'abc' FOR 3)
+----
+abc abc abc
+
+query error function substring\(bytea, integer, integer\) does not exist
+SELECT substring('11100011'::bytea, 4, -1)
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTTTT
+SELECT
+  encode(substring(decode('ff0001', 'hex'), 1), 'hex'),
+  encode(substring(decode('ff0001', 'hex'), 1, 1), 'hex'),
+  encode(substring(decode('ff0001', 'hex'), 1, 7), 'hex'),
+  encode(substring(decode('ff0001', 'hex'), 2), 'hex'),
+  encode(substring(decode('ff0001', 'hex'), 4), 'hex')
+----
+ff0001  ff  ff0001  0001  ·
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTTTTTTTTT
+SELECT
+  encode(substring(decode('5c0001', 'hex'), 1), 'hex'),
+  encode(substring(decode('aa5c0001', 'hex'), 1), 'hex'),
+  encode(substring(decode('aa5c0001', 'hex'), 2), 'hex'),
+  encode(substring(decode('aa5c1a1a1a1a0001', 'hex'), 2), 'hex'),
+  encode(substring(decode('5c0001', 'hex'), 1, 1), 'hex'),
+  encode(substring(decode('aa5c0001', 'hex'), 1, 2), 'hex'),
+  encode(substring(decode('aa5c0001', 'hex'), 2, 2), 'hex'),
+  encode(substring(decode('aa5c1a1a1a1a0001', 'hex'), 2, 2), 'hex'),
+  encode(substring(decode('5c0001', 'hex'), 1), 'escape'),
+  encode(substring(decode('aa5c0001', 'hex'), 2, 1), 'escape')
+----
+5c0001  aa5c0001  5c0001  5c1a1a1a1a0001  5c  aa5c  5c00  5c1a  \\\000\001  \\
+
+query error function concat_ws\(\) does not exist
 SELECT concat_ws()
 
 query T
@@ -269,6 +463,8 @@ SELECT concat_ws(',', 'abcde', '2')
 ----
 abcde,2
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error unknown signature: concat_ws\(string, string, int, unknown, int\)
 SELECT concat_ws(',', 'abcde', 2, NULL, 22)
 
@@ -287,11 +483,11 @@ SELECT repeat('Pg', -1) || 'empty'
 ----
 empty
 
-statement error pq: repeat\(\): requested length too large
+statement error function repeat\(unknown, bigint\) does not exist
 SELECT repeat('s', 9223372036854775807)
 
-# Regression for database-issues#5638.
-statement error pq: repeat\(\): requested length too large
+# Regression for #19035.
+statement error "6978072892806141784" integer out of range
 SELECT repeat('1234567890'::string, 6978072892806141784::int)
 
 query I
@@ -304,6 +500,8 @@ select ascii('禅')
 ----
 31109
 
+# Not supported by Materialize.
+onlyif cockroach
 query error ascii\(\): the input string must not be empty
 select ascii('')
 
@@ -322,7 +520,7 @@ select chr(31109)
 ----
 禅
 
-query error chr\(\): input value must be >= 0
+query error requested character too large for encoding: \-1
 SELECT chr(-1)
 
 query T
@@ -330,27 +528,43 @@ SELECT md5('abc')
 ----
 900150983cd24fb0d6963f7d28e17f72
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT sha1('abc')
 ----
 a9993e364706816aba3e25717850c26c9cd0d89d
 
 query T
+SELECT sha224('abc')
+----
+[35, 9, 125, 34, 52, 5, 216, 34, 134, 66, 164, 119, 189, 162, 85, 179, 42, 173, 188, 228, 189, 160, 179, 247, 227, 108, 157, 167]
+
+query T
 SELECT sha256('abc')
 ----
-ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+[186, 120, 22, 191, 143, 1, 207, 234, 65, 65, 64, 222, 93, 174, 34, 35, 176, 3, 97, 163, 150, 23, 122, 156, 180, 16, 255, 97, 242, 0, 21, 173]
 
+query T
+SELECT sha384('abc')
+----
+[203, 0, 117, 63, 69, 163, 94, 139, 181, 160, 61, 105, 154, 198, 80, 7, 39, 44, 50, 171, 14, 222, 209, 99, 26, 139, 96, 90, 67, 255, 91, 237, 128, 134, 7, 43, 161, 231, 204, 35, 88, 186, 236, 161, 52, 200, 37, 167]
+
+# Not supported by Materialize.
+onlyif cockroach
 query IIII
 SELECT fnv32('abc'), fnv32a('abc'), fnv64('abc'), fnv64a('abc')
 ----
 1134309195  440920331  -2820157060406071861  -1792535898324117685
 
+# Not supported by Materialize.
+onlyif cockroach
 query II
 SELECT crc32ieee('abc'), crc32c('abc')
 ----
 891568578  910901175
 
-# Regression tests for materialize#29754
+# Regression tests for #29754
 query T
 SELECT md5(NULL::STRING)
 ----
@@ -361,31 +575,57 @@ SELECT md5('')
 ----
 d41d8cd98f00b204e9800998ecf8427e
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT md5(NULL::STRING, NULL::STRING)
 ----
 NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT sha1(NULL::STRING)
 ----
 NULL
 
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT sha224(NULL::STRING)
+----
+NULL
+
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT sha256(NULL::STRING)
 ----
 NULL
 
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT sha384(NULL::STRING)
+----
+NULL
+
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT sha512(NULL::STRING, NULL::STRING)
 ----
 NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT fnv32(NULL::STRING)
 ----
 NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT to_hex(2147483647)
 ----
@@ -406,6 +646,41 @@ SELECT strpos('💩high', 'ig')
 ----
 3
 
+# Not supported by Materialize.
+onlyif cockroach
+query III
+SELECT strpos(B'00001111', B'1111'), strpos(B'', B''), strpos(B'0000111', B'1111')
+----
+5 1 0
+
+# Not supported by Materialize.
+onlyif cockroach
+query I
+SELECT strpos('000001'::varbit, '1'::varbit)
+----
+6
+
+# Not supported by Materialize.
+onlyif cockroach
+query I
+SELECT position(B'100' in B'100101')
+----
+1
+
+# Not supported by Materialize.
+onlyif cockroach
+query III
+SELECT strpos(b'\x61\145aabc', b'abc'), strpos(b'', b''), strpos(b'ttt\x61\x61c', b'abc')
+----
+4 1 0
+
+# Not supported by Materialize.
+onlyif cockroach
+query I
+SELECT position('\x616263'::bytea in 'abc'::bytea)
+----
+1
+
 query I
 SELECT position('ig' in 'high')
 ----
@@ -416,49 +691,69 @@ SELECT position('a' in 'high')
 ----
 0
 
+# Not supported by Materialize.
+onlyif cockroach
 query error unknown signature: strpos\(\)
 SELECT position()
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT overlay('123456789' placing 'xxxx' from 3)
 ----
 12xxxx789
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT overlay('123456789' placing 'xxxx' from 3 for 2)
 ----
 12xxxx56789
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT overlay('123456789' placing 'xxxx' from 3 for 6)
 ----
 12xxxx9
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT overlay('123456789' placing 'xxxx' from 15 for 6)
 ----
 123456789xxxx
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT overlay('123456789' placing 'xxxx' from 3 for 10)
 ----
 12xxxx
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT overlay('123456789' placing 'xxxx' from 3 for -1)
 ----
 12xxxx23456789
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT overlay('123456789' placing 'xxxx' from 3 for -8)
 ----
 12xxxx123456789
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT overlay('💩123456789' placing 'xxxxÂ' from 3 for 3)
 ----
 💩1xxxxÂ56789
 
+# Not supported by Materialize.
+onlyif cockroach
 query error non-positive substring length not allowed: -1
 SELECT overlay('123456789' placing 'xxxx' from -1 for 6)
 
@@ -548,11 +843,15 @@ SELECT initcap('THOMAS')
 ----
 Thomas
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT left('💩abcde'::bytes, 2)
 ----
 [240 159]
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT right('abcde💩'::bytes, 2)
 ----
@@ -578,7 +877,7 @@ SELECT abs(NULL)
 ----
 NULL
 
-query error abs\(\): abs of min integer value \(-9223372036854775808\) not defined
+query error "\-9223372036854775808" bigint out of range
 SELECT abs(-9223372036854775808)
 
 query I
@@ -586,6 +885,8 @@ SELECT abs(-9223372036854775807)
 ----
 9223372036854775807
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT abs(sin(pi())) < 1e-12
 ----
@@ -593,31 +894,39 @@ true
 
 subtest standard_float_digits
 
+# Not supported by Materialize.
+onlyif cockroach
 query RR
 SELECT acos(-0.5), round(acos(0.5), 15)
 ----
-2.0943951023932  1.0471975511966
+2.0943951023931957  1.047197551196598
 
 query RR
 SELECT cot(-0.5), cot(0.5)
 ----
--1.83048772171245  1.83048772171245
+-1.830487721712452  1.830487721712452
 
+# Not supported by Materialize.
+onlyif cockroach
 query RRR
 SELECT asin(-0.5), asin(0.5), asin(1.5)
 ----
--0.523598775598299  0.523598775598299  NaN
+-0.5235987755982989  0.5235987755982989  NaN
 
 query RR
 SELECT atan(-0.5), atan(0.5)
 ----
--0.463647609000806  0.463647609000806
+-0.4636476090008061  0.4636476090008061
 
+# Not supported by Materialize.
+onlyif cockroach
 query RR
 SELECT atan2(-10.0, 5.0), atan2(10.0, 5.0)
 ----
--1.10714871779409  1.10714871779409
+-1.1071487177940904  1.1071487177940904
 
+# Not supported by Materialize.
+onlyif cockroach
 query RRR
 SELECT cbrt(-1.0::float), round(cbrt(27.0::float), 15), cbrt(19.3::decimal)
 ----
@@ -632,23 +941,25 @@ SELECT ceil(-0.5::float), ceil(0.5::float), ceiling(0.5::float), ceil(0.1::decim
 query RR
 SELECT cos(-0.5), cos(0.5)
 ----
-0.877582561890373  0.877582561890373
+0.8775825618903728  0.8775825618903728
 
 query RRR
 SELECT sin(-1.0), sin(0.0), sin(1.0)
 ----
--0.841470984807897  0  0.841470984807897
+-0.8414709848078965  0  0.8414709848078965
 
 query RR
 SELECT degrees(-0.5), degrees(0.5)
 ----
--28.6478897565412  28.6478897565412
+-28.64788975654116  28.64788975654116
 
 subtest extra_float_digits_3
 
 statement ok
 SET extra_float_digits = 3
 
+# Not supported by Materialize.
+onlyif cockroach
 query RR
 SELECT acos(-0.5), round(acos(0.5), 15)
 ----
@@ -659,6 +970,8 @@ SELECT cot(-0.5), cot(0.5)
 ----
 -1.830487721712452  1.830487721712452
 
+# Not supported by Materialize.
+onlyif cockroach
 query RRR
 SELECT asin(-0.5), asin(0.5), asin(1.5)
 ----
@@ -669,11 +982,15 @@ SELECT atan(-0.5), atan(0.5)
 ----
 -0.4636476090008061  0.4636476090008061
 
+# Not supported by Materialize.
+onlyif cockroach
 query RR
 SELECT atan2(-10.0, 5.0), atan2(10.0, 5.0)
 ----
 -1.1071487177940904  1.1071487177940904
 
+# Not supported by Materialize.
+onlyif cockroach
 query RRR
 SELECT cbrt(-1.0::float), round(cbrt(27.0::float), 15), cbrt(19.3::decimal)
 ----
@@ -704,22 +1021,28 @@ SET extra_float_digits = 0
 
 subtest other_tests
 
+# Not supported by Materialize.
+onlyif cockroach
 query IIII
 SELECT div(-1::int, 2::int), div(1::int, 2::int), div(9::int, 4::int), div(-9::int, 4::int)
 ----
 0 0 2 -2
 
+# Not supported by Materialize.
+onlyif cockroach
 query RRRRRR
 SELECT div(-1.0::float, 2.0), div(1.0::float, 2.0), div(9.0::float, 4.0), div(-9.0::float, 4.0), div(1.0::float, 0.0), div(1111.0::decimal, 9.44)
 ----
 -0 0 2 -2 +Inf 117
 
-query error div\(\): division by zero
+query error function "div" does not exist
 SELECT div(1.0::decimal, 0.0::decimal)
 
-query error div\(\): division by zero
+query error function "div" does not exist
 SELECT div(1::int, 0::int)
 
+# Not supported by Materialize.
+onlyif cockroach
 # math.Exp(1.0) returns different results on amd64 vs arm64.
 # Round to make this test consistent across archs.
 # See https://github.com/golang/go/issues/20319.
@@ -728,7 +1051,7 @@ SELECT exp(-1.0::float), round(exp(1.0::float), 13), exp(2.0::decimal)
 ----
 0.367879441171442  2.718281828459  7.3890560989306502272
 
-query error exp\(\): overflow
+query error "1E2000" is out of range for type numeric: exceeds maximum precision 39
 SELECT exp(1e2000::decimal)
 
 query RRR
@@ -736,33 +1059,63 @@ SELECT floor(-1.5::float), floor(1.5::float), floor(9.123456789::decimal)
 ----
 -2 1 9
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBBB
 SELECT 1::FLOAT IS NAN, 1::FLOAT IS NOT NAN, isnan(1::FLOAT), 'NaN'::FLOAT IS NAN, 'NaN'::FLOAT IS NOT NAN, isnan('NaN'::FLOAT)
 ----
 false true false true false true
 
+# Not supported by Materialize.
+onlyif cockroach
 query RRR
 SELECT ln(-2.0::float), ln(2.0::float), ln(2.5::decimal)
 ----
 NaN  0.693147180559945  0.91629073187415506518
 
-query error cannot take logarithm of a negative number
+query error function ln is not defined for negative numbers
 SELECT ln(-100.000::decimal)
 
-query error cannot take logarithm of zero
+query error function ln is not defined for zero
 SELECT ln(0::decimal)
 
 query RR
 SELECT log(10.0::float), log(100.000::decimal)
 ----
-1 2.0000000000000000000
+1  2
 
-query error cannot take logarithm of a negative number
+# Not supported by Materialize.
+onlyif cockroach
+query R
+SELECT log(2.0::float, 4.0::float)
+----
+2
+
+query R
+SELECT log(2.0::decimal, 4.0::decimal)
+----
+2
+
+query error function log\(double precision, double precision\) does not exist
+SELECT log(2.0::float, -10.0::float)
+
+query error function log\(double precision, double precision\) does not exist
+SELECT log(2.0::float, 0.0::float)
+
+query error function log is not defined for negative numbers
+SELECT log(2.0::decimal, -10.0::decimal)
+
+query error function log is not defined for zero
+SELECT log(2.0::decimal, 0.0::decimal)
+
+query error function log10 is not defined for negative numbers
 SELECT log(-100.000::decimal)
 
-query error cannot take logarithm of zero
+query error function log10 is not defined for zero
 SELECT log(0::decimal)
 
+# Not supported by Materialize.
+onlyif cockroach
 query RRIR
 SELECT mod(5.0::float, 2.0), mod(1.0::float, 0.0), mod(5, 2), mod(19.3::decimal, 2)
 ----
@@ -771,10 +1124,10 @@ SELECT mod(5.0::float, 2.0), mod(1.0::float, 0.0), mod(5, 2), mod(19.3::decimal,
 # mod returns the same results as PostgreSQL 9.4.4
 # in tests below (except for the error message).
 
-query error mod\(\): zero modulus
+query error division by zero
 SELECT mod(5, 0)
 
-query error mod\(\): zero modulus
+query error division by zero
 SELECT mod(5::decimal, 0::decimal)
 
 query II
@@ -819,26 +1172,36 @@ SELECT mod(9223372036854775807, 4)
 
 # div and mod are a logical pair
 
+# Not supported by Materialize.
+onlyif cockroach
 query R
 SELECT div(9.0::float, 2.0) * 2.0 + mod(9.0::float, 2.0)
 ----
 9
 
+# Not supported by Materialize.
+onlyif cockroach
 query R
 SELECT div(9.0::float, -2.0) * -2.0 + mod(9.0::float, -2.0)
 ----
 9
 
+# Not supported by Materialize.
+onlyif cockroach
 query R
 SELECT div(-9.0::float, 2.0) * 2.0 + mod(-9.0::float, 2.0)
 ----
 -9
 
+# Not supported by Materialize.
+onlyif cockroach
 query R
 SELECT div(-9.0::float, -2.0) * -2.0 + mod(-9.0::float, -2.0)
 ----
 -9
 
+# Not supported by Materialize.
+onlyif cockroach
 query R
 SELECT pi()
 ----
@@ -849,6 +1212,8 @@ SELECT pow(-2::int, 3::int), pow(2::int, 3::int)
 ----
 -8 8
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error integer out of range
 SELECT pow(2::int, -3::int)
 
@@ -857,9 +1222,11 @@ SELECT pow(0::int, 3::int), pow(3::int, 0::int), pow(-3::int, 0::int)
 ----
 0 1 1
 
-statement error integer out of range
+statement error zero raised to a negative power is undefined
 SELECT pow(0::int, -3::int)
 
+# Not supported by Materialize.
+onlyif cockroach
 # TODO(mjibson): This uses the decimal implementation internally, which
 # returns NaN, hence the below error. However postgres returns 1 for this,
 # which we should probably match.
@@ -869,18 +1236,24 @@ SELECT pow(0::int, 0::int)
 query RRR
 SELECT pow(-3.0::float, 2.0), power(3.0::float, 2.0), pow(5.0::decimal, 2.0)
 ----
-9 9 25.00
+9  9  25
 
+# Not supported by Materialize.
+onlyif cockroach
 query R
 SELECT pow(CAST (pi() AS DECIMAL), DECIMAL '2.0')
 ----
 9.8696044010893571205
 
+# Not supported by Materialize.
+onlyif cockroach
 query R
 SELECT power(0::decimal, -1)
 ----
 Infinity
 
+# Not supported by Materialize.
+onlyif cockroach
 # TODO(mjibson): Postgres returns an error for this.
 query R
 SELECT power(-1, -.1)
@@ -890,23 +1263,31 @@ NaN
 query RR
 SELECT radians(-45.0), radians(45.0)
 ----
--0.785398163397448  0.785398163397448
+-0.7853981633974483  0.7853981633974483
 
+# Not supported by Materialize.
+onlyif cockroach
 query R
 SELECT round(123.456::float, -2438602134409251682)
 ----
 NaN
 
+# Not supported by Materialize.
+onlyif cockroach
 query RRR
 SELECT round(4.2::float, 0), round(4.2::float, 10), round(4.22222222::decimal, 3)
 ----
 4 4.2 4.222
 
+# Not supported by Materialize.
+onlyif cockroach
 query R
 SELECT round(1e-308::float, 324)
 ----
 1e-308
 
+# Not supported by Materialize.
+onlyif cockroach
 # round to nearest even
 query RRRR
 SELECT round(-2.5::float, 0), round(-1.5::float, 0), round(1.5::float, 0), round(2.5::float, 0)
@@ -918,6 +1299,8 @@ SELECT round(-2.5::float), round(-1.5::float), round(-0.0::float), round(0.0::fl
 ----
 -2 -2 -0 0 2 2
 
+# Not supported by Materialize.
+onlyif cockroach
 # some edge cases: denormal, 0.5-epsilon, 0.5+epsilon, 1 bit fractions, 1 bit fraction rounding to 0 bit fraction, large integer
 query RRRRRRR
 SELECT round(1.390671161567e-309::float), round(0.49999999999999994::float), round(0.5000000000000001::float), round(2251799813685249.5::float), round(2251799813685250.5::float), round(4503599627370495.5::float), round(4503599627370497::float)
@@ -935,7 +1318,7 @@ SELECT round(-2.5::decimal, 0), round(-1.5::decimal, 0), round(1.5::decimal, 0),
 query RRRRR
 SELECT round(-2.5::decimal, 3), round(-1.5::decimal, 3), round(0.0::decimal, 3), round(1.5::decimal, 3), round(2.5::decimal, 3)
 ----
--2.500 -1.500 0.000 1.500 2.500
+-2.5  -1.5  0  1.5  2.5
 
 query RRRRR
 SELECT round(-2.5::decimal), round(-1.5::decimal), round(0.0::decimal), round(1.5::decimal), round(2.5::decimal)
@@ -955,21 +1338,29 @@ SELECT round(-2.123456789, 5), round(2.123456789, 5), round(2.123456789012345678
 ----
 -2.12346 2.12346 2.12345678901235
 
+# Not supported by Materialize.
+onlyif cockroach
 query RR
 SELECT round(-1.7976931348623157e+308::float, 1), round(1.7976931348623157e+308::float, 1)
 ----
 -1.7976931348623157e+308 1.7976931348623157e+308
 
+# Not supported by Materialize.
+onlyif cockroach
 query RR
 SELECT round(-1.7976931348623157e+308::float, -303), round(1.7976931348623157e+308::float, -303)
 ----
 -1.79769e+308 1.79769e+308
 
+# Not supported by Materialize.
+onlyif cockroach
 query RR
 SELECT round(-1.23456789e+308::float, -308), round(1.23456789e+308::float, -308)
 ----
 -1e+308 1e+308
 
+# Not supported by Materialize.
+onlyif cockroach
 query RRRR
 SELECT 1.234567890123456789::float, round(1.234567890123456789::float, 15), round(1.234567890123456789::float, 16), round(1.234567890123456789::float, 17)
 ----
@@ -988,21 +1379,29 @@ SELECT round(-2.123456789, 5), round(2.123456789, 5), round(2.123456789012345678
 ----
 -2.12346 2.12346 2.12345678901235
 
+# Not supported by Materialize.
+onlyif cockroach
 query RR
 SELECT round(-1.7976931348623157e+308::float, 1), round(1.7976931348623157e+308::float, 1)
 ----
 -1.79769313e+308  1.79769313e+308
 
+# Not supported by Materialize.
+onlyif cockroach
 query RR
 SELECT round(-1.7976931348623157e+308::float, -303), round(1.7976931348623157e+308::float, -303)
 ----
 -1.79769e+308 1.79769e+308
 
+# Not supported by Materialize.
+onlyif cockroach
 query RR
 SELECT round(-1.23456789e+308::float, -308), round(1.23456789e+308::float, -308)
 ----
 -1e+308 1e+308
 
+# Not supported by Materialize.
+onlyif cockroach
 query RRRR
 SELECT 1.234567890123456789::float, round(1.234567890123456789::float, 15), round(1.234567890123456789::float, 16), round(1.234567890123456789::float, 17)
 ----
@@ -1013,33 +1412,43 @@ SET extra_float_digits = 0
 
 subtest more_round_tests
 
+# Not supported by Materialize.
+onlyif cockroach
 query RR
 SELECT round(-1.7976931348623157e-308::float, 1), round(1.7976931348623157e-308::float, 1)
 ----
 -0 0
 
 
+# Not supported by Materialize.
+onlyif cockroach
 query RRR
 SELECT round(123.456::float, -1), round(123.456::float, -2), round(123.456::float, -3)
 ----
 120 100 0
 
-query RRRR
-SELECT round(123.456::decimal, -1), round(123.456::decimal, -2), round(123.456::decimal, -3), round(123.456::decimal, -200)
+query RRRRR
+SELECT round(123.456::decimal, -1), round(123.456::decimal, -2), round(123.456::decimal, -3), round(123.456::decimal, -200), round(-0.1::decimal)
 ----
-1.2E+2  1E+2  0E+3  0E+200
+120  100  0  0  0
 
+# Not supported by Materialize.
+onlyif cockroach
 query RRRR
 SELECT round('nan'::decimal), round('nan'::decimal, 1), round('nan'::float), round('nan'::float, 1)
 ----
 NaN NaN NaN NaN
 
+# Not supported by Materialize.
+onlyif cockroach
 # Match postgres float round for inf.
 query RRRR
 SELECT round('inf'::float), round('inf'::float, 1), round('-inf'::float), round('-inf'::float, 1)
 ----
 +Inf  +Inf  -Inf  -Inf
 
+# Not supported by Materialize.
+onlyif cockroach
 # But decimal round (which isn't supported at all in postgres because
 # postgres doesn't support NaN or Inf for its decimals) conforms to
 # the GDA spec.
@@ -1048,6 +1457,8 @@ SELECT round('inf'::decimal)
 ----
 NaN
 
+# Not supported by Materialize.
+onlyif cockroach
 query R
 SELECT round(1::decimal, 3000)
 ----
@@ -1055,11 +1466,15 @@ NaN
 
 subtest more_tests
 
+# Not supported by Materialize.
+onlyif cockroach
 query III
 SELECT sign(-2), sign(0), sign(2)
 ----
 -1 0 1
 
+# Not supported by Materialize.
+onlyif cockroach
 query RRRR
 SELECT sign(-2.0), sign(-0.0), sign(0.0), sign(2.0)
 ----
@@ -1068,7 +1483,7 @@ SELECT sign(-2.0), sign(-0.0), sign(0.0), sign(2.0)
 query RR
 SELECT sqrt(4.0::float), sqrt(9.0::decimal)
 ----
-2 3
+2  3
 
 query error cannot take square root of a negative number
 SELECT sqrt(-1.0::float)
@@ -1076,6 +1491,8 @@ SELECT sqrt(-1.0::float)
 query error cannot take square root of a negative number
 SELECT sqrt(-1.0::decimal)
 
+# Not supported by Materialize.
+onlyif cockroach
 query RRR
 SELECT round(tan(-5.0), 14), tan(0.0), round(tan(5.0), 14)
 ----
@@ -1085,6 +1502,25 @@ query RRRR
 SELECT trunc(-0.0), trunc(0.0), trunc(1.9), trunc(19.5678::decimal)
 ----
 0 0 1 19
+
+# Not supported by Materialize.
+onlyif cockroach
+query RRRRRRR
+WITH v(x) AS
+  (VALUES('0'::numeric),('1'::numeric),('-1'::numeric),('4.2'::numeric),
+    ('-7.777'::numeric),('9127.777'::numeric),('inf'::numeric),('-inf'::numeric),('nan'::numeric))
+SELECT x, trunc(x), trunc(x,1), trunc(x,2), trunc(x,0), trunc(x,-1), trunc(x,-2)
+FROM v
+----
+0          0          0.0        0.00       0          0          0
+1          1          1.0        1.00       1          0          0
+-1         -1         -1.0       -1.00      -1         0          0
+4.2        4          4.2        4.20       4          0          0
+-7.777     -7         -7.7       -7.77      -7         0          0
+9127.777   9127       9127.7     9127.77    9127       9.12E+3    9.1E+3
+Infinity   Infinity   Infinity   Infinity   Infinity   Infinity   Infinity
+-Infinity  -Infinity  -Infinity  -Infinity  -Infinity  -Infinity  -Infinity
+NaN        NaN        NaN        NaN        NaN        NaN        NaN
 
 query T
 SELECT translate('Techonthenet.com', 'e.to', '456')
@@ -1106,26 +1542,36 @@ SELECT translate('a‰ÒÁ', 'aÒ', '∏p')
 ----
 ∏‰pÁ
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT regexp_extract('foobar', 'o.b')
 ----
 oob
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT regexp_extract('foobar', 'o(.)b')
 ----
 o
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT regexp_extract('foobar', '(o(.)b)')
 ----
 oob
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT regexp_extract('foabaroob', 'o(.)b')
 ----
 a
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT regexp_extract('foobar', 'o.x')
 ----
@@ -1144,31 +1590,36 @@ fooXX
 query T
 SELECT regexp_replace('foobarbaz', 'b(..)', E'X\\1Y', 'g')
 ----
-fooXarYXazY
+fooX\1YX\1Y
 
 query T
 SELECT regexp_replace('foobarbaz', 'b(.)(.)', E'X\\2\\1\\3Y', 'g')
 ----
-fooXraYXzaY
+fooX\2\1\3YX\2\1\3Y
 
 query T
 SELECT regexp_replace(E'fooBa\nrbaz', 'b(..)', E'X\\&Y', 'gi')
 ----
-fooXBa
-YrXbazY
+fooX\&YrX\&Y
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT regexp_replace(E'fooBa\nrbaz', 'b(..)', E'X\\&Y', 'gmi')
 ----
 fooBa
 rXbazY
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT regexp_replace(E'fooBar\nbaz', 'b(..)$', E'X\\&Y', 'gpi')
 ----
 fooBar
 XbazY
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT regexp_replace(E'fooBar\nbaz', 'b(..)$', E'X\\&Y', 'gwi')
 ----
@@ -1180,15 +1631,16 @@ SELECT regexp_replace('foobarbaz', 'nope', 'NO')
 ----
 foobarbaz
 
-query error regexp_replace\(\): invalid regexp flag: 'z'
+query error invalid regular expression flag: z
 SELECT regexp_replace(E'fooBar\nbaz', 'b(..)$', E'X\\&Y', 'z')
 
 query T
 SELECT regexp_replace(E'Foo\nFoo', '^(foo)', 'BAR', 'i')
 ----
-BAR
-Foo
+BAR⏎Foo
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT regexp_replace(e'DOGGIE\ndog \nDOG', '^d.+', 'CAT', 's')
 ----
@@ -1196,6 +1648,8 @@ DOGGIE
 dog
 DOG
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT regexp_replace(e'DOGGIE\ndog \nDOG', '^d.+', 'CAT', 'n');
 ----
@@ -1203,6 +1657,8 @@ DOGGIE
 CAT
 DOG
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT regexp_replace(e'DOGGIE\ndog \nDOG', '^D.+', 'CAT', 'p')
 ----
@@ -1210,48 +1666,80 @@ CAT
 dog
 DOG
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT regexp_replace(e'DOGGIE\ndog \nDOG', '^d.+', 'CAT', 'w')
 ----
 DOGGIE
 CAT
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT regexp_replace('abc', 'b', e'\n', 'w')
 ----
 a
 c
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT regexp_replace('abc\', 'b', 'a', 'w')
 ----
 aac\
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT regexp_replace('abc', 'c', 'a\', 'w')
 ----
 aba\
 
-# database-issues#5644
+# #19046
 query T
 SELECT regexp_replace('ReRe','R(e)','1\\1','g');
 ----
-1\11\1
+1\\11\\1
 
+# Regression test for #51289.
+query T
+SELECT regexp_replace('TIMESTAMP(6)', '.*(\((\d+)\))?.*', '\2')
+----
+\2
+
+query T
+SELECT regexp_replace('TIMESTAMP(6)', '.*(\((\d+)\)).*', '\2')
+----
+\2
+
+query T
+SELECT regexp_replace('TIMESTAMP(6)', '.*(\((\d+)\)?).*', '\2')
+----
+\2
+
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT unique_rowid() < unique_rowid()
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query BI
 SELECT uuid_v4() != uuid_v4(), length(uuid_v4())
 ----
 true 16
 
-query error syntax error at or near.*
+# Not supported by Materialize.
+onlyif cockroach
+query error at or near.*: syntax error
 SELECT greatest()
 
-query error syntax error at or near.*
+# Not supported by Materialize.
+onlyif cockroach
+query error at or near.*: syntax error
 SELECT least()
 
 query I
@@ -1429,37 +1917,41 @@ true true false false
 query I
 SELECT strpos(version(), 'CockroachDB')
 ----
-1
+0
 
-# Don't panic during incorrect use of * (materialize#7727)
-query error pq: cos\(\): cannot use "\*" in this context
+# Don't panic during incorrect use of * (#7727)
+query error unknown schema 'system'
 SELECT cos(*) FROM system.namespace
 
-# Don't panic with invalid names (database-issues#2461)
-query error cannot use "nonexistent.\*" without a FROM clause
+# Don't panic with invalid names (#8045)
+query error column "nonexistent" does not exist
 SELECT TRIM(TRAILING nonexistent.*[1])
 
-query error rtrim\(\): cannot subscript type tuple
+query error cannot subscript type record\(x: integer\)
 SELECT TRIM(TRAILING foo.*[1]) FROM (VALUES (1)) AS foo(x)
 
-# Don't panic with invalid names (database-issues#2460)
-query error cannot use "nonexistent.\*" without a FROM clause
+# Not supported by Materialize.
+onlyif cockroach
+# Don't panic with invalid names (#8044)
+query error no data source matches pattern: nonexistent.\*
 SELECT OVERLAY(nonexistent.* PLACING 'string' FROM 'string')
 
+# Not supported by Materialize.
+onlyif cockroach
 query error unknown signature
 SELECT OVERLAY(foo.* PLACING 'string' FROM 'string') FROM (VALUES (1)) AS foo(x)
 
-# Don't panic with invalid names (database-issues#2455)
-query error cannot use "nonexistent.\*" without a FROM clause
+# Don't panic with invalid names (#8023)
+query error column "nonexistent" does not exist
 SELECT nonexistent.* IS NOT TRUE
 
-query error unsupported comparison operator: <tuple\{int AS x\}> IS DISTINCT FROM <bool>
+query error SELECT clause must have type boolean, not type record\(x: integer\)
 SELECT foo.* IS NOT TRUE FROM (VALUES (1)) AS foo(x)
 
 query T
 SELECT current_schemas(true)
 ----
-{pg_catalog,public}
+{mz_catalog,pg_catalog,public}
 
 query T
 SELECT current_schemas(false)
@@ -1471,8 +1963,8 @@ SELECT current_schemas(false)
 query T
 SELECT current_schemas(x) FROM (VALUES (true), (false)) AS t(x);
 ----
-{pg_catalog,public}
 {public}
+{mz_catalog,pg_catalog,public}
 
 statement ok
 SET search_path=test,pg_catalog
@@ -1480,7 +1972,7 @@ SET search_path=test,pg_catalog
 query T
 SELECT current_schemas(true)
 ----
-{pg_catalog}
+{mz_catalog,pg_catalog}
 
 query T
 SELECT current_schemas(false)
@@ -1490,13 +1982,13 @@ SELECT current_schemas(false)
 statement ok
 RESET search_path
 
-query error pq: unknown signature: current_schemas()
+query error function current_schemas\(\) does not exist
 SELECT current_schemas()
 
 query T
 SELECT current_schemas(NULL::bool)
 ----
-NULL
+{public}
 
 query B
 SELECT 'public' = ANY (current_schemas(true))
@@ -1537,6 +2029,53 @@ SELECT current_schema()
 ----
 public
 
+query B
+SELECT pg_catalog.pg_function_is_visible((select 'pg_table_is_visible'::regproc))
+----
+true
+
+query B
+SELECT pg_catalog.pg_function_is_visible(0)
+----
+NULL
+
+# Not supported by Materialize.
+onlyif cockroach
+# COLLATION FOR returns a locale name for a collated string
+# but for a not collated string 'default' locale name is a Postgres compatible behavior:
+# https://www.postgresql.org/docs/10/functions-info.html#FUNCTIONS-INFO-CATALOG-TABLE
+query T
+SELECT COLLATION FOR ('foo')
+----
+"default"
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT COLLATION FOR ('foo' COLLATE "de_DE");
+----
+"de_DE"
+
+statement error Expected end of statement, found left parenthesis
+SELECT COLLATION FOR (1);
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT pg_collation_for ('foo')
+----
+"default"
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT pg_collation_for ('foo' COLLATE "de_DE");
+----
+"de_DE"
+
+statement error function "pg_collation_for" does not exist
+SELECT pg_collation_for(1);
+
 query I
 SELECT array_length(ARRAY['a', 'b'], 1)
 ----
@@ -1554,6 +2093,27 @@ NULL
 
 query I
 SELECT array_length(ARRAY['a'], 2)
+----
+NULL
+
+# Not supported by Materialize.
+onlyif cockroach
+query I
+SELECT cardinality(ARRAY['a', 'b'])
+----
+2
+
+# Not supported by Materialize.
+onlyif cockroach
+query I
+SELECT cardinality(ARRAY[]:::int[])
+----
+0
+
+# Not supported by Materialize.
+onlyif cockroach
+query I
+SELECT cardinality(NULL:::int[])
 ----
 NULL
 
@@ -1597,16 +2157,22 @@ SELECT array_upper(ARRAY['a'], 2)
 ----
 NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT array_length(ARRAY[]:::int[], 1)
 ----
 NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT array_lower(ARRAY[]:::int[], 1)
 ----
 NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT array_upper(ARRAY[]:::int[], 1)
 ----
@@ -1637,6 +2203,8 @@ SELECT encode('abc', 'hex'), decode('616263', 'hex')
 ----
 616263 abc
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT encode(e'123\000456', 'escape')
 ----
@@ -1662,53 +2230,95 @@ SELECT decode('padded1=', 'base64')::STRING
 ----
 \xa5a75d79dd
 
-query error illegal base64 data at input byte 4
+query error invalid base64 end sequence
 SELECT decode('invalid', 'base64')
 
-query error only 'hex', 'escape', and 'base64' formats are supported for encode\(\)
+query error invalid encoding name 'fake'
 SELECT encode('abc', 'fake')
 
-query error only 'hex', 'escape', and 'base64' formats are supported for decode\(\)
+query error invalid encoding name 'fake'
 SELECT decode('abc', 'fake')
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT from_ip(b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff\x01\x02\x03\x04')
 ----
 1.2.3.4
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT from_ip(to_ip('1.2.3.4'))
 ----
 1.2.3.4
 
+# Not supported by Materialize.
+onlyif cockroach
 # net.IP.String() always gives us the most succinct form of ipv6
 query T
 select from_ip(to_ip('2001:0db8:85a3:0000:0000:8a2e:0370:7334'))
 ----
 2001:db8:85a3::8a2e:370:7334
 
-query error pq: unknown signature: to_ip()
+query error function "to_ip" does not exist
 SELECT to_ip()
 
-query error pq: from_ip\(\): zero length IP
+query error function "from_ip" does not exist
 SELECT from_ip(b'')
 
-query error pq: to_ip\(\): invalid IP format: ''
+query error function "to_ip" does not exist
 SELECT to_ip('')
 
-query error pq: to_ip\(\): invalid IP format: 'asdf'
+query error function "to_ip" does not exist
 select to_ip('asdf')
 
 query R
 select ln(4.0786335175292462e+34::decimal)
 ----
-79.693655171940461633
+79.6936551719404616326118419422821569713
 
+# Not supported by Materialize.
+onlyif cockroach
 query IB
-SELECT length(gen_random_uuid()::BYTES), gen_random_uuid() = gen_random_uuid()
+SELECT length(gen_random_ulid()::BYTES), gen_random_ulid() = gen_random_ulid()
 ----
 16 false
 
+# Not supported by Materialize.
+onlyif cockroach
+query TTTT
+SELECT uuid_to_ulid('0178951c-b665-30a7-19a2-a18999834858'),
+       ulid_to_uuid('01F2AHSDK562KHK8N1H6CR6J2R'),
+       ulid_to_uuid(uuid_to_ulid('0178951c-b665-30a7-19a2-a18999834858')),
+       uuid_to_ulid(ulid_to_uuid('01F2AHSDK562KHK8N1H6CR6J2R'))
+----
+01F2AHSDK562KHK8N1H6CR6J2R  0178951c-b665-30a7-19a2-a18999834858  0178951c-b665-30a7-19a2-a18999834858  01F2AHSDK562KHK8N1H6CR6J2R
+
+let $ulid1
+SELECT gen_random_ulid()
+
+# Not supported by Materialize.
+onlyif cockroach
+# Proper sorting of ULIDs inside the same millisecond is not guaranteed, we need this to enforce correct behavior.
+statement ok
+SELECT pg_sleep(0.001)
+
+let $ulid2
+SELECT gen_random_ulid()
+
+# Not supported by Materialize.
+onlyif cockroach
+query BBBB
+SELECT '$ulid1' < '$ulid2',
+       '$ulid1' > '$ulid2',
+       uuid_to_ulid('$ulid1') < uuid_to_ulid('$ulid2'),
+       uuid_to_ulid('$ulid1') > uuid_to_ulid('$ulid2')
+----
+true  false  true  false
+
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTTT
 SELECT to_uuid('63616665-6630-3064-6465-616462656566'),
        to_uuid('{63616665-6630-3064-6465-616462656566}'),
@@ -1724,23 +2334,27 @@ cafef00ddeadbeef
 cafef00ddeadbeef
 63616665-6630-3064-6465-616462656566
 
-query error uuid: incorrect UUID length
+query error function "to_uuid" does not exist
 SELECT to_uuid('63616665-6630-3064-6465')
 
-query error uuid: incorrect UUID length
+query error function "to_uuid" does not exist
 SELECT to_uuid('63616665-6630-3064-6465-616462656566-123')
 
-query error uuid: incorrect UUID format
+query error function "to_uuid" does not exist
 SELECT to_uuid('6361666512-6630-3064-6465-616462656566')
 
-query error uuid: UUID must be exactly 16 bytes long, got 4 bytes
+query error function "from_uuid" does not exist
 SELECT from_uuid(b'f00d')
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT pg_catalog.pg_typeof(sign(1:::decimal))
 ----
-decimal
+numeric
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 VALUES (pg_typeof(1:::int)),
        (pg_typeof('a':::string)),
@@ -1752,97 +2366,67 @@ VALUES (pg_typeof(1:::int)),
        (pg_typeof(b'a':::bytes)),
        (pg_typeof(array[1,2,3]))
 ----
-int
-string
-bool
+bigint
+text
+boolean
 unknown
 interval
 date
-timestamptz
-bytes
-int[]
+timestamp with time zone
+bytea
+bigint[]
 
-# TODO(def-): Reenable after database-issues#6599 is fixed
-# query T
-# VALUES (format_type('anyelement'::regtype, -1)),
-#        (format_type('bit'::regtype, -1)),
-#        (format_type('bool'::regtype, -1)),
-#        (format_type('bytea'::regtype, -1)),
-#        (format_type('char'::regtype, -1)),
-#        (format_type('date'::regtype, -1)),
-#        (format_type('decimal'::regtype, -1)),
-#        (format_type('float'::regtype, -1)),
-#        (format_type('float4'::regtype, -1)),
-#        (format_type('interval'::regtype, -1)),
-#        (format_type('numeric'::regtype, -1)),
-#        (format_type('oid'::regtype, -1)),
-#        (format_type('oidvector'::regtype, -1)),
-#        (format_type('inet'::regtype, -1)),
-#        (format_type('int'::regtype, -1)),
-#        (format_type('int4'::regtype, -1)),
-#        (format_type('int2'::regtype, -1)),
-#        (format_type('int2vector'::regtype, -1)),
-#        (format_type('interval'::regtype, -1)),
-#        (format_type('json'::regtype, -1)),
-#        (format_type('name'::regtype, -1)),
-#        (format_type('regclass'::regtype, -1)),
-#        (format_type('regnamespace'::regtype, -1)),
-#        (format_type('regproc'::regtype, -1)),
-#        (format_type('regprocedure'::regtype, -1)),
-#        (format_type('regtype'::regtype, -1)),
-#        (format_type('string'::regtype, -1)),
-#        (format_type('time'::regtype, -1)),
-#        (format_type('timestamp'::regtype, -1)),
-#        (format_type('timestamptz'::regtype, -1)),
-#        (format_type('record'::regtype, -1)),
-#        (format_type('uuid'::regtype, -1)),
-#        (format_type('unknown'::regtype, -1)),
-#        (format_type('varbit'::regtype, -1)),
-#        (format_type('varchar'::regtype, -1)),
-#        (format_type('int[]'::regtype, -1)),
-#        (format_type('int2[]'::regtype, -1)),
-#        (format_type('string[]'::regtype, -1)),
-#        (format_type('varchar[]'::regtype, -1))
-# ----
-# anyelement
-# bit
-# boolean
-# bytea
-# character
-# date
-# numeric
-# double precision
-# real
-# interval
-# numeric
-# oid
-# oidvector
-# inet
-# bigint
-# integer
-# smallint
-# int2vector
-# interval
-# jsonb
-# name
-# regclass
-# regnamespace
-# regproc
-# regprocedure
-# regtype
-# text
-# time without time zone
-# timestamp without time zone
-# timestamp with time zone
-# record
-# uuid
-# unknown
-# bit varying
-# character varying
-# bigint[]
-# smallint[]
-# text[]
-# character varying[]
+# SQL-492 (https://linear.app/materializeinc/issue/SQL-492), root cause CLU-159
+# (https://linear.app/materializeinc/issue/CLU-159): format_type expands to a
+# large expression, and constant-folding it across many VALUES rows exceeds the
+# optimizer's recursion limit. PG evaluates all 44 rows and returns the formatted
+# type names (anyelement, bit, boolean, bytea, bpchar, "char", date, numeric,
+# double precision, real, interval, numeric, oid, oidvector, inet, ...).
+query error exceeded recursion limit of 2048
+VALUES (format_type('anyelement'::regtype, -1)),
+       (format_type('bit'::regtype, -1)),
+       (format_type('bool'::regtype, -1)),
+       (format_type('bytea'::regtype, -1)),
+       (format_type('char'::regtype, -1)),
+       (format_type('"char"'::regtype, -1)),
+       (format_type('date'::regtype, -1)),
+       (format_type('decimal'::regtype, -1)),
+       (format_type('float'::regtype, -1)),
+       (format_type('float4'::regtype, -1)),
+       (format_type('interval'::regtype, -1)),
+       (format_type('numeric'::regtype, -1)),
+       (format_type('oid'::regtype, -1)),
+       (format_type('oidvector'::regtype, -1)),
+       (format_type('inet'::regtype, -1)),
+       (format_type('int'::regtype, -1)),
+       (format_type('int4'::regtype, -1)),
+       (format_type('int2'::regtype, -1)),
+       (format_type('int2vector'::regtype, -1)),
+       (format_type('interval'::regtype, -1)),
+       (format_type('json'::regtype, -1)),
+       (format_type('name'::regtype, -1)),
+       (format_type('regclass'::regtype, -1)),
+       (format_type('regnamespace'::regtype, -1)),
+       (format_type('regproc'::regtype, -1)),
+       (format_type('regprocedure'::regtype, -1)),
+       (format_type('regrole'::regtype, -1)),
+       (format_type('regtype'::regtype, -1)),
+       (format_type('string'::regtype, -1)),
+       (format_type('time'::regtype, -1)),
+       (format_type('timestamp'::regtype, -1)),
+       (format_type('timestamptz'::regtype, -1)),
+       (format_type('record'::regtype, -1)),
+       (format_type('uuid'::regtype, -1)),
+       (format_type('unknown'::regtype, -1)),
+       (format_type('varbit'::regtype, -1)),
+       (format_type('varchar'::regtype, -1)),
+       (format_type('void'::regtype, -1)),
+       (format_type('int[]'::regtype, -1)),
+       (format_type('int2[]'::regtype, -1)),
+       (format_type('string[]'::regtype, -1)),
+       (format_type('varchar[]'::regtype, -1)),
+       (format_type('pg_catalog.int4'::regtype, -1)),
+       (format_type('pg_catalog.int2'::regtype, -1))
 
 query T
 VALUES (format_type('anyelement'::regtype, NULL)),
@@ -1855,15 +2439,15 @@ VALUES (format_type('anyelement'::regtype, NULL)),
        (format_type('timestamptz'::regtype, NULL)),
        (format_type('record'::regtype, NULL))
 ----
-anyelement
-boolean
-bytea
 date
+bytea
+record
+boolean
 numeric
 interval
-timestamp without time zone
+anyelement
 timestamp with time zone
-record
+timestamp without time zone
 
 query T
 SELECT format_type(oid, -1) FROM pg_type WHERE typname='text' LIMIT 1
@@ -1890,25 +2474,22 @@ SELECT format_type(oid, -1) FROM pg_type WHERE typname='_text' LIMIT 1
 ----
 text[]
 
-query T
-SELECT pg_catalog.pg_get_expr('abc', 1);
-----
-abc
+# Ensure each type can be formatted.
+statement ok
+SELECT format_type(oid, NULL) FROM pg_type
 
+# Not supported by Materialize.
+onlyif cockroach
+# Ensure that implicit record types for virtual tables can be formatted.
 query T
-SELECT pg_catalog.pg_get_expr('abc', 1, true);
+select format_type('pg_namespace'::regtype, null);
 ----
-abc
-
-query T
-SELECT pg_catalog.pg_get_expr('abc', 1, false);
-----
-abc
+pg_namespace
 
 query T
 SELECT pg_catalog.pg_get_userbyid((SELECT oid FROM pg_roles WHERE rolname='root'))
 ----
-root
+NULL
 
 query T
 SELECT pg_catalog.pg_get_userbyid(20)
@@ -1920,13 +2501,37 @@ SELECT pg_catalog.pg_get_indexdef(0)
 ----
 NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
-CREATE TABLE test.pg_indexdef_test (a INT, UNIQUE INDEX pg_indexdef_idx (a ASC), INDEX other (a DESC))
+CREATE TYPE testenum AS ENUM ('foo', 'bar', 'baz')
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE TABLE test.pg_indexdef_test (
+    a INT,
+    e testenum,
+    UNIQUE INDEX pg_indexdef_idx (a ASC),
+    INDEX pg_indexdef_partial_idx (a) WHERE a > 0,
+    INDEX pg_indexdef_partial_enum_idx (a) WHERE e IN ('foo', 'bar'),
+    INDEX other (a DESC)
+)
 
 query T
 SELECT pg_catalog.pg_get_indexdef((SELECT oid from pg_class WHERE relname='pg_indexdef_idx'))
 ----
-CREATE UNIQUE INDEX pg_indexdef_idx ON test.public.pg_indexdef_test (a ASC)
+NULL
+
+query T
+SELECT pg_catalog.pg_get_indexdef((SELECT oid from pg_class WHERE relname='pg_indexdef_partial_idx'))
+----
+NULL
+
+query T
+SELECT pg_catalog.pg_get_indexdef((SELECT oid from pg_class WHERE relname='pg_indexdef_partial_enum_idx'))
+----
+NULL
 
 query T
 SELECT pg_catalog.pg_get_indexdef(0, 0, true)
@@ -1936,52 +2541,63 @@ NULL
 query T
 SELECT pg_catalog.pg_get_indexdef((SELECT oid from pg_class WHERE relname='pg_indexdef_idx'), 0, true)
 ----
-CREATE UNIQUE INDEX pg_indexdef_idx ON test.public.pg_indexdef_test (a ASC)
+NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE test.pg_indexdef_test_cols (a INT, b INT, UNIQUE INDEX pg_indexdef_cols_idx (a ASC, b DESC), INDEX other (a DESC))
 
 query T
 SELECT pg_catalog.pg_get_indexdef((SELECT oid from pg_class WHERE relname='pg_indexdef_cols_idx'), 0, true)
 ----
-CREATE UNIQUE INDEX pg_indexdef_cols_idx ON test.public.pg_indexdef_test_cols (a ASC, b DESC)
+NULL
 
 query T
 SELECT pg_catalog.pg_get_indexdef((SELECT oid from pg_class WHERE relname='pg_indexdef_cols_idx'), 1, true)
 ----
-a
+NULL
 
 query T
 SELECT pg_catalog.pg_get_indexdef((SELECT oid from pg_class WHERE relname='pg_indexdef_cols_idx'), 2, false)
 ----
-b
+NULL
 
+# The empty string should be returned for index 3. Previously, there was a bug
+# where this would return the primary key column name, since the primary key
+# is stored in the index.
 query T
 SELECT pg_catalog.pg_get_indexdef((SELECT oid from pg_class WHERE relname='pg_indexdef_cols_idx'), 3, false)
 ----
-rowid
+NULL
 
 query I
 SELECT length(pg_catalog.pg_get_indexdef((SELECT oid from pg_class WHERE relname='pg_indexdef_cols_idx'), 4, false))
 ----
-0
+NULL
 
 query I
 SELECT length(pg_catalog.pg_get_indexdef((SELECT oid from pg_class WHERE relname='pg_indexdef_cols_idx'), -1, false))
 ----
-0
+NULL
 
 query T
 SELECT pg_catalog.pg_get_viewdef(0)
 ----
 NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE test.pg_viewdef_test (a int, b int, c int)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE VIEW test.pg_viewdef_view AS SELECT a, b FROM test.pg_viewdef_test
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT pg_catalog.pg_get_viewdef('pg_viewdef_view'::regclass::oid)
 ----
@@ -1997,33 +2613,55 @@ SELECT pg_catalog.pg_get_viewdef(0, false)
 ----
 NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT pg_catalog.pg_get_viewdef('pg_viewdef_view'::regclass::oid, true)
 ----
 SELECT a, b FROM test.public.pg_viewdef_test
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT pg_catalog.pg_get_viewdef('pg_viewdef_view'::regclass::oid, false)
 ----
 SELECT a, b FROM test.public.pg_viewdef_test
 
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE MATERIALIZED VIEW test.pg_viewdef_mview AS SELECT b, a FROM test.pg_viewdef_test
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT pg_catalog.pg_get_viewdef('pg_viewdef_mview'::regclass::oid)
+----
+SELECT b, a FROM test.public.pg_viewdef_test
+
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE test.pg_constraintdef_test (
   a int,
   b int unique,
   c int check (c > a),
+  d string,
+  UNIQUE INDEX (a) WHERE d = 'foo',
   FOREIGN KEY(a) REFERENCES test.pg_indexdef_test(a) ON DELETE CASCADE
-)
+);
+ALTER TABLE test.pg_constraintdef_test ADD CONSTRAINT c CHECK (c > 0) NOT VALID;
+ALTER TABLE test.pg_constraintdef_test ADD CONSTRAINT fk FOREIGN KEY (c) REFERENCES test.pg_indexdef_test(a) NOT VALID;
 
 query T rowsort
 SELECT pg_catalog.pg_get_constraintdef(oid)
 FROM pg_catalog.pg_constraint
 WHERE conrelid='pg_constraintdef_test'::regclass
 ----
-FOREIGN KEY (a) REFERENCES pg_indexdef_test (a) ON DELETE CASCADE
-CHECK (c > a)
-UNIQUE (b ASC)
 
+
+# Not supported by Materialize.
+onlyif cockroach
 # These functions always return NULL since we don't support comments on vtable columns and databases.
 query TT
 SELECT col_description('pg_class'::regclass::oid, 2),
@@ -2031,6 +2669,8 @@ SELECT col_description('pg_class'::regclass::oid, 2),
 ----
 NULL  NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 # vtable comments are supported
 query TT
 SELECT regexp_replace(obj_description('pg_class'::regclass::oid), e' .*', '') AS comment1,
@@ -2048,6 +2688,8 @@ COMMENT ON TABLE t IS 'waa'
 statement ok
 COMMENT ON COLUMN t.x IS 'woo'
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTT
 SELECT obj_description('t'::regclass::oid),
        obj_description('t'::regclass::oid, 'pg_class'),
@@ -2056,17 +2698,23 @@ SELECT obj_description('t'::regclass::oid),
 ----
 waa  waa  NULL  woo
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 COMMENT ON DATABASE test is 'foo'
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTT
-SELECT shobj_description((select oid from pg_database where datname = 'materialize')::oid, 'pg_database'),
+SELECT shobj_description((select oid from pg_database where datname = 'defaultdb')::oid, 'pg_database'),
        shobj_description((select oid from pg_database where datname = 'test')::oid, 'pg_database'),
        shobj_description((select oid from pg_database where datname = 'notexist')::oid, 'pg_database'),
        shobj_description((select oid from pg_database where datname = 'test')::oid, 'notexist')
 ----
 NULL foo NULL NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 # Ensure that shobj_ and obj_description don't return the opposite type of
 # comments.
 query TT
@@ -2081,19 +2729,36 @@ SELECT pg_catalog.length('hello')
 ----
 5
 
-query OOO
-SELECT oid(3), oid(0), oid(12023948723)
+# Not supported by Materialize.
+onlyif cockroach
+# -2147483648 is MinInt32.
+# 4294967295 is MaxUint32.
+query OOOOO
+SELECT oid(3), oid(0), (-1)::oid, (-2147483648)::oid, (4294967295)::oid
 ----
-3  0  12023948723
+3  0  4294967295  2147483648  4294967295
 
+# -2147483649 is (MinInt32 - 1).
+query error function "oid" does not exist
+SELECT oid(-2147483649)
+
+# 4294967296 is (MaxUint32 + 1).
+query error function "oid" does not exist
+SELECT oid(4294967296)
+
+# Not supported by Materialize.
+onlyif cockroach
 query T
-SELECT to_english(i) FROM (VALUES (1), (13), (617), (-2)) AS a(i)
+SELECT to_english(i) FROM (VALUES (1), (13), (617), (-2), (-9223372036854775808)) AS a(i)
 ----
 one
 one-three
 six-one-seven
 minus-two
+minus-nine-two-two-three-three-seven-two-zero-three-six-eight-five-four-seven-seven-five-eight-zero-eight
 
+# Not supported by Materialize.
+onlyif cockroach
 # Do some basic sanity checking of the variadic hash functions.
 query BBBBBBBBB
 SELECT
@@ -2109,6 +2774,8 @@ SELECT
 ----
 true false true false true false true true true
 
+# Not supported by Materialize.
+onlyif cockroach
 # The hash functions should be stable, so verify that the following hashes
 # don't change.
 query T
@@ -2131,7 +2798,7 @@ be09b235155bae6cb96b94ce4645260937e856ac3907d710850256e6351f50b428f948a7af339374
 f7fbba6e0636f890e56fbbf3283e524c6fa3204ae298382d624741d0dc6638326e282c41be5e4254d8820772c5518a2c5a8c0c7f7eda19594a7eb539453e1ed7
 95bce0fdbcf48ba9c944dae46238d89bbd6df696a0d0b7cc8fc16eeabd30c03d6d2506cfcce81de320b37bc677df1bd045ac9231b43ae11807773db3909d1220
 b2d173023893f71caadf7cb2f9557355462570de2c9c971b9cfa5494936e28df8e13d0db4d550aab66d5e7a002f678ddb02def092c069ce473cf5fb293953986
-960b0fed9378be1e9adefd91e1be6ac9c1de7208008dfec438ff845135727bebea0f7458a5181079f61288176e0168cfea501b900c3e495b3ab9bbe4d372486d
+17ecb6d43868f7502f588817661f5edb85b8e408d304ffbdeddd6b1abbec00dc5dda907b930356f1a031be368ea053626af59a9e74fbe55cf9cb7855acfd5f17
 d82c4eb5261cb9c8aa9855edd67d1bd10482f41529858d925094d173fa662aa91ff39bc5b188615273484021dfb16fd8284cf684ccf0fc795be3aa2fc1e6c181
 
 # We only support one encoding, UTF8, which is hardcoded to id 6 just like in
@@ -2141,6 +2808,8 @@ SELECT pg_catalog.pg_encoding_to_char(6), pg_catalog.pg_encoding_to_char(7)
 ----
 UTF8  NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 # TODO(jordan): Restore this to original form by removing FROM
 # clause once issue 32876 is fixed.
 query TITI
@@ -2153,23 +2822,27 @@ WHERE relname = 'pg_constraint'
 query TTTT
 SELECT quote_ident('foo'), quote_ident('select'), quote_ident('int8'), quote_ident('numeric')
 ----
-foo  "select"  int8  "numeric"
+foo  "select"  int8  numeric
 
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SELECT lpad('abc', 5, 'xy'), rpad('abc', 5, 'xy')
 ----
 xyabc  abcxy
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SELECT lpad('abc', 5, ''), rpad('abc', 5, '')
 ----
 abc  abc
 
-query error requested length too large
+query error function lpad\(unknown, bigint\) does not exist
 SELECT lpad('abc', 100000000000000)
 
-query error requested length too large
+query error function "rpad" does not exist
 SELECT rpad('abc', 100000000000000)
 
 query TT
@@ -2182,11 +2855,103 @@ SELECT array_to_string(ARRAY['a', 'b,', 'c'], NULL), array_to_string(ARRAY['a', 
 ----
 NULL  afoob,foozerpfooc
 
-query error could not determine polymorphic type because input has type unknown
-SELECT array_to_string(NULL, ',')
+# Not supported by Materialize.
+onlyif cockroach
+query TT
+SELECT array_to_string(NULL, ','), array_to_string(NULL, 'foo', 'zerp')
+----
+NULL  NULL
 
-query error could not determine polymorphic type because input has type unknown
-SELECT array_to_string(NULL, 'foo', 'zerp')
+# Builtin array_to_string should recursively search nested arrays.
+query T
+SELECT array_to_string(ARRAY[ARRAY[ARRAY[5,6], ARRAY[2,3]], ARRAY[ARRAY[7,8], ARRAY[4,44]]], ' ');
+----
+5 6 2 3 7 8 4 44
+
+# Not supported by Materialize.
+onlyif cockroach
+# Builtin array_to_string should recursively search nested arrays.
+query T
+SELECT array_to_string(ARRAY[(SELECT ARRAY[1,2]::int2vector)],' ');
+----
+1 2
+
+# Not supported by Materialize.
+onlyif cockroach
+# Examples from https://www.postgresql.org/docs/9.3/functions-string.html#FUNCTIONS-STRING-FORMAT
+query T
+SELECT format('Hello %s', 'World')
+----
+Hello World
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT format('INSERT INTO %I VALUES(%L)', 'locations', 'C:\Program Files')
+----
+INSERT INTO locations VALUES(e'C:\\Program Files')
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT format('|%10s|', 'foo')
+----
+|       foo|
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT format('|%-10s|', 'foo')
+----
+|foo       |
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT format('|%*s|', 10, 'foo')
+----
+|       foo|
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT format('|%*s|', -10, 'foo')
+----
+|foo       |
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT format('|%-*s|', 10, 'foo')
+----
+|foo       |
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT format('|%-*s|', -10, 'foo')
+----
+|foo       |
+
+# Not supported by Materialize.
+onlyif cockroach
+# Escaping $ into \x24 only needed in testlogic or prepared statements
+query T
+SELECT format(E'Testing %3\x24s, %2\x24s, %1\x24s', 'one', 'two', 'three')
+----
+Testing three, two, one
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT format(E'Testing %3\x24s, %2\x24s, %s', 'one', 'two', 'three')
+----
+Testing three, two, three
+
+# Not supported by Materialize.
+onlyif cockroach
+query error pq: format\(\): error parsing format string: not enough arguments
+SELECT format(E'%2\x24s','foo');
 
 subtest pg_is_in_recovery
 
@@ -2198,60 +2963,1732 @@ false
 
 subtest pg_is_xlog_replay_paused
 
+# Not supported by Materialize.
+onlyif cockroach
 query B colnames
 SELECT pg_is_xlog_replay_paused()
 ----
 pg_is_xlog_replay_paused
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT pg_catalog.pg_client_encoding()
 ----
 UTF8
 
+subtest width_bucket
+
+# Not supported by Materialize.
+onlyif cockroach
+# Tests for width_bucket builtin
+query I
+SELECT width_bucket(8.0, 2.0, 3.0, 5)
+----
+6
+
+# Not supported by Materialize.
+onlyif cockroach
+query I
+SELECT width_bucket(5.35, 0.024, 10.06, 5)
+----
+3
+
+# Not supported by Materialize.
+onlyif cockroach
+query I
+SELECT width_bucket(7, 3, 11, 5)
+----
+3
+
+# Not supported by Materialize.
+onlyif cockroach
+query I
+SELECT width_bucket(now(), array['yesterday', 'today', 'tomorrow']::timestamptz[])
+----
+2
+
+query error function "width_bucket" does not exist
+SELECT width_bucket(1, array['a', 'h', 'l', 'z']);
+
+# Not supported by Materialize.
+onlyif cockroach
+# Regression for #40623
+query I
+SELECT width_bucket(1, array[]::int[]);
+----
+0
+
+# Not supported by Materialize.
+onlyif cockroach
+# Sanity check pg_type_is_visible.
+query BBB
+SELECT pg_type_is_visible('int'::regtype), pg_type_is_visible(NULL), pg_type_is_visible(99999)
+----
+true  NULL  NULL
+
+# Not supported by Materialize.
+onlyif cockroach
+# Sanity check pg_get_function_arguments.
+query T
+SELECT pg_get_function_arguments('convert_from'::regproc::oid)
+----
+bytea, text
+
+# Not supported by Materialize.
+onlyif cockroach
+# This produces an empty string in Postgres too.
+query T
+SELECT pg_get_function_arguments('version'::regproc::oid)
+----
+·
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT pg_get_function_arguments('array_length'::regproc)
+----
+anyarray, int8
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT pg_get_function_arguments((select oid from pg_proc where proname='variance' and proargtypes[0] = 'int'::regtype))
+----
+int8
+
+# Not supported by Materialize.
+onlyif cockroach
+# Sanity check pg_get_function_identity_arguments.
+query T
+SELECT pg_get_function_identity_arguments('convert_from'::regproc::oid)
+----
+bytea, text
+
+# Not supported by Materialize.
+onlyif cockroach
+# This produces an empty string in Postgres too.
+query T
+SELECT pg_get_function_identity_arguments('version'::regproc::oid)
+----
+·
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT pg_get_function_identity_arguments('array_length'::regproc)
+----
+anyarray, int8
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT pg_get_function_identity_arguments((select oid from pg_proc where proname='variance' and proargtypes[0] = 'int'::regtype))
+----
+int8
+
+# Sanity check pg_get_function_result.
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT pg_get_function_result('array_length'::regproc)
+----
+int8
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT pg_get_function_result((select oid from pg_proc where proname='variance' and proargtypes[0] = 'int'::regtype))
+----
+numeric
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT pg_get_function_result('pg_sleep'::regproc)
+----
+bool
+
+# Note in Postgres <= 9.5, returns SETOF anyelement.
+query error function "pg_get_function_result" does not exist
+SELECT pg_get_function_result('unnest'::regproc);
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT CASE WHEN true THEN (1, 2) ELSE NULL END
+----
+(1,2)
+
+query B
+SELECT (1, 2) IN ((2, 3), NULL, (1, 2))
+----
+true
+
+query B
+SELECT (1, 2) IN ((2, 3), NULL)
+----
+NULL
+
+# Test for regression in hex functions.
+subtest regression_41707
+
+# Not supported by Materialize.
+onlyif cockroach
+# The int8 casts make it match postgres behavior - unfortunately, we do not default to int4.
+query TTTTTTT
+select to_hex(-2147483649), to_hex(-2147483648::int8), to_hex(-1::int8), to_hex(0), to_hex(1), to_hex(2147483647), to_hex(2147483648)
+----
+ffffffff7fffffff  ffffffff80000000  ffffffffffffffff  0  1  7fffffff  80000000
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+select to_hex(E'\\047\\134'::bytea)
+----
+275c
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+select to_hex('abc')
+----
+616263
+
+# Test for timezone builtin.
+subtest timezone_test
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+SET TIME ZONE -3
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT timezone('UTC+6', '1970-01-01 01:00')
+----
+1969-12-31 22:00:00 +0000 +0000
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT timezone('UTC+6', '1970-01-01 01:00'::time)
+----
+0000-01-01 22:00:00 -0600 -0600
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT timezone('UTC+6', '1970-01-01 01:00'::timetz)
+----
+0000-01-01 22:00:00 -0600 -0600
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT timezone('UTC+6', '1970-01-01 01:00'::timestamp)
+----
+1970-01-01 04:00:00 -0300 -0300
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT timezone('UTC+6', '1970-01-01 01:00'::timestamptz)
+----
+1969-12-31 22:00:00 +0000 +0000
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+SET TIME ZONE +0
+
+subtest getdatabaseencoding
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT getdatabaseencoding()
+----
+UTF8
+
+subtest get_byte
+
+query I
+SELECT get_byte('Th\000omas'::BYTEA, 4)
+----
+109
+
+query error index 10 out of valid range, 0\.\.2
+SELECT get_byte('abc'::BYTEA, 10)
+
+query error index \-10 out of valid range, 0\.\.2
+SELECT get_byte('abc'::BYTEA, -10)
+
+subtest set_byte
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT set_byte('Th\000omas'::BYTEA, 2, 64)
+----
+Th@omas
+
+# Not supported by Materialize.
+onlyif cockroach
+# A substitute value that's larger than 8 bit will be truncated.
+query T
+SELECT set_byte('Th\000omas'::BYTEA, 2, 16448)
+----
+Th@omas
+
+query error function "set_byte" does not exist
+SELECT set_byte('abc'::BYTEA, 10, 123)
+
+query error function "set_byte" does not exist
+SELECT set_byte('abc'::BYTEA, -10, 123)
+
+subtest get_bit
+
+# Not supported by Materialize.
+onlyif cockroach
+query I rowsort
+SELECT get_bit(B'100101110101', 3) UNION SELECT get_bit(B'100101110101', 2)
+----
+1
+0
+
+# Not supported by Materialize.
+onlyif cockroach
+query I rowsort
+SELECT get_bit('000000'::varbit, 5) UNION SELECT get_bit('1111111'::varbit, 5)
+----
+1
+0
+
+query error type "b" does not exist
+SELECT get_bit(B'10110', 10)
+
+query error type "b" does not exist
+SELECT get_bit(B'', 0);
+
+query II
+SELECT i, get_bit('\x11'::BYTEA, i) FROM generate_series(0, 7) i ORDER BY i;
+----
+0  1
+1  0
+2  0
+3  0
+4  1
+5  0
+6  0
+7  0
+
+query II rowsort
+SELECT i, get_bit('\x11ef'::BYTEA, i) FROM generate_series(0, 15) i ORDER BY i;
+----
+0   1
+1   0
+2   0
+3   0
+4   1
+5   0
+6   0
+7   0
+8   1
+9   1
+10  1
+11  1
+12  0
+13  1
+14  1
+15  1
+
+query error type "b" does not exist
+SELECT get_bit(b'\x61', 8)
+
+query error type "b" does not exist
+SELECT get_bit(b'', 0)
+
+subtest set_bit
+
+# Not supported by Materialize.
+onlyif cockroach
+query T rowsort
+SELECT set_bit(B'1101010', 0, 0) UNION SELECT set_bit(B'1101010', 2, 1)
+----
+0101010
+1111010
+
+# Not supported by Materialize.
+onlyif cockroach
+query T rowsort
+SELECT set_bit('000000'::varbit, 5, 1) UNION SELECT set_bit('111111'::varbit, 5, 0)
+----
+000001
+111110
+
+query error function "set_bit" does not exist
+SELECT set_bit(B'1101010', 10, 1)
+
+query error function "set_bit" does not exist
+SELECT set_bit(B'1001010', 0, 2)
+
+query error function "set_bit" does not exist
+SELECT set_bit(B'', 0, 1)
+
+# Not supported by Materialize.
+onlyif cockroach
+query IT
+SELECT i, encode(set_bit('\x00'::BYTEA, i, 1), 'hex') FROM generate_series(0, 7) i ORDER BY i
+----
+0  01
+1  02
+2  04
+3  08
+4  10
+5  20
+6  40
+7  80
+
+# Not supported by Materialize.
+onlyif cockroach
+query IT
+SELECT i, encode(set_bit('\x0000'::bytea, i, 1), 'hex') FROM generate_series(0, 15) i ORDER BY i
+----
+0   0100
+1   0200
+2   0400
+3   0800
+4   1000
+5   2000
+6   4000
+7   8000
+8   0001
+9   0002
+10  0004
+11  0008
+12  0010
+13  0020
+14  0040
+15  0080
+
+query error function "set_bit" does not exist
+SELECT set_bit(b'ac', 16, 0)
+
+query error function "set_bit" does not exist
+SELECT set_bit(b'', 0, 1)
+
+query error function "set_bit" does not exist
+SELECT set_bit(b'\145\x6C\l', 0, 2)
+
+subtest num_nulls_test
+
+statement ok
+CREATE TABLE nulls_test(a INT, b STRING)
+
+statement ok
+INSERT INTO nulls_test VALUES(1, 'foo'), (1, NULL), (NULL, 'foo'), (NULL, NULL)
+
+# Not supported by Materialize.
+onlyif cockroach
+query II rowsort
+SELECT num_nulls(a, b), num_nonnulls(a, b) FROM nulls_test
+----
+0  2
+1  1
+1  1
+2  0
+
+subtest pb_to_json
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+select crdb_internal.pb_to_json('cockroach.sql.sqlbase.Descriptor', descriptor)->'database'->>'name' from system.descriptor where id=1
+----
+system
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+select crdb_internal.pb_to_json('cockroach.sql.sqlbase.Descriptor', descriptor, true, true)->'database'->>'name' from system.descriptor where id=1
+----
+system
+
+query error unknown schema 'crdb_internal'
+select crdb_internal.pb_to_json('cockroach.sql.sqlbase.descriptor', descriptor)->'database'->>'name' from system.descriptor where id=1
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT (SELECT * FROM [SHOW crdb_version]) = version()
+----
+true
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+select crdb_internal.json_to_pb('cockroach.sql.sqlbase.Descriptor', crdb_internal.pb_to_json('cockroach.sql.sqlbase.Descriptor', descriptor)) = descriptor from system.descriptor where id = 1
+----
+true
+
+query error unknown schema 'crdb_internal'
+select crdb_internal.json_to_pb('cockroach.sql.sqlbase.Descriptor', crdb_internal.pb_to_json('cockroach.sql.sqlbase.Descriptor', descriptor, true, true)) = descriptor from system.descriptor where id = 1
+
+subtest regexp_split
+
+query T
+SELECT regexp_split_to_table('3aa0AAa1', 'a+')
+----
+1
+3
+0AA
+
+query T
+SELECT regexp_split_to_table('3aa0AAa1', 'a+', 'i')
+----
+0
+1
+3
+
+query T
+SELECT regexp_split_to_array('3aa0AAa1', 'a+')
+----
+{3,0AA,1}
+
+query T
+SELECT regexp_split_to_array('3aaa0AAa1', 'a+', 'i')
+----
+{3,0,1}
+
+subtest crdb_internal.trace_id
+
+# switch users -- this one has no permissions so expect errors
+user testuser
+
+query error unknown schema 'crdb_internal'
+SELECT * FROM crdb_internal.trace_id()
+
+user root
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT count(*) = 1 FROM crdb_internal.trace_id()
+----
+true
+
+subtest crdb_internal.payloads_for_span
+
+# switch users -- this one has no permissions so expect errors
+user testuser
+
+query error unknown schema 'crdb_internal'
+SELECT * FROM crdb_internal.payloads_for_span(0)
+
+user root
+
+# Not supported by Materialize.
+onlyif cockroach
+query TT colnames
+SELECT * FROM crdb_internal.payloads_for_span(0)
+WHERE false
+----
+payload_type  payload_jsonb
+
+subtest crdb_internal.payloads_for_trace
+
+# switch users -- this one has no permissions so expect errors
+user testuser
+
+query error unknown schema 'crdb_internal'
+SELECT * FROM crdb_internal.payloads_for_span(0)
+
+user root
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTT colnames
+SELECT * FROM crdb_internal.payloads_for_trace(0)
+WHERE false
+----
+span_id payload_type  payload_jsonb
+
+# switch users -- this one has no permissions so expect errors
+user testuser
+
+query error unknown schema 'crdb_internal'
+SELECT * FROM crdb_internal.set_trace_verbose(0, false)
+
+user root
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT * FROM crdb_internal.set_trace_verbose(0, false)
+WHERE false
+----
+
+# Not supported by Materialize.
+onlyif cockroach
+# set timezone to something other then UTC
+statement ok
+SET timezone = 'Europe/Berlin'
+
+query T
+select generate_series('2021-07-05'::timestamptz, '2021-07-06'::timestamptz, '1day'::interval)
+----
+2021-07-05 00:00:00+00
+2021-07-06 00:00:00+00
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+SET TIME ZONE +0
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+set timezone = 'Europe/Bucharest';
+
+# the following two queries should provide the same output
+query T
+select '2020-10-25 00:00'::TIMESTAMPTZ + (i::text || ' hour')::interval from generate_series(0, 24) AS g(i);
+----
+2020-10-25 16:00:00+00
+2020-10-25 08:00:00+00
+2020-10-25 00:00:00+00
+2020-10-26 00:00:00+00
+2020-10-25 05:00:00+00
+2020-10-25 21:00:00+00
+2020-10-25 13:00:00+00
+2020-10-25 18:00:00+00
+2020-10-25 10:00:00+00
+2020-10-25 02:00:00+00
+2020-10-25 23:00:00+00
+2020-10-25 15:00:00+00
+2020-10-25 07:00:00+00
+2020-10-25 12:00:00+00
+2020-10-25 04:00:00+00
+2020-10-25 20:00:00+00
+2020-10-25 01:00:00+00
+2020-10-25 17:00:00+00
+2020-10-25 09:00:00+00
+2020-10-25 22:00:00+00
+2020-10-25 14:00:00+00
+2020-10-25 06:00:00+00
+2020-10-25 19:00:00+00
+2020-10-25 11:00:00+00
+2020-10-25 03:00:00+00
+
+query T
+select generate_series('2020-10-25 00:00'::TIMESTAMPTZ, '2020-10-25 23:00'::TIMESTAMPTZ, '1 hour');
+----
+2020-10-25 16:00:00+00
+2020-10-25 08:00:00+00
+2020-10-25 00:00:00+00
+2020-10-25 05:00:00+00
+2020-10-25 21:00:00+00
+2020-10-25 13:00:00+00
+2020-10-25 18:00:00+00
+2020-10-25 10:00:00+00
+2020-10-25 02:00:00+00
+2020-10-25 23:00:00+00
+2020-10-25 15:00:00+00
+2020-10-25 07:00:00+00
+2020-10-25 12:00:00+00
+2020-10-25 04:00:00+00
+2020-10-25 20:00:00+00
+2020-10-25 01:00:00+00
+2020-10-25 17:00:00+00
+2020-10-25 09:00:00+00
+2020-10-25 22:00:00+00
+2020-10-25 14:00:00+00
+2020-10-25 06:00:00+00
+2020-10-25 19:00:00+00
+2020-10-25 11:00:00+00
+2020-10-25 03:00:00+00
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+SET TIME ZONE +0
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT 'AAA'::text ~ similar_escape('(ACTIVE|CLOSED|PENDING)'::text, NULL::text)
+----
+false
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT 'ACTIVE'::text ~ similar_escape('(ACTIVE|CLOSED|PENDING)'::text, NULL::text)
+----
+true
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT 'ACTIVE'::text ~ similar_escape(NULL::text, NULL::text)
+----
+NULL
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT 'AAA'::text ~ similar_to_escape('(ACTIVE|CLOSED|PENDING)'::text, NULL::text)
+----
+NULL
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT 'ACTIVE'::text ~ similar_to_escape('(ACTIVE|CLOSED|PENDING)'::text, NULL::text)
+----
+NULL
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT 'ACTIVE'::text ~ similar_to_escape('(ACTIVE|CLOSED|PENDING)'::text)
+----
+true
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT 'AAA'::text ~ similar_to_escape('(ACTIVE|CLOSED|PENDING)'::text)
+----
+false
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT 'ACTIVE'::text ~ similar_to_escape(NULL::text)
+----
+NULL
+
+subtest password_hash
+
+# Need to escapes the dollar signs since the testlogic language gives them special meaning.
+
+query error pgcode 42601 unknown schema 'crdb_internal'
+SELECT crdb_internal.check_password_hash_format(('CRDB-BCRYPT$'||'3a$'||'10$'||'vcmoIBvgeHjgScVHWRMWI.Z3v03WMixAw2bBS6qZihljSUuwi88Yq')::bytes)
+
+query error pgcode 42601 unknown schema 'crdb_internal'
+SELECT crdb_internal.check_password_hash_format(('CRDB-BCRYPT$'||'2a$'||'10$'||'vcmoIBvgeHjgScVHWRMWI.Z3v0')::bytes)
+
+query error pgcode 42601 unknown schema 'crdb_internal'
+SELECT crdb_internal.check_password_hash_format(('CRDB-BCRYPT$'||'2a$'||'01$'||'vcmoIBvgeHjgScVHWRMWI.Z3v03WMixAw2bBS6qZihljSUuwi88Yq')::bytes)
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.check_password_hash_format(('CRDB-BCRYPT$'||'2a$'||'10$'||'vcmoIBvgeHjgScVHWRMWI.Z3v03WMixAw2bBS6qZihljSUuwi88Yq')::bytes)
+----
+crdb-bcrypt
+
+# Not supported by Materialize.
+onlyif cockroach
+# Legacy format, only recognized for parsing, not for storing passwords.
+query T
+SELECT crdb_internal.check_password_hash_format('md5aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')
+----
+md5
+
+# Not supported by Materialize.
+onlyif cockroach
+# Not yet supported for storing passwords, but recognized on input.
+query T
+SELECT crdb_internal.check_password_hash_format(('SCRAM-SHA-256$'||'4096:B5VaTCvCLDzZxSYL829oVA==$'||'3Ako3mNxNtdsaSOJl0Av3i6vyV2OiSP9Ly7famdFSbw=:d7BfSmrtjwbF74mSoOhQiDSpoIvlakXKdpBNb3Meunc=')::bytes)
+----
+scram-sha-256
+
+subtest session_revival_token
+
+user host-cluster-root
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER TENANT ALL SET CLUSTER SETTING server.user_login.session_revival_token.enabled = true
+
+user root
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE USER parentuser;
+GRANT parentuser TO testuser
+
+skipif config 3node-tenant-default-configs
+statement error unknown schema 'crdb_internal'
+select crdb_internal.create_session_revival_token()
+
+onlyif config 3node-tenant
+statement error cannot create token for root user
+select crdb_internal.create_session_revival_token()
+
+user testuser
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE TABLE token_payload(algorithm STRING, "expiresAt" TIMESTAMPTZ, "issuedAt" TIMESTAMPTZ, "user" STRING)
+
+# Not supported by Materialize.
+onlyif cockroach
+# Make sure the token is generated for testuser, not parentuser.
+statement ok
+SET ROLE parentuser
+
+# create_session_revival_token requires tenant-signing certs, so it only works
+# in 3node-tenant.
+onlyif config 3node-tenant
+query TTBBBB
+WITH
+  a AS (SELECT crdb_internal.create_session_revival_token() AS token),
+  b AS (
+    SELECT
+      crdb_internal.pb_to_json(
+        'cockroach.sql.sessiondatapb.SessionRevivalToken',
+        a.token
+      ) AS json_token
+    FROM a
+  ),
+  c AS (
+    SELECT
+      (json_populate_record(
+        NULL::token_payload,
+        crdb_internal.pb_to_json(
+          'cockroach.sql.sessiondatapb.SessionRevivalToken.Payload',
+          decode(b.json_token->>'payload', 'base64'),
+          true
+        )
+      )).*
+    FROM b
+  )
+SELECT
+  algorithm,
+  "user",
+  "expiresAt" > now(),
+  "expiresAt" < (now() + INTERVAL '11 minutes'),
+  "expiresAt" > "issuedAt",
+  crdb_internal.validate_session_revival_token(a.token)
+FROM
+  c, a
+----
+Ed25519  testuser  true  true  true  true
+
+user host-cluster-root
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER TENANT ALL SET CLUSTER SETTING server.user_login.session_revival_token.enabled = false
+
+user root
+
+# Not supported by Materialize.
+onlyif cockroach
+# test OVERLAPS expression
+query B
+SELECT overlaps(
+TIMESTAMP '2000-01-01 00:00:00',
+TIMESTAMP '2000-01-01 01:00:00',
+TIMESTAMP '2000-01-01 00:30:00',
+TIMESTAMP '2000-01-01 01:30:00');
+----
+true
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+TIMESTAMP '2000-01-01 01:00:00',
+TIMESTAMP '2000-01-01 00:00:00',
+TIMESTAMP '2000-01-01 00:30:00',
+TIMESTAMP '2000-01-01 01:30:00');
+----
+true
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+TIMESTAMP '2000-01-01 00:00:00',
+TIMESTAMP '2000-01-01 00:15:00',
+TIMESTAMP '2000-01-01 00:30:00',
+TIMESTAMP '2000-01-01 01:30:00');
+----
+false
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+TIMESTAMP '2000-01-01 00:00:00',
+TIMESTAMP '2000-01-01 00:30:00',
+TIMESTAMP '2000-01-01 00:30:00',
+TIMESTAMP '2000-01-01 01:30:00');
+----
+false
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+TIMESTAMP '2000-01-01 00:30:00',
+TIMESTAMP '2000-01-01 00:30:00',
+TIMESTAMP '2000-01-01 00:30:00',
+TIMESTAMP '2000-01-01 01:30:00');
+----
+true
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+TIMESTAMPTZ '2000-01-01 00:00:00',
+TIMESTAMPTZ '2000-01-01 01:00:00',
+TIMESTAMPTZ '2000-01-01 00:30:00',
+TIMESTAMPTZ '2000-01-01 01:30:00');
+----
+true
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+TIMESTAMPTZ '2000-01-01 01:00:00',
+TIMESTAMPTZ '2000-01-01 00:00:00',
+TIMESTAMPTZ '2000-01-01 00:30:00',
+TIMESTAMPTZ '2000-01-01 01:30:00');
+----
+true
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+TIMESTAMPTZ '2000-01-01 00:00:00',
+TIMESTAMPTZ '2000-01-01 00:15:00',
+TIMESTAMPTZ '2000-01-01 00:30:00',
+TIMESTAMPTZ '2000-01-01 01:30:00');
+----
+false
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+TIMESTAMPTZ '2000-01-01 00:00:00',
+TIMESTAMPTZ '2000-01-01 00:30:00',
+TIMESTAMPTZ '2000-01-01 00:30:00',
+TIMESTAMPTZ '2000-01-01 01:30:00');
+----
+false
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+TIMESTAMPTZ '2000-01-01 00:30:00',
+TIMESTAMPTZ '2000-01-01 00:30:00',
+TIMESTAMPTZ '2000-01-01 00:30:00',
+TIMESTAMPTZ '2000-01-01 01:30:00');
+----
+true
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+TIME '2000-01-01 00:00:00',
+TIME '2000-01-01 01:00:00',
+TIME '2000-01-01 00:30:00',
+TIME '2000-01-01 01:30:00');
+----
+true
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+TIME '2000-01-01 01:00:00',
+TIME '2000-01-01 00:00:00',
+TIME '2000-01-01 00:30:00',
+TIME '2000-01-01 01:30:00');
+----
+true
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+TIME '2000-01-01 00:00:00',
+TIME '2000-01-01 00:15:00',
+TIME '2000-01-01 00:30:00',
+TIME '2000-01-01 01:30:00');
+----
+false
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+TIME '2000-01-01 00:00:00',
+TIME '2000-01-01 00:30:00',
+TIME '2000-01-01 00:30:00',
+TIME '2000-01-01 01:30:00');
+----
+false
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+TIME '2000-01-01 00:30:00',
+TIME '2000-01-01 00:30:00',
+TIME '2000-01-01 00:30:00',
+TIME '2000-01-01 01:30:00');
+----
+true
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+TIMETZ '2000-01-01 00:00:00',
+TIMETZ '2000-01-01 01:00:00',
+TIMETZ '2000-01-01 00:30:00',
+TIMETZ '2000-01-01 01:30:00');
+----
+true
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+TIMETZ '2000-01-01 01:00:00',
+TIMETZ '2000-01-01 00:00:00',
+TIMETZ '2000-01-01 00:30:00',
+TIMETZ '2000-01-01 01:30:00');
+----
+true
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+TIMETZ '2000-01-01 00:00:00',
+TIMETZ '2000-01-01 00:15:00',
+TIMETZ '2000-01-01 00:30:00',
+TIMETZ '2000-01-01 01:30:00');
+----
+false
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+TIMETZ '2000-01-01 00:00:00',
+TIMETZ '2000-01-01 00:30:00',
+TIMETZ '2000-01-01 00:30:00',
+TIMETZ '2000-01-01 01:30:00');
+----
+false
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+TIMETZ '2000-01-01 00:30:00',
+TIMETZ '2000-01-01 00:30:00',
+TIMETZ '2000-01-01 00:30:00',
+TIMETZ '2000-01-01 01:30:00');
+----
+true
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+DATE '2000-01-01',
+DATE '2000-01-03',
+DATE '2000-01-02',
+DATE '2000-01-04');
+----
+true
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+DATE '2000-01-03',
+DATE '2000-01-01',
+DATE '2000-01-02',
+DATE '2000-01-04');
+----
+true
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+DATE '2000-01-01',
+DATE '2000-01-02',
+DATE '2000-01-03',
+DATE '2000-01-04');
+----
+false
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+DATE '2000-01-01',
+DATE '2000-01-03',
+DATE '2000-01-03',
+DATE '2000-01-04');
+----
+false
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+DATE '2000-01-03',
+DATE '2000-01-03',
+DATE '2000-01-03',
+DATE '2000-01-04');
+----
+true
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+TIMESTAMP '2000-01-01 00:00:00',
+INTERVAL '100 days',
+TIMESTAMP '2000-01-01 00:30:00',
+INTERVAL '30 minutes');
+----
+true
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+TIMESTAMP '2000-01-01 00:00:00',
+INTERVAL '100 s',
+TIMESTAMP '2000-01-01 00:30:00',
+INTERVAL '30 minutes');
+----
+false
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+TIMESTAMP '2000-01-01 00:00:00',
+INTERVAL '30 minutes',
+TIMESTAMP '2000-01-01 00:30:00',
+INTERVAL '30 minutes');
+----
+false
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+TIMESTAMPTZ '2000-01-01 00:00:00',
+INTERVAL '100 days',
+TIMESTAMPTZ '2000-01-01 00:30:00',
+INTERVAL '30 minutes');
+----
+true
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+TIMESTAMPTZ '2000-01-01 00:00:00',
+INTERVAL '100 s',
+TIMESTAMPTZ '2000-01-01 00:30:00',
+INTERVAL '30 minutes');
+----
+false
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+TIMESTAMPTZ '2000-01-01 00:00:00',
+INTERVAL '30 minutes',
+TIMESTAMPTZ '2000-01-01 00:30:00',
+INTERVAL '30 minutes');
+----
+false
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+TIME '2000-01-01 00:00:00',
+INTERVAL '2 hours',
+TIME '2000-01-01 00:30:00',
+INTERVAL '30 minutes');
+----
+true
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+TIME '2000-01-01 00:00:00',
+INTERVAL '100 s',
+TIME '2000-01-01 00:30:00',
+INTERVAL '30 minutes');
+----
+false
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+TIME '2000-01-01 00:00:00',
+INTERVAL '30 minutes',
+TIME '2000-01-01 00:30:00',
+INTERVAL '30 minutes');
+----
+false
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+TIMETZ '00:00:00',
+INTERVAL '3 hours',
+TIMETZ '00:30:00',
+INTERVAL '30 minutes');
+----
+true
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+TIMETZ '00:00:00',
+INTERVAL '100 s',
+TIMETZ '00:30:00',
+INTERVAL '30 minutes');
+----
+false
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+TIMETZ '00:00:00',
+INTERVAL '30 minutes',
+TIMETZ '00:30:00',
+INTERVAL '30 minutes');
+----
+false
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+DATE '2000-01-01',
+INTERVAL '3 hours',
+DATE '2000-01-02',
+INTERVAL '2 days');
+----
+false
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+DATE '2000-01-01',
+INTERVAL '2 days',
+DATE '2000-01-02',
+INTERVAL '2 days');
+----
+true
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT overlaps(
+DATE '2000-01-01',
+INTERVAL '1 day',
+DATE '2000-01-02',
+INTERVAL '2 days');
+----
+false
+
+query error function "overlaps" does not exist
+SELECT overlaps
+(DATE '2000-01-03',
+DATE '2000-02-03',
+DATE '2000-03-03',
+DATE '2000-01-03',
+DATE '2000-01-04');
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT overlaps(NULL, NULL, NULL, NULL);
+----
+NULL
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT overlaps(NULL, INTERVAL '1 day', NULL, NULL);
+----
+NULL
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT overlaps(DATE '2000-01-01', INTERVAL '1 day', NULL, NULL);
+----
+NULL
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT overlaps(DATE '2000-01-01', NULL, DATE '2000-01-01', DATE '2000-01-02');
+----
+NULL
+
+query error function "overlaps" does not exist
+SELECT overlaps(
+TIMESTAMP '2000-01-01 00:00:00',
+TIME '2000-01-01 01:00:00',
+TIME '2000-01-01 00:30:00',
+TIMESTAMP '2000-01-01 01:30:00');
+
+query error function "overlaps" does not exist
+SELECT overlaps(
+TIMESTAMP '2000-01-01 00:00:00',
+INTERVAL '2 days',
+DATE '2000-01-01',
+TIMESTAMPTZ '2000-01-01 01:30:00');
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT encode(decompress(compress('Hello World', 'gzip'), 'gzip'), 'escape');
+----
+Hello World
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT encode(decompress(compress('Hello World', 'zstd'), 'zstd'), 'escape');
+----
+Hello World
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT encode(decompress(compress('Hello World', 'snappy'), 'snappy'), 'escape');
+----
+Hello World
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT encode(decompress(compress('Hello World', 'lz4'), 'LZ4'), 'escape');
+----
+Hello World
+
+query error function "decompress" does not exist
+SELECT encode(decompress(compress('Hello World', 'snappy'), 'lz4'), 'escape');
+
+query error function "compress" does not exist
+SELECT compress('Hello World', 'infiniteCompressionCodec');
+
+# Not supported by Materialize.
+onlyif cockroach
+subtest crdb_internal.hide_sql_constants
+query T
+SELECT crdb_internal.hide_sql_constants('select 1, 2, 3')
+----
+SELECT _, _, _
+
+# Not supported by Materialize.
+onlyif cockroach
+# Passing a redacted sql stmt shouldn't have any effect.
+query T
+SELECT crdb_internal.hide_sql_constants('select _, _, _')
+----
+SELECT _, _, _
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.hide_sql_constants(ARRAY('select 1', NULL, 'select ''hello''', '', 'not a sql stmt'))
+----
+{"SELECT _",NULL,"SELECT '_'","",""}
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.hide_sql_constants(ARRAY['banana'])
+----
+{""}
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.hide_sql_constants('SELECT ''yes'' IN (''no'', ''maybe'', ''yes'')')
+----
+SELECT '_' IN ('_', '_', __more1_10__)
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.hide_sql_constants('')
+----
+·
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.hide_sql_constants(NULL)
+----
+NULL
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.hide_sql_constants('not a sql stmt')
+----
+·
+
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+select crdb_internal.hide_sql_constants(e'\r');
+----
+·
+
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.hide_sql_constants(create_statement) from crdb_internal.create_statements where descriptor_name = 'foo'
+----
+CREATE TABLE public.foo (a INT8 NULL, rowid INT8 NOT NULL NOT VISIBLE DEFAULT unique_rowid(), CONSTRAINT foo_pkey PRIMARY KEY (rowid ASC))
+
+# Not supported by Materialize.
+onlyif cockroach
+# More tests are in parse_ident_builtin_test.go.
+query T
+SELECT parse_ident(str) FROM ( VALUES
+  ('a.b.c'),
+  ('"YesCaps".NoCaps'),
+  ('"a""b".xyz'),
+  ('"a\b".xyz')
+) tbl(str)
+----
+{a,b,c}
+{YesCaps,nocaps}
+{"a\"b",xyz}
+{"a\\b",xyz}
+
+query T
+SELECT parse_ident('ab.xyz()', false)
+----
+{ab,xyz}
+
+query error string is not a valid identifier: \"ab.xyz\(\)\"
+SELECT parse_ident('ab.xyz()', true)
+
+# Test that we return appropriate user-facing errors when trying to decode invalid bytes.
+query error pgcode 22023 unknown schema 'crdb_internal'
+select crdb_internal.job_payload_type('invalid'::BYTES);
+
+query error pgcode 22023 unknown schema 'crdb_internal'
+select crdb_internal.job_payload_type('');
+
+# Not supported by Materialize.
+onlyif cockroach
+subtest crdb_internal.redactable_sql_constants
+query T
+SELECT crdb_internal.redactable_sql_constants(NULL)
+----
+NULL
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.redactable_sql_constants('')
+----
+‹›
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.redactable_sql_constants('SELECT 1, 2, 3')
+----
+SELECT ‹1›, ‹2›, ‹3›
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.redactable_sql_constants('UPDATE mytable SET col = ''abc'' WHERE key = 0')
+----
+UPDATE mytable SET col = ‹'abc'› WHERE key = ‹0›
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.redactable_sql_constants('not a sql statement')
+----
+‹not a sql statement›
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.redactable_sql_constants('1')
+----
+‹1›
+
+statement error unknown schema 'crdb_internal'
+SELECT crdb_internal.redactable_sql_constants(1)
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.redactable_sql_constants(ARRAY[]::string[])
+----
+{}
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.redactable_sql_constants(ARRAY[''])
+----
+{‹›}
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.redactable_sql_constants(ARRAY[NULL])
+----
+{NULL}
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.redactable_sql_constants(ARRAY['banana'])
+----
+{‹banana›}
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.redactable_sql_constants(ARRAY['SELECT 1', NULL, 'SELECT ''hello''', ''])
+----
+{"SELECT ‹1›",NULL,"SELECT ‹'hello'›",‹›}
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.redactable_sql_constants('SELECT ''yes'' IN (''no'', ''maybe'', ''yes'')')
+----
+SELECT ‹'yes'› IN (‹'no'›, ‹'maybe'›, ‹'yes'›)
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.redactable_sql_constants(e'\r')
+----
+‹
+›
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.redactable_sql_constants('SELECT crdb_internal.redactable_sql_constants('''')')
+----
+SELECT crdb_internal.redactable_sql_constants(‹''›)
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.redactable_sql_constants('WITH j AS (VALUES (0.1, false, ''{}''::jsonb, ARRAY[''x'', ''y'', ''''])) INSERT INTO i SELECT *, 7 FROM j WHERE true')
+----
+WITH j AS (VALUES (‹0.1›, ‹false›, ‹'{}'›::JSONB, ARRAY[‹'x'›, ‹'y'›, ‹''›])) INSERT INTO i SELECT *, ‹7› FROM j WHERE ‹true›
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.redactable_sql_constants(create_statement)
+FROM crdb_internal.create_statements
+WHERE descriptor_name = 'foo'
+----
+CREATE TABLE public.foo (a INT8 NULL, rowid INT8 NOT NULL NOT VISIBLE DEFAULT unique_rowid(), CONSTRAINT foo_pkey PRIMARY KEY (rowid ASC))
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE TABLE redactable_sql_constants_table (
+  a INT PRIMARY KEY,
+  b STRING DEFAULT 'yo' CHECK (b != 'grapefruit'),
+  c STRING AS (b || 'foo') VIRTUAL,
+  FAMILY (a, b),
+  INDEX (b) WHERE b > 'z'
+);
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.redactable_sql_constants(create_statement)
+FROM crdb_internal.create_statements
+WHERE descriptor_name = 'redactable_sql_constants_table'
+----
+CREATE TABLE public.redactable_sql_constants_table (a INT8 NOT NULL, b STRING NULL DEFAULT ‹'yo'›:::STRING, c STRING NULL AS (b || ‹'foo'›:::STRING) VIRTUAL, CONSTRAINT redactable_sql_constants_table_pkey PRIMARY KEY (a ASC), INDEX redactable_sql_constants_table_b_idx (b ASC) WHERE b > ‹'z'›:::STRING, FAMILY fam_0_a_b (a, b), CONSTRAINT check_b CHECK (b != ‹'grapefruit'›:::STRING))
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+DROP TABLE redactable_sql_constants_table
+
+subtest crdb_internal.redact
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.redact(NULL)
+----
+NULL
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.redact('')
+----
+·
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.redact('0')
+----
+0
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.redact('‹0›')
+----
+‹×›
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.redact('‹‹0››')
+----
+‹‹×››
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.redact('‹0› ‹0›')
+----
+‹×› ‹×›
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.redact('‹‹0›')
+----
+‹‹×›
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.redact(ARRAY[]::string[])
+----
+{}
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.redact(ARRAY[NULL])
+----
+{NULL}
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.redact(ARRAY[''])
+----
+{""}
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.redact(ARRAY['‹0›', '', NULL, '‹0› ‹0›', '‹0'])
+----
+{‹×›,"",NULL,"‹×› ‹×›",‹0}
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.redact(crdb_internal.redactable_sql_constants('SELECT 1, 2, 3'))
+----
+SELECT ‹×›, ‹×›, ‹×›
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT crdb_internal.redact(crdb_internal.redactable_sql_constants(ARRAY['SELECT 1', NULL, 'SELECT ''hello''', '']))
+----
+{"SELECT ‹×›",NULL,"SELECT ‹×›",‹×›}
+
 subtest check_consistency
 
 # Sanity-check crdb_internal.check_consistency.
 
-statement error start key must be >= "\\x02"
-SELECT crdb_internal.check_consistency(true, '\x01', '\xffff')
+statement error unknown schema 'crdb_internal'
+SELECT crdb_internal.check_consistency(true, '\x00', crdb_internal.tenant_span()[2])
 
-statement error end key must be < "\\xff\\xff"
-SELECT crdb_internal.check_consistency(true, '\x02', '\xffff00')
+statement error unknown schema 'crdb_internal'
+SELECT crdb_internal.check_consistency(true, crdb_internal.tenant_span()[1], '\xffff00')
 
-statement error start key must be less than end key
-SELECT crdb_internal.check_consistency(true, '\x02', '\x02')
+statement error unknown schema 'crdb_internal'
+SELECT crdb_internal.check_consistency(true, crdb_internal.tenant_span()[2], crdb_internal.tenant_span()[2])
 
-statement error start key must be less than end key
-SELECT crdb_internal.check_consistency(true, '\x03', '\x02')
-
-query ITT
-SELECT range_id, status, regexp_replace(detail, '[0-9]+', '', 'g') FROM crdb_internal.check_consistency(true, '\x02', '\xffff') WHERE range_id = 1
+# Not supported by Materialize.
+onlyif cockroach
+query TT
+SELECT status, regexp_replace(detail, '[0-9]+', '', 'g')
+FROM crdb_internal.check_consistency(true, crdb_internal.tenant_span()[1], crdb_internal.tenant_span()[2])
+ORDER BY range_id
+LIMIT 1
 ----
-1  RANGE_CONSISTENT  stats: {ContainsEstimates:false LastUpdateNanos: IntentAge: GCBytesAge: LiveBytes: LiveCount: KeyBytes: KeyCount: ValBytes: ValCount: IntentBytes: IntentCount: SysBytes: SysCount: XXX_NoUnkeyedLiteral:{} XXX_sizecache:}
+RANGE_CONSISTENT  stats: {ContainsEstimates: LastUpdateNanos: IntentAge: GCBytesAge: LiveBytes: LiveCount: KeyBytes: KeyCount: ValBytes: ValCount: IntentBytes: IntentCount: SeparatedIntentCount: RangeKeyCount: RangeKeyBytes: RangeValCount: RangeValBytes: SysBytes: SysCount: AbortSpanBytes:}
 
-# Without explicit keys, scans all ranges (we don't test this too precisely to
-# avoid flaking the test when the range count changes, just want to know that
-# we're touching multiple ranges).
-query B
-SELECT count(*) > 5 FROM crdb_internal.check_consistency(true, '', '')
-----
-true
+# Not supported by Materialize.
+onlyif cockroach
+# Fill a table with consistency check results. This used to panic.
+# See: https://github.com/cockroachdb/cockroach/issues/88222
+statement ok
+CREATE TABLE conscheckresult AS (SELECT * FROM crdb_internal.check_consistency(false, '', ''));
 
-# Query that should touch only a single range.
-query B
-SELECT count(*) = 1 FROM crdb_internal.check_consistency(true, '\x03', '\x0300')
-----
-true
-
-# Ditto, but implicit start key \x02
-query B
-SELECT count(*) = 1 FROM crdb_internal.check_consistency(true, '', '\x0200')
-----
-true
-
-# Ditto, but implicit end key.
-query B
-SELECT count(*) = 1 FROM crdb_internal.check_consistency(true, '\xff', '')
-----
-true
+subtest end

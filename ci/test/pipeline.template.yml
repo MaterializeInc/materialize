@@ -265,6 +265,7 @@ steps:
 
 
   - id: cargo-test
+    topics: [kafka, postgres]
     label: ":rust: Cargo test"
     timeout_in_minutes: 60
     inputs:
@@ -292,6 +293,7 @@ steps:
       queue: hetzner-x86-64-dedi-48cpu-192gb
 
   - id: testdrive
+    topics: [copy-to-s3, kafka, kafka-sink, mysql, postgres]
     label: "Testdrive"
     depends_on: build-aarch64
     timeout_in_minutes: 40
@@ -304,6 +306,7 @@ steps:
       queue: hetzner-aarch64-8cpu-16gb
 
   - id: cluster-tests
+    topics: [kafka, kafka-sink, postgres]
     label: Cluster
     depends_on: build-aarch64
     timeout_in_minutes: 30
@@ -330,6 +333,7 @@ steps:
       queue: hetzner-aarch64-16cpu-32gb
 
   - id: restarts
+    topics: [kafka, kafka-sink]
     label: Restart
     depends_on: build-aarch64
     timeout_in_minutes: 30
@@ -344,6 +348,7 @@ steps:
     key: mysql-tests
     steps:
       - id: mysql-cdc
+        topics: [mysql]
         label: MySQL CDC
         parallelism: 5
         depends_on: build-aarch64
@@ -356,6 +361,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: mysql-rtr
+        topics: [mysql]
         label: MySQL RTR
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -370,6 +376,7 @@ steps:
     key: postgres-tests
     steps:
       - id: pg-cdc
+        topics: [postgres]
         label: Postgres CDC
         parallelism: 6
         depends_on: build-aarch64
@@ -383,6 +390,7 @@ steps:
         # the mzbuild postgres version will be used, which depends on the Dockerfile specification
 
       - id: pg-rtr
+        topics: [postgres]
         label: Postgres RTR
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -394,6 +402,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: pg-cdc-standby
+        topics: [postgres]
         label: Postgres CDC against a physical standby
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -408,6 +417,7 @@ steps:
     key: connection-tests
     steps:
       - id: ssh-connection
+        topics: [kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
         label: SSH connection
         depends_on: build-x86_64
         timeout_in_minutes: 40
@@ -434,6 +444,7 @@ steps:
     key: kafka-tests
     steps:
       - id: kafka-auth
+        topics: [kafka, kafka-sink, ssh-tunnel]
         label: Kafka auth
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -444,9 +455,9 @@ steps:
               composition: kafka-auth
         agents:
           queue: hetzner-aarch64-8cpu-16gb
-        skip: "https://linear.app/materializeinc/issue/SS-115"
 
       - id: kafka-exactly-once
+        topics: [kafka, kafka-sink]
         label: Kafka exactly-once
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -457,6 +468,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: kafka-rtr
+        topics: [kafka]
         label: Kafka RTR
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -468,6 +480,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: kafka-low-watermark
+        topics: [kafka]
         label: Kafka low watermark
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -479,6 +492,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: aws-glue-schema-registry
+        topics: [kafka]
         label: AWS Glue Schema Registry (Moto)
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -490,6 +504,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
   - id: zippy-kafka-sources-short
+    topics: [cockroach, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
     label: "Short Zippy"
     depends_on: build-aarch64
     inputs: [misc/python/materialize/zippy]
@@ -502,6 +517,7 @@ steps:
           args: [--scenario=KafkaSources, --actions=60]
 
   - id: checks-no-restart-no-upgrade
+    topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
     label: Checks parallel
     depends_on: build-x86_64
     inputs: [misc/python/materialize/checks]
@@ -523,6 +539,7 @@ steps:
           ]
 
   - id: upgrade-smoke-test
+    topics: [0dt-migration, debezium, iceberg, kafka, mysql, postgres, sql-server, ssh-tunnel, upgrade]
     label: "0dt Upgrade Smoke Test"
     depends_on: build-x86_64
     timeout_in_minutes: 30
@@ -538,6 +555,7 @@ steps:
       queue: hetzner-x86-64-4cpu-8gb
 
   - id: source-sink-errors
+    topics: [kafka, kafka-sink, postgres]
     label: "S&S error reporting"
     depends_on: build-aarch64
     parallelism: 3
@@ -551,6 +569,7 @@ steps:
   # Fast tests closer to the end, doesn't matter as much if they have to wait
   # for an agent
   - id: persistence
+    topics: [kafka, kafka-sink]
     label: Persistence
     depends_on: build-aarch64
     timeout_in_minutes: 30
@@ -561,6 +580,7 @@ steps:
       queue: hetzner-aarch64-8cpu-16gb
 
   - id: cluster-isolation
+    topics: [kafka, kafka-sink]
     label: Cluster isolation
     depends_on: build-aarch64
     timeout_in_minutes: 20
@@ -573,12 +593,7 @@ steps:
 
   - id: clusterd-test-driver
     label: Clusterd test driver
-    # Depend on both builds: the `clusterd-test-driver` image changes every commit,
-    # so its arch-specific tag is pushed late in its build. `mkpipeline` may switch
-    # this aarch64 job to an x86_64 agent (Hetzner aarch64 availability), so waiting
-    # for only one build races the other arch's freshly-built image (it would fail
-    # to pull `clusterd-test-driver:mzbuild-…: not found`). Waiting for both is safe.
-    depends_on: [build-aarch64, build-x86_64]
+    depends_on: build-aarch64
     timeout_in_minutes: 20
     inputs: [test/clusterd-test-driver]
     plugins:
@@ -588,6 +603,7 @@ steps:
       queue: hetzner-aarch64-4cpu-8gb
 
   - id: dbt-materialize
+    topics: [kafka]
     label: dbt-materialize
     depends_on: build-aarch64
     timeout_in_minutes: 30
@@ -602,6 +618,7 @@ steps:
     key: debezium-tests
     steps:
       - id: debezium-postgres
+        topics: [debezium, kafka, mysql, postgres, sql-server]
         label: Debezium Postgres
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -614,6 +631,7 @@ steps:
           queue: hetzner-aarch64-8cpu-16gb
 
       - id: debezium-sql-server
+        topics: [debezium, kafka, mysql, postgres, sql-server]
         label: Debezium SQL Server
         depends_on: build-x86_64
         timeout_in_minutes: 30
@@ -627,6 +645,7 @@ steps:
           queue: hetzner-x86-64-4cpu-8gb
 
       - id: debezium-mysql
+        topics: [debezium, kafka, mysql, postgres, sql-server]
         label: Debezium MySQL
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -639,6 +658,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
   - id: storage-usage
+    topics: [kafka, postgres]
     label: Storage usage table
     depends_on: build-aarch64
     timeout_in_minutes: 30
@@ -661,6 +681,7 @@ steps:
       queue: linux-aarch64-small
 
   - id: rtr-combined
+    topics: [kafka, mysql, postgres]
     label: RTR with all sources
     depends_on: build-aarch64
     timeout_in_minutes: 30
@@ -672,6 +693,7 @@ steps:
       queue: hetzner-aarch64-16cpu-32gb
 
   - id: mz-debug
+    topics: [self-managed]
     label: "mz-debug tool"
     depends_on: build-aarch64
     timeout_in_minutes: 45
@@ -694,6 +716,7 @@ steps:
       queue: hetzner-aarch64-4cpu-8gb
 
   - id: secrets-logging
+    topics: [kafka, mysql, postgres]
     label: "Secrets Logging"
     depends_on: build-aarch64
     timeout_in_minutes: 45
@@ -704,6 +727,7 @@ steps:
       queue: hetzner-aarch64-4cpu-8gb
 
   - id: copy
+    topics: [copy-to-s3]
     label: Copy
     depends_on: build-aarch64
     timeout_in_minutes: 30
@@ -737,6 +761,7 @@ steps:
       queue: hetzner-aarch64-4cpu-8gb
 
   - id: chbench-demo
+    topics: [debezium, kafka, mysql]
     label: chbench smoke
     depends_on: build-aarch64
     plugins:
@@ -760,6 +785,7 @@ steps:
       queue: hetzner-x86-64-4cpu-8gb
 
   - id: fdb
+    topics: [cockroach]
     label: "FoundationDB"
     depends_on: build-aarch64
     timeout_in_minutes: 40
@@ -769,18 +795,6 @@ steps:
           composition: foundationdb
     agents:
       queue: hetzner-aarch64-4cpu-8gb
-
-  - id: mz-deploy
-    label: "mz-deploy"
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    inputs: [src/mz-deploy, test/mz-deploy]
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: mz-deploy
-          ci-builder: stable
-    agents:
-      queue: hetzner-x86-64-4cpu-8gb
 
   - group: Docs
     key: docs-tests
@@ -826,6 +840,7 @@ steps:
         sanitizer: skip
 
       - id: doc-examples
+        topics: [kafka, mysql, postgres, sql-server, ssh-tunnel]
         label: Documentation Examples Code
         inputs:
           - doc/user/data/examples
@@ -856,6 +871,7 @@ steps:
         sanitizer: skip
 
       - id: console-sql-test
+        topics: [kafka, mysql, postgres, sql-server]
         label: "Console SQL"
         depends_on: build-x86_64
         timeout_in_minutes: 30
@@ -868,7 +884,7 @@ steps:
               run: sql-tests
         agents:
           # SQL Server doesn't support ARM: https://github.com/microsoft/mssql-docker/issues/944
-          queue: hetzner-x86-64-12cpu-24gb
+          queue: hetzner-x86-64-16cpu-32gb
         coverage: skip
         sanitizer: skip
 

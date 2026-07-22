@@ -15,6 +15,12 @@ from materialize.test_analytics.data.base_data_storage import BaseDataStorage
 from materialize.test_analytics.util.mz_sql_util import as_sanitized_literal
 
 
+def _as_double_literal(value: float | None) -> str:
+    # `value or 'NULL::DOUBLE'` would turn a legitimate 0.0 into NULL, so test
+    # explicitly for None.
+    return "NULL::DOUBLE" if value is None else str(value)
+
+
 @dataclass
 class FeatureBenchmarkResultEntry:
     scenario_name: str
@@ -70,14 +76,14 @@ class FeatureBenchmarkResultStorage(BaseDataStorage):
                     {result_entry.cycle},
                     {as_sanitized_literal(result_entry.scale)},
                     {result_entry.is_regression},
-                    {result_entry.wallclock.result or 'NULL::DOUBLE'},
+                    {_as_double_literal(result_entry.wallclock.result)},
                     NULL::INT,  -- to be removed when we remove the "messages" column
-                    {result_entry.memory_mz.result or 'NULL::DOUBLE'},
-                    {result_entry.memory_clusterd.result or 'NULL::DOUBLE'},
-                    {result_entry.wallclock.min or 'NULL::DOUBLE'},
-                    {result_entry.wallclock.max or 'NULL::DOUBLE'},
-                    {result_entry.wallclock.mean or 'NULL::DOUBLE'},
-                    {result_entry.wallclock.variance or 'NULL::DOUBLE'}
+                    {_as_double_literal(result_entry.memory_mz.result)},
+                    {_as_double_literal(result_entry.memory_clusterd.result)},
+                    {_as_double_literal(result_entry.wallclock.min)},
+                    {_as_double_literal(result_entry.wallclock.max)},
+                    {_as_double_literal(result_entry.wallclock.mean)},
+                    {_as_double_literal(result_entry.wallclock.variance)}
                 ;
                 """)
 
@@ -117,14 +123,14 @@ class FeatureBenchmarkResultStorage(BaseDataStorage):
                     {as_sanitized_literal(discarded_entry.scenario_name)},
                     {discarded_entry.cycle},
                     {discarded_entry.is_regression},
-                    {discarded_entry.wallclock.result or 'NULL::DOUBLE'},
+                    {_as_double_literal(discarded_entry.wallclock.result)},
                     NULL::INT,  -- to be removed when we remove the "messages" column
-                    {discarded_entry.memory_mz.result or 'NULL::DOUBLE'},
-                    {discarded_entry.memory_clusterd.result or 'NULL::DOUBLE'},
-                    {discarded_entry.wallclock.min or 'NULL::DOUBLE'},
-                    {discarded_entry.wallclock.max or 'NULL::DOUBLE'},
-                    {discarded_entry.wallclock.mean or 'NULL::DOUBLE'},
-                    {discarded_entry.wallclock.variance or 'NULL::DOUBLE'}
+                    {_as_double_literal(discarded_entry.memory_mz.result)},
+                    {_as_double_literal(discarded_entry.memory_clusterd.result)},
+                    {_as_double_literal(discarded_entry.wallclock.min)},
+                    {_as_double_literal(discarded_entry.wallclock.max)},
+                    {_as_double_literal(discarded_entry.wallclock.mean)},
+                    {_as_double_literal(discarded_entry.wallclock.variance)}
                 ;
                 """)
 

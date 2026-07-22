@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
@@ -9,7 +9,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-set -euo pipefail
+set -eu
 
 if [ -z "${MZ_EAT_MY_DATA:-}" ]; then
     unset LD_PRELOAD

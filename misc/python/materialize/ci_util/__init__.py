@@ -64,12 +64,18 @@ def get_artifacts() -> Any:
                 f"https://agent.buildkite.com/v3/builds/{build_id}/artifacts/search",
                 params=payload,
                 headers={"Authorization": f"Token {token}"},
+                timeout=30,
             )
             res.raise_for_status()
             break
-        except:
+        except Exception as e:
+            # Artifact info only supplies links for annotations, so on repeated
+            # failure degrade to no artifacts rather than crashing the caller
+            # and losing all annotations. A bare except would also swallow
+            # KeyboardInterrupt.
+            print(f"Failed to get artifacts (attempt {attempt + 1}/{attempts}): {e}")
             if attempt == attempts - 1:
-                raise
+                return []
             time.sleep(5)
 
     assert res

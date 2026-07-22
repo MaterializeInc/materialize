@@ -12,10 +12,13 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+use std::sync::atomic;
 use std::time::Duration;
 
 use itertools::Itertools;
-use mz_adapter_types::cluster_state::ExpectedClusterState;
+use mz_adapter_types::cluster_state::{
+    BurstAudit, BurstFinishCause, ExpectedClusterState, ReconfigurationAudit,
+};
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::{
@@ -23,8 +26,10 @@ use mz_adapter_types::dyncfgs::{
     WITH_0DT_DEPLOYMENT_MAX_WAIT,
 };
 use mz_audit_log::{
-    CreateOrDropClusterReplicaReasonV1, EventDetails, EventType, IdFullNameV1, IdNameV1,
-    ObjectType, SchedulingDecisionsWithReasonsV2, VersionedEvent,
+    AlterClusterReconfigurationV1, BurstFinishCauseV1, ClusterHydrationBurstV1,
+    ClusterReplicaLoggingV1, CreateOrDropClusterReplicaReasonV1, EventDetails, EventType,
+    HydrationBurstLifecycleV1, IdFullNameV1, IdNameV1, ObjectType, ReconfigurationLifecycleV1,
+    SchedulingDecisionsWithReasonsV2, VersionedEvent,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::BuiltinLog;
@@ -32,7 +37,8 @@ use mz_catalog::durable::{NetworkPolicy, Snapshot, Transaction};
 use mz_catalog::expr_cache::LocalExpressions;
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, ClusterConfig, DataSourceDesc, DefaultPrivileges, SourceReferences,
+    CatalogEntry, CatalogItem, ClusterConfig, ClusterVariant, DataSourceDesc, DefaultPrivileges,
+    ReconfigurationState, ReconfigurationStatus, ReconfigurationTarget, SourceReferences,
     StateDiff, StateUpdate, StateUpdateKind, TemporaryItem,
 };
 use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
@@ -227,6 +233,12 @@ pub enum Op {
         id: ClusterId,
         name: String,
         config: ClusterConfig,
+        /// Writer-declared reconfiguration lifecycle transition to audit for
+        /// this write, alongside the record carried in `config`.
+        reconfiguration_audit: Option<ReconfigurationAudit>,
+        /// Writer-declared hydration-burst lifecycle transition to audit for
+        /// this write, alongside the record carried in `config`.
+        burst_audit: Option<BurstAudit>,
     },
     UpdateClusterReplicaConfig {
         cluster_id: ClusterId,
@@ -348,6 +360,13 @@ pub enum ReplicaCreateDropReason {
     /// The automated cluster scheduling initiated the replica create or drop, e.g., a
     /// materialized view is needing a refresh on a SCHEDULE ON REFRESH cluster.
     ClusterScheduling(Vec<SchedulingDecision>),
+    /// The cluster controller's graceful-reconfiguration strategy created the replica while
+    /// converging a cluster onto an in-flight `reconfiguration` target (a background
+    /// `ALTER CLUSTER`).
+    GracefulReconfiguration,
+    /// The cluster controller's hydration-burst strategy created the transient burst replica
+    /// it runs while a cluster's objects are not yet hydrated.
+    HydrationBurst,
     /// The cluster controller dropped the replica because the cluster's configuration no longer
     /// calls for it. The uniform reason on every controller-emitted drop (e.g. a
     /// replication-factor decrease).
@@ -367,6 +386,12 @@ impl ReplicaCreateDropReason {
                 CreateOrDropClusterReplicaReasonV1::Schedule,
                 Some(scheduling_decisions),
             ),
+            ReplicaCreateDropReason::GracefulReconfiguration => {
+                (CreateOrDropClusterReplicaReasonV1::Reconfiguration, None)
+            }
+            ReplicaCreateDropReason::HydrationBurst => {
+                (CreateOrDropClusterReplicaReasonV1::HydrationBurst, None)
+            }
             ReplicaCreateDropReason::Retired => (CreateOrDropClusterReplicaReasonV1::Retired, None),
         };
         (
@@ -403,6 +428,200 @@ enum TransactInnerMode {
 impl Catalog {
     fn should_audit_log_item(item: &CatalogItem) -> bool {
         !item.is_temporary()
+    }
+
+    /// The cluster config's `reconfiguration` record, if any.
+    fn reconfiguration_record_of(
+        config: &ClusterConfig,
+    ) -> Option<&mz_catalog::memory::objects::ReconfigurationState> {
+        match &config.variant {
+            ClusterVariant::Managed(managed) => managed.reconfiguration.as_ref(),
+            ClusterVariant::Unmanaged => None,
+        }
+    }
+
+    /// The cluster config's `burst` record, if any.
+    fn burst_record_of(config: &ClusterConfig) -> Option<&mz_catalog::memory::objects::BurstState> {
+        match &config.variant {
+            ClusterVariant::Managed(managed) => managed.burst.as_ref(),
+            ClusterVariant::Unmanaged => None,
+        }
+    }
+
+    /// Whether a cluster config write moves the burst lifecycle: a record
+    /// appears or disappears. Unlike reconfiguration there is no status field,
+    /// so presence transitions are the whole lifecycle. Bookkeeping rewrites of
+    /// an existing record (the hydration stamp and its reset) move nothing.
+    ///
+    /// Every such movement is an audit-log transition, so a write performing
+    /// one must declare the matching intent.
+    fn burst_lifecycle_moved(old_config: &ClusterConfig, new_config: &ClusterConfig) -> bool {
+        matches!(
+            (
+                Self::burst_record_of(old_config),
+                Self::burst_record_of(new_config),
+            ),
+            (None, Some(_)) | (Some(_), None)
+        )
+    }
+
+    /// Whether a cluster config write moves the reconfiguration lifecycle: a
+    /// status change, a fresh record, or the drop of an in-progress record.
+    ///
+    /// Every such movement is an audit-log transition, so a write performing
+    /// one must declare the matching intent. Status-preserving copies (legacy
+    /// paths carrying a record forward, re-targets that stay in progress with a
+    /// declared `Started`) and drops of already-settled records move nothing.
+    fn reconfiguration_lifecycle_moved(
+        old_config: &ClusterConfig,
+        new_config: &ClusterConfig,
+    ) -> bool {
+        match (
+            Self::reconfiguration_record_of(old_config),
+            Self::reconfiguration_record_of(new_config),
+        ) {
+            (None, Some(_)) => true,
+            (Some(old), Some(new)) => old.status != new.status,
+            (Some(old), None) => old.is_in_progress(),
+            (None, None) => false,
+        }
+    }
+
+    /// Builds a reconfiguration lifecycle audit event from the writer-declared
+    /// audit intent and the record in `config`.
+    ///
+    /// The intent must cohere with the record it rides along with: the durable
+    /// `status` and the audited transition are two views of one decision, so a
+    /// mismatch is a writer bug and fails the transaction rather than commit an
+    /// event that contradicts the state. The valid pairings are tabulated on
+    /// [`mz_catalog::memory::objects::ReconfigurationStatus`].
+    fn reconfiguration_audit_details(
+        config: &ClusterConfig,
+        cluster_id: ClusterId,
+        cluster_name: &str,
+        audit: ReconfigurationAudit,
+    ) -> Result<AlterClusterReconfigurationV1, AdapterError> {
+        let record = Self::reconfiguration_record_of(config);
+        let Some(record) = record else {
+            return Err(AdapterError::Internal(format!(
+                "reconfiguration audit transition {audit:?} for cluster {cluster_name} \
+                 without a reconfiguration record"
+            )));
+        };
+        // The one mirror match from the write-side vocabulary to the audit-log
+        // vocabulary. `forced` exists only on the intent: the durable status
+        // reads `Finalized` for both a hydrated and a forced cut-over.
+        let (transition, forced) = match audit {
+            ReconfigurationAudit::Started => (ReconfigurationLifecycleV1::Started, None),
+            ReconfigurationAudit::Cancelled => (ReconfigurationLifecycleV1::Cancelled, None),
+            ReconfigurationAudit::Finalized { forced } => {
+                (ReconfigurationLifecycleV1::Finalized, Some(forced))
+            }
+            ReconfigurationAudit::TimedOut => (ReconfigurationLifecycleV1::TimedOut, None),
+            ReconfigurationAudit::ResourceExhausted => {
+                (ReconfigurationLifecycleV1::ResourceExhausted, None)
+            }
+        };
+        let coherent = matches!(
+            (audit, record.status),
+            (
+                ReconfigurationAudit::Started,
+                ReconfigurationStatus::InProgress
+            ) | (
+                ReconfigurationAudit::Cancelled,
+                ReconfigurationStatus::Cancelled
+            ) | (
+                ReconfigurationAudit::Finalized { .. },
+                ReconfigurationStatus::Finalized
+            ) | (
+                ReconfigurationAudit::TimedOut,
+                ReconfigurationStatus::TimedOut
+            ) | (
+                ReconfigurationAudit::ResourceExhausted,
+                ReconfigurationStatus::ResourceExhausted
+            )
+        );
+        if !coherent {
+            return Err(AdapterError::Internal(format!(
+                "reconfiguration audit transition {audit:?} for cluster {cluster_name} \
+                 contradicts the written record status {:?}",
+                record.status
+            )));
+        }
+        let ReconfigurationState {
+            target,
+            deadline,
+            on_timeout: _,
+            status: _,
+        } = record;
+        let ReconfigurationTarget {
+            size,
+            replication_factor,
+            availability_zones,
+            logging,
+        } = target;
+        Ok(AlterClusterReconfigurationV1 {
+            cluster_id: cluster_id.to_string(),
+            cluster_name: cluster_name.to_string(),
+            transition,
+            forced,
+            target_size: size.clone(),
+            target_replication_factor: *replication_factor,
+            target_availability_zones: availability_zones.clone(),
+            target_logging: ClusterReplicaLoggingV1 {
+                log_logging: logging.log_logging,
+                interval: logging.interval,
+            },
+            deadline: Some((*deadline).into()),
+        })
+    }
+
+    /// Builds a hydration-burst lifecycle audit event from the writer-declared
+    /// audit intent and the `burst` record it rides along with.
+    ///
+    /// A `started` intent reads the record from the new config (the write that
+    /// armed the burst carries it). A `finished` intent reads it from the old
+    /// config, since the same write cleared it. A missing record on the
+    /// respective side means the intent contradicts the write, a writer bug
+    /// that fails the transaction.
+    fn burst_audit_details(
+        old_config: &ClusterConfig,
+        new_config: &ClusterConfig,
+        cluster_id: ClusterId,
+        cluster_name: &str,
+        audit: BurstAudit,
+    ) -> Result<ClusterHydrationBurstV1, AdapterError> {
+        let (transition, finish_cause, record) = match audit {
+            BurstAudit::Started => (
+                HydrationBurstLifecycleV1::Started,
+                None,
+                Self::burst_record_of(new_config),
+            ),
+            BurstAudit::Finished { cause } => {
+                let cause = match cause {
+                    BurstFinishCause::LingerElapsed => BurstFinishCauseV1::LingerElapsed,
+                    BurstFinishCause::NoLongerWarranted => BurstFinishCauseV1::NoLongerWarranted,
+                };
+                (
+                    HydrationBurstLifecycleV1::Finished,
+                    Some(cause),
+                    Self::burst_record_of(old_config),
+                )
+            }
+        };
+        let Some(record) = record else {
+            return Err(AdapterError::Internal(format!(
+                "burst audit transition {audit:?} for cluster {cluster_name} \
+                 without a burst record on the corresponding side of the write"
+            )));
+        };
+        Ok(ClusterHydrationBurstV1 {
+            cluster_id: cluster_id.to_string(),
+            cluster_name: cluster_name.to_string(),
+            transition,
+            finish_cause,
+            burst_size: record.burst_size.clone(),
+        })
     }
 
     /// Gets [`CatalogItemId`]s of temporary items to be created, checks for name collisions
@@ -521,6 +740,13 @@ impl Catalog {
         drop(storage);
         if let Some(new_state) = new_state {
             self.transient_revision += 1;
+            // Publish the new revision before returning. Everything that can
+            // reveal this transaction's effects (responses, notices, builtin
+            // table writes) happens after `transact` returns, so any session
+            // that has observed such evidence is guaranteed to see this bump
+            // and refresh its cached catalog snapshot.
+            self.shared_transient_revision
+                .store(self.transient_revision, atomic::Ordering::SeqCst);
             self.state = new_state;
         }
 
@@ -1092,7 +1318,7 @@ impl Catalog {
                 tx.remove_item(replacement_id)?;
 
                 new_entry.id = replacement_id;
-                tx_replace_item(tx, state, id, new_entry)?;
+                tx_replace_item(tx, state, id, new_entry, &mut temporary_item_updates)?;
 
                 let comment_id = CommentObjectId::MaterializedView(replacement_id);
                 tx.drop_comments(&[comment_id].into())?;
@@ -2629,8 +2855,59 @@ impl Catalog {
                     }),
                 )?;
             }
-            Op::UpdateClusterConfig { id, name, config } => {
+            Op::UpdateClusterConfig {
+                id,
+                name,
+                mut config,
+                reconfiguration_audit,
+                mut burst_audit,
+            } => {
                 let mut cluster = state.get_cluster(id).clone();
+                // A write that invalidates the in-flight burst (policy removed
+                // or re-sized, cluster turned off) retires the record here, in
+                // the same transaction. Retiring at this chokepoint rather
+                // than in each sequencer path means no writer can forget, so a
+                // committed config never carries a record it does not warrant.
+                // Writes that declare a burst intent manage the record
+                // themselves.
+                if burst_audit.is_none() {
+                    if let ClusterVariant::Managed(managed) = &mut config.variant {
+                        if managed.has_unwarranted_burst_record() {
+                            managed.burst = None;
+                            burst_audit = Some(BurstAudit::Finished {
+                                cause: BurstFinishCause::NoLongerWarranted,
+                            });
+                        }
+                    }
+                }
+                // Writes that declare no reconfiguration intent must not move
+                // the reconfiguration lifecycle, or the audit log would
+                // silently lose the transition. Writer bug, fails the
+                // transaction.
+                if reconfiguration_audit.is_none()
+                    && Self::reconfiguration_lifecycle_moved(&cluster.config, &config)
+                {
+                    return Err(AdapterError::Internal(format!(
+                        "cluster {name} reconfiguration record moved without a declared \
+                         audit intent"
+                    )));
+                }
+                // The same contract for the burst lifecycle: a record appearing
+                // or disappearing without a declared intent would silently lose
+                // the started/finished audit transition.
+                if burst_audit.is_none() && Self::burst_lifecycle_moved(&cluster.config, &config) {
+                    return Err(AdapterError::Internal(format!(
+                        "cluster {name} burst record moved without a declared audit intent"
+                    )));
+                }
+                let reconfiguration_event = reconfiguration_audit
+                    .map(|audit| Self::reconfiguration_audit_details(&config, id, &name, audit))
+                    .transpose()?;
+                let burst_event = burst_audit
+                    .map(|audit| {
+                        Self::burst_audit_details(&cluster.config, &config, id, &name, audit)
+                    })
+                    .transpose()?;
                 cluster.config = config;
                 tx.update_cluster(id, cluster.into())?;
                 info!("update cluster {}", name);
@@ -2648,6 +2925,32 @@ impl Catalog {
                         name,
                     }),
                 )?;
+
+                if let Some(details) = reconfiguration_event {
+                    CatalogState::add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Alter,
+                        ObjectType::Cluster,
+                        EventDetails::AlterClusterReconfigurationV1(details),
+                    )?;
+                }
+
+                if let Some(details) = burst_event {
+                    CatalogState::add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Alter,
+                        ObjectType::Cluster,
+                        EventDetails::ClusterHydrationBurstV1(details),
+                    )?;
+                }
             }
             Op::UpdateClusterReplicaConfig {
                 replica_id,
@@ -2668,6 +2971,31 @@ impl Catalog {
                 )?;
             }
             Op::UpdateItem { id, name, to_item } => {
+                // A non-temporary item must not depend on a temporary one.
+                // Temporary objects are session-scoped and never persisted, so
+                // a durable item referencing one is a dangling reference that
+                // panics the coordinator when its create_sql is re-planned on
+                // catalog apply (apply emits durable items before temporary
+                // ones, relying on this invariant). `Op::CreateItem` enforces
+                // it; mirror it here so ALTER paths (e.g. ALTER SINK ... SET
+                // FROM) cannot repoint a persistent item at a temporary one.
+                if !to_item.is_temporary() {
+                    if let Some(temp_id) =
+                        to_item
+                            .uses()
+                            .iter()
+                            .find(|id| match state.try_get_entry(*id) {
+                                Some(entry) => entry.item().is_temporary(),
+                                None => temporary_ids.contains(id),
+                            })
+                    {
+                        let temp_item = state.get_entry(temp_id);
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::InvalidTemporaryDependency(temp_item.name().item.clone()),
+                        )));
+                    }
+                }
+
                 let mut entry = state.get_entry(&id).clone();
                 entry.name = name.clone();
                 entry.item = to_item.clone();
@@ -2966,17 +3294,33 @@ fn tx_replace_item(
     state: &CatalogState,
     id: CatalogItemId,
     new_entry: CatalogEntry,
+    temporary_item_updates: &mut Vec<(TemporaryItem, StateDiff)>,
 ) -> Result<(), AdapterError> {
     let new_id = new_entry.id;
 
     // Rewrite dependent objects to point to the new ID.
     for use_id in new_entry.referenced_by() {
+        let dependent = state.get_entry(use_id);
+
+        // Temporary items live only in the in-memory catalog, never in the durable
+        // transaction. They must be rewritten via `temporary_item_updates`. Routing them
+        // through `tx.update_item` would be a no-op (they are not in `tx`), leaving the
+        // temporary object referencing the removed `id` and tripping the catalog
+        // consistency check. Mirrors how `Op::RenameItem` handles temporary dependents.
+        if dependent.item().is_temporary() {
+            let mut rewritten = dependent.clone();
+            rewritten.item = rewritten.item.replace_item_refs(id, new_id);
+            temporary_item_updates.push((dependent.clone().into(), StateDiff::Retraction));
+            temporary_item_updates.push((rewritten.into(), StateDiff::Addition));
+            continue;
+        }
+
         // The dependent might be dropped in the same tx, so check.
         if tx.get_item(use_id).is_none() {
             continue;
         }
 
-        let mut dependent = state.get_entry(use_id).clone();
+        let mut dependent = dependent.clone();
         dependent.item = dependent.item.replace_item_refs(id, new_id);
         tx.update_item(*use_id, dependent.into())?;
     }
@@ -3268,6 +3612,404 @@ mod tests {
         let (reason, scheduling_policies) = ReplicaCreateDropReason::Retired.into_audit_log();
         assert_eq!(reason, CreateOrDropClusterReplicaReasonV1::Retired);
         assert!(scheduling_policies.is_none());
+    }
+
+    #[mz_ore::test]
+    fn test_reconfiguration_audit_details() {
+        use std::time::Duration;
+
+        use mz_adapter_types::cluster_state::ReconfigurationAudit;
+        use mz_audit_log::ReconfigurationLifecycleV1;
+        use mz_catalog::memory::objects::{
+            ClusterConfig, ClusterVariant, ClusterVariantManaged, ReconfigurationState,
+            ReconfigurationStatus, ReconfigurationTarget,
+        };
+        use mz_controller::clusters::ReplicaLogging;
+        use mz_controller_types::ClusterId;
+        use mz_repr::Timestamp;
+        use mz_repr::optimize::OptimizerFeatureOverrides;
+
+        let cluster_id = ClusterId::user(1).expect("valid id");
+        let logging = ReplicaLogging {
+            log_logging: false,
+            interval: None,
+        };
+        let managed = |reconfiguration: Option<ReconfigurationState>| ClusterConfig {
+            variant: ClusterVariant::Managed(ClusterVariantManaged {
+                size: "small".into(),
+                availability_zones: Vec::new(),
+                logging: logging.clone(),
+                replication_factor: 1,
+                optimizer_feature_overrides: OptimizerFeatureOverrides::default(),
+                schedule: Default::default(),
+                auto_scaling_strategy: None,
+                reconfiguration,
+                burst: None,
+            }),
+            workload_class: None,
+        };
+        let record = |status| ReconfigurationState {
+            target: ReconfigurationTarget {
+                size: "large".into(),
+                replication_factor: 2,
+                availability_zones: vec!["az1".into(), "az2".into()],
+                logging: ReplicaLogging {
+                    log_logging: true,
+                    interval: Some(Duration::from_secs(5)),
+                },
+            },
+            deadline: Timestamp::from(400u64),
+            on_timeout: mz_sql::plan::OnTimeoutAction::Rollback,
+            status,
+        };
+
+        let details = Catalog::reconfiguration_audit_details(
+            &managed(Some(record(ReconfigurationStatus::InProgress))),
+            cluster_id,
+            "c",
+            ReconfigurationAudit::Started,
+        )
+        .expect("record supplies audit details");
+        assert_eq!(details.cluster_id, cluster_id.to_string());
+        assert_eq!(details.cluster_name, "c");
+        assert_eq!(details.transition, ReconfigurationLifecycleV1::Started);
+        assert_eq!(details.forced, None);
+        assert_eq!(details.target_size, "large");
+        assert_eq!(details.target_replication_factor, 2);
+        assert_eq!(
+            details.target_availability_zones,
+            vec!["az1".to_string(), "az2".to_string()]
+        );
+        assert_eq!(details.target_logging.log_logging, true);
+        assert_eq!(
+            details.target_logging.interval,
+            Some(Duration::from_secs(5))
+        );
+        assert_eq!(details.deadline, Some(400));
+
+        // The `forced` bit exists only on the intent. The durable status reads
+        // `Finalized` for both a hydrated and a forced cut-over, and the event
+        // preserves the distinction.
+        let forced = Catalog::reconfiguration_audit_details(
+            &managed(Some(record(ReconfigurationStatus::Finalized))),
+            cluster_id,
+            "c",
+            ReconfigurationAudit::Finalized { forced: true },
+        )
+        .expect("a coherent finalize supplies audit details");
+        assert_eq!(forced.transition, ReconfigurationLifecycleV1::Finalized);
+        assert_eq!(forced.forced, Some(true));
+
+        // A declared transition that contradicts the written record's status is
+        // a writer bug and must fail the transaction.
+        let incoherent = Catalog::reconfiguration_audit_details(
+            &managed(Some(record(ReconfigurationStatus::TimedOut))),
+            cluster_id,
+            "c",
+            ReconfigurationAudit::ResourceExhausted,
+        );
+        assert!(incoherent.is_err());
+
+        let missing = Catalog::reconfiguration_audit_details(
+            &managed(None),
+            cluster_id,
+            "c",
+            ReconfigurationAudit::Started,
+        );
+        assert!(missing.is_err());
+    }
+
+    #[mz_ore::test]
+    fn test_reconfiguration_lifecycle_moved() {
+        use std::time::Duration;
+
+        use mz_catalog::memory::objects::{
+            ClusterConfig, ClusterVariant, ClusterVariantManaged, ReconfigurationState,
+            ReconfigurationStatus, ReconfigurationTarget,
+        };
+        use mz_controller::clusters::ReplicaLogging;
+        use mz_repr::Timestamp;
+        use mz_repr::optimize::OptimizerFeatureOverrides;
+
+        let managed = |reconfiguration: Option<ReconfigurationState>| ClusterConfig {
+            variant: ClusterVariant::Managed(ClusterVariantManaged {
+                size: "small".into(),
+                availability_zones: Vec::new(),
+                logging: ReplicaLogging {
+                    log_logging: false,
+                    interval: None,
+                },
+                replication_factor: 1,
+                optimizer_feature_overrides: OptimizerFeatureOverrides::default(),
+                schedule: Default::default(),
+                auto_scaling_strategy: None,
+                reconfiguration,
+                burst: None,
+            }),
+            workload_class: None,
+        };
+        let unmanaged = ClusterConfig {
+            variant: ClusterVariant::Unmanaged,
+            workload_class: None,
+        };
+        let record = |status| ReconfigurationState {
+            target: ReconfigurationTarget {
+                size: "large".into(),
+                replication_factor: 2,
+                availability_zones: Vec::new(),
+                logging: ReplicaLogging {
+                    log_logging: false,
+                    interval: Some(Duration::from_secs(1)),
+                },
+            },
+            deadline: Timestamp::from(400u64),
+            on_timeout: mz_sql::plan::OnTimeoutAction::Rollback,
+            status,
+        };
+
+        // Lifecycle movements: these writes must declare an audit intent.
+        // A fresh record appears.
+        assert!(Catalog::reconfiguration_lifecycle_moved(
+            &managed(None),
+            &managed(Some(record(ReconfigurationStatus::InProgress))),
+        ));
+        // The status changes.
+        assert!(Catalog::reconfiguration_lifecycle_moved(
+            &managed(Some(record(ReconfigurationStatus::InProgress))),
+            &managed(Some(record(ReconfigurationStatus::Finalized))),
+        ));
+        // An in-progress record is dropped, e.g. by converting the cluster to
+        // unmanaged (which the sequencer refuses, and this guard backstops).
+        assert!(Catalog::reconfiguration_lifecycle_moved(
+            &managed(Some(record(ReconfigurationStatus::InProgress))),
+            &unmanaged,
+        ));
+
+        // Not movements: no record at all, a status-preserving copy (legacy
+        // paths carry the record forward), and dropping a settled record.
+        assert!(!Catalog::reconfiguration_lifecycle_moved(
+            &managed(None),
+            &managed(None),
+        ));
+        assert!(!Catalog::reconfiguration_lifecycle_moved(
+            &managed(Some(record(ReconfigurationStatus::InProgress))),
+            &managed(Some(record(ReconfigurationStatus::InProgress))),
+        ));
+        assert!(!Catalog::reconfiguration_lifecycle_moved(
+            &managed(Some(record(ReconfigurationStatus::Cancelled))),
+            &unmanaged,
+        ));
+    }
+
+    #[mz_ore::test]
+    fn test_burst_lifecycle_moved() {
+        use std::time::Duration;
+
+        use mz_catalog::memory::objects::{
+            BurstState, ClusterConfig, ClusterVariant, ClusterVariantManaged,
+        };
+        use mz_controller::clusters::ReplicaLogging;
+        use mz_repr::Timestamp;
+        use mz_repr::optimize::OptimizerFeatureOverrides;
+
+        let managed = |burst: Option<BurstState>| ClusterConfig {
+            variant: ClusterVariant::Managed(ClusterVariantManaged {
+                size: "small".into(),
+                availability_zones: Vec::new(),
+                logging: ReplicaLogging {
+                    log_logging: false,
+                    interval: None,
+                },
+                replication_factor: 1,
+                optimizer_feature_overrides: OptimizerFeatureOverrides::default(),
+                schedule: Default::default(),
+                auto_scaling_strategy: None,
+                reconfiguration: None,
+                burst,
+            }),
+            workload_class: None,
+        };
+        let unmanaged = ClusterConfig {
+            variant: ClusterVariant::Unmanaged,
+            workload_class: None,
+        };
+        let record = |steady_hydrated_at| BurstState {
+            burst_size: "large".into(),
+            linger_duration: Duration::from_secs(60),
+            steady_hydrated_at,
+        };
+
+        // Lifecycle movements: these writes must declare an audit intent.
+        // A fresh record appears.
+        assert!(Catalog::burst_lifecycle_moved(
+            &managed(None),
+            &managed(Some(record(None))),
+        ));
+        // The record is cleared.
+        assert!(Catalog::burst_lifecycle_moved(
+            &managed(Some(record(None))),
+            &managed(None),
+        ));
+        // The record is dropped by converting the cluster to unmanaged (which
+        // the sequencer refuses, and this guard backstops).
+        assert!(Catalog::burst_lifecycle_moved(
+            &managed(Some(record(None))),
+            &unmanaged,
+        ));
+
+        // Not movements: no record at all, and the bookkeeping rewrites (the
+        // hydration stamp and its reset) that keep the record present.
+        assert!(!Catalog::burst_lifecycle_moved(
+            &managed(None),
+            &managed(None)
+        ));
+        assert!(!Catalog::burst_lifecycle_moved(
+            &managed(Some(record(None))),
+            &managed(Some(record(Some(Timestamp::from(100u64))))),
+        ));
+        assert!(!Catalog::burst_lifecycle_moved(
+            &managed(Some(record(Some(Timestamp::from(100u64))))),
+            &managed(Some(record(None))),
+        ));
+    }
+
+    #[mz_ore::test]
+    fn test_has_unwarranted_burst_record() {
+        use std::time::Duration;
+
+        use mz_catalog::memory::objects::{BurstState, ClusterVariantManaged};
+        use mz_controller::clusters::ReplicaLogging;
+        use mz_repr::optimize::OptimizerFeatureOverrides;
+        use mz_sql::plan::{AutoScalingStrategy, OnHydration};
+
+        let managed = |replication_factor: u32,
+                       strategy: Option<AutoScalingStrategy>,
+                       burst: Option<BurstState>| ClusterVariantManaged {
+            size: "small".into(),
+            availability_zones: Vec::new(),
+            logging: ReplicaLogging {
+                log_logging: false,
+                interval: None,
+            },
+            replication_factor,
+            optimizer_feature_overrides: OptimizerFeatureOverrides::default(),
+            schedule: Default::default(),
+            auto_scaling_strategy: strategy,
+            reconfiguration: None,
+            burst,
+        };
+        let policy = |hydration_size: &str| AutoScalingStrategy {
+            on_hydration: Some(OnHydration {
+                hydration_size: hydration_size.into(),
+                linger_duration: None,
+            }),
+        };
+        let record = || BurstState {
+            burst_size: "large".into(),
+            linger_duration: Duration::from_secs(60),
+            steady_hydrated_at: None,
+        };
+
+        // No record: nothing to retire, with or without a policy.
+        assert!(!managed(1, None, None).has_unwarranted_burst_record());
+        assert!(!managed(1, Some(policy("large")), None).has_unwarranted_burst_record());
+
+        // A record backed by a matching, active policy is warranted.
+        assert!(!managed(1, Some(policy("large")), Some(record())).has_unwarranted_burst_record());
+
+        // Unwarranted: policy removed, policy re-sized, or cluster turned off.
+        assert!(managed(1, None, Some(record())).has_unwarranted_burst_record());
+        assert!(
+            managed(
+                1,
+                Some(AutoScalingStrategy { on_hydration: None }),
+                Some(record())
+            )
+            .has_unwarranted_burst_record()
+        );
+        assert!(managed(1, Some(policy("xlarge")), Some(record())).has_unwarranted_burst_record());
+        assert!(managed(0, Some(policy("large")), Some(record())).has_unwarranted_burst_record());
+    }
+
+    #[mz_ore::test]
+    fn test_burst_audit_details() {
+        use std::time::Duration;
+
+        use mz_adapter_types::cluster_state::{BurstAudit, BurstFinishCause};
+        use mz_audit_log::{BurstFinishCauseV1, HydrationBurstLifecycleV1};
+        use mz_catalog::memory::objects::{
+            BurstState, ClusterConfig, ClusterVariant, ClusterVariantManaged,
+        };
+        use mz_controller::clusters::ReplicaLogging;
+        use mz_controller_types::ClusterId;
+        use mz_repr::optimize::OptimizerFeatureOverrides;
+
+        let cluster_id = ClusterId::user(1).expect("valid id");
+        let managed = |burst: Option<BurstState>| ClusterConfig {
+            variant: ClusterVariant::Managed(ClusterVariantManaged {
+                size: "small".into(),
+                availability_zones: Vec::new(),
+                logging: ReplicaLogging {
+                    log_logging: false,
+                    interval: None,
+                },
+                replication_factor: 1,
+                optimizer_feature_overrides: OptimizerFeatureOverrides::default(),
+                schedule: Default::default(),
+                auto_scaling_strategy: None,
+                reconfiguration: None,
+                burst,
+            }),
+            workload_class: None,
+        };
+        let record = || BurstState {
+            burst_size: "large".into(),
+            linger_duration: Duration::from_secs(60),
+            steady_hydrated_at: None,
+        };
+
+        // A started intent reads the armed record from the new config.
+        let started = Catalog::burst_audit_details(
+            &managed(None),
+            &managed(Some(record())),
+            cluster_id,
+            "c",
+            BurstAudit::Started,
+        )
+        .expect("armed record supplies audit details");
+        assert_eq!(started.transition, HydrationBurstLifecycleV1::Started);
+        assert_eq!(started.finish_cause, None);
+        assert_eq!(started.burst_size, "large");
+
+        // A finished intent reads the cleared record from the old config and
+        // carries the writer-declared cause.
+        let finished = Catalog::burst_audit_details(
+            &managed(Some(record())),
+            &managed(None),
+            cluster_id,
+            "c",
+            BurstAudit::Finished {
+                cause: BurstFinishCause::LingerElapsed,
+            },
+        )
+        .expect("cleared record supplies audit details");
+        assert_eq!(finished.transition, HydrationBurstLifecycleV1::Finished);
+        assert_eq!(
+            finished.finish_cause,
+            Some(BurstFinishCauseV1::LingerElapsed)
+        );
+        assert_eq!(finished.burst_size, "large");
+
+        // An intent without a record on the corresponding side contradicts the
+        // write and must fail the transaction.
+        let incoherent = Catalog::burst_audit_details(
+            &managed(None),
+            &managed(None),
+            cluster_id,
+            "c",
+            BurstAudit::Started,
+        );
+        assert!(incoherent.is_err());
     }
 
     #[mz_ore::test]

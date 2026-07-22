@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
@@ -787,15 +788,32 @@ pub(crate) fn should_sample_statement(
     }
 }
 
-/// Helper function to serialize statement parameters for logging.
+/// Serializes statement parameters for logging as UTF-8 strings.
+///
+/// Non-UTF-8 wire bytes are lossily replaced with `U+FFFD`.
 fn serialize_params(params: &Params) -> Vec<Option<String>> {
     std::iter::zip(params.execute_types.iter(), params.datums.iter())
-        .map(|(r#type, datum)| {
+        .enumerate()
+        .map(|(index, (r#type, datum))| {
             mz_pgrepr::Value::from_datum(datum, r#type).map(|val| {
                 let mut buf = BytesMut::new();
                 val.encode_text(&mut buf);
-                String::from_utf8(Into::<Vec<u8>>::into(buf))
-                    .expect("Serialization shouldn't produce non-UTF-8 strings.")
+                // NOTE: `encode_text` can emit non-UTF-8 bytes for `"char"`
+                // (`PgLegacyChar`) params, which write their byte verbatim.
+                // Log the raw bytes so operators can recover what came in.
+                match String::from_utf8_lossy(&buf) {
+                    Cow::Borrowed(s) => s.to_owned(),
+                    Cow::Owned(s) => {
+                        let bytes_hex: String = buf.iter().map(|b| format!("{:02x}", b)).collect();
+                        tracing::warn!(
+                            index,
+                            ty = ?r#type,
+                            bytes_hex = %bytes_hex,
+                            "non-UTF-8 bytes in statement-logging param, replaced with U+FFFD"
+                        );
+                        s
+                    }
+                }
             })
         })
         .collect()
@@ -1051,5 +1069,41 @@ impl WatchSetCreation {
             storage_ids,
             compute_ids,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_repr::{Datum, Row, SqlScalarType};
+    use mz_sql::plan::Params;
+
+    use super::serialize_params;
+
+    /// A `"char"` param whose byte is `>= 0x80` used to panic
+    /// `String::from_utf8` on the statement-logging path. It should now
+    /// round-trip through `from_utf8_lossy` and emit the replacement
+    /// character instead.
+    #[mz_ore::test]
+    fn serialize_params_replaces_non_utf8_char() {
+        let params = Params {
+            datums: Row::pack_slice(&[Datum::UInt8(0xFF)]),
+            execute_types: vec![SqlScalarType::PgLegacyChar],
+            expected_types: vec![SqlScalarType::PgLegacyChar],
+        };
+        let out = serialize_params(&params);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].as_deref(), Some("\u{FFFD}"));
+    }
+
+    /// An ASCII `"char"` param must render as its ASCII character, unchanged.
+    #[mz_ore::test]
+    fn serialize_params_ascii_char_unchanged() {
+        let params = Params {
+            datums: Row::pack_slice(&[Datum::UInt8(b'A')]),
+            execute_types: vec![SqlScalarType::PgLegacyChar],
+            expected_types: vec![SqlScalarType::PgLegacyChar],
+        };
+        let out = serialize_params(&params);
+        assert_eq!(out[0].as_deref(), Some("A"));
     }
 }

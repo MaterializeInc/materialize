@@ -42,3 +42,22 @@ mz_support
 NULL
 mz_system
 r1 (scale=1,workers=2)
+
+# `SHOW CLUSTERS` surfaces any in-flight reconfiguration or autoscaling action in a
+# single `activity` column. With the cluster controller at its default (off), no
+# reconfiguration or burst record is ever written, so `activity` is NULL for every
+# cluster, managed (baz) or unmanaged (foo).
+statement ok
+CREATE CLUSTER baz (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
+
+query TT rowsort
+SELECT name, activity
+FROM (SHOW CLUSTERS) WHERE name IN ('baz', 'foo')
+----
+baz
+NULL
+foo
+NULL
+
+statement ok
+DROP CLUSTER baz

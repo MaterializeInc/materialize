@@ -176,7 +176,7 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
     wait(condition="condition=Ready", resource=f"{pod_name}")
 
     try:
-        mz.kubectl("exec", pod_name, "--", "bash", "-c", "kill -9 `pidof clusterd`")
+        mz.kubectl("exec", pod_name, "--", "sh", "-c", "kill -9 `pidof clusterd`")
     except subprocess.CalledProcessError as e:
         # Killing the entrypoint via kubectl may result in kubectl exiting with code 137
         assert e.returncode == 137
@@ -207,7 +207,7 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
         "exec",
         "pod/environmentd-0",
         "--",
-        "bash",
+        "sh",
         "-c",
         "kill -9 `pidof environmentd`",
     )

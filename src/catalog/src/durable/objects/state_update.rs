@@ -40,7 +40,6 @@ use mz_ore::collections::HashSet;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::Diff;
 use mz_repr::adt::jsonb::Jsonb;
-use mz_repr::adt::numeric::{Dec, Numeric};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::sources::SourceData;
 #[cfg(test)]
@@ -343,35 +342,6 @@ impl StateUpdateKindJson {
             .find_map(|(field, datum)| if field == "kind" { Some(datum) } else { None })
             .expect("kind field must exist");
         datum.unwrap_str()
-    }
-
-    pub(crate) fn audit_log_id(&self) -> u64 {
-        assert!(self.is_audit_log(), "unexpected update kind: {self:?}");
-        let row = self.0.row();
-        let mut iter = row.unpack_first().unwrap_map().iter();
-        let key = iter
-            .find_map(|(field, datum)| if field == "key" { Some(datum) } else { None })
-            .expect("key field must exist")
-            .unwrap_map();
-        let event = key
-            .iter()
-            .find_map(|(field, datum)| if field == "event" { Some(datum) } else { None })
-            .expect("event field must exist")
-            .unwrap_map();
-        let (event_version, versioned_datum) = event.iter().next().expect("event cannot be empty");
-        match event_version {
-            "V1" => {
-                let versioned_map = versioned_datum.unwrap_map();
-                let id = versioned_map
-                    .iter()
-                    .find_map(|(field, datum)| if field == "id" { Some(datum) } else { None })
-                    .expect("event field must exist")
-                    .unwrap_numeric();
-                let mut cx = Numeric::context();
-                cx.try_into_u64(id.into_inner()).expect("invalid id")
-            }
-            version => unimplemented!("unsupported event version: {version}"),
-        }
     }
 
     /// Returns true if this is an update kind that is always deserializable, even before migrations. Otherwise, returns false.
@@ -918,55 +888,6 @@ mod tests {
             let json_kind: StateUpdateKindJson = kind.into();
             let kind = json_kind.kind().to_string();
             assert_eq!(expected, kind);
-        }
-    }
-
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)]
-    fn audit_log_id_test() {
-        let test_cases = [
-            (
-                StateUpdateKind::AuditLog(
-                    proto::AuditLogKey {
-                        event: proto::AuditLogEvent::V1(proto::AuditLogEventV1 {
-                            id: 1,
-                            event_type: proto::audit_log_event_v1::EventType::Create,
-                            object_type: proto::audit_log_event_v1::ObjectType::Cluster,
-                            user: None,
-                            occurred_at: proto::EpochMillis { millis: 4 },
-                            details: proto::audit_log_event_v1::Details::ResetAllV1(
-                                proto::Empty {},
-                            ),
-                        }),
-                    },
-                    (),
-                ),
-                1,
-            ),
-            (
-                StateUpdateKind::AuditLog(
-                    proto::AuditLogKey {
-                        event: proto::AuditLogEvent::V1(proto::AuditLogEventV1 {
-                            id: 4,
-                            event_type: proto::audit_log_event_v1::EventType::Drop,
-                            object_type: proto::audit_log_event_v1::ObjectType::Database,
-                            user: None,
-                            occurred_at: proto::EpochMillis { millis: 7 },
-                            details: proto::audit_log_event_v1::Details::ResetAllV1(
-                                proto::Empty {},
-                            ),
-                        }),
-                    },
-                    (),
-                ),
-                4,
-            ),
-        ];
-
-        for (kind, expected) in test_cases {
-            let json_kind: StateUpdateKindJson = kind.into();
-            let id = json_kind.audit_log_id();
-            assert_eq!(expected, id);
         }
     }
 

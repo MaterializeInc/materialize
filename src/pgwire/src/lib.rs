@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-#![recursion_limit = "256"]
+#![recursion_limit = "512"]
 
 //! PostgreSQL network ("wire") protocol.
 //!
@@ -33,3 +33,11 @@ mod server;
 pub use metrics::MetricsConfig;
 pub use protocol::match_handshake;
 pub use server::{Config, Server};
+
+/// Internal types re-exported under `cfg(feature = "fuzzing")` so the fuzz
+/// crate can drive the frontend-message decoder directly. Not for
+/// production use.
+#[cfg(feature = "fuzzing")]
+pub mod fuzz_exports {
+    pub use crate::codec::Codec;
+}

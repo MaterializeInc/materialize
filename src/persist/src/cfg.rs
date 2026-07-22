@@ -33,7 +33,7 @@ use crate::s3::{S3Blob, S3BlobConfig};
 
 /// Adds the full set of all mz_persist `Config`s.
 pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
-    configs.add(&crate::postgres::USE_POSTGRES_TUNED_QUERIES)
+    configs.add(&crate::postgres::PG_CONSENSUS_READ_COMMITTED)
 }
 
 /// Config for an implementation of [Blob].
@@ -101,7 +101,7 @@ impl BlobConfig {
             "s3" => {
                 let bucket = url
                     .host()
-                    .ok_or_else(|| anyhow!("missing bucket: {}", &url.as_str()))?
+                    .ok_or_else(|| anyhow!("missing bucket: {}", url))?
                     .to_string();
                 let prefix = url
                     .path()
@@ -154,7 +154,7 @@ impl BlobConfig {
             }
             "http" | "https" => match url
                 .host()
-                .ok_or_else(|| anyhow!("missing protocol: {}", &url.as_str()))?
+                .ok_or_else(|| anyhow!("missing protocol: {}", url))?
                 .to_string()
                 .split_once('.')
             {
@@ -180,21 +180,17 @@ impl BlobConfig {
                             knobs,
                         )?))
                     } else {
-                        Err(anyhow!("unknown persist blob scheme: {}", url.as_str()))
+                        Err(anyhow!("unknown persist blob scheme: {}", url))
                     }
                 }
-                _ => Err(anyhow!("unknown persist blob scheme: {}", url.as_str())),
+                _ => Err(anyhow!("unknown persist blob scheme: {}", url)),
             },
             #[cfg(feature = "turmoil")]
             "turmoil" => {
                 let cfg = crate::turmoil::BlobConfig::new(url);
                 Ok(BlobConfig::Turmoil(cfg))
             }
-            p => Err(anyhow!(
-                "unknown persist blob scheme {}: {}",
-                p,
-                url.as_str()
-            )),
+            p => Err(anyhow!("unknown persist blob scheme {}: {}", p, url)),
         }?;
 
         if !query_params.is_empty() {
@@ -205,7 +201,7 @@ impl BlobConfig {
                     .map(|x| x.as_ref())
                     .collect::<Vec<_>>()
                     .join(" "),
-                url.as_str(),
+                url,
             )));
         }
 
@@ -273,11 +269,7 @@ impl ConsensusConfig {
                 let cfg = crate::turmoil::ConsensusConfig::new(url);
                 Ok(ConsensusConfig::Turmoil(cfg))
             }
-            p => Err(anyhow!(
-                "unknown persist consensus scheme {}: {}",
-                p,
-                url.as_str()
-            )),
+            p => Err(anyhow!("unknown persist consensus scheme {}: {}", p, url)),
         }?;
         Ok(config)
     }

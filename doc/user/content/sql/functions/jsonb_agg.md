@@ -24,8 +24,7 @@ _expression_ | [jsonb](../../types) | The values you want aggregated.
 
 `jsonb_agg` returns the aggregated values as a `jsonb` array.
 
-This function always executes on the data from `value` as if it were sorted in ascending order before the function call. Any specified ordering is
-ignored. If you need to perform aggregation in a specific order, you must specify `ORDER BY` within the aggregate function call itself. Otherwise incoming rows are not guaranteed any order.
+{{% include-headless "/headless/aggregate-input-order-ignored" %}}
 
 ## Details
 

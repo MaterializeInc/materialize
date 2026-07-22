@@ -97,13 +97,15 @@ use mz_adapter_types::dyncfgs::{
 };
 use mz_auth::password::Password;
 use mz_build_info::BuildInfo;
-use mz_catalog::builtin::{BUILTINS, BUILTINS_STATIC, MZ_AUDIT_EVENTS, MZ_STORAGE_USAGE_BY_SHARD};
+use mz_catalog::builtin::{
+    BUILTINS, BUILTINS_STATIC, MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY, MZ_STORAGE_USAGE_BY_SHARD,
+};
 use mz_catalog::config::{AwsPrincipalContext, BuiltinItemMigrationConfig, ClusterReplicaSizeMap};
-use mz_catalog::durable::{AuditLogIterator, OpenableDurableCatalogState};
+use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_catalog::expr_cache::{GlobalExpressions, LocalExpressions};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, ClusterVariantManaged, Connection,
-    DataSourceDesc, StateDiff, StateUpdate, StateUpdateKind, Table, TableDataSource,
+    DataSourceDesc, ReconfigurationTarget, Table, TableDataSource,
 };
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
 use mz_compute_client::as_of_selection;
@@ -316,6 +318,17 @@ impl IdPool {
     }
 }
 
+/// A row for `mz_object_arrangement_size_history`, prepared off-thread by the
+/// arrangement sizes snapshot task and stamped with a collection timestamp at
+/// write time.
+#[derive(Debug)]
+pub struct ArrangementSizeRecord {
+    pub replica_id: String,
+    pub object_id: String,
+    pub size: i64,
+    pub hydration_complete: bool,
+}
+
 #[derive(Debug)]
 pub enum Message {
     Command(OpenTelemetryContext, Command),
@@ -359,6 +372,7 @@ pub enum Message {
     StorageUsagePrune(Vec<BuiltinTableUpdate>),
     ArrangementSizesSchedule,
     ArrangementSizesSnapshot,
+    ArrangementSizesWrite(Vec<ArrangementSizeRecord>),
     ArrangementSizesPrune(Vec<BuiltinTableUpdate>),
     /// Performs any cleanup and logging actions necessary for
     /// finalizing a statement execution.
@@ -475,6 +489,7 @@ impl Message {
                 Command::CopyToPreflight { .. } => "copy-to-preflight",
                 Command::ExecuteCopyTo { .. } => "execute-copy-to",
                 Command::ExecuteSideEffectingFunc { .. } => "execute-side-effecting-func",
+                Command::LookupConnection { .. } => "lookup-connection",
                 Command::RegisterFrontendPeek { .. } => "register-frontend-peek",
                 Command::UnregisterFrontendPeek { .. } => "unregister-frontend-peek",
                 Command::ExplainTimestamp { .. } => "explain-timestamp",
@@ -509,6 +524,7 @@ impl Message {
             Message::StorageUsagePrune(_) => "storage_usage_prune",
             Message::ArrangementSizesSchedule => "arrangement_sizes_schedule",
             Message::ArrangementSizesSnapshot => "arrangement_sizes_snapshot",
+            Message::ArrangementSizesWrite(_) => "arrangement_sizes_write",
             Message::ArrangementSizesPrune(_) => "arrangement_sizes_prune",
             Message::RetireExecute { .. } => "retire_execute",
             Message::ExecuteSingleStatementTransaction { .. } => {
@@ -858,6 +874,11 @@ pub enum ClusterStage {
     Alter(AlterCluster),
     WaitForHydrated(AlterClusterWaitForHydrated),
     Finalize(AlterClusterFinalize),
+    /// The foreground wait-shim over a controller-driven background
+    /// reconfiguration: poll the durable `reconfiguration` record until it
+    /// clears, then report success or timeout depending on whether the realized
+    /// config reached the target.
+    AwaitReconfiguration(AlterClusterAwaitReconfiguration),
 }
 
 #[derive(Debug)]
@@ -882,6 +903,16 @@ pub struct AlterClusterFinalize {
     plan: plan::AlterClusterPlan,
     new_config: ClusterVariantManaged,
     workload_class: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct AlterClusterAwaitReconfiguration {
+    validity: PlanValidity,
+    cluster_id: ClusterId,
+    /// The target shape the awaited `ALTER` wrote. Once the record becomes
+    /// terminal, the realized config matching this is what distinguishes a
+    /// cut-over from a failure. See `await_reconfiguration_stage`.
+    target: ReconfigurationTarget,
 }
 
 #[derive(Debug)]
@@ -1208,7 +1239,6 @@ pub struct Config {
     pub controller_config: ControllerConfig,
     pub controller_envd_epoch: NonZeroI64,
     pub storage: Box<dyn mz_catalog::durable::DurableCatalogState>,
-    pub audit_logs_iterator: AuditLogIterator,
     pub timestamp_oracle_url: Option<SensitiveUrl>,
     pub unsafe_mode: bool,
     pub all_features: bool,
@@ -2348,7 +2378,6 @@ impl Coordinator {
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
         cached_global_exprs: BTreeMap<GlobalId, GlobalExpressions>,
         uncached_local_exprs: BTreeMap<GlobalId, LocalExpressions>,
-        audit_logs_iterator: AuditLogIterator,
     ) -> Result<(), AdapterError> {
         let bootstrap_start = Instant::now();
         info!("startup: coordinator init: bootstrap beginning");
@@ -2413,7 +2442,7 @@ impl Coordinator {
         if enforce_credit_limit_at_bootstrap {
             self.validate_resource_limit_numeric(
                 Numeric::zero(),
-                self.current_credit_consumption_rate(),
+                self.current_credit_consumption_rate(None),
                 |system_vars| {
                     self.license_key
                         .max_credit_consumption_rate()
@@ -2623,11 +2652,16 @@ impl Coordinator {
                 }
                 CatalogItem::View(_) => (),
                 CatalogItem::MaterializedView(mview) => {
+                    // Each version receives a read policy when it is created. Bootstrap
+                    // must restore every policy because the oldest version owns the shared
+                    // Persist shard and capability changes reach it through each newer
+                    // version's primary link. A `NoPolicy` version would block that
+                    // propagation and pin compaction.
                     policies_to_set
                         .entry(policy.expect("materialized views have a compaction window"))
                         .or_insert_with(Default::default)
                         .storage_ids
-                        .insert(mview.global_id_writes());
+                        .extend(mview.global_ids());
 
                     let mut df_desc = self
                         .catalog()
@@ -2821,32 +2855,12 @@ impl Coordinator {
                 "coordinator init: bootstrap: stashing builtin table updates while in read-only mode"
             );
 
-            // TODO(jkosh44) Optimize deserializing the audit log in read-only mode.
-            let audit_join_start = Instant::now();
-            info!("startup: coordinator init: bootstrap: audit log deserialization beginning");
-            let audit_log_updates: Vec<_> = audit_logs_iterator
-                .map(|(audit_log, ts)| StateUpdate {
-                    kind: StateUpdateKind::AuditLog(audit_log),
-                    ts,
-                    diff: StateDiff::Addition,
-                })
-                .collect();
-            let audit_log_builtin_table_updates = self
-                .catalog()
-                .state()
-                .generate_builtin_table_updates(audit_log_updates);
-            builtin_table_updates.extend(audit_log_builtin_table_updates);
-            info!(
-                "startup: coordinator init: bootstrap: audit log deserialization complete in {:?}",
-                audit_join_start.elapsed()
-            );
             self.buffered_builtin_table_updates
                 .as_mut()
                 .expect("in read-only mode")
                 .append(&mut builtin_table_updates);
         } else {
-            self.bootstrap_tables(&entries, builtin_table_updates, audit_logs_iterator)
-                .await;
+            self.bootstrap_tables(&entries, builtin_table_updates).await;
         };
         info!(
             "startup: coordinator init: bootstrap: generate builtin updates complete in {:?}",
@@ -2965,7 +2979,6 @@ impl Coordinator {
         &mut self,
         entries: &[CatalogEntry],
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
-        audit_logs_iterator: AuditLogIterator,
     ) {
         /// Smaller helper struct of metadata for bootstrapping tables.
         struct TableMetadata<'a> {
@@ -3011,38 +3024,30 @@ impl Coordinator {
         debug!("coordinator init: resetting system tables");
         let read_ts = self.get_local_read_ts().await;
 
-        // Filter out the 'mz_storage_usage_by_shard' table since we need to retain that info for
-        // billing purposes.
+        // Filter out tables whose contents must survive restarts:
+        // 'mz_storage_usage_by_shard' for billing, and
+        // 'mz_object_arrangement_size_history', which accumulates history that
+        // is pruned by its own retention period instead.
         let mz_storage_usage_by_shard_schema: SchemaSpecifier = self
             .catalog()
             .resolve_system_schema(MZ_STORAGE_USAGE_BY_SHARD.schema)
             .into();
-        let is_storage_usage_by_shard = |meta: &TableMetadata| -> bool {
-            meta.name.item == MZ_STORAGE_USAGE_BY_SHARD.name
-                && meta.name.qualifiers.schema_spec == mz_storage_usage_by_shard_schema
+        let arrangement_size_history_schema: SchemaSpecifier = self
+            .catalog()
+            .resolve_system_schema(MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY.schema)
+            .into();
+        let is_retained_across_restarts = |meta: &TableMetadata| -> bool {
+            (meta.name.item == MZ_STORAGE_USAGE_BY_SHARD.name
+                && meta.name.qualifiers.schema_spec == mz_storage_usage_by_shard_schema)
+                || (meta.name.item == MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY.name
+                    && meta.name.qualifiers.schema_spec == arrangement_size_history_schema)
         };
 
         let mut retraction_tasks = Vec::new();
-        let mut system_tables: Vec<_> = table_metas
+        let system_tables: Vec<_> = table_metas
             .iter()
-            .filter(|meta| meta.id.is_system() && !is_storage_usage_by_shard(meta))
+            .filter(|meta| meta.id.is_system() && !is_retained_across_restarts(meta))
             .collect();
-
-        // Special case audit events because it's append only.
-        let (audit_events_idx, _) = system_tables
-            .iter()
-            .find_position(|table| {
-                table.id == self.catalog().resolve_builtin_table(&MZ_AUDIT_EVENTS)
-            })
-            .expect("mz_audit_events must exist");
-        let audit_events = system_tables.remove(audit_events_idx);
-        let audit_log_task = self.bootstrap_audit_log_table(
-            audit_events.id,
-            audit_events.name,
-            audit_events.table,
-            audit_logs_iterator,
-            read_ts,
-        );
 
         for system_table in system_tables {
             let table_id = system_table.id;
@@ -3090,19 +3095,6 @@ impl Coordinator {
             builtin_table_updates.push(retractions);
         }
 
-        let audit_join_start = Instant::now();
-        info!("startup: coordinator init: bootstrap: join audit log deserialization beginning");
-        let audit_log_updates = audit_log_task.await;
-        let audit_log_builtin_table_updates = self
-            .catalog()
-            .state()
-            .generate_builtin_table_updates(audit_log_updates);
-        builtin_table_updates.extend(audit_log_builtin_table_updates);
-        info!(
-            "startup: coordinator init: bootstrap: join audit log deserialization complete in {:?}",
-            audit_join_start.elapsed()
-        );
-
         // Now that the snapshots are complete, the appends must also be complete.
         table_fence_rx
             .await
@@ -3118,55 +3110,6 @@ impl Coordinator {
         if let Some(write_ts) = write_ts {
             self.apply_local_write(write_ts).await;
         }
-    }
-
-    /// Prepare updates to the audit log table. The audit log table append only and very large, so
-    /// we only need to find the events present in `audit_logs_iterator` but not in the audit log
-    /// table.
-    #[instrument]
-    fn bootstrap_audit_log_table<'a>(
-        &self,
-        table_id: CatalogItemId,
-        name: &'a QualifiedItemName,
-        table: &'a Table,
-        audit_logs_iterator: AuditLogIterator,
-        read_ts: Timestamp,
-    ) -> JoinHandle<Vec<StateUpdate>> {
-        let full_name = self.catalog().resolve_full_name(name, None);
-        debug!("coordinator init: reconciling audit log: {full_name} ({table_id})");
-        let current_contents_fut = self
-            .controller
-            .storage_collections
-            .snapshot(table.global_id_writes(), read_ts);
-        spawn(|| format!("snapshot-audit-log-{table_id}"), async move {
-            let current_contents = current_contents_fut
-                .await
-                .unwrap_or_terminate("cannot fail to fetch snapshot");
-            let contents_len = current_contents.len();
-            debug!("coordinator init: audit log table ({table_id}) size {contents_len}");
-
-            // Fetch the largest audit log event ID that has been written to the table.
-            let max_table_id = current_contents
-                .into_iter()
-                .filter(|(_, diff)| *diff == 1)
-                .map(|(row, _diff)| row.unpack_first().unwrap_uint64())
-                .sorted()
-                .rev()
-                .next();
-
-            // Filter audit log catalog updates to those that are not present in the table.
-            audit_logs_iterator
-                .take_while(|(audit_log, _)| match max_table_id {
-                    Some(id) => audit_log.event.sortable_id() > id,
-                    None => true,
-                })
-                .map(|(audit_log, ts)| StateUpdate {
-                    kind: StateUpdateKind::AuditLog(audit_log),
-                    ts,
-                    diff: StateDiff::Addition,
-                })
-                .collect::<Vec<_>>()
-        })
     }
 
     /// Initializes all storage collections required by catalog objects in the storage controller.
@@ -3312,9 +3255,21 @@ impl Coordinator {
                     };
                 }
                 CatalogItem::MaterializedView(mv) => {
+                    // Applying a replacement preserves the ownership link established when the
+                    // replacement was created. The oldest collection owns the shard, each applied
+                    // replacement points to its predecessor, and a pending replacement starts by
+                    // pointing to its target's latest collection.
+                    //
+                    // NOTE: Versioned tables chain in the opposite direction because their latest
+                    // version owns the shard. Each chain matches its runtime replacement path.
+                    let mut primary = mv
+                        .replacement_target
+                        .map(|target_id| catalog.get_entry(&target_id).latest_global_id());
                     let collection_descs = mv.collection_descs().map(|(gid, _version, desc)| {
-                        let collection_desc =
+                        let mut collection_desc =
                             CollectionDescription::for_other(desc, mv.initial_as_of.clone());
+                        collection_desc.primary = primary;
+                        primary = Some(gid);
                         (gid, collection_desc)
                     });
 
@@ -4586,9 +4541,12 @@ impl Coordinator {
         });
     }
 
-    fn current_credit_consumption_rate(&self) -> Numeric {
+    /// The environment's current credit consumption rate, summed over all user
+    /// cluster replicas except those of `exclude_cluster`.
+    fn current_credit_consumption_rate(&self, exclude_cluster: Option<ClusterId>) -> Numeric {
         self.catalog()
             .user_cluster_replicas()
+            .filter(|replica| Some(replica.cluster_id) != exclude_cluster)
             .filter_map(|replica| match &replica.config.location {
                 ReplicaLocation::Managed(location) => Some(location.size_for_billing()),
                 ReplicaLocation::Unmanaged(_) => None,
@@ -4710,7 +4668,6 @@ pub fn serve(
         controller_config,
         controller_envd_epoch,
         mut storage,
-        audit_logs_iterator,
         timestamp_oracle_url,
         unsafe_mode,
         all_features,
@@ -4967,10 +4924,15 @@ pub fn serve(
         let clusters_caught_up_check =
             clusters_caught_up_trigger.map(|trigger| {
                 let mut exclude_collections: BTreeSet<GlobalId> =
-                    new_builtin_collections.into_iter().collect();
+                    new_builtin_collections.iter().copied().collect();
 
-                // Migrated MVs can't make progress in read-only mode. Exclude them and all their
-                // transitive dependents.
+                // A collection that can't advance its write frontier in read-only mode
+                // stalls its transitive dependents too, so exclude those from the caught-up
+                // check as well. That's migrated MVs (their dataflows don't write in
+                // read-only mode) and new builtin MVs (their fresh shard has no writer until
+                // this deployment promotes). An excluded dependent may still be hydrating
+                // right after promotion, a brief blip we accept because these MVs are small
+                // and get a writer at cut-over.
                 //
                 // TODO: Consider sending `allow_writes` for the dataflows of migrated MVs, which
                 //       would allow them to make progress even in read-only mode. This doesn't
@@ -4978,12 +4940,21 @@ pub fn serve(
                 //       than v26.17, since before that version the catalog shard's frontier wasn't
                 //       kept up-to-date with the current time. So this workaround has to remain in
                 //       place upgrades from a version less than v26.17 are no longer supported.
+                let new_builtin_mvs = new_builtin_collections
+                    .iter()
+                    .map(|global_id| {
+                        catalog
+                            .state()
+                            .try_get_entry_by_global_id(global_id)
+                            .expect("new builtin collections have catalog entries")
+                    })
+                    .filter(|entry| entry.is_materialized_view())
+                    .map(|entry| entry.id());
                 let mut todo: Vec<_> = migrated_storage_collections_0dt
                     .iter()
-                    .filter(|id| {
-                        catalog.state().get_entry(id).is_materialized_view()
-                    })
                     .copied()
+                    .filter(|id| catalog.state().get_entry(id).is_materialized_view())
+                    .chain(new_builtin_mvs)
                     .collect();
                 while let Some(item_id) = todo.pop() {
                     let entry = catalog.state().get_entry(&item_id);
@@ -5136,7 +5107,6 @@ pub fn serve(
                             builtin_table_updates,
                             cached_global_exprs,
                             uncached_local_exprs,
-                            audit_logs_iterator,
                         )
                         .await?;
                     coord

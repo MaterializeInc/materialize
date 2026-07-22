@@ -53,11 +53,11 @@ use mz_sql_parser::ast::{
     AlterSystemResetStatement, AlterSystemSetStatement, AlterTableAddColumnStatement, AvroSchema,
     AvroSchemaOption, AvroSchemaOptionName, ClusterAlterOption, ClusterAlterOptionName,
     ClusterAlterOptionValue, ClusterAlterUntilReadyOption, ClusterAlterUntilReadyOptionName,
-    ClusterFeature, ClusterFeatureName, ClusterOption, ClusterOptionName,
-    ClusterScheduleOptionValue, ColumnDef, ColumnOption, CommentObjectType, CommentStatement,
-    ConnectionOption, ConnectionOptionName, CreateClusterReplicaStatement, CreateClusterStatement,
-    CreateConnectionOption, CreateConnectionOptionName, CreateConnectionStatement,
-    CreateConnectionType, CreateDatabaseStatement, CreateIndexStatement,
+    ClusterAutoScalingStrategyOptionValue, ClusterFeature, ClusterFeatureName, ClusterOption,
+    ClusterOptionName, ClusterScheduleOptionValue, ColumnDef, ColumnOption, CommentObjectType,
+    CommentStatement, ConnectionOption, ConnectionOptionName, CreateClusterReplicaStatement,
+    CreateClusterStatement, CreateConnectionOption, CreateConnectionOptionName,
+    CreateConnectionStatement, CreateConnectionType, CreateDatabaseStatement, CreateIndexStatement,
     CreateMaterializedViewStatement, CreateNetworkPolicyStatement, CreateRoleStatement,
     CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection, CreateSinkOption,
     CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection, CreateSourceOption,
@@ -73,14 +73,14 @@ use mz_sql_parser::ast::{
     LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewOption,
     MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, NetworkPolicyOption,
     NetworkPolicyOptionName, NetworkPolicyRuleDefinition, NetworkPolicyRuleOption,
-    NetworkPolicyRuleOptionName, PgConfigOption, PgConfigOptionName, ProtobufSchema,
-    QualifiedReplica, RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue,
-    ReplicaDefinition, ReplicaOption, ReplicaOptionName, RoleAttribute, SetRoleVar,
-    SourceErrorPolicy, SourceIncludeMetadata, SqlServerConfigOption, SqlServerConfigOptionName,
-    Statement, TableConstraint, TableFromSourceColumns, TableFromSourceOption,
-    TableFromSourceOptionName, TableOption, TableOptionName, UnresolvedDatabaseName,
-    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
-    WithOptionValue,
+    NetworkPolicyRuleOptionName, OnHydrationOptionValue, PgConfigOption, PgConfigOptionName,
+    ProtobufSchema, QualifiedReplica, RefreshAtOptionValue, RefreshEveryOptionValue,
+    RefreshOptionValue, ReplicaDefinition, ReplicaOption, ReplicaOptionName, RoleAttribute,
+    SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata, SqlServerConfigOption,
+    SqlServerConfigOptionName, Statement, TableConstraint, TableFromSourceColumns,
+    TableFromSourceOption, TableFromSourceOptionName, TableOption, TableOptionName,
+    UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
+    ViewDefinition, WithOptionValue,
 };
 use mz_sql_parser::ident;
 use mz_sql_parser::parser::StatementParseResult;
@@ -138,7 +138,7 @@ use crate::names::{
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
 use crate::plan::query::{
-    ExprContext, QueryLifetime, plan_expr, scalar_type_from_catalog, scalar_type_from_sql,
+    ExprContext, QueryLifetime, TypeResolutionBudget, plan_expr, scalar_type_from_sql,
 };
 use crate::plan::scope::Scope;
 use crate::plan::statement::ddl::connection::{INALTERABLE_OPTIONS, MUTUALLY_EXCLUSIVE_SETS};
@@ -152,22 +152,23 @@ use crate::plan::{
     AlterOptionParameter, AlterRetainHistoryPlan, AlterRolePlan, AlterSchemaRenamePlan,
     AlterSchemaSwapPlan, AlterSecretPlan, AlterSetClusterPlan, AlterSinkPlan,
     AlterSourceTimestampIntervalPlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
-    AlterSystemSetPlan, AlterTablePlan, ClusterSchedule, CommentPlan, ComputeReplicaConfig,
-    ComputeReplicaIntrospectionConfig, ConnectionDetails, CreateClusterManagedPlan,
-    CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
-    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateNetworkPolicyPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
-    DropObjectsPlan, DropOwnedPlan, HirRelationExpr, Index, MaterializedView, NetworkPolicyRule,
-    NetworkPolicyRuleAction, NetworkPolicyRuleDirection, Plan, PlanClusterOption, PlanNotice,
-    PolicyAddress, QueryContext, ReplicaConfig, Secret, Sink, Source, Table, TableDataSource, Type,
-    VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders,
-    WebhookValidation, literal, plan_utils, query, transform_ast,
+    AlterSystemSetPlan, AlterTablePlan, AutoScalingStrategy, ClusterSchedule, CommentPlan,
+    ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, ConnectionDetails,
+    CreateClusterManagedPlan, CreateClusterPlan, CreateClusterReplicaPlan,
+    CreateClusterUnmanagedPlan, CreateClusterVariant, CreateConnectionPlan, CreateDatabasePlan,
+    CreateIndexPlan, CreateMaterializedViewPlan, CreateNetworkPolicyPlan, CreateRolePlan,
+    CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
+    CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan,
+    HirRelationExpr, Index, MaterializedView, NetworkPolicyRule, NetworkPolicyRuleAction,
+    NetworkPolicyRuleDirection, OnHydration, Plan, PlanClusterOption, PlanNotice, PolicyAddress,
+    QueryContext, ReplicaConfig, Secret, Sink, Source, Table, TableDataSource, Type, VariableValue,
+    View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders, WebhookValidation, literal,
+    plan_utils, query, transform_ast,
 };
 use crate::session::vars::{
-    self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_COLLECTION_PARTITION_BY,
-    ENABLE_CREATE_TABLE_FROM_SOURCE, ENABLE_KAFKA_SINK_HEADERS, ENABLE_REFRESH_EVERY_MVS,
-    ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS, VarInput,
+    self, ENABLE_AUTO_SCALING_STRATEGY, ENABLE_CLUSTER_SCHEDULE_REFRESH,
+    ENABLE_COLLECTION_PARTITION_BY, ENABLE_CREATE_TABLE_FROM_SOURCE, ENABLE_KAFKA_SINK_HEADERS,
+    ENABLE_REFRESH_EVERY_MVS, ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS, VarInput,
 };
 use crate::{names, parse};
 
@@ -1205,7 +1206,7 @@ fn plan_kafka_source_connection(
     let KafkaSourceConfigOptionExtracted {
         group_id_prefix,
         topic,
-        mut topic_metadata_refresh_interval,
+        topic_metadata_refresh_interval,
         start_timestamp: _, // purified into `start_offset`
         start_offset,
         seen: _,
@@ -1226,9 +1227,10 @@ fn plan_kafka_source_connection(
         // would result in a runtime error for the source.
         sql_bail!("TOPIC METADATA REFRESH INTERVAL cannot be greater than 1 hour");
     }
-    if topic_metadata_refresh_interval < MIN_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL {
-        // We enforce a minimum of 1 second refresh interval to prevent overloading the topic
-        topic_metadata_refresh_interval = MIN_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL;
+    if topic_metadata_refresh_interval < Duration::from_secs(1) {
+        // This is a librdkafka-enforced restriction that, if violated,
+        // would result in a runtime error for the source.
+        sql_bail!("TOPIC METADATA REFRESH INTERVAL must be at least 1 second");
     }
     let metadata_columns = include_metadata
         .into_iter()
@@ -1650,16 +1652,18 @@ pub fn plan_create_subsource(
         let details =
             SourceExportStatementDetails::from_proto(details).map_err(|e| sql_err!("{}", e))?;
         let details = match details {
-            SourceExportStatementDetails::Postgres { table } => {
-                SourceExportDetails::Postgres(PostgresSourceExportDetails {
-                    column_casts: crate::pure::postgres::generate_column_casts(
-                        scx,
-                        &table,
-                        &text_columns,
-                    )?,
-                    table,
-                })
-            }
+            SourceExportStatementDetails::Postgres {
+                table,
+                cast_oid_full_range,
+            } => SourceExportDetails::Postgres(PostgresSourceExportDetails {
+                column_casts: crate::pure::postgres::generate_column_casts(
+                    scx,
+                    &table,
+                    &text_columns,
+                    cast_oid_full_range,
+                )?,
+                table,
+            }),
             SourceExportStatementDetails::MySql {
                 table,
                 initial_gtid_set,
@@ -1809,16 +1813,18 @@ pub fn plan_create_table_from_source(
     }
 
     let details = match details {
-        SourceExportStatementDetails::Postgres { table } => {
-            SourceExportDetails::Postgres(PostgresSourceExportDetails {
-                column_casts: crate::pure::postgres::generate_column_casts(
-                    scx,
-                    &table,
-                    &text_columns,
-                )?,
-                table,
-            })
-        }
+        SourceExportStatementDetails::Postgres {
+            table,
+            cast_oid_full_range,
+        } => SourceExportDetails::Postgres(PostgresSourceExportDetails {
+            column_casts: crate::pure::postgres::generate_column_casts(
+                scx,
+                &table,
+                &text_columns,
+                cast_oid_full_range,
+            )?,
+            table,
+        }),
         SourceExportStatementDetails::MySql {
             table,
             initial_gtid_set,
@@ -2296,7 +2302,17 @@ fn source_sink_cluster_config<'a, 'ctx>(
 
 generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool, Default(true)));
 
-generate_extracted_config!(GlueAvroOption, (SchemaName, String));
+// `SchemaName` is source-only (a source reads one value schema by name). The
+// `Key`/`Value`-prefixed options are sink-only. Which options are valid in
+// which context is enforced by the source purifier and the sink planner.
+generate_extracted_config!(
+    GlueAvroOption,
+    (SchemaName, String),
+    (KeySchemaName, String),
+    (ValueSchemaName, String),
+    (KeyCompatibilityLevel, String),
+    (ValueCompatibilityLevel, String)
+);
 
 #[derive(Debug)]
 pub struct Schema {
@@ -3753,8 +3769,17 @@ fn iceberg_sink_builder(
     let Some(namespace) = namespace else {
         sql_bail!("Iceberg sink must specify NAMESPACE");
     };
-    if commit_interval.is_none() {
-        sql_bail!("Iceberg sink must specify COMMIT INTERVAL");
+    match commit_interval {
+        None => sql_bail!("Iceberg sink must specify COMMIT INTERVAL"),
+        // The sink truncates the interval to whole milliseconds, and a
+        // truncated interval of zero would make it mint zero-width batches in
+        // a busy loop, never committing any data. Require a full second so
+        // truncation is irrelevant, matching the TOPIC METADATA REFRESH
+        // INTERVAL minimum.
+        Some(interval) if interval < Duration::from_secs(1) => {
+            sql_bail!("COMMIT INTERVAL must be at least 1 second")
+        }
+        Some(_) => {}
     }
 
     Ok(StorageSinkConnection::Iceberg(IcebergSinkConnection {
@@ -3805,7 +3830,7 @@ fn kafka_sink_builder(
         transactional_id_prefix,
         legacy_ids,
         topic_config,
-        mut topic_metadata_refresh_interval,
+        topic_metadata_refresh_interval,
         topic_partition_count,
         topic_replication_factor,
         seen: _,
@@ -3836,7 +3861,7 @@ fn kafka_sink_builder(
     } else if topic_metadata_refresh_interval < MIN_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL {
         // We enforce a minimum of 1 second here to prevent excessive refreshes, and ensure that
         // tokio::time::interval receives a valid (positive) duration.
-        topic_metadata_refresh_interval = MIN_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL;
+        sql_bail!("TOPIC METADATA REFRESH INTERVAL must be at least 1 second");
     }
 
     let assert_positive = |val: Option<i32>, name: &str| {
@@ -3959,8 +3984,128 @@ fn kafka_sink_builder(
                 } else {
                     options.value_compatibility_level
                 },
+                // Confluent always derives the subject from the topic.
+                schema_name: None,
                 wire_format: WireFormat::Confluent {
                     registry: Some(csr_connection),
+                },
+            })
+        }
+        Format::Avro(AvroSchema::Glue {
+            connection,
+            with_options,
+            seed,
+        }) => {
+            if seed.is_some() {
+                sql_bail!("SEED option does not make sense with sinks");
+            }
+
+            let extracted: GlueAvroOptionExtracted = with_options.try_into()?;
+            let GlueAvroOptionExtracted {
+                schema_name,
+                key_schema_name,
+                value_schema_name,
+                key_compatibility_level,
+                value_compatibility_level,
+                seen: _,
+            } = extracted;
+
+            // The singular `SCHEMA NAME` is source-only: a source reads one
+            // value schema by name, but a sink registers separate key and value
+            // schemas that must not share a name. Steer users to the per-side
+            // options instead.
+            if schema_name.is_some() {
+                sql_bail!(
+                    "SCHEMA NAME is not supported for AWS Glue Schema Registry sinks, \
+                     use KEY SCHEMA NAME and VALUE SCHEMA NAME instead"
+                );
+            }
+
+            // The `KEY`-prefixed options only apply to the key schema, so they
+            // are meaningless without a key. Mirror the CSR clause, which
+            // rejects key-side options without a corresponding KEY field rather
+            // than silently ignoring them. This is checked here rather than
+            // per-side because the key branch runs only when a key exists.
+            if key_desc_and_indices.is_none()
+                && (key_schema_name.is_some() || key_compatibility_level.is_some())
+            {
+                sql_bail!(
+                    "KEY SCHEMA NAME and KEY COMPATIBILITY LEVEL require a corresponding KEY field"
+                );
+            }
+
+            let item = scx.get_item_by_resolved_name(&connection)?;
+            let glue_connection = match item.connection()? {
+                Connection::GlueSchemaRegistry(_) => item.id(),
+                _ => {
+                    sql_bail!(
+                        "{} is not an AWS Glue Schema Registry connection",
+                        scx.catalog
+                            .resolve_full_name(item.name())
+                            .to_string()
+                            .quoted()
+                    )
+                }
+            };
+
+            // Parse the compatibility level through the CSR enum, which rejects
+            // Glue-only levels like DISABLED. `None` leaves the level unset, so
+            // a newly created schema defaults to Glue's `BACKWARD`.
+            let compatibility_level = {
+                let raw = if is_key {
+                    key_compatibility_level
+                } else {
+                    value_compatibility_level
+                };
+                raw.map(|s| {
+                    mz_ccsr::CompatibilityLevel::try_from(s.to_uppercase().as_str())
+                        .map_err(PlanError::Unstructured)
+                })
+                .transpose()?
+            };
+
+            // The schema name defaults to the topic-derived subject and can be
+            // overridden per side. The topic-derived fallback is applied in the
+            // storage layer, which knows the resolved topic name.
+            let schema_name = if is_key {
+                key_schema_name
+            } else {
+                value_schema_name
+            };
+
+            // Unlike the CSR clause, the Glue clause carries no fullname or doc
+            // options, so the schema is generated with defaults.
+            let schema = if is_key {
+                AvroSchemaGenerator::new(
+                    desc.clone(),
+                    false,
+                    Default::default(),
+                    "row",
+                    false,
+                    Some(sink_from),
+                    false,
+                )?
+                .schema()
+                .to_string()
+            } else {
+                AvroSchemaGenerator::new(
+                    desc.clone(),
+                    matches!(envelope, SinkEnvelope::Debezium),
+                    Default::default(),
+                    "envelope",
+                    false,
+                    Some(sink_from),
+                    true,
+                )?
+                .schema()
+                .to_string()
+            };
+            Ok(KafkaSinkFormatType::Avro {
+                schema,
+                compatibility_level,
+                schema_name,
+                wire_format: WireFormat::Glue {
+                    registry: Some(glue_connection),
                 },
             })
         }
@@ -4249,11 +4394,19 @@ pub fn plan_create_type(
     let create_sql = normalize::create_statement(scx, Statement::CreateType(stmt.clone()))?;
     let CreateTypeStatement { name, as_type, .. } = stmt;
 
+    // The type being created does not yet exist in the catalog, so its children
+    // (list element, map value, record fields) are validated directly. They all
+    // draw from one shared budget that also accounts for the root, so creation
+    // rejects exactly the types a later direct `scalar_type_from_catalog` call
+    // would reject. In particular a wide record whose fields are individually
+    // valid but collectively enormous is rejected here rather than materializing
+    // an unbounded type tree during sequencing.
     fn validate_data_type(
         scx: &StatementContext,
         data_type: ResolvedDataType,
         as_type: &str,
         key: &str,
+        budget: &mut TypeResolutionBudget,
     ) -> Result<(CatalogItemId, Vec<i64>), PlanError> {
         let (id, modifiers) = match data_type {
             ResolvedDataType::Named { id, modifiers, .. } => (id, modifiers),
@@ -4281,14 +4434,16 @@ pub fn plan_create_type(
                 bail_unsupported!("embedding char type in a list or map")
             }
             _ => {
-                // Validate that the modifiers are actually valid.
-                scalar_type_from_catalog(scx.catalog, id, &modifiers)?;
+                // Validate that the modifiers are actually valid, and that the
+                // referenced type resolves within the shared budget.
+                budget.resolve_child(scx.catalog, id, &modifiers)?;
 
                 Ok((id, modifiers))
             }
         }
     }
 
+    let mut budget = TypeResolutionBudget::for_root(scx.catalog);
     let inner = match as_type {
         CreateTypeAs::List { options } => {
             let CreateTypeListOptionExtracted {
@@ -4297,7 +4452,8 @@ pub fn plan_create_type(
             } = CreateTypeListOptionExtracted::try_from(options)?;
             let element_type =
                 element_type.ok_or_else(|| sql_err!("ELEMENT TYPE option is required"))?;
-            let (id, modifiers) = validate_data_type(scx, element_type, "LIST ", "ELEMENT TYPE")?;
+            let (id, modifiers) =
+                validate_data_type(scx, element_type, "LIST ", "ELEMENT TYPE", &mut budget)?;
             CatalogType::List {
                 element_reference: id,
                 element_modifiers: modifiers,
@@ -4311,9 +4467,18 @@ pub fn plan_create_type(
             } = CreateTypeMapOptionExtracted::try_from(options)?;
             let key_type = key_type.ok_or_else(|| sql_err!("KEY TYPE option is required"))?;
             let value_type = value_type.ok_or_else(|| sql_err!("VALUE TYPE option is required"))?;
-            let (key_id, key_modifiers) = validate_data_type(scx, key_type, "MAP ", "KEY TYPE")?;
+            // A map's resolved type ignores the key (map keys are always text at
+            // runtime), so it is not part of the root's materialized tree and is
+            // validated under its own budget.
+            let (key_id, key_modifiers) = validate_data_type(
+                scx,
+                key_type,
+                "MAP ",
+                "KEY TYPE",
+                &mut TypeResolutionBudget::for_root(scx.catalog),
+            )?;
             let (value_id, value_modifiers) =
-                validate_data_type(scx, value_type, "MAP ", "VALUE TYPE")?;
+                validate_data_type(scx, value_type, "MAP ", "VALUE TYPE", &mut budget)?;
             CatalogType::Map {
                 key_reference: key_id,
                 key_modifiers,
@@ -4326,7 +4491,7 @@ pub fn plan_create_type(
             for column_def in column_defs {
                 let data_type = column_def.data_type;
                 let key = ident(column_def.name.clone());
-                let (id, modifiers) = validate_data_type(scx, data_type, "", &key)?;
+                let (id, modifiers) = validate_data_type(scx, data_type, "", &key, &mut budget)?;
                 fields.push(CatalogRecordField {
                     name: ColumnName::from(key.clone()),
                     type_reference: id,
@@ -4657,6 +4822,7 @@ pub fn describe_create_cluster(
 // to ALTER CLUSTER would always reset the value of that option to the default.
 generate_extracted_config!(
     ClusterOption,
+    (AutoScalingStrategy, ClusterAutoScalingStrategyOptionValue),
     (AvailabilityZones, Vec<String>),
     (Disk, bool),
     (IntrospectionDebugging, bool),
@@ -4753,6 +4919,7 @@ pub fn plan_create_cluster_inner(
     }: CreateClusterStatement<Aug>,
 ) -> Result<CreateClusterPlan, PlanError> {
     let ClusterOptionExtracted {
+        auto_scaling_strategy,
         availability_zones,
         introspection_debugging,
         introspection_interval,
@@ -4853,6 +5020,22 @@ pub fn plan_create_cluster_inner(
             ..Default::default()
         };
 
+        // The gate applies to new DDL only: clusters are stored structurally,
+        // not as SQL, so existing configs survive a flag rollback.
+        let auto_scaling_strategy = match auto_scaling_strategy {
+            Some(value) => {
+                scx.require_feature_flag(&ENABLE_AUTO_SCALING_STRATEGY)?;
+                let strategy = plan_auto_scaling_strategy(value)?;
+                if let Some(strategy) = &strategy {
+                    let schedule_non_manual =
+                        !matches!(schedule, ClusterScheduleOptionValue::Manual);
+                    validate_auto_scaling_strategy(strategy, Some(&size), schedule_non_manual)?;
+                }
+                strategy
+            }
+            None => None,
+        };
+
         let schedule = plan_cluster_schedule(schedule)?;
 
         Ok(CreateClusterPlan {
@@ -4864,6 +5047,7 @@ pub fn plan_create_cluster_inner(
                 compute,
                 optimizer_feature_overrides,
                 schedule,
+                auto_scaling_strategy,
             }),
             workload_class,
         })
@@ -4871,6 +5055,9 @@ pub fn plan_create_cluster_inner(
         let Some(replica_defs) = replicas else {
             sql_bail!("REPLICAS must be specified for unmanaged clusters");
         };
+        if auto_scaling_strategy.is_some() {
+            sql_bail!("AUTO SCALING STRATEGY not supported for unmanaged clusters");
+        }
         if availability_zones.is_some() {
             sql_bail!("AVAILABILITY ZONES not supported for unmanaged clusters");
         }
@@ -4930,8 +5117,12 @@ pub fn unplan_create_cluster(
             compute,
             optimizer_feature_overrides,
             schedule,
+            auto_scaling_strategy,
         }) => {
             let schedule = unplan_cluster_schedule(schedule);
+            let auto_scaling_strategy = auto_scaling_strategy
+                .as_ref()
+                .map(unplan_auto_scaling_strategy);
             let OptimizerFeatureOverrides {
                 enable_reduce_mfp_fusion: _,
                 enable_cardinality_estimates: _,
@@ -4952,6 +5143,7 @@ pub fn unplan_create_cluster(
                 enable_simplify_quantified_comparisons: _,
                 enable_coalesce_case_transform: _,
                 enable_will_distinct_propagation: _,
+                enable_fixed_correlated_cte_lowering: _,
             } = optimizer_feature_overrides;
             // The ones from above that don't occur below are not wired up to cluster features.
             let features_extracted = ClusterFeatureExtracted {
@@ -4995,6 +5187,7 @@ pub fn unplan_create_cluster(
             let options_extracted = ClusterOptionExtracted {
                 // Seen is ignored when unplanning.
                 seen: Default::default(),
+                auto_scaling_strategy,
                 availability_zones,
                 disk: None,
                 introspection_debugging: Some(introspection_debugging),
@@ -5228,6 +5421,85 @@ fn unplan_cluster_schedule(schedule: ClusterSchedule) -> ClusterScheduleOptionVa
                 hydration_time_estimate: Some(interval_value),
             }
         }
+    }
+}
+
+/// Convert a [`ClusterAutoScalingStrategyOptionValue`] into an
+/// [`AutoScalingStrategy`]. An empty block (no sub-policies) maps to `None`
+/// (autoscaling disabled), so an empty `AUTO SCALING STRATEGY = ()` behaves like
+/// a reset. Cross-config invariants are checked separately by
+/// [`validate_auto_scaling_strategy`].
+///
+/// The reverse of [`unplan_auto_scaling_strategy`].
+fn plan_auto_scaling_strategy(
+    value: ClusterAutoScalingStrategyOptionValue,
+) -> Result<Option<AutoScalingStrategy>, PlanError> {
+    let ClusterAutoScalingStrategyOptionValue { on_hydration } = value;
+    let Some(on_hydration) = on_hydration else {
+        // An empty block disables autoscaling.
+        return Ok(None);
+    };
+
+    let hydration_size = String::try_from_value(on_hydration.hydration_size)?;
+
+    let linger_duration = on_hydration
+        .linger_duration
+        .map(Duration::try_from_value)
+        .transpose()?;
+
+    Ok(Some(AutoScalingStrategy {
+        on_hydration: Some(OnHydration {
+            hydration_size,
+            linger_duration,
+        }),
+    }))
+}
+
+/// Validate an [`AutoScalingStrategy`] against the cluster's effective `SIZE`
+/// and `SCHEDULE`. Rejects a burst `HYDRATION SIZE` equal to the cluster `SIZE`
+/// (a no-op burst) and the `AUTO SCALING STRATEGY` + non-MANUAL `SCHEDULE`
+/// combination.
+///
+/// `cluster_size` is `None` only when the effective size is unknown at plan time
+/// (an unmanaged→managed `ALTER` that does not set `SIZE`, which fails later for
+/// the missing size); the size equality check is then skipped.
+fn validate_auto_scaling_strategy(
+    strategy: &AutoScalingStrategy,
+    cluster_size: Option<&str>,
+    schedule_non_manual: bool,
+) -> Result<(), PlanError> {
+    if let (Some(on_hydration), Some(cluster_size)) = (&strategy.on_hydration, cluster_size) {
+        if on_hydration.hydration_size == cluster_size {
+            return Err(PlanError::HydrationSizeEqualsClusterSize {
+                size: cluster_size.to_string(),
+            });
+        }
+    }
+    if schedule_non_manual {
+        sql_bail!("AUTO SCALING STRATEGY cannot be combined with a SCHEDULE other than MANUAL");
+    }
+    Ok(())
+}
+
+/// Convert an [`AutoScalingStrategy`] back into a
+/// [`ClusterAutoScalingStrategyOptionValue`] for `SHOW CREATE CLUSTER` rendering.
+///
+/// The reverse of [`plan_auto_scaling_strategy`].
+fn unplan_auto_scaling_strategy(
+    strategy: &AutoScalingStrategy,
+) -> ClusterAutoScalingStrategyOptionValue {
+    ClusterAutoScalingStrategyOptionValue {
+        on_hydration: strategy
+            .on_hydration
+            .as_ref()
+            .map(|on_hydration| OnHydrationOptionValue {
+                hydration_size: Value::String(on_hydration.hydration_size.clone()),
+                linger_duration: on_hydration.linger_duration.map(|d| {
+                    let interval = Interval::from_duration(&d)
+                        .expect("planning ensured this is convertible back to Interval");
+                    Value::Interval(literal::unplan_interval(&interval))
+                }),
+            }),
     }
 }
 
@@ -6185,6 +6457,7 @@ pub fn plan_alter_cluster(
             with_options,
         } => {
             let ClusterOptionExtracted {
+                auto_scaling_strategy,
                 availability_zones,
                 introspection_debugging,
                 introspection_interval,
@@ -6209,6 +6482,21 @@ pub fn plan_alter_cluster(
                     let alter_strategy_extracted =
                         ClusterAlterOptionExtracted::try_from(with_options)?;
                     alter_strategy = AlterClusterPlanStrategy::try_from(alter_strategy_extracted)?;
+
+                    // Only a replica config shape change has a hydrate-overlap
+                    // to wait on. Reject a `WAIT` on anything else rather than
+                    // accept a wait that silently has nothing to do.
+                    if !matches!(alter_strategy, AlterClusterPlanStrategy::None)
+                        && size.is_none()
+                        && availability_zones.is_none()
+                        && introspection_debugging.is_none()
+                        && introspection_interval.is_none()
+                    {
+                        sql_bail!(
+                            "WAIT can only be used together with a SIZE, AVAILABILITY ZONES, \
+                            or INTROSPECTION change"
+                        );
+                    }
 
                     match alter_strategy {
                         AlterClusterPlanStrategy::None => {}
@@ -6262,10 +6550,42 @@ pub fn plan_alter_cluster(
                             }
                         }
                     }
+
+                    if let Some(value) = auto_scaling_strategy {
+                        scx.require_feature_flag(&ENABLE_AUTO_SCALING_STRATEGY)?;
+                        let strategy = plan_auto_scaling_strategy(value)?;
+                        options.auto_scaling_strategy = AlterOptionParameter::Set(strategy);
+                    }
+
+                    // Validate against the *effective* config (the values this `ALTER`
+                    // sets, else the cluster's current ones), so an invariant cannot be
+                    // broken by changing the other side of its constraint.
+                    let effective_strategy = match &options.auto_scaling_strategy {
+                        AlterOptionParameter::Set(s) => s.clone(),
+                        AlterOptionParameter::Reset => None,
+                        AlterOptionParameter::Unchanged => cluster.auto_scaling_strategy().cloned(),
+                    };
+                    if let Some(effective_strategy) = &effective_strategy {
+                        let effective_size = size.as_deref().or_else(|| cluster.managed_size());
+                        let schedule_non_manual = match &schedule {
+                            Some(s) => !matches!(s, ClusterScheduleOptionValue::Manual),
+                            None => cluster
+                                .schedule()
+                                .is_some_and(|s| !matches!(s, ClusterSchedule::Manual)),
+                        };
+                        validate_auto_scaling_strategy(
+                            effective_strategy,
+                            effective_size,
+                            schedule_non_manual,
+                        )?;
+                    }
                 }
                 false => {
                     if !with_options.is_empty() {
                         sql_bail!("ALTER... WITH not supported for unmanaged clusters");
+                    }
+                    if auto_scaling_strategy.is_some() {
+                        sql_bail!("AUTO SCALING STRATEGY not supported for unmanaged clusters");
                     }
                     if availability_zones.is_some() {
                         sql_bail!("AVAILABILITY ZONES not supported for unmanaged clusters");
@@ -6371,8 +6691,14 @@ pub fn plan_alter_cluster(
                 }
             }
 
+            // RESET (AUTO SCALING STRATEGY) is deliberately not feature-gated:
+            // resetting to the default must stay available after a flag
+            // rollback, or a cluster that picked up a policy while the flag was
+            // on would carry it forever (and the strategy/schedule
+            // compatibility check would then also block SCHEDULE changes).
             for option in reset_options {
                 match option {
+                    AutoScalingStrategy => options.auto_scaling_strategy = Reset,
                     AvailabilityZones => options.availability_zones = Reset,
                     Disk => scx
                         .catalog
@@ -7313,40 +7639,93 @@ pub fn plan_alter_sink(
     // Always ALTER objects from their latest version.
     let item = item.at_version(RelationVersionSelector::Latest);
 
+    // First we reconstruct the original CREATE SINK statement
+    let create_sql = item.create_sql();
+    let stmts = mz_sql_parser::parser::parse_statements(create_sql)?;
+    let [stmt]: [StatementParseResult; 1] = stmts
+        .try_into()
+        .map_err(|_| internal_err!("create SQL of sink was not exactly one statement"))?;
+    let Statement::CreateSink(stmt) = stmt.ast else {
+        bail_internal!("create SQL of sink is not a CREATE SINK statement");
+    };
+    let (mut stmt, _) = crate::names::resolve(scx.catalog, stmt)?;
+
+    // Then apply the requested change to the statement
+    let mut set_options = vec![];
+    let mut reset_options = vec![];
     match action {
         AlterSinkAction::ChangeRelation(new_from) => {
-            // First we reconstruct the original CREATE SINK statement
-            let create_sql = item.create_sql();
-            let stmts = mz_sql_parser::parser::parse_statements(create_sql)?;
-            let [stmt]: [StatementParseResult; 1] = stmts
-                .try_into()
-                .map_err(|_| internal_err!("create SQL of sink was not exactly one statement"))?;
-            let Statement::CreateSink(stmt) = stmt.ast else {
-                bail_internal!("create SQL of sink is not a CREATE SINK statement");
-            };
-
-            // Then resolve and swap the resolved from relation to the new one
-            let (mut stmt, _) = crate::names::resolve(scx.catalog, stmt)?;
             stmt.from = new_from;
-
-            // Finally re-plan the modified create sink statement to verify the new configuration is valid
-            let Plan::CreateSink(mut plan) = plan_sink(scx, stmt)? else {
-                bail_internal!("plan_sink did not produce a CreateSink plan");
-            };
-
-            plan.sink.version += 1;
-
-            Ok(Plan::AlterSink(AlterSinkPlan {
-                item_id: item.id(),
-                global_id: item.global_id(),
-                sink: plan.sink,
-                with_snapshot: plan.with_snapshot,
-                in_cluster: plan.in_cluster,
-            }))
         }
-        AlterSinkAction::SetOptions(_) => bail_unsupported!("ALTER SINK SET options"),
-        AlterSinkAction::ResetOptions(_) => bail_unsupported!("ALTER SINK RESET option"),
+        AlterSinkAction::SetOptions(options) => {
+            for option in &options {
+                match &option.name {
+                    CreateSinkOptionName::CommitInterval => {}
+                    name => bail_unsupported!(format!(
+                        "ALTER SINK ... SET ({})",
+                        name.to_ast_string_simple()
+                    )),
+                }
+            }
+            // Setting every option to its current value would restart the
+            // sink dataflow without changing its behavior, so make it a
+            // no-op instead. The values are compared as ASTs, so spelling
+            // the same value differently (`'60s'` vs `'1m'`) still counts
+            // as a change.
+            //
+            // NOTE: This check races with other `ALTER SINK` statements,
+            // because `ALTER SINK` does not take the DDL lock. Example: the
+            // interval is '1s', we plan `SET (COMMIT INTERVAL = '1s')` as a
+            // no-op, and before we respond a concurrent `ALTER SINK` changes
+            // the interval to '2s'. We then report success even though the
+            // interval is now '2s', not the '1s' we were asked for. An alter
+            // that is not a no-op detects this in sequencing by checking the
+            // sink's version, but a no-op is never re-checked. We accept this
+            // because alters are last-writer-wins anyway.
+            if options.iter().all(|o| stmt.with_options.contains(o)) {
+                return Ok(Plan::AlterNoop(AlterNoopPlan { object_type }));
+            }
+            set_options = options;
+        }
+        AlterSinkAction::ResetOptions(names) => {
+            for name in &names {
+                match name {
+                    CreateSinkOptionName::CommitInterval => {}
+                    name => bail_unsupported!(format!(
+                        "ALTER SINK ... RESET ({})",
+                        name.to_ast_string_simple()
+                    )),
+                }
+                // Resetting an option that is not set would still restart the
+                // sink dataflow, so reject it instead of silently no-oping.
+                if !stmt.with_options.iter().any(|o| o.name == *name) {
+                    sql_bail!(
+                        "cannot RESET {}: option is not set",
+                        name.to_ast_string_simple()
+                    );
+                }
+            }
+            reset_options = names;
+        }
     }
+    crate::plan::apply_sink_option_edits(&mut stmt.with_options, &set_options, &reset_options);
+
+    // Finally re-plan the modified create sink statement to verify the new configuration is valid
+    let Plan::CreateSink(mut plan) = plan_sink(scx, stmt)? else {
+        bail_internal!("plan_sink did not produce a CreateSink plan");
+    };
+
+    plan.sink.version += 1;
+
+    Ok(Plan::AlterSink(AlterSinkPlan {
+        item_id: item.id(),
+        global_id: item.global_id(),
+        sink: plan.sink,
+        with_snapshot: plan.with_snapshot,
+        in_cluster: plan.in_cluster,
+        set_options,
+        reset_options,
+    }))
 }
 
 pub fn describe_alter_source(

@@ -461,19 +461,19 @@ def workflow_endpoints(c: Composition) -> None:
             f"(dex27_other), but activity log shows cluster_name = {observed_cluster!r}"
         )
 
-    # -- read_data_product fails loud when role lacks USAGE on home cluster ---
+    # -- read_data_product falls back to the serving cluster without USAGE ----
     #
-    # `mz_mcp_data_products` filters by SELECT on the object but not by
-    # cluster privileges, so a role may see a data product hosted on a
-    # cluster it can't use. Auto-routing without a USAGE check would
-    # emit `SET CLUSTER = <home>; SELECT ...` and the SELECT would fail
-    # with `permission denied for CLUSTER`. Silently falling back to the
-    # session default would hide the missing privilege as "slow reads
-    # forever," so we instead surface a clear `ClusterPrivilegeMissing`
-    # error and let the caller decide: grant USAGE, or pass an explicit
-    # `cluster` override to read from a cluster they can use.
+    # `mz_mcp_data_products` nulls the advertised cluster unless the role has
+    # USAGE on it (DEX-66), so a role that lacks USAGE on a data product's home
+    # cluster sees a null cluster rather than one it cannot use. A no-override
+    # read then routes to the session's default (serving) cluster instead of
+    # failing: materialized views serve from persist, so the read succeeds with
+    # correct results, just without index benefit. An explicit `cluster`
+    # override still lets the caller target a specific cluster.
 
-    with c.test_case("agent_read_data_product_fails_when_lacking_cluster_usage"):
+    with c.test_case(
+        "agent_read_data_product_falls_back_to_serving_cluster_without_usage"
+    ):
         # Provision a "compute" cluster that hosts the MV's dataflow, and
         # a "serving" cluster the HTTP user has USAGE on. Grant SELECT on
         # the MV but withhold USAGE on the compute cluster.
@@ -511,8 +511,9 @@ def workflow_endpoints(c: Composition) -> None:
             ),
         )
 
-        # No-override read: must fail with ClusterPrivilegeMissing and an
-        # actionable message naming the missing cluster.
+        # No-override read: the advertised cluster is null (the role lacks
+        # USAGE on the home cluster), so the read runs on the session's serving
+        # cluster and succeeds.
         r = post_mcp(
             c,
             "agent",
@@ -530,20 +531,14 @@ def workflow_endpoints(c: Composition) -> None:
         )
         assert r.status_code == 200, f"unexpected status: {r.status_code} {r.text}"
         body = r.json()
-        err = body.get("error")
-        assert err is not None, (
-            "no-override read should fail loud when the role lacks USAGE on "
-            f"the home cluster, but got: {body}"
+        assert "error" not in body, (
+            "no-override read should fall back to the serving cluster when the "
+            f"role lacks USAGE on the home cluster, but got: {body}"
         )
-        assert (
-            err["data"]["error_type"] == "ClusterPrivilegeMissing"
-        ), f"unexpected error_type: {err}"
-        assert (
-            "restricted_compute" in err["message"]
-        ), f"error message should name the missing cluster: {err['message']!r}"
+        rows = json.loads(body["result"]["content"][0]["text"])
+        assert rows == [["9", "override"]], f"unexpected no-override rows: {rows}"
 
-        # With an explicit `cluster` override to a usable cluster, the
-        # read succeeds. Confirms the documented recovery path.
+        # An explicit `cluster` override to a usable cluster also works.
         r = post_mcp(
             c,
             "agent",
@@ -593,6 +588,131 @@ def workflow_endpoints(c: Composition) -> None:
         # Tidy up the role default so it does not leak into later cases.
         c.sql(
             "ALTER ROLE anonymous_http_user RESET cluster",
+            user="mz_system",
+            port=6877,
+            print_statement=False,
+        )
+
+    # -- QAR-136: developer query pins reads to a named cluster replica -------
+    #
+    # On a cluster with more than one replica, introspection reads (including
+    # EXPLAIN ANALYZE) must target a specific replica. The developer `query`
+    # tool accepts an optional `cluster_replica` for this. Verify the three
+    # observable behaviors: untargeted EXPLAIN ANALYZE fails and names the
+    # remedy, a pinned one succeeds, and a nonexistent replica surfaces a
+    # clean ExecutionError.
+
+    with c.test_case("developer_query_cluster_replica_pinning"):
+        c.sql(
+            """
+            DROP CLUSTER IF EXISTS qar136_two_replicas CASCADE;
+            CREATE CLUSTER qar136_two_replicas REPLICAS (
+                r1 (SIZE 'scale=1,workers=1'),
+                r2 (SIZE 'scale=1,workers=1')
+            );
+            GRANT USAGE ON CLUSTER qar136_two_replicas TO anonymous_http_user;
+            """,
+            user="mz_system",
+            port=6877,
+            print_statement=False,
+        )
+
+        def qar136_query(req_id: int, arguments: dict) -> dict:
+            r = post_mcp(
+                c,
+                "developer",
+                jsonrpc(
+                    "tools/call",
+                    {"name": "query", "arguments": arguments},
+                    req_id=req_id,
+                ),
+            )
+            assert r.status_code == 200, f"unexpected status: {r.status_code} {r.text}"
+            return r.json()
+
+        # Without a replica pin, the introspection read cannot choose among
+        # the two replicas. The error should point at the remedy.
+        body = qar136_query(
+            2900,
+            {
+                "cluster": "qar136_two_replicas",
+                "sql_query": "EXPLAIN ANALYZE CLUSTER MEMORY",
+            },
+        )
+        err = body.get("error")
+        assert err is not None, (
+            "untargeted EXPLAIN ANALYZE on a 2-replica cluster should fail, "
+            f"but got: {body}"
+        )
+        assert (
+            "log source reads must target a replica" in err["message"].lower()
+        ), f"error should mention replica targeting: {err['message']!r}"
+
+        # Pinned to r1, the same read succeeds.
+        body = qar136_query(
+            2901,
+            {
+                "cluster": "qar136_two_replicas",
+                "cluster_replica": "r1",
+                "sql_query": "EXPLAIN ANALYZE CLUSTER MEMORY",
+            },
+        )
+        assert "error" not in body, f"pinned EXPLAIN ANALYZE errored: {body}"
+        content = body["result"]["content"]
+        assert (
+            content and content[0]["type"] == "text"
+        ), f"unexpected content: {content}"
+
+        # A nonexistent replica surfaces the SQL layer's error as a clean
+        # ExecutionError rather than anything worse.
+        body = qar136_query(
+            2902,
+            {
+                "cluster": "qar136_two_replicas",
+                "cluster_replica": "no_such_replica",
+                "sql_query": "EXPLAIN ANALYZE CLUSTER MEMORY",
+            },
+        )
+        err = body.get("error")
+        assert err is not None, f"nonexistent replica should fail, but got: {body}"
+        assert (
+            err["data"]["error_type"] == "ExecutionError"
+        ), f"unexpected error_type: {err}"
+
+        # Replica pinning is not part of the agent surface. The agent `query`
+        # dispatch arm drops `cluster_replica`, so supplying one there is
+        # silently accepted-and-ignored rather than honored or rejected. If it
+        # were honored, this nonexistent replica would fail with an
+        # ExecutionError. Because it is dropped, the plain read succeeds. A plain
+        # SELECT does not need replica targeting, so success here proves the pin
+        # was never applied.
+        r = post_mcp(
+            c,
+            "agent",
+            jsonrpc(
+                "tools/call",
+                {
+                    "name": "query",
+                    "arguments": {
+                        "cluster": "qar136_two_replicas",
+                        "cluster_replica": "no_such_replica",
+                        "sql_query": "SELECT 1",
+                    },
+                },
+                req_id=2903,
+            ),
+        )
+        assert r.status_code == 200, f"unexpected status: {r.status_code} {r.text}"
+        body = r.json()
+        assert "error" not in body, (
+            "agent endpoint should ignore cluster_replica, so the read should "
+            f"succeed rather than fail on the bogus replica: {body}"
+        )
+        rows = json.loads(body["result"]["content"][0]["text"])
+        assert rows == [["1"]], f"unexpected rows: {rows}"
+
+        c.sql(
+            "DROP CLUSTER IF EXISTS qar136_two_replicas CASCADE",
             user="mz_system",
             port=6877,
             print_statement=False,
@@ -1137,3 +1257,57 @@ def workflow_oauth_metadata_extras(c: Composition) -> None:
                 port=6877,
                 print_statement=False,
             )
+
+
+# Error emitted by the 1 MB parser guard (MAX_STATEMENT_BATCH_SIZE in
+# src/sql-parser/src/parser.rs) before any lexing happens.
+SIZE_LIMIT_ERROR = "statement batch size cannot exceed"
+
+
+def workflow_parser_statement_size_limit_bypass(c: Composition) -> None:
+    """Regression test for DEX-64: the 1 MB parser guard lives in
+    `parse_with_limit` / `parse_item_name_with_limit`. Before the fix the MCP
+    handlers called the unbounded `parse()` and `parse_item_name()` directly,
+    so they lexed and parsed multi-megabyte input the guard should reject
+    (HTTP bodies go up to 5 MiB). These cases pin that MCP enforces the same
+    limit; the "statement batch size cannot exceed ..." message is the
+    fingerprint that the guard fired.
+    """
+    c.up("materialized")
+
+    # A >1 MB batch of valid statements. The guard rejects it before lexing;
+    # the unbounded parser instead parses all of them, so a "Found N
+    # statements" rejection would be the fingerprint that the guard was
+    # skipped.
+    batch = "SELECT 1;" * (1_200_000 // len("SELECT 1;"))
+
+    def tool_error(endpoint: str, tool: str, arguments: dict) -> str:
+        r = post_mcp(
+            c, endpoint, jsonrpc("tools/call", {"name": tool, "arguments": arguments})
+        )
+        assert r.status_code == 200, f"{r.status_code}: {r.text}"
+        err = r.json().get("error")
+        assert err is not None, f"oversized input should be rejected: {r.text[:500]}"
+        return err["message"]
+
+    with c.test_case("sql_http_endpoint_enforces_size_limit"):
+        # Control: the reference SQL path rejects it with the guard, on any build.
+        port = c.port("materialized", 6876)
+        r = requests.post(f"http://localhost:{port}/api/sql", json={"query": batch})
+        assert SIZE_LIMIT_ERROR in r.text, r.text[:500]
+
+    # `parse()` bypass, reached through `validate_readonly_query` in both tools.
+    for endpoint, tool, args in [
+        ("agent", "query", {"cluster": "quickstart", "sql_query": batch}),
+        ("developer", "query_system_catalog", {"sql_query": batch}),
+    ]:
+        with c.test_case(f"{endpoint}_{tool}_enforces_size_limit"):
+            msg = tool_error(endpoint, tool, args)
+            assert SIZE_LIMIT_ERROR in msg, f"{tool} parsed the oversized batch: {msg}"
+
+    # `parse_item_name()` bypass: an oversized, non-parseable data product name.
+    with c.test_case("agent_read_data_product_name_enforces_size_limit"):
+        msg = tool_error("agent", "read_data_product", {"name": "(" * 1_200_000})
+        assert (
+            SIZE_LIMIT_ERROR in msg
+        ), f"parse_item_name processed oversized name: {msg[:200]}"

@@ -382,10 +382,6 @@ impl StorageState {
 pub struct StorageInstanceContext {
     /// A directory that can be used for scratch work.
     pub scratch_directory: Option<PathBuf>,
-    /// A global `rocksdb::Env`, shared across ALL instances of `RocksDB` (even
-    /// across sources!). This `Env` lets us control some resources (like background threads)
-    /// process-wide.
-    pub rocksdb_env: rocksdb::Env,
     /// The memory limit of the materialize cluster replica. This will
     /// be used to calculate and configure the maximum inflight bytes for backpressure
     pub cluster_memory_limit: Option<usize>,
@@ -393,22 +389,28 @@ pub struct StorageInstanceContext {
 
 impl StorageInstanceContext {
     /// Build a new `StorageInstanceContext`.
-    pub fn new(
-        scratch_directory: Option<PathBuf>,
-        cluster_memory_limit: Option<usize>,
-    ) -> Result<Self, anyhow::Error> {
-        // If no file system is available, fall back to running RocksDB in memory.
-        let rocksdb_env = if scratch_directory.is_some() {
-            rocksdb::Env::new()?
-        } else {
-            rocksdb::Env::mem_env()?
-        };
-
-        Ok(Self {
+    pub fn new(scratch_directory: Option<PathBuf>, cluster_memory_limit: Option<usize>) -> Self {
+        Self {
             scratch_directory,
-            rocksdb_env,
             cluster_memory_limit,
-        })
+        }
+    }
+
+    /// Returns a `rocksdb::Env` for a new RocksDB instance.
+    ///
+    /// With a scratch directory this is the default `Env`, which stores data
+    /// on the host filesystem. Without one, RocksDB runs in memory, and every
+    /// call returns a fresh in-memory `Env`. State written through an `Env`
+    /// is only reachable through that same `Env`, so a per-instance `Env`
+    /// isolates instances from each other and from previous incarnations of
+    /// themselves. Background threads are process-wide either way, both
+    /// variants delegate them to the default `Env`.
+    pub fn rocksdb_env(&self) -> Result<rocksdb::Env, rocksdb::Error> {
+        if self.scratch_directory.is_some() {
+            rocksdb::Env::new()
+        } else {
+            rocksdb::Env::mem_env()
+        }
     }
 }
 

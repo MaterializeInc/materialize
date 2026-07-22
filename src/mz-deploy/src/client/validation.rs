@@ -379,9 +379,13 @@ async fn find_missing_external_dependencies(
     client: &Client,
     planned_project: &graph::Project,
 ) -> Result<BTreeSet<ObjectId>, DatabaseValidationError> {
+    // System-schema dependencies are database-less and always present. Their
+    // 2-part name never matches the 3-part FQN the existence query builds, so
+    // including them here would wrongly report them missing.
     let external_deps: BTreeSet<ObjectId> = planned_project
         .external_dependencies
         .iter()
+        .filter(|dep| dep.database().is_some())
         .cloned()
         .collect();
     let existing =

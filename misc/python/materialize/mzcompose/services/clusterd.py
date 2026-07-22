@@ -47,13 +47,13 @@ class Clusterd(Service):
             "CLUSTERD_USE_CTP=true",
             "MZ_SOFT_ASSERTIONS=1",
             "MZ_EAT_MY_DATA=1",
+            "LD_PRELOAD=libeatmydata.so",
             # Defaults that were previously set by the clusterd entrypoint.sh.
             "CLUSTERD_STORAGE_CONTROLLER_LISTEN_ADDR=0.0.0.0:2100",
             "CLUSTERD_COMPUTE_CONTROLLER_LISTEN_ADDR=0.0.0.0:2101",
             "CLUSTERD_INTERNAL_HTTP_LISTEN_ADDR=0.0.0.0:6878",
             "CLUSTERD_SECRETS_READER=local-file",
             "CLUSTERD_SECRETS_READER_LOCAL_FILE_DIR=/mzdata/secrets",
-            "LD_PRELOAD=libeatmydata.so",
             f"CLUSTERD_PERSIST_PUBSUB_URL=http://{mz_service}:6879",
             *environment_extra,
         ]

@@ -40,6 +40,7 @@ import psycopg
 from psycopg import sql
 
 from materialize.biglake import bootstrap_namespace
+from materialize.mz_env_util import connect_and_print_environment_id
 from materialize.mzcompose import loader
 from materialize.mzcompose.composition import (
     Composition,
@@ -424,11 +425,21 @@ def workflow_create(c: Composition, parser: WorkflowArgumentParser) -> None:
             > CREATE TABLE IF NOT EXISTS public_table.table (c INT)
             > GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public_table.table TO "infra+qacanaryload@materialize.io"
 
+            # table_mv and its index go on qa_canary_environment_sinks, NOT the
+            # shared qa_canary_environment_compute. compute is mz-deploy's
+            # blue/green target: `promote` clones it, swaps the clone in, and
+            # drops the old cluster CASCADE. The model MVs survive because the
+            # deploy re-creates them in the clone every time, but table_mv is
+            # testdrive-managed and created once, so a swap would drop it (and its
+            # index, and the sinks reading it) with no recreation. Only clusters
+            # referenced by the blue/green MVs/views are staged and swapped; the
+            # sinks cluster is not (sinks are applied in place), so table_mv is
+            # safe there, alongside the two sinks that already read it.
             > CREATE MATERIALIZED VIEW IF NOT EXISTS public_table.table_mv
-              IN CLUSTER qa_canary_environment_compute
+              IN CLUSTER qa_canary_environment_sinks
               AS SELECT max(c) FROM public_table.table
             > CREATE INDEX IF NOT EXISTS table_mv_idx
-              IN CLUSTER qa_canary_environment_compute
+              IN CLUSTER qa_canary_environment_sinks
               ON public_table.table_mv (max)
             > GRANT ALL PRIVILEGES ON TABLE public_table.table_mv TO "infra+bot@materialize.com", "infra+qacanaryload@materialize.io"
 
@@ -447,9 +458,12 @@ def workflow_create(c: Composition, parser: WorkflowArgumentParser) -> None:
               MODE APPEND
               WITH (COMMIT INTERVAL = '60s')
 
-            # The GCS Iceberg sink (table_mv_gcs_iceberg_sink) stays disabled, as
-            # do the *_gcs_iceberg_sink.sql.disabled model sinks. Only the
-            # AWS/S3-Tables Iceberg sinks are enabled.
+            > CREATE SINK IF NOT EXISTS public_table.table_mv_gcs_iceberg_sink
+              IN CLUSTER qa_canary_environment_sinks
+              FROM public_table.table_mv
+              INTO ICEBERG CATALOG CONNECTION public.qa_canary_gcs_iceberg_catalog (NAMESPACE = 'qa_canary_environment', TABLE = 'table_mv')
+              MODE APPEND
+              WITH (COMMIT INTERVAL = '60s')
 
             # Seed data for the loadgen product/category tables (created by `apply`).
             > DELETE FROM public_loadgen_sources.product_category
@@ -660,6 +674,13 @@ def workflow_test(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
 
+    assert MATERIALIZE_PROD_SANDBOX_HOSTNAME is not None
+    connect_and_print_environment_id(
+        MATERIALIZE_PROD_SANDBOX_HOSTNAME,
+        MATERIALIZE_PROD_SANDBOX_USERNAME,
+        MATERIALIZE_PROD_SANDBOX_APP_PASSWORD,
+    )
+
     # `stop` lets the frontier checks bail out promptly on Ctrl-C: signals go to
     # the main thread, so the workers can't see the KeyboardInterrupt — they poll
     # this event while waiting out the sample window.
@@ -859,9 +880,11 @@ def workflow_mz_deploy(c: Composition, parser: WorkflowArgumentParser) -> None:
     if not cli_args.mz_args:
         raise ValueError("usage: ./mzcompose run mz <mz-deploy command> [args...]")
     write_profiles()
+    write_project_toml()
     mz_deploy(c, *cli_args.mz_args)
 
 
 def workflow_clean(c: Composition, parser: WorkflowArgumentParser) -> None:
     write_profiles()
+    write_project_toml()
     mz_deploy(c, "clean")

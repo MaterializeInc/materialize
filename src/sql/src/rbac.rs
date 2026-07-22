@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::iter;
 use std::sync::LazyLock;
 
@@ -111,10 +111,11 @@ pub static EMPTY_ITEM_USAGE: LazyLock<BTreeSet<CatalogItemType>> = LazyLock::new
 ///
 /// The `mz_mcp_data_product*` views are how the MCP agent endpoint
 /// discovers data products; blocking them defeats the isolation model.
-/// `mz_show_my_cluster_privileges` is joined by `read_data_product` to
-/// check cluster USAGE (it replaces a `has_cluster_privilege` call whose
-/// body referenced `mz_roles`) and only exposes the session role's own
-/// privileges.
+/// `mz_show_my_cluster_privileges` is referenced by those views to null the
+/// advertised cluster unless the role has USAGE on it (it uses
+/// `mz_session_role_memberships()` rather than a `has_cluster_privilege`
+/// body that referenced `mz_roles`), and is itself useful for a restricted
+/// session to inspect its own privileges.
 static RESTRICT_TO_USER_OBJECTS_ALLOWED_OIDS: LazyLock<BTreeSet<u32>> = LazyLock::new(|| {
     use mz_pgrepr::oid;
     btreeset! {
@@ -404,12 +405,10 @@ pub fn check_usage(
 /// only checked by the `restrict_to_user_objects` restriction.
 pub fn check_plan(
     catalog: &impl SessionCatalog,
-    // Function mapping a connection ID to an authenticated role. The roles may have been dropped concurrently.
-    // Only required for Plan::SideEffectingFunc; can be None for other plan types.
-    // TODO(peek-seq): Remove this when deleting the old peek sequencing. The logic here that uses
-    // `active_conns` is mirrored in `execute_side_effecting_func`, which is what the frontend peek
-    // sequencing uses.
-    active_conns: Option<impl FnOnce(u32) -> Option<RoleId>>,
+    // The authenticated role of the connection targeted by the plan, if the plan is a
+    // Plan::SideEffectingFunc that targets an existing connection. The role may have been
+    // dropped concurrently. Ignored for other plan types.
+    target_conn_role: Option<RoleId>,
     session: &dyn SessionMetadata,
     plan: &Plan,
     target_cluster_id: Option<ClusterId>,
@@ -426,7 +425,7 @@ pub fn check_plan(
     let rbac_requirements = generate_rbac_requirements(
         catalog,
         plan,
-        active_conns,
+        target_conn_role,
         target_cluster_id,
         session.role_metadata().current_role,
     );
@@ -455,7 +454,7 @@ pub fn is_rbac_enabled_for_session(
 fn generate_rbac_requirements(
     catalog: &impl SessionCatalog,
     plan: &Plan,
-    active_conns: Option<impl FnOnce(u32) -> Option<RoleId>>,
+    target_conn_role: Option<RoleId>,
     target_cluster_id: Option<ClusterId>,
     role_id: RoleId,
 ) -> RbacRequirements {
@@ -843,7 +842,7 @@ fn generate_rbac_requirements(
             for privilege in generate_rbac_requirements(
                 catalog,
                 &Plan::Select(select_plan.clone()),
-                active_conns,
+                target_conn_role,
                 target_cluster_id,
                 role_id,
             )
@@ -1139,6 +1138,8 @@ fn generate_rbac_requirements(
             sink,
             with_snapshot: _,
             in_cluster,
+            set_options: _,
+            reset_options: _,
         }) => {
             let items = iter::once(sink.from).map(|gid| catalog.resolve_item_id(&gid));
             let mut privileges = generate_read_privileges(catalog, items, role_id);
@@ -1567,12 +1568,8 @@ fn generate_rbac_requirements(
                     connection_id: None,
                 } => BTreeSet::new(),
                 SideEffectingFunc::PgCancelBackend {
-                    connection_id: Some(connection_id),
-                } => active_conns.expect("active_conns is required for Plan::SideEffectingFunc")(
-                    *connection_id,
-                )
-                .map(|x| [x].into())
-                .unwrap_or_default(),
+                    connection_id: Some(_),
+                } => target_conn_role.map(|x| [x].into()).unwrap_or_default(),
             };
             RbacRequirements {
                 role_membership,
@@ -1752,9 +1749,11 @@ fn generate_read_privileges_inner(
     seen: &mut BTreeSet<(ObjectId, RoleId)>,
 ) -> Vec<(SystemObjectId, AclMode, RoleId)> {
     let mut privileges = Vec::new();
-    let mut views = Vec::new();
 
-    for id in ids {
+    // Iterative worklist traversal rather than recursion. View dependency
+    // chains are user controlled and can be arbitrarily deep.
+    let mut queue: VecDeque<(CatalogItemId, RoleId)> = ids.map(|id| (id, role_id)).collect();
+    while let Some((id, role_id)) = queue.pop_front() {
         if seen.insert((id.into(), role_id)) {
             let item = catalog.get_item(&id);
             let schema_id: ObjectId = item.name().qualifiers.clone().into();
@@ -1764,7 +1763,8 @@ fn generate_read_privileges_inner(
             match item.item_type() {
                 CatalogItemType::View | CatalogItemType::MaterializedView => {
                     privileges.push((SystemObjectId::Object(id.into()), AclMode::SELECT, role_id));
-                    views.push((item.references().items().copied(), item.owner_id()));
+                    let view_owner = item.owner_id();
+                    queue.extend(item.references().items().map(|id| (*id, view_owner)));
                 }
                 CatalogItemType::Table | CatalogItemType::Source => {
                     privileges.push((SystemObjectId::Object(id.into()), AclMode::SELECT, role_id));
@@ -1775,12 +1775,6 @@ fn generate_read_privileges_inner(
                 CatalogItemType::Sink | CatalogItemType::Index | CatalogItemType::Func => {}
             }
         }
-    }
-
-    for (view_ids, view_owner) in views {
-        privileges.extend_from_slice(&generate_read_privileges_inner(
-            catalog, view_ids, view_owner, seen,
-        ));
     }
 
     privileges

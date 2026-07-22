@@ -708,7 +708,7 @@ class IcebergSink(Object):
     def manipulate(self, kind: int) -> str:
         manipulations = [
             lambda: "",
-            # TODO: https://github.com/MaterializeInc/database-issues/issues/10026
+            # TODO: https://linear.app/materializeinc/issue/SS-344
             # lambda: dedent(
             #     f"""
             #     > DROP MATERIALIZED VIEW IF EXISTS {self.name}_tmp_mv

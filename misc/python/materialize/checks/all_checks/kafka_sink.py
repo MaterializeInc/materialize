@@ -1498,3 +1498,119 @@ class KafkaSinkPartitionByDebezium(Check):
 
                 # TODO: kafka-verify-data when it can deal with being run twice, to check the actual partitioning
             """))
+
+
+@externally_idempotent(False)
+class KafkaTopicMetadataRefreshInterval(Check):
+    """Regression test for SS-112 (#36461).
+
+    The commit rejects `TOPIC METADATA REFRESH INTERVAL < 1s` at planning time
+    for Kafka sources and sinks. Because catalog bootstrap re-plans every
+    object's persisted `create_sql`, an environment that already has such an
+    object -- created on an older version that accepted it -- panics
+    environmentd on upgrade ("invalid persisted SQL") and crash-loops the whole
+    environment. We create the objects on the old base version and assert the
+    environment still boots and they survive the upgrade.
+
+    The interval is covered in both AST shapes a user can persist it as: a
+    single-quoted string ('999ms', stored as WithOptionValue::Value) and a
+    double-quoted value ("998ms", lexed as an identifier and stored as
+    WithOptionValue::UnresolvedItemName). The migration must rewrite both.
+    """
+
+    def _can_run(self, e: Executor) -> bool:
+        # The < 1s rejection landed in v26.30. Only reproducible when the base
+        # version still accepts the value; otherwise the CREATE in initialize()
+        # fails up-front. Also makes this a no-op in non-upgrade scenarios
+        # (base == current, rejecting build).
+        return self.base_version < MzVersion.parse_mz("v26.32.0-dev")
+
+    def initialize(self) -> Testdrive:
+        # '999ms' source / '500ms' sink: accepted and functional pre-rejection,
+        # rejected when the new planner re-plans their create_sql on bootstrap.
+        # ('0s' -- the literal SS-112 case -- is avoided: it crash-loops the
+        # storage task on the old version; any sub-second value triggers the
+        # bootstrap panic equally well.)
+        return Testdrive(dedent("""
+                $ kafka-create-topic topic=tmri-source partitions=1
+
+                $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=tmri-source
+                "k1":"v1"
+
+                > CREATE SOURCE tmri_source_src
+                  FROM KAFKA CONNECTION kafka_conn (
+                    TOPIC 'testdrive-tmri-source-${testdrive.seed}',
+                    TOPIC METADATA REFRESH INTERVAL '999ms'
+                  )
+                > CREATE TABLE tmri_source FROM SOURCE tmri_source_src (REFERENCE "testdrive-tmri-source-${testdrive.seed}")
+                  KEY FORMAT JSON VALUE FORMAT JSON ENVELOPE UPSERT
+
+                > CREATE SOURCE tmri_source_src_ident
+                  FROM KAFKA CONNECTION kafka_conn (
+                    TOPIC 'testdrive-tmri-source-${testdrive.seed}',
+                    TOPIC METADATA REFRESH INTERVAL = "998ms"
+                  )
+                > CREATE TABLE tmri_source_ident FROM SOURCE tmri_source_src_ident (REFERENCE "testdrive-tmri-source-${testdrive.seed}")
+                  KEY FORMAT JSON VALUE FORMAT JSON ENVELOPE UPSERT
+
+                > CREATE TABLE tmri_sink_table (f1 INTEGER)
+                > INSERT INTO tmri_sink_table VALUES (1)
+                > CREATE SINK tmri_sink FROM tmri_sink_table
+                  INTO KAFKA CONNECTION kafka_conn (
+                    TOPIC 'testdrive-tmri-sink-${testdrive.seed}',
+                    TOPIC METADATA REFRESH INTERVAL '500ms'
+                  )
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE DEBEZIUM
+                > CREATE SINK tmri_sink_ident FROM tmri_sink_table
+                  INTO KAFKA CONNECTION kafka_conn (
+                    TOPIC 'testdrive-tmri-sink-ident-${testdrive.seed}',
+                    TOPIC METADATA REFRESH INTERVAL = "499ms"
+                  )
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE DEBEZIUM
+                """))
+
+    def manipulate(self) -> list[Testdrive]:
+        # Only flow data; phase 2 runs on the new (rejecting) build, so no
+        # sub-second-interval DDL here.
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
+                $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=tmri-source
+                "k2":"v2"
+                > INSERT INTO tmri_sink_table VALUES (2)
+                """,
+                """
+                $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=tmri-source
+                "k3":"v3"
+                > INSERT INTO tmri_sink_table VALUES (3)
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        # Reaching validate() means bootstrap survived the upgrade; also assert
+        # both objects are still present and healthy.
+        return Testdrive(dedent("""
+                $ set-sql-timeout duration=120s
+                > SELECT count(*) FROM tmri_source
+                3
+                > SELECT count(*) FROM tmri_sink_table
+                3
+                > SELECT count(*) FROM tmri_source_ident
+                3
+                > SELECT count(*) FROM mz_sources WHERE name = 'tmri_source_src'
+                1
+                > SELECT count(*) FROM mz_sources WHERE name = 'tmri_source_src_ident'
+                1
+                > SELECT count(*) FROM mz_sinks WHERE name = 'tmri_sink'
+                1
+                > SELECT count(*) FROM mz_sinks WHERE name = 'tmri_sink_ident'
+                1
+                > SELECT status FROM mz_internal.mz_sink_statuses WHERE name = 'tmri_sink'
+                running
+                > SELECT status FROM mz_internal.mz_sink_statuses WHERE name = 'tmri_sink_ident'
+                running
+                """))

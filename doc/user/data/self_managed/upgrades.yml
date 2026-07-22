@@ -197,6 +197,17 @@
        kubectl -n materialize-environment describe pod -l app=environmentd
        ```
 
+- name: upgrade-tf-v4-crd-version-default
+  content: |
+    {{< important >}}
+    Starting in Terraform module version v4.0.0, `crd_version` defaults to
+    `v1`. If your instance uses `v1alpha1` and you are upgrading to module
+    version v4.0.0 or greater, set `crd_version = "v1alpha1"` explicitly to
+    stay on `v1alpha1`. Otherwise, applying migrates the instance to `v1` and
+    triggers a rollout. See [Adopting the v1
+    CRD](/self-managed-deployments/upgrading/adopting-the-v1-crd/).
+    {{< /important >}}
+
 - name: upgrade-request_rollout
   content: |
     **If you are using `v1alpha1`**, you need to update your `terraform.tfvars`

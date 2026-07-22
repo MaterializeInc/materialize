@@ -150,6 +150,15 @@ skip = [
     { name = "hashlink", version = "0.9.1" },
     # held back by owo-colors 4.3 (mz-deploy terminal styling)
     { name = "supports-color", version = "2.1.0" },
+
+    # Pulled by launchdarkly-server-sdk 3.x via launchdarkly-sdk-transport /
+    # eventsource-client (proxy/timeout/rustls stack and the SDK's RNG path).
+    # NB: tower 0.4.13 is already skipped above (mz-deploy).
+    { name = "rustls-native-certs", version = "0.7.3" },
+    { name = "rand", version = "0.10.1" },
+    { name = "rand_core", version = "0.10.1" },
+    { name = "getrandom", version = "0.4.2" },
+    { name = "cpufeatures", version = "0.3.0" },
 ]
 
 [[bans.deny]]
@@ -206,6 +215,7 @@ wrappers = [
     "globset",
     "launchdarkly-server-sdk",
     "launchdarkly-server-sdk-evaluation",
+    "launchdarkly-sdk-transport",
     "native-tls",
     "opendal",
     "os_info",
@@ -284,6 +294,11 @@ ignore = [
     # Allows private key leakage through timing information
     # rsa is required through iceberg-storage-opendal
     "RUSTSEC-2023-0071",
+    # `quick-xml` pulled in as transitive dependency: Quadratic run time when
+    # checking a start tag for duplicate attribute names. Not used to parse
+    # untrusted XML.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
 ]
 
 # Must be manually kept in sync with about.toml.

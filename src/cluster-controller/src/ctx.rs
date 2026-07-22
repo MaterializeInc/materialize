@@ -22,6 +22,8 @@
 //! controller drives what is fetched. Read methods are batched so a separate-task
 //! deployment can bound its round-trips to the Coordinator.
 
+use std::collections::BTreeSet;
+
 use async_trait::async_trait;
 use mz_compute_types::config::ComputeReplicaLogging;
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -32,16 +34,45 @@ use mz_repr::Timestamp;
 // decision can share them without depending on this crate. They are part of the
 // ctx vocabulary, so re-export them here.
 pub use mz_adapter_types::cluster_state::{
-    AvailabilityZones, BurstRecord, ExpectedClusterState, ReconfigurationRecord,
-    ReconfigurationTarget, ReplicaShape,
+    AutoScalingPolicy, AvailabilityZones, BurstAudit, BurstFinishCause, BurstRecord,
+    ExpectedClusterState, OnHydrationPolicy, OnTimeout, ReconfigurationAudit,
+    ReconfigurationRecord, ReconfigurationStatus, ReconfigurationTarget, ReplicaShape,
 };
 
 /// A replica that actually exists on a cluster, as observed through the ctx.
+/// Every replica physically on the cluster appears here, whether or not the
+/// controller owns it; [`Self::owned_shape`] is the ownership test.
 #[derive(Clone, Debug)]
 pub struct ObservedReplica {
     pub replica_id: ReplicaId,
     pub name: String,
-    pub shape: ReplicaShape,
+    /// `None` for a replica with an unmanaged location, which has no managed
+    /// shape to reconcile against.
+    pub shape: Option<ReplicaShape>,
+    /// Created with `INTERNAL`.
+    pub internal: bool,
+    /// Carries a `BILLED AS` override.
+    pub billed_as: bool,
+    /// The `-pending` target of an in-flight graceful reconfiguration.
+    pub pending: bool,
+}
+
+impl ObservedReplica {
+    /// The replica's shape if the controller owns it, `None` otherwise.
+    ///
+    /// INTERNAL / BILLED AS replicas are manually managed: a user can attach
+    /// one to any managed cluster, outside the replication-factor domain. A
+    /// pending replica is owned by the reconfiguration sequencer path until
+    /// finalize (retiring it would defeat the zero-downtime resize creating
+    /// it). The controller must neither count such a replica toward a desired
+    /// shape nor drop it as excess, but their names still block the name
+    /// generator, since every replica observed here occupies a name.
+    pub fn owned_shape(&self) -> Option<&ReplicaShape> {
+        if self.internal || self.billed_as || self.pending {
+            return None;
+        }
+        self.shape.as_ref()
+    }
 }
 
 /// The durable state of a single managed cluster plus its observed replicas, as
@@ -60,11 +91,12 @@ pub struct ClusterState {
     pub replication_factor: u32,
     pub availability_zones: Vec<String>,
     pub logging: ComputeReplicaLogging,
-    /// In-flight graceful reconfiguration, if any.
+    pub auto_scaling_policy: Option<AutoScalingPolicy>,
+    /// Latest graceful reconfiguration record, if one has been written.
     pub reconfiguration: Option<ReconfigurationRecord>,
     /// In-flight hydration burst, if any.
     pub burst: Option<BurstRecord>,
-    /// The replicas that actually exist on the cluster.
+    /// The replicas that actually exist on the cluster, owned or not.
     pub replicas: Vec<ObservedReplica>,
 }
 
@@ -86,6 +118,7 @@ impl ClusterState {
             replication_factor: self.replication_factor,
             availability_zones: AvailabilityZones(self.availability_zones.clone()),
             logging: self.logging.clone(),
+            auto_scaling_policy: self.auto_scaling_policy.clone(),
             reconfiguration: self.reconfiguration.clone(),
             burst: self.burst.clone(),
         }
@@ -103,11 +136,38 @@ pub struct StateWrite {
     pub new_replication_factor: Option<u32>,
     pub new_availability_zones: Option<Vec<String>>,
     pub new_logging: Option<ComputeReplicaLogging>,
-    /// Write (`Some(Some(_))`), clear (`Some(None)`), or leave unchanged
-    /// (`None`) the reconfiguration record.
-    pub reconfiguration: Option<Option<ReconfigurationRecord>>,
-    /// Write, clear, or leave unchanged the burst record, as above.
-    pub burst: Option<Option<BurstRecord>>,
+    /// Write or clear the reconfiguration record, together with its audit
+    /// intent. `None` leaves the record unchanged.
+    pub reconfiguration: Option<ReconfigurationWrite>,
+    /// Write or clear the burst record, together with its audit intent.
+    /// `None` leaves the record unchanged.
+    pub burst: Option<BurstWrite>,
+}
+
+/// A write to the `reconfiguration` record, bundled with the audit intent
+/// declaring which lifecycle transition the write represents.
+///
+/// Bundling means a writer cannot move the record without deciding, at the same
+/// decision point, what the papertrail should say. The two travel together
+/// through the apply path and are transacted atomically with the state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReconfigurationWrite {
+    /// The record to write, or `None` to clear it.
+    pub record: Option<ReconfigurationRecord>,
+    /// The lifecycle transition to audit. `None` declares that this write is
+    /// not a lifecycle transition and must not emit an event.
+    pub audit: Option<ReconfigurationAudit>,
+}
+
+/// A write to the `burst` record, bundled with its audit intent. See
+/// [`ReconfigurationWrite`]. A bookkeeping rewrite of an existing record (the
+/// linger stamp and its reset) declares `audit: None`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BurstWrite {
+    /// The record to write, or `None` to clear it.
+    pub record: Option<BurstRecord>,
+    /// The lifecycle transition to audit, or `None` for a bookkeeping rewrite.
+    pub audit: Option<BurstAudit>,
 }
 
 impl StateWrite {
@@ -178,6 +238,11 @@ pub enum ApplyOutcome {
     /// At least one decision failed its compare-and-append guard. The whole
     /// batch is rejected; the controller recomputes next tick.
     Rejected,
+    /// The batch was rejected because it exceeded the environment's resource
+    /// budget. Nothing was transacted. Unlike a guard rejection, retrying the
+    /// same batch cannot succeed on its own: the controller decides what to
+    /// shed to make room.
+    ResourceExhausted,
 }
 
 /// The strategy-agnostic pull/apply interface between the controller and its
@@ -200,6 +265,27 @@ pub trait ClusterControllerCtx: Send {
 
     /// The ids of all managed clusters the controller owns this tick.
     async fn managed_cluster_ids(&mut self) -> Vec<ClusterId>;
+
+    /// Of `replicas` on `cluster`, which are online and have *all* current
+    /// (non-transient) collections on the cluster hydrated. The returned set
+    /// is a subset of `replicas`.
+    ///
+    /// Callers should request only replicas their strategy currently needs. This
+    /// keeps live-signal dependencies local to the strategies that consume them.
+    async fn hydrated_replicas(
+        &mut self,
+        cluster_id: ClusterId,
+        replicas: &[ReplicaId],
+    ) -> BTreeSet<ReplicaId>;
+
+    /// Whether `cluster_id` has at least one hydratable (dataflow-backed) object
+    /// bound to it: an index, materialized view, ingestion source, or sink.
+    ///
+    /// A catalog-level approximation of "the hydration check has something to
+    /// count". Where the two disagree at the margin, the mismatch is
+    /// self-healing: a replica with nothing to hydrate reads hydrated, and the
+    /// burst winds down via its linger.
+    async fn has_hydratable_objects(&mut self, cluster_id: ClusterId) -> bool;
 
     /// Apply a tick's batch of decisions under their compare-and-append guards.
     /// Each decision carries the [`ExpectedClusterState`] it was derived from;

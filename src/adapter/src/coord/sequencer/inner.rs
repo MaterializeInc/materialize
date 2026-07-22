@@ -20,7 +20,7 @@ use futures::{Future, StreamExt, future};
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
-use mz_adapter_types::dyncfgs::ENABLE_PASSWORD_AUTH;
+use mz_adapter_types::dyncfgs::{ENABLE_PASSWORD_AUTH, READ_THEN_WRITE_MAX_DEPENDENCIES};
 use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{
     CatalogItem, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
@@ -2310,10 +2310,12 @@ impl Coordinator {
     }
 
     /// Execute a side-effecting function from the frontend peek path.
-    /// This is separate from `sequence_side_effecting_func` because
-    /// - It doesn't have an ExecuteContext.
-    /// - It needs to do its own RBAC check, because the `rbac::check_plan` call in the frontend
-    ///   peek sequencing can't look at `active_conns`.
+    /// This is separate from `sequence_side_effecting_func` because it doesn't have an
+    /// ExecuteContext. RBAC is checked by the caller via `rbac::check_plan` before
+    /// sending `Command::ExecuteSideEffectingFunc`. The caller must hold the target
+    /// connection's `ConnectionId` handle from its RBAC check until this command
+    /// completes, so that the connection found in `active_conns` here (if any) is
+    /// the same one the check was performed against.
     ///
     /// TODO(peek-seq): Delete `sequence_side_effecting_func` after we delete the old peek
     /// sequencing.
@@ -2321,7 +2323,6 @@ impl Coordinator {
         &mut self,
         plan: SideEffectingFunc,
         conn_id: ConnectionId,
-        current_role: RoleId,
     ) -> Result<ExecuteResponse, AdapterError> {
         match plan {
             SideEffectingFunc::PgCancelBackend { connection_id } => {
@@ -2338,36 +2339,14 @@ impl Coordinator {
                     return Err(AdapterError::Canceled);
                 }
 
-                // Perform RBAC check: the current user must be a member of the role
-                // that owns the connection being cancelled.
-                if let Some((_id_handle, conn_meta)) =
+                // The caller verified role membership via rbac::check_plan and
+                // still holds the target's `ConnectionId` handle, so this entry
+                // (if present) is the same connection the check was performed
+                // against.
+                if let Some((id_handle, _conn_meta)) =
                     self.active_conns.get_key_value(&connection_id)
                 {
-                    let target_role = *conn_meta.authenticated_role_id();
-                    let role_membership = self
-                        .catalog()
-                        .state()
-                        .collect_role_membership(&current_role);
-                    if !role_membership.contains(&target_role) {
-                        let target_role_name = self
-                            .catalog()
-                            .try_get_role(&target_role)
-                            .map(|role| role.name().to_string())
-                            .unwrap_or_else(|| target_role.to_string());
-                        return Err(AdapterError::Unauthorized(
-                            rbac::UnauthorizedError::RoleMembership {
-                                role_names: vec![target_role_name],
-                            },
-                        ));
-                    }
-
-                    // RBAC check passed, proceed with cancellation.
-                    let id_handle = self
-                        .active_conns
-                        .get_key_value(&connection_id)
-                        .map(|(id, _)| id.clone())
-                        .expect("checked above");
-                    self.handle_privileged_cancel(id_handle).await;
+                    self.handle_privileged_cancel(id_handle.clone()).await;
                     Ok(Self::send_immediate_rows(Row::pack_slice(&[Datum::True])))
                 } else {
                     // Connection not found, return false.
@@ -2824,12 +2803,19 @@ impl Coordinator {
         }
 
         // Ensure all objects `selection` depends on are valid for `ReadThenWrite` operations.
-        for gid in selection.depends_on() {
-            let item_id = self.catalog().resolve_item_id(&gid);
-            if let Err(err) = validate_read_then_write_dependencies(self.catalog(), &item_id) {
-                ctx.retire(Err(err));
-                return;
-            }
+        let dependency_ids = selection
+            .depends_on()
+            .into_iter()
+            .map(|gid| self.catalog().resolve_item_id(&gid));
+        let max_rw_dependencies =
+            READ_THEN_WRITE_MAX_DEPENDENCIES.get(self.catalog().system_config().dyncfgs());
+        if let Err(err) = validate_read_then_write_dependencies(
+            self.catalog(),
+            dependency_ids,
+            max_rw_dependencies,
+        ) {
+            ctx.retire(Err(err));
+            return;
         }
 
         let (peek_tx, peek_rx) = oneshot::channel();
@@ -3456,9 +3442,11 @@ impl Coordinator {
             sink: sink_plan,
             with_snapshot,
             in_cluster,
+            set_options,
+            reset_options,
         } = ctx.plan.clone();
 
-        // We avoid taking the DDL lock for `ALTER SINK SET FROM` commands, see
+        // We avoid taking the DDL lock for `ALTER SINK` commands, see
         // `Coordinator::must_serialize_ddl`. We therefore must assume that the world has
         // arbitrarily changed since we performed planning, and we must re-assert that it still
         // matches our requirements.
@@ -3522,18 +3510,23 @@ impl Coordinator {
         };
 
         // Update the sink version.
-        stmt.with_options
-            .retain(|o| o.name != CreateSinkOptionName::Version);
-        stmt.with_options.push(CreateSinkOption {
-            name: CreateSinkOptionName::Version,
-            value: Some(WithOptionValue::Value(mz_sql::ast::Value::Number(
-                sink_plan.version.to_string(),
-            ))),
-        });
+        plan::apply_sink_option_edits(
+            &mut stmt.with_options,
+            &[CreateSinkOption {
+                name: CreateSinkOptionName::Version,
+                value: Some(WithOptionValue::Value(mz_sql::ast::Value::Number(
+                    sink_plan.version.to_string(),
+                ))),
+            }],
+            &[],
+        );
 
         let conn_catalog = self.catalog().for_system_session();
         let (mut stmt, resolved_ids) =
             mz_sql::names::resolve(&conn_catalog, stmt).expect("resolvable create_sql");
+
+        // Re-apply the option edits requested by the `ALTER SINK`.
+        plan::apply_sink_option_edits(&mut stmt.with_options, &set_options, &reset_options);
 
         // Update the `from` relation.
         let from_entry = self.catalog().get_entry_by_global_id(&sink_plan.from);
@@ -3546,6 +3539,16 @@ impl Coordinator {
             version: from_entry.version,
         };
 
+        // `resolved_ids` was derived from the old `create_sql`, so it still
+        // references the old input. `create_sql` and `from` above already
+        // point at the new input, so sync the dependency set to match.
+        // Otherwise the in-memory catalog disagrees with `create_sql` until
+        // the next reload, and the temporary-dependency check in
+        // `Op::UpdateItem` (which reads `uses()`) would not see the new input.
+        let mut resolved_ids = resolved_ids;
+        resolved_ids.remove_item(&self.catalog().resolve_item_id(&old_sink.from));
+        resolved_ids.add_item(from_entry.id());
+
         let new_sink = Sink {
             create_sql: stmt.to_ast_string_stable(),
             global_id,
@@ -3554,7 +3557,7 @@ impl Coordinator {
             envelope: sink_plan.envelope,
             version: sink_plan.version,
             with_snapshot,
-            resolved_ids: resolved_ids.clone(),
+            resolved_ids,
             cluster_id: in_cluster,
             commit_interval: sink_plan.commit_interval,
         };

@@ -100,6 +100,17 @@ struct ActiveExport {
     active_replicas: BTreeSet<ReplicaId>,
 }
 
+/// Which replicas actively run a given object, as resolved by
+/// [`Instance::active_replica_ids`].
+enum ActiveReplicas<'a> {
+    /// The object has per-replica scheduling and runs on exactly these
+    /// replicas. The set is empty when it currently runs nowhere, e.g. it has
+    /// been compacted away or is not yet scheduled onto a replica.
+    Scheduled(&'a BTreeSet<ReplicaId>),
+    /// The object has no per-replica scheduling, so every replica runs it.
+    All,
+}
+
 impl Instance {
     /// Creates a new [`Instance`].
     pub fn new(
@@ -652,70 +663,56 @@ impl Instance {
         }
     }
 
-    /// Returns the replicas that are actively running the given object (ingestion or export).
-    fn active_replicas(&mut self, id: &GlobalId) -> Box<dyn Iterator<Item = &mut Replica> + '_> {
+    /// Resolves an object to the replicas actively running it.
+    ///
+    /// Shared by [`Self::active_replicas`], [`Self::is_active_replica`], and
+    /// [`Self::get_active_replicas_for_object`], which differ only in how they
+    /// project the result.
+    fn active_replica_ids(&self, id: &GlobalId) -> ActiveReplicas<'_> {
+        // An empty set to borrow for objects whose scheduling target is gone.
+        static EMPTY: BTreeSet<ReplicaId> = BTreeSet::new();
+
         if let Some(ingestion_id) = self.ingestion_exports.get(id) {
             match self.active_ingestions.get(ingestion_id) {
-                Some(ingestion) => Box::new(self.replicas.iter_mut().filter_map(
-                    move |(replica_id, replica)| {
-                        if ingestion.active_replicas.contains(replica_id) {
-                            Some(replica)
-                        } else {
-                            None
-                        }
-                    },
-                )),
-                None => {
-                    // The ingestion has already been compacted away (aka. stopped).
-                    Box::new(std::iter::empty())
-                }
+                Some(ingestion) => ActiveReplicas::Scheduled(&ingestion.active_replicas),
+                // The ingestion has already been compacted away (aka. stopped).
+                None => ActiveReplicas::Scheduled(&EMPTY),
             }
         } else if let Some(ingestion) = self.active_ingestions.get(id) {
-            Box::new(
-                self.replicas
-                    .iter_mut()
-                    .filter_map(move |(replica_id, replica)| {
-                        if ingestion.active_replicas.contains(replica_id) {
-                            Some(replica)
-                        } else {
-                            None
-                        }
-                    }),
-            )
+            // A new-syntax source lists only its tables in `source_exports`, so
+            // the primary ingestion id is not in `ingestion_exports`.
+            ActiveReplicas::Scheduled(&ingestion.active_replicas)
         } else if let Some(export) = self.active_exports.get(id) {
-            Box::new(
-                self.replicas
-                    .iter_mut()
-                    .filter_map(move |(replica_id, replica)| {
-                        if export.active_replicas.contains(replica_id) {
-                            Some(replica)
-                        } else {
-                            None
-                        }
-                    }),
-            )
+            ActiveReplicas::Scheduled(&export.active_replicas)
         } else {
-            Box::new(self.replicas.values_mut())
+            // Objects that have no per-replica scheduling (e.g. tables and
+            // webhooks) run on all replicas.
+            ActiveReplicas::All
+        }
+    }
+
+    /// Returns the replicas that are actively running the given object (ingestion or export).
+    fn active_replicas(&mut self, id: &GlobalId) -> Box<dyn Iterator<Item = &mut Replica> + '_> {
+        // Take an owned copy of the scheduled set so the immutable borrow of
+        // `self` ends before we borrow `self.replicas` mutably below. The set
+        // is tiny (one entry per replica) and this is not a per-row path.
+        let scheduled = match self.active_replica_ids(id) {
+            ActiveReplicas::All => None,
+            ActiveReplicas::Scheduled(replicas) => Some(replicas.clone()),
+        };
+        match scheduled {
+            None => Box::new(self.replicas.values_mut()),
+            Some(scheduled) => Box::new(self.replicas.iter_mut().filter_map(
+                move |(replica_id, replica)| scheduled.contains(replica_id).then_some(replica),
+            )),
         }
     }
 
     /// Returns whether the given replica is actively running the given object (ingestion or export).
     fn is_active_replica(&self, id: &GlobalId, replica_id: &ReplicaId) -> bool {
-        if let Some(ingestion_id) = self.ingestion_exports.get(id) {
-            match self.active_ingestions.get(ingestion_id) {
-                Some(ingestion) => ingestion.active_replicas.contains(replica_id),
-                None => {
-                    // The ingestion has already been compacted away (aka. stopped).
-                    false
-                }
-            }
-        } else if let Some(ingestion) = self.active_ingestions.get(id) {
-            ingestion.active_replicas.contains(replica_id)
-        } else if let Some(export) = self.active_exports.get(id) {
-            export.active_replicas.contains(replica_id)
-        } else {
-            // For non-ingestion objects, all replicas are active
-            true
+        match self.active_replica_ids(id) {
+            ActiveReplicas::All => true,
+            ActiveReplicas::Scheduled(replicas) => replicas.contains(replica_id),
         }
     }
 
@@ -738,18 +735,9 @@ impl Instance {
     /// Returns the set of replica IDs that are actively running the given
     /// object (ingestion, ingestion export (aka. subsource), or export).
     pub fn get_active_replicas_for_object(&self, id: &GlobalId) -> BTreeSet<ReplicaId> {
-        if let Some(ingestion_id) = self.ingestion_exports.get(id) {
-            // Right now, only ingestions can have per-replica scheduling decisions.
-            match self.active_ingestions.get(ingestion_id) {
-                Some(ingestion) => ingestion.active_replicas.clone(),
-                None => {
-                    // The ingestion has already been compacted away (aka. stopped).
-                    BTreeSet::new()
-                }
-            }
-        } else {
-            // For non-ingestion objects, all replicas are active
-            self.replicas.keys().copied().collect()
+        match self.active_replica_ids(id) {
+            ActiveReplicas::All => self.replicas.keys().copied().collect(),
+            ActiveReplicas::Scheduled(replicas) => replicas.clone(),
         }
     }
 }

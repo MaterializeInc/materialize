@@ -335,6 +335,7 @@ impl Coordinator {
         let mut update_cluster_scheduling_config = false;
         let mut update_http_config = false;
         let mut update_advance_timelines_interval = false;
+        let mut update_optimizer_e2e_latency_warning_threshold = false;
 
         for op in &ops {
             match op {
@@ -389,6 +390,8 @@ impl Coordinator {
                     update_cluster_scheduling_config |= vars::is_cluster_scheduling_var(name);
                     update_http_config |= vars::is_http_config_var(name);
                     update_advance_timelines_interval |= name == DEFAULT_TIMESTAMP_INTERVAL.name();
+                    update_optimizer_e2e_latency_warning_threshold |=
+                        name == vars::OPTIMIZER_E2E_LATENCY_WARNING_THRESHOLD.name();
                 }
                 catalog::Op::ResetAllSystemConfiguration => {
                     // Assume they all need to be updated.
@@ -405,6 +408,7 @@ impl Coordinator {
                     update_metrics_config = true;
                     update_http_config = true;
                     update_advance_timelines_interval = true;
+                    update_optimizer_e2e_latency_warning_threshold = true;
                 }
                 catalog::Op::RenameItem { id, .. } => {
                     let item = self.catalog().get_entry(id);
@@ -560,6 +564,14 @@ impl Coordinator {
                 if new_interval != self.advance_timelines_interval.period() {
                     self.advance_timelines_interval = tokio::time::interval(new_interval);
                 }
+            }
+            if update_optimizer_e2e_latency_warning_threshold {
+                let threshold = self
+                    .catalog()
+                    .system_config()
+                    .optimizer_e2e_latency_warning_threshold();
+                self.optimizer_metrics
+                    .set_e2e_optimization_time_log_threshold(threshold);
             }
         }
         .instrument(info_span!("coord::catalog_transact_with::finalize"))
@@ -1455,7 +1467,7 @@ impl Coordinator {
             )?;
         }
         self.validate_resource_limit_numeric(
-            self.current_credit_consumption_rate(),
+            self.current_credit_consumption_rate(None),
             new_credit_consumption_rate,
             |system_vars| {
                 self.license_key

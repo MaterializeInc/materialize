@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,16 +9,16 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/namespace
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/namespace
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
-
-# not supported yet
-halt
 
 mode cockroach
 
@@ -28,28 +28,34 @@ CREATE TABLE a(a INT)
 statement ok
 CREATE DATABASE public; CREATE TABLE public.public.t(a INT)
 
+# Not supported by Materialize.
+onlyif cockroach
 # "public" with the current database designates the public schema
-query T
+query TTTTIT
 SHOW TABLES FROM public
 ----
-a
+public  a  table  root  0  NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 # To access all tables in database "public", one must specify
 # its public schema explicitly.
-query T
+query TTTTIT
 SHOW TABLES FROM public.public
 ----
-t
+public  t  table  root  0  NULL
 
 # Of course one can also list the tables in "public" by making it the
 # current database.
 statement ok
 SET database = public
 
-query T
+# Not supported by Materialize.
+onlyif cockroach
+query TTTTIT
 SHOW TABLES
 ----
-t
+public  t  table  root  0  NULL
 
 statement ok
 SET database = test; DROP DATABASE public
@@ -64,31 +70,43 @@ date
 statement ok
 SET search_path=public,pg_catalog
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE pg_type(x INT); INSERT INTO pg_type VALUES(42)
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT x FROM pg_type
 ----
 42
 
+# Not supported by Materialize.
+onlyif cockroach
 # Leave database, check name resolves to default.
 # The expected error can only occur on the virtual pg_type, not the physical one.
 query error cannot access virtual schema in anonymous database
 SET database = ''; SELECT * FROM pg_type
 
+# Not supported by Materialize.
+onlyif cockroach
 # Go to different database, check name still resolves to default.
 query T
 CREATE DATABASE foo; SET database = foo; SELECT typname FROM pg_type WHERE typname = 'date'
 ----
 date
 
+# Not supported by Materialize.
+onlyif cockroach
 # Verify that pg_catalog at the beginning of the search path takes precedence.
 query T
 SET database = test; SET search_path = pg_catalog,public; SELECT typname FROM pg_type WHERE typname = 'date'
 ----
 date
 
+# Not supported by Materialize.
+onlyif cockroach
 # Now set the search path to the testdb, placing pg_catalog explicitly
 # at the end.
 query I
@@ -96,17 +114,25 @@ SET search_path = public,pg_catalog; SELECT x FROM pg_type
 ----
 42
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP TABLE pg_type; RESET search_path; SET database = test
 
+# Not supported by Materialize.
+onlyif cockroach
 # Unqualified index name resolution.
 statement ok
-ALTER INDEX "primary" RENAME TO a_pk
+ALTER INDEX a_pkey RENAME TO a_pk
 
+# Not supported by Materialize.
+onlyif cockroach
 # Schema-qualified index name resolution.
 statement ok
 ALTER INDEX public.a_pk RENAME TO a_pk2
 
+# Not supported by Materialize.
+onlyif cockroach
 # DB-qualified index name resolution (CRDB 1.x compat).
 statement ok
 ALTER INDEX test.a_pk2 RENAME TO a_pk3
@@ -115,20 +141,24 @@ statement ok
 CREATE DATABASE public; CREATE TABLE public.public.t(a INT)
 
 # We can't see the DB "public" with DB-qualified index name resolution.
-statement error index "primary" does not exist
-ALTER INDEX public."primary" RENAME TO t_pk
+statement error unknown schema 'public'
+ALTER INDEX public.t_pkey RENAME TO t_pk
 
+# Not supported by Materialize.
+onlyif cockroach
 # But we can see it with sufficient qualification.
 statement ok
-ALTER INDEX public.public."primary" RENAME TO t_pk
+ALTER INDEX public.public.t_pkey RENAME TO t_pk
 
 # If the search path is invalid, we get a special error.
 statement ok
 SET search_path = invalid
 
-statement error schema or database was not found while searching index: "a_pk3"
+statement error unknown catalog item 'a_pk3'
 ALTER INDEX a_pk3 RENAME TO a_pk4
 
+# Not supported by Materialize.
+onlyif cockroach
 # But qualification resolves the problem.
 statement ok
 ALTER INDEX public.a_pk3 RENAME TO a_pk4

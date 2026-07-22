@@ -50,7 +50,6 @@ class MaterializeEmulator(Service):
         name = "materialized"
 
         config: ServiceConfig = {
-            "mzbuild": name,
             "ports": [6875, 6874, 6876, 6877, 6878, 26257],
             "healthcheck": {
                 "test": ["CMD", "curl", "-f", "localhost:6878/api/readyz"],
@@ -59,6 +58,10 @@ class MaterializeEmulator(Service):
                 "start_period": "600s",
             },
         }
+        if image is not None:
+            config["image"] = image
+        else:
+            config["mzbuild"] = name
 
         super().__init__(name=name, config=config)
 
@@ -185,14 +188,26 @@ class Materialized(Service):
 
         if system_parameter_defaults is None:
             system_parameter_defaults = get_default_system_parameters(
-                system_parameter_version or image_version
+                system_parameter_version or image_version,
+                metadata_store=metadata_store,
             )
+        else:
+            # Copy so the writes below don't leak into the caller's dict,
+            # which is often shared across multiple Materialized instances.
+            system_parameter_defaults = dict(system_parameter_defaults)
 
         system_parameter_defaults["default_cluster_replication_factor"] = str(
             default_replication_factor
         )
         if additional_system_parameter_defaults is not None:
             system_parameter_defaults.update(additional_system_parameter_defaults)
+
+        # `persist_pg_consensus_read_committed` panics persist on CockroachDB.
+        # Force it off there regardless of how the defaults were produced, since
+        # a caller may have derived them for the default Postgres backend and
+        # handed them to a CRDB-backed environmentd.
+        if metadata_store == "cockroach":
+            system_parameter_defaults["persist_pg_consensus_read_committed"] = "false"
 
         if len(system_parameter_defaults) > 0:
             environment += [

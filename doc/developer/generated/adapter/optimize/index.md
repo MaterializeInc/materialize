@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/optimize/index.rs
-revision: 52af3ba2a1
+revision: 43a933b189
 ---
 
 # adapter::optimize::index

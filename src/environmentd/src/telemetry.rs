@@ -78,6 +78,7 @@
 // https://app.segment.com/materializeinc/sources/cloud_dev/debugger.
 
 use anyhow::bail;
+use chrono::Utc;
 use futures::StreamExt;
 use mz_adapter::PeekResponseUnary;
 use mz_adapter::telemetry::{EventDetails, SegmentClientExt};
@@ -98,6 +99,10 @@ pub struct Config {
     pub adapter_client: mz_adapter::Client,
     /// The ID of the environment for which to report data.
     pub environment_id: EnvironmentId,
+    /// The validated license key for this environment. Reported so downstream
+    /// analytics can tell which entitlements are active and whether the key has
+    /// expired.
+    pub license_key: mz_license_keys::ValidatedLicenseKey,
     /// How frequently to send a summary to Segment.
     pub report_interval: Duration,
 }
@@ -112,6 +117,7 @@ async fn report_loop(
         segment_client,
         adapter_client,
         environment_id,
+        license_key,
         report_interval,
     }: Config,
 ) {
@@ -198,13 +204,42 @@ async fn report_loop(
             })
             .await;
 
-        let traits = match traits {
+        let mut traits = match traits {
             Ok(traits) => traits,
             Err(e) => {
                 soft_panic_or_log!("unable to collect telemetry traits: {e}");
                 continue;
             }
         };
+
+        // Merge in the license key's organization and environment IDs, plus its
+        // current state. The license key is the authoritative source for these
+        // IDs. `EnvironmentId::organization_id` only matches the real
+        // organization in cloud SaaS, so we report the license key's `sub`
+        // (organization) and `aud` (environment) instead.
+        //
+        // Expiry is recomputed against the wall clock each interval rather than
+        // reusing the flag computed once at startup, so a key that lapses while
+        // environmentd keeps running is reported as expired. The
+        // `expiration == 0` guard exempts the sentinel disabled/emulator key,
+        // whose zero expiration is not a real timestamp.
+        let now_secs = u64::try_from(Utc::now().timestamp()).unwrap_or(0);
+        let license_expired = license_key.expired
+            || (license_key.expiration != 0 && now_secs >= license_key.expiration);
+        if let Some(traits) = traits.as_object_mut() {
+            traits.insert("organization_id".into(), json!(license_key.organization));
+            traits.insert("environment_id".into(), json!(license_key.environment_id));
+            traits.insert("license_key_id".into(), json!(license_key.id));
+            traits.insert(
+                "license_expiration_timestamp".into(),
+                json!(license_key.expiration),
+            );
+            traits.insert("license_expired".into(), json!(license_expired));
+            traits.insert(
+                "license_expiration_behavior".into(),
+                json!(license_key.expiration_behavior),
+            );
+        }
 
         tracing::info!(?traits, "telemetry traits");
 

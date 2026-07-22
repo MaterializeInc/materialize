@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+import re
 import time
 import urllib.parse
 from functools import cache
@@ -51,6 +52,78 @@ from materialize.workload_replay.util import (
 def delivery_report(err: KafkaError | None, msg: Any) -> None:
     """Kafka delivery report callback."""
     assert err is None, f"Delivery failed for user record {msg.key()}: {err}"
+
+
+@cache
+def make_kafka_producer(kafka_port: int):
+    """Create (and cache per port) a confluent_kafka Producer."""
+    return confluent_kafka.Producer(
+        {
+            "bootstrap.servers": f"127.0.0.1:{kafka_port}",
+            "linger.ms": 20,
+            "batch.num.messages": 10000,
+            "queue.buffering.max.kbytes": 1048576,
+            "compression.type": "lz4",
+            "acks": "1",
+            "retries": 3,
+        }
+    )
+
+
+def get_kafka_value_format(create_sql: str) -> str:
+    """Return a source's Kafka VALUE format ('json' or 'avro') from its CREATE SQL.
+
+    Captured sources may be `VALUE FORMAT JSON` (or bare `FORMAT JSON`); everything
+    else (AVRO, including Debezium envelopes) is produced via the Avro/Confluent path.
+    """
+    m = re.search(r"VALUE\s+FORMAT\s+(\w+)", create_sql, re.IGNORECASE) or re.search(
+        r"\bFORMAT\s+(\w+)", create_sql, re.IGNORECASE
+    )
+    return "json" if (m and m.group(1).lower() == "json") else "avro"
+
+
+def _json_bytes(value: Any) -> bytes | None:
+    """Encode a generated value as raw UTF-8 bytes for a FORMAT JSON message."""
+    if value is None:
+        return None
+    if isinstance(value, bytes | bytearray):
+        return bytes(value)
+    return str(value).encode()
+
+
+def produce_json(producer: Any, topic: str, columns: list[Column], rng, num_rows: int):
+    """Produce raw-JSON Kafka messages for a `FORMAT JSON` source.
+
+    MZ's `FORMAT JSON` exposes the message value as a single `data` jsonb column and
+    (with `KEY FORMAT JSON`) the key as a `key` jsonb column; `INCLUDE
+    PARTITION/OFFSET/TIMESTAMP/HEADERS` columns are Kafka metadata the broker fills
+    in, so we don't produce them. The jsonb generator already emits a JSON string,
+    so we ship it as-is — no Avro/Confluent framing (which a JSON source can't
+    decode, producing the "Failed to decode JSON" errors that propagate downstream).
+    """
+    names = {c.name: i for i, c in enumerate(columns)}
+    data_idx = names.get("data")
+    assert (
+        data_idx is not None
+    ), f"FORMAT JSON source {topic} has no `data` column (cols={list(names)})"
+    key_idx = names.get("key")
+
+    producer.poll(0)
+    for _ in range(num_rows):
+        row = [c.kafka_value(rng) for c in columns]
+        while True:
+            try:
+                producer.produce(
+                    topic=topic,
+                    key=_json_bytes(row[key_idx]) if key_idx is not None else None,
+                    value=_json_bytes(row[data_idx]),
+                    on_delivery=delivery_report,
+                )
+                break
+            except BufferError:
+                producer.poll(0.01)
+        producer.poll(0)
+    producer.flush()
 
 
 async def ingest_webhook(
@@ -159,17 +232,7 @@ def get_kafka_objects(
 
     registry = SchemaRegistryClient({"url": f"http://127.0.0.1:{schema_registry_port}"})
 
-    producer = confluent_kafka.Producer(
-        {
-            "bootstrap.servers": f"127.0.0.1:{kafka_port}",
-            "linger.ms": 20,
-            "batch.num.messages": 10000,
-            "queue.buffering.max.kbytes": 1048576,
-            "compression.type": "lz4",
-            "acks": "1",
-            "retries": 3,
-        }
-    )
+    producer = make_kafka_producer(kafka_port)
 
     col_names = [c.name for c in columns]
 
@@ -393,25 +456,45 @@ def ingest(
 
         with conn.cursor() as cur:
             cur.execute(stmt)
+        # The connection is opened with autocommit=False, so without this commit
+        # the implicit InnoDB transaction is discarded on close and no rows are
+        # ingested.
+        conn.commit()
         conn.close()
 
     elif source["type"] == "kafka":
+        topic = get_kafka_topic(source)
+
+        if get_kafka_value_format(child["create_sql"]) == "json":
+            produce_json(
+                make_kafka_producer(c.default_port("kafka")),
+                topic,
+                columns,
+                rng,
+                num_rows,
+            )
+            return
+
         batch_values_kafka = []
         for _ in range(num_rows):
             row = [col.kafka_value(rng) for col in columns]
             batch_values_kafka.append(row)
 
-        topic = get_kafka_topic(source)
         debezium = "ENVELOPE DEBEZIUM" in child["create_sql"]
 
-        producer, serializer, key_serializer, sctx, ksctx, col_names = (
-            get_kafka_objects(
-                topic,
-                tuple(columns),
-                debezium,
-                c.default_port("schema-registry"),
-                c.default_port("kafka"),
-            )
+        (
+            producer,
+            serializer,
+            key_serializer,
+            sctx,
+            ksctx,
+            col_names,
+        ) = get_kafka_objects(
+            topic,
+            tuple(columns),
+            debezium,
+            c.default_port("schema-registry"),
+            c.default_port("kafka"),
         )
         now_ms = int(time.time() * 1000)
         if debezium:

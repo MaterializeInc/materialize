@@ -28,7 +28,7 @@ mcp-developer
 {"jsonrpc":"2.0","id":2,"method":"tools/list"}
 ----
 200 OK
-{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"query_system_catalog","title":"Query System Catalog","description":"Query Materialize system catalog tables for troubleshooting and observability. Only mz_*, pg_catalog, and information_schema tables are accessible. Use the mz_internal.mz_ontology_* tables to discover tables, columns, and join paths before writing queries. Response limit: 1 MB.","inputSchema":{"type":"object","properties":{"sql_query":{"type":"string","description":"PostgreSQL-compatible SELECT, SHOW, or EXPLAIN query referencing mz_* system catalog tables"}},"required":["sql_query"]},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},{"name":"query","title":"Query","description":"Execute a read-only SQL query (SELECT, SHOW, or EXPLAIN) against any object the role can access, including system catalog and user objects. Requires a cluster, which is what enables EXPLAIN ANALYZE and queries against indexed user objects. For pure system catalog lookups that do not need a cluster, prefer `query_system_catalog`. Response limit: 1 MB.","inputSchema":{"type":"object","properties":{"cluster":{"type":"string","description":"Exact cluster name the query should run on. Required: EXPLAIN ANALYZE and queries against indexed user objects need a specific cluster to execute on."},"sql_query":{"type":"string","description":"PostgreSQL-compatible SELECT, SHOW, or EXPLAIN statement. Multi-statement queries are rejected."}},"required":["cluster","sql_query"]},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}}]}}
+{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"query_system_catalog","title":"Query System Catalog","description":"Query Materialize system catalog tables for troubleshooting and observability. Only mz_*, pg_catalog, and information_schema tables are accessible. Use the mz_internal.mz_ontology_* tables to discover tables, columns, and join paths before writing queries. Response limit: 1.0 MB.","inputSchema":{"type":"object","properties":{"sql_query":{"type":"string","description":"PostgreSQL-compatible SELECT, SHOW, or EXPLAIN query referencing mz_*, pg_catalog, or information_schema tables"}},"required":["sql_query"]},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},{"name":"query","title":"Query","description":"Execute a read-only SQL query (SELECT, SHOW, or EXPLAIN) against any object the role can access, including system catalog and user objects. Requires a cluster, which is what enables EXPLAIN ANALYZE and queries against indexed user objects. For pure system catalog lookups that do not need a cluster, prefer `query_system_catalog`. Response limit: 1.0 MB.","inputSchema":{"type":"object","properties":{"cluster":{"type":"string","description":"Exact cluster name the query should run on. Required: EXPLAIN ANALYZE and queries against indexed user objects need a specific cluster to execute on."},"cluster_replica":{"type":"string","description":"Optional replica name (e.g. 'r1') to target one replica of the cluster. Required for EXPLAIN ANALYZE on clusters with more than one replica. Find replica names in mz_catalog.mz_cluster_replicas."},"sql_query":{"type":"string","description":"PostgreSQL-compatible SELECT, SHOW, or EXPLAIN statement. Multi-statement queries are rejected."}},"required":["cluster","sql_query"]},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}}]}}
 
 # =============================================================================
 # query - valid SELECT/SHOW/EXPLAIN
@@ -183,3 +183,29 @@ mcp-developer
 ----
 200 OK
 {"jsonrpc":"2.0","id":50,"result":{"content":[{"type":"text","text":"[\n  [\n    \"materialize\"\n  ]\n]"}],"isError":false}}
+
+# =============================================================================
+# query - cluster_replica validation
+# =============================================================================
+
+# Empty cluster_replica is rejected by validation before reaching the engine.
+mcp-developer
+{"jsonrpc":"2.0","id":60,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","cluster_replica":"","sql_query":"SELECT 1"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":60,"error":{"code":-32602,"message":"Query validation failed: cluster_replica must not be empty or whitespace-only","data":{"error_type":"ValidationError"}}}
+
+# Whitespace-only cluster_replica is rejected too.
+mcp-developer
+{"jsonrpc":"2.0","id":61,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","cluster_replica":"   ","sql_query":"SELECT 1"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":61,"error":{"code":-32602,"message":"Query validation failed: cluster_replica must not be empty or whitespace-only","data":{"error_type":"ValidationError"}}}
+
+# A replica that does not exist on the target cluster fails at execution with
+# an error naming the replica, so agents can self-correct.
+mcp-developer
+{"jsonrpc":"2.0","id":62,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","cluster_replica":"r99","sql_query":"SELECT 1"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":62,"error":{"code":-32603,"message":"Query execution failed: cluster replica 'quickstart.r99' does not exist","data":{"error_type":"ExecutionError"}}}

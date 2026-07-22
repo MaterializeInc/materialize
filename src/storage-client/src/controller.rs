@@ -253,16 +253,20 @@ pub trait StorageTxn {
     /// include these keys.
     fn delete_collection_metadata(&mut self, ids: BTreeSet<GlobalId>) -> Vec<(GlobalId, ShardId)>;
 
-    /// Retrieve all of the shards that are no longer in use by an active
-    /// collection but are yet to be finalized.
+    /// Retrieve the durable set of shards recorded as unfinalized.
+    ///
+    /// Entries must be reconciled with active collection metadata before
+    /// finalization because stale entries can refer to active collections.
     fn get_unfinalized_shards(&self) -> BTreeSet<ShardId>;
 
     /// Insert the specified values as unfinalized shards.
     fn insert_unfinalized_shards(&mut self, s: BTreeSet<ShardId>) -> Result<(), StorageError>;
 
-    /// Mark the specified shards as finalized, deleting them from the
-    /// unfinalized shard collection.
-    fn mark_shards_as_finalized(&mut self, shards: BTreeSet<ShardId>);
+    /// Removes the specified shards from the unfinalized shard collection.
+    ///
+    /// Missing shards are ignored. This only updates transaction metadata and
+    /// does not finalize the underlying Persist shards.
+    fn remove_unfinalized_shards(&mut self, shards: BTreeSet<ShardId>);
 
     /// Get the txn WAL shard for this environment if it exists.
     fn get_txn_wal_shard(&self) -> Option<ShardId>;
@@ -326,6 +330,11 @@ pub trait StorageController: Debug {
 
     /// Returns `true` if each non-transient, non-excluded collection is
     /// hydrated on at least one of the provided replicas.
+    ///
+    /// Collections that are not scheduled on any of the provided replicas do
+    /// not count against hydration: a single-replica source keeps running on
+    /// its current replica and can never hydrate on a replica it is not
+    /// scheduled on.
     ///
     /// If no replicas are provided, this checks for hydration on _any_ replica.
     ///

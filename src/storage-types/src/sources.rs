@@ -93,8 +93,10 @@ pub struct IngestionDescription<S: 'static = (), C: ConnectionAccess = InlinedCo
     ///
     ///   Re-rendering/executing the source after making these modifications
     ///   adds and drops the subsource, respectively.
-    /// - This field includes the primary source's ID, which might need to be
-    ///   filtered out to understand which exports are explicit ingestion exports.
+    /// - For old-syntax sources this field includes the primary source's ID,
+    ///   which might need to be filtered out to understand which exports are
+    ///   explicit ingestion exports. New-syntax sources (with source tables)
+    ///   list only their exports here.
     /// - This field does _not_ include the remap collection, which is tracked
     ///   in its own field.
     pub source_exports: BTreeMap<GlobalId, SourceExport<S>>,
@@ -909,6 +911,12 @@ impl crate::AlterCompatible for SourceExportDetails {
 pub enum SourceExportStatementDetails {
     Postgres {
         table: mz_postgres_util::desc::PostgresTableDesc,
+        /// Whether the text-to-oid cast for this export accepts the full `u32`
+        /// range. Exports created before the cast was widened decode as
+        /// `false` and must keep the legacy `i32`-range cast forever, because
+        /// replication re-casts old tuples on delete and the persisted rows
+        /// were ingested under the legacy semantics.
+        cast_oid_full_range: bool,
     },
     MySql {
         table: mz_mysql_util::MySqlTableDesc,
@@ -929,10 +937,14 @@ pub enum SourceExportStatementDetails {
 impl RustType<ProtoSourceExportStatementDetails> for SourceExportStatementDetails {
     fn into_proto(&self) -> ProtoSourceExportStatementDetails {
         match self {
-            SourceExportStatementDetails::Postgres { table } => ProtoSourceExportStatementDetails {
+            SourceExportStatementDetails::Postgres {
+                table,
+                cast_oid_full_range,
+            } => ProtoSourceExportStatementDetails {
                 kind: Some(proto_source_export_statement_details::Kind::Postgres(
                     postgres::ProtoPostgresSourceExportStatementDetails {
                         table: Some(table.into_proto()),
+                        cast_oid_full_range: *cast_oid_full_range,
                     },
                 )),
             },
@@ -986,6 +998,7 @@ impl RustType<ProtoSourceExportStatementDetails> for SourceExportStatementDetail
                 table: details
                     .table
                     .into_rust_if_some("ProtoPostgresSourceExportStatementDetails::table")?,
+                cast_oid_full_range: details.cast_oid_full_range,
             },
             Some(Kind::Mysql(details)) => SourceExportStatementDetails::MySql {
                 table: details

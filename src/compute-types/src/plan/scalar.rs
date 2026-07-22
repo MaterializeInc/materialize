@@ -106,6 +106,11 @@ impl LirScalarExpr {
         }
     }
 
+    /// Returns true if the expression is a literal true.
+    pub fn is_literal_true(&self) -> bool {
+        Some(Ok(Datum::True)) == self.as_literal()
+    }
+
     /// If the expression is an int64, returns the literal.
     pub fn as_literal_int64(&self) -> Option<i64> {
         match self.as_literal() {
@@ -628,6 +633,7 @@ impl From<&LirScalarExpr> for MirScalarExpr {
 }
 
 impl TryFrom<&MirScalarExpr> for LirScalarExpr {
+    // MIR-to-LIR failures come from unmaterializable functions that haven't been dealt with yet.
     type Error = Vec<UnmaterializableFunc>;
 
     fn try_from(value: &MirScalarExpr) -> Result<Self, Self::Error> {

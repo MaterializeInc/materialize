@@ -8,9 +8,11 @@ menu:
 ---
 
 {{< note >}}
-`v1alpha1` is the default CRD version (default). With v1alpha1, rollouts require manually rotating a UUID.
-Starting in v26.30, the [v1](/self-managed-deployments/materialize-crd-field-descriptions/v1/)
-CRD is available and provides a simplified rollout behavior.
+`v1alpha1` is the default CRD version for the Helm chart. The Terraform
+modules default to `v1` starting in v4.0.0. With v1alpha1, rollouts require
+manually rotating a UUID. Starting in v26.30, the
+[v1](/self-managed-deployments/materialize-crd-field-descriptions/v1/) CRD is
+available and provides a simplified rollout behavior.
 
 To switch to `v1`, see [Adopting the v1
 CRD](/self-managed-deployments/upgrading/adopting-the-v1-crd/).

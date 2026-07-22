@@ -14,6 +14,7 @@ mod builtin_schema_migration;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use std::time::{Duration, Instant};
 
 use futures::future::{BoxFuture, FutureExt};
@@ -567,6 +568,7 @@ impl Catalog {
                 state,
                 expr_cache_handle,
                 transient_revision: 1,
+                shared_transient_revision: Arc::new(AtomicU64::new(1)),
                 storage: Arc::new(tokio::sync::Mutex::new(storage)),
             };
 
@@ -884,7 +886,16 @@ fn add_new_remove_old_builtin_items_migration(
             | Builtin::Index(_)
             | Builtin::Connection(_) => continue,
         };
-        txn.drop_comments(&BTreeSet::from_iter([comment_id]))?;
+        // Drop comments under every relation-style `CommentObjectId` variant
+        // for this id, not just the current one. When a builtin's type changes
+        // (e.g. Table -> MaterializedView) but its catalog id is preserved, the
+        // prior type's comment rows would otherwise linger forever.
+        txn.drop_comments(&BTreeSet::from_iter([
+            CommentObjectId::Table(id),
+            CommentObjectId::View(id),
+            CommentObjectId::MaterializedView(id),
+            CommentObjectId::Source(id),
+        ]))?;
 
         let mut comments = comments.clone();
         for (col_idx, name) in desc.iter_names().enumerate() {

@@ -408,6 +408,7 @@ impl MetricsVecs {
             init_state: self.cmd_metrics("init_state"),
             add_rollup: self.cmd_metrics("add_rollup"),
             remove_rollups: self.cmd_metrics("remove_rollups"),
+            upgrade_version: self.cmd_metrics("upgrade_version"),
             register: self.cmd_metrics("register"),
             compare_and_append: self.cmd_metrics("compare_and_append"),
             compare_and_append_noop:             registry.register(metric!(
@@ -619,6 +620,7 @@ pub struct CmdsMetrics {
     pub(crate) init_state: CmdMetrics,
     pub(crate) add_rollup: CmdMetrics,
     pub(crate) remove_rollups: CmdMetrics,
+    pub(crate) upgrade_version: CmdMetrics,
     pub(crate) register: CmdMetrics,
     pub(crate) compare_and_append: CmdMetrics,
     pub(crate) compare_and_append_noop: IntCounter,
@@ -2299,6 +2301,7 @@ pub struct WatchMetrics {
     pub(crate) wait_resolved_via_watch: IntCounter,
     pub(crate) wait_resolved_via_sleep: IntCounter,
     pub(crate) notify_sent: IntCounter,
+    pub(crate) notify_upper_sent: IntCounter,
     pub(crate) notify_noop: IntCounter,
     pub(crate) notify_recv: IntCounter,
     pub(crate) notify_lagged: IntCounter,
@@ -2328,6 +2331,10 @@ impl WatchMetrics {
             notify_sent: registry.register(metric!(
                 name: "mz_persist_watch_notify_sent",
                 help: "count of watch notifications sent to a non-empty broadcast channel",
+            )),
+            notify_upper_sent: registry.register(metric!(
+                name: "mz_persist_watch_notify_upper_sent",
+                help: "count of strict shard upper advances signaled to upper waiters",
             )),
             notify_noop: registry.register(metric!(
                 name: "mz_persist_watch_notify_noop",

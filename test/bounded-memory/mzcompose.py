@@ -14,6 +14,7 @@ and do not regress. Contains tests for large data ingestions.
 
 import argparse
 import math
+import traceback
 from dataclasses import dataclass
 from string import ascii_lowercase
 from textwrap import dedent
@@ -46,6 +47,7 @@ from materialize.test_analytics.data.bounded_memory.bounded_memory_minimal_searc
     BoundedMemoryMinimalSearchEntry,
 )
 from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
+from materialize.ui import UIError
 
 # Those defaults have been carefully chosen to avoid known OOMs
 # such as materialize#15093 and database-issues#4297 while hopefully catching any further
@@ -87,6 +89,11 @@ class Scenario:
     post_restart: str
     materialized_memory: str
     clusterd_memory: str
+    # Testdrive `--default-timeout`, i.e. the wall-clock budget for a `>` query
+    # to reach its expected result while the dataflow catches up. Kept tight by
+    # default so that a memory-bounding-induced hang fails fast. Scenarios whose
+    # legitimate snapshot/hydration time is close to this budget raise it.
+    timeout: str = "5m"
     disabled: bool = False
     needs_iceberg: bool = False
 
@@ -248,6 +255,10 @@ SCENARIOS = [
             """),
         materialized_memory="4.5Gb",
         clusterd_memory="1Gb",
+        # Snapshotting 20M rows (~20GB) under a 1Gb clusterd runs I/O-bound and
+        # legitimately takes ~4.5min in the good case, too close to the default
+        # 5m budget to be reliable on shared CI hosts.
+        timeout="10m",
     ),
     PgCdcScenario(
         name="pg-cdc-update",
@@ -261,7 +272,7 @@ SCENARIOS = [
         + "\n".join([dedent("""
                     $ postgres-execute connection=postgres://postgres:postgres@postgres
                     UPDATE t1 SET f2 = f2 + 1;
-                    """) for letter in ascii_lowercase[:ITERATIONS]])
+                    """) for _ in ascii_lowercase])
         + dedent(
             f"""
             $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -443,7 +454,7 @@ SCENARIOS = [
         + "\n".join([dedent("""
                     $ mysql-execute name=mysql
                     UPDATE t1 SET f2 = f2 + 1;
-                    """) for letter in ascii_lowercase[:ITERATIONS]])
+                    """) for _ in ascii_lowercase])
         + dedent(
             f"""
             $ mysql-execute name=mysql
@@ -578,7 +589,7 @@ SCENARIOS = [
 
                     $ kafka-ingest format=avro key-format=avro topic=topic1 schema=${{value-schema}} key-schema=${{key-schema}} repeat={REPEAT}
                     "${{kafka-ingest.iteration}}"
-                    """) for letter in ascii_lowercase[:ITERATIONS]])
+                    """) for letter in ascii_lowercase])
         + KafkaScenario.END_MARKER
         + dedent(
             """
@@ -607,7 +618,7 @@ SCENARIOS = [
         + "\n".join([dedent(f"""
                     > INSERT INTO t1 (f1, f2) SELECT '{letter}', REPEAT('a', {PAD_LEN}) || generate_series::text FROM generate_series(1, {REPEAT});
                     > DELETE FROM t1 WHERE f1 = '{letter}';
-                    """) for letter in ascii_lowercase[:ITERATIONS]])
+                    """) for letter in ascii_lowercase])
         + dedent(
             """
             > SELECT * FROM v1;
@@ -1346,6 +1357,7 @@ def workflow_main(c: Composition, parser: WorkflowArgumentParser) -> None:
         "scenarios", nargs="*", default=None, help="run specified Scenarios"
     )
     args = parser.parse_args()
+    check_scenario_names(args.scenarios)
 
     for scenario in shard_list(SCENARIOS, lambda scenario: scenario.name):
         if shall_skip_scenario(scenario, args):
@@ -1355,18 +1367,20 @@ def workflow_main(c: Composition, parser: WorkflowArgumentParser) -> None:
             print(f"+++ Scenario {scenario.name} is disabled, skipping.")
             continue
 
-        c.override_current_testcase_name(f"Scenario '{scenario.name}'")
+        # test_case records a failure without re-raising, so one failing
+        # scenario does not abort the remaining scenarios. The recorded
+        # failures still fail the overall run.
+        with c.test_case(f"Scenario '{scenario.name}'"):
+            print(
+                f"+++ Running scenario {scenario.name} with materialized_memory={scenario.materialized_memory} and clusterd_memory={scenario.clusterd_memory} ..."
+            )
 
-        print(
-            f"+++ Running scenario {scenario.name} with materialized_memory={scenario.materialized_memory} and clusterd_memory={scenario.clusterd_memory} ..."
-        )
-
-        run_scenario(
-            c,
-            scenario,
-            materialized_memory=scenario.materialized_memory,
-            clusterd_memory=scenario.clusterd_memory,
-        )
+            run_scenario(
+                c,
+                scenario,
+                materialized_memory=scenario.materialized_memory,
+                clusterd_memory=scenario.clusterd_memory,
+            )
 
 
 def workflow_minimization_search(
@@ -1398,6 +1412,7 @@ def workflow_minimization_search(
         type=float,
     )
     args = parser.parse_args()
+    check_scenario_names(args.scenarios)
 
     if buildkite.is_in_buildkite():
         test_analytics_config = create_test_analytics_config(c)
@@ -1437,6 +1452,17 @@ def workflow_minimization_search(
     except Exception as e:
         # An error during an upload must never cause the build to fail
         test_analytics.on_upload_failed(e)
+
+
+def check_scenario_names(scenario_names: list[str] | None) -> None:
+    """Reject unknown scenario names, a typo would otherwise silently skip everything."""
+    known_names = [scenario.name for scenario in SCENARIOS]
+    unknown_names = [name for name in scenario_names or [] if name not in known_names]
+    if unknown_names:
+        raise UIError(
+            f"unknown scenarios: {', '.join(unknown_names)}. "
+            f"Known scenarios: {', '.join(known_names)}"
+        )
 
 
 def shall_skip_scenario(scenario: Scenario, args: argparse.Namespace) -> bool:
@@ -1489,7 +1515,7 @@ def run_scenario(
             ))
         """)
 
-        testdrive_timeout_arg = "--default-timeout=5m"
+        testdrive_timeout_arg = f"--default-timeout={scenario.timeout}"
         statement_timeout = "> SET statement_timeout = '600s';\n"
         extra_testdrive_args: list[str] = []
 
@@ -1522,7 +1548,8 @@ def try_run_scenario(
     try:
         run_scenario(c, scenario, materialized_memory, clusterd_memory)
         return True
-    except:
+    except Exception:
+        traceback.print_exc()
         return False
 
 
@@ -1680,9 +1707,10 @@ def find_minimal_memory(
             )
             break
 
-    if (
-        materialized_memory < initial_materialized_memory
-        or clusterd_memory < initial_clusterd_memory
+    if _get_memory_in_gb(materialized_memory) < _get_memory_in_gb(
+        initial_materialized_memory
+    ) or _get_memory_in_gb(clusterd_memory) < _get_memory_in_gb(
+        initial_clusterd_memory
     ):
         print(f"Validating again the memory configuration for {scenario.name}")
         materialized_memory, clusterd_memory = _validate_new_memory_configuration(

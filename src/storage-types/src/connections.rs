@@ -764,25 +764,6 @@ impl IcebergCatalogConnection<InlinedConnection> {
     ) -> Result<Arc<dyn Catalog>, anyhow::Error> {
         let secret_reader = &storage_configuration.connection_context.secrets_reader;
         let aws_ref = &s3tables.aws_connection;
-        let aws_config = aws_ref
-            .connection
-            .load_sdk_config(
-                &storage_configuration.connection_context,
-                aws_ref.connection_id,
-                in_task,
-                ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
-            )
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to load AWS SDK config for S3 Tables Iceberg catalog \
-                     (connection id: {}, auth method: {}, catalog uri: {}, warehouse: {})",
-                    aws_ref.connection_id,
-                    aws_ref.connection.auth_method(),
-                    self.uri,
-                    s3tables.warehouse
-                )
-            })?;
 
         let aws_region = aws_ref
             .connection
@@ -819,9 +800,61 @@ impl IcebergCatalogConnection<InlinedConnection> {
         // Sign REST catalog requests with the Materialize AWS credential chain
         // via a custom `RequestAuthenticator`. For AssumeRole auth, also feed
         // the chain to OpenDAL's S3 loader so data-file IO uses the same creds.
-        let credentials_provider = aws_config
-            .credentials_provider()
-            .ok_or_else(|| anyhow!("aws_config missing credentials provider"))?;
+        //
+        // For AssumeRole auth, the provider serves cached credentials that a
+        // background task keeps fresh, so no request through this catalog ever
+        // waits on STS. The task lives as long as the catalog holds the
+        // provider.
+        let credentials_provider = match &aws_auth {
+            // NOTE: This branch never contacts the connection's ENDPOINT.
+            // REST requests go to the catalog URI and the STS calls use the
+            // SDK defaults. The endpoint is still validated so a forbidden
+            // one is rejected rather than silently ignored.
+            AwsAuth::AssumeRole(assume_role) => {
+                aws_ref.connection.validate_endpoint(
+                    ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
+                )?;
+                assume_role
+                    .prefetch_credentials(
+                        &storage_configuration.connection_context,
+                        aws_ref.connection_id,
+                        storage_configuration.config_set(),
+                        format!("aws-connection-{}", aws_ref.connection_id),
+                    )
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "failed to initialize AssumeRole credentials for S3 Tables Iceberg \
+                             catalog (catalog uri: {}, warehouse: {})",
+                            self.uri, s3tables.warehouse
+                        )
+                    })?
+            }
+            AwsAuth::Credentials(_) => {
+                let aws_config = aws_ref
+                    .connection
+                    .load_sdk_config(
+                        &storage_configuration.connection_context,
+                        aws_ref.connection_id,
+                        in_task,
+                        ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
+                    )
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "failed to load AWS SDK config for S3 Tables Iceberg catalog \
+                             (connection id: {}, auth method: {}, catalog uri: {}, warehouse: {})",
+                            aws_ref.connection_id,
+                            aws_ref.connection.auth_method(),
+                            self.uri,
+                            s3tables.warehouse
+                        )
+                    })?;
+                aws_config
+                    .credentials_provider()
+                    .ok_or_else(|| anyhow!("aws_config missing credentials provider"))?
+            }
+        };
 
         let authenticator = Arc::new(Sigv4Authenticator {
             provider: credentials_provider.clone(),
@@ -1115,6 +1148,13 @@ impl KafkaConnection {
     /// Generates a string that can be used as the base for a configuration ID
     /// (e.g., `client.id`, `group.id`, `transactional.id`) for a Kafka source
     /// or sink.
+    ///
+    /// NOTE: the `mz_catalog.mz_kafka_sources` builtin materialized view
+    /// reconstructs this exact `materialize-<env>-<conn>-<obj>` format in SQL
+    /// (see `MZ_KAFKA_SOURCES` in `src/catalog/src/builtin/mz_catalog.rs`).
+    /// The two must stay in sync. `test/testdrive/kafka-commit.td` guards this
+    /// by feeding the view's reconstructed value into `kafka-verify-commit`,
+    /// so a divergence here fails that test.
     pub fn id_base(
         connection_context: &ConnectionContext,
         connection_id: CatalogItemId,

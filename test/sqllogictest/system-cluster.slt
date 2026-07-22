@@ -526,11 +526,59 @@ SET CLUSTER TO foo;
 statement ok
 CREATE TABLE bar ( key text, val bigint );
 
+# The system check must decide by the schema's identity, not its bare name. A
+# user-created `information_schema` (the one system schema name not blocked by
+# the `mz_`/`pg_` prefix rule) must not bypass the restriction, so a user table
+# in it is rejected exactly like `materialize.public.bar` below.
+statement ok
+CREATE SCHEMA information_schema;
+
+statement ok
+CREATE TABLE materialize.information_schema.spoof ( key text );
+
 statement ok
 SET CLUSTER TO mz_catalog_server;
 
 statement error querying the following items "materialize\.public\.bar" is not allowed from the "mz_catalog_server" cluster
 SELECT key FROM bar;
+
+statement error querying the following items "materialize\.information_schema\.spoof" is not allowed from the "mz_catalog_server" cluster
+SELECT key FROM materialize.information_schema.spoof;
+
+# INSERT ... SELECT with a non-constant body is internally a read-then-write
+# whose SELECT half peeks on the active cluster, so reading a user object this
+# way from mz_catalog_server must be rejected like the bare SELECT above.
+
+statement ok
+CREATE TABLE sink_tbl ( key text, val bigint );
+
+statement error querying the following items "materialize\.public\.bar" is not allowed from the "mz_catalog_server" cluster
+INSERT INTO sink_tbl SELECT key, val FROM bar;
+
+# A constant INSERT runs no computation on the cluster and stays allowed.
+statement ok
+INSERT INTO sink_tbl VALUES ('a', 1);
+
+statement ok
+DROP TABLE sink_tbl;
+
+# COPY ... TO <url> runs its select as a dataflow on the active cluster, so
+# reading a user object this way from mz_catalog_server must be rejected too.
+
+statement ok
+CREATE SECRET aws_secret AS 'secret_key';
+
+statement ok
+CREATE CONNECTION aws_conn TO AWS (ACCESS KEY ID = 'access_key', SECRET ACCESS KEY = SECRET aws_secret) WITH (VALIDATE = false);
+
+statement error querying the following items "materialize\.public\.bar" is not allowed from the "mz_catalog_server" cluster
+COPY (SELECT key FROM bar) TO 's3://path/to/dir' WITH (AWS CONNECTION = aws_conn, FORMAT = 'csv');
+
+statement ok
+DROP CONNECTION aws_conn;
+
+statement ok
+DROP SECRET aws_secret;
 
 # But inspecting those objects, e.g. checking what indexes exist, should be allowed.
 statement ok

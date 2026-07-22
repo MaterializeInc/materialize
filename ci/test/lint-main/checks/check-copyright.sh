@@ -77,6 +77,7 @@ copyright_files=$(grep -vE \
     -e '^console/CLOUD_REF$' \
     -e '^console/login_examples$' \
     -e '^console/.*__snapshots__/.*' \
+    -e '^misc/python/materialize/cloudtest/k8s/minio-yaml/minio-standalone-.*\.yaml$' \
     <<< "$files"
 )
 

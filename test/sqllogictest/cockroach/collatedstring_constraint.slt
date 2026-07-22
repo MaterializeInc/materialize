@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,12 +9,15 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/collatedstring_constraint
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/collatedstring_constraint
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
 mode cockroach
@@ -23,81 +26,95 @@ mode cockroach
 
 statement ok
 CREATE TABLE p (
-  a TEXT COLLATE en_u_ks_level1 PRIMARY KEY
+  a STRING COLLATE en_u_ks_level1 PRIMARY KEY
 )
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO p VALUES ('a' COLLATE en_u_ks_level1)
 
-statement error duplicate key value \(a\)=\('a' COLLATE en_u_ks_level1\) violates unique constraint "primary"
+statement error COLLATE not yet supported
 INSERT INTO p VALUES ('A' COLLATE en_u_ks_level1)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO p VALUES ('b' COLLATE en_u_ks_level1)
 
 statement ok
 CREATE TABLE c1 (
-  a TEXT COLLATE en_u_ks_level1 PRIMARY KEY,
-  b TEXT COLLATE en_u_ks_level1
-) INTERLEAVE IN PARENT p (a)
+  a STRING COLLATE en_u_ks_level1 PRIMARY KEY,
+  b STRING COLLATE en_u_ks_level1
+)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO c1 VALUES ('A' COLLATE en_u_ks_level1, 'apple' COLLATE en_u_ks_level1)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO c1 VALUES ('b' COLLATE en_u_ks_level1, 'banana' COLLATE en_u_ks_level1)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO c1 VALUES ('p' COLLATE en_u_ks_level1, 'pear' COLLATE en_u_ks_level1)
 
 query T
 SELECT a FROM p ORDER BY a
 ----
-a
-b
+
 
 query T
 SELECT a FROM c1 ORDER BY a
 ----
-A
-b
-p
+
 
 query T
 SELECT b FROM c1 ORDER BY a
 ----
-apple
-banana
-pear
 
+
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE c2 (
-  a TEXT COLLATE en_u_ks_level1 PRIMARY KEY,
-  b TEXT COLLATE en_u_ks_level1,
+  a STRING COLLATE en_u_ks_level1 PRIMARY KEY,
+  b STRING COLLATE en_u_ks_level1,
   CONSTRAINT fk_p FOREIGN KEY (a) REFERENCES p
-) INTERLEAVE IN PARENT p (a)
+)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO c2 VALUES ('A' COLLATE en_u_ks_level1, 'apple' COLLATE en_u_ks_level1)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO c2 VALUES ('b' COLLATE en_u_ks_level1, 'banana' COLLATE en_u_ks_level1)
 
-statement error foreign key violation: value \['p' COLLATE en_u_ks_level1\] not found in p@primary \[a\]
+statement error unknown catalog item 'c2'
 INSERT INTO c2 VALUES ('p' COLLATE en_u_ks_level1, 'pear' COLLATE en_u_ks_level1)
 
 query T
 SELECT a FROM p ORDER BY a
 ----
-a
-b
 
+
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT a FROM c2 ORDER BY a
 ----
 A
 b
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT b FROM c2 ORDER BY a
 ----

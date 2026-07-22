@@ -15,6 +15,110 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.33.0
+*Released to Materialize Cloud: 2026-07-16* <br>
+*Released to Materialize Self-Managed: 2026-07-17* <br>
+
+### Improved hydration times on Materialize Cloud {#v26.33-upgraded-cloud-hardware}
+
+<red>*Materialize Cloud only*</red>
+
+We've upgraded cluster hardware for all Materialize Cloud environments. The new hardware speeds up compute-intensive
+operations. We've observed a 10%–66% reduction in hydration times. You don't need to take any actions. The improvement is live across all Materialize Cloud
+environments, on all new and existing clusters.
+
+### READ COMMITTED isolation for PostgreSQL metadata databases {#v26.33-pg-consensus-read-committed}
+
+<red>*Materialize Self-Managed only*</red>
+
+Starting in v26.33, self-managed deployments that use a PostgreSQL metadata
+database can configure Materialize to run its internal metadata queries under
+`READ COMMITTED` transaction isolation instead of `SERIALIZABLE`. This improves metadata
+write throughput. To enable this isolation mode, enable the `persist_pg_consensus_read_committed` system parameter after completing an upgrade to v26.33.
+
+{{< note >}}
+The parameter applies only to PostgreSQL metadata databases. Only enable it
+after you have upgraded your self-managed deployment to v26.33 or later.
+{{< /note >}}
+
+For details, see the [Self-Managed upgrade
+notes](/self-managed-deployments/upgrading/version-notes/).
+
+### Improvements {#v26.33-improvements}
+- **`EXPLAIN ANALYZE` on multi-replica clusters via MCP**: The Materialize MCP developer endpoint's `query` tool now accepts an optional cluster replica parameter, so `EXPLAIN ANALYZE` can target a specific replica.
+- **Faster queries on busy environments**: We've improved query latency on query-heavy clusters. We've reduced by caching the catalog snapshot for the duration of a session. In our tests, we've seen QPS improvements of up to 13%.
+- **Improved responsiveness under load**: A slow timestamp oracle no longer stalls unrelated sessions that are running `EXPLAIN TIMESTAMP` or `SUBSCRIBE`.
+- **New materialize-dbt [agent skill](/integrations/coding-agent-skills/)**: The
+  `materialize-dbt` skill helps coding agents build and manage dbt models for
+  Materialize.
+
+### Bug Fixes {#v26.33-bug-fixes}
+- Fixed server crashes triggered by stack overflows while computing object dependencies and read privileges.
+- Fixed catalog corruption and coordinator panics triggered by `ALTER SCHEMA RENAME` when the target schema contains user-defined types, functions, or temporary objects.
+- Fixed a crash that could occur when a `SUBSCRIBE` ran while an index or other dependency it read was concurrently dropped; the query now returns a clean error.
+- Fixed a crash triggered by binding a non-UTF-8 `char` parameter over the extended query protocol.
+- Calling `mz_any` or `mz_all` with a non-boolean argument now returns a planning error instead of crashing a compute worker.
+- Polymorphic array functions such as `array_remove` now return a planning error instead of dropping the connection when an argument would produce an array of `list` or `map`.
+- Fixed a class of crashes where cancelling or tearing down a statement (for example, `DROP CLUSTER`) while it was being dispatched could abort the server.
+- Fixed a crash where scraping the usage metrics endpoint could abort the server when an unmanaged cluster replica was present.
+- Fixed queries with nested, shadowed common table expressions returning incorrect results.
+- Fixed queries that reference a correlated CTE from a nested correlated scope returning incorrect results.
+- Fixed `SHOW COLUMNS` returning duplicate rows for certain system catalog objects after upgrading across releases.
+- Query results that fit within `max_result_size` are no longer incorrectly rejected by an over-counted memory estimate.
+- `DROP SCHEMA` without `CASCADE` no longer silently drops a schema that contains only user-defined types or functions; it now correctly treats the schema as non-empty.
+- Casting large OID values from text (`2147483648` through `4294967295`) and copying into `oid` columns no longer fail with an invalid-input error.
+- `NUL` bytes supplied to text values through query parameters, the HTTP SQL API, `COPY FROM`, and `convert_from` are now rejected, matching PostgreSQL.
+- A `COPY` that fails before entering copy mode no longer corrupts or hangs the connection for clients such as pgx and libpq.
+- `RESET` and `DISCARD ALL` now restore client-supplied startup parameters, such as the connected database, rather than server defaults, fixing connection poolers that rebound pooled sessions to the wrong database.
+- Fixed PostgreSQL sources so that upgrades correctly handle `oid` values above the signed 32-bit range instead of leaving replication stuck.
+- Fixed PostgreSQL sources that exclude a column erroneously halting when the excluded column and its constraint were dropped upstream.
+- Kafka source and sink metadata refresh intervals below one second are now rejected, and existing definitions with smaller values are migrated automatically on upgrade.
+- `COPY FROM` can now read array columns from Arrow files that were written by `COPY TO`.
+- `GRANT` and `REVOKE USAGE ON ALL POLICIES` now correctly grant and revoke network-policy privileges instead of silently succeeding as a no-op.
+- Fixed the system administrator role being unable to invoke certain side-effecting functions, such as terminating backend sessions.
+- Closed a resource-isolation gap that allowed `INSERT ... SELECT` and `COPY ... TO <url>` reads of user objects to run on the reserved `mz_catalog_server` cluster.
+- Fixed inline credentials in `CREATE CONNECTION` options being written in clear text to redacted SQL and telemetry.
+- Error messages that include connection URLs now redact embedded credentials instead of exposing the username and password.
+
+## v26.32.0
+*Released to Materialize Cloud: 2026-07-09* <br>
+*Released to Materialize Self-Managed: 2026-07-10* <br>
+
+### Improvements {#v26.32-improvements}
+- **`COPY TO` replica routing**: `COPY TO` now honors the session's `cluster_replica` setting, matching the behavior of regular `SELECT` queries.
+
+### Agent Skills {#v26.32-agent-skills}
+- **MCP Developer Analysis**: Updated to document the developer `query` tool and `EXPLAIN ANALYZE` workflow for querying user objects on named clusters.
+
+### Bug Fixes {#v26.32-bug-fixes}
+- Fixed internal HTTP endpoints not enforcing role-based authorization in Self-Managed deployments with password or OIDC authentication, allowing any authenticated user to access internal administration routes.
+- Fixed `CREATE REPLACEMENT MATERIALIZED VIEW ... FOR <target>` not requiring ownership of the target view, allowing another role to block the owner from using the replacement workflow on their own object.
+- Fixed secret values potentially appearing in `mz_internal.mz_statement_execution_history` error messages when `CREATE SECRET` or `ALTER SECRET` commands failed.
+- Fixed `COMMENT` bodies and `PARTITION BY` option values not being redacted in redacted SQL output, leaking user-provided text across the redaction boundary.
+- Fixed float-to-integer casts silently accepting out-of-range boundary values instead of raising errors, affecting `float4`-to-`uint32`/`uint64` and `float8`-to-`uint8` conversions.
+- Fixed narrowing integer casts (`uint4` to `uint2`, `smallint`, or `integer`) silently filtering out rows with out-of-range values instead of raising errors when used in indexed filter expressions.
+- Fixed incorrect results when casting arrays between element types.
+- Fixed `varchar` columns reporting incorrect column type metadata.
+- Fixed read-only transactions incorrectly accepting write operations after a constant expression peek (e.g., `SELECT 1`), which could silently commit data or cause panics on subsequent writes.
+- Fixed a priority inversion where sustained strict-serializable reads could stall the coordinator by starving group commit, causing the environment to appear stuck until clients disconnected.
+- Fixed coordinator stalls when granting privileges to many roles in a single transaction.
+- Fixed `generate_series` entering an infinite loop when called with a timestamp interval that mixes months and days in a way that prevents forward progress (e.g., `INTERVAL '1 month -29 days'`).
+- Fixed `mz_sleep` panicking on invalid input values instead of returning an error.
+- Fixed stale query cancellations from a previous statement incorrectly canceling the next statement within an explicit transaction.
+- Fixed `ALTER CLUSTER ... WITH (WAIT FOR ...)` and `WITH (WAIT UNTIL READY ...)` being silently accepted and ignored on unmanaged clusters instead of returning an error.
+- Fixed `SUBSCRIBE` returning an internal error code (`XX000`) instead of the standard "undefined object" code (`42704`) when referencing a non-existent object.
+- Fixed `TopK` query optimization losing `expected_group_size` hints during operator fusion, causing unnecessary overhead in query execution.
+- Fixed `app.kubernetes.io/name` label missing from environmentd Kubernetes resources when using the `v1alpha1` CRD.
+
+## v26.31.2
+*Released to Materialize Self-Managed: 2026-07-08* <br>
+
+### Bug Fixes {#v26.31.2-bug-fixes}
+
+- Fixed a priority inversion bug where sustained strict-serializable / real-time-recency reads
+  could starve group commit, leading to livelock in the database coordinator. This would cause
+  queries to hang until pending reads drained.
+
 ## v26.31.0
 *Released to Materialize Cloud: 2026-07-02* <br>
 *Released to Materialize Self-Managed: 2026-07-03* <br>

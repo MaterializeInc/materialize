@@ -1,6 +1,6 @@
 ---
 source: src/storage-types/src/sinks.rs
-revision: 4c35690026
+revision: 7363cb98d0
 ---
 
 # storage-types::sinks
@@ -9,7 +9,7 @@ Defines `StorageSinkDesc`, the full description of a storage sink dataflow, para
 `StorageSinkConnection` enumerates the supported sink backends: `Kafka` and `Iceberg`.
 `SinkEnvelope` covers three variants: `Debezium` (Kafka only), `Upsert`, and `Append` (Iceberg only).
 `KafkaSinkConnection` carries topic, format, compression, key/value descriptors, partition-by expression, and ID style fields; `IcebergSinkConnection` carries catalog connection references, an optional storage connection (currently unused — S3 Tables and BigLake/Lakehouse each reuse the same connection for both catalog and storage), namespace, table, and key descriptors.
-`KafkaSinkFormat` and `KafkaSinkFormatType` describe the key/value encoding (Avro, JSON, Text, or Bytes).
+`KafkaSinkFormat` and `KafkaSinkFormatType` describe the key/value encoding (Avro, JSON, Text, or Bytes). The `Avro` variant of `KafkaSinkFormatType` carries an optional `schema_name: Option<String>` field: when `None` the schema registry subject is derived from the topic name (`{topic}-key` / `{topic}-value`); when `Some` the user-supplied name is used verbatim. This field is used only for Glue Schema Registry sinks; Confluent Schema Registry always derives the subject from the topic.
 `KafkaSinkCompressionType` maps to librdkafka compression options (none, gzip, snappy, lz4, zstd).
 `KafkaIdStyle` distinguishes prefixed (new-style) from legacy IDs for progress group and transactional IDs.
 Constants `ICEBERG_APPEND_DIFF_COLUMN` (`_mz_diff`) and `ICEBERG_APPEND_TIMESTAMP_COLUMN` (`_mz_timestamp`) name the extra columns appended by `MODE APPEND` Iceberg sinks.

@@ -105,6 +105,18 @@ def workflow_mode_append(c: Composition) -> None:
     )
 
 
+def workflow_alter_commit_interval(c: Composition) -> None:
+    """ALTER SINK ... SET (COMMIT INTERVAL ...) restarts the sink dataflow
+    with the new interval and subsequent batches follow the new cadence."""
+    key = _setup(c)
+
+    c.run_testdrive_files(
+        f"--var=s3-access-key={key}",
+        "--var=aws-endpoint=minio:9000",
+        "alter-commit-interval.td",
+    )
+
+
 def workflow_empty_source(c: Composition) -> None:
     """A fresh Iceberg sink whose input closes after producing zero rows
     commits one empty snapshot instead of stalling or erroring."""

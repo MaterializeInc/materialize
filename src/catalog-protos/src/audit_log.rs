@@ -16,17 +16,18 @@
 use mz_audit_log::{
     AlterAddColumnV1, AlterApplyReplacementV1, AlterClusterReconfigurationV1,
     AlterDefaultPrivilegeV1, AlterRetainHistoryV1, AlterSetClusterV1, AlterSourceSinkV1,
-    AlterSourceTimestampIntervalV1, ClusterHydrationBurstV1, ClusterReplicaLoggingV1,
-    CreateClusterReplicaV1, CreateClusterReplicaV2, CreateClusterReplicaV3, CreateClusterReplicaV4,
-    CreateIndexV1, CreateMaterializedViewV1, CreateOrDropClusterReplicaReasonV1, CreateRoleV1,
-    CreateSourceSinkV1, CreateSourceSinkV2, CreateSourceSinkV3, CreateSourceSinkV4,
-    DropClusterReplicaV1, DropClusterReplicaV2, DropClusterReplicaV3, EventDetails, EventType,
-    EventV1, FromPreviousIdV1, FullNameV1, GrantRoleV1, GrantRoleV2, HydrationBurstLifecycleV1,
-    IdFullNameV1, IdNameV1, ReconfigurationLifecycleV1, RefreshDecisionWithReasonV1,
-    RefreshDecisionWithReasonV2, RenameClusterReplicaV1, RenameClusterV1, RenameItemV1,
-    RenameSchemaV1, RevokeRoleV1, RevokeRoleV2, RotateKeysV1, SchedulingDecisionV1,
-    SchedulingDecisionsWithReasonsV1, SchedulingDecisionsWithReasonsV2, SchemaV1, SchemaV2, SetV1,
-    ToNewIdV1, UpdateItemV1, UpdateOwnerV1, UpdatePrivilegeV1, VersionedEvent,
+    AlterSourceTimestampIntervalV1, BurstFinishCauseV1, ClusterHydrationBurstV1,
+    ClusterReplicaLoggingV1, CreateClusterReplicaV1, CreateClusterReplicaV2,
+    CreateClusterReplicaV3, CreateClusterReplicaV4, CreateIndexV1, CreateMaterializedViewV1,
+    CreateOrDropClusterReplicaReasonV1, CreateRoleV1, CreateSourceSinkV1, CreateSourceSinkV2,
+    CreateSourceSinkV3, CreateSourceSinkV4, DropClusterReplicaV1, DropClusterReplicaV2,
+    DropClusterReplicaV3, EventDetails, EventType, EventV1, FromPreviousIdV1, FullNameV1,
+    GrantRoleV1, GrantRoleV2, HydrationBurstLifecycleV1, IdFullNameV1, IdNameV1,
+    ReconfigurationLifecycleV1, RefreshDecisionWithReasonV1, RefreshDecisionWithReasonV2,
+    RenameClusterReplicaV1, RenameClusterV1, RenameItemV1, RenameSchemaV1, RevokeRoleV1,
+    RevokeRoleV2, RotateKeysV1, SchedulingDecisionV1, SchedulingDecisionsWithReasonsV1,
+    SchedulingDecisionsWithReasonsV2, SchemaV1, SchemaV2, SetV1, ToNewIdV1, UpdateItemV1,
+    UpdateOwnerV1, UpdatePrivilegeV1, VersionedEvent,
 };
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
@@ -320,6 +321,9 @@ impl RustType<crate::objects::audit_log_event_v1::ReconfigurationLifecycleV1>
             ReconfigurationLifecycleV1::Finalized => Transition::Finalized(Empty {}),
             ReconfigurationLifecycleV1::TimedOut => Transition::TimedOut(Empty {}),
             ReconfigurationLifecycleV1::Cancelled => Transition::Cancelled(Empty {}),
+            ReconfigurationLifecycleV1::ResourceExhausted => {
+                Transition::ResourceExhausted(Empty {})
+            }
         };
         crate::objects::audit_log_event_v1::ReconfigurationLifecycleV1 { transition }
     }
@@ -333,6 +337,7 @@ impl RustType<crate::objects::audit_log_event_v1::ReconfigurationLifecycleV1>
             Transition::Finalized(_) => ReconfigurationLifecycleV1::Finalized,
             Transition::TimedOut(_) => ReconfigurationLifecycleV1::TimedOut,
             Transition::Cancelled(_) => ReconfigurationLifecycleV1::Cancelled,
+            Transition::ResourceExhausted(_) => ReconfigurationLifecycleV1::ResourceExhausted,
         })
     }
 }
@@ -345,6 +350,7 @@ impl RustType<crate::objects::audit_log_event_v1::AlterClusterReconfigurationV1>
             cluster_id: self.cluster_id.to_string(),
             cluster_name: self.cluster_name.to_string(),
             transition: self.transition.into_proto(),
+            forced: self.forced,
             target_size: self.target_size.to_string(),
             target_replication_factor: self.target_replication_factor,
             target_availability_zones: self.target_availability_zones.clone(),
@@ -360,6 +366,7 @@ impl RustType<crate::objects::audit_log_event_v1::AlterClusterReconfigurationV1>
             cluster_id: proto.cluster_id,
             cluster_name: proto.cluster_name,
             transition: proto.transition.into_rust()?,
+            forced: proto.forced,
             target_size: proto.target_size,
             target_replication_factor: proto.target_replication_factor,
             target_availability_zones: proto.target_availability_zones,
@@ -412,6 +419,27 @@ impl RustType<crate::objects::audit_log_event_v1::HydrationBurstLifecycleV1>
     }
 }
 
+impl RustType<crate::objects::audit_log_event_v1::BurstFinishCauseV1> for BurstFinishCauseV1 {
+    fn into_proto(&self) -> crate::objects::audit_log_event_v1::BurstFinishCauseV1 {
+        use crate::objects::audit_log_event_v1::burst_finish_cause_v1::Cause;
+        let cause = match self {
+            BurstFinishCauseV1::LingerElapsed => Cause::LingerElapsed(Empty {}),
+            BurstFinishCauseV1::NoLongerWarranted => Cause::NoLongerWarranted(Empty {}),
+        };
+        crate::objects::audit_log_event_v1::BurstFinishCauseV1 { cause }
+    }
+
+    fn from_proto(
+        proto: crate::objects::audit_log_event_v1::BurstFinishCauseV1,
+    ) -> Result<Self, TryFromProtoError> {
+        use crate::objects::audit_log_event_v1::burst_finish_cause_v1::Cause;
+        Ok(match proto.cause {
+            Cause::LingerElapsed(_) => BurstFinishCauseV1::LingerElapsed,
+            Cause::NoLongerWarranted(_) => BurstFinishCauseV1::NoLongerWarranted,
+        })
+    }
+}
+
 impl RustType<crate::objects::audit_log_event_v1::ClusterHydrationBurstV1>
     for ClusterHydrationBurstV1
 {
@@ -420,6 +448,7 @@ impl RustType<crate::objects::audit_log_event_v1::ClusterHydrationBurstV1>
             cluster_id: self.cluster_id.to_string(),
             cluster_name: self.cluster_name.to_string(),
             transition: self.transition.into_proto(),
+            finish_cause: self.finish_cause.map(|cause| cause.into_proto()),
             burst_size: self.burst_size.to_string(),
         }
     }
@@ -431,6 +460,10 @@ impl RustType<crate::objects::audit_log_event_v1::ClusterHydrationBurstV1>
             cluster_id: proto.cluster_id,
             cluster_name: proto.cluster_name,
             transition: proto.transition.into_rust()?,
+            finish_cause: proto
+                .finish_cause
+                .map(|cause| cause.into_rust())
+                .transpose()?,
             burst_size: proto.burst_size,
         })
     }

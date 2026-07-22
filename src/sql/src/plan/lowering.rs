@@ -141,6 +141,8 @@ pub struct Config {
     pub enable_variadic_left_join_lowering: bool,
     pub enable_cast_elimination: bool,
     pub enable_simplify_quantified_comparisons: bool,
+    /// See the feature flag of the same name.
+    pub enable_fixed_correlated_cte_lowering: bool,
 }
 
 impl Default for Config {
@@ -150,6 +152,7 @@ impl Default for Config {
             enable_variadic_left_join_lowering: false,
             enable_cast_elimination: false,
             enable_simplify_quantified_comparisons: false,
+            enable_fixed_correlated_cte_lowering: false,
         }
     }
 }
@@ -161,6 +164,7 @@ impl From<&SystemVars> for Config {
             enable_variadic_left_join_lowering: vars.enable_variadic_left_join_lowering(),
             enable_cast_elimination: vars.enable_cast_elimination(),
             enable_simplify_quantified_comparisons: vars.enable_simplify_quantified_comparisons(),
+            enable_fixed_correlated_cte_lowering: vars.enable_fixed_correlated_cte_lowering(),
         }
     }
 }
@@ -1869,56 +1873,149 @@ where
         }
     });
     // Collect all the outer columns referenced by any CTE referenced by
-    // the inner relation.
-    #[allow(deprecated)]
-    inner.visit(0, &mut |e, _| match e {
-        HirRelationExpr::Get {
-            id: mz_expr::Id::Local(id),
-            ..
-        } => {
-            if let Some(cte_desc) = cte_map.get(id) {
-                let cte_outer_arity = cte_desc.outer_relation.arity();
-                outer_cols.extend(
-                    col_map
-                        .inner
-                        .iter()
-                        .filter(|(_, position)| **position < cte_outer_arity)
-                        .map(|(c, _)| {
-                            // `col_map` maps column references to column positions in
-                            // `outer`'s projection.
-                            // `outer_cols` is meant to contain the external column
-                            // references in `inner`.
-                            // Since `inner` defines a new scope, any column reference
-                            // in `col_map` is one level deeper when seen from within
-                            // `inner`, hence the +1.
-                            ColumnRef {
-                                level: c.level + 1,
-                                column: c.column,
-                            }
-                        }),
-                );
+    // the inner relation. The `Get` arm of `applied_to` reconciles a CTE
+    // reference with the relation the CTE was applied to by equating the
+    // first `cte_outer_arity` columns of both sides, so it relies on the
+    // outer columns of every referenced CTE sitting at the beginning of the
+    // branch key, in order. We track the maximum such arity to arrange for
+    // that below.
+    let mut max_cte_outer_arity = 0;
+    {
+        let mut visit = |e: &HirRelationExpr| match e {
+            HirRelationExpr::Get {
+                id: mz_expr::Id::Local(id),
+                ..
+            } => {
+                if let Some(cte_desc) = cte_map.get(id) {
+                    let cte_outer_arity = cte_desc.outer_relation.arity();
+                    max_cte_outer_arity = max_cte_outer_arity.max(cte_outer_arity);
+                    outer_cols.extend(
+                        col_map
+                            .inner
+                            .iter()
+                            .filter(|(_, position)| **position < cte_outer_arity)
+                            .map(|(c, _)| {
+                                // `col_map` maps column references to column positions in
+                                // `outer`'s projection.
+                                // `outer_cols` is meant to contain the external column
+                                // references in `inner`.
+                                // Since `inner` defines a new scope, any column reference
+                                // in `col_map` is one level deeper when seen from within
+                                // `inner`, hence the +1.
+                                ColumnRef {
+                                    level: c.level + 1,
+                                    column: c.column,
+                                }
+                            }),
+                    );
+                }
             }
+            HirRelationExpr::Let { id, .. } => {
+                // Note: if ID uniqueness is not guaranteed, we can't use `visit` since
+                // we would need to remove the old CTE with the same ID temporarily while
+                // traversing the definition of the new CTE under the same ID.
+                assert!(!cte_map.contains_key(id));
+            }
+            _ => {}
+        };
+        if context.config.enable_fixed_correlated_cte_lowering {
+            // `visit_post` descends into scalar subqueries, so this finds CTE
+            // references at any depth inside `inner`. Full depth matters: a
+            // nested `branch()` inside `inner` relies on the key computed
+            // here already carrying its referenced CTEs' outer columns as a
+            // prefix.
+            inner.visit_post(&mut visit);
+        } else {
+            // The deprecated `visit` does not descend into scalar subqueries,
+            // so CTE references inside them are missed and the branch key can
+            // lack outer columns that the CTE reference's reconciliation join
+            // needs, producing wrong correlations (SQL-349).
+            #[allow(deprecated)]
+            inner.visit(0, &mut |e, _| visit(e));
         }
-        HirRelationExpr::Let { id, .. } => {
-            // Note: if ID uniqueness is not guaranteed, we can't use `visit` since
-            // we would need to remove the old CTE with the same ID temporarily while
-            // traversing the definition of the new CTE under the same ID.
-            assert!(!cte_map.contains_key(id));
-        }
-        _ => {}
-    });
+    }
     let mut new_col_map = BTreeMap::new();
     let mut key = vec![];
-    for col in outer_cols {
-        new_col_map.insert(col, key.len());
-        key.push(col_map.get(&ColumnRef {
-            // Note: `outer_cols` contains the external column references within `inner`.
-            // We must compensate for `inner`'s scope when translating column references
-            // as seen within `inner` to column references as seen from `outer`'s context,
-            // hence the -1.
-            level: col.level - 1,
-            column: col.column,
-        }));
+    if context.config.enable_fixed_correlated_cte_lowering {
+        // The `Get` arm reconciles a CTE reference by equating key slots
+        // `0..cte_outer_arity` with the CTE's outer columns, positionally, so
+        // it needs every referenced CTE's outer columns at the head of the
+        // key, in their original `outer` order. Those columns are exactly the
+        // ones at `outer` positions `0..max_cte_outer_arity` (see the discovery
+        // above), so we split the discovered columns into that prefix and the
+        // rest, and emit the prefix first, sorted by position. That makes
+        // `key[i] == i` over the prefix, which is what the `Get` arm assumes.
+        //
+        // A single prefix covers all referenced CTEs because their outer
+        // relations are nested prefixes of one another (nested scopes only ever
+        // append columns). The `rest`'s order is free: the final join in
+        // `branch` compensates for any key order, and only the `Get` arm cares
+        // about absolute slot positions (we keep `outer_cols`'s order).
+        let mut prefix = Vec::new();
+        let mut rest = Vec::new();
+        for col in outer_cols {
+            // `position` is `col`'s index in `outer`'s projection.
+            let position = col_map.get(&ColumnRef {
+                // `outer_cols` holds references as seen from within `inner`,
+                // one level deeper than `outer`'s scope (the discovery walk and
+                // `visit_columns` both record them that way), so undo that with
+                // `-1` before looking `col` up in `outer`'s `col_map`.
+                level: col.level - 1,
+                column: col.column,
+            });
+            if position < max_cte_outer_arity {
+                prefix.push((position, col));
+            } else {
+                rest.push((position, col));
+            }
+        }
+        prefix.sort_unstable_by_key(|(position, _)| *position);
+        // The discovery inserts every position `0..cte_outer_arity` of each
+        // referenced CTE, and `col_map` is a bijection onto `0..col_map.len()`,
+        // so the prefix positions are exactly `0..max_cte_outer_arity`, each
+        // once, reading `0, 1, ..., max-1` after the sort. If they don't, the
+        // `Get` arm's reconciliation would join on the wrong columns and
+        // silently produce wrong results, so fail the query instead. There is
+        // no safe fallback: the unpartitioned key order is the bug this is
+        // fixing.
+        if !prefix
+            .iter()
+            .map(|(position, _)| *position)
+            .eq(0..max_cte_outer_arity)
+        {
+            return Err(PlanError::Internal(format!(
+                "CTE outer columns are not a contiguous prefix of the branch key: \
+                 prefix positions {:?}, max_cte_outer_arity {}",
+                prefix
+                    .iter()
+                    .map(|(position, _)| *position)
+                    .collect::<Vec<_>>(),
+                max_cte_outer_arity,
+            )));
+        }
+        // Give each chosen outer column its key slot: `new_col_map` records the
+        // slot, `key` records which `outer` position feeds it. Over the prefix
+        // the slot (`key.len()`) equals `position`, so `key[i] == i`; over the
+        // rest they may differ, which is fine.
+        for (position, col) in prefix.into_iter().chain(rest) {
+            new_col_map.insert(col, key.len());
+            key.push(position);
+        }
+    } else {
+        // Note: this order can break the `Get` arm's prefix assumption when a
+        // level-1 column sorts before a referenced CTE's outer column
+        // (SQL-349).
+        for col in outer_cols {
+            new_col_map.insert(col, key.len());
+            key.push(col_map.get(&ColumnRef {
+                // Note: `outer_cols` contains the external column references within `inner`.
+                // We must compensate for `inner`'s scope when translating column references
+                // as seen within `inner` to column references as seen from `outer`'s context,
+                // hence the -1.
+                level: col.level - 1,
+                column: col.column,
+            }));
+        }
     }
     let new_col_map = ColumnMap::new(new_col_map);
     outer.let_in(id_gen, |id_gen, get_outer| {

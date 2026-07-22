@@ -84,6 +84,7 @@ def get_minimal_system_parameters(
         "enable_eager_delta_joins": "true",
         "enable_envelope_debezium_in_subscribe": "true",
         "enable_expressions_in_limit_syntax": "true",
+        "enable_fixed_correlated_cte_lowering": "true",
         "enable_introspection_subscribes": "true",
         "enable_kafka_sink_partition_by": "true",
         "enable_lgalloc": "false",
@@ -96,6 +97,16 @@ def get_minimal_system_parameters(
         "enable_refresh_every_mvs": "true",
         "enable_replacement_materialized_views": "true",
         "enable_cluster_schedule_refresh": "true",
+        # The cluster controller and background ALTER CLUSTER land dark in
+        # production (the dyncfg defaults stay false); force them on for the test
+        # harness so CI exercises the controller owning the managed-cluster
+        # replica set. The real production default flip is a separate rollout.
+        "enable_cluster_controller": (
+            "true" if version >= MzVersion.parse_mz("v26.29.0-dev") else "false"
+        ),
+        "enable_background_alter_cluster": (
+            "true" if version >= MzVersion.parse_mz("v26.29.0-dev") else "false"
+        ),
         "enable_s3_tables_region_check": "false",
         "enable_statement_lifecycle_logging": "true",
         "enable_storage_introspection_logs": "true",
@@ -129,10 +140,24 @@ class VariableSystemParameter:
 def get_variable_system_parameters(
     version: MzVersion,
     force_source_table_syntax: bool,
+    metadata_store: str,
 ) -> list[VariableSystemParameter]:
     """Note: Only the default is tested unless we explicitly select "System Parameters: Random" in trigger-ci.
     These defaults are applied _after_ applying the settings from `get_minimal_system_parameters`.
     """
+
+    # `persist_pg_consensus_read_committed` must stay off on CockroachDB, where
+    # the lockless CRDB_* consensus queries are only linearizable under
+    # SERIALIZABLE and persist asserts on the connection's isolation level. On
+    # Postgres-backed consensus the query family is linearizable under READ
+    # COMMITTED, so default it on and let it vary. FoundationDB does not use the
+    # Postgres consensus, so leaving it off there is a harmless no-op.
+    read_committed_safe = metadata_store in ("postgres-metadata", "alloydb")
+    persist_pg_consensus_read_committed = VariableSystemParameter(
+        "persist_pg_consensus_read_committed",
+        "true" if read_committed_safe else "false",
+        ["true", "false"] if read_committed_safe else ["false"],
+    )
 
     return [
         # -----
@@ -160,8 +185,16 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "persist_enable_s3_lgalloc_noncc_sizes", "true", ["true", "false"]
         ),
+        VariableSystemParameter(
+            "persist_source_fetch_concurrency", "1", ["1", "2", "8", "16"]
+        ),
         # -----
         # Others (ordered by name),
+        VariableSystemParameter(
+            "aws_prefetch_sts_connect_timeout",
+            "3100ms",
+            ["3100ms", "30s", "60s"],
+        ),
         VariableSystemParameter(
             "compute_correction_v2_chain_proportionality",
             "3",
@@ -208,6 +241,11 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter(
             "enable_cast_elimination",
+            "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
+            "enable_fixed_correlated_cte_lowering",
             "true",
             ["true", "false"],
         ),
@@ -394,12 +432,20 @@ def get_variable_system_parameters(
             "false",  # always false, because we always have zero-downtime enabled
             ["false"],
         ),
+        # 0 disables; otherwise coalesce hydration frontier downgrades until
+        # this many encoded bytes have been emitted (1 MiB, 16 MiB, 128 MiB).
+        VariableSystemParameter(
+            "persist_source_hydration_frontier_coalesce_bytes",
+            "0",
+            ["0", "1048576", "16777216", "134217728"],
+        ),
         VariableSystemParameter(
             "persist_part_decode_format", "arrow", ["arrow", "row_with_validate"]
         ),
         VariableSystemParameter(
             "persist_blob_cache_scale_with_threads", "true", ["true", "false"]
         ),
+        persist_pg_consensus_read_committed,
         VariableSystemParameter(
             "persist_state_update_lease_timeout", "1s", ["0s", "1s", "10s"]
         ),
@@ -459,18 +505,30 @@ def get_variable_system_parameters(
 def get_default_system_parameters(
     version: MzVersion | None = None,
     force_source_table_syntax: bool = False,
+    metadata_store: str | None = None,
 ) -> dict[str, str]:
     """For upgrade tests we only want parameters set when all environmentd /
     clusterd processes have reached a specific version (or higher)
+
+    `metadata_store` selects backend-specific defaults. It defaults to the
+    globally configured metadata store, but callers that target a different
+    backend than the global (e.g. a local CockroachDB) must pass their own.
     """
 
     if not version:
         version = MzVersion.parse_cargo()
 
+    if metadata_store is None:
+        from materialize.mzcompose.services.metadata_store import METADATA_STORE
+
+        metadata_store = METADATA_STORE
+
     params = get_minimal_system_parameters(version)
 
     system_param_setting = os.getenv("CI_SYSTEM_PARAMETERS", "")
-    variable_params = get_variable_system_parameters(version, force_source_table_syntax)
+    variable_params = get_variable_system_parameters(
+        version, force_source_table_syntax, metadata_store
+    )
 
     if system_param_setting == "":
         for param in variable_params:
@@ -553,6 +611,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "persist_consensus_connection_pool_max_wait",
     "persist_consensus_connection_pool_ttl",
     "persist_consensus_connection_pool_ttl_stagger",
+    "persist_use_postgres_tuned_queries",
     "crdb_connect_timeout",
     "crdb_tcp_user_timeout",
     "crdb_keepalives_idle",
@@ -679,13 +738,18 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "enable_public_metrics_endpoint",
     "enable_mcp_agent",
     "enable_mcp_agent_query_tool",
+    "enable_mcp_agent_read_data_product_tool",
     "enable_mcp_developer",
     "enable_mcp_developer_query_tool",
     "mcp_max_response_size",
+    "mcp_request_timeout",
     "user_id_pool_batch_size",
     "webhook_max_request_size_bytes",
-    "enable_cluster_controller",
     "cluster_controller_tick_interval",
+    "default_cluster_reconfiguration_timeout",
+    "read_then_write_max_dependencies",
+    "enable_hydration_burst",
+    "default_hydration_burst_linger",
 ]
 
 

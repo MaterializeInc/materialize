@@ -24,12 +24,14 @@ check_all_files_referenced_in_ci() {
         -not -wholename "./misc/monitoring/mzcompose.py" `# Only run manually` \
         -not -wholename "./test/canary-environment/mzcompose.py" `# Only run manually` \
         -not -wholename "./test/console/mzcompose.py" `# Only run manually` \
-        -not -wholename "./test/cargo-fuzz/mzcompose.py" `# Enabled in release qualification later in the cargo-fuzz stack` \
         -not -wholename "./test/mzcompose_examples/mzcompose.py" `# Example only` \
         -not -wholename "./test/get-cloud-hostname/mzcompose.py" `# Utility, no test` \
         | sed -e "s|.*/\([^/]*\)/mzcompose.py|\1|")
     while read -r composition; do
-        if ! grep -q "composition: $composition" ci/*/pipeline.template.yml; then
+        # Anchor at end of line, otherwise a composition whose name prefixes
+        # another (e.g. "cluster" vs "cluster-isolation") passes the check even
+        # when none of its own steps exist.
+        if ! grep -qE "composition: $composition$" ci/*/pipeline.template.yml; then
             echo "mzcompose composition \"$composition\" is unused in any CI pipeline file"
             RETURN=1
         fi

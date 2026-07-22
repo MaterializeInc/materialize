@@ -196,8 +196,14 @@ def is_ancestor(earlier: str, later: str) -> bool:
         if token := os.getenv("GITHUB_TOKEN"):
             headers["Authorization"] = f"Bearer {token}"
 
+        # GitHub resolves the ref "HEAD" server-side to the repo's default
+        # branch, not the local checkout's HEAD. Resolve it to a concrete SHA
+        # first, otherwise e.g. compare/HEAD...main becomes main...main.
+        api_earlier = rev_parse(earlier) if earlier == "HEAD" else earlier
+        api_later = rev_parse(later) if later == "HEAD" else later
+
         resp = requests.get(
-            f"https://api.github.com/repos/materializeinc/materialize/compare/{earlier}...{later}",
+            f"https://api.github.com/repos/materializeinc/materialize/compare/{api_earlier}...{api_later}",
             headers=headers,
         )
         resp.raise_for_status()
@@ -209,7 +215,10 @@ def is_ancestor(earlier: str, later: str) -> bool:
 
         # Make sure we have an up to date view of main.
         command = ["git", "fetch"]
-        if spawn.capture(["git", "rev-parse", "--is-shallow-repository"]) == "true":
+        if (
+            spawn.capture(["git", "rev-parse", "--is-shallow-repository"]).strip()
+            == "true"
+        ):
             command.append("--unshallow")
         spawn.runv(command + [get_remote(), earlier, later])
 
@@ -253,7 +262,7 @@ def fetch(
         raise RuntimeError("branch must not be specified if only_tags is set")
 
     command = ["git", "fetch"]
-    if spawn.capture(["git", "rev-parse", "--is-shallow-repository"]) == "true":
+    if spawn.capture(["git", "rev-parse", "--is-shallow-repository"]).strip() == "true":
         command.append("--unshallow")
 
     if remote:
@@ -343,7 +352,10 @@ def get_common_ancestor_commit(remote: str, branch: str) -> str:
 
         # Make sure we have an up to date view
         command = ["git", "fetch"]
-        if spawn.capture(["git", "rev-parse", "--is-shallow-repository"]) == "true":
+        if (
+            spawn.capture(["git", "rev-parse", "--is-shallow-repository"]).strip()
+            == "true"
+        ):
             command.append("--unshallow")
         spawn.runv(command + [remote, branch])
 

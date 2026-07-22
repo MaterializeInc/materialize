@@ -108,6 +108,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         *([f"--blob-uri={blob_uri}"] if blob_uri else []),
         *([f"--consensus-uri={consensus_uri}"] if consensus_uri else []),
         *([f"--unreliability={args.unreliability}"] if args.unreliability else []),
+        # READ COMMITTED consensus is only safe against vanilla Postgres. On
+        # CockroachDB the CRDB_* queries require SERIALIZABLE, so enabling it
+        # there panics.
+        *(["--consensus-read-committed"] if args.consensus == "postgres" else []),
     )
 
     # TODO: Reenable this when we un-break MaelstromConsensus

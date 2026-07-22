@@ -15,7 +15,7 @@ use kube::core::Status;
 use kube::core::conversion::{ConversionRequest, ConversionResponse, ConversionReview};
 use kube::core::response::reason;
 
-use mz_cloud_resources::crd::materialize::{v1, v1alpha1};
+use mz_cloud_resources::crd::materialize::{convert_v1_to_v1alpha1, convert_v1alpha1_to_v1};
 use tracing::{debug, warn};
 
 pub fn router() -> Router {
@@ -68,16 +68,8 @@ fn convert(
     );
     let result = match (from_version, desired_version) {
         (SupportedVersion::V1alpha1, SupportedVersion::V1alpha1) => Ok(value),
-        (SupportedVersion::V1alpha1, SupportedVersion::V1) => {
-            serde_json::from_value::<v1alpha1::Materialize>(value)
-                .and_then(|mz_v1alpha1| serde_json::to_value(v1::Materialize::from(mz_v1alpha1)))
-                .map_err(|e| e.into())
-        }
-        (SupportedVersion::V1, SupportedVersion::V1alpha1) => {
-            serde_json::from_value::<v1::Materialize>(value)
-                .and_then(|mz_v1| serde_json::to_value(v1alpha1::Materialize::from(mz_v1)))
-                .map_err(|e| e.into())
-        }
+        (SupportedVersion::V1alpha1, SupportedVersion::V1) => convert_v1alpha1_to_v1(value),
+        (SupportedVersion::V1, SupportedVersion::V1alpha1) => convert_v1_to_v1alpha1(value),
         (SupportedVersion::V1, SupportedVersion::V1) => Ok(value),
     };
     match &result {

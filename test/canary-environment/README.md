@@ -99,13 +99,13 @@ the split clusters are new), so the `USAGE` grants are reapplied on every
   granted in the testdrive block of `workflow_create`, since mz-deploy has no
   cluster-grant modifier and doesn't manage those schemas.
 
-**Iceberg sinks: AWS/S3-Tables enabled, GCS still disabled.** The five
-S3-Tables model sinks and the `public_table.table_mv_iceberg_sink` testdrive
-sink are active. The five `*_gcs_iceberg_sink` model sinks remain
-`*.sql.disabled` (mz-deploy only reads `*.sql`, so it skips them) and the
-`table_mv_gcs_iceberg_sink` testdrive sink is left out of `mzcompose.py`. To
-re-enable a GCS sink, rename its `.sql.disabled` file back to `.sql` (and add
-the testdrive sink back to `mzcompose.py`).
+**Iceberg sinks: AWS/S3-Tables and GCS both enabled.** The five S3-Tables model
+sinks, the five `*_gcs_iceberg_sink` GCS model sinks, and both the
+`public_table.table_mv_iceberg_sink` (S3-Tables) and
+`public_table.table_mv_gcs_iceberg_sink` (GCS) testdrive sinks are active. To
+disable a GCS sink, rename its `.sql` file to `.sql.disabled` (mz-deploy only
+reads `*.sql`, so it skips them) and remove the corresponding testdrive sink
+from `mzcompose.py`.
 
 ## What `mz-deploy` does not manage
 
@@ -172,8 +172,8 @@ steady state) doesn't land on one replica:
 |---------|-------|-------|
 | `qa_canary_environment_storage` | tpch + pg_cdc + mysql_cdc sources and their source-tables | |
 | `qa_canary_environment_upsert` | the Kafka loadgen `customer`/`sales` sources (and the `customer_tbl`/`sales_tbl` source-tables, which ingest on their source's cluster) | **disk-backed** — the UPSERT key→value state spills to RocksDB on local disk, which is what keeps the cold backlog re-read from OOMing |
-| `qa_canary_environment_sinks` | all sinks | isolates sink backfill from source snapshots |
-| `qa_canary_environment_compute` | materialized views + indexes | |
+| `qa_canary_environment_sinks` | all sinks, plus the testdrive-managed `public_table.table_mv` + its index | isolates sink backfill from source snapshots |
+| `qa_canary_environment_compute` | the model materialized views + indexes | blue/green-swapped by `promote` |
 
 They are pre-created manually (with environment-appropriate sizes) and not
 declared in the project, so `mz-deploy` never resizes them; `stage` clones the
@@ -181,6 +181,17 @@ compute cluster for the blue/green swap. Source-tables have no `IN CLUSTER` of
 their own — they ingest on their source's cluster — so a source's placement
 determines its tables' placement. The use of the `quickstart` cluster is
 strongly discouraged.
+
+`public_table.table_mv` lives on `qa_canary_environment_sinks` rather than
+`qa_canary_environment_compute`, even though it is a materialized view.
+`promote` swaps the compute cluster (`stage` clones it, `promote` swaps the
+clone in and drops the old cluster `CASCADE`). The model MVs survive because the
+deploy re-creates them in the clone every time, but `table_mv` is
+testdrive-managed and created once, so a swap would drop it (and its index, and
+the sinks reading it) with no recreation. That is exactly what broke
+`test/canary-load` once. Only clusters referenced by the blue/green MVs/views
+are staged and swapped; sinks are applied in place, so their cluster is never
+swapped and `table_mv` is safe there alongside the two sinks that read it.
 
 # Creating the objects
 

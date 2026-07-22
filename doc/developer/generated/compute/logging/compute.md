@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/logging/compute.rs
-revision: 225aeaa79f
+revision: 1c55de49eb
 ---
 
 # mz-compute::logging::compute

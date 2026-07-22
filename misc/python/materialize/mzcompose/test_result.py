@@ -74,7 +74,10 @@ class FailedTestExecutionError(UIError):
 def try_determine_errors_from_cmd_execution(
     e: CommandFailureCausedUIError, test_context: str | None
 ) -> list[TestFailureDetails]:
-    output = e.stderr or e.stdout
+    # Combine both streams: testdrive prints each marked error to stdout and
+    # the final error report to stderr, so either stream alone is incomplete.
+    output_parts = [s for s in [e.stdout, e.stderr] if s]
+    output = "\n".join(output_parts) if output_parts else None
 
     if "running docker compose failed" in str(e):
         return [determine_error_from_docker_compose_failure(e, output, test_context)]
@@ -149,8 +152,10 @@ def extract_error_chunks_from_output(output: str) -> list[str]:
     if pos == -1:
         return []
 
-    error_output = output[: pos - 1]
-    error_chunks = error_output.split("^^^ +++")
+    error_output = output[:pos]
+    # Testdrive prints "^^^ +++" *before* each error, so everything up to the
+    # first marker is regular output, not an error.
+    error_chunks = error_output.split("^^^ +++")[1:]
 
     return [chunk.strip() for chunk in error_chunks if len(chunk.strip()) > 0]
 

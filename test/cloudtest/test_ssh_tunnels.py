@@ -96,7 +96,7 @@ def test_ssh_tunnels(mz: MaterializeApplication) -> None:
         "exec",
         environmentd_pod_name,
         "--",
-        "bash",
+        "sh",
         "-c",
         "kill -9 `pidof environmentd`",
     )

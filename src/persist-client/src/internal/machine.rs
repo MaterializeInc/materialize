@@ -191,7 +191,14 @@ where
     pub async fn upgrade_version(&self) -> Result<RoutineMaintenance, Version> {
         let metrics = Arc::clone(&self.applier.metrics);
         let (_seqno, upgrade_result, maintenance) = self
-            .apply_unbatched_idempotent_cmd(&metrics.cmds.remove_rollups, |_, cfg, state| {
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.upgrade_version, |_, cfg, state| {
+                // A tombstone is terminal and version-inert, so treat the
+                // upgrade as trivially satisfied instead of committing a new
+                // state that `compute_next_state_locked` would reject.
+                if state.is_tombstone() {
+                    return Break(NoOpStateTransition(Ok(())));
+                }
+
                 if state.version <= cfg.build_version {
                     // This would be the place to remove any deprecated items from state, now
                     // that we're dropping compatibility with any previous versions.
@@ -867,7 +874,7 @@ where
         }
         let mut watch_fut = std::pin::pin!(
             watch
-                .wait_for_seqno_ge(seqno.next())
+                .wait_for_upper_past(frontier)
                 .map(Wake::Watch)
                 .instrument(trace_span!("snapshot::watch"))
         );
@@ -956,7 +963,7 @@ where
                 Wake::Watch(watch) => {
                     watch_fut.set(
                         watch
-                            .wait_for_seqno_ge(seqno.next())
+                            .wait_for_upper_past(frontier)
                             .map(Wake::Watch)
                             .instrument(trace_span!("snapshot::watch")),
                     );
@@ -2665,5 +2672,67 @@ pub mod tests {
 
         write.expire().await;
         reader.expire().await;
+    }
+
+    /// Regression test for a panic where `upgrade_version` tried to commit a
+    /// new state on a tombstone shard. Upgrading a tombstone must be a no-op:
+    /// the shard stays finalized and its recorded version stays unchanged.
+    #[mz_persist_proc::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn version_upgrade_tombstone(dyncfgs: ConfigUpdates) {
+        async fn shard_version(
+            persist_client: &PersistClient,
+            shard_id: ShardId,
+        ) -> Option<semver::Version> {
+            let shard_state = persist_client.inspect_shard::<u64>(&shard_id).await.ok()?;
+            let json_state = serde_json::to_value(shard_state).expect("state serialization error");
+            let version = json_state
+                .get("applier_version")
+                .cloned()
+                .expect("missing applier_version");
+            Some(serde_json::from_value(version).expect("version deserialization error"))
+        }
+
+        let mut cache = new_test_client_cache(&dyncfgs);
+        cache.cfg.build_version = Version::new(26, 1, 0);
+        let client = cache.open(PersistLocation::new_in_mem()).await.unwrap();
+        let shard_id = ShardId::new();
+
+        // Advance since and upper to the empty antichain and finalize the
+        // shard into a tombstone.
+        let (mut write, mut read) = client.expect_open::<String, (), u64, i64>(shard_id).await;
+        read.downgrade_since(&Antichain::new()).await;
+        write.advance_upper(&Antichain::new()).await;
+        write.expire().await;
+        read.expire().await;
+        client
+            .finalize_shard::<String, (), u64, i64>(shard_id, Diagnostics::for_tests())
+            .await
+            .expect("finalization must succeed");
+
+        // Upgrading at the version that wrote the tombstone must not panic or
+        // commit a new state.
+        client
+            .upgrade_version::<String, (), u64, i64>(shard_id, Diagnostics::for_tests())
+            .await
+            .expect("upgrade on tombstone must succeed");
+
+        // Same for upgrading at a newer build version.
+        cache.cfg.build_version = Version::new(27, 1, 0);
+        let client = cache.open(PersistLocation::new_in_mem()).await.unwrap();
+        client
+            .upgrade_version::<String, (), u64, i64>(shard_id, Diagnostics::for_tests())
+            .await
+            .expect("upgrade on tombstone must succeed");
+
+        assert_eq!(
+            shard_version(&client, shard_id).await,
+            Some(Version::new(26, 1, 0)),
+        );
+        let is_finalized = client
+            .is_finalized::<String, (), u64, i64>(shard_id, Diagnostics::for_tests())
+            .await
+            .expect("invalid persist usage");
+        assert!(is_finalized, "shard must still be finalized");
     }
 }

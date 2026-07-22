@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/with_options.rs
-revision: 53f595e71f
+revision: 74f18a3354
 ---
 
 # mz-sql::plan::with_options
@@ -10,4 +10,5 @@ This is the type conversion layer that bridges raw AST `WithOptionValue` tokens 
 `BrokersList` is a struct with fields `static_entries: Vec<KafkaBroker<Aug>>` and `matching_rules: Vec<KafkaMatchingBrokerRule<Aug>>`.
 It implements `TryFromValue<WithOptionValue<Aug>>` by parsing a `Sequence` of `WithOptionValue` entries, routing `ConnectionKafkaBroker` variants into `static_entries` and `KafkaMatchingBrokerRule` variants into `matching_rules`; single non-sequence values of either kind are also accepted.
 `KafkaMatchingBrokerRule<Aug>` implements `TryFromValue<WithOptionValue<Aug>>` (extracts from `WithOptionValue::KafkaMatchingBrokerRule`) and `ImpliedValue` (bails with an error).
-In the generic `TryFromValue<WithOptionValue<Aug>>` fallback, `WithOptionValue::KafkaMatchingBrokerRule(_)` is excluded from generic scalar extraction alongside `ConnectionAwsPrivatelink`; the error label for `ConnectionAwsPrivatelink` is `"connection privatelink"`.
+In the generic `TryFromValue<WithOptionValue<Aug>>` fallback, `WithOptionValue::KafkaMatchingBrokerRule(_)` is excluded from generic scalar extraction alongside `ConnectionAwsPrivatelink`; the error label for `ConnectionAwsPrivatelink` is `"connection privatelink"`. `WithOptionValue::ClusterAutoScalingStrategyOptionValue(_)` is likewise excluded, with the error label `"cluster auto scaling strategy"`.
+`ClusterAutoScalingStrategyOptionValue` implements `TryFromValue<WithOptionValue<Aug>>` (extracts from `WithOptionValue::ClusterAutoScalingStrategyOptionValue`) and `ImpliedValue` (bails with an error requiring an explicit value).

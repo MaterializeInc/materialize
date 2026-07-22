@@ -52,3 +52,20 @@ SELECT * FROM t1;
 # For SUBSCRIBE, we need to add a GROUP BY to force an exchange in the dataflow.
 query error total result exceeds max size of 1\.0 MiB
 SUBSCRIBE (SELECT * FROM t1 GROUP BY a, b)
+
+# Regression: `RowSetFinishing` must not reject a result that fits within
+# `max_result_size`. This folds to a fast-path Constant of 10000 rows with a
+# `byte_len()` of 1100000, which fits under the 1140000 cap. The finishing path
+# used to also charge for a per-entry array it never builds (10000 * 8 bytes),
+# pushing the accounting to 1180000 and wrongly rejecting the query.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET max_result_size TO 1140000;
+----
+COMPLETE 0
+
+query TT
+SELECT lpad(g::text, 10, '0'), repeat('a', 80) FROM generate_series(1, 10000) g ORDER BY 1 LIMIT 3;
+----
+0000000001  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+0000000002  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+0000000003  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa

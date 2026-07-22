@@ -35,9 +35,9 @@ use mz_ore::{instrument, soft_panic_or_log};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Diff, GlobalId, SqlScalarType, Timestamp};
 use mz_sql::ast::{
-    AlterConnectionAction, AlterConnectionStatement, AlterSinkAction, AlterSourceAction, AstInfo,
-    ConstantVisitor, CopyRelation, CopyStatement, CreateSourceOptionName, Raw, Statement,
-    StatementKind, SubscribeStatement,
+    AlterConnectionAction, AlterConnectionStatement, AlterSourceAction, AstInfo, ConstantVisitor,
+    CopyRelation, CopyStatement, CreateSourceOptionName, Raw, Statement, StatementKind,
+    SubscribeStatement,
 };
 use mz_sql::catalog::RoleAttributesRaw;
 use mz_sql::names::{Aug, PartialItemName, ResolvedIds};
@@ -80,7 +80,7 @@ use crate::coord::{
 use crate::error::{AdapterError, AuthenticationError};
 use crate::notice::AdapterNotice;
 use crate::session::{Session, TransactionOps, TransactionStatus};
-use crate::statement_logging::WatchSetCreation;
+use crate::statement_logging::{StatementEndedExecutionReason, WatchSetCreation};
 use crate::util::{ClientTransmitter, ResultExt};
 use crate::webhook::{
     AppendWebhookResponse, AppendWebhookValidator, WebhookAppender, WebhookAppenderInvalidator,
@@ -498,6 +498,12 @@ impl Coordinator {
                             });
                         }
                         Err(e) => {
+                            // On success the guard's contents moved into the
+                            // `Subscribing` response. On error the frontend
+                            // logs the error end, so we defuse rather than
+                            // let the guard's `Drop` emit a spurious
+                            // `Aborted`.
+                            let _ = ctx_extra.defuse();
                             let _ = tx.send(Err(e));
                         }
                     }
@@ -553,16 +559,18 @@ impl Coordinator {
                     .await;
                 }
 
-                Command::ExecuteSideEffectingFunc {
-                    plan,
-                    conn_id,
-                    current_role,
-                    tx,
-                } => {
-                    let result = self
-                        .execute_side_effecting_func(plan, conn_id, current_role)
-                        .await;
+                Command::ExecuteSideEffectingFunc { plan, conn_id, tx } => {
+                    let result = self.execute_side_effecting_func(plan, conn_id).await;
                     let _ = tx.send(result);
+                }
+                Command::LookupConnection { connection_id, tx } => {
+                    let conn =
+                        self.active_conns
+                            .get_key_value(&connection_id)
+                            .map(|(id_handle, meta)| {
+                                (id_handle.clone(), *meta.authenticated_role_id())
+                            });
+                    let _ = tx.send(conn);
                 }
                 Command::RegisterFrontendPeek {
                     uuid,
@@ -583,8 +591,8 @@ impl Coordinator {
                         tx,
                     );
                 }
-                Command::UnregisterFrontendPeek { uuid, tx } => {
-                    self.handle_unregister_frontend_peek(uuid, tx);
+                Command::UnregisterFrontendPeek { uuid, reason, tx } => {
+                    self.handle_unregister_frontend_peek(uuid, reason, tx);
                 }
                 Command::ExplainTimestamp {
                     conn_id,
@@ -1708,17 +1716,13 @@ impl Coordinator {
             // users.
             Statement::AlterCluster(_) => false,
 
-            // `ALTER SINK SET FROM` waits for the old relation to make enough progress for a clean
-            // cutover. If the old collection is stalled, it may block forever. Checks in
+            // `ALTER SINK` waits for the sink to make enough progress for a clean cutover to the
+            // new configuration. If the sink is stalled, it may block forever. Checks in
             // sequencing ensure that the operation fails if any one of these happens concurrently:
             //   * the sink is dropped
-            //   * the new source relation is dropped
+            //   * the source relation is dropped
             //   * another `ALTER SINK` for the same sink is applied first
-            Statement::AlterSink(stmt)
-                if matches!(stmt.action, AlterSinkAction::ChangeRelation(_)) =>
-            {
-                false
-            }
+            Statement::AlterSink(_) => false,
 
             // `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT` waits for the target MV to make
             // enough progress for a clean cutover. If the target MV is stalled, it may block
@@ -2185,13 +2189,18 @@ impl Coordinator {
         let _ = tx.send(Ok(()));
     }
 
-    /// Handle unregistration of a frontend peek that was registered but failed to issue.
-    /// This is used for cleanup when `client.peek()` fails after `RegisterFrontendPeek` succeeds.
-    fn handle_unregister_frontend_peek(&mut self, uuid: Uuid, tx: oneshot::Sender<()>) {
-        // Remove from pending_peeks (this also removes from client_pending_peeks)
+    /// Handles [`Command::UnregisterFrontendPeek`]; see its documentation for
+    /// the end-of-execution ownership contract.
+    fn handle_unregister_frontend_peek(
+        &mut self,
+        uuid: Uuid,
+        reason: StatementEndedExecutionReason,
+        tx: oneshot::Sender<()>,
+    ) {
+        // A peek missing from `pending_peeks` was already retired, and its end
+        // logged, by a concurrent teardown.
         if let Some(pending_peek) = self.remove_pending_peek(&uuid) {
-            // Retire `ExecuteContextExtra`, because the frontend will log the peek's error result.
-            let _ = pending_peek.ctx_extra.defuse();
+            self.retire_execution(reason, pending_peek.ctx_extra.defuse());
         }
         let _ = tx.send(());
     }

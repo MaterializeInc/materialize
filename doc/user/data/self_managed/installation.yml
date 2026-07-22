@@ -89,10 +89,12 @@
 - name: installation-tfvars-crd-version-tip
   content: |
     {{< tip >}}
-    [CRD API version `v1`](/self-managed-deployments/upgrading/adopting-the-v1-crd/) is available starting in Materialize v26.30 and
-    Materialize Terraform module version v3.1.1.
-    For earlier versions, or if you want to remain on the default `v1alpha1`,
-    comment out the `crd_version` line or set it to `v1alpha1`.
+    Starting in Materialize Terraform module version v4.0.0, `crd_version`
+    defaults to [CRD API version
+    `v1`](/self-managed-deployments/upgrading/adopting-the-v1-crd/). `v1`
+    requires Materialize v26.30 or greater and is available starting in
+    Terraform module version v3.1.1. To use `v1alpha1` instead, set
+    `crd_version = "v1alpha1"`.
     {{< /tip >}}
 
 - name: installation-tfvars-variables-optional

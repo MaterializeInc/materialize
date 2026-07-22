@@ -14,8 +14,9 @@
 //! the controller as a **separate task** and implements the ctx by marshaling
 //! each pull/apply to the Coordinator over the internal command channel, because
 //! the catalog and the live compute/storage signals are reachable only from the
-//! coordinator loop. Pulls are batched so the round-trip count per tick is
-//! bounded.
+//! coordinator loop. The two whole-tick reads are batched; the per-cluster live
+//! signals are pulled on demand, so a tick's round-trips scale with the number of
+//! managed clusters that need a live signal, not with a constant.
 //!
 //! Everything here is gated by [`ENABLE_CLUSTER_CONTROLLER`] (default off). With
 //! the gate off the task does not tick, so the legacy scheduling and graceful
@@ -33,9 +34,14 @@ use mz_catalog::memory::objects::{ClusterConfig, ClusterVariant};
 use mz_cluster_controller::ClusterController;
 use mz_cluster_controller::ctx::{
     ApplyOutcome, AvailabilityZones, ClusterControllerCtx, ClusterState, Decision,
-    ExpectedClusterState, ObservedReplica, ReconfigurationRecord, ReplicaShape, StateWrite,
+    ExpectedClusterState, ObservedReplica, OnTimeout, ReconfigurationRecord, ReconfigurationStatus,
+    ReconfigurationTarget, ReplicaShape, StateWrite,
+};
+use mz_cluster_controller::strategy::{
+    GRACEFUL_RECONFIGURATION_STRATEGY_NAME, HYDRATION_BURST_STRATEGY_NAME,
 };
 use mz_compute_types::config::ComputeReplicaConfig;
+use mz_controller::clusters::ClusterStatus;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::task::spawn;
 use mz_repr::Timestamp;
@@ -43,15 +49,15 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, warn};
 
 use crate::catalog::{DropObjectInfo, Op, ReplicaCreateDropReason};
-use crate::coord::{Coordinator, Message};
+use crate::coord::{ClusterReplicaStatuses, Coordinator, Message};
 use crate::error::AdapterError;
 
 /// A request the controller task marshals to the Coordinator to satisfy one
 /// [`ClusterControllerCtx`] call. Each variant carries a oneshot for the reply.
 ///
-/// `ManagedClusterIds` and `ClusterStates` are the per-tick batched reads (`now`
-/// is folded into `ClusterStates`'s reply). `Apply` commits a tick's batch of
-/// decisions and `TickInterval` reports the current reconcile cadence.
+/// `ManagedClusterIds` and `ClusterStates` are the per-tick batched reads. The
+/// `ClusterStates` reply also carries `now`. `HydratedReplicas` is a
+/// per-cluster live signal a strategy pulls on demand.
 #[derive(Debug)]
 pub enum ClusterControllerRequest {
     /// The ids of all *user* managed clusters the controller owns this tick.
@@ -64,6 +70,19 @@ pub enum ClusterControllerRequest {
         clusters: Vec<ClusterId>,
         tx: oneshot::Sender<(Vec<ClusterState>, Timestamp)>,
     },
+    /// Of `replicas` on `cluster`, which are online and have all current
+    /// collections hydrated.
+    HydratedReplicas {
+        cluster_id: ClusterId,
+        replicas: Vec<ReplicaId>,
+        tx: oneshot::Sender<BTreeSet<ReplicaId>>,
+    },
+    /// Whether the cluster has any hydratable (dataflow-backed) objects bound to
+    /// it.
+    HasHydratableObjects {
+        cluster_id: ClusterId,
+        tx: oneshot::Sender<bool>,
+    },
     /// Apply a tick's batch of decisions under their compare-and-append guards.
     Apply {
         decisions: Vec<Decision>,
@@ -73,6 +92,11 @@ pub enum ClusterControllerRequest {
     /// change to `cluster_controller_tick_interval` takes effect without a
     /// restart.
     TickInterval { tx: oneshot::Sender<Duration> },
+}
+
+struct ReplicaHydrationCheck {
+    replica_id: ReplicaId,
+    compute_hydrated: oneshot::Receiver<bool>,
 }
 
 /// The controller-task side of the boundary: a [`ClusterControllerCtx`] that
@@ -130,6 +154,29 @@ impl ClusterControllerCtx for CoordCtx {
         }
     }
 
+    async fn hydrated_replicas(
+        &mut self,
+        cluster_id: ClusterId,
+        replicas: &[ReplicaId],
+    ) -> BTreeSet<ReplicaId> {
+        let replicas = replicas.to_vec();
+        self.request(|tx| ClusterControllerRequest::HydratedReplicas {
+            cluster_id,
+            replicas,
+            tx,
+        })
+        .await
+        .unwrap_or_default()
+    }
+
+    async fn has_hydratable_objects(&mut self, cluster_id: ClusterId) -> bool {
+        self.request(|tx| ClusterControllerRequest::HasHydratableObjects { cluster_id, tx })
+            .await
+            // A lost reply means shutdown; "no objects" arms nothing, which is
+            // the safe answer.
+            .unwrap_or(false)
+    }
+
     async fn apply(&mut self, decisions: Vec<Decision>) -> ApplyOutcome {
         self.request(|tx| ClusterControllerRequest::Apply { decisions, tx })
             .await
@@ -158,9 +205,12 @@ impl Coordinator {
     pub(crate) fn spawn_cluster_controller_task(&self) {
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let reconcile_now = Arc::clone(&self.reconcile_now);
+        // A shared handle: dyncfg updates land in the same underlying values, so
+        // the controller task sees flag flips without any push.
+        let dyncfgs = self.catalog().system_config().dyncfgs().clone();
 
         spawn(|| "cluster_controller", async move {
-            let controller = ClusterController::new();
+            let controller = ClusterController::new(dyncfgs);
             let mut ctx = CoordCtx {
                 internal_cmd_tx,
                 now: Timestamp::MIN,
@@ -244,6 +294,28 @@ impl Coordinator {
                     .collect();
                 let _ = tx.send((states, now));
             }
+            ClusterControllerRequest::HydratedReplicas {
+                cluster_id,
+                replicas,
+                tx,
+            } => {
+                let checks = self.start_hydration_checks(cluster_id, replicas);
+                // Start the controller calls on the coordinator loop, then wait
+                // for compute's replies off-loop. The compute check can wait on
+                // the compute instance task.
+                spawn(|| "cluster_controller_hydration_probe", async move {
+                    let mut hydrated = BTreeSet::new();
+                    for check in checks {
+                        if check.compute_hydrated.await.unwrap_or(false) {
+                            hydrated.insert(check.replica_id);
+                        }
+                    }
+                    let _ = tx.send(hydrated);
+                });
+            }
+            ClusterControllerRequest::HasHydratableObjects { cluster_id, tx } => {
+                let _ = tx.send(self.cluster_has_hydratable_objects(cluster_id));
+            }
             ClusterControllerRequest::Apply { decisions, tx } => {
                 let outcome = if active {
                     self.apply_cluster_decisions(decisions).await
@@ -272,34 +344,17 @@ impl Coordinator {
         // apply path checks against cannot drift.
         let expected = crate::catalog::cluster_state::project_expected(managed);
 
+        // All replicas, with the raw traits the controller's ownership test
+        // (`ObservedReplica::owned_shape`) classifies on.
         let replicas = cluster
             .replicas()
-            .filter_map(|replica| {
-                // INTERNAL / BILLED AS replicas are manually managed and live
-                // outside the controller's replication-factor domain: a user
-                // can attach one to any managed cluster, and the legacy
-                // scheduler and reconfiguration paths never create or drop
-                // them. A `-pending` replica is the in-flight target of a
-                // graceful reconfiguration, created at the new shape while the
-                // durable config still reads the old one until finalize. It is
-                // owned by the reconfiguration path, not the controller.
-                // Exclude all of these from the observed set so the controller
-                // neither counts one toward a desired shape (letting it stand
-                // in for a managed replica) nor drops it as excess. Retiring a
-                // pending replica here would defeat the zero-downtime resize
-                // that created it.
-                if replica.config.location.internal()
-                    || replica.config.location.billed_as().is_some()
-                    || replica.config.location.pending()
-                {
-                    return None;
-                }
-                let shape = replica_shape(&replica.config)?;
-                Some(ObservedReplica {
-                    replica_id: replica.replica_id,
-                    name: replica.name.clone(),
-                    shape,
-                })
+            .map(|replica| ObservedReplica {
+                replica_id: replica.replica_id,
+                name: replica.name.clone(),
+                shape: replica_shape(&replica.config),
+                internal: replica.config.location.internal(),
+                billed_as: replica.config.location.billed_as().is_some(),
+                pending: replica.config.location.pending(),
             })
             .collect();
 
@@ -309,10 +364,104 @@ impl Coordinator {
             replication_factor: expected.replication_factor,
             availability_zones: expected.availability_zones.0,
             logging: expected.logging,
+            auto_scaling_policy: expected.auto_scaling_policy,
             reconfiguration: expected.reconfiguration,
             burst: expected.burst,
             replicas,
         })
+    }
+
+    /// Whether the cluster has any hydratable objects bound to it, backing the
+    /// controller's [`ClusterControllerCtx::has_hydratable_objects`] pull (see
+    /// the trait method for the approximation contract and why mismatches with
+    /// the hydration check are self-healing).
+    fn cluster_has_hydratable_objects(&self, cluster_id: ClusterId) -> bool {
+        let Some(cluster) = self.catalog().try_get_cluster(cluster_id) else {
+            return false;
+        };
+        cluster
+            .bound_objects
+            .iter()
+            .any(|id| self.catalog().get_entry(id).item().is_hydratable())
+    }
+
+    /// Starts per-replica hydration checks for `cluster_id`.
+    ///
+    /// Returns only checks for replicas whose processes are all online, that
+    /// are already storage-hydrated, and that are known to the compute
+    /// controller. The compute receiver completes off the coordinator loop.
+    fn start_hydration_checks(
+        &self,
+        cluster_id: ClusterId,
+        replicas: Vec<ReplicaId>,
+    ) -> Vec<ReplicaHydrationCheck> {
+        use mz_catalog::memory::objects::CatalogItem;
+
+        // Materialized views pinned to a replica (via `IN CLUSTER ... REPLICA`)
+        // are only ever installed on that replica, so any other replica can
+        // never report them hydrated. Collect the cluster's pinned MVs once,
+        // then exclude the ones pinned elsewhere from each replica's hydration
+        // check. Otherwise a graceful reconfiguration's cut-over to a fresh
+        // replica set would wait forever for the new replicas to hydrate an MV
+        // bound to a replica being replaced, then roll back at the deadline
+        // (leaving the old replica, and the targeted MV, in place). Indexes
+        // cannot be replica-pinned, so MVs are the only case.
+        let pinned_mvs: Vec<(ReplicaId, mz_repr::GlobalId)> = self
+            .catalog()
+            .try_get_cluster(cluster_id)
+            .into_iter()
+            .flat_map(|cluster| cluster.bound_objects.iter())
+            .filter_map(|id| match self.catalog().get_entry(id).item() {
+                CatalogItem::MaterializedView(mv) => mv
+                    .target_replica
+                    .map(|target| (target, mv.global_id_writes())),
+                _ => None,
+            })
+            .collect();
+
+        let mut checks = Vec::new();
+        for replica_id in replicas {
+            // Skip replicas that are not online. We wait for a replica to be
+            // online even when it has no objects that need hydration on it
+            // (e.g. a single-replica source).
+            let status = self
+                .cluster_replica_statuses
+                .try_get_cluster_replica_statuses(cluster_id, replica_id)
+                .map(ClusterReplicaStatuses::cluster_replica_status);
+            if !matches!(status, Some(ClusterStatus::Online)) {
+                continue;
+            }
+            let exclude: BTreeSet<mz_repr::GlobalId> = pinned_mvs
+                .iter()
+                .filter(|(target, _)| *target != replica_id)
+                .map(|(_, id)| *id)
+                .collect();
+            let compute_fut = match self.controller.compute.collections_hydrated_for_replicas(
+                cluster_id,
+                vec![replica_id],
+                exclude.clone(),
+            ) {
+                Ok(fut) => fut,
+                // The replica is not known to the compute controller. Treat it
+                // as not hydrated.
+                Err(_) => continue,
+            };
+            let storage_hydrated = match self.controller.storage.collections_hydrated_on_replicas(
+                Some(vec![replica_id]),
+                &cluster_id,
+                &exclude,
+            ) {
+                Ok(hydrated) => hydrated,
+                Err(_) => continue,
+            };
+            if storage_hydrated {
+                checks.push(ReplicaHydrationCheck {
+                    replica_id,
+                    compute_hydrated: compute_fut,
+                });
+            }
+        }
+        checks
     }
 
     /// Apply one batch of decisions under their compare-and-append guards.
@@ -446,10 +595,13 @@ impl Coordinator {
                     cluster_id,
                     name,
                     shape,
+                    reasons,
                     ..
                 } => {
                     let replica_id = replica_ids.next().expect("one pre-allocated id per create");
-                    match self.build_create_replica_op(cluster_id, replica_id, name, &shape) {
+                    let reason = reason_from_strategies(&reasons);
+                    match self.build_create_replica_op(cluster_id, replica_id, name, &shape, reason)
+                    {
                         Ok(Some(op)) => mutations.push(op),
                         Ok(None) => return None,
                         Err(err) => {
@@ -463,6 +615,19 @@ impl Coordinator {
                     replica_id,
                     ..
                 } => {
+                    // The replica may have vanished since the decisions were
+                    // derived (a user DDL landed between the tick's read and
+                    // this apply). The in-transaction witness check would
+                    // reject such a stale batch, but resource-limit validation
+                    // runs before the transaction and panics on a missing
+                    // replica, so reject the batch here instead.
+                    if self
+                        .catalog()
+                        .try_get_cluster_replica(cluster_id, replica_id)
+                        .is_none()
+                    {
+                        return None;
+                    }
                     drops.push(DropObjectInfo::ClusterReplica((
                         cluster_id,
                         replica_id,
@@ -517,6 +682,12 @@ impl Coordinator {
                 debug!("cluster controller apply skipped in read-only mode");
                 ApplyOutcome::Rejected
             }
+            Err(AdapterError::ResourceExhaustion { .. }) => {
+                // The batch cannot fit the resource budget. Report the fact and
+                // leave the reaction (what, if anything, to shed) to the kernel.
+                debug!("cluster controller apply exceeded the resource budget");
+                ApplyOutcome::ResourceExhausted
+            }
             Err(err) => {
                 warn!("cluster controller apply failed: {err}");
                 ApplyOutcome::Rejected
@@ -542,40 +713,61 @@ impl Coordinator {
         else {
             return None;
         };
-        if let Some(size) = &write.new_size {
+        // Exhaustive destructure of the source (no `..`): a field added to
+        // `StateWrite` is a compile error here until it's overlaid onto the
+        // managed config. We cannot destructure `managed` itself. It carries
+        // fields the controller does not model (`workload_class`,
+        // `optimizer_feature_overrides`) that this overlay must leave untouched.
+        let StateWrite {
+            new_size,
+            new_replication_factor,
+            new_availability_zones,
+            new_logging,
+            reconfiguration,
+            burst,
+        } = write;
+        if let Some(size) = new_size {
             managed.size = size.clone();
         }
-        if let Some(rf) = write.new_replication_factor {
-            managed.replication_factor = rf;
+        if let Some(rf) = new_replication_factor {
+            managed.replication_factor = *rf;
         }
-        if let Some(azs) = &write.new_availability_zones {
+        if let Some(azs) = new_availability_zones {
             managed.availability_zones = azs.clone();
         }
-        if let Some(logging) = &write.new_logging {
+        if let Some(logging) = new_logging {
             managed.logging = logging.clone();
         }
-        if let Some(reconfiguration) = &write.reconfiguration {
-            managed.reconfiguration = reconfiguration.as_ref().map(memory_reconfiguration);
+        if let Some(reconfiguration) = reconfiguration {
+            managed.reconfiguration = reconfiguration.record.as_ref().map(memory_reconfiguration);
         }
-        if let Some(burst) = &write.burst {
-            managed.burst = burst.as_ref().map(memory_burst);
+        if let Some(burst) = burst {
+            managed.burst = burst.record.as_ref().map(memory_burst);
         }
+        // The audit intents travel with the write, declared by the strategy at
+        // the decision point. We pass them through untouched so the events are
+        // emitted in the same catalog transaction as the state they describe.
+        let reconfiguration_audit = write.reconfiguration.as_ref().and_then(|w| w.audit);
+        let burst_audit = write.burst.as_ref().and_then(|w| w.audit);
         Some(Op::UpdateClusterConfig {
             id: cluster_id,
             name: cluster.name.clone(),
             config,
+            reconfiguration_audit,
+            burst_audit,
         })
     }
 
     /// Build an [`Op::CreateClusterReplica`] for a desired replica `shape` on
-    /// `cluster_id` with the pre-allocated `replica_id`. Returns `Ok(None)` if
-    /// the cluster is gone or unmanaged.
+    /// `cluster_id` with the pre-allocated `replica_id`, attributed to `reason`.
+    /// Returns `Ok(None)` if the cluster is gone or unmanaged.
     fn build_create_replica_op(
         &self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
         name: String,
         shape: &ReplicaShape,
+        reason: ReplicaCreateDropReason,
     ) -> Result<Option<Op>, mz_catalog::memory::error::Error> {
         let Some(cluster) = self.catalog().try_get_cluster(cluster_id) else {
             return Ok(None);
@@ -620,11 +812,26 @@ impl Coordinator {
             name,
             config,
             owner_id,
-            // Creates carry the interim `Manual` reason. The reasons that
-            // attribute a create to a strategy arrive with the strategies that
-            // follow.
-            reason: ReplicaCreateDropReason::Manual,
+            reason,
         }))
+    }
+}
+
+/// Map a create decision's strategy-attribution to the audit reason carried on
+/// the create event. Graceful wins over burst when both desired a shape (their
+/// shapes differ in practice, so this is a stable tie-break); a baseline-held
+/// replica is `Manual`, the tag for replicas the user's own config calls for.
+///
+/// Drops never come through here: a drop happens exactly when no strategy
+/// desires the replica, so it carries no attribution and is uniformly audited
+/// [`ReplicaCreateDropReason::Retired`].
+fn reason_from_strategies(reasons: &[&'static str]) -> ReplicaCreateDropReason {
+    if reasons.contains(&GRACEFUL_RECONFIGURATION_STRATEGY_NAME) {
+        ReplicaCreateDropReason::GracefulReconfiguration
+    } else if reasons.contains(&HYDRATION_BURST_STRATEGY_NAME) {
+        ReplicaCreateDropReason::HydrationBurst
+    } else {
+        ReplicaCreateDropReason::Manual
     }
 }
 
@@ -642,29 +849,121 @@ fn replica_shape(config: &mz_controller::clusters::ReplicaConfig) -> Option<Repl
     })
 }
 
+fn on_timeout_from_controller(action: OnTimeout) -> mz_sql::plan::OnTimeoutAction {
+    match action {
+        OnTimeout::Commit => mz_sql::plan::OnTimeoutAction::Commit,
+        OnTimeout::Rollback => mz_sql::plan::OnTimeoutAction::Rollback,
+    }
+}
+
 fn memory_reconfiguration(
     record: &ReconfigurationRecord,
 ) -> mz_catalog::memory::objects::ReconfigurationState {
+    // Destructure the source (no `..`): a field added to the controller type is a
+    // compile error here until it's carried across. The target is the same.
+    let ReconfigurationRecord {
+        target,
+        deadline,
+        on_timeout,
+        status,
+    } = record;
+    let ReconfigurationTarget {
+        size,
+        replication_factor,
+        availability_zones,
+        logging,
+    } = target;
     mz_catalog::memory::objects::ReconfigurationState {
         target: mz_catalog::memory::objects::ReconfigurationTarget {
-            size: record.target.size.clone(),
-            replication_factor: record.target.replication_factor,
-            availability_zones: record.target.availability_zones.0.clone(),
-            logging: record.target.logging.clone(),
+            size: size.clone(),
+            replication_factor: *replication_factor,
+            availability_zones: availability_zones.0.clone(),
+            logging: logging.clone(),
         },
-        deadline: record.deadline,
-        // The baseline controller writes no reconfiguration records, so this
-        // mapper is never exercised; default to the conservative ROLLBACK.
-        on_timeout: mz_sql::plan::OnTimeoutAction::Rollback,
+        deadline: *deadline,
+        on_timeout: on_timeout_from_controller(*on_timeout),
+        status: status_from_controller(*status),
+    }
+}
+
+fn status_from_controller(
+    status: ReconfigurationStatus,
+) -> mz_catalog::memory::objects::ReconfigurationStatus {
+    match status {
+        ReconfigurationStatus::InProgress => {
+            mz_catalog::memory::objects::ReconfigurationStatus::InProgress
+        }
+        ReconfigurationStatus::Finalized => {
+            mz_catalog::memory::objects::ReconfigurationStatus::Finalized
+        }
+        ReconfigurationStatus::TimedOut => {
+            mz_catalog::memory::objects::ReconfigurationStatus::TimedOut
+        }
+        ReconfigurationStatus::Cancelled => {
+            mz_catalog::memory::objects::ReconfigurationStatus::Cancelled
+        }
+        ReconfigurationStatus::ResourceExhausted => {
+            mz_catalog::memory::objects::ReconfigurationStatus::ResourceExhausted
+        }
     }
 }
 
 fn memory_burst(
     record: &mz_cluster_controller::ctx::BurstRecord,
 ) -> mz_catalog::memory::objects::BurstState {
+    // Destructure the source (no `..`): a field added to the controller type is a
+    // compile error here until it's carried across.
+    let mz_cluster_controller::ctx::BurstRecord {
+        burst_size,
+        linger_duration,
+        steady_hydrated_at,
+    } = record;
     mz_catalog::memory::objects::BurstState {
-        burst_size: record.burst_size.clone(),
-        linger_duration: record.linger_duration,
-        steady_hydrated_at: record.steady_hydrated_at,
+        burst_size: burst_size.clone(),
+        linger_duration: *linger_duration,
+        steady_hydrated_at: *steady_hydrated_at,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_cluster_controller::strategy::BASELINE_STRATEGY_NAME;
+
+    use super::*;
+
+    #[mz_ore::test]
+    fn test_reason_from_strategies() {
+        use ReplicaCreateDropReason as Reason;
+
+        // Each strategy maps to its own reason; the baseline (or no
+        // attribution) is `Manual`.
+        assert!(matches!(
+            reason_from_strategies(&[BASELINE_STRATEGY_NAME]),
+            Reason::Manual
+        ));
+        assert!(matches!(reason_from_strategies(&[]), Reason::Manual));
+        assert!(matches!(
+            reason_from_strategies(&[GRACEFUL_RECONFIGURATION_STRATEGY_NAME]),
+            Reason::GracefulReconfiguration
+        ));
+        assert!(matches!(
+            reason_from_strategies(&[HYDRATION_BURST_STRATEGY_NAME]),
+            Reason::HydrationBurst
+        ));
+
+        // Graceful wins the tie-break when several strategies desired the
+        // shape, and any strategy attribution beats the baseline's `Manual`.
+        assert!(matches!(
+            reason_from_strategies(&[
+                BASELINE_STRATEGY_NAME,
+                HYDRATION_BURST_STRATEGY_NAME,
+                GRACEFUL_RECONFIGURATION_STRATEGY_NAME,
+            ]),
+            Reason::GracefulReconfiguration
+        ));
+        assert!(matches!(
+            reason_from_strategies(&[BASELINE_STRATEGY_NAME, HYDRATION_BURST_STRATEGY_NAME]),
+            Reason::HydrationBurst
+        ));
     }
 }

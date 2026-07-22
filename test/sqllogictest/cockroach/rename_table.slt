@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,20 +9,20 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/rename_table
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/rename_table
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
-
-# not supported yet
-halt
 
 mode cockroach
 
-statement error pgcode 42P01 relation "foo" does not exist
+statement error pgcode 42P01 unknown catalog item 'foo'
 ALTER TABLE foo RENAME TO bar
 
 statement ok
@@ -43,15 +43,17 @@ SELECT * FROM kv
 1 2
 3 4
 
-query T
+# Not supported by Materialize.
+onlyif cockroach
+query TTTTIT
 SHOW TABLES
 ----
-kv
+public  kv  table  root  0  NULL
 
 statement ok
 ALTER TABLE kv RENAME TO new_kv
 
-statement error pgcode 42P01 relation "kv" does not exist
+statement error pgcode 42P01 unknown catalog item 'kv'
 SELECT * FROM kv
 
 query II rowsort
@@ -60,24 +62,30 @@ SELECT * FROM new_kv
 1 2
 3 4
 
-query T
+# Not supported by Materialize.
+onlyif cockroach
+query TTTTIT
 SHOW TABLES
 ----
-new_kv
+public  new_kv  table  root  0  NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 # check the name in the descriptor, which is used by SHOW GRANTS, is also changed
-query TTTTT
+query TTTTTB
 SHOW GRANTS ON TABLE new_kv
 ----
-test  public new_kv  admin  ALL
-test  public new_kv  root   ALL
+test  public  new_kv  admin  ALL  true
+test  public  new_kv  root   ALL  true
 
-statement error invalid table name: ""
+statement error zero\-length delimited identifier
 ALTER TABLE "" RENAME TO foo
 
-statement error invalid table name: ""
+statement error zero\-length delimited identifier
 ALTER TABLE new_kv RENAME TO ""
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE new_kv RENAME TO new_kv
 
@@ -90,16 +98,18 @@ CREATE TABLE t (
 statement ok
 INSERT INTO t VALUES (4, 16), (5, 25)
 
-statement error pgcode 42P07 relation "new_kv" already exists
+statement error pgcode 42P07 catalog item 'new_kv' already exists
 ALTER TABLE t RENAME TO new_kv
 
 user testuser
 
-statement error user testuser does not have DROP privilege on relation t
+statement error unknown schema 'test'
 ALTER TABLE test.t RENAME TO t2
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT DROP ON TABLE test.t TO testuser
 
@@ -108,26 +118,32 @@ create database test2
 
 user testuser
 
-statement error user testuser does not have CREATE privilege on database test
+statement error unknown schema 'test'
 ALTER TABLE test.t RENAME TO t2
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT CREATE ON DATABASE test TO testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE test.t RENAME TO t2
 
-query T
+# Not supported by Materialize.
+onlyif cockroach
+query TTTTIT
 SHOW TABLES
 ----
-new_kv
-t2
+public  new_kv  table  root  0  NULL
+public  t2      table  root  0  NULL
 
 user testuser
 
-statement error user testuser does not have CREATE privilege on database test2
+statement error Expected end of statement, found dot
 ALTER TABLE test.t2 RENAME TO test2.t
 
 user root
@@ -135,51 +151,50 @@ user root
 statement ok
 GRANT CREATE ON DATABASE test2 TO testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT DROP ON test.new_kv TO testuser
 
 user testuser
 
-statement ok
-ALTER TABLE test.new_kv RENAME TO test2.t
-
-statement ok
-ALTER TABLE test.t2 RENAME TO test2.t2
-
-query T
+# Not supported by Materialize.
+onlyif cockroach
+query TTTTIT
 SHOW TABLES
 ----
+public  new_kv  table  root  0  NULL
+public  t2      table  root  0  NULL
 
-query T
+# Not supported by Materialize.
+onlyif cockroach
+query TTTTIT
 SHOW TABLES FROM test2
 ----
-t
-t2
 
 user root
 
-query II rowsort
-SELECT * FROM test2.t
-----
-1 2
-3 4
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE TABLE test2.t2(c1 INT, c2 INT)
 
-query II rowsort
-SELECT * FROM test2.t2
-----
-4 16
-5 25
-
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE VIEW test2.v1 AS SELECT c1,c2 FROM test2.t2
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE test2.v1 RENAME TO test2.v2
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE test2.v2 RENAME TO test2.v1
 
-statement error cannot rename relation "test2.public.t2" because view "v1" depends on it
+statement error Expected end of statement, found dot
 ALTER TABLE test2.t2 RENAME TO test2.t3
 
 # Tests that uncommitted database or table names can be used by statements
@@ -189,83 +204,42 @@ ALTER TABLE test2.t2 RENAME TO test2.t3
 statement ok
 BEGIN
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE DATABASE d; CREATE TABLE d.kv (k CHAR PRIMARY KEY, v CHAR);
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO d.kv (k,v) VALUES ('a', 'b')
 
 statement ok
 COMMIT
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO d.kv (k,v) VALUES ('c', 'd')
-
-# A table rename disallows the use of the old name
-statement ok
-BEGIN
-
-statement ok
-ALTER TABLE d.kv RENAME TO d.kv2
-
-statement ok
-INSERT INTO d.kv2 (k,v) VALUES ('e', 'f')
-
-statement error pgcode 42P01 relation \"d.kv\" does not exist
-INSERT INTO d.kv (k,v) VALUES ('g', 'h')
-
-statement ok
-ROLLBACK
-
-# A database rename disallows the use of the old name.
-statement ok
-BEGIN
-
-statement ok
-ALTER DATABASE d RENAME TO dnew
-
-statement ok
-INSERT INTO dnew.kv (k,v) VALUES ('e', 'f')
-
-statement error pgcode 42P01 relation \"d.kv\" does not exist
-INSERT INTO d.kv (k,v) VALUES ('g', 'h')
-
-statement ok
-ROLLBACK
-
-# The reuse of a name is allowed.
-statement ok
-BEGIN
-
-statement ok
-ALTER DATABASE d RENAME TO dnew
-
-statement ok
-CREATE DATABASE d
-
-statement ok
-CREATE TABLE d.kv (k CHAR PRIMARY KEY, v CHAR)
-
-statement ok
-INSERT INTO d.kv (k,v) VALUES ('a', 'b')
-
-statement ok
-COMMIT
 
 # Check that on a rollback a database name cannot be used.
 statement ok
 BEGIN
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE DATABASE dd; CREATE TABLE dd.kv (k CHAR PRIMARY KEY, v CHAR)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO dd.kv (k,v) VALUES ('a', 'b')
 
 statement ok
 ROLLBACK
 
-statement error pgcode 42P01 relation "dd\.kv" does not exist
+statement error pgcode 42P01 unknown schema 'dd'
 INSERT INTO dd.kv (k,v) VALUES ('c', 'd')
 
 # Check that on a rollback a table name cannot be used.
@@ -275,30 +249,191 @@ BEGIN
 statement ok
 CREATE TABLE d.kv2 (k CHAR PRIMARY KEY, v CHAR)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO d.kv2 (k,v) VALUES ('a', 'b')
 
 statement ok
 ROLLBACK
 
-statement error pgcode 42P01 relation \"d.kv2\" does not exist
+statement error pgcode 42P01 unknown schema 'd'
 INSERT INTO d.kv2 (k,v) VALUES ('c', 'd')
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 USE d
 
-query T
+# Not supported by Materialize.
+onlyif cockroach
+query TTTTIT
 SHOW TABLES
 ----
-kv
+public  kv  table  root  0  NULL
 
-query TTT
-EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR ALTER TABLE kv RENAME TO kv2
-----
-rename table  ·  ·
+statement ok
+SET vectorize=on
 
-# Verify that the EXPLAIN above does not actually rename the table (cockroach#30543)
+# Not supported by Materialize.
+onlyif cockroach
 query T
+EXPLAIN ALTER TABLE kv RENAME TO kv2
+----
+distribution: local
+vectorized: true
+·
+• alter table
+
+statement ok
+RESET vectorize
+
+# Not supported by Materialize.
+onlyif cockroach
+# Verify that the EXPLAIN above does not actually rename the table (#30543)
+query TTTTIT
 SHOW TABLES
 ----
-kv
+public  kv  table  root  0  NULL
+
+# Test that tables can't be renamed to a different database unless both the
+# old and new schemas are in the public schema.
+subtest rename_table_across_dbs
+
+statement ok
+CREATE DATABASE olddb
+
+statement ok
+CREATE DATABASE newdb
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+USE olddb
+
+statement ok
+CREATE SCHEMA oldsc
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+USE newdb
+
+statement ok
+CREATE SCHEMA newsc
+
+statement ok
+CREATE TABLE olddb.public.tbl1();
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE TABLE olddb.oldsc.tbl2();
+
+statement error pgcode 0A000 Expected end of statement, found dot
+ALTER TABLE olddb.public.tbl1 RENAME TO newdb.newsc.tbl1
+
+statement error pgcode 0A000 Expected end of statement, found dot
+ALTER TABLE olddb.oldsc.tbl2 RENAME TO newdb.public.tbl2
+
+statement error pgcode 0A000 Expected end of statement, found dot
+ALTER TABLE olddb.oldsc.tbl2 RENAME TO newdb.newsc.tbl2
+
+# Try different but equivalent names.
+
+statement error pgcode 0A000 Expected end of statement, found dot
+ALTER TABLE olddb.tbl1 RENAME TO newdb.newsc.tbl1
+
+statement error pgcode 0A000 Expected end of statement, found dot
+ALTER TABLE olddb.oldsc.tbl2 RENAME TO newdb.tbl2
+
+statement ok
+DROP DATABASE olddb CASCADE
+
+statement ok
+DROP DATABASE newdb CASCADE
+
+subtest rename_table_using_types_to_different_database_not_allowed_55709
+
+statement ok
+CREATE DATABASE olddb
+
+statement ok
+CREATE DATABASE newdb
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+USE olddb
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE TYPE typ AS ENUM ('foo')
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE TABLE tbl(a typ)
+
+statement error pgcode 0A000 Expected end of statement, found dot
+ALTER TABLE tbl RENAME TO newdb.tbl
+
+# Try it in a transaction with non-public columns.
+
+statement ok
+CREATE TABLE tbl2()
+
+statement ok
+BEGIN
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER TABLE tbl2 ADD COLUMN b typ
+
+statement error pgcode 0A000 Expected end of statement, found dot
+ALTER TABLE tbl2 RENAME TO newdb.tbl2
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER TABLE tbl DROP COLUMN a
+
+statement error pgcode 0A000 Expected end of statement, found dot
+ALTER TABLE tbl RENAME TO newdb.tbl
+
+statement ok
+ROLLBACK
+
+statement ok
+DROP DATABASE olddb CASCADE
+
+statement ok
+DROP DATABASE newdb CASCADE
+
+# Sanity check for #55709 renaming tables and cross DB references
+
+statement ok
+CREATE DATABASE newdb;
+
+statement ok
+SET database = newdb;
+
+# Not supported by Materialize.
+onlyif cockroach
+# In 22.1 and onwards, disallow moving a table across databases even if
+# the table is being moved from public schema to public schema.
+statement ok
+CREATE DATABASE d1;
+CREATE TABLE d1.t();
+CREATE DATABASE d2;
+
+statement error pgcode 0A000 Expected end of statement, found dot
+ALTER TABLE d1.t RENAME TO d2.t;

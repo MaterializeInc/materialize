@@ -1,0 +1,114 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Behavioural tests for mz_internal.mz_postgres_sources. The view is a
+# BuiltinMaterializedView backed by SQL over mz_internal.mz_catalog_raw:
+# see MZ_POSTGRES_SOURCES in src/catalog/src/builtin/mz_internal.rs and
+# the parse_postgres_source_details helper in
+# src/expr/src/scalar/func/impls/jsonb.rs. These tests pin down the
+# column shape, nullability, and cross-catalog invariants that must be
+# preserved as the SQL evolves.
+
+mode cockroach
+
+reset-server
+
+# --- Schema -------------------------------------------------------------------
+
+# Lock down: 3 columns, canonical order, types, and nullability.
+query TTT
+SELECT c.name, c.type, c.nullable::text
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_objects o ON c.id = o.id
+JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
+WHERE o.name = 'mz_postgres_sources' AND s.name = 'mz_internal'
+ORDER BY c.position
+----
+id  text  false
+replication_slot  text  false
+timeline_id  uint8  true
+
+# --- Cross-catalog FK invariant -----------------------------------------------
+
+# Every row in mz_postgres_sources must join back to a source in mz_sources.
+# There must be zero orphans.
+query I
+SELECT count(*) FROM mz_internal.mz_postgres_sources ps
+LEFT JOIN mz_sources s ON ps.id = s.id
+WHERE s.id IS NULL
+----
+0
+
+# --- Row-count parity with mz_sources -----------------------------------------
+
+# The set of rows in mz_postgres_sources must be exactly the set of postgres
+# sources visible in mz_sources. Any drift here means the MV filter is off.
+query I
+SELECT
+  (SELECT count(*) FROM mz_internal.mz_postgres_sources)
+  - (SELECT count(*) FROM mz_sources WHERE type = 'postgres')
+----
+0
+
+# --- Non-null contract --------------------------------------------------------
+
+# id and replication_slot are NOT NULL in the desc. timeline_id is nullable.
+query I
+SELECT count(*) FROM mz_internal.mz_postgres_sources
+WHERE id IS NULL OR replication_slot IS NULL
+----
+0
+
+# --- Slot naming shape --------------------------------------------------------
+
+# Slots produced by purification (src/sql/src/pure.rs:977) match
+# `materialize_<hex>`. Any row that doesn't match either came from a
+# different code path or is legacy data we didn't anticipate.
+query I
+SELECT count(*) FROM mz_internal.mz_postgres_sources
+WHERE replication_slot NOT LIKE 'materialize\_%' ESCAPE '\'
+----
+0
+
+# --- timeline_id sanity -------------------------------------------------------
+
+# timeline_id is a Postgres server-side value; when populated it must be
+# non-negative. NULL is allowed (represents pre-2024 sources whose
+# publication_details predate the field).
+query I
+SELECT count(*) FROM mz_internal.mz_postgres_sources
+WHERE timeline_id IS NOT NULL AND timeline_id::int8 < 0
+----
+0
+
+# --- Non-postgres sources are excluded ----------------------------------------
+
+# A LOAD GENERATOR source is a source but must not appear in
+# mz_postgres_sources.
+statement ok
+CREATE SOURCE lg_src IN CLUSTER quickstart FROM LOAD GENERATOR COUNTER
+
+query I
+SELECT count(*) FROM mz_internal.mz_postgres_sources
+WHERE id = (SELECT id FROM mz_sources WHERE name = 'lg_src')
+----
+0
+
+statement ok
+DROP SOURCE lg_src
+
+# --- The view is queryable and empty on a fresh env --------------------------
+
+# Fresh envs have no upstream Postgres, so this view must be empty. If a
+# future SLT harness pre-provisions a postgres source, this expectation
+# needs to be revisited.
+query I
+SELECT count(*) FROM mz_internal.mz_postgres_sources
+----
+0

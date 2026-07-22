@@ -9,7 +9,7 @@
 
 # Build and run SQLsmith, a random query generator, ported for Materialize
 
-MZFROM ubuntu-base
+MZFROM debian-base
 
 WORKDIR /workdir
 
@@ -30,7 +30,7 @@ ADD https://api.github.com/repos/MaterializeInc/sqlsmith/git/refs/heads/master v
 # Build SQLsmith
 RUN git clone --single-branch --branch=master https://github.com/MaterializeInc/sqlsmith \
     && cd sqlsmith \
-    && git checkout 64449b6d2d4fafbb87b4e407f2fb54d038926f0c \
+    && git checkout 11df80becfe13ecd6d01f016c898df513251aef7 \
     && rm -rf .git \
     && cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=c++ . \
     && cmake --build . -j `nproc`

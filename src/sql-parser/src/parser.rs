@@ -126,7 +126,7 @@ impl<T> ParserStatementErrorMapper<T> for Result<T, ParserError> {
 pub fn parse_statements_with_limit(
     sql: &str,
 ) -> Result<Result<Vec<StatementParseResult<'_>>, ParserStatementError>, String> {
-    if sql.bytes().count() > MAX_STATEMENT_BATCH_SIZE {
+    if sql.len() > MAX_STATEMENT_BATCH_SIZE {
         return Err(format!(
             "statement batch size cannot exceed {}",
             ByteSize::b(u64::cast_from(MAX_STATEMENT_BATCH_SIZE))
@@ -204,6 +204,24 @@ pub fn parse_item_name(sql: &str) -> Result<UnresolvedItemName, ParserError> {
     } else {
         Ok(name)
     }
+}
+
+/// Parses a SQL item name, rejecting inputs larger than
+/// [`MAX_STATEMENT_BATCH_SIZE`] before lexing.
+///
+/// The outer `Result` is for the size guard; the inner `Result` is for the
+/// parser. Mirrors [`parse_statements_with_limit`] so untrusted-input paths
+/// (e.g. the MCP HTTP handlers) can bound work before allocating.
+pub fn parse_item_name_with_limit(
+    sql: &str,
+) -> Result<Result<UnresolvedItemName, ParserError>, String> {
+    if sql.len() > MAX_STATEMENT_BATCH_SIZE {
+        return Err(format!(
+            "statement batch size cannot exceed {}",
+            ByteSize::b(u64::cast_from(MAX_STATEMENT_BATCH_SIZE))
+        ));
+    }
+    Ok(parse_item_name(sql))
 }
 
 /// Parses a string containing a comma-separated list of identifiers and
@@ -2267,18 +2285,42 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_glue_avro_option(&mut self) -> Result<GlueAvroOption<Raw>, ParserError> {
-        self.expect_keywords(&[SCHEMA, NAME])?;
-        // The value is parsed as optional even though SCHEMA NAME requires one currently.
-        // Enforcing it here wouldn't let us drop the purification-layer check:
-        // the whole option list is optional, so `CONNECTION glue_conn` and
-        // `(...)` with no SCHEMA NAME bypass this function entirely. This also allows
-        // us to provide more detailed errors.
-        //
-        // Future work may add mutually exclusive options (or interpret a lack of schema name).
-        // For example, a lack of schema name may fall back to the default AWS Glue naming strategy:
-        // See <https://github.com/awslabs/aws-glue-schema-registry/blob/4b9cac477d6876a883e2a8893738a30c072694dc/common/src/main/java/com/amazonaws/services/schemaregistry/common/AWSSchemaNamingStrategyDefaultImpl.java#L18>
+        // The singular `SCHEMA NAME` is used by sources; the `KEY`/`VALUE`-prefixed
+        // options mirror the CSR clause and are used by sinks. Which options are
+        // valid in which context is enforced in the planner and purifier, not
+        // here. Values are parsed as optional so a missing value surfaces a clear
+        // planner error rather than a parse error.
+        let name = match self.expect_one_of_keywords(&[SCHEMA, KEY, VALUE])? {
+            SCHEMA => {
+                self.expect_keyword(NAME)?;
+                GlueAvroOptionName::SchemaName
+            }
+            KEY => match self.expect_one_of_keywords(&[SCHEMA, COMPATIBILITY])? {
+                SCHEMA => {
+                    self.expect_keyword(NAME)?;
+                    GlueAvroOptionName::KeySchemaName
+                }
+                COMPATIBILITY => {
+                    self.expect_keyword(LEVEL)?;
+                    GlueAvroOptionName::KeyCompatibilityLevel
+                }
+                _ => unreachable!(),
+            },
+            VALUE => match self.expect_one_of_keywords(&[SCHEMA, COMPATIBILITY])? {
+                SCHEMA => {
+                    self.expect_keyword(NAME)?;
+                    GlueAvroOptionName::ValueSchemaName
+                }
+                COMPATIBILITY => {
+                    self.expect_keyword(LEVEL)?;
+                    GlueAvroOptionName::ValueCompatibilityLevel
+                }
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        };
         Ok(GlueAvroOption {
-            name: GlueAvroOptionName::SchemaName,
+            name,
             value: self.parse_optional_option_value()?,
         })
     }
@@ -3068,6 +3110,9 @@ impl<'a> Parser<'a> {
             )),
             ConnectionOptionName::GcpConnection => Some(self.parse_object_option_value()?),
             ConnectionOptionName::SshTunnel => Some(self.parse_object_option_value()?),
+            _ if name.value_contains_sensitive_data() => {
+                self.parse_optional_connection_credential_option_value()?
+            }
             _ => self.parse_optional_option_value()?,
         };
         Ok(ConnectionOption { name, value })
@@ -4546,6 +4591,7 @@ impl<'a> Parser<'a> {
 
     fn parse_cluster_option_name(&mut self) -> Result<ClusterOptionName, ParserError> {
         let option = self.expect_one_of_keywords(&[
+            AUTO,
             AVAILABILITY,
             DISK,
             INTROSPECTION,
@@ -4557,6 +4603,10 @@ impl<'a> Parser<'a> {
             WORKLOAD,
         ])?;
         let name = match option {
+            AUTO => {
+                self.expect_keywords(&[SCALING, STRATEGY])?;
+                ClusterOptionName::AutoScalingStrategy
+            }
             AVAILABILITY => {
                 self.expect_keyword(ZONES)?;
                 ClusterOptionName::AvailabilityZones
@@ -4590,6 +4640,9 @@ impl<'a> Parser<'a> {
         match name {
             ClusterOptionName::Replicas => self.parse_cluster_option_replicas(),
             ClusterOptionName::Schedule => self.parse_cluster_option_schedule(),
+            ClusterOptionName::AutoScalingStrategy => {
+                self.parse_cluster_option_auto_scaling_strategy()
+            }
             _ => {
                 let value = self.parse_optional_option_value()?;
                 Ok(ClusterOption { name, value })
@@ -4689,6 +4742,60 @@ impl<'a> Parser<'a> {
         Ok(ClusterOption {
             name: ClusterOptionName::Schedule,
             value: Some(WithOptionValue::ClusterScheduleOptionValue(value)),
+        })
+    }
+
+    /// Parse the value of the `AUTO SCALING STRATEGY` cluster option: a
+    /// paren-enclosed list of strategy sub-policies. v1 supports only
+    /// `ON HYDRATION (HYDRATION SIZE = '...' [, LINGER DURATION = '...'])`. An
+    /// empty list `()` disables autoscaling.
+    fn parse_cluster_option_auto_scaling_strategy(
+        &mut self,
+    ) -> Result<ClusterOption<Raw>, ParserError> {
+        let _ = self.consume_token(&Token::Eq);
+        self.expect_token(&Token::LParen)?;
+        let mut value = ClusterAutoScalingStrategyOptionValue { on_hydration: None };
+        if !self.consume_token(&Token::RParen) {
+            // The list is a comma-separated set of strategy sub-policies, each
+            // named by a leading keyword. Only `ON HYDRATION` exists in v1.
+            loop {
+                self.expect_keywords(&[ON, HYDRATION])?;
+                self.expect_token(&Token::LParen)?;
+                self.expect_keywords(&[HYDRATION, SIZE])?;
+                let _ = self.consume_token(&Token::Eq);
+                let hydration_size = self.parse_value()?;
+                let linger_duration = if self.consume_token(&Token::Comma) {
+                    self.expect_keywords(&[LINGER, DURATION])?;
+                    let _ = self.consume_token(&Token::Eq);
+                    Some(self.parse_value()?)
+                } else {
+                    None
+                };
+                self.expect_token(&Token::RParen)?;
+                // Each sub-policy may appear at most once; a repeated entry would
+                // otherwise silently keep only the last.
+                if value.on_hydration.is_some() {
+                    return parser_err!(
+                        self,
+                        self.peek_prev_pos(),
+                        "ON HYDRATION specified more than once"
+                    );
+                }
+                value.on_hydration = Some(OnHydrationOptionValue {
+                    hydration_size,
+                    linger_duration,
+                });
+                if !self.consume_token(&Token::Comma) {
+                    break;
+                }
+            }
+            self.expect_token(&Token::RParen)?;
+        }
+        Ok(ClusterOption {
+            name: ClusterOptionName::AutoScalingStrategy,
+            value: Some(WithOptionValue::ClusterAutoScalingStrategyOptionValue(
+                value,
+            )),
         })
     }
 
@@ -5521,6 +5628,40 @@ impl<'a> Parser<'a> {
     fn parse_object_option_value(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
         let _ = self.consume_token(&Token::Eq);
         Ok(WithOptionValue::Item(self.parse_raw_name()?))
+    }
+
+    fn parse_optional_connection_credential_option_value(
+        &mut self,
+    ) -> Result<Option<WithOptionValue<Raw>>, ParserError> {
+        match self.peek_token() {
+            Some(Token::RParen) | Some(Token::Comma) | Some(Token::Semicolon) | None => Ok(None),
+            _ => {
+                let _ = self.consume_token(&Token::Eq);
+                Ok(Some(self.parse_connection_credential_option_value()?))
+            }
+        }
+    }
+
+    fn parse_connection_credential_option_value(
+        &mut self,
+    ) -> Result<WithOptionValue<Raw>, ParserError> {
+        if self.parse_keyword(SECRET) {
+            if let Some(secret) = self.maybe_parse(Parser::parse_raw_name) {
+                Ok(WithOptionValue::Secret(secret))
+            } else {
+                Ok(WithOptionValue::Value(Value::String("secret".to_string())))
+            }
+        } else if let Some(value) = self.maybe_parse(Parser::parse_value) {
+            Ok(WithOptionValue::Value(value))
+        } else if let Some(ident) = self.maybe_parse(Parser::parse_identifier) {
+            Ok(WithOptionValue::Value(Value::String(ident.into_string())))
+        } else {
+            self.expected(
+                self.peek_pos(),
+                "connection credential value",
+                self.peek_token(),
+            )
+        }
     }
 
     fn parse_optional_option_value(&mut self) -> Result<Option<WithOptionValue<Raw>>, ParserError> {
@@ -9825,6 +9966,7 @@ impl<'a> Parser<'a> {
                 DATABASE,
                 SCHEMA,
                 FUNCTION,
+                NETWORK,
             ])? {
                 TABLE => ObjectType::Table,
                 VIEW => ObjectType::View,
@@ -9853,6 +9995,14 @@ impl<'a> Parser<'a> {
                 DATABASE => ObjectType::Database,
                 SCHEMA => ObjectType::Schema,
                 FUNCTION => ObjectType::Func,
+                NETWORK => {
+                    if self.parse_keyword(POLICY) {
+                        ObjectType::NetworkPolicy
+                    } else {
+                        self.prev_token();
+                        return None;
+                    }
+                }
                 _ => unreachable!(),
             },
         )

@@ -192,9 +192,11 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     0dt_deployment_hydration_check_interval
     arrangement_exert_proportionality
     arrangement_size_history_retention_period
+    aws_prefetch_sts_connect_timeout
     catalog_info_metrics_reconcile_interval
     cluster_alter_check_ready_interval
     cluster_check_scheduling_policies_interval
+    cluster_controller_tick_interval
     cluster_enable_topology_spread
     cluster_multi_process_replica_az_affinity_weight
     cluster_soften_az_affinity
@@ -225,15 +227,22 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     crdb_keepalives_interval
     crdb_keepalives_retries
     crdb_tcp_user_timeout
+    default_cluster_reconfiguration_timeout
+    default_hydration_burst_linger
     default_timestamp_interval
     disallow_unmaterializable_functions_as_of
     enable_0dt_caught_up_replica_status_check
     enable_0dt_caught_up_stability_check
     enable_0dt_deployment_panic_after_timeout
     enable_alter_table_add_column
+    enable_auto_scaling_strategy
+    enable_background_alter_cluster
+    enable_statement_arrival_logging
     enable_binary_date_bin
     enable_bounded_staleness_isolation
+    enable_cluster_controller
     enable_coalesce_case_transform
+    enable_cluster_controller
     enable_compute_half_join2
     enable_compute_render_fueled_as_specific_collection
     enable_date_bin_hopping
@@ -241,7 +250,9 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_dequadratic_eqprop_map
     enable_envelope_materialize
     enable_eq_classes_withholding_errors
+    enable_fixed_correlated_cte_lowering
     enable_frontend_subscribes
+    enable_hydration_burst
     enable_introspection_subscribes
     enable_less_reduce_in_eqprop
     enable_list_length_max
@@ -295,6 +306,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     max_sql_server_connections
     max_timestamp_interval
     mcp_max_response_size
+    mcp_request_timeout
     memory_limiter_usage_bias
     mysql_replication_heartbeat_interval
     mysql_source_connect_timeout
@@ -304,7 +316,6 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     network_policy
     oidc_audience
     oidc_authentication_claim
-    oidc_group_claim
     oidc_group_role_sync_strict
     oidc_issuer
     opentelemetry_filter_defaults
@@ -330,6 +341,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     persist_fetch_semaphore_cost_adjustment
     persist_gc_fallback_threshold_ms
     persist_gc_min_versions
+    persist_pg_consensus_read_committed
     persist_pubsub_client_receiver_channel_size
     persist_pubsub_client_sender_channel_size
     persist_pubsub_connect_attempt_timeout
@@ -350,7 +362,6 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     persist_txns_data_shard_retryer_multiplier
     persist_usage_state_fetch_concurrency_limit
     persist_use_critical_since_txn
-    persist_use_postgres_tuned_queries
     persist_write_combine_inline_writes
     pg_source_connect_timeout
     pg_source_snapshot_statement_timeout
@@ -368,6 +379,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     plan_insights_notice_fast_path_clusters_optimize_duration
     postgres_fetch_slot_resume_lsn_interval
     privatelink_status_update_quota_per_minute
+    read_then_write_max_dependencies
     replica_metrics_history_retention_interval
     replica_status_history_retention_window
     scram_iterations
@@ -397,6 +409,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     unsafe_enable_table_check_constraint
     unsafe_enable_table_foreign_key
     unsafe_enable_table_keys
+    unsafe_enable_unbounded_custom_type_resolution
     unsafe_enable_unorchestrated_cluster_replicas
     unsafe_enable_unsafe_functions
     unsafe_enable_unstable_dependencies
@@ -443,6 +456,7 @@ KNOWN_STALE_LD_FLAGS: set[str] = set("""
     enable_copy_from_remote
     enable_copy_to_expr
     enable_explain_broken
+    enable_glue_schema_registry
     enable_iceberg_sink
     enable_kafka_sink_partition_by
     enable_multi_replica_sources
@@ -479,12 +493,12 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "max_aws_privatelink_connections",
     "max_tables",
     # Cloud-only infrastructure / performance tuning.
-    "arrangement_size_history_collection_interval",
     "cluster_topology_spread_min_domains",
     "column_paged_batcher_budget_fraction",
     "column_paged_batcher_lz4",
     "compute_logical_backpressure_inflight_slack",
     "enable_lgalloc",
+    "enable_scoped_system_parameters",
     "enable_timely_zero_copy_lgalloc",
     "enable_upsert_paged_spill",
     "enable_zero_downtime_cluster_reconfiguration",
@@ -492,7 +506,9 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "kafka_progress_record_fetch_timeout",
     "kafka_socket_timeout",
     "mz_metrics_lgalloc_refresh_interval",
+    "oidc_group_claim",
     "persist_batch_max_run_len",
+    "persist_source_hydration_frontier_coalesce_bytes",
     "persist_validate_part_bounds_on_read",
     "persist_validate_part_bounds_on_write",
     "storage_enforce_external_addresses",
@@ -507,8 +523,8 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "enable_cast_elimination",
     "enable_compute_correction_v2",
     "enable_compute_temporal_bucketing",
-    "enable_create_table_from_source",
     "enable_new_outer_join_lowering",
+    "enable_upsert_v2",
     "enable_variadic_left_join_lowering",
     "persist_batch_delete_enabled",
     "persist_rollup_use_active_rollup",
@@ -522,16 +538,14 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
 KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     allow_real_time_recency
     allowed_cluster_replica_sizes
-    column_paged_batcher_budget_fraction
-    column_paged_batcher_lz4
     compute_dataflow_max_inflight_bytes
     compute_peek_response_stash_threshold_bytes
     compute_subscribe_snapshot_optimization
     enable_cluster_schedule_refresh
+    enable_column_paged_batcher
+    enable_column_paged_batcher_spill
     enable_compute_correction_v2
-    enable_create_table_from_source
     enable_eager_delta_joins
-    enable_glue_schema_registry
     enable_index_options
     enable_join_prioritize_arranged
     enable_kafka_broker_matching_rules
@@ -542,7 +556,6 @@ KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     enable_notices_for_index_too_wide_for_literal_constraints
     enable_refresh_every_mvs
     enable_upsert_paged_spill
-    enable_upsert_v2
     enable_variadic_left_join_lowering
     grpc_client_http2_keep_alive_timeout
     max_connections
@@ -550,6 +563,8 @@ KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     max_materialized_views
     max_sources
     mz_metrics_lgalloc_refresh_interval
+    oidc_group_claim
+    oidc_group_role_sync_enabled
     persist_batch_delete_enabled
     persist_catalog_force_compaction_fuel
     persist_claim_compaction_min_version
@@ -1057,9 +1072,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     total = sum(len(v) for v in failures.values())
     if total:
         summary = ", ".join(f"{len(v)} {k}" for k, v in failures.items() if v)
+        discrepancy_noun = "discrepancy" if total == 1 else "discrepancies"
+        flag_noun = "flag" if total == 1 else "flags"
+        allowlist_count = sum(1 for v in failures.values() if v)
+        allowlist_noun = "allowlist" if allowlist_count == 1 else "allowlists"
         message = (
-            f"{total} unexpected LaunchDarkly discrepancy/ies ({summary}). "
-            "Resolve them, or add to the appropriate known-exceptions allowlist."
+            f"{total} unexpected LaunchDarkly {discrepancy_noun} ({summary}). "
+            f"Resolve the {discrepancy_noun}, or add the affected {flag_noun} "
+            f"to the appropriate known-exceptions {allowlist_noun}."
         )
         if args.no_fail:
             print(f"WARNING: {message}")

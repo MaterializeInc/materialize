@@ -36,7 +36,7 @@ interpret
 (call_binary gte (2100.0 numeric) (call_binary add_numeric (300.0 numeric) #1))
 [true false null]
 ----
-may contain: [false]
+may contain: [false <err>]
 
 # The same, but the filter matches.
 # Expression: (2900 >= 300 + insert_ms)
@@ -49,7 +49,7 @@ interpret
 (call_binary gte (2900.0 numeric) (call_binary add_numeric (300.0 numeric) #1))
 [true false null]
 ----
-may contain: [true]
+may contain: [true <err>]
 
 # JSONB ->
 # Expression: (json_col -> "created_ms")

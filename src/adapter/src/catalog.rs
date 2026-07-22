@@ -15,6 +15,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
 use futures::future::BoxFuture;
 use futures::{Future, FutureExt};
@@ -140,6 +141,19 @@ pub struct Catalog {
     expr_cache_handle: Option<ExpressionCacheHandle>,
     storage: Arc<tokio::sync::Mutex<Box<dyn mz_catalog::durable::DurableCatalogState>>>,
     transient_revision: u64,
+    /// The latest `transient_revision`, shared by all clones of this catalog.
+    /// While `transient_revision` is this clone's own revision, frozen when
+    /// the snapshot was taken, this field always tracks the latest revision
+    /// across all clones. Comparing the two lets a snapshot holder detect
+    /// from off-thread whether its snapshot is still current, via
+    /// [`Catalog::transient_revision_is_current`], without a Coordinator
+    /// round-trip (see `PeekClient::catalog_snapshot`).
+    ///
+    /// The store happens in `transact`, before the transaction's effects can
+    /// be observed anywhere (responses, notices, builtin table writes), so a
+    /// session that has observed any evidence of a catalog change is
+    /// guaranteed to see the corresponding bump.
+    shared_transient_revision: Arc<AtomicU64>,
 }
 
 // Implement our own Clone because derive can't unless S is Clone, which it's
@@ -151,6 +165,7 @@ impl Clone for Catalog {
             expr_cache_handle: self.expr_cache_handle.clone(),
             storage: Arc::clone(&self.storage),
             transient_revision: self.transient_revision,
+            shared_transient_revision: Arc::clone(&self.shared_transient_revision),
         }
     }
 }
@@ -310,6 +325,18 @@ impl Catalog {
         self.transient_revision
     }
 
+    /// Reports whether this catalog's transient revision is still the latest,
+    /// i.e., whether no catalog transaction has committed since this snapshot
+    /// was taken. Can be called on a snapshot from off-thread, without a
+    /// Coordinator round-trip. See the field documentation on
+    /// `shared_transient_revision`.
+    pub fn transient_revision_is_current(&self) -> bool {
+        self.transient_revision
+            == self
+                .shared_transient_revision
+                .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// Creates a debug catalog from the current
     /// `METADATA_BACKEND_URL` with parameters set appropriately for debug contexts,
     /// like in tests.
@@ -361,8 +388,7 @@ impl Catalog {
         let mut storage = openable_storage
             .open(now().into(), &bootstrap_args)
             .await
-            .expect("can open durable catalog")
-            .0;
+            .expect("can open durable catalog");
         // Drain updates.
         let _ = storage
             .sync_to_current_updates()
@@ -388,7 +414,7 @@ impl Catalog {
             .with_default_deploy_generation()
             .build()
             .await?;
-        let storage = openable_storage.open(now().into(), bootstrap_args).await?.0;
+        let storage = openable_storage.open(now().into(), bootstrap_args).await?;
         let system_parameter_defaults = BTreeMap::default();
         Self::open_debug_catalog_inner(
             persist_client,
@@ -1483,8 +1509,27 @@ pub fn is_reserved_name(name: &str) -> bool {
         .any(|prefix| name.starts_with(prefix))
 }
 
+/// Role names that PostgreSQL reserves for role specifications in statements
+/// like `GRANT ... TO CURRENT_USER` and `SET ROLE NONE`. A role with such a
+/// name would be ambiguous there, so creating one is not allowed.
+///
+/// PostgreSQL rejects most of these at parse time, only when they appear as
+/// unquoted keywords. Our parser does not track whether an identifier was
+/// quoted, so we instead reject the names themselves. Only the lowercase
+/// spellings are reserved, which is what the unquoted forms normalize to, so
+/// quoted names like `"CURRENT_USER"` remain valid, as in PostgreSQL.
+const RESERVED_ROLE_SPECIFICATION_NAMES: [&str; 5] = [
+    "current_user",
+    "current_role",
+    "session_user",
+    "user",
+    "none",
+];
+
 pub fn is_reserved_role_name(name: &str) -> bool {
-    is_reserved_name(name) || is_public_role(name)
+    is_reserved_name(name)
+        || is_public_role(name)
+        || RESERVED_ROLE_SPECIFICATION_NAMES.contains(&name)
 }
 
 pub fn is_public_role(name: &str) -> bool {
@@ -2434,6 +2479,8 @@ mod tests {
             .await
             .expect("unable to open debug catalog");
             assert_eq!(catalog.transient_revision(), 1);
+            assert!(catalog.transient_revision_is_current());
+            let snapshot = catalog.clone();
             let commit_ts = catalog.current_upper().await;
             catalog
                 .transact(
@@ -2448,6 +2495,10 @@ mod tests {
                 .await
                 .expect("failed to transact");
             assert_eq!(catalog.transient_revision(), 2);
+            assert!(catalog.transient_revision_is_current());
+            // The pre-transaction snapshot detects its own staleness through
+            // the shared latest revision.
+            assert!(!snapshot.transient_revision_is_current());
             catalog.expire().await;
         }
         {

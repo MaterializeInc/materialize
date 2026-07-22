@@ -653,8 +653,13 @@ true
 # Make the next hydration take 1000000 ms.
 > INSERT INTO t6 VALUES (1000000);
 
-# Restart the cluster to force a hydration.
+# Restart the cluster to force a hydration. The controller tears the replica down
+# and brings it back asynchronously, so wait for the teardown to actually land
+# between the two ALTERs, otherwise the controller coalesces them against the
+# final replication factor and the replica (and its hydration) never restarts.
 > ALTER CLUSTER cluster_to_be_bricked SET (REPLICATION FACTOR 0);
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cluster_to_be_bricked';
+0
 > ALTER CLUSTER cluster_to_be_bricked SET (REPLICATION FACTOR 1);
 
 # Give the following hydration status query some time to wrongly turn to true if there is a bug.

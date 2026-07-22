@@ -23,6 +23,21 @@ mzcompose() {
     stdbuf --output=L --error=L bin/ci-builder run "$builder" bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
 }
 
+run_mzcompose() {
+    if [ -n "${BUILDKITE_PLUGIN_MZCOMPOSE_RUN_TIMEOUT:-}" ]; then
+        # NOTE: The timeout must run inside the container. Wrapping the
+        # `docker run` in host-side timeout(1) moves the docker CLI into a new
+        # process group, and under the Buildkite agent the CLI then reliably
+        # fails to exit after the container is done, so every run hangs from
+        # workflow completion until the timeout expires and counts as failed.
+        stdbuf --output=L --error=L bin/ci-builder run "$builder" \
+            timeout --signal=TERM --kill-after=30s "$BUILDKITE_PLUGIN_MZCOMPOSE_RUN_TIMEOUT" \
+            bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
+    else
+        mzcompose "$@"
+    fi
+}
+
 kubectl() {
     bin/ci-builder run stable kubectl --context="$K8S_CONTEXT" "$@"
 }
@@ -78,14 +93,18 @@ if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
     chmod 777 coverage/
 fi
 
-STOP_RUNNING=false
+HEAP_PROFILE_PID=""
 
 if is_truthy "${CI_HEAP_PROFILES:-}"; then
-    (while [ "$STOP_RUNNING" != "true" ]; do
+    (while true; do
          sleep 30
          bin/ci-builder run stable --detach bin/ci-upload-heap-profiles "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION"
      done
     ) &
+    # Track the loop's PID so cleanup can stop it. Assigning a shared variable
+    # cannot reach the subshell, which has its own copy, so the loop would
+    # otherwise keep spawning containers throughout the whole teardown.
+    HEAP_PROFILE_PID=$!
 fi
 
 EXTRA_ARGS=$(echo "${CI_EXTRA_ARGS:-}" | jq -r ".[\"$BUILDKITE_STEP_KEY\"] // \"\"")
@@ -264,7 +283,10 @@ cleanup() {
 
   TRUFFLEHOG_PID=""
   if is_truthy "${CI_HEAP_PROFILES:-}"; then
-      STOP_RUNNING=true
+      [ -n "$HEAP_PROFILE_PID" ] && kill "$HEAP_PROFILE_PID" 2>/dev/null || true
+      # ci-annotate-errors is passed trufflehog.log unconditionally below, but
+      # the trufflehog scan is skipped here, so create an empty log for it.
+      touch trufflehog.log
   else
       ci_unimportant_heading "Running trufflehog to scan artifacts for secrets & uploading artifacts"
       {
@@ -274,6 +296,10 @@ cleanup() {
   fi
 
   unset CI_EXTRA_ARGS # We don't want extra args for the annotation
+  CI_ANNOTATE_ERRORS_ARGS=()
+  if [ -n "${BUILDKITE_PLUGIN_MZCOMPOSE_LOG_START_AT_LAST:-}" ]; then
+      CI_ANNOTATE_ERRORS_ARGS+=("--log-start-at-last=$BUILDKITE_PLUGIN_MZCOMPOSE_LOG_START_AT_LAST")
+  fi
   # Continue even if ci-annotate-errors fails
   CI_ANNOTATE_ERRORS_RESULT=0
   # We have to upload artifacts before ci-annotate-errors, so that the annotations can link to the artifacts
@@ -290,7 +316,7 @@ cleanup() {
   # shellcheck disable=SC2086
   wait "$UPLOAD_PID" $TRUFFLEHOG_PID
   ci_unimportant_heading "Annotating errors"
-  bin/ci-builder run "$builder" bin/ci-annotate-errors --test-cmd="$TEST_CMD" --test-desc="$TEST_DESC" --test-result="$TEST_RESULT" "${artifacts[@]}" trufflehog.log > ci-annotate-errors.log || CI_ANNOTATE_ERRORS_RESULT=$?
+  bin/ci-builder run "$builder" bin/ci-annotate-errors "${CI_ANNOTATE_ERRORS_ARGS[@]}" --test-cmd="$TEST_CMD" --test-desc="$TEST_DESC" --test-result="$TEST_RESULT" "${artifacts[@]}" trufflehog.log > ci-annotate-errors.log || CI_ANNOTATE_ERRORS_RESULT=$?
   buildkite-agent artifact upload "ci-annotate-errors.log" &
 
   export_cov() {
@@ -353,6 +379,7 @@ cleanup() {
   killall -9 -q clusterd || true # There might be remaining processes from a cargo-test run
 
   if [ ! -s services.log ] \
+    && [ "$BUILDKITE_LABEL" != ":rust: cargo-fuzz" ] \
     && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of persist" ] \
     && [ "$BUILDKITE_LABEL" != "Long single-node Maelstrom coverage of persist" ] \
     && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of txn-wal" ] \
@@ -383,7 +410,7 @@ TEST_RESULT=1
 # sed command to filter out ANSI command codes in run.log, while keeping them in Buildkite's view
 {
   set -o pipefail
-  mzcompose run "${run_args[@]}" \
+  run_mzcompose run "${run_args[@]}" \
     |& tee >(sed -r 's/\x1B\[[0-9;]*[A-Za-z]//g' > run.log)
 } &
 pid=$!

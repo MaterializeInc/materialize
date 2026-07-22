@@ -384,6 +384,8 @@ impl StorageController for Controller {
         let target_replicas: Option<BTreeSet<ReplicaId>> =
             target_replica_ids.map(|ids| ids.into_iter().collect());
 
+        let instance = self.instances.get(target_cluster_id);
+
         let mut all_hydrated = true;
         for (collection_id, collection_state) in self.collections.iter() {
             if collection_id.is_transient() || exclude_collections.contains(collection_id) {
@@ -395,7 +397,23 @@ impl StorageController for Controller {
                         continue;
                     }
                     match &target_replicas {
-                        Some(target_replicas) => !state.hydrated_on.is_disjoint(target_replicas),
+                        Some(target_replicas) => {
+                            // Not scheduled on any target replica means it can
+                            // never hydrate there, so it does not count (see
+                            // the trait docs). If the instance is unknown (the
+                            // cluster is being dropped concurrently) the
+                            // scheduled set is empty and every ingestion is
+                            // skipped. Readiness callers gate on replica health
+                            // separately, which covers that window.
+                            let scheduled_on = instance
+                                .map(|i| i.get_active_replicas_for_object(collection_id))
+                                .unwrap_or_default();
+                            if scheduled_on.is_disjoint(target_replicas) {
+                                true
+                            } else {
+                                !state.hydrated_on.is_disjoint(target_replicas)
+                            }
+                        }
                         None => {
                             // Not target replicas, so check that it's hydrated
                             // on at least one replica.
@@ -576,6 +594,8 @@ impl StorageController for Controller {
         let mut source_status_updates = vec![];
         let mut sink_status_updates = vec![];
 
+        // NOTE: mz_source_statuses and mz_sink_statuses rely on per-replica `paused` meaning
+        // "replica dropped"
         let make_update = |id, object_type| StatusUpdate {
             id,
             status: Status::Paused,
@@ -1584,7 +1604,7 @@ impl StorageController for Controller {
         // If the write frontier of the sink is strictly larger than its read hold, it must have at
         // least written out its snapshot, and we can skip reading it; otherwise assume we may have
         // to replay from the beginning.
-        // TODO(database-issues#10002): unify this with run_export, if possible
+        // TODO(STG-26): unify this with run_export, if possible
         let with_snapshot = new_description.sink.with_snapshot
             && !PartialOrder::less_than(&new_description.sink.as_of, &cur_export.write_frontier);
 

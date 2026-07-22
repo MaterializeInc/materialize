@@ -1241,6 +1241,9 @@ def workflow_system_deps(c: Composition, parser: WorkflowArgumentParser) -> None
       `pg_catalog.pg_class`, etc. without a database prefix.
     - The generated `types.lock` records each system-schema entry as
       `schema.object` (no leading database).
+    - `stage` (the runtime deploy path) accepts a view that reads from a system
+      catalog: `validate_project` must not report the existing system object as
+      a missing external dependency. `lock` alone never exercises this path.
     - Mutating the project.toml to declare a 2-part name with a non-system
       schema (e.g. `someschema.foo`) is rejected.
     """
@@ -1270,6 +1273,27 @@ def workflow_system_deps(c: Composition, parser: WorkflowArgumentParser) -> None
         assert (
             f'name = "materialize.{system_dep}"' not in contents
         ), f"unexpected 3-part form for {system_dep} in types.lock:\n{contents}"
+
+    # ── Stage path: a project that reads a system catalog must deploy ─────
+    # `lock` only resolves types; `stage` runs `validate_project` (the real
+    # deploy path), which must not report the existing `mz_catalog.mz_objects`
+    # as a missing dependency. `--dry-run` reaches validation before any DDL.
+    result = run_mz_deploy(
+        c,
+        "system-deps/v1",
+        "stage",
+        "--dry-run",
+        "--deploy-id",
+        "sysdeps",
+        "--allow-dirty",
+        "--profile",
+        "admin",
+        check=False,
+    )
+    assert result.returncode == 0, (
+        "stage rejected a view that reads a system catalog: validate_project "
+        f"wrongly flagged a system object as missing.\n{result.stdout}{result.stderr}"
+    )
 
     # ── Negative case: 2-part non-system dep is rejected ──────────────────
     project_toml = project_dir / "project.toml"

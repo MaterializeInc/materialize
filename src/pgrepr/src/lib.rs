@@ -27,7 +27,7 @@ pub mod oid;
 pub use types::{
     ANYCOMPATIBLELIST, ANYCOMPATIBLEMAP, LIST, MAP, Type, TypeConversionError, TypeFromOidError,
 };
-pub use value::error::IntoDatumError;
+pub use value::error::{IntoDatumError, NulCharacterError};
 pub use value::interval::Interval;
 pub use value::jsonb::Jsonb;
 pub use value::numeric::Numeric;

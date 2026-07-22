@@ -1,0 +1,26 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+FROM debian:13-slim
+
+# Ensure any Rust binaries that crash print a backtrace.
+ENV RUST_BACKTRACE=1
+# Disable backtrace collection in Rust libraries, such as `anyhow`. Collecting
+# backtraces at runtime can be expensive and is known to cause deadlocks
+# (database-issues#9159).
+ENV RUST_LIB_BACKTRACE=0
+
+ARG BUILD_PROFILE=optimize
+
+LABEL build.profile=$BUILD_PROFILE
+
+RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends eatmydata \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=foundationdb/foundationdb:7.3.71 /usr/lib/libfdb_c.so /usr/lib/

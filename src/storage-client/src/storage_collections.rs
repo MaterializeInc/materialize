@@ -1297,6 +1297,29 @@ impl StorageCollectionsImpl {
     }
 }
 
+/// Partitions the finalization WAL by whether an active collection references
+/// each shard.
+fn partition_finalizable_shards(
+    collection_metadata: BTreeMap<GlobalId, ShardId>,
+    active_collection_ids: &BTreeSet<GlobalId>,
+    unfinalized_shards: BTreeSet<ShardId>,
+) -> (BTreeSet<ShardId>, BTreeSet<ShardId>) {
+    let active_shards: BTreeSet<_> = collection_metadata
+        .into_iter()
+        .filter_map(|(id, shard)| active_collection_ids.contains(&id).then_some(shard))
+        .collect();
+    let referenced_shards = unfinalized_shards
+        .intersection(&active_shards)
+        .copied()
+        .collect();
+    let finalizable_shards = unfinalized_shards
+        .difference(&active_shards)
+        .copied()
+        .collect();
+
+    (referenced_shards, finalizable_shards)
+}
+
 // See comments on the above impl for StorageCollectionsImpl.
 #[async_trait]
 impl StorageCollections for StorageCollectionsImpl {
@@ -1320,14 +1343,27 @@ impl StorageCollections for StorageCollectionsImpl {
         )
         .await?;
 
-        // All shards that belong to collections dropped in the last epoch are
-        // eligible for finalization.
+        // All unreferenced shards that belong to collections dropped in the
+        // last epoch are eligible for finalization. Active collection metadata
+        // is authoritative over stale finalization WAL entries.
         //
-        // n.b. this introduces an unlikely race condition: if a collection is
-        // dropped from the catalog, but the dataflow is still running on a
-        // worker, assuming the shard is safe to finalize on reboot may cause
-        // the cluster to panic.
-        let unfinalized_shards = txn.get_unfinalized_shards().into_iter().collect_vec();
+        // A dropped collection can still have a dataflow running on a worker.
+        // Finalizing its shard on reboot can cause that worker to panic.
+        let (referenced_shards, unfinalized_shards) = partition_finalizable_shards(
+            txn.get_collection_metadata(),
+            &init_ids,
+            txn.get_unfinalized_shards(),
+        );
+        if !referenced_shards.is_empty() {
+            warn!(
+                ?referenced_shards,
+                "removing active collection shards from the finalization WAL"
+            );
+            // Collection metadata is authoritative. Removing these entries in
+            // the initialization transaction keeps them out of the finalizer
+            // queue.
+            txn.remove_unfinalized_shards(referenced_shards);
+        }
 
         info!(?unfinalized_shards, "initializing finalizable_shards");
 
@@ -1647,6 +1683,20 @@ impl StorageCollections for StorageCollectionsImpl {
         ids_to_drop: BTreeSet<GlobalId>,
         ids_to_register: BTreeMap<GlobalId, ShardId>,
     ) -> Result<(), StorageError> {
+        // Durable metadata can outlive its collection. Reconcile it with live
+        // collection state so orphaned mappings do not block finalization.
+        let mut active_collection_ids: BTreeSet<_> = {
+            let collections = self.collections.lock().expect("poisoned");
+            collections
+                .iter()
+                .filter_map(|(id, collection)| {
+                    (!ids_to_drop.contains(id) && !collection.is_dropped()).then_some(*id)
+                })
+                .collect()
+        };
+        active_collection_ids.extend(ids_to_add.iter().copied());
+        active_collection_ids.extend(ids_to_register.keys().copied());
+
         txn.insert_collection_metadata(
             ids_to_add
                 .into_iter()
@@ -1670,12 +1720,24 @@ impl StorageCollections for StorageCollectionsImpl {
                 }
             }
         }
+        let remaining_metadata = txn.get_collection_metadata();
+        let (referenced_shards, dropped_shards) = partition_finalizable_shards(
+            remaining_metadata,
+            &active_collection_ids,
+            dropped_shards,
+        );
+        if !referenced_shards.is_empty() {
+            mz_ore::soft_panic_or_log!(
+                "dropped collections would finalize shards that active collections still use: \
+                 {referenced_shards:?}"
+            );
+        }
         txn.insert_unfinalized_shards(dropped_shards)?;
 
         // Reconcile any shards we've successfully finalized with the shard
         // finalization collection.
         let finalized_shards = self.finalized_shards.lock().iter().copied().collect();
-        txn.mark_shards_as_finalized(finalized_shards);
+        txn.remove_unfinalized_shards(finalized_shards);
 
         Ok(())
     }
@@ -1899,17 +1961,22 @@ impl StorageCollections for StorageCollectionsImpl {
                         // We don't care about the dependency since when the
                         // write frontier is empty. In that case, no-one can
                         // write down any more updates.
-                        mz_ore::soft_assert_or_log!(
-                            write_frontier.elements() == &[Timestamp::MIN]
-                                || write_frontier.is_empty()
-                                || PartialOrder::less_than(&dependency_since, write_frontier),
-                            "dependency ({dep}) since has advanced past dependent ({id}) upper \n
-                            dependent ({id}): since {:?}, upper {:?} \n
-                            dependency ({dep}): since {:?}",
-                            data_shard_since,
-                            write_frontier,
-                            dependency_since
-                        );
+                        // This invariant applies to remap dependencies. A `primary`
+                        // dependency is another version of the same shard, whose since can
+                        // validly equal the dependent's upper.
+                        if description.primary.is_none() {
+                            mz_ore::soft_assert_or_log!(
+                                write_frontier.elements() == &[Timestamp::MIN]
+                                    || write_frontier.is_empty()
+                                    || PartialOrder::less_than(&dependency_since, write_frontier),
+                                "dependency ({dep}) since has advanced past dependent ({id}) upper \n
+                                dependent ({id}): since {:?}, upper {:?} \n
+                                dependency ({dep}): since {:?}",
+                                data_shard_since,
+                                write_frontier,
+                                dependency_since
+                            );
+                        }
 
                         dependency_since
                     } else {
@@ -2187,6 +2254,20 @@ impl StorageCollections for StorageCollectionsImpl {
         debug!(?identifiers, "drop_collections_unvalidated");
 
         let mut self_collections = self.collections.lock().expect("lock poisoned");
+        // Durable metadata can outlive its collection. Reconcile it with live
+        // collection state so orphaned mappings do not block finalization.
+        let dropping: BTreeSet<_> = identifiers.iter().copied().collect();
+        let active_collection_ids: BTreeSet<_> = self_collections
+            .iter()
+            .filter_map(|(id, collection)| {
+                (!dropping.contains(id) && !collection.is_dropped()).then_some(*id)
+            })
+            .collect();
+        let shards_in_use: BTreeSet<_> = storage_metadata
+            .collection_metadata
+            .iter()
+            .filter_map(|(id, shard)| active_collection_ids.contains(id).then_some(*shard))
+            .collect();
 
         // Policies that advance the since to the empty antichain. We do still
         // honor outstanding read holds, and collections will only be dropped
@@ -2212,6 +2293,18 @@ impl StorageCollections for StorageCollectionsImpl {
                     "dropping {id}, but drop was not synchronized with storage \
                      controller via `prepare_state`"
                 );
+
+                // Releasing the owner's since can destroy a shared shard even if the
+                // finalization WAL is guarded. Prefer leaking this collection state over
+                // destroying data when durable metadata contradicts the primary links.
+                let data_shard = collection.collection_metadata.data_shard;
+                if shards_in_use.contains(&data_shard) {
+                    mz_ore::soft_panic_or_log!(
+                        "dropping {id} would release the since of shard {data_shard}, \
+                         which an active collection still uses"
+                    );
+                    continue;
+                }
             }
 
             finalized_policies.push((id, ReadPolicy::ValidFrom(Antichain::new())));
@@ -3190,6 +3283,28 @@ mod tests {
     use mz_secrets::InMemorySecretsController;
 
     use super::*;
+
+    #[mz_ore::test]
+    fn test_partition_finalizable_shards() {
+        let active_shard = ShardId::new();
+        let dropped_shard = ShardId::new();
+        let collection_metadata = BTreeMap::from([
+            (GlobalId::User(1), active_shard),
+            (GlobalId::User(2), active_shard),
+            (GlobalId::User(3), dropped_shard),
+        ]);
+        let active_collection_ids = BTreeSet::from([GlobalId::User(1), GlobalId::User(2)]);
+        let unfinalized_shards = BTreeSet::from([active_shard, dropped_shard]);
+
+        let (referenced_shards, finalizable_shards) = partition_finalizable_shards(
+            collection_metadata,
+            &active_collection_ids,
+            unfinalized_shards,
+        );
+
+        assert_eq!(referenced_shards, BTreeSet::from([active_shard]));
+        assert_eq!(finalizable_shards, BTreeSet::from([dropped_shard]));
+    }
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr`

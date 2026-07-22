@@ -72,7 +72,11 @@ esac
 arch_gcc=${MZ_DEV_CI_BUILDER_ARCH:-$(arch_gcc)}
 arch_go=$(arch_go "$arch_gcc")
 
-cid_file=ci/builder/.${flavor%%-*}.cidfile
+# Base name for per-invocation container ID files. `run` appends a unique
+# suffix so concurrent invocations of the same flavor do not race on docker's
+# --cidfile, which refuses to start if the file already exists. `root-shell`
+# reads the most recently written one.
+cid_file_prefix=ci/builder/.${flavor%%-*}
 
 rust_components=rustc,cargo,rust-std-$arch_gcc-unknown-linux-gnu,llvm-tools-preview
 if [[ $rust_version = nightly ]]; then
@@ -199,6 +203,7 @@ case "$cmd" in
         ;;
     run)
         docker_command=()
+        cid_file="$cid_file_prefix.$$.cidfile"
 
         detach_container=false
         interactive=false
@@ -280,6 +285,12 @@ case "$cmd" in
                 --env AZURE_SERVICE_ACCOUNT_USERNAME
                 --env AZURE_SERVICE_ACCOUNT_PASSWORD
                 --env AZURE_SERVICE_ACCOUNT_TENANT
+                # For test/sql-server-cdc `azure` workflow
+                --env AZURE_SQL_HOST
+                --env AZURE_SQL_PORT
+                --env AZURE_SQL_DATABASE
+                --env AZURE_SQL_USER
+                --env AZURE_SQL_PASSWORD
                 --env GCP_SERVICE_ACCOUNT_JSON
                 # For test/gcp Iceberg E2E
                 --env ICEBERG_GCS_BUCKET
@@ -438,6 +449,12 @@ case "$cmd" in
             args+=(--volume "$GIT_ROOT_DIR:$GIT_ROOT_DIR")
         fi
         rm -f "$cid_file"
+        # Remove the per-invocation cidfile on exit for foreground runs. A
+        # detached container outlives this process, so leave its cidfile for
+        # root-shell to find.
+        if [[ $detach_container != "true" ]]; then
+            trap 'rm -f "$cid_file"' EXIT
+        fi
         image="$image_registry/ci-builder:$tag"
         # Try downloading the image a few times in case of registry flakiness
         if [[ "${CI:-}" ]]; then
@@ -448,6 +465,12 @@ case "$cmd" in
         docker run "${args[@]}" "$image" eatmydata "${docker_command[@]}"
         ;;
     root-shell)
+        # Cidfile names are fully controlled (no spaces/newlines), so ls -t is safe.
+        # shellcheck disable=SC2012
+        cid_file=$(ls -t "$cid_file_prefix".*.cidfile 2>/dev/null | head -n1)
+        if [[ -z "$cid_file" || ! -s "$cid_file" ]]; then
+            die "no running ci-builder container found for flavor \"$flavor\""
+        fi
         docker exec --interactive --tty --user 0:0 "$(<"$cid_file")" eatmydata ci/builder/root-shell.sh
         ;;
     *)

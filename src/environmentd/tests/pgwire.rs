@@ -433,6 +433,88 @@ async fn test_conn_startup() {
     }
 }
 
+// Startup-packet parameters must become the session defaults, like in
+// PostgreSQL, so that RESET and DISCARD ALL restore them rather than the
+// server defaults. Connection poolers rely on this. For example, pgbouncer's
+// default server_reset_query is DISCARD ALL, which must not rebind a pooled
+// connection to the default database.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[allow(clippy::disallowed_methods)]
+async fn test_startup_params_survive_reset() {
+    let server = test_util::TestHarness::default().start().await;
+
+    async fn show(client: &tokio_postgres::Client, name: &str) -> String {
+        client
+            .query_one(&format!("SHOW {name}"), &[])
+            .await
+            .unwrap()
+            .get(0)
+    }
+
+    // Parameters passed directly in the startup packet.
+    {
+        let client = server
+            .connect()
+            .dbname("startup_db")
+            .application_name("startup_app")
+            .await
+            .unwrap();
+
+        client
+            .batch_execute("SET application_name = 'changed_app'")
+            .await
+            .unwrap();
+        assert_eq!(show(&client, "application_name").await, "changed_app");
+        client
+            .batch_execute("RESET application_name")
+            .await
+            .unwrap();
+        assert_eq!(show(&client, "application_name").await, "startup_app");
+
+        client
+            .batch_execute("SET database = other_db")
+            .await
+            .unwrap();
+        client.batch_execute("DISCARD ALL").await.unwrap();
+        assert_eq!(show(&client, "database").await, "startup_db");
+        assert_eq!(show(&client, "application_name").await, "startup_app");
+
+        client.batch_execute("RESET database").await.unwrap();
+        assert_eq!(show(&client, "database").await, "startup_db");
+    }
+
+    // Parameters passed via the `options` startup parameter.
+    {
+        let client = server
+            .connect()
+            .options("--search_path=custom_schema")
+            .await
+            .unwrap();
+
+        client.batch_execute("DISCARD ALL").await.unwrap();
+        assert_eq!(show(&client, "search_path").await, "custom_schema");
+    }
+
+    // Client-supplied startup parameters take precedence over role defaults,
+    // also as the reset value.
+    {
+        let client = server.connect().await.unwrap();
+        client
+            .batch_execute("ALTER ROLE materialize SET database = role_db")
+            .await
+            .unwrap();
+
+        let client = server.connect().dbname("client_db").await.unwrap();
+        assert_eq!(show(&client, "database").await, "client_db");
+        client.batch_execute("DISCARD ALL").await.unwrap();
+        assert_eq!(show(&client, "database").await, "client_db");
+
+        // Without a client-supplied database, the role default applies.
+        let client = server.connect().await.unwrap();
+        assert_eq!(show(&client, "database").await, "role_db");
+    }
+}
+
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_conn_user() {
@@ -745,6 +827,11 @@ fn test_pgtest_notice() {
 }
 
 #[mz_ore::test]
+fn test_pgtest_nul() {
+    pg_test_inner(Path::new("../../test/pgtest/nul.pt"), false);
+}
+
+#[mz_ore::test]
 fn test_pgtest_params() {
     pg_test_inner(Path::new("../../test/pgtest/params.pt"), false);
 }
@@ -852,6 +939,11 @@ fn test_pgtest_mz_subscribe_dependency_dropped() {
 #[mz_ore::test]
 fn test_pgtest_mz_startup() {
     pg_test_inner(Path::new("../../test/pgtest-mz/startup.pt"), true);
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_stray_copy() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/stray-copy.pt"), true);
 }
 
 #[mz_ore::test]

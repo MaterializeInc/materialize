@@ -18,8 +18,9 @@ use arrow::array::{
     Int16Array, Int32Array, Int64Array, IntervalDayTimeArray, IntervalMonthDayNanoArray,
     IntervalYearMonthArray, LargeBinaryArray, LargeListArray, LargeStringArray, ListArray,
     MapArray, StringArray, StringViewArray, StructArray, Time32MillisecondArray, Time32SecondArray,
-    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-    TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
+    Time64MicrosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray, TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array,
+    UInt64Array,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
@@ -27,6 +28,7 @@ use chrono::{DateTime, NaiveTime};
 use dec::OrderedDecimal;
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
+use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::JsonbPacker;
@@ -167,11 +169,15 @@ fn scalar_type_and_array_to_reader(
         (SqlScalarType::UInt16, DataType::UInt16) => {
             Ok(ColReader::UInt16(downcast_array::<UInt16Array>(array)))
         }
-        (SqlScalarType::UInt32, DataType::UInt32) => {
+        // `oid` shares `Datum::UInt32`'s representation, so it decodes identically.
+        (SqlScalarType::UInt32 | SqlScalarType::Oid, DataType::UInt32) => {
             Ok(ColReader::UInt32(downcast_array::<UInt32Array>(array)))
         }
         (SqlScalarType::UInt64, DataType::UInt64) => {
             Ok(ColReader::UInt64(downcast_array::<UInt64Array>(array)))
+        }
+        (SqlScalarType::MzTimestamp, DataType::UInt64) => {
+            Ok(ColReader::MzTimestamp(downcast_array::<UInt64Array>(array)))
         }
         (SqlScalarType::Float32 | SqlScalarType::Float64, DataType::Float16) => {
             let array = downcast_array::<Float16Array>(array);
@@ -260,14 +266,23 @@ fn scalar_type_and_array_to_reader(
                 .context("uuid reader")?;
             Ok(ColReader::Uuid(Box::new(reader)))
         }
-        (SqlScalarType::String, DataType::Utf8) => {
-            Ok(ColReader::String(downcast_array::<StringArray>(array)))
-        }
-        (SqlScalarType::String, DataType::LargeUtf8) => {
+        // `char` and `varchar` store `Datum::String`, so they decode as strings.
+        // The writer emits them as Utf8/LargeUtf8 depending on length.
+        (
+            SqlScalarType::String | SqlScalarType::Char { .. } | SqlScalarType::VarChar { .. },
+            DataType::Utf8,
+        ) => Ok(ColReader::String(downcast_array::<StringArray>(array))),
+        (
+            SqlScalarType::String | SqlScalarType::Char { .. } | SqlScalarType::VarChar { .. },
+            DataType::LargeUtf8,
+        ) => {
             let array = downcast_array::<LargeStringArray>(array);
             Ok(ColReader::LargeString(array))
         }
-        (SqlScalarType::String, DataType::Utf8View) => {
+        (
+            SqlScalarType::String | SqlScalarType::Char { .. } | SqlScalarType::VarChar { .. },
+            DataType::Utf8View,
+        ) => {
             let array = downcast_array::<StringViewArray>(array);
             Ok(ColReader::StringView(array))
         }
@@ -292,6 +307,15 @@ fn scalar_type_and_array_to_reader(
             let array = downcast_array::<TimestampNanosecondArray>(array);
             Ok(ColReader::TimestampNanosecond(array))
         }
+        // A tz-aware timestamp array stores UTC-normalized instants, so the tz
+        // string is metadata we can ignore. The writer always emits microseconds.
+        (
+            SqlScalarType::TimestampTz { .. },
+            DataType::Timestamp(TimeUnit::Microsecond, Some(_)),
+        ) => {
+            let array = downcast_array::<TimestampMicrosecondArray>(array);
+            Ok(ColReader::TimestampTzMicrosecond(array))
+        }
         (SqlScalarType::Date, DataType::Date32) => {
             let array = downcast_array::<Date32Array>(array);
             Ok(ColReader::Date32(array))
@@ -307,6 +331,10 @@ fn scalar_type_and_array_to_reader(
         (SqlScalarType::Time, DataType::Time32(TimeUnit::Millisecond)) => {
             let array = downcast_array::<Time32MillisecondArray>(array);
             Ok(ColReader::Time32Milliseconds(array))
+        }
+        (SqlScalarType::Time, DataType::Time64(TimeUnit::Microsecond)) => {
+            let array = downcast_array::<Time64MicrosecondArray>(array);
+            Ok(ColReader::Time64Microseconds(array))
         }
         (
             SqlScalarType::List {
@@ -340,6 +368,44 @@ fn scalar_type_and_array_to_reader(
                 offsets: array.offsets().clone(),
                 values: Box::new(inner_decoder),
                 nulls: array.nulls().cloned(),
+            })
+        }
+        (SqlScalarType::Array(element_type), DataType::Struct(_)) => {
+            // The builder encodes an array as a struct of an `items` list (the
+            // flat, row-major elements) and a `dimensions` count. Reverse that.
+            let struct_array = downcast_array::<StructArray>(array);
+
+            let items = struct_array
+                .column_by_name("items")
+                .ok_or_else(|| anyhow::anyhow!("array struct missing 'items' field"))?;
+            let items = items
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .ok_or_else(|| anyhow::anyhow!("array 'items' field is not a List"))?;
+            let values = scalar_type_and_array_to_reader(element_type, Arc::clone(items.values()))
+                .context("array items")?;
+
+            let dims_col = struct_array
+                .column_by_name("dimensions")
+                .ok_or_else(|| anyhow::anyhow!("array struct missing 'dimensions' field"))?;
+            // The builder writes `dimensions` as UInt8. An Iceberg round-trip
+            // widens it to Int32 (Iceberg has no narrow integer types), so
+            // accept both.
+            let dims = match dims_col.data_type() {
+                DataType::UInt8 => {
+                    ArrayDims::UInt8(downcast_array::<UInt8Array>(Arc::clone(dims_col)))
+                }
+                DataType::Int32 => {
+                    ArrayDims::Int32(downcast_array::<Int32Array>(Arc::clone(dims_col)))
+                }
+                other => anyhow::bail!("unsupported array 'dimensions' type: {other:?}"),
+            };
+
+            Ok(ColReader::Array {
+                offsets: items.offsets().clone(),
+                values: Box::new(values),
+                dims,
+                nulls: struct_array.nulls().cloned(),
             })
         }
         (
@@ -455,6 +521,26 @@ fn scalar_type_and_array_to_reader(
     }
 }
 
+/// The `dimensions` field of an encoded array. The builder writes it as
+/// [`UInt8`](DataType::UInt8); an Iceberg round-trip widens it to
+/// [`Int32`](DataType::Int32).
+enum ArrayDims {
+    UInt8(UInt8Array),
+    Int32(Int32Array),
+}
+
+impl ArrayDims {
+    /// The number of dimensions of the array at `idx`.
+    fn ndims(&self, idx: usize) -> Result<u8, anyhow::Error> {
+        match self {
+            ArrayDims::UInt8(array) => Ok(array.value(idx)),
+            ArrayDims::Int32(array) => {
+                u8::try_from(array.value(idx)).context("array dimension count out of range")
+            }
+        }
+    }
+}
+
 /// A "downcasted" version of [`arrow::array::Array`] that supports reading [`Datum`]s.
 ///
 /// Note: While this is fairly verbose, one-time "downcasting" to an enum is _much_ more performant
@@ -513,12 +599,16 @@ enum ColReader {
     TimestampMillisecond(arrow::array::TimestampMillisecondArray),
     TimestampMicrosecond(arrow::array::TimestampMicrosecondArray),
     TimestampNanosecond(arrow::array::TimestampNanosecondArray),
+    TimestampTzMicrosecond(arrow::array::TimestampMicrosecondArray),
+
+    MzTimestamp(arrow::array::UInt64Array),
 
     Date32(Date32Array),
     Date64(Date64Array),
 
     Time32Seconds(Time32SecondArray),
     Time32Milliseconds(arrow::array::Time32MillisecondArray),
+    Time64Microseconds(arrow::array::Time64MicrosecondArray),
 
     List {
         offsets: OffsetBuffer<i32>,
@@ -528,6 +618,13 @@ enum ColReader {
     LargeList {
         offsets: OffsetBuffer<i64>,
         values: Box<ColReader>,
+        nulls: Option<NullBuffer>,
+    },
+
+    Array {
+        offsets: OffsetBuffer<i32>,
+        values: Box<ColReader>,
+        dims: ArrayDims,
         nulls: Option<NullBuffer>,
     },
 
@@ -772,6 +869,22 @@ impl ColReader {
                     Ok::<_, anyhow::Error>(Datum::Timestamp(dt))
                 })
                 .transpose()?,
+            ColReader::TimestampTzMicrosecond(array) => array
+                .is_valid(idx)
+                .then(|| array.value(idx))
+                .map(|micros| {
+                    let dt = DateTime::from_timestamp_micros(micros).ok_or_else(|| {
+                        anyhow::anyhow!("invalid timestamptz microseconds {micros}")
+                    })?;
+                    let dt =
+                        CheckedTimestamp::from_timestamplike(dt).context("TimestampTzMicros")?;
+                    Ok::<_, anyhow::Error>(Datum::TimestampTz(dt))
+                })
+                .transpose()?,
+            ColReader::MzTimestamp(array) => array
+                .is_valid(idx)
+                .then(|| array.value(idx))
+                .map(|v| Datum::MzTimestamp(mz_repr::Timestamp::from(v))),
             ColReader::Date32(array) => array
                 .is_valid(idx)
                 .then(|| array.value(idx))
@@ -814,6 +927,21 @@ impl ColReader {
                     let unanos = (umillis % 1000).saturating_mul(1_000_000);
                     let time = NaiveTime::from_num_seconds_from_midnight_opt(usecs, unanos)
                         .ok_or_else(|| anyhow::anyhow!("invalid Time32 Milliseconds {umillis}"))?;
+                    Ok::<_, anyhow::Error>(Datum::Time(time))
+                })
+                .transpose()?,
+            ColReader::Time64Microseconds(array) => array
+                .is_valid(idx)
+                .then(|| array.value(idx))
+                .map(|micros| {
+                    // Inverse of the builder's `secs * 1_000_000 + nanos / 1_000`.
+                    let secs: u32 = (micros / 1_000_000).try_into().context("time64 seconds")?;
+                    let nanos: u32 = (micros % 1_000_000)
+                        .try_into()
+                        .map(|us: u32| us.saturating_mul(1_000))
+                        .context("time64 microseconds")?;
+                    let time = NaiveTime::from_num_seconds_from_midnight_opt(secs, nanos)
+                        .ok_or_else(|| anyhow::anyhow!("invalid Time64 Microseconds {micros}"))?;
                     Ok::<_, anyhow::Error>(Datum::Time(time))
                 })
                 .transpose()?,
@@ -865,6 +993,55 @@ impl ColReader {
                         Ok::<_, anyhow::Error>(())
                     })
                     .context("pack list")?;
+
+                // Return early because we've already packed the necessasry Datums.
+                return Ok(());
+            }
+            ColReader::Array {
+                offsets,
+                values,
+                dims,
+                nulls,
+            } => {
+                let is_valid = nulls.as_ref().map(|n| n.is_valid(idx)).unwrap_or(true);
+                if !is_valid {
+                    packer.push(Datum::Null);
+                    return Ok(());
+                }
+
+                let start: usize = offsets[idx].try_into().context("array start offset")?;
+                let end: usize = offsets[idx + 1].try_into().context("array end offset")?;
+                let nelements = end - start;
+
+                // The encoding stores only the dimension count and the flat,
+                // row-major elements (see the builder), so per-dimension extents
+                // are recoverable only for 0- and 1-dimensional arrays. A
+                // higher-dimensional array's extents cannot be reconstructed, so
+                // reject it rather than guess a shape.
+                let ndims = dims.ndims(idx)?;
+                if ndims > 1 {
+                    anyhow::bail!(
+                        "cannot decode {ndims}-dimensional array from parquet: the encoding \
+                         records only the dimension count, not per-dimension extents"
+                    );
+                }
+                let one_dim = [ArrayDimension {
+                    lower_bound: 1,
+                    length: nelements,
+                }];
+                let array_dims: &[ArrayDimension] = if ndims == 0 { &[] } else { &one_dim };
+
+                // SAFETY: the closure returns exactly the number of elements it
+                // pushes (`end - start`).
+                unsafe {
+                    packer.push_array_with_unchecked(array_dims, |packer| {
+                        for idx in start..end {
+                            values.read(idx, packer)?;
+                        }
+                        Ok::<_, anyhow::Error>(end - start)
+                    })
+                }
+                .context("pack array")?;
 
                 // Return early because we've already packed the necessasry Datums.
                 return Ok(());
@@ -1099,6 +1276,115 @@ mod tests {
 
         reader.read(1, &mut rnd_row).unwrap();
         assert_eq!(&null_row, &rnd_row);
+    }
+
+    /// Regression for SS-341: `COPY TO PARQUET` can write these scalar types,
+    /// so `COPY FROM PARQUET` must read them back. Each must survive a
+    /// builder -> reader round-trip.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+    fn smoketest_extra_scalar_types() {
+        let desc = RelationDesc::builder()
+            .with_column("oid", SqlScalarType::Oid.nullable(true))
+            .with_column("time", SqlScalarType::Time.nullable(true))
+            .with_column(
+                "timestamptz",
+                SqlScalarType::TimestampTz { precision: None }.nullable(true),
+            )
+            .with_column("char", SqlScalarType::Char { length: None }.nullable(true))
+            .with_column(
+                "varchar",
+                SqlScalarType::VarChar { max_length: None }.nullable(true),
+            )
+            .with_column("mz_timestamp", SqlScalarType::MzTimestamp.nullable(true))
+            .finish();
+
+        let tstz = CheckedTimestamp::from_timestamplike(
+            DateTime::from_timestamp(1_600_000_000, 0).expect("valid timestamp"),
+        )
+        .expect("valid CheckedTimestamp");
+
+        let og_row = Row::pack(vec![
+            Datum::UInt32(42),
+            // Sub-second component at microsecond resolution: the writer stores
+            // Time64 microseconds, so nanoseconds would not round-trip.
+            Datum::Time(NaiveTime::from_hms_micro_opt(12, 34, 56, 789_012).unwrap()),
+            Datum::TimestampTz(tstz),
+            Datum::String("abc"),
+            Datum::String("hello world"),
+            Datum::MzTimestamp(mz_repr::Timestamp::from(123_456_u64)),
+        ]);
+        let null_row = Row::pack(vec![Datum::Null; 6]);
+
+        let mut builder = crate::builder::ArrowBuilder::new(&desc, 2, 64).unwrap();
+        builder.add_row(&og_row).unwrap();
+        builder.add_row(&null_row).unwrap();
+        let record_batch = builder.to_record_batch().unwrap();
+
+        let reader = ArrowReader::new(&desc, StructArray::from(record_batch)).unwrap();
+
+        let mut got = Row::default();
+        reader.read(0, &mut got).unwrap();
+        assert_eq!(&og_row, &got, "values did not round-trip");
+
+        got.packer();
+        reader.read(1, &mut got).unwrap();
+        assert_eq!(&null_row, &got, "NULLs did not round-trip");
+    }
+
+    /// Regression: an array column must survive a builder -> reader round-trip.
+    /// The builder encodes an array as a struct of `{items, dimensions}`; the
+    /// reader must reverse that back into a `Datum::Array`.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+    fn smoketest_array() {
+        let desc = RelationDesc::builder()
+            .with_column(
+                "arr",
+                SqlScalarType::Array(Box::new(SqlScalarType::Int32)).nullable(true),
+            )
+            .finish();
+
+        let mut row_1d = Row::default();
+        row_1d
+            .packer()
+            .try_push_array(
+                &[ArrayDimension {
+                    lower_bound: 1,
+                    length: 3,
+                }],
+                [Datum::Int32(1), Datum::Null, Datum::Int32(3)],
+            )
+            .unwrap();
+
+        let mut row_empty = Row::default();
+        row_empty
+            .packer()
+            .try_push_array(&[], std::iter::empty::<Datum>())
+            .unwrap();
+
+        let row_null = Row::pack(vec![Datum::Null]);
+
+        // Encode with the builder, decode with the reader.
+        let mut builder = crate::builder::ArrowBuilder::new(&desc, 3, 128).unwrap();
+        builder.add_row(&row_1d).unwrap();
+        builder.add_row(&row_empty).unwrap();
+        builder.add_row(&row_null).unwrap();
+        let record_batch = builder.to_record_batch().unwrap();
+
+        let reader = ArrowReader::new(&desc, StructArray::from(record_batch)).unwrap();
+        let mut got = Row::default();
+
+        reader.read(0, &mut got).unwrap();
+        assert_eq!(got, row_1d, "1-D array did not round-trip");
+
+        got.packer();
+        reader.read(1, &mut got).unwrap();
+        assert_eq!(got, row_empty, "empty array did not round-trip");
+
+        got.packer();
+        reader.read(2, &mut got).unwrap();
+        assert_eq!(got, row_null, "NULL array did not round-trip");
     }
 
     #[mz_ore::test]

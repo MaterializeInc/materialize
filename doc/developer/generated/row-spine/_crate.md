@@ -1,6 +1,6 @@
 ---
 source: src/row-spine/src/lib.rs
-revision: 31e0aab020
+revision: 12181a5639
 ---
 
 # mz-row-spine
@@ -32,8 +32,8 @@ All builders use `RcBuilder` wrapping the appropriate `OrdValBuilder` or `OrdKey
 
 * `RowRowBuilder<T, R>`, `RowValBuilder<V, T, R>`, `RowBuilder<T, R>`, `ValRowBuilder<K, T, R>`
 
-`RowRowColPagedBuilder<T, R>` is a `RowRowBuilder` variant that consumes `Column` chunks instead of `ColumnationStack` input. It pairs with `Col2ValPagedBatcher` for the spillable arrange path.
-`ValRowColPagedBuilder<K, T, R>` is a `ValRowBuilder` variant that consumes `Column` chunks; pairs with `Col2ValPagedBatcher<K, Row, T, R>` for the spillable arrange path where keys are arbitrary `Columnar` values and values are packed `Row` bytes.
+`RowRowColPagedBuilder<T, R>` is a `RowRowBuilder` variant that consumes `Column` chunks instead of `ColumnationStack` input. It pairs with `Col2ValPagedBatcher` for the spillable arrange path and installs a dictionary codec on both the key and value containers at seal time, gathering statistics from the sealed `Column` chain.
+`ValRowColPagedBuilder<K, T, R>` is a `ValRowBuilder` variant that consumes `Column` chunks; pairs with `Col2ValPagedBatcher<K, Row, T, R>` for the spillable arrange path where keys are arbitrary `Columnar` values and values are packed `Row` bytes. It installs a dictionary codec on the value container at seal time; keys are not `Row`-shaped and stay uncompressed.
 
 ## Layout structs (internal)
 

@@ -331,9 +331,21 @@ pub enum Command {
     ExecuteSideEffectingFunc {
         plan: SideEffectingFunc,
         conn_id: ConnectionId,
-        /// The current role of the session, used for RBAC checks.
-        current_role: RoleId,
         tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
+    },
+
+    /// Look up an active connection by its raw connection ID, returning its
+    /// `ConnectionId` handle and authenticated role, or `None` if there is no
+    /// such connection.
+    ///
+    /// While the caller holds the returned `ConnectionId` handle, the raw
+    /// connection ID cannot be reused by a new connection. Frontend peek
+    /// sequencing relies on this to ensure that the connection it performs an
+    /// RBAC check against is the same one that a subsequent
+    /// `ExecuteSideEffectingFunc` acts on.
+    LookupConnection {
+        connection_id: u32,
+        tx: oneshot::Sender<Option<(ConnectionId, RoleId)>>,
     },
 
     /// Register a pending peek initiated by frontend sequencing. This is needed for:
@@ -351,12 +363,17 @@ pub enum Command {
         tx: oneshot::Sender<Result<(), AdapterError>>,
     },
 
-    /// Unregister a pending peek that was registered but failed to issue.
-    /// This is used for cleanup when `client.peek()` fails after `RegisterFrontendPeek` succeeds.
-    /// The `ExecuteContextExtra` is dropped without logging the statement retirement, because the
-    /// frontend will log the error.
+    /// Unregister and retire a pending peek that was registered but then
+    /// failed to issue, ending its statement-logging execution with the given
+    /// reason.
+    ///
+    /// Registration handed ownership of end-of-execution logging to the
+    /// coordinator, so the frontend must not log the end itself. If a
+    /// concurrent teardown (e.g. a `DROP CLUSTER`) already retired the peek
+    /// and logged its end, this is a no-op.
     UnregisterFrontendPeek {
         uuid: Uuid,
+        reason: StatementEndedExecutionReason,
         tx: oneshot::Sender<()>,
     },
 
@@ -409,6 +426,7 @@ impl Command {
             | Command::CopyToPreflight { .. }
             | Command::ExecuteCopyTo { .. }
             | Command::ExecuteSideEffectingFunc { .. }
+            | Command::LookupConnection { .. }
             | Command::RegisterFrontendPeek { .. }
             | Command::UnregisterFrontendPeek { .. }
             | Command::ExplainTimestamp { .. }
@@ -449,6 +467,7 @@ impl Command {
             | Command::CopyToPreflight { .. }
             | Command::ExecuteCopyTo { .. }
             | Command::ExecuteSideEffectingFunc { .. }
+            | Command::LookupConnection { .. }
             | Command::RegisterFrontendPeek { .. }
             | Command::UnregisterFrontendPeek { .. }
             | Command::ExplainTimestamp { .. }

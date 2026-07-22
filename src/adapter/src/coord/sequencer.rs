@@ -36,7 +36,7 @@ use mz_sql::catalog::{CatalogError, SessionCatalog};
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{
     self, AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, CreateSourcePlanBundle,
-    FetchPlan, HirScalarExpr, MutationKind, Params, Plan, PlanKind, RaisePlan,
+    FetchPlan, HirScalarExpr, MutationKind, Params, Plan, PlanKind, RaisePlan, SideEffectingFunc,
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
@@ -187,16 +187,24 @@ impl Coordinator {
                 }
             }
 
+            // Look up the authenticated role of the connection targeted by
+            // pg_cancel_backend, which check_plan needs for its RBAC check.
+            // Linear search through active connections is fine because this
+            // happens at most once per statement.
+            let target_conn_role = match &plan {
+                Plan::SideEffectingFunc(SideEffectingFunc::PgCancelBackend {
+                    connection_id: Some(connection_id),
+                }) => self
+                    .active_conns()
+                    .into_iter()
+                    .find(|(conn_id, _)| conn_id.unhandled() == *connection_id)
+                    .map(|(_, conn_meta)| *conn_meta.authenticated_role_id()),
+                _ => None,
+            };
+
             if let Err(e) = rbac::check_plan(
                 &session_catalog,
-                Some(|id| {
-                    // We use linear search through active connections if needed, which is fine
-                    // because the RBAC check will call the closure at most once.
-                    self.active_conns()
-                        .into_iter()
-                        .find(|(conn_id, _)| conn_id.unhandled() == id)
-                        .map(|(_, conn_meta)| *conn_meta.authenticated_role_id())
-                }),
+                target_conn_role,
                 ctx.session(),
                 &plan,
                 target_cluster_id,

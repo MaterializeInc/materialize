@@ -1,7 +1,9 @@
 version: 2
 updates:
 - package-ecosystem: cargo
-  directory: /
+  directories:
+    - /
+    - /test/cargo-fuzz
   schedule:
     interval: weekly
     day: sunday
@@ -80,7 +82,7 @@ updates:
         - minor
         - patch
 - package-ecosystem: docker
-  directory: /misc/images/ubuntu-base
+  directory: /misc/images/debian-base
   schedule:
     interval: weekly
     day: sunday
@@ -96,6 +98,36 @@ updates:
         - patch
 - package-ecosystem: docker
   directory: /misc/images/openssh-static
+  schedule:
+    interval: weekly
+    day: sunday
+    time: "22:00"
+  # TODO: Add cooldown when https://github.com/dependabot/dependabot-core/issues/14044 is fixed
+  open-pull-requests-limit: 50
+  labels: [A-dependencies]
+  groups:
+    simple:
+      applies-to: version-updates
+      update-types:
+        - minor
+        - patch
+- package-ecosystem: docker
+  directory: /misc/images/tini-static
+  schedule:
+    interval: weekly
+    day: sunday
+    time: "22:00"
+  # TODO: Add cooldown when https://github.com/dependabot/dependabot-core/issues/14044 is fixed
+  open-pull-requests-limit: 50
+  labels: [A-dependencies]
+  groups:
+    simple:
+      applies-to: version-updates
+      update-types:
+        - minor
+        - patch
+- package-ecosystem: docker
+  directory: /misc/images/distroless-prod-base
   schedule:
     interval: weekly
     day: sunday

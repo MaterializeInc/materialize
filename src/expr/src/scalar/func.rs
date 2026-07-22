@@ -354,6 +354,12 @@ fn convert_from<'a>(a: &'a [u8], b: &str) -> Result<&'a str, EvalError> {
     }
 
     match str::from_utf8(a) {
+        // Match PostgreSQL, which rejects NUL bytes because text values must
+        // never contain them.
+        Ok(from) if from.contains('\0') => Err(EvalError::InvalidByteSequence {
+            byte_sequence: "0x00".into(),
+            encoding_name,
+        }),
         Ok(from) => Ok(from),
         Err(e) => Err(EvalError::InvalidByteSequence {
             byte_sequence: e.to_string().into(),
@@ -976,6 +982,7 @@ fn mul_uint64(a: u64, b: u64) -> Result<u64, EvalError> {
 
 #[sqlfunc(
     is_monotone = (true, true),
+    is_infinity_monotone = false,
     is_infix_op = true,
     sqlname = "*",
     propagates_nulls = true
@@ -993,6 +1000,7 @@ fn mul_float32(a: f32, b: f32) -> Result<f32, EvalError> {
 
 #[sqlfunc(
     is_monotone = "(true, true)",
+    is_infinity_monotone = false,
     is_infix_op = true,
     sqlname = "*",
     propagates_nulls = true
@@ -1010,6 +1018,7 @@ fn mul_float64(a: f64, b: f64) -> Result<f64, EvalError> {
 
 #[sqlfunc(
     is_monotone = "(true, true)",
+    is_infinity_monotone = false,
     is_infix_op = true,
     sqlname = "*",
     propagates_nulls = true
@@ -1128,6 +1137,7 @@ fn div_uint64(a: u64, b: u64) -> Result<u64, EvalError> {
 
 #[sqlfunc(
     is_monotone = "(true, false)",
+    is_infinity_monotone = false,
     is_infix_op = true,
     sqlname = "/",
     propagates_nulls = true
@@ -1149,6 +1159,7 @@ fn div_float32(a: f32, b: f32) -> Result<f32, EvalError> {
 
 #[sqlfunc(
     is_monotone = "(true, false)",
+    is_infinity_monotone = false,
     is_infix_op = true,
     sqlname = "/",
     propagates_nulls = true
@@ -1170,6 +1181,7 @@ fn div_float64(a: f64, b: f64) -> Result<f64, EvalError> {
 
 #[sqlfunc(
     is_monotone = "(true, false)",
+    is_infinity_monotone = false,
     is_infix_op = true,
     sqlname = "/",
     propagates_nulls = true

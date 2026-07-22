@@ -97,10 +97,21 @@ fn clamped_range(pd: &PositionalDiagnostic) -> std::ops::Range<usize> {
     clamp(&pd.source, &pd.byte_range)
 }
 
+/// Clamp `range` to `[0, source.len()]` and snap its endpoints outward to the
+/// enclosing char boundaries (start down, end up).
+///
+/// annotate-snippets slices `source` at these byte offsets and panics on an
+/// offset that is out of bounds or falls inside a multi-byte char.
 fn clamp(source: &str, range: &std::ops::Range<usize>) -> std::ops::Range<usize> {
     let len = source.len();
-    let start = range.start.min(len);
-    let end = range.end.min(len).max(start);
+    let mut start = range.start.min(len);
+    let mut end = range.end.min(len).max(start);
+    while start > 0 && !source.is_char_boundary(start) {
+        start -= 1;
+    }
+    while end < len && !source.is_char_boundary(end) {
+        end += 1;
+    }
     start..end
 }
 
@@ -292,6 +303,19 @@ mod tests {
     fn clamped_range_preserves_in_bounds() {
         let diag = pd("abcdef", 1..4, "ok");
         assert_eq!(clamped_range(&diag), 1..4);
+    }
+
+    #[mz_ore::test]
+    fn clamp_snaps_to_char_boundary() {
+        // `é` occupies bytes 3..5 of "café", so 4 is mid-char.
+        assert_eq!(clamp("café", &(4..4)), 3..5);
+        assert_eq!(clamp("café", &(0..3)), 0..3);
+    }
+
+    #[mz_ore::test]
+    fn render_handles_multibyte_span() {
+        let out = render(&pd("café", 4..4, "unexpected token"));
+        assert!(out.contains("unexpected token"));
     }
 
     #[mz_ore::test]

@@ -30,6 +30,35 @@ SELECT 4294967296::oid
 query error "-1" OID out of range
 SELECT (-1)::int8::oid
 
+# Regression: the text -> oid parser must accept the full u32 range, not just
+# the i32 range. PostgreSQL accepts the union of the u32 and i32 ranges (the
+# latter reinterpreted), so 2147483648..4294967295 must parse.
+query T
+SELECT '4294967295'::oid
+----
+4294967295
+
+query T
+SELECT '2147483648'::oid
+----
+2147483648
+
+query T
+SELECT '-1'::oid
+----
+4294967295
+
+query T
+SELECT '-2147483648'::oid
+----
+2147483648
+
+query error invalid input syntax for type oid
+SELECT '4294967296'::oid
+
+query error invalid input syntax for type oid
+SELECT '-2147483649'::oid
+
 query B
 SELECT 1::oid = 2::oid
 ----
@@ -1204,3 +1233,10 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17097  mz_console_cluster_utilization_overview_3h_ind
 17098  mz_console_cluster_utilization_overview_24h
 17099  mz_console_cluster_utilization_overview_24h_ind
+17100  parse_catalog_audit_log_details
+17101  mz_cluster_reconfigurations
+17102  mz_cluster_reconfigurations_ind
+17103  mz_cluster_auto_scaling_strategies
+17104  mz_cluster_auto_scaling_strategies_ind
+17105  parse_postgres_source_details
+17106  parse_kafka_source_details

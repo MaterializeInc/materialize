@@ -2809,7 +2809,7 @@ impl StorageTxn for Transaction<'_> {
         Ok(())
     }
 
-    fn mark_shards_as_finalized(&mut self, shards: BTreeSet<ShardId>) {
+    fn remove_unfinalized_shards(&mut self, shards: BTreeSet<ShardId>) {
         let ks: Vec<_> = shards
             .into_iter()
             .map(|shard| UnfinalizedShardKey { shard })
@@ -4300,15 +4300,13 @@ mod tests {
             .await
             .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
-            .unwrap()
-            .0;
+            .unwrap();
         let mut savepoint_state = state_builder
             .unwrap_build()
             .await
             .open_savepoint(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
-            .unwrap()
-            .0;
+            .unwrap();
 
         let initial_snapshot = savepoint_state.sync_to_current_updates().await.unwrap();
         assert!(!initial_snapshot.is_empty());
@@ -4360,8 +4358,7 @@ mod tests {
             .await
             .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
-            .unwrap()
-            .0;
+            .unwrap();
 
         // The cluster does not need to exist: `insert_cluster_replica_with_id` only writes a
         // `cluster_replicas` row and does not validate the referenced cluster.

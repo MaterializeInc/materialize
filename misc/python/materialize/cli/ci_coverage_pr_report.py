@@ -24,12 +24,16 @@ from materialize import MZ_ROOT, buildkite, ci_util
 #   been covered in end-to-end tests.
 # - Negative values indicate that the line has only been covered in unit tests.
 Coverage = dict[str, OrderedDict[int, int | None]]
+# Normalizes an absolute lcov SF path to a repo-relative path so it can be
+# matched against the keys from find_modified_lines(). Only the buildkite
+# alternative yields an actual repo file (starting with `src/`). The external
+# and rustlib alternatives exist so the assert below does not fire on
+# dependency sources, they never match a modified repo file.
 SOURCE_RE = re.compile(
     r"""
-    ( src/(.*$)"
-    | external/(.*$)
+    ( external/(.*$)
     | /usr/local/lib/rustlib/(.*$)
-    | /var/lib/buildkite-agent/builds/buildkite-.*/materialize/[^/]*/src/(.*$)
+    | /var/lib/buildkite-agent/builds/buildkite-.*/materialize/[^/]*/(src/.*$)
     )""",
     re.VERBOSE,
 )
@@ -103,7 +107,10 @@ def mark_covered_lines(
             else:
                 result = SOURCE_RE.search(content)
                 assert result, f"not found: {content}"
-                file = result.group(1)
+                # Group 1 is the outer alternation, which for buildkite paths is
+                # the full absolute path. The repo-relative path is the innermost
+                # matched group, i.e. the last non-None capture.
+                file = [g for g in result.groups() if g is not None][-1]
         # DA:111,15524
         # DA:112,0
         # DA:113,15901
@@ -174,7 +181,9 @@ ci-coverage-pr-report creates a code coverage report for CI.""",
     parser.add_argument("tests", nargs="+", help="all other lcov files from test runs")
     args = parser.parse_args()
 
-    result = subprocess.run(["git", "diff"], check=True, capture_output=True)
+    # Compare against HEAD so staged-but-uncommitted changes are detected too.
+    # get_report() runs `git reset --hard`, which would otherwise destroy them.
+    result = subprocess.run(["git", "diff", "HEAD"], check=True, capture_output=True)
     output = result.stdout.decode("utf-8").strip()
     assert not output, f"Has to run on clean git state: \n{output}"
 

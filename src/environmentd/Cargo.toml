@@ -1,7 +1,7 @@
 [package]
 name = "mz-environmentd"
 description = "Manages a single Materialize environment."
-version = "26.33.0-dev.0"
+version = "26.35.0-dev.0"
 authors = ["Materialize, Inc."]
 license = "proprietary"
 edition.workspace = true
@@ -96,6 +96,7 @@ rand.workspace = true
 regex = { workspace = true, optional = true }
 reqwest.workspace = true
 rlimit.workspace = true
+rustls.workspace = true
 semver.workspace = true
 sentry-tracing.workspace = true
 serde.workspace = true

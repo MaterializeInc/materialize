@@ -7,9 +7,10 @@
 {{- $base := strings.TrimRight "/" (urls.Parse site.BaseURL).Path -}}
 {{- $adopt := printf "%s/self-managed-deployments/upgrading/adopting-the-v1-crd/" $base -}}
 {{- if eq $v "v1alpha1" -}}
-<p><code>v1alpha1</code> is the default CRD version for a Materialize instance.
+<p><code>v1alpha1</code> is the default CRD version for the Materialize Helm
+chart. The Terraform modules default to <code>v1</code> starting in v4.0.0.
 With <code>v1alpha1</code>, instance rollouts require manually rotating a
 UUID.</p>
 {{- else -}}
-<p>The <code>v1</code> CRD is available starting in v26.30 and is opt-in. See <a href="{{ $adopt }}">Adopting the v1 CRD</a> to enable it.</p>
+<p>The <code>v1</code> CRD is available starting in v26.30. It is opt-in for the Helm chart and the default for the Terraform modules starting in v4.0.0. See <a href="{{ $adopt }}">Adopting the v1 CRD</a> to enable it.</p>
 {{- end -}}

@@ -25,10 +25,14 @@ if ! buf --version >/dev/null 2>/dev/null; then
 fi
 
 CURRENT_GIT_BRANCH=$(try git branch --show-current)
-IN_BUILDKITE=in_ci
+IN_BUILDKITE=0
 IN_BUILDKITE_PR=0
 ON_MAIN_BRANCH=0
 IN_LOCAL_NON_MAIN_BRANCH=0
+
+if [[ "${BUILDKITE:-}" == "true" ]]; then
+  IN_BUILDKITE=1
+fi
 
 if [[ ${BUILDKITE_PULL_REQUEST:-false} != "false" ]]; then
   IN_BUILDKITE_PR=1
@@ -42,10 +46,10 @@ if [[ "$IN_BUILDKITE" != 1 && "$ON_MAIN_BRANCH" != 1 ]]; then
   IN_LOCAL_NON_MAIN_BRANCH=1
 fi
 
-echo $IN_BUILDKITE_PR
-echo $IN_LOCAL_NON_MAIN_BRANCH
-
-if [[ $IN_BUILDKITE_PR || $IN_LOCAL_NON_MAIN_BRANCH ]]; then
+# The breaking-change check compares against the target branch, so only run it
+# where that comparison is meaningful. Note that `[[ $VAR ]]` tests whether the
+# string is non-empty, so "0" would be true; compare explicitly.
+if [[ $IN_BUILDKITE_PR == 1 || $IN_LOCAL_NON_MAIN_BRANCH == 1 ]]; then
   # see ./ci/test/lint-buf/README.md
 
   ci_collapsed_heading "Verify that protobuf config is up-to-date"
@@ -78,6 +82,12 @@ check_no_map_fields() {
   local -A seen=()
   local stack=("$root")
   local failed=0
+  # The recursion below skips missing files (imports may resolve elsewhere),
+  # but a missing root would turn the whole check into a silent no-op.
+  if [[ ! -f "$root" ]]; then
+    echo "error: root proto $root does not exist"
+    return 1
+  fi
   while [[ ${#stack[@]} -gt 0 ]]; do
     local file="${stack[-1]}"
     unset 'stack[-1]'
