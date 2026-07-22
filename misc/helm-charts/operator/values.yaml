@@ -384,6 +384,10 @@ serviceAccount:
   create: true
   # -- The name of the service account to be created
   name: "orchestratord"
+  # -- Annotations to add to the service account, e.g.
+  # `iam.gke.io/gcp-service-account` to link it to a GCP service account
+  # via workload identity.
+  annotations: {}
 
 # Observability settings (disabled in this case)
 observability:
