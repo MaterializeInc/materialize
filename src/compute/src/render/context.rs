@@ -1868,7 +1868,7 @@ mod tests {
     /// The shared arrangement->collection materialization carries the columnar
     /// edge. Reduce, Threshold, and bucketed TopK emit arrangements; when their
     /// result is demanded as a collection it flows through
-    /// `as_specific_collection`, so this flip makes those outputs columnar with
+    /// `as_specific_collection`, so those outputs are columnar with
     /// no `ColumnarToVec`.
     ///
     /// Correctness: the materialized rows must equal the arranged input. Keying
