@@ -279,10 +279,15 @@ impl LirRelationExpr {
                         ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                     }
                     JoinPlan::Delta(plan) => {
-                        let label = if plan.has_cross_stage() {
-                            "→Delta Cross Join"
-                        } else {
-                            "→Delta Join"
+                        // A single path only survives when the plan was reduced to a one-shot
+                        // (single-time) join, e.g. a `SELECT`. Call it out so this plan is not
+                        // mistaken for the multi-path plan an index or materialized view would use.
+                        let one_shot = plan.path_plans.len() == 1;
+                        let label = match (one_shot, plan.has_cross_stage()) {
+                            (true, true) => "→One-Shot Delta Cross Join",
+                            (true, false) => "→One-Shot Delta Join",
+                            (false, true) => "→Delta Cross Join",
+                            (false, false) => "→Delta Join",
                         };
                         write!(f, "{}{label}", ctx.indent)?;
                         for dpp in &plan.path_plans {
@@ -293,7 +298,7 @@ impl LirRelationExpr {
                                 &mode,
                                 inputs,
                                 dpp.source_relation,
-                                Some(&dpp.source_key),
+                                dpp.source_key.as_ref(),
                                 dpp.stage_plans
                                     .iter()
                                     .map(|s| (s.lookup_relation, &s.lookup_key)),
@@ -1319,7 +1324,7 @@ impl LinearJoinPlan {
             }
             None => writeln!(
                 f,
-                "{}source={{ relation={}, key=[] }}",
+                "{}source={{ relation={}, raw }}",
                 ctx.indent, &plan.source_relation
             )?,
         };
@@ -1511,16 +1516,22 @@ impl DeltaPathPlan {
             writeln!(f, "{}initial_closure", ctx.indent)?;
             ctx.indented(|ctx| plan.initial_closure.fmt_text(f, ctx))?;
         }
-        {
-            let source_relation = &plan.source_relation;
-            let source_key = mode.seq(&plan.source_key, None);
-            let source_key = CompactScalars(source_key);
-            writeln!(
+        match &plan.source_key {
+            Some(source_key) => {
+                let source_key = mode.seq(source_key, None);
+                let source_key = CompactScalars(source_key);
+                writeln!(
+                    f,
+                    "{}source={{ relation={}, key=[{}] }}",
+                    ctx.indent, &plan.source_relation, source_key
+                )?
+            }
+            None => writeln!(
                 f,
-                "{}source={{ relation={}, key=[{}] }}",
-                ctx.indent, source_relation, source_key
-            )?;
-        }
+                "{}source={{ relation={}, raw }}",
+                ctx.indent, &plan.source_relation
+            )?,
+        };
         Ok(())
     }
 }

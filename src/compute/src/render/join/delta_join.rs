@@ -65,21 +65,25 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 
             // An input bundle may carry collections no delta path consumes: arrangements keyed
             // differently than any lookup, or a raw collection. Entering a collection into a region
-            // does work proportional to its data, so we prune each bundle to the arrangements some
-            // path reads before bringing it into `inner`.
+            // does work proportional to its data (and the raw collection is not reference counted),
+            // so we prune each bundle to what some path reads before bringing it into `inner`.
             let mut arrangements = vec![BTreeSet::new(); inputs.len()];
+            let mut raw = vec![false; inputs.len()];
             for path_plan in &join_plan.path_plans {
                 record_path_arrangements(
                     &mut arrangements,
+                    &mut raw,
                     path_plan.source_relation,
-                    &path_plan.source_key,
+                    path_plan.source_key.as_ref(),
                     &path_plan.stage_plans,
                 );
             }
             let inputs = inputs
                 .iter()
                 .enumerate()
-                .map(|(index, cb)| prune_bundle(cb, &arrangements[index]).enter_region(inner))
+                .map(|(index, cb)| {
+                    prune_bundle(cb, raw[index], &arrangements[index]).enter_region(inner)
+                })
                 .collect::<Vec<_>>();
 
             for path_plan in join_plan.path_plans {
@@ -110,20 +114,23 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     // available information to determine the filtering and logic that we can apply, and
                     // introduce that in to the `lookup` logic to cause it to happen in that operator.
 
-                    // Prune each bundle to just the arrangements this path looks up before entering
-                    // the path's region, for the reason noted at the join's region entry above.
+                    // Prune each bundle to just what this path reads before entering the path's
+                    // region, for the reason noted at the join's region entry above.
                     let mut path_arrangements = vec![BTreeSet::new(); inputs.len()];
+                    let mut path_raw = vec![false; inputs.len()];
                     record_path_arrangements(
                         &mut path_arrangements,
+                        &mut path_raw,
                         source_relation,
-                        &source_key,
+                        source_key.as_ref(),
                         &stage_plans,
                     );
                     let bundles = inputs
                         .iter()
                         .enumerate()
                         .map(|(index, cb)| {
-                            prune_bundle(cb, &path_arrangements[index]).enter_region(region)
+                            prune_bundle(cb, path_raw[index], &path_arrangements[index])
+                                .enter_region(region)
                         })
                         .collect::<Vec<_>>();
 
@@ -242,28 +249,36 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
     }
 }
 
-/// Records, into `arrangements`, the arrangement keys a single delta path reads from each input:
-/// the `source_key` for the seed relation and each stage's `lookup_key`.
+/// Records what a single delta path reads from each input: each stage's `lookup_key` and, for the
+/// seed relation, either its `source_key` arrangement or, when `source_key` is `None`, its raw
+/// collection (flagged in `raw`).
 fn record_path_arrangements(
     arrangements: &mut [BTreeSet<Vec<LirScalarExpr>>],
+    raw: &mut [bool],
     source_relation: usize,
-    source_key: &[LirScalarExpr],
+    source_key: Option<&Vec<LirScalarExpr>>,
     stage_plans: &[DeltaStagePlan],
 ) {
-    arrangements[source_relation].insert(source_key.to_vec());
+    match source_key {
+        Some(source_key) => {
+            arrangements[source_relation].insert(source_key.clone());
+        }
+        None => raw[source_relation] = true,
+    }
     for stage_plan in stage_plans {
         arrangements[stage_plan.lookup_relation].insert(stage_plan.lookup_key.clone());
     }
 }
 
-/// Retains only the arrangements of `bundle` keyed by `keys`, dropping every other collection
-/// (including the raw collection, which no delta path reads while every source is arranged).
+/// Retains only the collections of `bundle` a delta path reads: the arrangements keyed by `keys`,
+/// and the raw collection if `raw`. Every other collection is dropped.
 fn prune_bundle<'scope, T: RenderTimestamp>(
     bundle: &CollectionBundle<'scope, T>,
+    raw: bool,
     keys: &BTreeSet<Vec<LirScalarExpr>>,
 ) -> CollectionBundle<'scope, T> {
     CollectionBundle {
-        collection: None,
+        collection: if raw { bundle.collection.clone() } else { None },
         arranged: bundle
             .arranged
             .iter()
@@ -640,12 +655,13 @@ where
 
 /// Builds the initial update stream of a delta path from a collection bundle.
 ///
-/// Demuxes over the two flavors of arrangement the bundle might hold for `source_key`, dispatching
-/// to the generic [`build_update_stream_trace`] for each.
+/// With a `source_key`, demuxes over the two flavors of arrangement the bundle might hold for that
+/// key, dispatching to the generic [`build_update_stream_trace`]. Without a `source_key`, the source
+/// relation is consumed as a raw (unarranged) collection via [`build_update_stream_stream`].
 fn build_update_stream<'scope, T>(
     bundle: &CollectionBundle<'scope, T>,
     as_of: Antichain<mz_repr::Timestamp>,
-    source_key: Vec<LirScalarExpr>,
+    source_key: Option<Vec<LirScalarExpr>>,
     source_relation: usize,
     initial_closure: JoinClosure,
 ) -> (
@@ -655,6 +671,18 @@ fn build_update_stream<'scope, T>(
 where
     T: RenderTimestamp,
 {
+    let Some(source_key) = source_key else {
+        // No source key means a single-time dataflow (e.g. a `SELECT`) whose plan was truncated to
+        // this one path, letting us hydrate the source from its raw collection instead of an
+        // arrangement.
+        let (oks, errs) = bundle
+            .collection
+            .clone()
+            .expect("The unarranged collection doesn't exist.");
+        let (oks, errs2) =
+            build_update_stream_stream(oks.into_vec(), as_of, source_relation, initial_closure);
+        return (oks, errs2.concat(errs));
+    };
     match bundle.arrangement(&source_key) {
         Some(ArrangementFlavor::Local(oks, errs)) => {
             let (oks, errs2) = build_update_stream_trace::<_, RowRowAgent<_, _>>(
@@ -792,4 +820,42 @@ where
         ok_stream.as_collection(),
         err_stream.as_collection().map(DataflowErrorSer::from),
     )
+}
+
+/// Builds the beginning of the update stream of a delta path from a raw collection.
+///
+/// This is the unarranged counterpart of [`build_update_stream_trace`]. Only the delta path for the
+/// first relation can be seeded from a raw collection, since the as-of filtering that the other
+/// paths rely on is only available from an arrangement's times. We assert that here.
+fn build_update_stream_stream<'scope, T>(
+    stream: VecCollection<'scope, T, Row, Diff>,
+    _as_of: Antichain<mz_repr::Timestamp>,
+    source_relation: usize,
+    initial_closure: JoinClosure,
+) -> (
+    VecCollection<'scope, T, Row, Diff>,
+    VecCollection<'scope, T, DataflowErrorSer, Diff>,
+)
+where
+    T: RenderTimestamp,
+{
+    // The other paths discard updates at the as-of, so only the first relation's path can be seeded
+    // from a raw collection that carries no per-update times to filter on.
+    assert_eq!(source_relation, 0);
+
+    type CB<C> = ConsolidatingContainerBuilder<C>;
+    stream.flat_map_fallible::<CB<_>, CB<_>, _, _, _, _>("UpdateStream", {
+        // Reuseable allocation for unpacking.
+        let mut datums = DatumVec::new();
+        move |row| {
+            let mut row_builder = SharedRow::get();
+            let temp_storage = RowArena::new();
+            let mut datums_local = datums.borrow_with(&row);
+            initial_closure
+                .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                .map(|row| row.cloned())
+                .map_err(DataflowErrorSer::from)
+                .transpose()
+        }
+    })
 }
