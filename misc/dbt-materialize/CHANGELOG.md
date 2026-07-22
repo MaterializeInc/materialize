@@ -15,7 +15,8 @@
 
   During blue/green deployments, `deploy_init` now copies the production
   cluster's autoscaling strategy to the deployment cluster, so the deployment
-  environment hydrates faster ahead of the cutover.
+  environment bursts to the configured hydration size while it hydrates ahead
+  of the cutover.
 
 ## 1.9.10 - 2026-05-20
 
