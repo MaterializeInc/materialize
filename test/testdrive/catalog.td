@@ -528,9 +528,7 @@ mz_pseudo_types                ""
 mz_role_auth                   ""
 mz_sinks                       ""
 mz_ssh_tunnel_connections      ""
-mz_tables                      ""
 mz_types                       ""
-mz_views                       ""
 
 > SHOW VIEWS FROM mz_catalog
 name                       comment
@@ -561,6 +559,8 @@ mz_secrets            mz_catalog_server   ""
 mz_sources            mz_catalog_server   ""
 mz_system_privileges  mz_catalog_server   ""
 mz_materialized_views mz_catalog_server   ""
+mz_tables             mz_catalog_server   ""
+mz_views              mz_catalog_server   ""
 
 # Check default sources, tables, and views in mz_catalog_unstable.
 
@@ -629,6 +629,8 @@ name                                     comment
 mz_activity_log_thinned                  ""
 mz_builtin_materialized_views            ""
 mz_builtin_sources                       ""
+mz_builtin_tables                        ""
+mz_builtin_views                         ""
 mz_cluster_deployment_lineage            ""
 mz_cluster_replica_history               ""
 mz_cluster_replica_metrics               ""

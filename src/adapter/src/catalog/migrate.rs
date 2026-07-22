@@ -181,7 +181,7 @@ pub(crate) async fn migrate(
     let item_updates = item_updates
         .into_iter()
         .map(|(kind, ts, diff)| StateUpdate {
-            kind: kind.into(),
+            kind: kind,
             ts,
             diff: diff.try_into().expect("valid diff"),
         })
