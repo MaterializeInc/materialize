@@ -435,6 +435,35 @@ class TestClusterOps:
             expect_pass=False,
         )
 
+    def test_alter_cluster_auto_scaling_strategy_validation(self, project):
+        # Hydration size equal to the cluster's current size, validated against
+        # the size fetched from the catalog
+        project.run_sql("CREATE CLUSTER test_autoscaling SIZE = 'scale=1,workers=1'")
+        run_dbt(
+            [
+                "run-operation",
+                "alter_cluster_auto_scaling_strategy",
+                "--args",
+                '{"cluster_name": "test_autoscaling", "auto_scaling_strategy": {"on_hydration": {"hydration_size": "scale=1,workers=1"}}}',
+            ],
+            expect_pass=False,
+        )
+
+        # Cluster with a non-manual schedule, validated against the schedule
+        # fetched from the catalog
+        project.run_sql(
+            "CREATE CLUSTER test_on_refresh_schedule (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour'))"
+        )
+        run_dbt(
+            [
+                "run-operation",
+                "alter_cluster_auto_scaling_strategy",
+                "--args",
+                '{"cluster_name": "test_on_refresh_schedule", "auto_scaling_strategy": {"on_hydration": {"hydration_size": "scale=1,workers=2"}}}',
+            ],
+            expect_pass=False,
+        )
+
     def test_create_cluster_without_size_and_name(self, project):
         # Test creating a cluster without providing a size parameter
         run_dbt(

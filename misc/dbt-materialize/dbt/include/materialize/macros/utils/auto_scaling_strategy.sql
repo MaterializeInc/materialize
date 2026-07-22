@@ -115,6 +115,11 @@ configured (or the server predates the feature).
 NOTE: the catalog stores the linger duration as a {secs, nanos} object. The
 read-back keeps whole seconds only, so sub-second linger components are
 dropped when the strategy is copied to another cluster.
+
+NOTE: mz_cluster_auto_scaling_strategies is a builtin materialized view
+maintained on mz_catalog_server, so it reflects DDL with a small delay,
+unlike mz_clusters. A strategy configured immediately before this read may
+not be visible yet.
 #}
 {% macro internal_get_cluster_auto_scaling_strategy(cluster_name) %}
     {% set catalog_relation_exists %}

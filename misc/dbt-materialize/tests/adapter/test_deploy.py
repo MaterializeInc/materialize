@@ -31,6 +31,26 @@ from fixtures import (
 )
 
 
+def get_deploy_cluster_auto_scaling_strategy(project):
+    """Return (hydration_size, linger_secs) for the deploy cluster's
+    configured autoscaling strategy, or None when no strategy is
+    configured."""
+    result = project.run_sql(
+        """
+        SELECT
+            s.strategy->'on_hydration'->>'hydration_size',
+            (s.strategy->'on_hydration'->'linger_duration'->>'secs')::bigint
+        FROM mz_internal.mz_cluster_auto_scaling_strategies s
+        JOIN mz_clusters c ON c.id = s.cluster_id
+        WHERE c.name = 'prod_dbt_deploy'
+        """,
+        fetch="one",
+    )
+    if result is None or result[0] is None:
+        return None
+    return result
+
+
 class TestApplyGrantsAndPrivileges:
     @pytest.fixture(autouse=True)
     def cleanup(self, project):
@@ -596,18 +616,94 @@ class TestTargetDeploy:
 
         run_dbt(["run-operation", "deploy_init"])
 
-        strategy = project.run_sql(
+        strategy = get_deploy_cluster_auto_scaling_strategy(project)
+        assert strategy == ("scale=1,workers=2", 15)
+
+    def test_dbt_deploy_init_auto_scaling_strategy_idempotent(self, project):
+        try:
+            project.run_sql(
+                "CREATE CLUSTER prod ("
+                "SIZE = 'scale=1,workers=1', "
+                "AUTO SCALING STRATEGY = (ON HYDRATION ("
+                "HYDRATION SIZE = 'scale=1,workers=2')))"
+            )
+        except psycopg2.Error as e:
+            pytest.skip(f"local Materialize image rejects AUTO SCALING STRATEGY: {e}")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA staging")
+
+        run_dbt(["run-operation", "deploy_init"])
+        # The second run takes the existing-deploy-cluster branch, where the
+        # inherited strategy is validated but the cluster is not recreated.
+        run_dbt(["run-operation", "deploy_init"])
+
+        strategy = get_deploy_cluster_auto_scaling_strategy(project)
+        assert strategy == ("scale=1,workers=2", None)
+
+    def test_dbt_deploy_promote_keeps_auto_scaling_strategy(self, project):
+        try:
+            project.run_sql(
+                "CREATE CLUSTER prod ("
+                "SIZE = 'scale=1,workers=1', "
+                "AUTO SCALING STRATEGY = (ON HYDRATION ("
+                "HYDRATION SIZE = 'scale=1,workers=2', LINGER DURATION = '15s')))"
+            )
+        except psycopg2.Error as e:
+            pytest.skip(f"local Materialize image rejects AUTO SCALING STRATEGY: {e}")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA staging")
+
+        run_dbt(["run-operation", "deploy_init"])
+
+        green_cluster_id = project.run_sql(
+            "SELECT id FROM mz_clusters WHERE name = 'prod_dbt_deploy'",
+            fetch="one",
+        )[0]
+
+        run_dbt(["run-operation", "deploy_promote"])
+
+        # The strategy travels with the swapped cluster: the promoted (formerly
+        # green) cluster is now production and still carries it.
+        promoted = project.run_sql(
             """
             SELECT
+                c.id,
                 s.strategy->'on_hydration'->>'hydration_size',
                 (s.strategy->'on_hydration'->'linger_duration'->>'secs')::bigint
-            FROM mz_internal.mz_cluster_auto_scaling_strategies s
-            JOIN mz_clusters c ON c.id = s.cluster_id
-            WHERE c.name = 'prod_dbt_deploy'
+            FROM mz_clusters c
+            JOIN mz_internal.mz_cluster_auto_scaling_strategies s ON s.cluster_id = c.id
+            WHERE c.name = 'prod'
             """,
             fetch="one",
         )
-        assert strategy == ("scale=1,workers=2", 15)
+        assert promoted == (green_cluster_id, "scale=1,workers=2", 15)
+
+        run_dbt(["run-operation", "deploy_cleanup"])
+
+        result = project.run_sql(
+            "SELECT count(*) = 0 FROM mz_clusters WHERE name = 'prod_dbt_deploy'",
+            fetch="one",
+        )
+        assert bool(result[0])
+
+    def test_dbt_deploy_init_auto_scaling_subsecond_linger(self, project):
+        try:
+            project.run_sql(
+                "CREATE CLUSTER prod ("
+                "SIZE = 'scale=1,workers=1', "
+                "AUTO SCALING STRATEGY = (ON HYDRATION ("
+                "HYDRATION SIZE = 'scale=1,workers=2', LINGER DURATION = '1500ms')))"
+            )
+        except psycopg2.Error as e:
+            pytest.skip(f"local Materialize image rejects AUTO SCALING STRATEGY: {e}")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA staging")
+
+        run_dbt(["run-operation", "deploy_init"])
+
+        # The read-back keeps whole seconds only, so 1500ms is inherited as 1s.
+        strategy = get_deploy_cluster_auto_scaling_strategy(project)
+        assert strategy == ("scale=1,workers=2", 1)
 
     def test_dbt_deploy_init_without_auto_scaling_strategy(self, project):
         project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
