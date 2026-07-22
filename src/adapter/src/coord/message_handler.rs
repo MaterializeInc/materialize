@@ -116,6 +116,14 @@ impl Coordinator {
             }
             Message::AdvanceTimelines => {
                 self.advance_timelines().boxed_local().await;
+                // A group commit just advanced the oracle's read timestamp, which
+                // can make pending strict serializable reads ready. Retire them
+                // now rather than waiting for the backstop re-check. Only fires
+                // for advances this node makes; other writers' advances are
+                // observed by the poll in `message_linearize_reads`.
+                if !self.pending_linearize_read_txns.is_empty() {
+                    self.message_linearize_reads().boxed_local().await;
+                }
             }
             Message::ClusterEvent(event) => self.message_cluster_event(event).boxed_local().await,
             Message::CancelPendingPeeks { conn_id } => {
@@ -1167,12 +1175,18 @@ impl Coordinator {
         }
 
         if !self.pending_linearize_read_txns.is_empty() {
-            // Cap wait time to 1s, then signal a re-check. `serve` awaits this
-            // below group commit; see its linearize branch for why.
-            let remaining_ms = std::cmp::min(shortest_wait, Duration::from_millis(1_000));
+            // Pace the backstop re-check with `linearize_reads_min_interval`,
+            // capped at 1s. The poll observes advances by other writers; advances
+            // this node makes are handled eagerly (see `Message::AdvanceTimelines`).
+            // `serve` awaits the signal below group commit; see its linearize
+            // branch for the ordering.
+            let interval = mz_adapter_types::dyncfgs::LINEARIZE_READS_MIN_INTERVAL
+                .get(self.catalog().system_config().dyncfgs());
+            let cap = std::cmp::max(interval, Duration::from_millis(1_000));
+            let remaining = shortest_wait.clamp(interval, cap);
             let linearize_reads_notify = Arc::clone(&self.linearize_reads_notify);
             task::spawn(|| "deferred_read_txns", async move {
-                tokio::time::sleep(remaining_ms).await;
+                tokio::time::sleep(remaining).await;
                 linearize_reads_notify.notify_one();
             });
         }

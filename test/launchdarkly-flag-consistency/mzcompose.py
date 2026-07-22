@@ -299,6 +299,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     keep_n_privatelink_status_history_entries
     keep_n_sink_status_history_entries
     keep_n_source_status_history_entries
+    linearize_reads_min_interval
     log_filter_defaults
     max_copy_from_row_size
     max_network_policies
