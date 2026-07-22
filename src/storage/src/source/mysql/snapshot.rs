@@ -157,6 +157,9 @@ fn try_extract_single_column_pk(
         return None;
     };
     let col = desc.columns.iter().find(|c| &c.name == name)?;
+    if col.meta.is_some() {
+        return None;
+    }
     let scalar_type = col.column_type.as_ref()?.scalar_type.clone();
     Some((name.clone(), scalar_type))
 }
@@ -232,15 +235,15 @@ where
     // Render the PK column as text that sorts and compares the same way the range
     // predicates do: `QUOTE()` under the column's collation for character types,
     // `CAST(.. AS CHAR)` for integers. Any other type can't be split safely.
-    let col_literal = match scalar_type {
+    let (col_literal, integer_path) = match scalar_type {
         SqlScalarType::Int16
         | SqlScalarType::Int32
         | SqlScalarType::Int64
         | SqlScalarType::UInt16
         | SqlScalarType::UInt32
-        | SqlScalarType::UInt64 => format!("CAST({col} AS CHAR)"),
+        | SqlScalarType::UInt64 => (format!("CAST({col} AS CHAR)"), true),
         SqlScalarType::Char { .. } | SqlScalarType::VarChar { .. } | SqlScalarType::String => {
-            format!("QUOTE({col})")
+            (format!("QUOTE({col})"), false)
         }
         _ => return Ok(None),
     };
@@ -275,7 +278,7 @@ where
         // already a valid SQL literal. A decode failure (e.g. a non-UTF-8
         // collation) means we can't safely partition: fall back.
         match row.take_opt::<String, usize>(0) {
-            Some(Ok(lit)) => boundaries.push(lit),
+            Some(Ok(lit)) if !integer_path || is_decimal_literal(&lit) => boundaries.push(lit),
             _ => return Ok(None),
         }
     }
@@ -503,6 +506,11 @@ where
 /// gate charset/collation names before interpolating them (they can't be parameters).
 fn is_plain_ident(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+fn is_decimal_literal(s: &str) -> bool {
+    let digits = s.strip_prefix('-').unwrap_or(s);
+    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
 }
 
 /// After the tables are locked (so the collation is stable), verify each PK-range
