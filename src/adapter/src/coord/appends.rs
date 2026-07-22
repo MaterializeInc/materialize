@@ -285,7 +285,15 @@ impl Coordinator {
     /// writes.
     #[instrument(level = "debug")]
     pub(crate) async fn try_group_commit(&mut self, permit: Option<GroupCommitPermit>) {
-        let timestamp = self.peek_local_write_ts().await;
+        // The pacing check below only needs a lower bound on the oracle's
+        // write timestamp, so use the locally tracked one instead of paying an
+        // oracle round trip for a `peek_write_ts`. An underestimate means we
+        // commit immediately and the chosen timestamp may end up ahead of
+        // `now()`, which `group_commit` explicitly tolerates (see the comment
+        // on the `write_ts` call there). The bound self-corrects with the
+        // `write_ts` result of that commit, so a wait-loop can only be missed
+        // once per external advancement of the oracle.
+        let timestamp = self.last_seen_oracle_write_ts;
         let now = Timestamp::from((self.catalog().config().now)());
 
         // HACK: This is a special case to allow writes to the mz_sessions table to proceed even
@@ -599,7 +607,7 @@ impl Coordinator {
                 };
 
                 // Apply the write by marking the timestamp as complete on the timeline.
-                apply_write_fut
+                let oracle_read_ts = apply_write_fut
                     .instrument(debug_span!("group_commit_apply::append_write_fut"))
                     .await;
 
@@ -617,7 +625,9 @@ impl Coordinator {
                 drop(group_write_locks);
 
                 // Advance other timelines.
-                if let Err(e) = internal_cmd_tx.send(Message::AdvanceTimelines) {
+                if let Err(e) = internal_cmd_tx.send(Message::AdvanceTimelines {
+                    epoch_ms_read_ts: Some(oracle_read_ts),
+                }) {
                     warn!("Server closed with non-advanced timelines, {e}");
                 }
 

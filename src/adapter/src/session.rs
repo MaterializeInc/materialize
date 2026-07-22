@@ -920,6 +920,13 @@ impl Session {
         mz_ore::soft_assert_or_log!(prev.is_none(), "replacing old builtin table notify");
     }
 
+    /// Reports whether this session's startup builtin-table writes are still
+    /// pending, i.e. whether [`Session::clear_builtin_table_updates`] would
+    /// return a future to wait on.
+    pub fn has_builtin_table_updates(&self) -> bool {
+        self.builtin_updates.is_some()
+    }
+
     /// Takes the stashed `BuiltinTableAppendNotify`, if one exists, and returns a [`Future`] that
     /// waits for the writes to complete.
     pub fn clear_builtin_table_updates(&mut self) -> Option<impl Future<Output = ()> + 'static> {

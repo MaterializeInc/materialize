@@ -64,7 +64,12 @@ pub trait TimestampOracle<T>: std::fmt::Debug {
     ///
     /// All subsequent values of `self.read_ts()` will be greater or equal to
     /// `write_ts`.
-    async fn apply_write(&self, lower_bound: T);
+    ///
+    /// Returns the read timestamp that resulted from applying this write, as
+    /// if by an atomic `apply_write` immediately followed by a `read_ts`.
+    /// Callers can use it in place of a subsequent `read_ts` call, saving a
+    /// round trip to the backing store.
+    async fn apply_write(&self, lower_bound: T) -> T;
 }
 
 /// A [`NowFn`] that is generic over the timestamp.
@@ -159,13 +164,17 @@ pub mod tests {
         assert_eq!(oracle.peek_write_ts().await, Timestamp::from(0u64));
         assert_eq!(oracle.peek_write_ts().await, Timestamp::from(0u64));
 
-        // Interesting scenarios around apply_write, from its rustdoc.
+        // Interesting scenarios around apply_write, from its rustdoc. The
+        // return value of apply_write must match a subsequent read_ts.
         //
         // Scenario #1:
         // input <= r_0 <= w_0 -> r_1 = r_0 and w_1 = w_0
         let timeline = uuid::Uuid::new_v4().to_string();
         let oracle = new_fn(timeline, NowFn::from(|| 0u64), 10u64.into()).await;
-        oracle.apply_write(5u64.into()).await;
+        assert_eq!(
+            oracle.apply_write(5u64.into()).await,
+            Timestamp::from(10u64)
+        );
         assert_eq!(oracle.peek_write_ts().await, Timestamp::from(10u64));
         assert_eq!(oracle.read_ts().await, Timestamp::from(10u64));
 
@@ -178,7 +187,7 @@ pub mod tests {
         assert_eq!(oracle.write_ts().await.timestamp, Timestamp::from(2u64));
         assert_eq!(oracle.write_ts().await.timestamp, Timestamp::from(3u64));
         assert_eq!(oracle.write_ts().await.timestamp, Timestamp::from(4u64));
-        oracle.apply_write(2u64.into()).await;
+        assert_eq!(oracle.apply_write(2u64.into()).await, Timestamp::from(2u64));
         assert_eq!(oracle.peek_write_ts().await, Timestamp::from(4u64));
         assert_eq!(oracle.read_ts().await, Timestamp::from(2u64));
 
@@ -186,10 +195,10 @@ pub mod tests {
         // r_0 <= w_0 <= input -> r_1 = input and w_1 = input
         let timeline = uuid::Uuid::new_v4().to_string();
         let oracle = new_fn(timeline, NowFn::from(|| 0u64), 0u64.into()).await;
-        oracle.apply_write(2u64.into()).await;
+        assert_eq!(oracle.apply_write(2u64.into()).await, Timestamp::from(2u64));
         assert_eq!(oracle.peek_write_ts().await, Timestamp::from(2u64));
         assert_eq!(oracle.read_ts().await, Timestamp::from(2u64));
-        oracle.apply_write(4u64.into()).await;
+        assert_eq!(oracle.apply_write(4u64.into()).await, Timestamp::from(4u64));
         assert_eq!(oracle.peek_write_ts().await, Timestamp::from(4u64));
         assert_eq!(oracle.read_ts().await, Timestamp::from(4u64));
 

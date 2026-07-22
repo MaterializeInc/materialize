@@ -355,7 +355,12 @@ pub enum Message {
     /// Initiates a group commit.
     GroupCommitInitiate(Span, Option<GroupCommitPermit>),
     DeferredStatementReady,
-    AdvanceTimelines,
+    AdvanceTimelines {
+        /// The oracle read timestamp that resulted from the `apply_write` of
+        /// the group commit that triggered this message, if any. Used to
+        /// downgrade read holds without another oracle round trip.
+        epoch_ms_read_ts: Option<Timestamp>,
+    },
     ClusterEvent(ClusterEvent),
     CancelPendingPeeks {
         conn_id: ConnectionId,
@@ -513,7 +518,7 @@ impl Message {
             Message::CreateConnectionValidationReady(_) => "create_connection_validation_ready",
             Message::TryDeferred { .. } => "try_deferred",
             Message::GroupCommitInitiate(..) => "group_commit_initiate",
-            Message::AdvanceTimelines => "advance_timelines",
+            Message::AdvanceTimelines { .. } => "advance_timelines",
             Message::ClusterEvent(_) => "cluster_event",
             Message::CancelPendingPeeks { .. } => "cancel_pending_peeks",
             Message::LinearizeReads => "linearize_reads",
@@ -2057,6 +2062,23 @@ pub struct Coordinator {
     /// it manually.
     advance_timelines_interval: Interval,
 
+    /// The largest oracle write timestamp that this process has observed from
+    /// `write_ts` calls. Group commit uses it as a pacing hint to decide
+    /// whether to wait for the wall clock to catch up before committing,
+    /// without paying an oracle round trip for a `peek_write_ts`.
+    ///
+    /// This is a lower bound on the oracle's write timestamp, not
+    /// linearizability-relevant state: an underestimate only means a group
+    /// commit proceeds immediately and gets a timestamp ahead of `now()`,
+    /// which group commit explicitly tolerates. The bound self-corrects with
+    /// the `write_ts` result of that same commit.
+    last_seen_oracle_write_ts: Timestamp,
+
+    /// How many consecutive ticks of `advance_timelines_interval` were
+    /// skipped because no SQL connections existed. See
+    /// [`mz_adapter_types::dyncfgs::COORD_IDLE_ADVANCE_TIMELINES_MULTIPLIER`].
+    idle_advance_timelines_ticks_skipped: usize,
+
     /// Serialized DDL. DDL must be serialized because:
     /// - Many of them do off-thread work and need to verify the catalog is in a valid state, but
     ///   [`PlanValidity`] does not currently support tracking all changes. Doing that correctly
@@ -3018,11 +3040,9 @@ impl Coordinator {
             .append_table(write_ts.clone(), advance_to, appends)
             .expect("invalid updates");
 
-        self.apply_local_write(write_ts).await;
-
         // Add builtin table updates the clear the contents of all system tables
         debug!("coordinator init: resetting system tables");
-        let read_ts = self.get_local_read_ts().await;
+        let read_ts = self.apply_local_write(write_ts).await;
 
         // Filter out tables whose contents must survive restarts:
         // 'mz_storage_usage_by_shard' for billing, and
@@ -3989,9 +4009,26 @@ impl Coordinator {
                         // read-only mode we send this message directly because
                         // we're not doing group commits.
                         if self.controller.read_only() {
-                            messages.push(Message::AdvanceTimelines);
+                            messages.push(Message::AdvanceTimelines {
+                                epoch_ms_read_ts: None,
+                            });
                         } else {
-                            messages.push(Message::GroupCommitInitiate(span, None));
+                            // While no SQL connections exist, only run the
+                            // table-advancement group commit on every Nth
+                            // tick. Nothing observes the skipped
+                            // advancements: a new connection's mz_sessions
+                            // write forces an immediate group commit, and the
+                            // first query of that connection waits for it.
+                            use mz_adapter_types::dyncfgs::COORD_IDLE_ADVANCE_TIMELINES_MULTIPLIER;
+                            let idle_multiplier = COORD_IDLE_ADVANCE_TIMELINES_MULTIPLIER
+                                .get(self.catalog().system_config().dyncfgs());
+                            let skipped = self.idle_advance_timelines_ticks_skipped;
+                            if self.active_conns.is_empty() && skipped + 1 < idle_multiplier {
+                                self.idle_advance_timelines_ticks_skipped += 1;
+                            } else {
+                                self.idle_advance_timelines_ticks_skipped = 0;
+                                messages.push(Message::GroupCommitInitiate(span, None));
+                            }
                         }
                     },
                     // Re-check pending strict serializable reads. Deliberately
@@ -5072,6 +5109,8 @@ pub fn serve(
                     deferred_write_ops: BTreeMap::new(),
                     pending_writes: Vec::new(),
                     advance_timelines_interval,
+                    last_seen_oracle_write_ts: Timestamp::MIN,
+                    idle_advance_timelines_ticks_skipped: 0,
                     secrets_controller,
                     caching_secrets_reader,
                     cloud_resource_controller,

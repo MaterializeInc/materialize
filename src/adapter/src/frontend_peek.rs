@@ -36,6 +36,7 @@ use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::IsolationLevel;
 use mz_sql_parser::ast::{CopyDirection, ExplainStage, ShowStatement, Statement};
+use mz_storage_types::sources::Timeline;
 use mz_transform::EmptyStatisticsOracle;
 use mz_transform::dataflow::DataflowMetainfo;
 use opentelemetry::trace::TraceContextExt;
@@ -281,6 +282,47 @@ impl PeekClient {
                 metrics::statement_type_label_value(&stmt),
             ])
             .inc();
+
+        // Optimistically kick off an oracle read for the common case, a
+        // linearized read in the EpochMilliseconds timeline, so that the
+        // oracle round trip overlaps with name resolution, planning, and RBAC
+        // below. The read is started after this query arrived, so using its
+        // result keeps the query's timestamp within its real-time bounds. If
+        // the query turns out not to need a linearized read timestamp, or is
+        // in a different timeline, or reuses a transaction timestamp, the
+        // handle is dropped. A wasted read joins a batch in the batching
+        // oracle, so its marginal cost on the backing store is negligible.
+        let isolation_level = session.vars().transaction_isolation().clone();
+        let may_need_linearized_read_ts = matches!(
+            isolation_level,
+            IsolationLevel::StrictSerializable
+                | IsolationLevel::StrongSessionSerializable
+                | IsolationLevel::BoundedStaleness(_)
+        ) && session.get_transaction_timestamp_determination().is_none()
+            // While the session's startup builtin-table writes are pending, a
+            // query on those tables must observe them: it waits on
+            // `waiting_on_startup_appends` below and needs an oracle read
+            // taken after that wait (and thus after the writes' apply_write).
+            // A speculative read taken here would predate the writes, so a
+            // session's first query does not speculate.
+            && !session.has_builtin_table_updates();
+        let early_oracle_read_ts = if may_need_linearized_read_ts {
+            match self.ensure_oracle(Timeline::EpochMilliseconds).await {
+                Ok(oracle) => {
+                    let oracle = Arc::clone(oracle);
+                    Some(mz_ore::task::spawn(
+                        || "frontend_peek_early_oracle_read",
+                        async move { oracle.read_ts().await },
+                    ))
+                }
+                // Speculation must not introduce a new error path. The
+                // non-speculative oracle lookup below will surface the error
+                // if the query does need the oracle.
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
 
         // # From handle_execute_inner
 
@@ -588,16 +630,23 @@ impl PeekClient {
 
         // # From peek_linearize_timestamp
 
-        let isolation_level = session.vars().transaction_isolation().clone();
         let timeline = Coordinator::get_timeline(&timeline_context);
         let needs_linearized_read_ts =
             Coordinator::needs_linearized_read_ts(&isolation_level, when);
 
         let oracle_read_ts = match timeline {
             Some(timeline) if needs_linearized_read_ts => {
-                let oracle = self.ensure_oracle(timeline).await?;
-                let oracle_read_ts = oracle.read_ts().await;
-                Some(oracle_read_ts)
+                match early_oracle_read_ts {
+                    // Use the speculative read if it matches the query's
+                    // timeline. It was started during this query's handling,
+                    // so it is within the query's real-time bounds.
+                    Some(handle) if timeline == Timeline::EpochMilliseconds => Some(handle.await),
+                    _ => {
+                        let oracle = self.ensure_oracle(timeline).await?;
+                        let oracle_read_ts = oracle.read_ts().await;
+                        Some(oracle_read_ts)
+                    }
+                }
             }
             Some(_) | None => None,
         };
