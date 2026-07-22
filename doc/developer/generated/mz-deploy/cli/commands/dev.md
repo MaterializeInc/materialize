@@ -1,6 +1,6 @@
 ---
 source: src/mz-deploy/src/cli/commands/dev.rs
-revision: 8ee3def844
+revision: 5cc5e835e7
 ---
 
 # mz-deploy::cli::commands::dev

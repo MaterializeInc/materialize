@@ -1,6 +1,6 @@
 ---
 source: src/catalog/src/builtin/mz_internal.rs
-revision: 2ba315025c
+revision: 7f6c52776d
 ---
 
 # catalog::builtin::mz_internal
