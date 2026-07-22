@@ -78,6 +78,17 @@ These environments are later swapped transparently.
     schema named `<schema_name>_dbt_deploy` using the same configuration
     as the current environment to swap with (including privileges).
 
+    If the production cluster has an [autoscaling strategy](/sql/create-cluster/#autoscaling)
+    configured, the deployment cluster inherits it, so the deployment
+    environment temporarily bursts to the configured hydration size while it
+    hydrates ahead of the cutover. To speed up blue/green deployments of a
+    cluster without a strategy, you can configure one using the
+    `alter_cluster_auto_scaling_strategy` operation before running `deploy_init`:
+
+    ```bash
+    dbt run-operation alter_cluster_auto_scaling_strategy --args '{cluster_name: <cluster_name>, auto_scaling_strategy: {on_hydration: {hydration_size: "<size>"}}}'
+    ```
+
 1. Run the dbt project containing the code changes against the new deployment
    environment.
 
