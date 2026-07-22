@@ -1978,14 +1978,14 @@ CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Cluster
 parse-statement
 CREATE CLUSTER cluster WITH REPLICAS ()
 ----
-error: Expected one of AUTO or AVAILABILITY or DISK or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE or SCHEDULE or WORKLOAD, found WITH
+error: Expected one of AUTO or AVAILABILITY or DISK or EXPERIMENTAL or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE or SCHEDULE or WORKLOAD, found WITH
 CREATE CLUSTER cluster WITH REPLICAS ()
                        ^
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS (), BADOPT
 ----
-error: Expected one of AUTO or AVAILABILITY or DISK or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE or SCHEDULE or WORKLOAD, found identifier "badopt"
+error: Expected one of AUTO or AVAILABILITY or DISK or EXPERIMENTAL or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE or SCHEDULE or WORKLOAD, found identifier "badopt"
 CREATE CLUSTER cluster REPLICAS (), BADOPT
                                     ^
 
@@ -2107,6 +2107,20 @@ CREATE CLUSTER cluster INTROSPECTION DEBUGGING true
 CREATE CLUSTER cluster (INTROSPECTION DEBUGGING = true)
 =>
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: IntrospectionDebugging, value: Some(Value(Boolean(true))) }], features: [] })
+
+parse-statement
+CREATE CLUSTER cluster (SIZE = '1', EXPERIMENTAL ARRANGEMENT COMPRESSION = true)
+----
+CREATE CLUSTER cluster (SIZE = '1', EXPERIMENTAL ARRANGEMENT COMPRESSION = true)
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("1"))) }, ClusterOption { name: ExperimentalArrangementCompression, value: Some(Value(Boolean(true))) }], features: [] })
+
+parse-statement
+CREATE CLUSTER REPLICA cluster.r1 (SIZE = '1', EXPERIMENTAL ARRANGEMENT COMPRESSION = true)
+----
+CREATE CLUSTER REPLICA cluster.r1 (SIZE = '1', EXPERIMENTAL ARRANGEMENT COMPRESSION = true)
+=>
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("cluster"), definition: ReplicaDefinition { name: Ident("r1"), options: [ReplicaOption { name: Size, value: Some(Value(String("1"))) }, ReplicaOption { name: ExperimentalArrangementCompression, value: Some(Value(Boolean(true))) }] } })
 
 parse-statement
 CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', SCHEDULE = MANUAL)

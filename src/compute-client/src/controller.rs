@@ -722,9 +722,13 @@ impl ComputeController {
 
         // Capture dictionary compression once, at replica creation, and hold it fixed for the
         // replica's lifetime (see `InstanceConfig::arrangement_dictionary_compression`). This is
-        // why a later flip of the flag only affects replicas created afterwards.
-        let arrangement_dictionary_compression =
-            ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA.get(&self.dyncfg);
+        // why a later flip of the flag only affects replicas created afterwards. The feature flag
+        // only gates the feature: a replica honors its per-cluster/replica configured value only
+        // while the flag is enabled, so turning the flag off disables compression on new or
+        // restarted replicas regardless of their configuration.
+        let arrangement_dictionary_compression = ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA
+            .get(&self.dyncfg)
+            && config.arrangement_compression;
 
         let replica_config = ReplicaConfig {
             location,

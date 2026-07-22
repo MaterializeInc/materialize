@@ -364,6 +364,7 @@ impl Coordinator {
             replication_factor: expected.replication_factor,
             availability_zones: expected.availability_zones.0,
             logging: expected.logging,
+            arrangement_compression: expected.arrangement_compression,
             auto_scaling_policy: expected.auto_scaling_policy,
             reconfiguration: expected.reconfiguration,
             burst: expected.burst,
@@ -723,6 +724,7 @@ impl Coordinator {
             new_replication_factor,
             new_availability_zones,
             new_logging,
+            new_arrangement_compression,
             reconfiguration,
             burst,
         } = write;
@@ -737,6 +739,9 @@ impl Coordinator {
         }
         if let Some(logging) = new_logging {
             managed.logging = logging.clone();
+        }
+        if let Some(arrangement_compression) = new_arrangement_compression {
+            managed.arrangement_compression = *arrangement_compression;
         }
         if let Some(reconfiguration) = reconfiguration {
             managed.reconfiguration = reconfiguration.record.as_ref().map(memory_reconfiguration);
@@ -803,6 +808,7 @@ impl Coordinator {
             location,
             compute: ComputeReplicaConfig {
                 logging: shape.logging.clone(),
+                arrangement_compression: shape.arrangement_compression,
             },
         };
 
@@ -846,6 +852,7 @@ fn replica_shape(config: &mz_controller::clusters::ReplicaConfig) -> Option<Repl
         size: managed.size.clone(),
         availability_zones: AvailabilityZones(managed.availability_zones.clone()),
         logging: config.compute.logging.clone(),
+        arrangement_compression: config.compute.arrangement_compression,
     })
 }
 
@@ -872,6 +879,7 @@ fn memory_reconfiguration(
         replication_factor,
         availability_zones,
         logging,
+        arrangement_compression,
     } = target;
     mz_catalog::memory::objects::ReconfigurationState {
         target: mz_catalog::memory::objects::ReconfigurationTarget {
@@ -879,6 +887,7 @@ fn memory_reconfiguration(
             replication_factor: *replication_factor,
             availability_zones: availability_zones.0.clone(),
             logging: logging.clone(),
+            arrangement_compression: *arrangement_compression,
         },
         deadline: *deadline,
         on_timeout: on_timeout_from_controller(*on_timeout),

@@ -997,6 +997,7 @@ fn add_new_remove_old_builtin_clusters_migration(
                         availability_zones: vec![],
                         replication_factor: cluster_config.replication_factor,
                         logging: default_logging_config(),
+                        arrangement_compression: false,
                         optimizer_feature_overrides: Default::default(),
                         schedule: Default::default(),
                         auto_scaling_strategy: None,
@@ -1349,6 +1350,7 @@ pub(crate) fn builtin_cluster_replica_config(
             size: replica_size,
         },
         logging: default_logging_config(),
+        arrangement_compression: false,
     }
 }
 

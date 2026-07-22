@@ -26,13 +26,14 @@
 
 $ set-sql-timeout duration=120s
 
-# Must precede CREATE CLUSTER: the compression flag is captured once at
-# replica creation.
+# Must precede CREATE CLUSTER: the gating flag is captured once at replica
+# creation. The flag only enables honoring the per-cluster configuration, so
+# the cluster below must also request compression explicitly.
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_arrangement_dictionary_compression_alpha = true
 ALTER SYSTEM SET enable_column_paged_batcher = true
 
-> CREATE CLUSTER dict_compression SIZE 'scale=1,workers=1'
+> CREATE CLUSTER dict_compression SIZE 'scale=1,workers=1', EXPERIMENTAL ARRANGEMENT COMPRESSION = true
 
 > SET cluster = dict_compression
 
