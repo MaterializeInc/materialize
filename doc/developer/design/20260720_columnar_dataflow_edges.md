@@ -324,7 +324,9 @@ Files: `src/compute/src/render/context.rs`.
 Base: Wave 1 complete.
 
 **P6: columnar TopK output (`from_collections` paths).**
-The TopK monotonic and top1 variants build a result collection via `from_collections` (`top_k.rs:303/329`); flip these to `ConsolidatingColumnBuilder`.
+The TopK monotonic and basic variants build a result collection via `from_collections` (`top_k.rs:303/329`).
+Flip these to a plain `ColumnBuilder` with a borrowed push, NOT `ConsolidatingColumnBuilder`.
+The prior output was a non-consolidating `.map`, and both feed sites are already consolidated upstream via `consolidate_named`, so a consolidating builder here would be a wasted sort and would change the deliberate non-consolidating semantics (the same consumer carve-out as P5).
 The bucketed variant emits an arrangement (`from_columns`, `top_k.rs:206`), covered by P5's shared materialization, not here.
 Files: `src/compute/src/render/top_k.rs`.
 Base: Wave 1 complete.
