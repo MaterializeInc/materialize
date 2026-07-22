@@ -103,6 +103,10 @@ impl FrontendWriteAttemptState {
         self.write_submitted.store(true, Ordering::Release);
     }
 
+    fn mark_write_resolved(&self) {
+        self.write_submitted.store(false, Ordering::Release);
+    }
+
     pub(crate) fn write_submitted(&self) -> bool {
         self.write_submitted.load(Ordering::Acquire)
     }
@@ -782,6 +786,7 @@ impl PeekClient {
                             tx,
                         })
                         .await;
+                    attempt_state.mark_write_resolved();
                     match result {
                         WriteResult::Success { timestamp } => {
                             if let Some(id) = statement_logging_id {
@@ -904,6 +909,7 @@ impl PeekClient {
                             tx,
                         })
                         .await;
+                    attempt_state.mark_write_resolved();
 
                     match result {
                         WriteResult::Success { timestamp } => {
