@@ -23,6 +23,8 @@ use http::header::{CONTENT_DISPOSITION, CONTENT_TYPE};
 use http::{HeaderMap, HeaderValue, StatusCode};
 use mz_build_info::BuildInfo;
 use mz_prof::StackProfileExt;
+#[cfg(all(feature = "jemalloc", not(miri)))]
+use mz_prof::jemalloc::JemallocProfCtlExt;
 use pprof_util::{ProfStartTime, StackProfile};
 use serde::{Deserialize, Serialize};
 
@@ -214,8 +216,12 @@ pub struct FlamegraphTemplate<'a> {
     pub mzfg: &'a str,
 }
 
-/// Holds the jemalloc profiling control lock with memory profiling
-/// deactivated, restoring the prior state on drop.
+/// Holds the jemalloc profiling control lock with memory profiling paused,
+/// restoring the prior state on drop.
+///
+/// Pauses rather than deactivates memory profiling: deactivation calls
+/// jemalloc's `prof.reset`, which discards the heap profile accumulated so far.
+/// See [`JemallocProfCtlExt::pause`].
 ///
 /// Restoration lives in `Drop` so that it also runs when the capture future is
 /// cancelled, for example when the HTTP client disconnects mid-capture.
@@ -231,8 +237,8 @@ impl Drop for MemProfilingSuspendGuard {
         if self.memory_was_active {
             // There is no caller to report the error to during drop, so log
             // instead. `GET /mode` exposes the resulting state.
-            if let Err(e) = self.ctl.activate() {
-                tracing::error!("failed to re-activate memory profiling after CPU profiling: {e}");
+            if let Err(e) = self.ctl.resume() {
+                tracing::error!("failed to resume memory profiling after CPU profiling: {e}");
             }
         }
     }
@@ -262,12 +268,14 @@ async fn capture_cpu_profile(
                 Some(ctl) => {
                     // Acquire the jemalloc memory profiling control lock
                     // to ensure that no other thread can re-activate memory profiling
-                    let mut borrow = ctl.lock().await;
+                    let borrow = ctl.lock().await;
                     // Check if memory profiling is currently active
                     let memory_was_active = borrow.activated();
-                    // If it is, deactivate it
+                    // If it is, pause it. Pause rather than deactivate: the
+                    // latter calls jemalloc's `prof.reset`, which would discard
+                    // the heap profile accumulated so far.
                     if memory_was_active {
-                        borrow.deactivate().map_err(|e| {
+                        borrow.pause().map_err(|e| {
                             (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
                         })?;
                     }
