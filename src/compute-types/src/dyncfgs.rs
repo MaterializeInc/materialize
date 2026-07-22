@@ -134,6 +134,25 @@ pub const ENABLE_SYNC_MV_SINK: Config<bool> = Config::new(
     "Use sync Timely operators with Tokio tasks for the MV sink.",
 );
 
+/// Coalesce the parts written by the workers in one process into a single shared batch per batch
+/// interval, instead of each worker writing its own batch.
+pub const ENABLE_SYNC_MV_SINK_SHARED_BATCHES: Config<bool> = Config::new(
+    "enable_compute_sync_mv_sink_shared_batches",
+    false,
+    "Coalesce the parts written by the workers in one process into a single shared batch per \
+     batch interval in the MV sink.",
+);
+
+/// When shared batches are enabled, make the workers in one process barrier on each batch interval
+/// so they coalesce into exactly one batch, rather than best-effort. The barrier waits for every
+/// process-local worker to report, so there is no timeout.
+pub const ENABLE_SYNC_MV_SINK_SHARED_BATCHES_BARRIER: Config<bool> = Config::new(
+    "enable_compute_sync_mv_sink_shared_batches_barrier",
+    false,
+    "Barrier the workers in one process onto a single shared batch per interval in the MV sink, \
+     rather than coalescing best-effort.",
+);
+
 /// Whether rendering should use the new MV sink correction buffer implementation.
 pub const ENABLE_CORRECTION_V2: Config<bool> = Config::new(
     "enable_compute_correction_v2",
@@ -493,6 +512,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_HALF_JOIN2)
         .add(&ENABLE_MZ_JOIN_CORE)
         .add(&ENABLE_SYNC_MV_SINK)
+        .add(&ENABLE_SYNC_MV_SINK_SHARED_BATCHES)
+        .add(&ENABLE_SYNC_MV_SINK_SHARED_BATCHES_BARRIER)
         .add(&ENABLE_CORRECTION_V2)
         .add(&CORRECTION_V2_CHAIN_PROPORTIONALITY)
         .add(&CORRECTION_V2_CHUNK_SIZE)

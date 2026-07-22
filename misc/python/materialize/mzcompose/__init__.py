@@ -255,6 +255,11 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
+            "enable_compute_sync_mv_sink_shared_batches",
+            "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
             "enable_password_auth",
             "true",
             ["true", "false"],
@@ -563,6 +568,10 @@ def get_default_system_parameters(
 # all. Only add it in UNINTERESTING_SYSTEM_PARAMETERS if none of the above
 # apply.
 UNINTERESTING_SYSTEM_PARAMETERS = [
+    # The shared-batch barrier adds an unbounded cross-worker wait, too risky to randomize across
+    # the whole CI suite. It is covered by a dedicated testdrive test and the parallel-workload flag
+    # flipper. (The best-effort shared_batches flag stays in get_variable_system_parameters.)
+    "enable_compute_sync_mv_sink_shared_batches_barrier",
     "enable_compute_half_join2",
     "enable_mz_join_core",
     "linear_join_yielding",
