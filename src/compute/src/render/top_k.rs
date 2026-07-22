@@ -618,7 +618,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
 /// The output is a `VecCollection<(Row, Row)>` because the TopK downstream
 /// (`KeyBatcher`, `MzReduce`) is `Vec`-based. The columnar arm therefore still
 /// decodes the value `Row` of every record inline via `Columnar::into_owned`,
-/// which costs the same as `columnar_to_vec`'s body. This is not C1's zero-copy
+/// which costs the same as `columnar_to_vec`'s body. This is not a zero-copy
 /// borrowed-push: it removes the separate `ColumnarToVec` decode operator and the
 /// intermediate `Vec<(Row, T, Diff)>` container it would produce, but it does not
 /// avoid the per-record decode, because there is no columnar batcher to push
