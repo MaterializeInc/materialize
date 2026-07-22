@@ -26,6 +26,7 @@ function cluster(
     category: string;
     region: string;
     amounts: { [k: string]: string };
+    usage: number;
   }> = {},
 ) {
   return {
@@ -34,6 +35,7 @@ function cluster(
     category: "",
     region: "aws/us-east-1",
     amounts: { "price-compute": "10.00" },
+    usage: 0,
     ...overrides,
   };
 }
@@ -47,6 +49,7 @@ describe("aggregateDays", () => {
         accounts: [
           {
             external_customer_id: "acct",
+            name: "",
             clusters: [cluster({ amounts: { "price-compute": "10.00" } })],
           },
         ],
@@ -57,6 +60,7 @@ describe("aggregateDays", () => {
         accounts: [
           {
             external_customer_id: "acct",
+            name: "",
             clusters: [cluster({ amounts: { "price-compute": "4.50" } })],
           },
         ],
@@ -87,7 +91,7 @@ describe("aggregateDays", () => {
       {
         startDate: "2026-06-01T00:00:00Z",
         endDate: "2026-06-02T00:00:00Z",
-        accounts: [{ external_customer_id: "acct", clusters }],
+        accounts: [{ external_customer_id: "acct", name: "", clusters }],
       },
     ];
 
@@ -106,6 +110,7 @@ describe("accountDailyTotals", () => {
         accounts: [
           {
             external_customer_id: "a",
+            name: "",
             clusters: [cluster({ amounts: { c: "3.00" } })],
           },
         ],
@@ -117,6 +122,7 @@ describe("accountDailyTotals", () => {
         accounts: [
           {
             external_customer_id: "b",
+            name: "",
             clusters: [cluster({ amounts: { c: "7.00" } })],
           },
         ],
@@ -139,10 +145,12 @@ describe("accountDailyTotals", () => {
         accounts: [
           {
             external_customer_id: "a",
+            name: "",
             clusters: [cluster({ amounts: { c: "3.00" } })],
           },
           {
             external_customer_id: "a",
+            name: "",
             clusters: [cluster({ amounts: { c: "4.00" } })],
           },
         ],
@@ -162,10 +170,12 @@ describe("accountIdsByTotal / stackedDailyRows", () => {
       accounts: [
         {
           external_customer_id: "small",
+          name: "",
           clusters: [cluster({ amounts: { c: "1.00" } })],
         },
         {
           external_customer_id: "big",
+          name: "",
           clusters: [cluster({ amounts: { c: "5.00" } })],
         },
       ],
@@ -176,6 +186,7 @@ describe("accountIdsByTotal / stackedDailyRows", () => {
       accounts: [
         {
           external_customer_id: "big",
+          name: "",
           clusters: [cluster({ amounts: { c: "5.00" } })],
         },
       ],
@@ -208,10 +219,12 @@ describe("breakdownByAccount", () => {
         accounts: [
           {
             external_customer_id: "b-account",
+            name: "",
             clusters: [cluster({ amounts: { "price-compute": "10.00" } })],
           },
           {
             external_customer_id: "a-account",
+            name: "",
             clusters: [cluster({ amounts: { "price-compute": "10.00" } })],
           },
         ],
@@ -246,10 +259,12 @@ describe("pivotBreakdown", () => {
         accounts: [
           {
             external_customer_id: "small",
+            name: "",
             clusters: [cluster({ amounts: { c: "1.00" } })],
           },
           {
             external_customer_id: "big",
+            name: "",
             clusters: [cluster({ amounts: { c: "5.00" } })],
           },
         ],
@@ -277,6 +292,7 @@ describe("pivotBreakdown", () => {
         accounts: [
           {
             external_customer_id: "acct",
+            name: "",
             clusters: [
               cluster({ region: "aws/us-east-1", amounts: { c: "3.00" } }),
               cluster({ region: "aws/eu-west-1", amounts: { c: "4.00" } }),

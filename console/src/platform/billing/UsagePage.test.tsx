@@ -91,6 +91,7 @@ describe("UsagePage", () => {
           days: oneDay([
             {
               external_customer_id: "parent-org",
+              name: "",
               clusters: [
                 {
                   environment_id: "environment-parent-0",
@@ -98,6 +99,7 @@ describe("UsagePage", () => {
                   category: "",
                   region: "aws/us-east-1",
                   amounts: { "price-compute": "10.00" },
+                  usage: 0,
                 },
                 {
                   environment_id: "environment-parent-0",
@@ -105,11 +107,13 @@ describe("UsagePage", () => {
                   category: "",
                   region: "aws/us-east-1",
                   amounts: { "price-compute": "4.00" },
+                  usage: 0,
                 },
               ],
             },
             {
               external_customer_id: "child-org",
+              name: "",
               clusters: [
                 {
                   environment_id: "environment-child-0",
@@ -117,6 +121,7 @@ describe("UsagePage", () => {
                   category: "",
                   region: "aws/us-east-1",
                   amounts: { "price-compute": "5.00" },
+                  usage: 0,
                 },
               ],
             },
@@ -242,6 +247,7 @@ describe("UsagePage", () => {
           days: oneDay([
             {
               external_customer_id: "parent-org",
+              name: "",
               clusters: [
                 {
                   environment_id: "environment-parent-0",
@@ -249,11 +255,13 @@ describe("UsagePage", () => {
                   category: "",
                   region: "aws/us-east-1",
                   amounts: { "price-compute": "0.00" },
+                  usage: 0,
                 },
               ],
             },
             {
               external_customer_id: "child-org",
+              name: "",
               clusters: [
                 {
                   environment_id: "environment-child-0",
@@ -261,6 +269,7 @@ describe("UsagePage", () => {
                   category: "",
                   region: "aws/us-east-1",
                   amounts: { "price-compute": "0.00" },
+                  usage: 0,
                 },
               ],
             },
@@ -288,6 +297,7 @@ describe("UsagePage", () => {
           days: oneDay([
             {
               external_customer_id: "parent-org",
+              name: "",
               clusters: [
                 {
                   environment_id: "environment-parent-0",
@@ -295,6 +305,7 @@ describe("UsagePage", () => {
                   category: "",
                   region: "aws/us-east-1",
                   amounts: { "price-compute": "10.00" },
+                  usage: 0,
                 },
                 {
                   environment_id: "environment-parent-0",
@@ -302,11 +313,13 @@ describe("UsagePage", () => {
                   category: "",
                   region: "aws/us-east-1",
                   amounts: { "price-compute": "4.00" },
+                  usage: 0,
                 },
               ],
             },
             {
               external_customer_id: "child-org",
+              name: "",
               clusters: [
                 {
                   environment_id: "environment-child-0",
@@ -314,6 +327,7 @@ describe("UsagePage", () => {
                   category: "",
                   region: "aws/us-east-1",
                   amounts: { "price-compute": "5.00" },
+                  usage: 0,
                 },
               ],
             },
@@ -345,6 +359,7 @@ describe("UsagePage", () => {
           days: oneDay([
             {
               external_customer_id: "standalone-org",
+              name: "",
               clusters: [
                 {
                   environment_id: "environment-standalone-0",
@@ -352,6 +367,7 @@ describe("UsagePage", () => {
                   category: "",
                   region: "aws/us-east-1",
                   amounts: { "price-compute": "3.00" },
+                  usage: 0,
                 },
                 {
                   // Storage and egress both have an empty cluster_grouping_key;
@@ -362,6 +378,7 @@ describe("UsagePage", () => {
                   category: "Storage",
                   region: "aws/us-east-1",
                   amounts: { "price-storage": "0.50" },
+                  usage: 0,
                 },
                 {
                   environment_id: "environment-standalone-0",
@@ -369,6 +386,7 @@ describe("UsagePage", () => {
                   category: "Egress",
                   region: "aws/us-east-1",
                   amounts: { "price-egress": "0.25" },
+                  usage: 0,
                 },
               ],
             },
@@ -400,6 +418,7 @@ describe("UsagePage", () => {
           days: oneDay([
             {
               external_customer_id: "standalone-org",
+              name: "",
               clusters: [
                 {
                   environment_id: "environment-standalone-0",
@@ -407,6 +426,7 @@ describe("UsagePage", () => {
                   category: "",
                   region: "aws/us-east-1",
                   amounts: { "price-storage": "0.50" },
+                  usage: 0,
                 },
               ],
             },
@@ -430,6 +450,7 @@ describe("UsagePage", () => {
           days: oneDay([
             {
               external_customer_id: "east-org",
+              name: "",
               clusters: [
                 {
                   environment_id: "environment-east-0",
@@ -437,11 +458,13 @@ describe("UsagePage", () => {
                   category: "",
                   region: "aws/us-east-1",
                   amounts: { "price-compute": "10.00" },
+                  usage: 0,
                 },
               ],
             },
             {
               external_customer_id: "west-org",
+              name: "",
               clusters: [
                 {
                   environment_id: "environment-west-0",
@@ -449,6 +472,7 @@ describe("UsagePage", () => {
                   category: "",
                   region: "aws/eu-west-1",
                   amounts: { "price-compute": "5.00" },
+                  usage: 0,
                 },
               ],
             },
