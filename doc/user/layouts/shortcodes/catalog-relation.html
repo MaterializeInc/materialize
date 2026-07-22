@@ -1,0 +1,44 @@
+{{/* catalog-relation: render a system-catalog relation from a data entry.
+
+     Params:
+       schema - data file basename under doc/user/data (e.g. "mz_introspection")
+       name   - relation name (e.g. "mz_active_peeks")
+
+     Looks up the relation in .Site.Data.<schema>.relations and renders its
+     description, base column table, and each variant. per_worker variants show
+     the base columns plus their own extra columns; raw variants show only a
+     warning. Type links come from .Site.Data.catalog_types. */}}
+{{- $schema := .Get "schema" -}}
+{{- $name := .Get "name" -}}
+{{- $types := .Site.Data.catalog_types -}}
+{{- $data := index .Site.Data $schema -}}
+{{- $rel := false -}}
+{{- range $data.relations -}}
+  {{- if eq .name $name -}}{{- $rel = . -}}{{- end -}}
+{{- end -}}
+{{- with $rel -}}
+{{ .description | $.Page.RenderString }}
+{{ template "catalog-relation-table" (dict "columns" .columns "types" $types "Page" $.Page) }}
+{{- range .variants -}}
+<h4><code>{{ .name }}</code></h4>
+{{ .description | $.Page.RenderString }}
+{{- if ne .kind "raw" -}}
+{{ template "catalog-relation-table" (dict "columns" (append (index $rel "columns") .columns) "types" $types "Page" $.Page) }}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "catalog-relation-table" -}}
+<table>
+<thead><tr><th>Field</th><th>Type</th><th>Meaning</th></tr></thead>
+<tbody>
+{{- range .columns }}
+<tr>
+<td><code>{{ .name }}</code></td>
+<td>{{- $u := index $.types .type -}}{{- if $u -}}{{ printf "[`%s`](%s)" .type $u | $.Page.RenderString }}{{- else -}}{{ printf "`%s`" .type | $.Page.RenderString }}{{- end -}}</td>
+<td>{{ .meaning | $.Page.RenderString }}</td>
+</tr>
+{{- end }}
+</tbody>
+</table>
+{{- end -}}
