@@ -31,3 +31,10 @@ Materialize natively supports the following SQL Server types:
 <li><code>datetimeoffset</code></li>
 <li><code>uniqueidentifier</code></li>
 </ul>
+
+#### `char` and `nchar` columns
+
+To preserve values exactly as SQL Server returns them, `char` and `nchar` columns
+are replicated as `text` rather than fixed-length. SQL Server and Materialize
+measure fixed-length character types differently, so replicating as text avoids
+truncation and padding mismatches.
