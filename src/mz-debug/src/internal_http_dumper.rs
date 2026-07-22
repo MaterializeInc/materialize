@@ -24,7 +24,8 @@ use tracing::{info, warn};
 use url::Url;
 
 use crate::kubectl_port_forwarder::{
-    KubectlPortForwarder, ServiceInfo, find_cluster_services, find_environmentd_service,
+    KubectlPortForwarder, PortForwardConnection, PortForwardTarget, ServiceInfo,
+    find_cluster_services, find_environmentd_service, find_service_pods,
 };
 use crate::{AuthMode, Context, EmulatorContext, PasswordAuthCredentials, SelfManagedContext};
 
@@ -582,6 +583,35 @@ pub async fn dump_emulator_http_resources(
     Ok(())
 }
 
+/// One pod to dump HTTP resources from, expanded from the service that fronts
+/// it. A scaled replica's service fronts more than one such pod.
+struct PodDumpTarget {
+    pod_name: String,
+    namespace: String,
+    /// Ports are taken from the fronting service. We assume the service port
+    /// equals the pod's container port for these HTTP endpoints, which holds
+    /// for clusterd and environmentd.
+    service_ports: Vec<ServicePort>,
+    service_type: ServiceType,
+}
+
+/// Spawns a `kubectl port-forward` against a specific pod (not its service),
+/// so a scaled replica's individual processes can each be reached.
+async fn spawn_pod_port_forward(
+    self_managed_context: &SelfManagedContext,
+    pod_target: &PodDumpTarget,
+    target_port: i32,
+) -> Result<PortForwardConnection> {
+    KubectlPortForwarder {
+        context: self_managed_context.k8s_context.clone(),
+        namespace: pod_target.namespace.clone(),
+        target: PortForwardTarget::Pod(pod_target.pod_name.clone()),
+        target_port,
+    }
+    .spawn_port_forward()
+    .await
+}
+
 pub async fn dump_self_managed_http_resources(
     context: &Context,
     self_managed_context: &SelfManagedContext,
@@ -618,80 +648,103 @@ pub async fn dump_self_managed_http_resources(
         )))
         .collect();
 
-    // Scrape each service for heap profiles and prometheus metrics.
+    // A replica with `scale > 1` is a single service containing multiple clusterd
+    // pods. Expand every service into the pods it contains and dump each pod
+    // individually so no process is silently skipped.
+    let mut pod_targets: Vec<PodDumpTarget> = Vec::new();
     for &(service_info, service_type) in &services {
-        let profiling_endpoint = get_profile_endpoint(&service_type);
-        let heap_profile_port_label = get_port_labels(
-            &self_managed_context.http_connection_auth_mode,
-            &service_type,
+        let pod_names = match find_service_pods(
+            &self_managed_context.k8s_client,
+            &self_managed_context.k8s_namespace,
+            &service_info.selector,
         )
-        .heap_profile_port_label;
-
-        let prom_metrics_port_label = get_port_labels(
-            &self_managed_context.http_connection_auth_mode,
-            &service_type,
-        )
-        .prom_metrics_port_label;
-
-        let (heap_profile_http_connection, prom_metrics_http_connection) = {
-            let maybe_heap_profile_port = service_info
-                .service_ports
-                .iter()
-                .find_map(|port_info| find_http_port_by_label(port_info, heap_profile_port_label));
-            let maybe_prom_metrics_port = service_info
-                .service_ports
-                .iter()
-                .find_map(|port_info| find_http_port_by_label(port_info, prom_metrics_port_label));
-            if let (Some(heap_profile_port), Some(prom_metrics_port)) =
-                (maybe_heap_profile_port, maybe_prom_metrics_port)
-            {
-                let heap_profile_port_forwarder = KubectlPortForwarder {
-                    context: self_managed_context.k8s_context.clone(),
-                    namespace: service_info.namespace.clone(),
-                    service_name: service_info.service_name.clone(),
-                    target_port: heap_profile_port.port,
-                };
-                let heap_profile_http_connection = Arc::new(
-                    heap_profile_port_forwarder
-                        .spawn_port_forward()
-                        .await
-                        .with_context(|| {
-                            format!(
-                                "Failed to spawn port forwarder for service {}",
-                                service_info.service_name
-                            )
-                        })?,
+        .await
+        {
+            Ok(pod_names) => pod_names,
+            Err(e) => {
+                warn!(
+                    "Failed to list pods for service {}: {:#}",
+                    service_info.service_name, e
                 );
-                let prom_metrics_http_connection = if heap_profile_port == prom_metrics_port {
-                    Arc::clone(&heap_profile_http_connection)
-                } else {
-                    let prom_metrics_port_forwarder = KubectlPortForwarder {
-                        context: self_managed_context.k8s_context.clone(),
-                        namespace: service_info.namespace.clone(),
-                        service_name: service_info.service_name.clone(),
-                        target_port: prom_metrics_port.port,
-                    };
-                    Arc::new(
-                        prom_metrics_port_forwarder
-                            .spawn_port_forward()
-                            .await
-                            .with_context(|| {
-                                format!(
-                                    "Failed to spawn port forwarder for service {}",
-                                    service_info.service_name
-                                )
-                            })?,
-                    )
-                };
+                continue;
+            }
+        };
+        if pod_names.is_empty() {
+            warn!(
+                "Found no pods for service {}, skipping",
+                service_info.service_name
+            );
+            continue;
+        }
+        for pod_name in pod_names {
+            pod_targets.push(PodDumpTarget {
+                pod_name,
+                namespace: service_info.namespace.clone(),
+                service_ports: service_info.service_ports.clone(),
+                service_type,
+            });
+        }
+    }
 
-                (heap_profile_http_connection, prom_metrics_http_connection)
-            } else {
-                return Err(anyhow::anyhow!(
-                    "Failed to find HTTP port for service {}, heap_profile_port_label={}, prom_metrics_port_label={}",
-                    service_info.service_name,
-                    heap_profile_port_label,
-                    prom_metrics_port_label
-                ));
+    // Scrape each pod for heap profiles and prometheus metrics. A failure on
+    // one pod is logged and skipped rather than aborting the whole dump, so one
+    // unreachable pod does not cost us every other pod's data.
+    for pod_target in &pod_targets {
+        let service_type = pod_target.service_type;
+        let profiling_endpoint = get_profile_endpoint(&service_type);
+        let HttpPortLabels {
+            heap_profile_port_label,
+            prom_metrics_port_label,
+        } = get_port_labels(
+            &self_managed_context.http_connection_auth_mode,
+            &service_type,
+        );
+
+        let maybe_heap_profile_port = pod_target
+            .service_ports
+            .iter()
+            .find_map(|port_info| find_http_port_by_label(port_info, heap_profile_port_label));
+        let maybe_prom_metrics_port = pod_target
+            .service_ports
+            .iter()
+            .find_map(|port_info| find_http_port_by_label(port_info, prom_metrics_port_label));
+        let (Some(heap_profile_port), Some(prom_metrics_port)) =
+            (maybe_heap_profile_port, maybe_prom_metrics_port)
+        else {
+            warn!(
+                "Failed to find HTTP port for pod {}, heap_profile_port_label={}, prom_metrics_port_label={}",
+                pod_target.pod_name, heap_profile_port_label, prom_metrics_port_label
+            );
+            continue;
+        };
+
+        let heap_profile_http_connection =
+            match spawn_pod_port_forward(self_managed_context, pod_target, heap_profile_port.port)
+                .await
+            {
+                Ok(connection) => Arc::new(connection),
+                Err(e) => {
+                    warn!(
+                        "Failed to spawn port forwarder for pod {}: {:#}",
+                        pod_target.pod_name, e
+                    );
+                    continue;
+                }
+            };
+        let prom_metrics_http_connection = if heap_profile_port == prom_metrics_port {
+            Arc::clone(&heap_profile_http_connection)
+        } else {
+            match spawn_pod_port_forward(self_managed_context, pod_target, prom_metrics_port.port)
+                .await
+            {
+                Ok(connection) => Arc::new(connection),
+                Err(e) => {
+                    warn!(
+                        "Failed to spawn port forwarder for pod {}: {:#}",
+                        pod_target.pod_name, e
+                    );
+                    continue;
+                }
             }
         };
 
@@ -703,17 +756,14 @@ pub async fn dump_self_managed_http_resources(
                 profiling_endpoint
             );
 
-            info!(
-                "Dumping heap profile for service {}",
-                service_info.service_name
-            );
+            info!("Dumping heap profile for pod {}", pod_target.pod_name);
             if let Err(e) = dump_task
-                .dump_heap_profile(&profiling_endpoint, &service_info.service_name)
+                .dump_heap_profile(&profiling_endpoint, &pod_target.pod_name)
                 .await
             {
                 warn!(
-                    "Failed to dump heap profile for service {}: {:#}",
-                    service_info.service_name, e
+                    "Failed to dump heap profile for pod {}: {:#}",
+                    pod_target.pod_name, e
                 );
             }
         }
@@ -725,32 +775,30 @@ pub async fn dump_self_managed_http_resources(
                 prom_metrics_http_connection.local_port,
                 PROM_METRICS_ENDPOINT
             );
-            info!(
-                "Dumping prometheus metrics for service {}",
-                service_info.service_name
-            );
+            info!("Dumping prometheus metrics for pod {}", pod_target.pod_name);
             if let Err(e) = dump_task
-                .dump_prometheus_metrics(&prom_metrics_endpoint, &service_info.service_name)
+                .dump_prometheus_metrics(&prom_metrics_endpoint, &pod_target.pod_name)
                 .await
             {
                 warn!(
-                    "Failed to dump prometheus metrics for service {}: {:#}",
-                    service_info.service_name, e
+                    "Failed to dump prometheus metrics for pod {}: {:#}",
+                    pod_target.pod_name, e
                 );
             }
         }
     }
 
     // Capture CPU profiles after memory profiling, since each capture
-    // temporarily disables memory profiling on its service. The captures run
-    // in parallel, and a failure on one service does not abort the others.
+    // temporarily disables memory profiling on its pod. The captures run in
+    // parallel, and a failure on one pod does not abort the others.
     if context.dump_cpu_profiles {
         info!(
-            "Capturing CPU profiles for {} seconds. Memory profiling is temporarily disabled on each service during its capture and restored afterwards.",
+            "Capturing CPU profiles for {} seconds. Memory profiling is temporarily disabled on each pod during its capture and restored afterwards.",
             context.cpu_profile_duration_secs
         );
 
-        let cpu_profile_futures = services.iter().map(|&(service_info, service_type)| {
+        let cpu_profile_futures = pod_targets.iter().map(|pod_target| {
+            let service_type = pod_target.service_type;
             // The CPU and mode endpoints are served on the same port as the heap
             // profile endpoint.
             let port_label = get_port_labels(
@@ -758,39 +806,34 @@ pub async fn dump_self_managed_http_resources(
                 &service_type,
             )
             .heap_profile_port_label;
-            let k8s_context = self_managed_context.k8s_context.clone();
             let dump_task = &dump_task;
             let duration_secs = context.cpu_profile_duration_secs;
 
             async move {
-                let Some(port) = service_info
+                let Some(port) = pod_target
                     .service_ports
                     .iter()
                     .find_map(|port_info| find_http_port_by_label(port_info, port_label))
                 else {
                     warn!(
-                        "Failed to find HTTP port `{}` for CPU profiling of service {}",
-                        port_label, service_info.service_name
+                        "Failed to find HTTP port `{}` for CPU profiling of pod {}",
+                        port_label, pod_target.pod_name
                     );
                     return;
                 };
 
-                let port_forwarder = KubectlPortForwarder {
-                    context: k8s_context,
-                    namespace: service_info.namespace.clone(),
-                    service_name: service_info.service_name.clone(),
-                    target_port: port.port,
-                };
-                let connection = match port_forwarder.spawn_port_forward().await {
-                    Ok(connection) => connection,
-                    Err(e) => {
-                        warn!(
-                            "Failed to spawn port forwarder for CPU profiling of service {}: {:#}",
-                            service_info.service_name, e
-                        );
-                        return;
-                    }
-                };
+                let connection =
+                    match spawn_pod_port_forward(self_managed_context, pod_target, port.port).await
+                    {
+                        Ok(connection) => connection,
+                        Err(e) => {
+                            warn!(
+                                "Failed to spawn port forwarder for CPU profiling of pod {}: {:#}",
+                                pod_target.pod_name, e
+                            );
+                            return;
+                        }
+                    };
 
                 let cpu_endpoint = format!(
                     "{}:{}/{}",
@@ -809,7 +852,7 @@ pub async fn dump_self_managed_http_resources(
                     dump_task,
                     &cpu_endpoint,
                     &mode_endpoint,
-                    &service_info.service_name,
+                    &pod_target.pod_name,
                     duration_secs,
                 )
                 .await;

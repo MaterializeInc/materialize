@@ -15,19 +15,51 @@
 
 //! Port forwards k8s service via Kubectl
 
+use std::collections::BTreeMap;
+
 use anyhow::{Context, Result};
 use k8s_openapi::api::apps::v1::StatefulSet;
-use k8s_openapi::api::core::v1::{Service, ServicePort};
+use k8s_openapi::api::core::v1::{Pod, Service, ServicePort};
 use kube::api::ListParams;
 use kube::{Api, Client};
 use tokio::io::AsyncBufReadExt;
 
 use tracing::info;
 
+/// A Kubernetes resource that `kubectl port-forward` can target.
+///
+/// Forwarding a `Service` lets Kubernetes pick one arbitrary backing pod, which
+/// is what you want when any pod will do (for example the environmentd SQL
+/// listener, where the service routes to the active leader). Forwarding a `Pod`
+/// reaches one specific process, which is what profiling a multi-pod (scaled)
+#[derive(Debug, Clone)]
+pub enum PortForwardTarget {
+    Service(String),
+    Pod(String),
+}
+
+impl PortForwardTarget {
+    /// The `kubectl` resource argument, for example `services/foo` or
+    /// `pods/foo`.
+    fn kubectl_arg(&self) -> String {
+        match self {
+            PortForwardTarget::Service(name) => format!("services/{name}"),
+            PortForwardTarget::Pod(name) => format!("pods/{name}"),
+        }
+    }
+
+    /// The bare resource name, for logging and error messages.
+    pub fn name(&self) -> &str {
+        match self {
+            PortForwardTarget::Service(name) | PortForwardTarget::Pod(name) => name,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct KubectlPortForwarder {
     pub namespace: String,
-    pub service_name: String,
+    pub target: PortForwardTarget,
     pub target_port: i32,
     pub context: Option<String>,
 }
@@ -48,10 +80,10 @@ impl KubectlPortForwarder {
     /// the port forward is established.
     pub async fn spawn_port_forward(&self) -> Result<PortForwardConnection, anyhow::Error> {
         let port_arg_str = format!(":{}", &self.target_port);
-        let service_name_arg_str = format!("services/{}", &self.service_name);
+        let target_arg_str = self.target.kubectl_arg();
         let mut args = vec![
             "port-forward",
-            &service_name_arg_str,
+            &target_arg_str,
             &port_arg_str,
             "-n",
             &self.namespace,
@@ -103,7 +135,10 @@ impl KubectlPortForwarder {
                 if let (Some(local_address), Some(local_port)) = (local_address, local_port) {
                     info!(
                         "Port forwarding established for {} from ports {}:{} -> {}",
-                        &self.service_name, local_address, local_port, &self.target_port
+                        self.target.name(),
+                        local_address,
+                        local_port,
+                        &self.target_port
                     );
                     return Ok(PortForwardConnection {
                         _lines: lines,
@@ -127,6 +162,9 @@ pub struct ServiceInfo {
     pub service_name: String,
     pub service_ports: Vec<ServicePort>,
     pub namespace: String,
+    /// The service's pod selector, used to enumerate the pods it fronts. A
+    /// scaled replica's service selects more than one pod.
+    pub selector: BTreeMap<String, String>,
 }
 
 /// Returns ServiceInfo for balancerd
@@ -164,6 +202,7 @@ pub async fn find_environmentd_service(
                             service_name: service_name.clone(),
                             service_ports: ports.clone(),
                             namespace: k8s_namespace.clone(),
+                            selector: spec.selector.clone().unwrap_or_default(),
                         })
                     } else {
                         None
@@ -237,6 +276,7 @@ pub async fn find_cluster_services(
                 service_name: name,
                 service_ports: ports,
                 namespace: k8s_namespace.clone(),
+                selector,
             })
         })
         .collect();
@@ -273,7 +313,7 @@ pub async fn create_pg_wire_port_forwarder(
         Ok(KubectlPortForwarder {
             context: k8s_context.clone(),
             namespace: service_info.namespace,
-            service_name: service_info.service_name,
+            target: PortForwardTarget::Service(service_info.service_name),
             target_port: external_sql_port.port,
         })
     } else {
@@ -281,4 +321,39 @@ pub async fn create_pg_wire_port_forwarder(
             "No SQL port forwarding info found. Set --mz-connection-url to a Materialize instance."
         ))
     }
+}
+
+/// Lists the names of the pods a service contains, matched by its `selector`.
+///
+/// A service with `scale > 1` contains multiple pods, 1 per process.
+/// The names of the pods are returned sorted so output is deterministic across runs.
+pub async fn find_service_pods(
+    client: &Client,
+    k8s_namespace: &str,
+    selector: &BTreeMap<String, String>,
+) -> Result<Vec<String>> {
+    // An empty selector would match every pod in the namespace, which is never
+    // what a caller means. Treat it as "no pods".
+    if selector.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let label_filter = selector
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join(",");
+
+    let pods_api: Api<Pod> = Api::namespaced(client.clone(), k8s_namespace);
+    let pods = pods_api
+        .list(&ListParams::default().labels(&label_filter))
+        .await
+        .with_context(|| format!("Failed to list pods in namespace {}", k8s_namespace))?;
+
+    let mut pod_names: Vec<String> = pods
+        .iter()
+        .filter_map(|pod| pod.metadata.name.clone())
+        .collect();
+    pod_names.sort();
+    Ok(pod_names)
 }
