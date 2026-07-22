@@ -164,10 +164,9 @@ describe("UsagePage", () => {
     const totalRow = within(await ledger.findByTestId("account-total-row"));
     expect(totalRow.getByText(formatCurrency(19))).toBeVisible();
     // A Usage column sits between "Account / cluster" and "Share of total"
-    // (SAS-145): the endpoint doesn't carry usage quantities yet, so each of
-    // the 3 cluster rows shows a placeholder rather than a number.
+    // (SAS-145/SAS-159): each cluster row shows its usage quantity.
     expect(await ledger.findByText("Usage")).toBeVisible();
-    expect(ledger.getAllByText("—")).toHaveLength(3);
+    expect(ledger.getAllByText("0 credits")).toHaveLength(3);
     // The section leads with the period total (19 = 14 + 5), mirroring the
     // legacy chart panel, and a "Spend between …" range above the table,
     // mirroring the legacy "Spend between …" breakdown. oneDay()'s single
@@ -352,7 +351,7 @@ describe("UsagePage", () => {
     expect(await planDetails.findByText(formatCurrency(5))).toBeVisible();
   });
 
-  it("renders storage and egress as distinct region-qualified rows", async () => {
+  it("renders storage and egress as distinct region-qualified rows, each with its own usage unit (SAS-159)", async () => {
     server.use(
       buildDailyCostBreakdownResponse({
         payload: {
@@ -367,7 +366,7 @@ describe("UsagePage", () => {
                   category: "",
                   region: "aws/us-east-1",
                   amounts: { "price-compute": "3.00" },
-                  usage: 0,
+                  usage: 2.5,
                 },
                 {
                   // Storage and egress both have an empty cluster_grouping_key;
@@ -378,7 +377,7 @@ describe("UsagePage", () => {
                   category: "Storage",
                   region: "aws/us-east-1",
                   amounts: { "price-storage": "0.50" },
-                  usage: 0,
+                  usage: 10.75,
                 },
                 {
                   environment_id: "environment-standalone-0",
@@ -386,7 +385,7 @@ describe("UsagePage", () => {
                   category: "Egress",
                   region: "aws/us-east-1",
                   amounts: { "price-egress": "0.25" },
-                  usage: 0,
+                  usage: 3,
                 },
               ],
             },
@@ -405,6 +404,11 @@ describe("UsagePage", () => {
     expect(await ledger.findByText("aws/us-east-1 / default.r1")).toBeVisible();
     expect(await ledger.findByText("aws/us-east-1 / Storage")).toBeVisible();
     expect(await ledger.findByText("aws/us-east-1 / Egress")).toBeVisible();
+    // The compute row's usage renders in credits, the storage/egress rows'
+    // in GB.
+    expect(await ledger.findByText("2.5 credits")).toBeVisible();
+    expect(await ledger.findByText("10.75 GB")).toBeVisible();
+    expect(await ledger.findByText("3 GB")).toBeVisible();
   });
 
   it("falls back to 'Other' when a row has neither cluster key nor category", async () => {
