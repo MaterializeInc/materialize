@@ -125,17 +125,15 @@ impl<'scope, T: RenderTimestamp> CollectionEdge<'scope, T> {
 
     /// Concatenates a collection of edges.
     ///
-    /// Every producer emits the columnar variant, so the inputs concatenate
-    /// natively into the columnar variant.
+    /// The inputs are all columnar, so they concatenate natively into the
+    /// columnar variant.
     pub fn concat_many<I>(scope: Scope<'scope, T>, edges: I) -> Self
     where
         I: IntoIterator<Item = Self>,
     {
         let cols = edges.into_iter().map(|edge| match edge {
             CollectionEdge::Columnar(c) => c,
-            // No producer emits `Vec` after the migration, so a `Vec` input
-            // cannot reach here. The `Vec` arm and this `unreachable!` are
-            // removed together when the enum collapses to a columnar alias.
+            // No producer emits `Vec`, so a `Vec` input cannot reach here.
             CollectionEdge::Vec(_) => unreachable!("no producer emits a `Vec` edge"),
         });
         CollectionEdge::Columnar(differential_dataflow::collection::concatenate(
