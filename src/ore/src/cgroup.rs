@@ -45,7 +45,7 @@ pub fn parse_proc_self_cgroup() -> Option<Vec<CgroupEntry>> {
     let file = BufReader::new(file);
     Some(
         file.lines()
-            .flatten()
+            .map_while(Result::ok)
             .filter_map(CgroupEntry::from_line)
             .collect(),
     )
@@ -95,7 +95,7 @@ pub fn parse_proc_self_mountinfo() -> Option<(Vec<Mountinfo>, Vec<Mountinfo>)> {
     let file = BufReader::new(file);
     Some(
         file.lines()
-            .flatten()
+            .map_while(Result::ok)
             .filter_map(Mountinfo::from_line)
             .filter(|mi| mi.fs_type == "cgroup" || mi.fs_type == "cgroup2")
             .partition(|mi| mi.fs_type == "cgroup2"),

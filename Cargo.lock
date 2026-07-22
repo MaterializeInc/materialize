@@ -7803,6 +7803,7 @@ dependencies = [
  "itertools 0.14.0",
  "lgalloc",
  "libc",
+ "lz4_flex",
  "mz-ore",
  "mz-ore-proc",
  "native-tls",
