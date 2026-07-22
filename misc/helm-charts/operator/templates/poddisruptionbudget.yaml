@@ -1,0 +1,23 @@
+{{- if and .Values.operator.podDisruptionBudget.enabled (gt (int .Values.operator.replicas) 1) -}}
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "materialize-operator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "materialize-operator.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.operator.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "materialize-operator.selectorLabels" . | nindent 6 }}
+{{- end }}

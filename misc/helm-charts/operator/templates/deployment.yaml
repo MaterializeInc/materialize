@@ -16,7 +16,7 @@ metadata:
   labels:
     {{- include "materialize-operator.labels" . | nindent 4 }}
 spec:
-  replicas: 1
+  replicas: {{ .Values.operator.replicas }}
   selector:
     matchLabels:
       {{- include "materialize-operator.selectorLabels" . | nindent 6 }}

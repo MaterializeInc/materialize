@@ -1,0 +1,34 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+suite: test poddisruptionbudget
+templates:
+- poddisruptionbudget.yaml
+tests:
+- it: should create a pod disruption budget by default
+  asserts:
+  - isKind:
+      of: PodDisruptionBudget
+  - equal:
+      path: spec.minAvailable
+      value: 1
+
+- it: should not create a pod disruption budget with a single replica
+  set:
+    operator.replicas: 1
+  asserts:
+  - hasDocuments:
+      count: 0
+
+- it: should not create a pod disruption budget when disabled
+  set:
+    operator.podDisruptionBudget.enabled: false
+  asserts:
+  - hasDocuments:
+      count: 0

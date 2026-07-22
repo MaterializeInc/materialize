@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::{
-    future,
+    env, future,
     net::SocketAddr,
     sync::{Arc, LazyLock},
     time::Duration,
@@ -456,236 +456,267 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         });
     }
 
-    mz_ore::task::spawn(
-        || "materialize controller",
-        k8s_controller::Controller::namespaced_all(
+    // Leader election allows running multiple replicas of orchestratord
+    // (e.g. to avoid downtime of the conversion webhook during rollouts)
+    // while ensuring that each controller reconciles on only one replica at
+    // a time. The identity must be unique per replica. Kubernetes sets
+    // $HOSTNAME to the pod name in containers, and the uuid fallback covers
+    // running outside of a pod.
+    let leader_election_identity =
+        env::var("HOSTNAME").unwrap_or_else(|_| format!("orchestratord-{}", uuid::Uuid::new_v4()));
+    let leader_election = |lease_name: &str| {
+        k8s_controller::LeaderElection::new(
             client.clone(),
-            controller::materialize::Context::new(
-                controller::materialize::Config {
-                    cloud_provider: args.cloud_provider,
-                    region: args.region,
-                    create_balancers: args.create_balancers,
-                    create_console: args.create_console,
-                    helm_chart_version: args.helm_chart_version,
-                    secrets_controller: args.secrets_controller,
-                    collect_pod_metrics: args.collect_pod_metrics,
-                    enable_prometheus_scrape_annotations: args.enable_prometheus_scrape_annotations,
-                    segment_api_key: args.segment_api_key,
-                    segment_client_side: args.segment_client_side,
-                    console_image_tag_default: args.console_image_tag_default,
-                    console_image_tag_map: args.console_image_tag_map,
-                    aws_account_id: args.aws_account_id,
-                    environmentd_iam_role_arn: args.environmentd_iam_role_arn,
-                    environmentd_connection_role_arn: args.environmentd_connection_role_arn,
-                    aws_secrets_controller_tags: args.aws_secrets_controller_tags,
-                    environmentd_availability_zones: args.environmentd_availability_zones,
-                    ephemeral_volume_class: args.ephemeral_volume_class,
-                    scheduler_name: args.scheduler_name.clone(),
-                    enable_security_context: args.enable_security_context,
-                    enable_internal_statement_logging: args.enable_internal_statement_logging,
-                    disable_statement_logging: args.disable_statement_logging,
-                    orchestratord_pod_selector_labels: args.orchestratord_pod_selector_labels,
-                    environmentd_node_selector: args.environmentd_node_selector,
-                    environmentd_affinity: args.environmentd_affinity,
-                    environmentd_tolerations: args.environmentd_tolerations,
-                    environmentd_default_resources: args.environmentd_default_resources,
-                    clusterd_node_selector: args.clusterd_node_selector,
-                    clusterd_affinity: args.clusterd_affinity,
-                    clusterd_tolerations: args.clusterd_tolerations,
-                    image_pull_policy: args.image_pull_policy,
-                    network_policies_internal_enabled: args.network_policies_internal_enabled,
-                    network_policies_ingress_enabled: args.network_policies_ingress_enabled,
-                    network_policies_ingress_cidrs: args.network_policies_ingress_cidrs.clone(),
-                    network_policies_egress_enabled: args.network_policies_egress_enabled,
-                    network_policies_egress_cidrs: args.network_policies_egress_cidrs,
-                    environmentd_cluster_replica_sizes: args.environmentd_cluster_replica_sizes,
-                    bootstrap_default_cluster_replica_size: args
-                        .bootstrap_default_cluster_replica_size,
-                    bootstrap_builtin_system_cluster_replica_size: args
-                        .bootstrap_builtin_system_cluster_replica_size,
-                    bootstrap_builtin_probe_cluster_replica_size: args
-                        .bootstrap_builtin_probe_cluster_replica_size,
-                    bootstrap_builtin_support_cluster_replica_size: args
-                        .bootstrap_builtin_support_cluster_replica_size,
-                    bootstrap_builtin_catalog_server_cluster_replica_size: args
-                        .bootstrap_builtin_catalog_server_cluster_replica_size,
-                    bootstrap_builtin_analytics_cluster_replica_size: args
-                        .bootstrap_builtin_analytics_cluster_replica_size,
-                    bootstrap_builtin_system_cluster_replication_factor: args
-                        .bootstrap_builtin_system_cluster_replication_factor,
-                    bootstrap_builtin_probe_cluster_replication_factor: args
-                        .bootstrap_builtin_probe_cluster_replication_factor,
-                    bootstrap_builtin_support_cluster_replication_factor: args
-                        .bootstrap_builtin_support_cluster_replication_factor,
-                    bootstrap_builtin_analytics_cluster_replication_factor: args
-                        .bootstrap_builtin_analytics_cluster_replication_factor,
-                    environmentd_allowed_origins: args.environmentd_allowed_origins,
-                    internal_console_proxy_url: args.internal_console_proxy_url,
-                    environmentd_sql_port: args.environmentd_sql_port,
-                    environmentd_http_port: args.environmentd_http_port,
-                    environmentd_internal_sql_port: args.environmentd_internal_sql_port,
-                    environmentd_internal_http_port: args.environmentd_internal_http_port,
-                    environmentd_internal_persist_pubsub_port: args
-                        .environmentd_internal_persist_pubsub_port,
-                    default_certificate_specs: args.default_certificate_specs.clone(),
-                    disable_license_key_checks: args.disable_license_key_checks,
-                    tracing: args.tracing,
-                    orchestratord_namespace: namespace,
-                },
-                Arc::clone(&metrics),
-            ),
-            watcher::Config::default().timeout(29),
+            &namespace,
+            lease_name,
+            &leader_election_identity,
         )
-        .with_controller(|controller| {
-            let controller = controller
-                .owns(
-                    Api::<NetworkPolicy>::all(client.clone()),
-                    watcher::Config::default()
-                        .labels("materialize.cloud/mz-resource-id")
-                        .timeout(29),
-                )
-                .owns(
-                    Api::<ServiceAccount>::all(client.clone()),
-                    watcher::Config::default()
-                        .labels("materialize.cloud/mz-resource-id")
-                        .timeout(29),
-                )
-                .owns(
-                    Api::<Role>::all(client.clone()),
-                    watcher::Config::default()
-                        .labels("materialize.cloud/mz-resource-id")
-                        .timeout(29),
-                )
-                .owns(
-                    Api::<RoleBinding>::all(client.clone()),
-                    watcher::Config::default()
-                        .labels("materialize.cloud/mz-resource-id")
-                        .timeout(29),
-                );
-            if has_cert_manager {
-                controller.owns(
-                    Api::<Certificate>::all(client.clone()),
-                    watcher::Config::default()
-                        .labels("materialize.cloud/mz-resource-id")
-                        .timeout(29),
-                )
-            } else {
-                controller
-            }
-        })
-        .run(),
-    );
+    };
+    let materialize_leader_election = leader_election("orchestratord-materialize-controller");
+    let balancer_leader_election = leader_election("orchestratord-balancer-controller");
+    let console_leader_election = leader_election("orchestratord-console-controller");
 
-    mz_ore::task::spawn(
-        || "balancer controller",
-        k8s_controller::Controller::namespaced_all(
-            client.clone(),
-            controller::balancer::Context::new(controller::balancer::Config {
-                enable_security_context: args.enable_security_context,
+    let materialize_controller = k8s_controller::Controller::namespaced_all(
+        client.clone(),
+        controller::materialize::Context::new(
+            controller::materialize::Config {
+                cloud_provider: args.cloud_provider,
+                region: args.region,
+                create_balancers: args.create_balancers,
+                create_console: args.create_console,
+                helm_chart_version: args.helm_chart_version,
+                secrets_controller: args.secrets_controller,
+                collect_pod_metrics: args.collect_pod_metrics,
                 enable_prometheus_scrape_annotations: args.enable_prometheus_scrape_annotations,
-                image_pull_policy: args.image_pull_policy,
+                segment_api_key: args.segment_api_key,
+                segment_client_side: args.segment_client_side,
+                console_image_tag_default: args.console_image_tag_default,
+                console_image_tag_map: args.console_image_tag_map,
+                aws_account_id: args.aws_account_id,
+                environmentd_iam_role_arn: args.environmentd_iam_role_arn,
+                environmentd_connection_role_arn: args.environmentd_connection_role_arn,
+                aws_secrets_controller_tags: args.aws_secrets_controller_tags,
+                environmentd_availability_zones: args.environmentd_availability_zones,
+                ephemeral_volume_class: args.ephemeral_volume_class,
                 scheduler_name: args.scheduler_name.clone(),
-                balancerd_node_selector: args.balancerd_node_selector,
-                balancerd_affinity: args.balancerd_affinity,
-                balancerd_tolerations: args.balancerd_tolerations,
-                balancerd_default_resources: args.balancerd_default_resources,
-                default_certificate_specs: args.default_certificate_specs.clone(),
+                enable_security_context: args.enable_security_context,
+                enable_internal_statement_logging: args.enable_internal_statement_logging,
+                disable_statement_logging: args.disable_statement_logging,
+                orchestratord_pod_selector_labels: args.orchestratord_pod_selector_labels,
+                environmentd_node_selector: args.environmentd_node_selector,
+                environmentd_affinity: args.environmentd_affinity,
+                environmentd_tolerations: args.environmentd_tolerations,
+                environmentd_default_resources: args.environmentd_default_resources,
+                clusterd_node_selector: args.clusterd_node_selector,
+                clusterd_affinity: args.clusterd_affinity,
+                clusterd_tolerations: args.clusterd_tolerations,
+                image_pull_policy: args.image_pull_policy,
+                network_policies_internal_enabled: args.network_policies_internal_enabled,
+                network_policies_ingress_enabled: args.network_policies_ingress_enabled,
+                network_policies_ingress_cidrs: args.network_policies_ingress_cidrs.clone(),
+                network_policies_egress_enabled: args.network_policies_egress_enabled,
+                network_policies_egress_cidrs: args.network_policies_egress_cidrs,
+                environmentd_cluster_replica_sizes: args.environmentd_cluster_replica_sizes,
+                bootstrap_default_cluster_replica_size: args.bootstrap_default_cluster_replica_size,
+                bootstrap_builtin_system_cluster_replica_size: args
+                    .bootstrap_builtin_system_cluster_replica_size,
+                bootstrap_builtin_probe_cluster_replica_size: args
+                    .bootstrap_builtin_probe_cluster_replica_size,
+                bootstrap_builtin_support_cluster_replica_size: args
+                    .bootstrap_builtin_support_cluster_replica_size,
+                bootstrap_builtin_catalog_server_cluster_replica_size: args
+                    .bootstrap_builtin_catalog_server_cluster_replica_size,
+                bootstrap_builtin_analytics_cluster_replica_size: args
+                    .bootstrap_builtin_analytics_cluster_replica_size,
+                bootstrap_builtin_system_cluster_replication_factor: args
+                    .bootstrap_builtin_system_cluster_replication_factor,
+                bootstrap_builtin_probe_cluster_replication_factor: args
+                    .bootstrap_builtin_probe_cluster_replication_factor,
+                bootstrap_builtin_support_cluster_replication_factor: args
+                    .bootstrap_builtin_support_cluster_replication_factor,
+                bootstrap_builtin_analytics_cluster_replication_factor: args
+                    .bootstrap_builtin_analytics_cluster_replication_factor,
+                environmentd_allowed_origins: args.environmentd_allowed_origins,
+                internal_console_proxy_url: args.internal_console_proxy_url,
                 environmentd_sql_port: args.environmentd_sql_port,
                 environmentd_http_port: args.environmentd_http_port,
-                balancerd_sql_port: args.balancerd_sql_port,
-                balancerd_http_port: args.balancerd_http_port,
-                balancerd_internal_http_port: args.balancerd_internal_http_port,
-            }),
-            watcher::Config::default().timeout(29),
-        )
-        .with_controller(|controller| {
-            let controller = controller
-                .owns(
-                    Api::<Deployment>::all(client.clone()),
-                    watcher::Config::default()
-                        .labels("materialize.cloud/mz-resource-id")
-                        .timeout(29),
-                )
-                .owns(
-                    Api::<Service>::all(client.clone()),
-                    watcher::Config::default()
-                        .labels("materialize.cloud/mz-resource-id")
-                        .timeout(29),
-                );
-            if has_cert_manager {
-                controller.owns(
-                    Api::<Certificate>::all(client.clone()),
-                    watcher::Config::default()
-                        .labels("materialize.cloud/mz-resource-id")
-                        .timeout(29),
-                )
-            } else {
-                controller
-            }
-        })
-        .run(),
-    );
+                environmentd_internal_sql_port: args.environmentd_internal_sql_port,
+                environmentd_internal_http_port: args.environmentd_internal_http_port,
+                environmentd_internal_persist_pubsub_port: args
+                    .environmentd_internal_persist_pubsub_port,
+                default_certificate_specs: args.default_certificate_specs.clone(),
+                disable_license_key_checks: args.disable_license_key_checks,
+                tracing: args.tracing,
+                orchestratord_namespace: namespace,
+            },
+            Arc::clone(&metrics),
+        ),
+        watcher::Config::default().timeout(29),
+    )
+    .with_controller(|controller| {
+        let controller = controller
+            .owns(
+                Api::<NetworkPolicy>::all(client.clone()),
+                watcher::Config::default()
+                    .labels("materialize.cloud/mz-resource-id")
+                    .timeout(29),
+            )
+            .owns(
+                Api::<ServiceAccount>::all(client.clone()),
+                watcher::Config::default()
+                    .labels("materialize.cloud/mz-resource-id")
+                    .timeout(29),
+            )
+            .owns(
+                Api::<Role>::all(client.clone()),
+                watcher::Config::default()
+                    .labels("materialize.cloud/mz-resource-id")
+                    .timeout(29),
+            )
+            .owns(
+                Api::<RoleBinding>::all(client.clone()),
+                watcher::Config::default()
+                    .labels("materialize.cloud/mz-resource-id")
+                    .timeout(29),
+            );
+        if has_cert_manager {
+            controller.owns(
+                Api::<Certificate>::all(client.clone()),
+                watcher::Config::default()
+                    .labels("materialize.cloud/mz-resource-id")
+                    .timeout(29),
+            )
+        } else {
+            controller
+        }
+    });
+    mz_ore::task::spawn(|| "materialize controller", async move {
+        materialize_controller
+            .run_with_leader_election(materialize_leader_election)
+            .await;
+        // This returns only when leadership is lost. Exit promptly so that
+        // no in-flight reconciliation outlives the lease, and let
+        // Kubernetes restart the process.
+        tracing::error!("materialize controller lost leadership lease; exiting");
+        std::process::exit(1);
+    });
 
-    mz_ore::task::spawn(
-        || "console controller",
-        k8s_controller::Controller::namespaced_all(
-            client.clone(),
-            controller::console::Context::new(controller::console::Config {
-                enable_security_context: args.enable_security_context,
-                enable_prometheus_scrape_annotations: args.enable_prometheus_scrape_annotations,
-                image_pull_policy: args.image_pull_policy,
-                scheduler_name: args.scheduler_name,
-                console_node_selector: args.console_node_selector,
-                console_affinity: args.console_affinity,
-                console_tolerations: args.console_tolerations,
-                console_default_resources: args.console_default_resources,
-                network_policies_ingress_enabled: args.network_policies_ingress_enabled,
-                network_policies_ingress_cidrs: args.network_policies_ingress_cidrs,
-                default_certificate_specs: args.default_certificate_specs,
-                console_http_port: args.console_http_port,
-                balancerd_http_port: args.balancerd_http_port,
-            }),
-            watcher::Config::default().timeout(29),
-        )
-        .with_controller(|controller| {
-            let controller = controller
-                .owns(
-                    Api::<Deployment>::all(client.clone()),
-                    watcher::Config::default()
-                        .labels("materialize.cloud/mz-resource-id")
-                        .timeout(29),
-                )
-                .owns(
-                    Api::<Service>::all(client.clone()),
-                    watcher::Config::default()
-                        .labels("materialize.cloud/mz-resource-id")
-                        .timeout(29),
-                )
-                .owns(
-                    Api::<NetworkPolicy>::all(client.clone()),
-                    watcher::Config::default()
-                        .labels("materialize.cloud/mz-resource-id")
-                        .timeout(29),
-                )
-                .owns(
-                    Api::<ConfigMap>::all(client.clone()),
-                    watcher::Config::default()
-                        .labels("materialize.cloud/mz-resource-id")
-                        .timeout(29),
-                );
-            if has_cert_manager {
-                controller.owns(
-                    Api::<Certificate>::all(client.clone()),
-                    watcher::Config::default()
-                        .labels("materialize.cloud/mz-resource-id")
-                        .timeout(29),
-                )
-            } else {
-                controller
-            }
-        })
-        .run(),
-    );
+    let balancer_controller = k8s_controller::Controller::namespaced_all(
+        client.clone(),
+        controller::balancer::Context::new(controller::balancer::Config {
+            enable_security_context: args.enable_security_context,
+            enable_prometheus_scrape_annotations: args.enable_prometheus_scrape_annotations,
+            image_pull_policy: args.image_pull_policy,
+            scheduler_name: args.scheduler_name.clone(),
+            balancerd_node_selector: args.balancerd_node_selector,
+            balancerd_affinity: args.balancerd_affinity,
+            balancerd_tolerations: args.balancerd_tolerations,
+            balancerd_default_resources: args.balancerd_default_resources,
+            default_certificate_specs: args.default_certificate_specs.clone(),
+            environmentd_sql_port: args.environmentd_sql_port,
+            environmentd_http_port: args.environmentd_http_port,
+            balancerd_sql_port: args.balancerd_sql_port,
+            balancerd_http_port: args.balancerd_http_port,
+            balancerd_internal_http_port: args.balancerd_internal_http_port,
+        }),
+        watcher::Config::default().timeout(29),
+    )
+    .with_controller(|controller| {
+        let controller = controller
+            .owns(
+                Api::<Deployment>::all(client.clone()),
+                watcher::Config::default()
+                    .labels("materialize.cloud/mz-resource-id")
+                    .timeout(29),
+            )
+            .owns(
+                Api::<Service>::all(client.clone()),
+                watcher::Config::default()
+                    .labels("materialize.cloud/mz-resource-id")
+                    .timeout(29),
+            );
+        if has_cert_manager {
+            controller.owns(
+                Api::<Certificate>::all(client.clone()),
+                watcher::Config::default()
+                    .labels("materialize.cloud/mz-resource-id")
+                    .timeout(29),
+            )
+        } else {
+            controller
+        }
+    });
+    mz_ore::task::spawn(|| "balancer controller", async move {
+        balancer_controller
+            .run_with_leader_election(balancer_leader_election)
+            .await;
+        tracing::error!("balancer controller lost leadership lease; exiting");
+        std::process::exit(1);
+    });
+
+    let console_controller = k8s_controller::Controller::namespaced_all(
+        client.clone(),
+        controller::console::Context::new(controller::console::Config {
+            enable_security_context: args.enable_security_context,
+            enable_prometheus_scrape_annotations: args.enable_prometheus_scrape_annotations,
+            image_pull_policy: args.image_pull_policy,
+            scheduler_name: args.scheduler_name,
+            console_node_selector: args.console_node_selector,
+            console_affinity: args.console_affinity,
+            console_tolerations: args.console_tolerations,
+            console_default_resources: args.console_default_resources,
+            network_policies_ingress_enabled: args.network_policies_ingress_enabled,
+            network_policies_ingress_cidrs: args.network_policies_ingress_cidrs,
+            default_certificate_specs: args.default_certificate_specs,
+            console_http_port: args.console_http_port,
+            balancerd_http_port: args.balancerd_http_port,
+        }),
+        watcher::Config::default().timeout(29),
+    )
+    .with_controller(|controller| {
+        let controller = controller
+            .owns(
+                Api::<Deployment>::all(client.clone()),
+                watcher::Config::default()
+                    .labels("materialize.cloud/mz-resource-id")
+                    .timeout(29),
+            )
+            .owns(
+                Api::<Service>::all(client.clone()),
+                watcher::Config::default()
+                    .labels("materialize.cloud/mz-resource-id")
+                    .timeout(29),
+            )
+            .owns(
+                Api::<NetworkPolicy>::all(client.clone()),
+                watcher::Config::default()
+                    .labels("materialize.cloud/mz-resource-id")
+                    .timeout(29),
+            )
+            .owns(
+                Api::<ConfigMap>::all(client.clone()),
+                watcher::Config::default()
+                    .labels("materialize.cloud/mz-resource-id")
+                    .timeout(29),
+            );
+        if has_cert_manager {
+            controller.owns(
+                Api::<Certificate>::all(client.clone()),
+                watcher::Config::default()
+                    .labels("materialize.cloud/mz-resource-id")
+                    .timeout(29),
+            )
+        } else {
+            controller
+        }
+    });
+    mz_ore::task::spawn(|| "console controller", async move {
+        console_controller
+            .run_with_leader_election(console_leader_election)
+            .await;
+        tracing::error!("console controller lost leadership lease; exiting");
+        std::process::exit(1);
+    });
 
     info!("All tasks started successfully.");
 
