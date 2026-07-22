@@ -164,7 +164,7 @@ where
 
 /// Consolidates a [`ColumnarCollection`] natively, without a row round-trip.
 ///
-/// Mirrors the `Vec` arm's [`CollectionExt::consolidate_named`], but keeps the
+/// Mirrors the `Vec` arm's `CollectionExt::consolidate_named`, but keeps the
 /// data columnar throughout: the input is reshaped into the `((Row, ()), T,
 /// Diff)` shape the key batcher consumes, merged by [`Col2KeyBatcher`] under a
 /// [`columnar_exchange`] pact, then unpacked back into a `Column`. Rows, times,
