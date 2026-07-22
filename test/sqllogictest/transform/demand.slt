@@ -29,6 +29,9 @@ select x from (select x, 1/a from (select 2 as x), t);
 # A `dummy` used to occur in the following plan before putting an extra call to `ProjectionPushdown` after the `Demand`
 # call in the physical optimizer, because at the time of the first `Demand` call, the column that is later dummied in
 # the second call is still being used in a join constraint, but this join is then eliminated by `RedundantJoin`.
+#
+# This query also exercises `UnionBranchCancellation` running again after the final `RelationCSE`: it folds a
+# `union(get l0, negate(get l0), constant)` left behind by the earlier passes into the fast path below.
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 select
