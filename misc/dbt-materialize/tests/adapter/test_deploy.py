@@ -581,6 +581,52 @@ class TestTargetDeploy:
 
         run_dbt(["run-operation", "deploy_promote"], expect_pass=False)
 
+    def test_dbt_deploy_init_inherits_auto_scaling_strategy(self, project):
+        try:
+            project.run_sql(
+                "CREATE CLUSTER prod ("
+                "SIZE = 'scale=1,workers=1', "
+                "AUTO SCALING STRATEGY = (ON HYDRATION ("
+                "HYDRATION SIZE = 'scale=1,workers=2', LINGER DURATION = '15s')))"
+            )
+        except psycopg2.Error as e:
+            pytest.skip(f"local Materialize image rejects AUTO SCALING STRATEGY: {e}")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA staging")
+
+        run_dbt(["run-operation", "deploy_init"])
+
+        strategy = project.run_sql(
+            """
+            SELECT
+                s.strategy->'on_hydration'->>'hydration_size',
+                (s.strategy->'on_hydration'->'linger_duration'->>'secs')::bigint
+            FROM mz_internal.mz_cluster_auto_scaling_strategies s
+            JOIN mz_clusters c ON c.id = s.cluster_id
+            WHERE c.name = 'prod_dbt_deploy'
+            """,
+            fetch="one",
+        )
+        assert strategy == ("scale=1,workers=2", 15)
+
+    def test_dbt_deploy_init_without_auto_scaling_strategy(self, project):
+        project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA staging")
+
+        run_dbt(["run-operation", "deploy_init"])
+
+        strategy_count = project.run_sql(
+            """
+            SELECT count(*)
+            FROM mz_internal.mz_cluster_auto_scaling_strategies s
+            JOIN mz_clusters c ON c.id = s.cluster_id
+            WHERE c.name = 'prod_dbt_deploy'
+            """,
+            fetch="one",
+        )
+        assert strategy_count == (0,)
+
     def test_dbt_deploy_init_unmanaged_empty(self, project):
         project.run_sql("CREATE CLUSTER prod REPLICAS ()")
         project.run_sql("CREATE SCHEMA prod")

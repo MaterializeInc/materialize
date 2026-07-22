@@ -22,12 +22,18 @@ This macro creates a cluster with the specified properties.
   - replication_factor (int, optional): The replication factor for the cluster. Only applicable when schedule_type is 'manual'.
   - schedule_type (str, optional): The type of schedule for the cluster. Accepts 'manual' or 'on-refresh'.
   - refresh_hydration_time_estimate (str, optional): The estimated hydration time for the cluster. Only applicable when schedule_type is 'on-refresh'.
+  - auto_scaling_strategy (dict, optional): An autoscaling strategy for the cluster,
+    e.g. {'on_hydration': {'hydration_size': '800cc', 'linger_duration': '15s'}}.
+    The cluster temporarily bursts to the hydration size while it has un-hydrated
+    objects. Only applicable when schedule_type is 'manual'.
   - ignore_existing_objects (bool, optional): Whether to ignore existing objects in the cluster. Defaults to false.
   - force_deploy_suffix (bool, optional): Whether to forcefully add a deploy suffix to the cluster name. Defaults to false.
 
   Incompatibilities:
   - replication_factor is only applicable when schedule_type is 'manual'.
   - refresh_hydration_time_estimate is only applicable when schedule_type is 'on-refresh'.
+  - auto_scaling_strategy is only applicable when schedule_type is 'manual', and
+    its hydration_size must differ from size.
 #}
 {% macro create_cluster(
     cluster_name,
@@ -35,6 +41,7 @@ This macro creates a cluster with the specified properties.
     replication_factor=none,
     schedule_type=none,
     refresh_hydration_time_estimate=none,
+    auto_scaling_strategy=none,
     ignore_existing_objects=false,
     force_deploy_suffix=false
 ) %}
@@ -46,6 +53,10 @@ This macro creates a cluster with the specified properties.
 
     {% if not size %}
         {{ exceptions.raise_compiler_error("size must be provided") }}
+    {% endif %}
+
+    {% if auto_scaling_strategy is not none %}
+        {% do internal_validate_auto_scaling_strategy(auto_scaling_strategy, size, schedule_type) %}
     {% endif %}
 
     {% set deploy_cluster = adapter.generate_final_cluster_name(cluster_name, force_deploy_suffix) %}
@@ -65,6 +76,9 @@ This macro creates a cluster with the specified properties.
                     {% else %}
                         , SCHEDULE = ON REFRESH
                     {% endif %}
+                {% endif %}
+                {% if auto_scaling_strategy is not none %}
+                    , {{ internal_render_auto_scaling_strategy(auto_scaling_strategy) }}
                 {% endif %}
             )
         {% endset %}
