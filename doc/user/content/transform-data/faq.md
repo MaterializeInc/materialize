@@ -7,6 +7,8 @@ menu:
     identifier: faq-indexes
     parent: transform-data
     weight: 100
+aliases:
+  - /self-managed/v25.2/transform-data/faq/
 ---
 
 ## Do indexes in Materialize support `ORDER BY`?

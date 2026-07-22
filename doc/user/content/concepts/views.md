@@ -8,6 +8,7 @@ menu:
     identifier: 'concepts-views'
 aliases:
   - /get-started/key-concepts/#views
+  - /self-managed/v25.2/concepts/views/
 ---
 
 ## Overview

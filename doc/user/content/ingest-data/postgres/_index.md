@@ -9,6 +9,8 @@ menu:
     identifier: 'postgresql'
 aliases:
   - /self-managed/v25.1/ingest-data/postgres/
+  - /self-managed/v25.2/ingest-data/postgres/
+  - /self-managed/v25.2/ingest-data/postgres/amazon-aurora/
 ---
 
 ## Change Data Capture (CDC)

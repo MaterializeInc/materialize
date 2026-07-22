@@ -5,6 +5,30 @@ disable_list: true
 aliases:
   - /self-hosted/concepts/
   - /self-managed-deployments/appendix/legacy/appendix-legacy-terraform-releases/
+  - /self-managed/
+  - /self-managed/v25.2/
+  - /self-managed/v25.2/installation/
+  - /self-managed/v25.2/installation/configuration/
+  - /self-managed/v25.2/installation/install-on-aws/
+  - /self-managed/v25.2/installation/install-on-aws/upgrade-on-aws/
+  - /self-managed/v25.2/installation/install-on-aws/appendix-aws-configuration/
+  - /self-managed/v25.2/installation/install-on-awsappendix-deployment-guidelines/
+  - /self-managed/v25.2/installation/install-on-gcp/
+  - /self-managed/v25.2/installation/install-on-gcp/appendix-gcp-configuration/
+  - /self-managed/v25.2/installation/install-on-azure/
+  - /self-managed/v25.2/installation/install-on-azureappendix-deployment-guidelines/
+  - /self-managed/v25.2/installation/install-on-azureappendix-azure-configuration/
+  - /self-managed/v25.2/installation/install-on-azure/upgrade-on-azure/
+  - /self-managed/v25.2/installation/install-on-local-kind/
+  - /self-managed/v25.2/installation/install-on-local-minikube/
+  - /self-managed/v25.2/installation/install-on-local-minikubeupgrade-on-local-minikube/
+  - /self-managed/v25.2/installation/operational-guidelines/
+  - /self-managed/v25.2/installation/troubleshooting/
+  - /self-managed/v25.2/installation/appendix-terraforms/
+  - /self-managed/v25.2/installation/upgrading/
+  - /self-managed/v25.2/installation/troubleshooting/
+  - /self-managed/v25.2/installation/upgrade-to-swap/
+
 menu:
   main:
     identifier: "sm-deployments"

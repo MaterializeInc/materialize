@@ -6,6 +6,14 @@ menu:
   main:
     parent: commands
     identifier: 'create-source'
+aliases:
+  - /self-managed/v25.2/sql/create-source/
+  - /self-managed/v25.2/sql/create-source/kafka/
+  - /self-managed/v25.2/sql/create-source/mysql/
+  - /self-managed/v25.2/sql/create-source/postgres/
+  - /self-managed/v25.2/sql/create-source/sql-server/
+  - /self-managed/v25.2/sql/create-source/load-generator/
+  - /self-managed/v25.2/sql/create-source/webhook/
 ---
 
 {{% include-headless "/headless/source-definition" %}}

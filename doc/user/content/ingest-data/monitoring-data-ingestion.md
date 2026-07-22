@@ -6,6 +6,8 @@ menu:
     identifier: ingest-monitoring
     parent: ingest-data
     weight: 39
+aliases:
+  - /self-managed/v25.2/ingest-data/monitoring-data-ingestion/
 ---
 
 ## Monitoring the snapshotting progress

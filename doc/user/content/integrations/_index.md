@@ -4,11 +4,17 @@ description: "Get details about third-party tools and integrations supported by 
 make_table_row_headers_searchable: true
 disable_list: true
 aliases:
-    - /third-party/supported-tools/
-    - /third-party/
-    - /third-party/postgres-cloud/
-    - /guides/postgres-cloud/
-    - /guides/
+  - /third-party/supported-tools/
+  - /third-party/
+  - /third-party/postgres-cloud/
+  - /guides/postgres-cloud/
+  - /guides/
+  - /self-managed/v25.2/integrations/mz-debug/
+  - /self-managed/v25.2/integrations/mz-debug/self-managed/
+  - /self-managed/v25.2/integrations/mz-debug/emulator/
+  - /self-managed/v25.2/integrations/http-api/
+  - /self-managed/v25.2/integrations/websocket-api/
+  - /self-managed/v25.2/integrations/llm/
 menu:
   main:
     identifier: "integrations"

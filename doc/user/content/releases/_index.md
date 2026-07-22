@@ -8,6 +8,10 @@ menu:
     weight: 80
 aliases:
   - /self-managed/v25.1/release-notes/
+  - /self-managed/v25.2/release-notes/
+  - /self-managed/v25.2/release-notes/compatibility/
+  - /self-managed/v25.2/release-notes/versioning_lifecycle/
+  - /self-managed/v25.2/release-notes/compatibility/
 ---
 
 {{< note >}}

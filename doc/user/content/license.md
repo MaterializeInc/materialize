@@ -5,6 +5,8 @@ menu:
   main:
     parent: 'about'
     weight: 15
+aliases:
+  - /self-managed/v25.2/license/
 ---
 
 ## Materialize Cloud

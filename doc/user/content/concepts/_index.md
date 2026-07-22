@@ -13,6 +13,7 @@ aliases:
   - /get-started/key-concepts/
   - /overview
   - /self-managed/v25.1/concepts/
+  - /self-managed/v25.2/concepts/
 ---
 
 The pages in this section introduces some of the key concepts in Materialize:
