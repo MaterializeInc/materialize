@@ -71,6 +71,7 @@ pub struct ComputeMetrics {
     // Peek coalescing counters (per-cluster, no worker label)
     index_peek_coalesced_groups_total: IntCounter,
     index_peek_coalesced_peeks_total: IntCounter,
+    index_peek_coalesced_overflow_total: IntCounter,
 
     // memory usage
     shared_row_heap_capacity_bytes: raw::UIntGaugeVec,
@@ -229,6 +230,10 @@ impl ComputeMetrics {
                 name: "mz_index_peek_coalesced_peeks_total",
                 help: "Number of index peeks served through coalescing, summed across the process's workers (each worker counts the same logical peeks).",
             )),
+            index_peek_coalesced_overflow_total: registry.register(metric!(
+                name: "mz_index_peek_coalesced_overflow_total",
+                help: "Number of coalesced index peek groups that exceeded the aggregate memory budget and fell back to serving each peek individually, summed across the process's workers.",
+            )),
             replica_expiration_timestamp_seconds: registry.register(metric!(
                 name: "mz_dataflow_replica_expiration_timestamp_seconds",
                 help: "The replica expiration timestamp in seconds since epoch.",
@@ -284,6 +289,7 @@ impl ComputeMetrics {
         let index_peek_row_collection_seconds = self.index_peek_row_collection_seconds.clone();
         let index_peek_coalesced_groups_total = self.index_peek_coalesced_groups_total.clone();
         let index_peek_coalesced_peeks_total = self.index_peek_coalesced_peeks_total.clone();
+        let index_peek_coalesced_overflow_total = self.index_peek_coalesced_overflow_total.clone();
         let replica_expiration_timestamp_seconds = self
             .replica_expiration_timestamp_seconds
             .with_label_values(&[&worker]);
@@ -313,6 +319,7 @@ impl ComputeMetrics {
             index_peek_row_collection_seconds,
             index_peek_coalesced_groups_total,
             index_peek_coalesced_peeks_total,
+            index_peek_coalesced_overflow_total,
             replica_expiration_timestamp_seconds,
             replica_expiration_remaining_seconds,
             shared_row_heap_capacity_bytes,
@@ -362,6 +369,9 @@ pub struct WorkerMetrics {
     pub(crate) index_peek_coalesced_groups_total: IntCounter,
     /// Number of index peeks served through coalescing.
     pub(crate) index_peek_coalesced_peeks_total: IntCounter,
+    /// Number of coalesced groups that overflowed the aggregate memory budget and
+    /// fell back to serving each peek individually.
+    pub(crate) index_peek_coalesced_overflow_total: IntCounter,
     /// The timestamp of replica expiration.
     pub(crate) replica_expiration_timestamp_seconds: UIntGauge,
     /// Remaining seconds until replica expiration.

@@ -1225,14 +1225,40 @@ impl<'a> ActiveComputeState<'a> {
             })
             .collect();
 
-        // The single shared arrangement walk.
+        // The single shared arrangement walk. Coalescing keeps every peek's
+        // result resident until this walk finishes, so a shared budget caps the
+        // group's aggregate memory at roughly one peek's worth. Use the per-query
+        // `max_result_size` as that budget: it matches what the single-peek path
+        // holds for one result, so falling back below stays within the same bound.
         let walk_start = Instant::now();
-        peek_coalesce::collect_coalesced_ok_data(peeks[0].trace_bundle.oks_mut(), &mut muxed);
+        let overflowed = peek_coalesce::collect_coalesced_ok_data(
+            peeks[0].trace_bundle.oks_mut(),
+            &mut muxed,
+            max_result_size,
+        );
         let walk_duration = walk_start.elapsed();
         self.compute_state
             .metrics
             .index_peek_row_iteration_seconds
             .observe(walk_duration.as_secs_f64());
+
+        // The group's aggregate results would exceed the memory budget. Drop the
+        // partial accumulators and serve each peek through the single-peek path,
+        // which builds and sends one result at a time. This trades the shared
+        // walk (re-scanning the arrangement per peek) for bounded peak memory,
+        // and only fires in the pathological large-result case.
+        if overflowed {
+            drop(muxed);
+            self.compute_state
+                .metrics
+                .index_peek_coalesced_overflow_total
+                .inc();
+            let mut upper = Antichain::new();
+            for peek in peeks {
+                self.process_peek(&mut upper, PendingPeek::Index(peek), true);
+            }
+            return;
+        }
 
         // Attribute the shared walk time to each peek's total-time histogram so
         // that dashboard stays populated when coalescing is on. The per-phase

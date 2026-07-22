@@ -108,6 +108,12 @@ impl PeekAccumulator {
         self.sort_time
     }
 
+    /// Bytes currently retained in `results`, used to bound the aggregate memory
+    /// of a coalesced group.
+    pub(super) fn total_size(&self) -> usize {
+        self.total_size
+    }
+
     /// Pushes a single `(row, copies)` result into the accumulator.
     pub(super) fn push(&mut self, row: Row, copies: NonZeroUsize) -> PushOutcome {
         let count_byte_size = size_of::<NonZeroUsize>();
@@ -284,14 +290,26 @@ enum Copies {
 /// Walks the ok stream of `oks` once, demultiplexing each visited row into the
 /// peeks in `peeks`.
 ///
-/// On return, every peek has its `outcome` populated. Peeks whose accumulation
-/// completed normally get a `Response`; peeks that overflowed the stash
-/// threshold get `Stash`; peeks that errored (map-filter-project error, negative
-/// multiplicities, or oversized result) get an error `Response`.
+/// Returns `false` when the walk completed and every peek has its `outcome`
+/// populated. Peeks whose accumulation completed normally get a `Response`;
+/// peeks that overflowed the stash threshold get `Stash`; peeks that errored
+/// (map-filter-project error, negative multiplicities, or oversized result) get
+/// an error `Response`.
+///
+/// Returns `true` when the peeks' aggregate retained bytes exceeded
+/// `group_budget`. In that case the walk aborts, `outcome`s are left
+/// unspecified, and the caller must fall back to serving each peek individually
+/// so that peak memory stays bounded to one result at a time. The budget bounds
+/// the coalesced group to roughly what a single peek would hold, since coalescing
+/// keeps every result live at once until the shared walk finishes.
 ///
 /// The caller is responsible for the shared readiness and error-trace checks
 /// before invoking this, and for acting on each peek's outcome afterward.
-pub(super) fn collect_coalesced_ok_data<Tr>(oks: &mut Tr, peeks: &mut [MuxedPeek])
+pub(super) fn collect_coalesced_ok_data<Tr>(
+    oks: &mut Tr,
+    peeks: &mut [MuxedPeek],
+    group_budget: usize,
+) -> bool
 where
     Tr: TraceReader<Batch: Navigable>,
     for<'a> BatchCursor<Tr>: Cursor<
@@ -323,6 +341,12 @@ where
     let mut row_builder = Row::default();
     let mut mults = vec![0usize; peeks.len()];
 
+    // Sum of every accumulator's retained bytes. Bounds the group's live memory:
+    // coalescing keeps all results resident until the shared walk finishes, so
+    // without this an unbounded ordered peek (never stash-eligible) multiplied by
+    // the group size could OOM the replica.
+    let mut group_total: usize = 0;
+
     if full_scan {
         while cursor.key_valid(&storage) {
             if peeks.iter().all(|peek| peek.outcome.is_some()) {
@@ -332,7 +356,7 @@ where
             for i in 0..peeks.len() {
                 mults[i] = peek_multiplicity::<Tr>(&peeks[i], &mut lit_cursors[i], key);
             }
-            visit_key::<Tr>(
+            let overflow = visit_key::<Tr>(
                 &mut cursor,
                 &storage,
                 key,
@@ -340,7 +364,12 @@ where
                 &mults,
                 &mut datum_vec,
                 &mut row_builder,
+                &mut group_total,
+                group_budget,
             );
+            if overflow {
+                return true;
+            }
             cursor.step_key(&storage);
         }
     } else {
@@ -367,7 +396,7 @@ where
                 for i in 0..peeks.len() {
                     mults[i] = peek_multiplicity::<Tr>(&peeks[i], &mut lit_cursors[i], key);
                 }
-                visit_key::<Tr>(
+                let overflow = visit_key::<Tr>(
                     &mut cursor,
                     &storage,
                     key,
@@ -375,7 +404,12 @@ where
                     &mults,
                     &mut datum_vec,
                     &mut row_builder,
+                    &mut group_total,
+                    group_budget,
                 );
+                if overflow {
+                    return true;
+                }
             } else {
                 // No row for this union key. Still advance every literal cursor
                 // past it so their pointers stay in step with the ascending walk.
@@ -391,6 +425,8 @@ where
             peek.outcome = Some(PeekOutcome::Response(peek.accumulator.finish()));
         }
     }
+
+    false
 }
 
 /// Computes a peek's multiplicity at `key`, advancing its literal cursor.
@@ -420,6 +456,9 @@ where
 }
 
 /// Processes all values under the current key, feeding each active peek.
+///
+/// Returns `true` if the group's aggregate retained bytes (`group_total`)
+/// exceeded `group_budget`, signaling the caller to abort the coalesced walk.
 fn visit_key<Tr>(
     cursor: &mut TraceCursor<Tr>,
     storage: &TraceStorage<Tr>,
@@ -428,7 +467,10 @@ fn visit_key<Tr>(
     mults: &[usize],
     datum_vec: &mut DatumVec,
     row_builder: &mut Row,
-) where
+    group_total: &mut usize,
+    group_budget: usize,
+) -> bool
+where
     Tr: TraceReader<Batch: Navigable>,
     for<'a> BatchCursor<Tr>: Cursor<
             Key<'a>: ExtendDatums + Eq,
@@ -444,7 +486,7 @@ fn visit_key<Tr>(
         .find(|p| p.outcome.is_none())
         .map(|p| p.timestamp);
     let Some(timestamp) = timestamp else {
-        return;
+        return false;
     };
 
     while cursor.val_valid(storage) {
@@ -522,23 +564,36 @@ fn visit_key<Tr>(
                             break;
                         }
                         Copies::Zero => break,
-                        Copies::Positive(copies) => match peeks[i].accumulator.push(row, *copies) {
-                            PushOutcome::Continue => {}
-                            PushOutcome::Complete => {
-                                let response = peeks[i].accumulator.finish();
-                                peeks[i].outcome = Some(PeekOutcome::Response(response));
-                                break;
+                        Copies::Positive(copies) => {
+                            // Update the group's aggregate bytes by this push's
+                            // delta (thinning can shrink it) and abort the whole
+                            // coalesced walk if it exceeds the budget.
+                            let before = peeks[i].accumulator.total_size();
+                            let outcome = peeks[i].accumulator.push(row, *copies);
+                            *group_total = group_total
+                                .saturating_sub(before)
+                                .saturating_add(peeks[i].accumulator.total_size());
+                            if *group_total > group_budget {
+                                return true;
                             }
-                            PushOutcome::Stash => {
-                                peeks[i].outcome = Some(PeekOutcome::Stash);
-                                break;
+                            match outcome {
+                                PushOutcome::Continue => {}
+                                PushOutcome::Complete => {
+                                    let response = peeks[i].accumulator.finish();
+                                    peeks[i].outcome = Some(PeekOutcome::Response(response));
+                                    break;
+                                }
+                                PushOutcome::Stash => {
+                                    peeks[i].outcome = Some(PeekOutcome::Stash);
+                                    break;
+                                }
+                                PushOutcome::MaxSizeExceeded => {
+                                    let response = peeks[i].accumulator.max_size_error();
+                                    peeks[i].outcome = Some(PeekOutcome::Response(response));
+                                    break;
+                                }
                             }
-                            PushOutcome::MaxSizeExceeded => {
-                                let response = peeks[i].accumulator.max_size_error();
-                                peeks[i].outcome = Some(PeekOutcome::Response(response));
-                                break;
-                            }
-                        },
+                        }
                     },
                 }
             }
@@ -547,6 +602,8 @@ fn visit_key<Tr>(
         drop(borrow);
         cursor.step_val(storage);
     }
+
+    false
 }
 
 /// Classifies a summed diff into the multiplicity cases.
@@ -776,7 +833,8 @@ mod tests {
         // A key/val with diff 3 must be reported with count 3 by every peek.
         with_arrangement_diffs(vec![(1, 10, 3), (2, 20, 1)], |trace| {
             let mut group = vec![muxed(2, None), muxed(2, None)];
-            collect_coalesced_ok_data(trace, &mut group);
+            let overflowed = collect_coalesced_ok_data(trace, &mut group, usize::MAX);
+            assert!(!overflowed);
             let expected = vec![(vec![1, 10], 3), (vec![2, 20], 1)];
             assert_eq!(extract(group[0].outcome.take()), expected);
             assert_eq!(extract(group[1].outcome.take()), expected);
@@ -791,7 +849,8 @@ mod tests {
         // fires once the identity MFP has accepted the row).
         with_arrangement_diffs(vec![(1, 10, -1)], |trace| {
             let mut group = vec![muxed(2, None), muxed(2, None)];
-            collect_coalesced_ok_data(trace, &mut group);
+            let overflowed = collect_coalesced_ok_data(trace, &mut group, usize::MAX);
+            assert!(!overflowed);
             for peek in &mut group {
                 assert!(matches!(
                     peek.outcome.take(),
@@ -805,7 +864,8 @@ mod tests {
     fn coalesced_full_scans_each_see_all_rows() {
         with_arrangement(vec![(1, 10), (1, 11), (2, 20)], |trace| {
             let mut group = vec![muxed(2, None), muxed(2, None)];
-            collect_coalesced_ok_data(trace, &mut group);
+            let overflowed = collect_coalesced_ok_data(trace, &mut group, usize::MAX);
+            assert!(!overflowed);
 
             let expected = vec![(vec![1, 10], 1), (vec![1, 11], 1), (vec![2, 20], 1)];
             assert_eq!(extract(group[0].outcome.take()), expected);
@@ -819,7 +879,8 @@ mod tests {
             // A full scan and a literal peek on key = 2. The literal peek's row
             // carries the key columns twice, mirroring an IndexedFilter join.
             let mut group = vec![muxed(2, None), muxed(3, Some(vec![row(2)]))];
-            collect_coalesced_ok_data(trace, &mut group);
+            let overflowed = collect_coalesced_ok_data(trace, &mut group, usize::MAX);
+            assert!(!overflowed);
 
             assert_eq!(
                 extract(group[0].outcome.take()),
@@ -835,7 +896,8 @@ mod tests {
             // No full scan: the walk seeks through the union of literals and
             // demultiplexes each key to the peeks that requested it.
             let mut group = vec![muxed(3, Some(vec![row(1)])), muxed(3, Some(vec![row(2)]))];
-            collect_coalesced_ok_data(trace, &mut group);
+            let overflowed = collect_coalesced_ok_data(trace, &mut group, usize::MAX);
+            assert!(!overflowed);
 
             assert_eq!(
                 extract(group[0].outcome.take()),
@@ -851,7 +913,8 @@ mod tests {
             // A duplicated literal reproduces the key's rows once per occurrence,
             // matching the single-peek path.
             let mut group = vec![muxed(3, Some(vec![row(2), row(2)])), muxed(2, None)];
-            collect_coalesced_ok_data(trace, &mut group);
+            let overflowed = collect_coalesced_ok_data(trace, &mut group, usize::MAX);
+            assert!(!overflowed);
 
             assert_eq!(
                 extract(group[0].outcome.take()),
@@ -874,7 +937,8 @@ mod tests {
                 muxed(3, Some(vec![row(2), row(2)])),
                 muxed(3, Some(vec![row(1), row(2)])),
             ];
-            collect_coalesced_ok_data(trace, &mut group);
+            let overflowed = collect_coalesced_ok_data(trace, &mut group, usize::MAX);
+            assert!(!overflowed);
 
             assert_eq!(
                 extract(group[0].outcome.take()),
@@ -884,6 +948,18 @@ mod tests {
                 extract(group[1].outcome.take()),
                 vec![(vec![1, 10, 1], 1), (vec![2, 20, 2], 1)],
             );
+        });
+    }
+
+    #[mz_ore::test]
+    fn coalesced_overflow_aborts_walk() {
+        // A budget below even a single retained row forces the aggregate check to
+        // trip. The walk aborts and signals the caller to fall back to individual
+        // processing; outcomes are left unspecified.
+        with_arrangement(vec![(1, 10), (2, 20)], |trace| {
+            let mut group = vec![muxed(2, None), muxed(2, None)];
+            let overflowed = collect_coalesced_ok_data(trace, &mut group, 1);
+            assert!(overflowed);
         });
     }
 }

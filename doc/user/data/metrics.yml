@@ -845,6 +845,10 @@ metrics:
   help: Number of coalesced index peek groups (each served by a single arrangement walk), summed across the process's workers.
   source: src/compute/src/metrics.rs
   visibility: internal
+- name: mz_index_peek_coalesced_overflow_total
+  help: Number of coalesced index peek groups that exceeded the aggregate memory budget and fell back to serving each peek individually, summed across the process's workers.
+  source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_index_peek_coalesced_peeks_total
   help: Number of index peeks served through coalescing, summed across the process's workers (each worker counts the same logical peeks).
   source: src/compute/src/metrics.rs
