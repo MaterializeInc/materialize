@@ -15,8 +15,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use columnar::Columnar;
 use mz_expr::{
-    CollectionPlan, EvalError, Id, LetRecLimit, LocalId, MfpPlan, OptimizedMirRelationExpr,
-    SafeMfpPlan, TableFunc,
+    CollectionPlan, EvalError, Id, LetRecLimit, LocalId, MapFilterProject, MfpPlan,
+    OptimizedMirRelationExpr, SafeMfpPlan, TableFunc,
 };
 use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
