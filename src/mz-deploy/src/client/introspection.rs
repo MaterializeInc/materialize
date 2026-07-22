@@ -74,22 +74,63 @@ pub(super) async fn cluster_exists(client: &Client, name: &str) -> Result<bool, 
     Ok(row.get("exists"))
 }
 
+/// The cluster's configured autoscaling policy, read from the
+/// `auto_scaling_strategy` column of a cluster query row. A `NULL` column means
+/// "no policy": the cluster has none, or the region predates the feature.
+fn parse_auto_scaling_strategy(
+    row: &tokio_postgres::Row,
+    cluster_name: &str,
+) -> Result<Option<mz_sql::plan::AutoScalingStrategy>, ConnectionError> {
+    let json: Option<String> = row.get("auto_scaling_strategy");
+    match json {
+        None => Ok(None),
+        Some(json) => crate::client::auto_scaling::strategy_from_catalog_json(&json).map_err(|e| {
+            ConnectionError::Message(format!(
+                "invalid autoscaling strategy for cluster '{}': {}",
+                cluster_name, e
+            ))
+        }),
+    }
+}
+
+/// SQL fragments (a select expression and a join) that add the configured
+/// autoscaling policy to a cluster query. On regions that predate the feature,
+/// they yield a `NULL` policy column instead.
+async fn auto_scaling_query_parts(
+    client: &Client,
+) -> Result<(&'static str, &'static str), ConnectionError> {
+    if client.supports_auto_scaling_strategies().await? {
+        Ok((
+            "scaling.strategy::text AS auto_scaling_strategy",
+            "LEFT JOIN mz_internal.mz_cluster_auto_scaling_strategies scaling \
+             ON scaling.cluster_id = c.id",
+        ))
+    } else {
+        Ok(("NULL::text AS auto_scaling_strategy", ""))
+    }
+}
+
 /// Get a cluster by name.
 pub(super) async fn get_cluster(
     client: &Client,
     name: &str,
 ) -> Result<Option<Cluster>, ConnectionError> {
-    let query = r#"
+    let (strategy_col, strategy_join) = auto_scaling_query_parts(client).await?;
+    let query = format!(
+        r#"
         SELECT
-            id,
-            name,
-            size,
-            replication_factor::bigint AS replication_factor
-        FROM mz_catalog.mz_clusters
-        WHERE name = $1
-    "#;
+            c.id,
+            c.name,
+            c.size,
+            c.replication_factor::bigint AS replication_factor,
+            {strategy_col}
+        FROM mz_catalog.mz_clusters c
+        {strategy_join}
+        WHERE c.name = $1
+    "#
+    );
 
-    let rows = client.query(query, &[&name]).await?;
+    let rows = client.query(&query, &[&name]).await?;
 
     if rows.is_empty() {
         return Ok(None);
@@ -101,32 +142,42 @@ pub(super) async fn get_cluster(
         name: row.get("name"),
         size: row.get("size"),
         replication_factor: row.get("replication_factor"),
+        auto_scaling_strategy: parse_auto_scaling_strategy(row, name)?,
     }))
 }
 
 /// List all clusters.
 pub(super) async fn list_clusters(client: &Client) -> Result<Vec<Cluster>, ConnectionError> {
-    let query = r#"
+    let (strategy_col, strategy_join) = auto_scaling_query_parts(client).await?;
+    let query = format!(
+        r#"
         SELECT
-            id,
-            name,
-            size,
-            replication_factor::bigint AS replication_factor
-        FROM mz_catalog.mz_clusters
-        ORDER BY name
-    "#;
+            c.id,
+            c.name,
+            c.size,
+            c.replication_factor::bigint AS replication_factor,
+            {strategy_col}
+        FROM mz_catalog.mz_clusters c
+        {strategy_join}
+        ORDER BY c.name
+    "#
+    );
 
-    let rows = client.query(query, &[]).await?;
+    let rows = client.query(&query, &[]).await?;
 
-    Ok(rows
-        .iter()
-        .map(|row| Cluster {
-            id: row.get("id"),
-            name: row.get("name"),
-            size: row.get("size"),
-            replication_factor: row.get("replication_factor"),
+    rows.iter()
+        .map(|row| {
+            let name: String = row.get("name");
+            let auto_scaling_strategy = parse_auto_scaling_strategy(row, &name)?;
+            Ok(Cluster {
+                id: row.get("id"),
+                name,
+                size: row.get("size"),
+                replication_factor: row.get("replication_factor"),
+                auto_scaling_strategy,
+            })
         })
-        .collect())
+        .collect()
 }
 
 /// Get cluster configuration including replicas and grants.
@@ -140,23 +191,28 @@ pub(super) async fn get_cluster_config(
     name: &str,
 ) -> Result<Option<ClusterConfig>, ConnectionError> {
     // Query 1: Get cluster info and replicas with LEFT JOIN
-    let cluster_query = r#"
+    let (strategy_col, strategy_join) = auto_scaling_query_parts(client).await?;
+    let cluster_query = format!(
+        r#"
         SELECT
             c.id,
             c.name,
             c.managed,
             c.size,
             c.replication_factor::bigint AS replication_factor,
+            {strategy_col},
             r.name AS replica_name,
             r.size AS replica_size,
             r.availability_zone
         FROM mz_catalog.mz_clusters c
+        {strategy_join}
         LEFT JOIN mz_catalog.mz_cluster_replicas r ON c.id = r.cluster_id
         WHERE c.name = $1
         ORDER BY r.name
-    "#;
+    "#
+    );
 
-    let cluster_rows = client.query(cluster_query, &[&name]).await?;
+    let cluster_rows = client.query(&cluster_query, &[&name]).await?;
 
     if cluster_rows.is_empty() {
         return Ok(None);
@@ -167,6 +223,7 @@ pub(super) async fn get_cluster_config(
     let managed: bool = first_row.get("managed");
     let size: Option<String> = first_row.get("size");
     let replication_factor: Option<i64> = first_row.get("replication_factor");
+    let auto_scaling_strategy = parse_auto_scaling_strategy(first_row, name)?;
 
     // Query 2: Get grants (excluding owner's implicit privileges)
     let grants_query = r#"
@@ -211,6 +268,7 @@ pub(super) async fn get_cluster_config(
             options: ClusterOptions {
                 size,
                 replication_factor,
+                auto_scaling_strategy,
             },
             grants,
         }))

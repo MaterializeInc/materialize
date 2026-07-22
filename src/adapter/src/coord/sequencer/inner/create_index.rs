@@ -547,7 +547,7 @@ impl Coordinator {
                         .set_physical_plan(global_id, df_desc.clone());
 
                     let notice_builtin_updates_fut =
-                        coord.persist_dataflow_metainfo(df_meta, global_id).await;
+                        coord.persist_dataflow_metainfo(df_meta, global_id);
 
                     // We're putting in place read holds, such that ship_dataflow,
                     // below, which calls update_read_capabilities, can successfully

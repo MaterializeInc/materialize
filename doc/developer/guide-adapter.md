@@ -213,7 +213,8 @@ compare-and-append. It is a time-of-check to time-of-use gap.
 
 - It is safe today only by the fragile accident that the coordinator loop does
   not yield between the check and the durable commit. Any await later inserted
-  between them, or any move of the check off the loop, reopens the race.
+  between them, or any move of the check off the coordinator loop, reopens
+  the race.
 - It does not hold across writers. Another `environmentd` that commits a
   conflicting change to the durable store between this node's in-memory check and
   its durable commit is not detected. The durable layer does not re-validate a
@@ -222,7 +223,8 @@ compare-and-append. It is a time-of-check to time-of-use gap.
 
 If you need conflict detection, evaluate the precondition atomically with the
 commit, a real compare-and-append against the durable store. A check that merely
-precedes the write on the loop is not that, even when it reads the right state.
+precedes the write on the coordinator loop is not that, even when it reads the
+right state.
 
 ### Catalog mutations must bump the transient revision or stay invisible
 
@@ -234,6 +236,46 @@ the Coordinator's in-memory catalog, either route it through `transact` or
 keep the change invisible to session-visible catalog reads (name resolution,
 planning). Otherwise sessions serve stale catalogs where today they would see
 the change.
+
+### Group commits and generation handover
+
+At runtime, one group committer per `environmentd` serializes txns-shard operations:
+
+```text
+append / register / forget -> FIFO group committer -> table-write worker -> txns shard
+```
+
+FIFO ordering prevents an append from overtaking table registration or forgetting. Bootstrap is
+the only local exception because it runs before the process serves.
+
+Each runtime command uses this protocol:
+
+```text
+shared oracle write timestamp -> advance catalog upper -> compare-and-append txns shard
+                                                       | conflict -> retry
+                                                       ` success  -> apply write to oracle
+```
+
+The successful timestamp is applied to the oracle only after the txns write is durable.
+
+On `environmentd` bootstrap in read/write mode:
+
+```text
+catalog fence -> set up and register tables -> txns write advances table uppers
+              -> snapshot and reset system tables -> start serving
+```
+
+The snapshots cannot complete until the txns write has advanced the table uppers. Therefore:
+
+```text
+pre-fence write before barrier -> ordered before the snapshot
+pre-fence write after barrier  -> `InvalidUppers` -> retry at a fresh timestamp
+                                -> catalog advance observes the fence -> old generation exits
+```
+
+A system-table write before the barrier is included in the reset. A user-table write remains
+visible to later reads. The retry's `advance_to` is above the stale catalog handle's cached upper,
+so its catalog check is durable. An `advance_upper` no-op only checks an already-observed fence.
 
 ## Rejected Optimizations
 

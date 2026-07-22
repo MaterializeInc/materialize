@@ -275,6 +275,11 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
+            "enable_simplify_from_less_existence",
+            "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
             "enable_upsert_v2",
             "false",
             ["true", "false"],
@@ -702,6 +707,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "sql_server_cdc_cleanup_change_table",
     "sql_server_cdc_cleanup_change_table_max_deletes",
     "allow_user_sessions",
+    "group_commit_max_attempts",
     "with_0dt_deployment_ddl_check_interval",
     "enable_0dt_caught_up_check",
     "with_0dt_caught_up_check_allowed_lag",

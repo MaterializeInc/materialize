@@ -68,6 +68,9 @@ pub enum DurableCatalogError {
     /// Catalog is not in a writable state.
     #[error("{0}")]
     NotWritable(String),
+    /// A dry-run transaction reached a commit path.
+    #[error("cannot commit a dry-run catalog transaction")]
+    DryRunTransaction,
     /// Unable to serialize/deserialize Protobuf message.
     #[error("proto: {0}")]
     Proto(TryFromProtoError),
@@ -80,6 +83,16 @@ pub enum DurableCatalogError {
     /// A programming error occurred during a [`mz_storage_client::controller::StorageTxn`].
     #[error(transparent)]
     Storage(StorageError),
+    /// The durable catalog contains updates that this process has not applied.
+    ///
+    /// NOTE: `update_count` counts raw durable updates when produced by the write-conflict
+    /// classification (commit and advance paths) but memory updates when produced by
+    /// `ensure_not_out_of_sync`. It is diagnostic only, do not compare across producers.
+    #[error("durable catalog advanced to {upper} with {update_count} unapplied updates")]
+    CatalogOutOfSync {
+        update_count: usize,
+        upper: Timestamp,
+    },
     /// An internal programming error.
     #[error("Internal catalog error: {0}")]
     Internal(String),

@@ -324,7 +324,8 @@ impl Coordinator {
     /// `mz_subscriptions` retraction is durable. The retraction is deferred to a group
     /// commit rather than committed inline, which would block the coordinator loop on a
     /// timestamp-oracle round trip. Callers that expose completion of the retirement
-    /// should wait on the notify off the loop before responding. The notify is already
+    /// should wait on the notify off the coordinator loop before responding. The notify is
+    /// already
     /// resolved for sinks that write no introspection row (internal subscribes and COPY TO).
     ///
     /// This is a low-level method. The caller is responsible for dropping the
@@ -358,7 +359,8 @@ impl Coordinator {
                         // Defer the retraction to a group commit, for the same reason we
                         // defer the insert (see `add_active_compute_sink`): committing inline
                         // would block the coordinator loop. Callers that expose the
-                        // retirement wait on the notify off the loop before responding.
+                        // retirement wait on the notify off the coordinator loop
+                        // before responding.
                         self.builtin_table_update().defer(vec![update])
                     } else {
                         Box::pin(std::future::ready(()))

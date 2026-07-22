@@ -91,6 +91,7 @@ pub struct ClusterState {
     pub replication_factor: u32,
     pub availability_zones: Vec<String>,
     pub logging: ComputeReplicaLogging,
+    pub arrangement_compression: bool,
     pub auto_scaling_policy: Option<AutoScalingPolicy>,
     /// Latest graceful reconfiguration record, if one has been written.
     pub reconfiguration: Option<ReconfigurationRecord>,
@@ -107,6 +108,7 @@ impl ClusterState {
             size: self.size.clone(),
             availability_zones: AvailabilityZones(self.availability_zones.clone()),
             logging: self.logging.clone(),
+            arrangement_compression: self.arrangement_compression,
         }
     }
 
@@ -118,6 +120,7 @@ impl ClusterState {
             replication_factor: self.replication_factor,
             availability_zones: AvailabilityZones(self.availability_zones.clone()),
             logging: self.logging.clone(),
+            arrangement_compression: self.arrangement_compression,
             auto_scaling_policy: self.auto_scaling_policy.clone(),
             reconfiguration: self.reconfiguration.clone(),
             burst: self.burst.clone(),
@@ -136,6 +139,7 @@ pub struct StateWrite {
     pub new_replication_factor: Option<u32>,
     pub new_availability_zones: Option<Vec<String>>,
     pub new_logging: Option<ComputeReplicaLogging>,
+    pub new_arrangement_compression: Option<bool>,
     /// Write or clear the reconfiguration record, together with its audit
     /// intent. `None` leaves the record unchanged.
     pub reconfiguration: Option<ReconfigurationWrite>,
@@ -180,6 +184,7 @@ impl StateWrite {
             new_replication_factor,
             new_availability_zones,
             new_logging,
+            new_arrangement_compression,
             reconfiguration,
             burst,
         } = self;
@@ -187,6 +192,7 @@ impl StateWrite {
             && new_replication_factor.is_none()
             && new_availability_zones.is_none()
             && new_logging.is_none()
+            && new_arrangement_compression.is_none()
             && reconfiguration.is_none()
             && burst.is_none()
     }

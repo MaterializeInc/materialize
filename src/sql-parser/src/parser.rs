@@ -4594,6 +4594,7 @@ impl<'a> Parser<'a> {
             AUTO,
             AVAILABILITY,
             DISK,
+            EXPERIMENTAL,
             INTROSPECTION,
             MANAGED,
             REPLICAS,
@@ -4612,6 +4613,10 @@ impl<'a> Parser<'a> {
                 ClusterOptionName::AvailabilityZones
             }
             DISK => ClusterOptionName::Disk,
+            EXPERIMENTAL => {
+                self.expect_keywords(&[ARRANGEMENT, COMPRESSION])?;
+                ClusterOptionName::ExperimentalArrangementCompression
+            }
             INTROSPECTION => match self.expect_one_of_keywords(&[DEBUGGING, INTERVAL])? {
                 DEBUGGING => ClusterOptionName::IntrospectionDebugging,
                 INTERVAL => ClusterOptionName::IntrospectionInterval,
@@ -4806,6 +4811,7 @@ impl<'a> Parser<'a> {
             COMPUTE,
             COMPUTECTL,
             DISK,
+            EXPERIMENTAL,
             INTERNAL,
             INTROSPECTION,
             SIZE,
@@ -4830,6 +4836,10 @@ impl<'a> Parser<'a> {
                 ReplicaOptionName::ComputectlAddresses
             }
             DISK => ReplicaOptionName::Disk,
+            EXPERIMENTAL => {
+                self.expect_keywords(&[ARRANGEMENT, COMPRESSION])?;
+                ReplicaOptionName::ExperimentalArrangementCompression
+            }
             INTERNAL => ReplicaOptionName::Internal,
             INTROSPECTION => match self.expect_one_of_keywords(&[DEBUGGING, INTERVAL])? {
                 DEBUGGING => ReplicaOptionName::IntrospectionDebugging,

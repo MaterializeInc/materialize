@@ -350,6 +350,9 @@ impl From<&OptimizerConfig> for mz_sql::plan::HirToMirConfig {
             enable_fixed_correlated_cte_lowering: config
                 .features
                 .enable_fixed_correlated_cte_lowering,
+            enable_simplify_from_less_existence: config
+                .features
+                .enable_simplify_from_less_existence,
         }
     }
 }
