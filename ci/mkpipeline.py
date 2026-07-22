@@ -208,6 +208,7 @@ so it is executed.""",
     lto = (
         pipeline.get("env", {}).get("CI_LTO", 0) == 1
         or bool(os.environ["BUILDKITE_TAG"])
+        or args.pipeline == "spec-sheet"
         or (
             not ui.env_is_truthy("BUILDKITE_PULL_REQUEST")
             and args.pipeline in ("nightly", "release-qualification")
