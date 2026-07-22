@@ -48,7 +48,7 @@ pub use relation::{
 };
 pub use scalar::func::{self, BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
 pub use scalar::{
-    Columns, Eval, EvalError, FilterCharacteristics, MirScalarExpr, OptimizableExpr,
+    Columns, DomainLimit, Eval, EvalError, FilterCharacteristics, MirScalarExpr, OptimizableExpr,
     ProtoDomainLimit, ProtoEvalError, like_pattern,
 };
 
