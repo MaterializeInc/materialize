@@ -1,5 +1,12 @@
 # Materialize MCP Server
 
+> [!WARNING]
+> **Deprecated.** The Materialize MCP server is now built into Materialize and
+> served directly by `environmentd` (the `/api/mcp/agent` and
+> `/api/mcp/developer` endpoints). This standalone package is no longer the
+> recommended way to use MCP with Materialize and is not actively maintained.
+> See the [MCP server documentation](https://materialize.com/docs/integrations/mcp-server/).
+
 **The live data layer for apps and agents**
 
 Agents succeed when they can act in a loop with confidence.

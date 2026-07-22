@@ -24,6 +24,8 @@ authors = [
 ]
 
 keywords = ["materialize", "mcp", "database", "api"]
+# Deprecated: superseded by the MCP server built into Materialize.
+classifiers = ["Development Status :: 7 - Inactive"]
 dependencies = [
     "aiohttp>=3.11.18",
     "aiorwlock>=1.5.0",

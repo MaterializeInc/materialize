@@ -1,5 +1,12 @@
 # Materialize MCP Server
 
+> [!WARNING]
+> **Deprecated.** The Materialize MCP server is now built into Materialize and
+> served directly by `environmentd` (the `/api/mcp/agent` and
+> `/api/mcp/developer` endpoints). This standalone package is no longer the
+> recommended way to use MCP with Materialize and is not actively maintained.
+> See the [MCP server documentation](https://materialize.com/docs/integrations/mcp-server/).
+
 **Instantly turn indexed views in Materialize into real-time context tools for LLM-powered applications.**
 
 Materialize MCP Server exposes your Materialize views—when indexed and documented—as live, typed, callable tools. These tools behave like stable APIs for structured data, enabling models to act on fresh, consistent, and trustworthy information.

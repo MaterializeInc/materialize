@@ -24,6 +24,8 @@ authors = [
 ]
 
 keywords = ["materialize", "mcp", "database", "api"]
+# Deprecated: superseded by the MCP server built into Materialize.
+classifiers = ["Development Status :: 7 - Inactive"]
 dependencies = [
     "mcp>=1.10.1",
     "psycopg-pool>=3.2.6",

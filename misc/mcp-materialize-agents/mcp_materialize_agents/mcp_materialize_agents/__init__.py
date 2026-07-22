@@ -299,6 +299,11 @@ def json_serial(obj):
 def main():
     """Synchronous wrapper for the async main function."""
     try:
+        logger.warning(
+            "DEPRECATED: this standalone MCP server is superseded by the MCP "
+            "server built into Materialize (the /api/mcp endpoints). See "
+            "https://materialize.com/docs/integrations/mcp-server/"
+        )
         logger.info("Starting Materialize MCP Server...")
         asyncio.run(run())
     except KeyboardInterrupt:
