@@ -13,7 +13,7 @@
 //! edges between Plan nodes carry. Every producer emits this representation.
 //!
 //! Within a Plan node, operators may freely materialize `Vec` collections. Only
-//! the inter-node edge format is constrained. A node that produces a row-based
+//! the collection edge format is constrained. A node that produces a row-based
 //! collection re-encodes it to the columnar edge at its output leaf via
 //! [`vec_to_columnar`]. A node that must consume rows decodes at its input leaf
 //! via [`columnar_to_vec`]. Both are named operators (`VecToColumnar`,
@@ -47,7 +47,7 @@ use crate::render::errors::DataflowErrorSer;
 pub type ColumnarCollection<'scope, T, D, R> = Collection<'scope, T, Column<(D, T, R)>>;
 
 /// A dataflow edge between Plan nodes: a columnar collection of `(Row, Diff)`
-/// updates. Every producer emits this representation; a row-based producer
+/// updates. Every producer emits this representation. A row-based producer
 /// re-encodes to it at its output leaf via [`vec_to_columnar`].
 pub type CollectionEdge<'scope, T> = ColumnarCollection<'scope, T, Row, Diff>;
 
@@ -64,7 +64,7 @@ where
 /// Applies `logic` to each record in `edge`, exposing the record as a borrowed
 /// [`DatumVecBorrow`] and giving it ok and err output sessions.
 ///
-/// `max_demand` bounds the number of columns decoded per row; pass `usize::MAX`
+/// `max_demand` bounds the number of columns decoded per row. Pass `usize::MAX`
 /// to decode all columns.
 ///
 /// This is the canonical entry point for "decoding consumers" (operators that
@@ -103,8 +103,8 @@ where
             let mut ok_output = ok_output.activate();
             let mut err_output = err_output.activate();
             input.for_each(|time, data| {
-                // Retain the input capability to derive a `Capability` for each output;
-                // the `Session` type alias is fixed to `Capability<T>`.
+                // Retain the input capability to derive a `Capability` for each
+                // output. The `Session` type alias is fixed to `Capability<T>`.
                 let ok_cap = time.retain(0);
                 let err_cap = time.retain(1);
                 let mut ok_session = ok_output.session_with_builder(&ok_cap);
