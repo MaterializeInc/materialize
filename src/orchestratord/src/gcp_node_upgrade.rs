@@ -141,7 +141,7 @@ impl Config {
 
     fn node_pool_url(&self, pool: &str) -> String {
         format!(
-            "https://container.googleapis.com/v1/projects/{}/locations/{}/clusters/{}/nodePools/{}",
+            "https://container.googleapis.com/v1beta1/projects/{}/locations/{}/clusters/{}/nodePools/{}",
             self.project(),
             self.cluster_location,
             self.cluster_name,
@@ -151,6 +151,10 @@ impl Config {
 }
 
 /// The blue-green upgrade phase of a node pool, from the GKE API.
+///
+/// `WAITING_TO_DRAIN_BLUE_POOL` (the wait window of autoscaled blue-green
+/// upgrades, between cordoning and draining) is only reported by the
+/// `v1beta1` API, which is why this module talks to that version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 enum BlueGreenPhase {
@@ -158,6 +162,7 @@ enum BlueGreenPhase {
     UpdateStarted,
     CreatingGreenPool,
     CordoningBluePool,
+    WaitingToDrainBluePool,
     DrainingBluePool,
     NodePoolSoaking,
     DeletingBluePool,
@@ -171,10 +176,17 @@ impl BlueGreenPhase {
     /// Whether every blue node is guaranteed to have been cordoned, meaning
     /// a new generation of pods cannot land on a node which is about to be
     /// drained.
+    ///
+    /// `WAITING_TO_DRAIN_BLUE_POOL` is the ideal trigger window: all blue
+    /// nodes are cordoned but GKE won't start draining them until the
+    /// configured wait (up to 7 days) elapses.
     fn blue_pool_fully_cordoned(&self) -> bool {
         matches!(
             self,
-            Self::DrainingBluePool | Self::NodePoolSoaking | Self::DeletingBluePool
+            Self::WaitingToDrainBluePool
+                | Self::DrainingBluePool
+                | Self::NodePoolSoaking
+                | Self::DeletingBluePool
         )
     }
 }
@@ -364,7 +376,11 @@ async fn check_armed_pool(
     if cordoned_nodes.is_empty() {
         return Ok(PoolCheckOutcome::StillUpgrading);
     }
-    debug!(pool, ?cordoned_nodes, "found cordoned nodes in armed node pool");
+    debug!(
+        pool,
+        ?cordoned_nodes,
+        "found cordoned nodes in armed node pool"
+    );
 
     // Pods which are already terminating are ignored: the old generation's
     // pods are deleted asynchronously after a rollout completes and must not
@@ -438,8 +454,7 @@ async fn maybe_trigger_rollout(
     let Some(mz) = get_resource(&mz_api, name).await? else {
         warn!(
             namespace,
-            name,
-            "pods on cordoned nodes belong to a Materialize instance which no longer exists"
+            name, "pods on cordoned nodes belong to a Materialize instance which no longer exists"
         );
         return Ok(());
     };
@@ -539,7 +554,12 @@ impl GcpApiClient {
             .token(&["https://www.googleapis.com/auth/cloud-platform"])
             .await
             .context("fetching GCP auth token")?;
-        let response = self.http.get(url).bearer_auth(token.as_str()).send().await?;
+        let response = self
+            .http
+            .get(url)
+            .bearer_auth(token.as_str())
+            .send()
+            .await?;
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
@@ -576,7 +596,7 @@ async fn poll_gke_for_upgrades(
     }
 
     let url = format!(
-        "https://container.googleapis.com/v1/projects/{}/locations/{}/clusters/{}/nodePools",
+        "https://container.googleapis.com/v1beta1/projects/{}/locations/{}/clusters/{}/nodePools",
         config.project(),
         config.cluster_location,
         config.cluster_name,
@@ -798,7 +818,7 @@ mod tests {
         assert_eq!(config.project(), "my-project");
         assert_eq!(
             config.node_pool_url("materialize"),
-            "https://container.googleapis.com/v1/projects/my-project/locations/us-central1/clusters/my-cluster/nodePools/materialize",
+            "https://container.googleapis.com/v1beta1/projects/my-project/locations/us-central1/clusters/my-cluster/nodePools/materialize",
         );
     }
 
@@ -808,6 +828,10 @@ mod tests {
             ("\"DRAINING_BLUE_POOL\"", BlueGreenPhase::DrainingBluePool),
             ("\"NODE_POOL_SOAKING\"", BlueGreenPhase::NodePoolSoaking),
             ("\"CORDONING_BLUE_POOL\"", BlueGreenPhase::CordoningBluePool),
+            (
+                "\"WAITING_TO_DRAIN_BLUE_POOL\"",
+                BlueGreenPhase::WaitingToDrainBluePool,
+            ),
             // Phases from future API versions must not fail parsing.
             ("\"SOME_FUTURE_PHASE\"", BlueGreenPhase::Unknown),
         ] {
@@ -824,6 +848,7 @@ mod tests {
             // Cordoning is in progress but not necessarily complete: some
             // blue nodes may still accept pods.
             (BlueGreenPhase::CordoningBluePool, false),
+            (BlueGreenPhase::WaitingToDrainBluePool, true),
             (BlueGreenPhase::DrainingBluePool, true),
             (BlueGreenPhase::NodePoolSoaking, true),
             (BlueGreenPhase::DeletingBluePool, true),
@@ -870,12 +895,7 @@ mod tests {
         assert_eq!(
             upgrading_node_pool(
                 &config,
-                &upgrade_event_attributes(
-                    "my-cluster",
-                    "europe-west1",
-                    "NODE_POOL",
-                    pool_resource
-                ),
+                &upgrade_event_attributes("my-cluster", "europe-west1", "NODE_POOL", pool_resource),
             ),
             None,
         );

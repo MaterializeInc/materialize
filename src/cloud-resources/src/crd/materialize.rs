@@ -2818,14 +2818,10 @@ mod tests {
         // Changing the annotation's value changes both again.
         let hash = mz.generate_rollout_hash();
         let force = Materialize::from(mz.clone()).force_rollout_value();
-        mz.metadata
-            .annotations
-            .as_mut()
-            .unwrap()
-            .insert(
-                FORCE_ROLLOUT_ANNOTATION.to_owned(),
-                "3f61bf8d-0714-462c-8b3b-3d9a68d0bcba".to_owned(),
-            );
+        mz.metadata.annotations.as_mut().unwrap().insert(
+            FORCE_ROLLOUT_ANNOTATION.to_owned(),
+            "3f61bf8d-0714-462c-8b3b-3d9a68d0bcba".to_owned(),
+        );
         assert_ne!(mz.generate_rollout_hash(), hash);
         assert_ne!(Materialize::from(mz.clone()).force_rollout_value(), force);
     }
