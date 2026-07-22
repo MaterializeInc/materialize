@@ -374,7 +374,7 @@ pub fn build_compute_dataflow(
                 );
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
-                    // Imports read row-shaped data from persist; encode it to the
+                    // Imports read row-shaped data from persist. Encode it to the
                     // columnar edge at the boundary. The batches are already
                     // consolidated, so this leaf-encode is non-consolidating.
                     let bundle = crate::render::CollectionBundle::from_edge(
@@ -477,7 +477,7 @@ pub fn build_compute_dataflow(
                 );
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
-                    // Imports read row-shaped data from persist; encode it to the
+                    // Imports read row-shaped data from persist. Encode it to the
                     // columnar edge at the boundary. The batches are already
                     // consolidated, so this leaf-encode is non-consolidating.
                     let bundle = crate::render::CollectionBundle::from_edge(
@@ -673,7 +673,7 @@ where
                         start_signal,
                         |e, _| e.clone(),
                     );
-                    // The filtered index collection is row-shaped; encode it to
+                    // The filtered index collection is row-shaped. Encode it to
                     // the columnar edge at the boundary. It is already
                     // consolidated, so this leaf-encode is non-consolidating.
                     CollectionBundle::from_edge(
