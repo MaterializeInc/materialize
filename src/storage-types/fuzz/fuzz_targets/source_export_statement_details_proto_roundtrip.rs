@@ -99,7 +99,13 @@ fuzz_target!(|data: &[u8]| {
                 let Some(table) = arb::<PostgresTableDesc>(&mut runner) else {
                     return;
                 };
-                SourceExportStatementDetails::Postgres { table }
+                let Some(cast_oid_full_range) = arb::<bool>(&mut runner) else {
+                    return;
+                };
+                SourceExportStatementDetails::Postgres {
+                    table,
+                    cast_oid_full_range,
+                }
             }
             1 => {
                 let Some(table) = arb::<MySqlTableDesc>(&mut runner) else {

@@ -41,6 +41,7 @@ export const buildEnabledRegionReponse = (
         httpAddress:
           "47azz5yc00ab7xnu21b4p2evh.eu-west-1.aws.staging.materialize.cloud:443",
         resolvable: true,
+        upToDate: "True",
         enabledAt: "2022-11-11T00:20:14Z",
         ...regionInfo,
       },

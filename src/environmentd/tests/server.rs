@@ -5412,8 +5412,22 @@ fn run_mcp_datadriven_inner(
                 other => panic!("unknown directive: {}", other),
             };
 
-            let json: serde_json::Value = serde_json::from_str(&tc.input).unwrap();
-            let res = Client::new().post(url).json(&json).send().unwrap();
+            // Directive args: `get` sends a GET request instead of POST (the
+            // input is ignored), and `origin` attaches a non-allowlisted
+            // Origin header to exercise the DNS-rebinding defense. (Datadriven
+            // arg values cannot contain `:` or `/`, so the origin value is a
+            // fixed constant here rather than a directive parameter.)
+            let client = Client::new();
+            let mut req = if tc.args.contains_key("get") {
+                client.get(url)
+            } else {
+                let json: serde_json::Value = serde_json::from_str(&tc.input).unwrap();
+                client.post(url).json(&json)
+            };
+            if tc.args.contains_key("origin") {
+                req = req.header("origin", "https://evil.example.com");
+            }
+            let res = req.send().unwrap();
 
             let status = res.status();
             let body = res.text().unwrap();
@@ -5502,6 +5516,18 @@ fn test_mcp_developer_disabled() {
         .with_mcp_routes(false, true)
         .with_system_parameter_default("enable_mcp_developer".to_string(), "false".to_string());
     run_mcp_datadriven("tests/testdata/mcp/developer_disabled", harness);
+}
+
+/// Tests that MCP tool responses larger than `mcp_max_response_size` are
+/// rejected with an error telling the agent to narrow the query, instead of
+/// returning an unbounded payload.
+#[mz_ore::test]
+fn test_mcp_developer_response_size_limit() {
+    let harness = test_util::TestHarness::default()
+        .with_mcp_routes(false, true)
+        .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string())
+        .with_system_parameter_default("mcp_max_response_size".to_string(), "1024".to_string());
+    run_mcp_datadriven("tests/testdata/mcp/developer_response_limit", harness);
 }
 
 /// Regression test for database-issues#11320.

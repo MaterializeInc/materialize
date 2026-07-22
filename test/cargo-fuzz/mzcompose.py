@@ -498,10 +498,16 @@ class FuzzRunner:
                     pass
 
     def build(self) -> None:
-        # Build every target up front, one crate at a time, so the concurrent
-        # fuzzing phase doesn't have 20+ `cargo fuzz run` invocations fighting
-        # over cargo's per-target-dir build lock. Crates share the target dir,
-        # so common dependencies compile once.
+        # Compile every fuzz crate up front, one at a time, not just the crates
+        # this run will fuzz. A fuzz target that won't compile is a broken
+        # build: building only the crates the active --profile/filters select
+        # would let a compile break in a skipped crate pass as a green run,
+        # since that crate is never compiled. Building all of them makes a
+        # broken fuzzer fail the run immediately, whatever the profile.
+        # Sequential, one crate at a time, so the concurrent fuzzing phase
+        # doesn't have 20+ `cargo fuzz run` invocations fighting over cargo's
+        # per-target-dir build lock; crates share the target dir, so common
+        # dependencies compile once.
         # Must match _spawn's exec: we build with this sanitizer and run that
         # exact binary. Defaults to `none` everywhere (see the CLI flag): on
         # macOS ASan's interceptors segfault on startup (e.g. in flockfile), and
@@ -511,13 +517,9 @@ class FuzzRunner:
         cmd = ["cargo", "fuzz", "build"]
         if self.sanitizer:
             cmd.append(f"--sanitizer={self.sanitizer}")
-        crates = sorted({job.crate for job in self.jobs})
-        for i, crate in enumerate(crates, 1):
-            say(f"building [{i}/{len(crates)}] {crate}")
+        for i, crate in enumerate(FUZZ_CRATES, 1):
+            say(f"building [{i}/{len(FUZZ_CRATES)}] {crate}")
             if subprocess.run(cmd, cwd=MZ_ROOT / crate, env=self.env).returncode != 0:
-                # A fuzz target that won't compile is a broken build, not
-                # something to fuzz around: fail the whole run immediately rather
-                # than dropping the crate's targets and reporting green.
                 raise ui.UIError(f"build FAILED for {crate}")
 
     def run(self) -> list[Job]:

@@ -126,7 +126,7 @@ impl Metrics {
             )),
             arrangement_sizes_collection_time_seconds: registry.register(metric!(
                 name: "mz_arrangement_sizes_collection_time_seconds",
-                help: "Seconds to read mz_object_arrangement_sizes and prepare history-table updates for one snapshot.",
+                help: "Seconds to read mz_object_arrangement_sizes and prepare history records for one snapshot.",
                 buckets: histogram_seconds_buckets(0.000_128, 8.0)
             )),
             arrangement_sizes_rows_written: registry.register(metric!(

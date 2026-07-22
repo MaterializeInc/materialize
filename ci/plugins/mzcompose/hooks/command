@@ -379,6 +379,7 @@ cleanup() {
   killall -9 -q clusterd || true # There might be remaining processes from a cargo-test run
 
   if [ ! -s services.log ] \
+    && [ "$BUILDKITE_LABEL" != ":rust: cargo-fuzz" ] \
     && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of persist" ] \
     && [ "$BUILDKITE_LABEL" != "Long single-node Maelstrom coverage of persist" ] \
     && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of txn-wal" ] \

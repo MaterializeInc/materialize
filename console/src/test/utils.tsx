@@ -67,6 +67,7 @@ export const healthyEnvironment: EnabledEnvironment = {
   httpAddress: "8zpze6ltqnsjok9vvf2i99st5.us-east-1.aws.example.com:443",
   sqlAddress: "8zpze6ltqnsjok9vvf2i99st5.us-east-1.aws.example.com:6875",
   resolvable: true,
+  upToDate: "True",
   enabledAt: "2023-01-10T01:59:37Z",
   state: "enabled",
   status: {

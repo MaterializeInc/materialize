@@ -25,13 +25,14 @@ use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
 use mz_ore::option::OptionExt;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_ore::{soft_assert_or_log, task};
+use mz_ore::{soft_assert_or_log, soft_panic_or_log, task};
 use mz_persist_client::usage::ShardsUsageReferenced;
 use mz_repr::{Datum, Diff, Row};
 use mz_sql::ast::Statement;
 use mz_sql::names::ResolvedIds;
 use mz_sql::pure::PurifiedStatement;
 use mz_storage_client::controller::IntrospectionType;
+use mz_storage_types::StorageDiff;
 use opentelemetry::trace::TraceContextExt;
 use rand::{Rng, SeedableRng, rngs};
 use serde_json::json;
@@ -42,11 +43,19 @@ use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReaso
 use crate::catalog::BuiltinTableUpdate;
 use crate::command::Command;
 use crate::coord::{
-    AlterConnectionValidationReady, ClusterReplicaStatuses, Coordinator,
+    AlterConnectionValidationReady, ArrangementSizeRecord, ClusterReplicaStatuses, Coordinator,
     CreateConnectionValidationReady, Message, PurifiedStatementReady, WatchSetResponse,
 };
 use crate::telemetry::{EventDetails, SegmentClientExt};
 use crate::{AdapterNotice, TimestampContext};
+
+/// How long an introspection subscribe must have been delivering data before
+/// the arrangement sizes snapshot trusts its replica's rows.
+///
+/// See `Coordinator::fresh_introspection_replicas` for why a margin is needed.
+/// 10s comfortably covers the collection manager's ~1s write batching plus the
+/// oracle read timestamp trailing the wall clock.
+const ARRANGEMENT_SIZES_FRESHNESS_MARGIN: Duration = Duration::from_secs(10);
 
 impl Coordinator {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 74KB. This would
@@ -141,6 +150,9 @@ impl Coordinator {
             }
             Message::ArrangementSizesSnapshot => {
                 self.arrangement_sizes_snapshot().boxed_local().await;
+            }
+            Message::ArrangementSizesWrite(records) => {
+                self.arrangement_sizes_write(records).boxed_local().await;
             }
             Message::ArrangementSizesPrune(expired) => {
                 self.arrangement_sizes_prune(expired).boxed_local().await;
@@ -457,27 +469,44 @@ impl Coordinator {
         });
     }
 
-    /// Snapshots the current contents of `mz_object_arrangement_sizes` and
-    /// appends them to `mz_object_arrangement_size_history`, tagged with a
-    /// shared `collection_timestamp`. Reschedules on completion.
+    /// Kicks off a snapshot of `mz_object_arrangement_sizes` for appending to
+    /// `mz_object_arrangement_size_history`.
     ///
-    /// Each `(replica_id, object_id)` pair is recorded with a
-    /// `hydration_complete` flag derived from `mz_compute_hydration_times`:
-    /// `true` once the pair's initial hydration on that replica is finished,
-    /// `false` while still building. Consumers that want only stable sizes
-    /// should filter `WHERE hydration_complete`.
+    /// The persist reads and row preparation are too slow for the coordinator
+    /// main loop, so they run on a spawned task. The prepared records come
+    /// back as [`Message::ArrangementSizesWrite`] and are appended by
+    /// [`Coordinator::arrangement_sizes_write`], which also reschedules the
+    /// next collection. An empty or failed snapshot reschedules directly.
+    ///
+    /// Rows from replicas without fresh introspection data are excluded, so
+    /// sizes predating an environmentd or replica restart are not recorded.
+    /// See [`Coordinator::fresh_introspection_replicas`].
     #[mz_ore::instrument(level = "debug")]
-    async fn arrangement_sizes_snapshot(&mut self) {
-        // The catalog server is not writable in read-only mode.
+    async fn arrangement_sizes_snapshot(&self) {
+        // Builtin collections are not writable in read-only mode. Skip the
+        // cycle but keep rescheduling, mirroring `storage_usage_fetch`, so
+        // collection stays alive regardless of how the coordinator leaves
+        // read-only mode. The transition is one-way, so
+        // `arrangement_sizes_write` needs no check of its own.
         if self.controller.read_only() {
             self.schedule_arrangement_sizes_collection().await;
             return;
         }
 
-        let collection_timer = self
-            .metrics
-            .arrangement_sizes_collection_time_seconds
-            .start_timer();
+        let fresh_size_replicas = self.fresh_introspection_replicas(
+            IntrospectionType::ComputeObjectArrangementSizes,
+            ARRANGEMENT_SIZES_FRESHNESS_MARGIN,
+        );
+        let fresh_hydration_replicas = self.fresh_introspection_replicas(
+            IntrospectionType::ComputeHydrationTimes,
+            ARRANGEMENT_SIZES_FRESHNESS_MARGIN,
+        );
+        if fresh_size_replicas.is_empty() {
+            // No replica has reported sizes in this process yet, so the live
+            // collection contains only stale rows (or none). Skip the cycle.
+            self.schedule_arrangement_sizes_collection().await;
+            return;
+        }
 
         let live_item_id = self.catalog().resolve_builtin_storage_collection(
             &mz_catalog::builtin::MZ_OBJECT_ARRANGEMENT_SIZES_UNIFIED,
@@ -490,65 +519,84 @@ impl Coordinator {
             .catalog
             .get_entry(&hydration_item_id)
             .latest_global_id();
-        let history_item_id = self
-            .catalog()
-            .resolve_builtin_table(&mz_catalog::builtin::MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY);
 
-        let read_ts = self.get_local_read_ts().await;
-        let snapshot = match self
-            .controller
-            .storage_collections
-            .snapshot(live_global_id, read_ts)
-            .await
-        {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::warn!("arrangement sizes snapshot failed: {e:?}");
-                drop(collection_timer);
-                self.schedule_arrangement_sizes_collection().await;
-                return;
-            }
-        };
-        let mut hydration_snapshot = match self
-            .controller
-            .storage_collections
-            .snapshot(hydration_global_id, read_ts)
-            .await
-        {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::warn!("arrangement sizes hydration snapshot failed: {e:?}");
-                drop(collection_timer);
-                self.schedule_arrangement_sizes_collection().await;
-                return;
-            }
-        };
-        differential_dataflow::consolidation::consolidate(&mut hydration_snapshot);
+        let oracle = self.get_local_timestamp_oracle();
+        let storage_collections = Arc::clone(&self.controller.storage_collections);
+        let collection_metric = self
+            .metrics
+            .arrangement_sizes_collection_time_seconds
+            .clone();
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
 
-        // Build the set of pairs whose initial hydration has finished
-        // (`time_ns IS NOT NULL`). The set drives the `hydration_complete`
-        // flag for each row we emit below.
-        let mut datum_vec = mz_repr::DatumVec::new();
-        let mut hydrated: BTreeSet<(String, String)> = BTreeSet::new();
-        const HYDRATION_COL_REPLICA_ID: usize = 0;
-        const HYDRATION_COL_OBJECT_ID: usize = 1;
-        const HYDRATION_COL_TIME_NS: usize = 2;
-        const HYDRATION_COL_COUNT: usize = 3;
-        for (row, diff) in &hydration_snapshot {
-            if *diff != 1 {
-                continue;
-            }
-            let datums = datum_vec.borrow_with(row);
-            if datums.len() < HYDRATION_COL_COUNT {
-                continue;
-            }
-            if datums[HYDRATION_COL_TIME_NS].is_null() {
-                continue;
-            }
-            hydrated.insert((
-                datums[HYDRATION_COL_REPLICA_ID].unwrap_str().to_string(),
-                datums[HYDRATION_COL_OBJECT_ID].unwrap_str().to_string(),
-            ));
+        task::spawn(|| "arrangement_sizes_snapshot", async move {
+            let collection_metric_timer = collection_metric.start_timer();
+
+            // No read hold is taken, so the reads rely on both collections
+            // being retained-metrics objects, whose since lags the upper by
+            // `metrics_retention` rather than tracking it closely. If the
+            // since still overtakes `read_ts`, the snapshot fails, and the
+            // cycle is skipped and retried at the next interval.
+            let read_ts = oracle.read_ts().await;
+            let live_snapshot = match storage_collections.snapshot(live_global_id, read_ts).await {
+                Ok(s) => s,
+                Err(e) => {
+                    // Unreachable short of a read-policy bug or catalog
+                    // corruption, so be loud, but degrade to a skipped cycle
+                    // in production.
+                    soft_panic_or_log!("arrangement sizes snapshot failed: {e:?}");
+                    let _ = internal_cmd_tx.send(Message::ArrangementSizesSchedule);
+                    return;
+                }
+            };
+            let hydration_snapshot = match storage_collections
+                .snapshot(hydration_global_id, read_ts)
+                .await
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    soft_panic_or_log!("arrangement sizes hydration snapshot failed: {e:?}");
+                    let _ = internal_cmd_tx.send(Message::ArrangementSizesSchedule);
+                    return;
+                }
+            };
+
+            let records = arrangement_sizes_records(
+                live_snapshot,
+                hydration_snapshot,
+                &fresh_size_replicas,
+                &fresh_hydration_replicas,
+            );
+            collection_metric_timer.observe_duration();
+
+            let msg = if records.is_empty() {
+                Message::ArrangementSizesSchedule
+            } else {
+                Message::ArrangementSizesWrite(records)
+            };
+            // It is not an error for this task to outlive `internal_cmd_rx`.
+            let _ = internal_cmd_tx.send(msg);
+        });
+    }
+
+    /// Stamps prepared snapshot records with a shared `collection_timestamp`
+    /// and appends them to `mz_object_arrangement_size_history`. Reschedules
+    /// the next collection once the append completes.
+    #[mz_ore::instrument(level = "debug")]
+    async fn arrangement_sizes_write(&mut self, records: Vec<ArrangementSizeRecord>) {
+        // Freshness may have been invalidated while the snapshot task ran,
+        // e.g. by a cluster event reporting a replica offline. Revalidate so
+        // records prepared from a now-untrusted replica's data are dropped.
+        let fresh_size_replicas = self.fresh_introspection_replicas(
+            IntrospectionType::ComputeObjectArrangementSizes,
+            ARRANGEMENT_SIZES_FRESHNESS_MARGIN,
+        );
+        let records: Vec<_> = records
+            .into_iter()
+            .filter(|record| fresh_size_replicas.contains(&record.replica_id))
+            .collect();
+        if records.is_empty() {
+            self.schedule_arrangement_sizes_collection().await;
+            return;
         }
 
         // `collection_ts` is stamped after the snapshot so it's always >= the
@@ -562,90 +610,43 @@ impl Coordinator {
                 .expect("collection_timestamp must fit into TimestampTz"),
         );
 
-        let mut consolidated = snapshot;
-        differential_dataflow::consolidation::consolidate(&mut consolidated);
+        let history_item_id = self
+            .catalog()
+            .resolve_builtin_table(&mz_catalog::builtin::MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY);
 
-        // Column positions in `mz_object_arrangement_sizes`.
-        const LIVE_COL_REPLICA_ID: usize = 0;
-        const LIVE_COL_OBJECT_ID: usize = 1;
-        const LIVE_COL_SIZE: usize = 2;
-        const LIVE_COL_COUNT: usize = 3;
-
-        let mut skipped_malformed: u64 = 0;
-        let mut skipped_null_size: u64 = 0;
-        let mut updates: Vec<BuiltinTableUpdate> = Vec::with_capacity(consolidated.len());
-        for (row, diff) in consolidated.iter() {
-            if *diff != 1 {
-                continue;
-            }
-            let datums = datum_vec.borrow_with(row);
-            // Surface schema drift via a warn log below rather than silently
-            // skipping entire snapshots.
-            if datums.len() != LIVE_COL_COUNT {
-                skipped_malformed += 1;
-                continue;
-            }
-            let replica_id = datums[LIVE_COL_REPLICA_ID].unwrap_str();
-            let object_id = datums[LIVE_COL_OBJECT_ID].unwrap_str();
-            let size_datum = datums[LIVE_COL_SIZE];
-            // The history table's `size` is non-null; fabricating zero would
-            // be misleading, so drop.
-            if size_datum.is_null() {
-                skipped_null_size += 1;
-                continue;
-            }
-            let size = size_datum.unwrap_int64();
-            // Pairs whose hydration hasn't completed yet are still recorded,
-            // tagged with `hydration_complete = false`. Consumers that care
-            // only about stable sizes can filter on `hydration_complete`.
-            let hydration_complete =
-                hydrated.contains(&(replica_id.to_string(), object_id.to_string()));
-            let new_row = Row::pack_slice(&[
-                Datum::String(replica_id),
-                Datum::String(object_id),
-                Datum::Int64(size),
-                collection_datum,
-                Datum::from(hydration_complete),
-            ]);
-            updates.push(BuiltinTableUpdate::row(history_item_id, new_row, Diff::ONE));
-        }
-        if skipped_malformed > 0 {
-            warn!(
-                "mz_object_arrangement_sizes schema drift: skipped {skipped_malformed} rows \
-                 with unexpected arity"
-            );
-        }
-        if skipped_null_size > 0 {
-            tracing::debug!("skipped {skipped_null_size} live rows with null size");
-        }
+        let updates: Vec<_> = records
+            .into_iter()
+            .map(|record| {
+                let row = Row::pack_slice(&[
+                    Datum::String(&record.replica_id),
+                    Datum::String(&record.object_id),
+                    Datum::Int64(record.size),
+                    collection_datum,
+                    Datum::from(record.hydration_complete),
+                ]);
+                BuiltinTableUpdate::row(history_item_id, row, Diff::ONE)
+            })
+            .collect();
 
         let row_count = updates.len();
-        // Captures snapshot + row construction. The async table-apply below
-        // is captured separately by `mz_append_table_duration_seconds`.
-        collection_timer.observe_duration();
+        self.metrics
+            .arrangement_sizes_rows_written
+            .inc_by(u64::cast_from(row_count));
 
-        if !updates.is_empty() {
-            self.metrics
-                .arrangement_sizes_rows_written
-                .inc_by(u64::cast_from(row_count));
-            // TODO(arrangement-sizes): when the writeable-catalog-server plumbing
-            // in https://github.com/MaterializeInc/materialize/pull/35436 lands,
-            // append directly on `mz_catalog_server` instead of going through
-            // the environmentd builtin-table-update path.
-            let (fut, _) = self.builtin_table_update().execute(updates).await;
-            let internal_cmd_tx = self.internal_cmd_tx.clone();
-            let task_span =
-                info_span!(parent: None, "coord::arrangement_sizes_snapshot::table_updates");
-            OpenTelemetryContext::obtain().attach_as_parent_to(&task_span);
-            task::spawn(|| "arrangement_sizes_snapshot_apply", async move {
-                fut.instrument(task_span).await;
-                if let Err(e) = internal_cmd_tx.send(Message::ArrangementSizesSchedule) {
-                    warn!("internal_cmd_rx dropped before we could send: {e:?}");
-                }
-            });
-        } else {
-            self.schedule_arrangement_sizes_collection().await;
-        }
+        // TODO(arrangement-sizes): when the writeable-catalog-server plumbing
+        // in https://github.com/MaterializeInc/materialize/pull/35436 lands,
+        // append directly on `mz_catalog_server` instead of going through
+        // the environmentd builtin-table-update path.
+        let (fut, _) = self.builtin_table_update().execute(updates).await;
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+        let task_span = info_span!(parent: None, "coord::arrangement_sizes_write::table_updates");
+        OpenTelemetryContext::obtain().attach_as_parent_to(&task_span);
+        task::spawn(|| "arrangement_sizes_write_table_updates", async move {
+            fut.instrument(task_span).await;
+            if let Err(e) = internal_cmd_tx.send(Message::ArrangementSizesSchedule) {
+                warn!("internal_cmd_rx dropped before we could send: {e:?}");
+            }
+        });
 
         tracing::debug!(
             "appended {row_count} rows to mz_object_arrangement_size_history at ts {collection_ts}"
@@ -1042,6 +1043,14 @@ impl Coordinator {
             new_process_status,
         );
 
+        // The replica's introspection subscribes may keep serving data written
+        // for its previous incarnation until their failure responses are
+        // processed. Invalidate freshness eagerly so consumers like the
+        // arrangement sizes history don't record that data as current.
+        if !matches!(event.status, ClusterStatus::Online) || restart_count_changed {
+            self.invalidate_introspection_freshness(event.replica_id);
+        }
+
         if let Some(old_replica_status) = old_replica_status {
             let cluster = self.catalog().get_cluster(event.cluster_id);
             let replica = cluster.replica(event.replica_id).expect("Replica exists");
@@ -1167,5 +1176,253 @@ impl Coordinator {
                 linearize_reads_notify.notify_one();
             });
         }
+    }
+}
+
+/// Builds history records from snapshots of `mz_object_arrangement_sizes` and
+/// `mz_compute_hydration_times`.
+///
+/// Each `(replica_id, object_id)` pair is recorded with a
+/// `hydration_complete` flag: `true` once the pair's initial hydration on that
+/// replica is finished (`time_ns IS NOT NULL`), `false` while still building.
+/// Consumers that want only stable sizes should filter
+/// `WHERE hydration_complete`.
+///
+/// Rows from replicas outside `fresh_size_replicas` are dropped, and the
+/// hydration flag is only trusted for replicas in `fresh_hydration_replicas`.
+/// Rows for other replicas may predate an environmentd or replica restart.
+///
+/// Rows with a size of 0 (arrangements below the live collection's 5 MiB
+/// quantization threshold) are not recorded.
+fn arrangement_sizes_records(
+    mut live_snapshot: Vec<(Row, StorageDiff)>,
+    mut hydration_snapshot: Vec<(Row, StorageDiff)>,
+    fresh_size_replicas: &BTreeSet<String>,
+    fresh_hydration_replicas: &BTreeSet<String>,
+) -> Vec<ArrangementSizeRecord> {
+    differential_dataflow::consolidation::consolidate(&mut live_snapshot);
+    differential_dataflow::consolidation::consolidate(&mut hydration_snapshot);
+
+    let mut datum_vec = mz_repr::DatumVec::new();
+
+    // Column positions in `mz_compute_hydration_times`.
+    const HYDRATION_COL_REPLICA_ID: usize = 0;
+    const HYDRATION_COL_OBJECT_ID: usize = 1;
+    const HYDRATION_COL_TIME_NS: usize = 2;
+    const HYDRATION_COL_COUNT: usize = 3;
+
+    let mut hydrated: BTreeSet<(String, String)> = BTreeSet::new();
+    for (row, diff) in &hydration_snapshot {
+        if *diff != 1 {
+            continue;
+        }
+        let datums = datum_vec.borrow_with(row);
+        if datums.len() < HYDRATION_COL_COUNT {
+            continue;
+        }
+        if datums[HYDRATION_COL_TIME_NS].is_null() {
+            continue;
+        }
+        let replica_id = datums[HYDRATION_COL_REPLICA_ID].unwrap_str();
+        if !fresh_hydration_replicas.contains(replica_id) {
+            continue;
+        }
+        hydrated.insert((
+            replica_id.to_string(),
+            datums[HYDRATION_COL_OBJECT_ID].unwrap_str().to_string(),
+        ));
+    }
+
+    // Column positions in `mz_object_arrangement_sizes`.
+    const LIVE_COL_REPLICA_ID: usize = 0;
+    const LIVE_COL_OBJECT_ID: usize = 1;
+    const LIVE_COL_SIZE: usize = 2;
+    const LIVE_COL_COUNT: usize = 3;
+
+    let mut skipped_malformed: u64 = 0;
+    let mut skipped_null_size: u64 = 0;
+    let mut skipped_zero_size: u64 = 0;
+    let mut skipped_stale_replica: u64 = 0;
+    let mut records = Vec::with_capacity(live_snapshot.len());
+    for (row, diff) in &live_snapshot {
+        if *diff != 1 {
+            continue;
+        }
+        let datums = datum_vec.borrow_with(row);
+        // Surface schema drift via a warn log below rather than silently
+        // skipping entire snapshots.
+        if datums.len() != LIVE_COL_COUNT {
+            skipped_malformed += 1;
+            continue;
+        }
+        let replica_id = datums[LIVE_COL_REPLICA_ID].unwrap_str();
+        if !fresh_size_replicas.contains(replica_id) {
+            skipped_stale_replica += 1;
+            continue;
+        }
+        let object_id = datums[LIVE_COL_OBJECT_ID].unwrap_str();
+        let size_datum = datums[LIVE_COL_SIZE];
+        // The history table's `size` is non-null; fabricating zero would
+        // be misleading, so drop.
+        if size_datum.is_null() {
+            skipped_null_size += 1;
+            continue;
+        }
+        // A quantized size of 0 means "below 5 MiB". The live collection
+        // keeps such rows so small objects stay visible, but recording them
+        // every cycle would bloat the history with rows carrying no signal.
+        if size_datum.unwrap_int64() == 0 {
+            skipped_zero_size += 1;
+            continue;
+        }
+        let hydration_complete =
+            hydrated.contains(&(replica_id.to_string(), object_id.to_string()));
+        records.push(ArrangementSizeRecord {
+            replica_id: replica_id.to_string(),
+            object_id: object_id.to_string(),
+            size: size_datum.unwrap_int64(),
+            hydration_complete,
+        });
+    }
+    if skipped_malformed > 0 {
+        warn!(
+            "mz_object_arrangement_sizes schema drift: skipped {skipped_malformed} rows \
+             with unexpected arity"
+        );
+    }
+    if skipped_null_size > 0 {
+        tracing::debug!("skipped {skipped_null_size} live rows with null size");
+    }
+    if skipped_zero_size > 0 {
+        tracing::debug!("skipped {skipped_zero_size} live rows with zero size");
+    }
+    if skipped_stale_replica > 0 {
+        tracing::debug!(
+            "skipped {skipped_stale_replica} live rows from replicas without fresh \
+             introspection data"
+        );
+    }
+    records
+}
+
+#[cfg(test)]
+mod arrangement_sizes_records_tests {
+    use std::collections::BTreeSet;
+
+    use mz_repr::{Datum, Row};
+
+    use super::arrangement_sizes_records;
+
+    fn live_row(replica_id: &str, object_id: &str, size: Option<i64>) -> Row {
+        Row::pack_slice(&[
+            Datum::String(replica_id),
+            Datum::String(object_id),
+            size.map_or(Datum::Null, Datum::Int64),
+        ])
+    }
+
+    fn hydration_row(replica_id: &str, object_id: &str, hydrated: bool) -> Row {
+        Row::pack_slice(&[
+            Datum::String(replica_id),
+            Datum::String(object_id),
+            if hydrated {
+                Datum::UInt64(1)
+            } else {
+                Datum::Null
+            },
+        ])
+    }
+
+    fn replicas(ids: &[&str]) -> BTreeSet<String> {
+        ids.iter().map(|id| id.to_string()).collect()
+    }
+
+    #[mz_ore::test]
+    fn hydration_flag_per_pair() {
+        let live = vec![
+            (live_row("u1", "u100", Some(10)), 1),
+            (live_row("u1", "u200", Some(20)), 1),
+        ];
+        let hydration = vec![
+            (hydration_row("u1", "u100", true), 1),
+            (hydration_row("u1", "u200", false), 1),
+        ];
+        let fresh = replicas(&["u1"]);
+        let records = arrangement_sizes_records(live, hydration, &fresh, &fresh);
+        assert_eq!(records.len(), 2);
+        assert!(
+            records
+                .iter()
+                .any(|r| r.object_id == "u100" && r.hydration_complete)
+        );
+        assert!(
+            records
+                .iter()
+                .any(|r| r.object_id == "u200" && !r.hydration_complete)
+        );
+    }
+
+    #[mz_ore::test]
+    fn skips_malformed_null_and_retracted() {
+        let live = vec![
+            // Wrong arity.
+            (Row::pack_slice(&[Datum::String("u1")]), 1),
+            // Null size.
+            (live_row("u1", "u100", None), 1),
+            // Retracted by consolidation.
+            (live_row("u1", "u200", Some(20)), 1),
+            (live_row("u1", "u200", Some(20)), -1),
+            (live_row("u1", "u300", Some(30)), 1),
+        ];
+        let fresh = replicas(&["u1"]);
+        let records = arrangement_sizes_records(live, Vec::new(), &fresh, &fresh);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].object_id, "u300");
+        assert_eq!(records[0].size, 30);
+        assert!(!records[0].hydration_complete);
+    }
+
+    #[mz_ore::test]
+    fn skips_zero_size_rows() {
+        // Size 0 means "below the live collection's quantization threshold".
+        // Such objects stay visible live but are not recorded in the history.
+        let live = vec![
+            (live_row("u1", "u100", Some(0)), 1),
+            (live_row("u1", "u200", Some(10485760)), 1),
+        ];
+        let fresh = replicas(&["u1"]);
+        let records = arrangement_sizes_records(live, Vec::new(), &fresh, &fresh);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].object_id, "u200");
+    }
+
+    #[mz_ore::test]
+    fn skips_rows_from_stale_replicas() {
+        // u1 has fresh introspection data, u2's rows predate a restart.
+        let live = vec![
+            (live_row("u1", "u100", Some(10)), 1),
+            (live_row("u2", "u100", Some(99)), 1),
+        ];
+        let hydration = vec![
+            (hydration_row("u1", "u100", true), 1),
+            (hydration_row("u2", "u100", true), 1),
+        ];
+        let fresh = replicas(&["u1"]);
+        let records = arrangement_sizes_records(live, hydration, &fresh, &fresh);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].replica_id, "u1");
+        assert!(records[0].hydration_complete);
+    }
+
+    #[mz_ore::test]
+    fn stale_hydration_data_is_not_trusted() {
+        // u1's sizes subscribe is fresh but its hydration subscribe is not,
+        // so its stale "hydrated" row must not mark the record complete.
+        let live = vec![(live_row("u1", "u100", Some(10)), 1)];
+        let hydration = vec![(hydration_row("u1", "u100", true), 1)];
+        let records =
+            arrangement_sizes_records(live, hydration, &replicas(&["u1"]), &replicas(&[]));
+        assert_eq!(records.len(), 1);
+        assert!(!records[0].hydration_complete);
     }
 }
