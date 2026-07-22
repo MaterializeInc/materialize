@@ -23,6 +23,13 @@ pub struct PostgresClientMetrics {
     pub(crate) connpool_connections_created: Counter,
     pub(crate) connpool_connection_errors: Counter,
     pub(crate) connpool_ttl_reconnections: Counter,
+    /// Connections in a caller-managed shared set. These count against the pool's max size but
+    /// look permanently checked out to the connpool gauges, so this gauge is needed to read
+    /// those correctly.
+    pub connpool_shared_size: UIntGauge,
+    /// In-flight operations on a shared connection at acquisition, including the acquiring
+    /// operation itself. Values above 1 mean operations are pipelining.
+    pub connpool_shared_inflight: prometheus::Histogram,
 }
 
 impl PostgresClientMetrics {
@@ -56,6 +63,15 @@ impl PostgresClientMetrics {
             connpool_ttl_reconnections: registry.register(metric!(
                 name: format!("{}_postgres_connpool_ttl_reconnections", prefix),
                 help: "times a connection was recycled due to ttl",
+            )),
+            connpool_shared_size: registry.register(metric!(
+                name: format!("{}_postgres_connpool_shared_size", prefix),
+                help: "connections in the shared set for pipelined operations",
+            )),
+            connpool_shared_inflight: registry.register(metric!(
+                name: format!("{}_postgres_connpool_shared_inflight", prefix),
+                help: "in-flight operations on a shared connection at acquisition",
+                buckets: prometheus::exponential_buckets(1.0, 2.0, 11).expect("valid buckets"),
             )),
         }
     }

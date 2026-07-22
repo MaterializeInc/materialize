@@ -338,6 +338,17 @@ impl PostgresClient {
         // Don't bother reporting the maximum size of the pool... we know that from config.
     }
 
+    /// The connection pool's maximum size, as the pool was actually built.
+    ///
+    /// This reflects the pool that exists, not [`PostgresClientKnobs::connection_pool_max_size`],
+    /// which reads a dyncfg that can be updated after the pool is constructed (the pool only
+    /// honors a new value across a restart). Callers that reserve pool capacity, e.g. to keep
+    /// exclusive checkouts from being starved by a shared set, must clamp against this. Clamping
+    /// against the knob instead can over-subscribe a pool that was built smaller.
+    pub fn connection_pool_max_size(&self) -> usize {
+        self.pool.status().max_size
+    }
+
     /// Gets connection from the pool or waits for one to become available.
     pub async fn get_connection(&self) -> Result<Connection, PoolError> {
         let start = Instant::now();
