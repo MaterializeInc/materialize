@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use itertools::Itertools;
-use mz_adapter_types::dyncfgs::ENABLE_FRONTEND_SUBSCRIBES;
+use mz_adapter_types::dyncfgs::{ENABLE_FRONTEND_SUBSCRIBES, ENABLE_SESSION_LOCAL_COMMIT};
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller_types::ClusterId;
@@ -810,6 +810,10 @@ impl PeekClient {
         // necessary to support PG's `BEGIN` semantics, whose behavior can
         // depend on whether or not reads have occurred in the txn.
         let requires_linearization = (&explain_ctx).into();
+        // Only plain SELECTs qualify. COPY TO leaves Coordinator-side state,
+        // see the field's doc comment.
+        let allow_session_local_commit = matches!(query_plan, QueryPlan::Select(..))
+            && ENABLE_SESSION_LOCAL_COMMIT.get(catalog.system_config().dyncfgs());
         let mut transaction_determination = determination.clone();
         match query_plan {
             QueryPlan::Subscribe { .. } => {
@@ -823,6 +827,7 @@ impl PeekClient {
                         determination: transaction_determination,
                         cluster_id: target_cluster_id,
                         requires_linearization,
+                        allow_session_local_commit,
                     })?;
                 } else if matches!(session.transaction(), &TransactionStatus::InTransaction(_)) {
                     // If the query uses AS OF, then ignore the timestamp.
@@ -831,6 +836,7 @@ impl PeekClient {
                         determination: transaction_determination,
                         cluster_id: target_cluster_id,
                         requires_linearization,
+                        allow_session_local_commit,
                     })?;
                 }
             }

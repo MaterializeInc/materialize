@@ -1087,53 +1087,44 @@ impl Coordinator {
         let mut cached_oracle_ts = BTreeMap::new();
 
         for (conn_id, mut read_txn) in std::mem::take(&mut self.pending_linearize_read_txns) {
-            if let TimestampContext::TimelineTimestamp {
+            if !read_txn.timestamp_context().requires_oracle_wait() {
+                // No oracle timestamp, or the chosen timestamp already
+                // trailed the oracle timestamp when it was determined, so no
+                // need to delay.
+                ready_txns.push(read_txn);
+                continue;
+            }
+            let TimestampContext::TimelineTimestamp {
                 timeline,
                 chosen_ts,
-                oracle_ts,
+                ..
             } = read_txn.timestamp_context()
-            {
-                let oracle_ts = match oracle_ts {
-                    Some(oracle_ts) => oracle_ts,
-                    None => {
-                        // There was no oracle timestamp, so no need to delay.
-                        ready_txns.push(read_txn);
-                        continue;
-                    }
-                };
+            else {
+                unreachable!("requires_oracle_wait implies a timeline timestamp");
+            };
 
-                if chosen_ts <= oracle_ts {
-                    // Chosen ts was already <= the oracle ts, so we're good
-                    // to go!
-                    ready_txns.push(read_txn);
-                    continue;
+            // See what the oracle timestamp is now and delay when needed.
+            let current_oracle_ts = cached_oracle_ts.entry(timeline.clone());
+            let current_oracle_ts = match current_oracle_ts {
+                btree_map::Entry::Vacant(entry) => {
+                    let timestamp_oracle = self.get_timestamp_oracle(timeline);
+                    let read_ts = timestamp_oracle.read_ts().await;
+                    entry.insert(read_ts.clone());
+                    read_ts
                 }
+                btree_map::Entry::Occupied(entry) => entry.get().clone(),
+            };
 
-                // See what the oracle timestamp is now and delay when needed.
-                let current_oracle_ts = cached_oracle_ts.entry(timeline.clone());
-                let current_oracle_ts = match current_oracle_ts {
-                    btree_map::Entry::Vacant(entry) => {
-                        let timestamp_oracle = self.get_timestamp_oracle(timeline);
-                        let read_ts = timestamp_oracle.read_ts().await;
-                        entry.insert(read_ts.clone());
-                        read_ts
-                    }
-                    btree_map::Entry::Occupied(entry) => entry.get().clone(),
-                };
-
-                if *chosen_ts <= current_oracle_ts {
-                    ready_txns.push(read_txn);
-                } else {
-                    let wait =
-                        Duration::from_millis(chosen_ts.saturating_sub(current_oracle_ts).into());
-                    if wait < shortest_wait {
-                        shortest_wait = wait;
-                    }
-                    read_txn.num_requeues += 1;
-                    self.pending_linearize_read_txns.insert(conn_id, read_txn);
-                }
-            } else {
+            if *chosen_ts <= current_oracle_ts {
                 ready_txns.push(read_txn);
+            } else {
+                let wait =
+                    Duration::from_millis(chosen_ts.saturating_sub(current_oracle_ts).into());
+                if wait < shortest_wait {
+                    shortest_wait = wait;
+                }
+                read_txn.num_requeues += 1;
+                self.pending_linearize_read_txns.insert(conn_id, read_txn);
             }
         }
 

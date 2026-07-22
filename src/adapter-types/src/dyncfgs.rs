@@ -101,6 +101,14 @@ pub const ENABLE_FRONTEND_SUBSCRIBES: Config<bool> = Config::new(
     "Enable sending subscribes down the new frontend-peek path.",
 );
 
+/// Enable committing single-peek transactions in the session task, without a
+/// Coordinator round-trip.
+pub const ENABLE_SESSION_LOCAL_COMMIT: Config<bool> = Config::new(
+    "enable_session_local_commit",
+    false,
+    "Enable committing single-peek transactions in the session task, without a Coordinator round-trip.",
+);
+
 /// The plan insights notice will not investigate fast path clusters if plan optimization took longer than this.
 pub const PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION: Config<Duration> = Config::new(
     "plan_insights_notice_fast_path_clusters_optimize_duration",
@@ -435,6 +443,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
         .add(&ENABLE_INTROSPECTION_SUBSCRIBES)
         .add(&ENABLE_FRONTEND_SUBSCRIBES)
+        .add(&ENABLE_SESSION_LOCAL_COMMIT)
         .add(&PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION)
         .add(&ENABLE_EXPRESSION_CACHE)
         .add(&ENABLE_PASSWORD_AUTH)

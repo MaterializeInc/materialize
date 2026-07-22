@@ -1839,6 +1839,7 @@ class FlipFlagsAction(Action):
             "true",
             "false",
         ]
+        self.flags_with_values["enable_session_local_commit"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_case_literal_transform"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_cast_elimination"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_fixed_correlated_cte_lowering"] = (

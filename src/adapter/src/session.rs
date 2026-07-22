@@ -1321,12 +1321,16 @@ impl TransactionStatus {
                         determination,
                         cluster_id,
                         requires_linearization,
+                        allow_session_local_commit,
                     } => match add_ops {
                         TransactionOps::Peeks {
                             determination: add_timestamp_determination,
                             cluster_id: add_cluster_id,
                             requires_linearization: add_requires_linearization,
+                            allow_session_local_commit: add_allow_session_local_commit,
                         } => {
+                            *allow_session_local_commit =
+                                *allow_session_local_commit && add_allow_session_local_commit;
                             assert_eq!(*cluster_id, add_cluster_id);
                             match (
                                 &determination.timestamp_context,
@@ -1577,6 +1581,19 @@ pub enum TransactionOps {
         cluster_id: ClusterId,
         /// Whether this peek needs to be linearized.
         requires_linearization: RequireLinearization,
+        /// Whether `SessionClient::end_transaction` may commit this
+        /// transaction in the session task, without a `Command::Commit`
+        /// round-trip to the Coordinator.
+        ///
+        /// Contract: only set this to true if sequencing left no
+        /// per-connection state in the Coordinator that gets cleaned up when
+        /// the transaction ends (see `Coordinator::clear_connection`, e.g.
+        /// stored transaction read holds, active compute sinks). The frontend
+        /// peek sequencing of a plain `SELECT` satisfies this. The Coordinator
+        /// peek sequencing does not (it stores transaction read holds even for
+        /// single-statement transactions), and neither does `COPY TO`, whose
+        /// active sink is retired on transaction end.
+        allow_session_local_commit: bool,
     },
     /// This transaction has done a `SUBSCRIBE` and must do nothing else.
     Subscribe,

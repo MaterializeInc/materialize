@@ -270,6 +270,11 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
+            "enable_session_local_commit",
+            "true" if version >= MzVersion.parse_mz("v26.34.0-dev") else "false",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
             "enable_scoped_system_parameters",
             "false",
             ["true", "false"],

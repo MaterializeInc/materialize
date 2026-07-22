@@ -235,6 +235,32 @@ keep the change invisible to session-visible catalog reads (name resolution,
 planning). Otherwise sessions serve stale catalogs where today they would see
 the change.
 
+### Session-local commit must stay a no-op on the Coordinator
+
+`SessionClient::end_transaction` commits a single-statement transaction whose
+only statement was a frontend-sequenced plain `SELECT` in the session task,
+without a `Command::Commit` round-trip (behind the
+`enable_session_local_commit` dyncfg). This is correct only because such a
+transaction leaves no per-connection state in the Coordinator that is cleaned
+up at transaction end, so `Coordinator::clear_connection` would find nothing
+to do. Eligibility is tracked by
+`TransactionOps::Peeks::allow_session_local_commit`, which any sequencing path
+that does leave such state must set to false. Two known examples:
+
+- The Coordinator peek sequencing stores transaction read holds in
+  `Coordinator::txn_read_holds` even for single-statement transactions, and
+  `store_transaction_read_holds` merges into an existing entry. A wrongly
+  eligible transaction would therefore silently accumulate read holds on a
+  pooled connection, stalling compaction.
+- `COPY TO` registers an active compute sink that transaction end retires.
+
+At strict serializable isolation, commit must additionally not return before
+the oracle read timestamp has passed the peek's timestamp. The session-local
+path only handles the no-wait case: `chosen_ts <= oracle_ts` already held when
+the peek's timestamp was determined, and the oracle only advances. Actual
+waits, and strong session serializable's oracle `apply_write` at commit, fall
+back to `Command::Commit`.
+
 ## Rejected Optimizations
 
 This section records specific optimizations that have been attempted and found

@@ -110,6 +110,28 @@ impl TimestampContext {
         }
     }
 
+    /// Whether a strict serializable read at this timestamp context may have
+    /// to wait for the timestamp oracle before its results are released.
+    ///
+    /// This is the case when the chosen timestamp ran ahead of the oracle
+    /// read timestamp at the time the timestamp was determined. The oracle
+    /// only advances, so a `false` result remains valid: results can be
+    /// released without consulting the oracle.
+    pub fn requires_oracle_wait(&self) -> bool {
+        match self {
+            Self::TimelineTimestamp {
+                chosen_ts,
+                oracle_ts: Some(oracle_ts),
+                ..
+            } => chosen_ts > oracle_ts,
+            // No oracle timestamp to wait for.
+            Self::TimelineTimestamp {
+                oracle_ts: None, ..
+            }
+            | Self::NoTimestamp => false,
+        }
+    }
+
     /// The timestamp belonging to this context, or a sensible default if one does not exists.
     pub fn timestamp_or_default(&self) -> Timestamp {
         match self {

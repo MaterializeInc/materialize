@@ -42,7 +42,7 @@ use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::SUPPORT_USER;
 use mz_sql::session::vars::{
-    CLUSTER, ENABLE_FRONTEND_PEEK_SEQUENCING, OwnedVarInput, SystemVars, Var,
+    CLUSTER, ENABLE_FRONTEND_PEEK_SEQUENCING, IsolationLevel, OwnedVarInput, SystemVars, Var,
 };
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
@@ -62,7 +62,8 @@ use crate::coord::{Coordinator, ExecuteContextGuard};
 use crate::error::AdapterError;
 use crate::metrics::{self, Metrics};
 use crate::session::{
-    EndTransactionAction, PreparedStatement, Session, SessionConfig, StateRevision, TransactionId,
+    EndTransactionAction, PreparedStatement, RequireLinearization, Session, SessionConfig,
+    StateRevision, TransactionId, TransactionOps, TransactionStatus,
 };
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::telemetry::{self, EventDetails, SegmentClientExt, StatementFailureType};
@@ -1093,6 +1094,17 @@ impl SessionClient {
         &mut self,
         action: EndTransactionAction,
     ) -> Result<ExecuteResponse, AdapterError> {
+        if self.commit_is_session_local(&action) {
+            // This matches what the `Command::Commit` path does for such a
+            // transaction: `Session::clear_transaction` in
+            // `sequence_end_transaction_inner`, and `SessionVars::end_transaction`
+            // when building the response.
+            let session = self.session.as_mut().expect("session invariant violated");
+            let _ = session.clear_transaction();
+            let params = session.vars_mut().end_transaction(action);
+            return Ok(ExecuteResponse::TransactionCommitted { params });
+        }
+
         let res = self
             .send(|tx, session| Command::Commit {
                 action,
@@ -1105,6 +1117,59 @@ impl SessionClient {
         // any data that the Coordinator must act on for correctness.
         let _ = self.session().clear_transaction();
         res
+    }
+
+    /// Whether [`SessionClient::end_transaction`] can commit the current
+    /// transaction in the session task, without a `Command::Commit`
+    /// round-trip to the Coordinator.
+    ///
+    /// This is the case for a single-statement transaction whose only
+    /// statement was a peek sequenced by the frontend peek sequencing. Such a
+    /// transaction has no Coordinator-side state that gets cleaned up when the
+    /// transaction ends (see `TransactionOps::Peeks::allow_session_local_commit`),
+    /// so committing consists only of session-local steps. The exception is
+    /// isolation levels whose commit involves the timestamp oracle, where we
+    /// fall back to the Coordinator path:
+    /// - At strict serializable, a peek whose timestamp is ahead of the oracle
+    ///   read timestamp must wait for the oracle to pass it before the commit
+    ///   may return, see `Coordinator::message_linearize_reads`. We commit
+    ///   locally only when
+    ///   [`TimestampContext::requires_oracle_wait`](crate::coord::timestamp_selection::TimestampContext::requires_oracle_wait)
+    ///   shows that no wait is needed.
+    /// - At strong session serializable, commit applies the peek timestamp to
+    ///   the session's oracle.
+    fn commit_is_session_local(&self, action: &EndTransactionAction) -> bool {
+        if !matches!(action, EndTransactionAction::Commit) {
+            return false;
+        }
+        let session = self.session.as_ref().expect("session invariant violated");
+        // `Started` transactions are guaranteed single-statement (see its doc
+        // comment), so the transaction consists of exactly the peeks checked
+        // below. Everything else, including explicit and multi-statement
+        // implicit transactions (whose read holds are stored in the
+        // Coordinator) and failed transactions, falls back.
+        let TransactionStatus::Started(txn) = session.transaction() else {
+            return false;
+        };
+        let TransactionOps::Peeks {
+            determination,
+            requires_linearization,
+            allow_session_local_commit: true,
+            ..
+        } = &txn.ops
+        else {
+            return false;
+        };
+        match (
+            session.vars().transaction_isolation(),
+            requires_linearization,
+        ) {
+            (IsolationLevel::StrictSerializable, RequireLinearization::Required) => {
+                !determination.timestamp_context.requires_oracle_wait()
+            }
+            (IsolationLevel::StrongSessionSerializable, RequireLinearization::Required) => false,
+            _ => true,
+        }
     }
 
     /// Fails a transaction.
