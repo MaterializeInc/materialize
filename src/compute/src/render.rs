@@ -940,7 +940,7 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                 // Re-encode the read-edge to columnar so `Get`s on this rec
                 // binding (e.g. as a Union input) see a columnar edge. The
                 // feedback `Variable` itself stays `Vec` (set at `oks_v.set`
-                // below); the recursive value flows `Vec` through the loop, and
+                // below). The recursive value flows `Vec` through the loop, and
                 // only the externally-visible collection is re-containered. The
                 // re-encode is a stateless, timestamp-agnostic pass-through, so
                 // it does not alter the iterative frontier or fixpoint behavior.
