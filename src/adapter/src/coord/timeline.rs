@@ -364,7 +364,7 @@ pub(crate) fn check_runaway_write_ts(now: &mz_repr::Timestamp, timestamp: mz_rep
     if timestamp > upper_bound {
         error!(
             %now,
-            "Setting local read timestamp to {timestamp}, which is more than \
+            "Setting local write timestamp to {timestamp}, which is more than \
             the desired upper bound {upper_bound}."
         );
     }

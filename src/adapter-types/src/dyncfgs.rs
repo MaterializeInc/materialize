@@ -284,6 +284,15 @@ pub const USER_ID_POOL_BATCH_SIZE: Config<u32> = Config::new(
     "Number of user IDs to pre-allocate in a batch for DDL operations.",
 );
 
+/// Maximum number of txns-shard write attempts before rebuilding `environmentd`.
+///
+/// The effective minimum is one attempt.
+pub const GROUP_COMMIT_MAX_ATTEMPTS: Config<usize> = Config::new(
+    "group_commit_max_attempts",
+    100,
+    "Maximum number of txns-shard write attempts before rebuilding environmentd. Values below 1 are treated as 1.",
+);
+
 /// OIDC client ID for the web console.
 pub const CONSOLE_OIDC_CLIENT_ID: Config<&'static str> = Config::new(
     "console_oidc_client_id",
@@ -457,6 +466,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&MCP_REQUEST_TIMEOUT)
         .add(&WEBHOOK_MAX_REQUEST_SIZE_BYTES)
         .add(&USER_ID_POOL_BATCH_SIZE)
+        .add(&GROUP_COMMIT_MAX_ATTEMPTS)
         .add(&CONSOLE_OIDC_CLIENT_ID)
         .add(&CONSOLE_OIDC_SCOPES)
         .add(&ARRANGEMENT_SIZE_HISTORY_COLLECTION_INTERVAL)

@@ -42,7 +42,9 @@ use std::time::{Duration, Instant};
 use derivative::Derivative;
 use futures::future::{BoxFuture, FutureExt};
 use mz_adapter_types::connection::ConnectionId;
+use mz_adapter_types::dyncfgs::GROUP_COMMIT_MAX_ATTEMPTS;
 use mz_catalog::builtin::{BuiltinTable, MZ_SESSIONS};
+use mz_dyncfg::{ConfigSet, ConfigValHandle};
 use mz_expr::CollectionPlan;
 use mz_ore::assert_none;
 use mz_ore::halt;
@@ -265,6 +267,7 @@ pub(crate) struct GroupCommitter {
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
     now: NowFn,
     metrics: Metrics,
+    max_attempts: ConfigValHandle<usize>,
 }
 
 impl GroupCommitter {
@@ -318,13 +321,15 @@ impl GroupCommitter {
         mut op: impl FnMut(Timestamp, Timestamp) -> oneshot::Receiver<Result<(), StorageError>>,
     ) -> Option<WriteTimestamp> {
         // Persistent conflicts indicate an unexpected writer. Halt instead of spinning forever.
-        const MAX_ATTEMPTS: usize = 100;
         let mut attempt = 0;
         let write_ts = loop {
-            attempt += 1;
-            if attempt > MAX_ATTEMPTS {
-                halt!("txns-shard write conflicted {MAX_ATTEMPTS} times, rebuilding");
+            let max_attempts = self.max_attempts.get().max(1);
+            if attempt >= max_attempts {
+                halt!(
+                    "txns-shard write reached attempt limit {max_attempts} after {attempt} conflicts, rebuilding"
+                );
             }
+            attempt += 1;
             let write_ts = self.oracle.write_ts().await;
 
             // A post-fence retry has an advance frontier above this handle's stale upper, so this
@@ -501,6 +506,7 @@ pub(crate) fn spawn_group_committer(
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
     now: NowFn,
     metrics: Metrics,
+    dyncfgs: &ConfigSet,
 ) {
     let committer = GroupCommitter {
         rx,
@@ -510,6 +516,7 @@ pub(crate) fn spawn_group_committer(
         internal_cmd_tx,
         now,
         metrics,
+        max_attempts: GROUP_COMMIT_MAX_ATTEMPTS.handle(dyncfgs),
     };
     task::spawn(|| "group_committer", committer.run());
 }
@@ -1444,6 +1451,7 @@ mod tests {
                 internal_cmd_tx,
                 now: SYSTEM_TIME.clone(),
                 metrics: Metrics::register_into(&MetricsRegistry::new()),
+                max_attempts: ConfigValHandle::disconnected(2),
             };
 
             let write_ts = committer
@@ -1479,6 +1487,50 @@ mod tests {
                 "catalog upper {catalog_upper} must cover the write's advance_to {}",
                 write_ts.advance_to
             );
+
+            catalog.expire().await;
+        })
+        .await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn test_write_to_txns_zero_limit_allows_one_attempt() {
+        Catalog::with_debug(|catalog| async move {
+            let initial_upper = catalog.current_upper().await;
+            let oracle = Arc::new(MemTimestampOracle::starting_at(initial_upper));
+            let handle = Arc::new(ConflictingTableWriteHandle::new(0));
+            let oracle_dyn: Arc<dyn TimestampOracle<Timestamp> + Send + Sync> =
+                Arc::<MemTimestampOracle>::clone(&oracle);
+            let handle_dyn: Arc<dyn TableWriteHandle> =
+                Arc::<ConflictingTableWriteHandle>::clone(&handle);
+            let (_tx, rx) = mpsc::unbounded_channel();
+            let (internal_cmd_tx, _internal_cmd_rx) = mpsc::unbounded_channel();
+            let committer = GroupCommitter {
+                rx,
+                oracle: oracle_dyn,
+                table_write_handle: handle_dyn,
+                catalog_upper: catalog.upper_handle(),
+                internal_cmd_tx,
+                now: SYSTEM_TIME.clone(),
+                metrics: Metrics::register_into(&MetricsRegistry::new()),
+                max_attempts: ConfigValHandle::disconnected(0),
+            };
+
+            let write_ts = committer
+                .write_to_txns(None, |ts, advance_to| {
+                    handle.append(ts, advance_to, Vec::new())
+                })
+                .await
+                .expect("zero limit permits one successful attempt");
+
+            let attempts = handle
+                .write_timestamps
+                .lock()
+                .expect("lock poisoned")
+                .clone();
+            assert_eq!(attempts, vec![write_ts.timestamp]);
+            assert_eq!(oracle.apply_writes.load(Ordering::SeqCst), 1);
 
             catalog.expire().await;
         })

@@ -1796,6 +1796,11 @@ class FlipFlagsAction(Action):
         self.flags_with_values["persist_validate_part_bounds_on_write"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values["group_commit_max_attempts"] = [
+            "1",
+            "100",
+            "1000",
+        ]
         self.flags_with_values["user_id_pool_batch_size"] = [
             "1",
             "5",

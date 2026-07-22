@@ -5142,6 +5142,7 @@ pub fn serve(
                         coord.internal_cmd_tx.clone(),
                         coord.catalog().config().now.clone(),
                         coord.metrics.clone(),
+                        coord.catalog().system_config().dyncfgs(),
                     );
                 });
 
