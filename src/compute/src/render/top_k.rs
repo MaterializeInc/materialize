@@ -161,9 +161,9 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                     let mut datum_vec = mz_repr::DatumVec::new();
                     // A literal, non-negative limit skips this branch entirely, so this
                     // per-row evaluation only runs for column or otherwise fallible
-                    // limits. On the `Vec` edge `into_vec` is the identity, so Wave 1 is
-                    // unchanged. On a columnar edge it is a narrow sanctioned decode
-                    // confined to this rare path.
+                    // limits. On the `Vec` edge `into_vec` is the identity, so the
+                    // `Vec` path is unchanged. On a columnar edge it is a narrow
+                    // sanctioned decode confined to this rare path.
                     let errors = ok_input.clone().into_vec().flat_map(move |row| {
                         let temp_storage = mz_repr::RowArena::new();
                         let datums = datum_vec.borrow_with(&row);
@@ -622,8 +622,8 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
 /// avoid the per-record decode, because there is no columnar batcher to push
 /// borrowed rows into here. The `Vec` arm maps the collection directly and reuses
 /// the owned input row, so it is behaviorally identical to consuming the
-/// collection as before this migration. The columnar arm runs whenever the TopK
-/// input edge is columnar, which the upstream producers now emit.
+/// collection directly. The columnar arm runs whenever the TopK input edge is
+/// columnar.
 fn map_topk_key<'s, T, L>(
     edge: CollectionEdge<'s, T>,
     name: &str,
