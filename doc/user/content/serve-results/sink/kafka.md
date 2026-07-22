@@ -109,8 +109,8 @@ By default, Materialize assigns a partition to each message using the following
 strategy:
 
   1. Encode the message's key in the specified format.
-  2. If the format uses a Confluent Schema Registry, strip out the
-     schema ID from the encoded bytes.
+  2. If the format uses a schema registry (Confluent or AWS Glue), strip out
+     the header carrying the schema ID from the encoded bytes.
   3. Hash the remaining encoded bytes using [SeaHash].
   4. Divide the hash value by the topic's partition count and assign the
      remainder as the message's partition.

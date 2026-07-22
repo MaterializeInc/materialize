@@ -625,8 +625,8 @@ CREATE CONNECTION csr_ssh TO CONFLUENT SCHEMA REGISTRY (
 
 An AWS Glue Schema Registry connection establishes a link to an [AWS Glue Schema
 Registry]. You can use AWS Glue Schema Registry connections in the `FORMAT`
-clause of [`CREATE SOURCE`] statements to decode Avro-encoded messages whose
-schemas are managed in AWS Glue.
+clause of [`CREATE SOURCE`] statements to decode Avro-encoded messages, and of
+[`CREATE SINK`] statements to encode them, with schemas managed in AWS Glue.
 
 The connection authenticates to AWS through a separate [AWS connection](#aws),
 which supplies the credentials and region. See [AWS](#aws) for how to grant
@@ -651,15 +651,21 @@ CREATE CONNECTION glue_conn TO AWS GLUE SCHEMA REGISTRY (
 
 #### Permissions {#glue-permissions}
 
-The IAM role assumed by the [AWS connection](#aws) must be allowed to read
-schemas from the registry. Materialize uses the following AWS Glue actions:
+The IAM role assumed by the [AWS connection](#aws) must be allowed to access the
+registry. Sources only read. Sinks also register schemas. Materialize uses the
+following AWS Glue actions:
 
 | Action | When it is used |
 |--------|-----------------|
 | `glue:GetRegistry` | At connection creation, to validate the connection. Only required when `VALIDATE` is `true` (the default). |
-| `glue:GetSchemaVersion` | When a source is created, to pin the schema, and at runtime, to fetch the writer schema for each new schema version encountered. Always required. |
+| `glue:GetSchemaVersion` | Source: when the source is created, to pin the schema, and at runtime, to fetch the writer schema for each new schema version encountered. Sink: to poll a newly registered schema version until it becomes available. Always required. |
+| `glue:GetSchemaByDefinition` | Sink, to find an existing version matching the schema being registered. |
+| `glue:RegisterSchemaVersion` | Sink, to add a version to an existing schema. |
+| `glue:CreateSchema` | Sink, to create a schema on its first publish. |
+| `glue:GetSchema` | Sink, to read an existing schema's compatibility level and warn when it differs from the requested one. Optional. |
 
-A least-privilege policy scoped to a single registry looks like:
+A least-privilege policy for a source, scoped to a single registry, grants only
+the read actions:
 
 ```json
 {
@@ -680,9 +686,35 @@ A least-privilege policy scoped to a single registry looks like:
 }
 ```
 
+A sink additionally needs the schema-write actions on the same resources:
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "glue:GetRegistry",
+                "glue:GetSchemaVersion",
+                "glue:GetSchemaByDefinition",
+                "glue:RegisterSchemaVersion",
+                "glue:CreateSchema",
+                "glue:GetSchema"
+            ],
+            "Resource": [
+                "arn:aws:glue:<region>:<account>:registry/<registry-name>",
+                "arn:aws:glue:<region>:<account>:schema/<registry-name>/*"
+            ]
+        }
+    ]
+}
+```
+
 If you create the connection with `WITH (VALIDATE = false)`, you can omit
-`glue:GetRegistry` and grant only `glue:GetSchemaVersion`. For details on
-creating and authorizing the AWS connection, see [AWS](#aws).
+`glue:GetRegistry`. The registry itself must already exist. Materialize sinks
+create and version schemas within it but never create the registry. For details
+on creating and authorizing the AWS connection, see [AWS](#aws).
 
 ### MySQL
 
