@@ -25,7 +25,7 @@ import React from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { createNamespace } from "~/api/materialize";
-import { Replica } from "~/api/materialize/cluster/clusterList";
+import { Cluster, Replica } from "~/api/materialize/cluster/clusterList";
 import {
   MaterializedView,
   MaterializedViewsResponse,
@@ -51,8 +51,12 @@ import {
   SampleCodeBoxWrapper,
 } from "~/layouts/listPageComponents";
 import docUrls from "~/mz-doc-urls.json";
-import { useBuildMaterializedViewPath } from "~/platform/routeHelpers";
+import {
+  absoluteClusterPath,
+  useBuildMaterializedViewPath,
+} from "~/platform/routeHelpers";
 import { useAllClusters } from "~/store/allClusters";
+import { useRegionSlug } from "~/store/environments";
 import { MaterializeTheme } from "~/theme";
 import { truncateMaxWidth } from "~/theme/components/Table";
 import { assert } from "~/util";
@@ -205,6 +209,7 @@ const MaterializedViewListInner = ({
           replicas={cluster?.replicas ?? []}
           memoryUsageMap={memoryUsageById}
           lagMap={lagMap}
+          cluster={cluster}
         />
       </React.Suspense>
     </AppErrorBoundary>
@@ -216,13 +221,16 @@ interface MaterializedViewTableProps {
   replicas: Replica[];
   memoryUsageMap: ArrangmentsMemoryUsageMap | undefined;
   lagMap?: LagMap;
+  cluster: Cluster | undefined;
 }
 
 const MaterializedViewTable = (props: MaterializedViewTableProps) => {
   const navigate = useNavigate();
   const flags = useFlags();
   const materializedViewPath = useBuildMaterializedViewPath();
+  const regionSlug = useRegionSlug();
   const dataflowVisualizerEnabled = flags["visualization-features"];
+  const { cluster } = props;
 
   const { colors } = useTheme<MaterializeTheme>();
 
@@ -279,7 +287,7 @@ const MaterializedViewTable = (props: MaterializedViewTableProps) => {
                   )}
                 </Td>
                 <Td>{formattedLag}</Td>
-                {dataflowVisualizerEnabled && (
+                {dataflowVisualizerEnabled && cluster && (
                   <Td width="16">
                     <OverflowMenu
                       items={[
@@ -289,7 +297,7 @@ const MaterializedViewTable = (props: MaterializedViewTableProps) => {
                             <MenuItem
                               key="dataflow-visualizer"
                               as={Link}
-                              to={`${materializedViewPath(v)}/dataflow-visualizer`}
+                              to={`${absoluteClusterPath(regionSlug, cluster)}/dataflows?export=${v.id}`}
                               onClick={(e) => {
                                 e.stopPropagation();
                               }}
