@@ -119,7 +119,7 @@ For example, consider a table with two columns named `col-a` and `col@a`.
 Materialize will use the names `col_a` and `col_a1`, respectively, in the
 generated Avro schema.
 
-When using a Confluent Schema Registry:
+#### When using a Confluent Schema Registry:
 
   * Materialize will automatically publish Avro schemas for the key, if present,
     and the value to the registry.
@@ -139,7 +139,9 @@ When using a Confluent Schema Registry:
     The level is applied only when the subject has no compatibility level yet. If
     the subject already has one, it is left unchanged.
 
-When using an [AWS Glue Schema Registry](/sql/create-connection/#aws-glue-schema-registry):
+#### When using an [AWS Glue Schema Registry](/sql/create-connection/#aws-glue-schema-registry):
+
+{{< private-preview />}}
 
   * Materialize registers Avro schemas for the key, if present, and the value in
     the registry named by the connection. The registry must already exist.
@@ -156,8 +158,12 @@ When using an [AWS Glue Schema Registry](/sql/create-connection/#aws-glue-schema
 
   * The `AVRO ... FULLNAME`, `NULL DEFAULTS`, and `doc` options are not supported.
 
-Compatibility levels use the Confluent spelling and map to their AWS Glue
-equivalent. Glue's `DISABLED` level is not supported.
+##### Compatibility levels
+
+To specify compatibility levels, use the Confluent compatibility level names shown
+below. The table also shows the equivalent AWS Glue compatibility levels for
+reference. AWS Glue's `DISABLED` compatibility level has no equivalent Confluent
+compatibility level and is not supported.
 
 Compatibility level | AWS Glue equivalent
 --------------------|--------------------
@@ -168,6 +174,9 @@ Compatibility level | AWS Glue equivalent
 `FULL`              | `FULL`
 `FULL_TRANSITIVE`   | `FULL_ALL`
 `NONE`              | `NONE`
+
+
+#### Publishing Schemas
 
 With either registry, Materialize publishes the schemas when the sink starts
 running, not when you run `CREATE SINK`. The schema names and definitions are not
@@ -643,7 +652,11 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 {{< /tab >}}
 {{< /tabs >}}
 
-#### Confluent Schema Registry
+#### Schema Registry
+
+
+{{< tabs tabID="1" >}}
+{{< tab "Confluent" >}}
 
 {{< tabs tabID="1" >}}
 {{< tab "SSL">}}
@@ -679,7 +692,8 @@ CREATE CONNECTION csr_basic_http
 {{< /tab >}}
 {{< /tabs >}}
 
-#### AWS Glue Schema Registry
+{{< /tab >}}
+{{< tab "AWS Glue" >}}
 
 {{< private-preview />}}
 
@@ -694,36 +708,15 @@ CREATE CONNECTION glue_conn TO AWS GLUE SCHEMA REGISTRY (
 );
 ```
 
-The registry named by the connection must already exist. The IAM role assumed
-by the AWS connection must have the schema-write permissions listed under [AWS
-Glue Schema Registry](/sql/create-connection/#aws-glue-schema-registry).
-
-```mzsql
-CREATE SINK glue_sink
-  IN CLUSTER my_io_cluster
-  FROM <source, table or mview>
-  INTO KAFKA CONNECTION kafka_connection (
-    TOPIC 'test_avro_topic',
-  )
-  KEY (key_col)
-  FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (
-    KEY SCHEMA NAME = 'my_key_schema',
-    VALUE SCHEMA NAME = 'my_value_schema',
-    KEY COMPATIBILITY LEVEL = 'FORWARD',
-    VALUE COMPATIBILITY LEVEL = 'FULL'
-  )
-  ENVELOPE UPSERT;
-```
-
-See [Avro](#avro) for the schema-name defaults and how compatibility levels map
-to their AWS Glue equivalents.
+{{< /tab >}}
+{{< /tabs >}}
 
 ### Creating a sink
 
 #### Upsert envelope
 
 {{< tabs >}}
-{{< tab "Avro">}}
+{{< tab "Avro Confluent">}}
 
 ```mzsql
 CREATE SINK avro_sink
@@ -733,6 +726,27 @@ CREATE SINK avro_sink
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   ENVELOPE UPSERT;
 ```
+{{< /tab >}}
+{{< tab "Avro AWS Glue">}}
+
+The registry named by the connection must already exist. The IAM role assumed
+by the AWS connection must have the schema-write permissions listed under [AWS
+Glue Schema Registry](/sql/create-connection/#aws-glue-schema-registry).
+
+```mzsql
+CREATE SINK glue_sink
+  IN CLUSTER my_io_cluster
+  FROM <source, table or mview>
+  INTO KAFKA CONNECTION kafka_connection (
+    TOPIC 'test_avro_topic'
+  )
+  KEY (key_col)
+  FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn
+  ENVELOPE UPSERT;
+```
+
+See [Avro](#avro) for the schema-name defaults and how compatibility levels map
+to their AWS Glue equivalents.
 
 {{< /tab >}}
 {{< tab "JSON">}}
@@ -752,7 +766,7 @@ CREATE SINK json_sink
 #### Debezium envelope
 
 {{< tabs >}}
-{{< tab "Avro">}}
+{{< tab "Avro Confluent">}}
 
 ```mzsql
 CREATE SINK avro_sink
@@ -761,6 +775,31 @@ CREATE SINK avro_sink
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   ENVELOPE DEBEZIUM;
 ```
+
+{{< /tab >}}
+{{< tab "Avro AWS Glue">}}
+
+{{< private-preview />}}
+The registry named by the connection must already exist. The IAM role assumed
+by the AWS connection must have the schema-write permissions listed under [AWS
+Glue Schema Registry](/sql/create-connection/#aws-glue-schema-registry).
+
+```mzsql
+CREATE SINK glue_sink
+  IN CLUSTER my_io_cluster
+  FROM <source, table or mview>
+  INTO KAFKA CONNECTION kafka_connection (
+    TOPIC 'test_avro_topic'
+  )
+  KEY (key_col)
+  FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn
+  ENVELOPE DEBEZIUM;
+```
+
+See [Avro](#avro) for the schema-name defaults and how compatibility levels map
+to their AWS Glue equivalents.
+
+
 {{< /tab >}}
 {{< /tabs >}}
 
@@ -783,12 +822,16 @@ CREATE SINK custom_topic_sink
 
 #### Schema compatibility levels
 
+
+{{< tabs >}}
+{{< tab "Avro Confluent">}}
+
 ```mzsql
 CREATE SINK compatibility_level_sink
   IN CLUSTER my_io_cluster
   FROM <source, table or mview>
   INTO KAFKA CONNECTION kafka_connection (
-    TOPIC 'test_avro_topic',
+    TOPIC 'test_avro_topic'
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection (
     KEY COMPATIBILITY LEVEL 'BACKWARD',
@@ -797,7 +840,34 @@ CREATE SINK compatibility_level_sink
   ENVELOPE UPSERT;
 ```
 
+{{< /tab >}}
+{{< tab "Avro AWS Glue">}}
+
+{{< private-preview />}}
+```mzsql
+CREATE SINK compatibility_level_sink
+  IN CLUSTER my_io_cluster
+  FROM <source, table or mview>
+  INTO KAFKA CONNECTION kafka_connection (
+    TOPIC 'test_avro_topic'
+  )
+  KEY (key_col)
+  FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (
+    KEY COMPATIBILITY LEVEL 'BACKWARD',
+    VALUE COMPATIBILITY LEVEL 'FULL'
+  )
+  ENVELOPE UPSERT;
+```
+
+See [Avro](#avro) for the schema-name defaults and how compatibility levels map
+to their AWS Glue equivalents.
+
+
+{{< /tab >}}
+{{< /tabs >}}
+
 #### Documentation comments
+
 
 Consider the following sink, `docs_sink`, built on top of a relation `t` with
 several [SQL comments](/sql/comment-on) attached.

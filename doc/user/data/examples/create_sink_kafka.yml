@@ -112,7 +112,7 @@
         Optional, AWS Glue Schema Registry only. The name under which the value schema is registered. Default: `<topic>-value`.
     - name: "**DOC ON** `<doc_on_option>` [, ...]"
       description: |
-        Optional. Add a documentation comment to the generated Avro schemas.
+        Optional, Confluent Schema Registry only. Add a documentation comment to the generated Avro schemas.
 
         | Option | Description |
         |--------|-------------|
