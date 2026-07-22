@@ -290,6 +290,9 @@ def get_variable_system_parameters(
             ["true", "false"] if force_source_table_syntax else ["false"],
         ),
         VariableSystemParameter(
+            "mysql_source_snapshot_parallelism", "true", ["true", "false"]
+        ),
+        VariableSystemParameter(
             "persist_batch_columnar_format",
             "structured" if version > MzVersion.parse_mz("v0.135.0-dev") else "both_v2",
             ["row", "both_v2", "both", "structured"],

@@ -67,10 +67,12 @@
 //! reads only its assigned range. Ranges are assigned round-robin starting from each table's
 //! legacy single-worker owner, so the open-ended ranges (which absorb any rows written past the
 //! last sampled boundary) land on a different worker per table rather than always the last worker.
-//! Tables without a suitable PK fall back to single-worker-per-table mode. This holds up to
-//! `worker_count + 1` upstream connections per source (one per ranged worker plus the leader's
-//! lock connection). To handle various charsets and collation gracefully we rely on MySQL's sort
-//! order and never attempt to compare or order strings in Rust. To handle possible races with
+//! Tables without a suitable PK fall back to single-worker-per-table mode. The
+//! `mysql_source_snapshot_parallelism` dyncfg disables splitting entirely, putting every table in
+//! that fallback mode. This holds up to `worker_count + 1` upstream connections per source (one
+//! per ranged worker plus the leader's lock connection). To handle various charsets and collation
+//! gracefully we rely on MySQL's sort order and never attempt to compare or order strings in
+//! Rust. To handle possible races with
 //! changes to collation each worker validates in its read transaction that the boundaries are
 //! strictly increasing under the table's current collation, retrying transiently if not. The
 //! repeatable read snapshots should then succeed if they start reading from the table before DDL
@@ -320,6 +322,11 @@ async fn sample_pk_bounds(
         .parameters
         .mysql_source_timeouts
         .snapshot_max_execution_time;
+    // Kill switch for PK-range splitting. When disabled every table gets `None`
+    // bounds, i.e. the single-worker-per-table fallback. The counts still run,
+    // they feed the snapshot size gauge.
+    let parallelism_enabled = mz_storage_types::dyncfgs::MYSQL_SOURCE_SNAPSHOT_PARALLELISM
+        .get(config.config.config_set());
 
     let pooled_conns: Rc<RefCell<Vec<MySqlConn>>> = Rc::new(RefCell::new(Vec::new()));
     // Counting and boundary-sampling each walk a table's index (O(rows)), so run tables
@@ -362,7 +369,10 @@ async fn sample_pk_bounds(
                 );
                 let count = stats.count;
                 // Compute split boundaries only for a supported single-column PK.
-                let splits = match try_extract_single_column_pk(&outputs[0].desc) {
+                let splits = match parallelism_enabled
+                    .then(|| try_extract_single_column_pk(&outputs[0].desc))
+                    .flatten()
+                {
                     Some((raw_col, scalar_type)) => {
                         let pk_col = (quote_identifier(&raw_col), scalar_type);
                         compute_sampled_splits(&mut *conn, table, &pk_col, worker_count, count)
