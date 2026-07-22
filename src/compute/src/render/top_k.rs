@@ -1396,7 +1396,8 @@ mod tests {
 
     /// `topk_result_to_columnar` drops the hash-key pairing and produces a
     /// columnar edge whose rows are the value component, preserving times and
-    /// diffs. This is the output flip for the monotonic and basic TopK plans.
+    /// diffs. This produces the columnar output for the monotonic and basic TopK
+    /// plans.
     #[mz_ore::test]
     fn topk_result_to_columnar_drops_key() {
         let key = Row::pack_slice(&[Datum::Int64(7)]);
