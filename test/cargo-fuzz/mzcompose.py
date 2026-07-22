@@ -561,6 +561,10 @@ class FuzzRunner:
             # for the next run holds only coverage-increasing inputs.
             if self.minimize:
                 self._minimize()
+            # Fold this run's crash reproducers into the corpus (after minimize,
+            # so the merge never sees them) so the synced corpus replays them
+            # next run and the qualification gate keeps enforcing the find.
+            self._persist_crash_artifacts()
         self._summary()
         return self.failed
 
@@ -688,6 +692,29 @@ class FuzzRunner:
         shutil.rmtree(corpus)
         merged.rename(corpus)
         say(f"  cmin {job.name}: {before} -> {after}")
+
+    def _persist_crash_artifacts(self) -> None:
+        """Fold this run's crash reproducers into the corpus.
+
+        libFuzzer writes crash/oom/timeout/leak reproducers to the `artifacts/`
+        dir (`-artifact_prefix`), which the corpus sync does not carry between
+        runs. A reproducer that lives only there is lost once the build's
+        Buildkite artifacts age out, so a later qualification run can miss the
+        same bug and pass even though it is unfixed. Copying each one into the
+        corpus makes the synced corpus carry it forward, and libFuzzer replays
+        every corpus input on startup, so the crash re-triggers until the
+        underlying bug is fixed. Run after minimize: `-merge=1` executes each
+        input and would crash on a reproducer, so it must not see them.
+        """
+        for job in self.failed:
+            corpus = MZ_ROOT / job.crate / "corpus" / job.target
+            corpus.mkdir(parents=True, exist_ok=True)
+            for name in self._new_artifacts(job):
+                try:
+                    shutil.copy2(job.artifact_dir / name, corpus / name)
+                    say(f"  persisted reproducer {name} into {job.name} corpus")
+                except OSError as e:
+                    say(f"  (could not persist {name} into corpus: {e})")
 
     def _shutdown(self) -> None:
         if not self.running:
