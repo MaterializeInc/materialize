@@ -91,8 +91,8 @@ The `COMMIT INTERVAL` setting involves tradeoffs between latency and efficiency:
 - For production: `1m` to `5m`
 - For batch analytics: `5m` to `15m`
 
-You can change the commit interval of an existing sink with [`ALTER
-SINK`](/sql/alter-sink/).
+Starting in v26.34, you can change the commit interval of an existing sink with
+[`ALTER SINK`](/sql/alter-sink/).
 
 {{< note >}}
 Outside of development environments, commit intervals should be at least `1m`.

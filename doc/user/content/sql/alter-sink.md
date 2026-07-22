@@ -29,6 +29,8 @@ To change the relation you want to sink from:
 
 ### Change commit interval
 
+*Available starting in v26.34**
+
 To change the commit interval of an [Iceberg sink](/sql/create-sink/iceberg/):
 
 {{% include-syntax file="examples/alter_sink" example="syntax-set-commit-interval" %}}
@@ -150,10 +152,10 @@ keyspaces to avoid the scenario.
 
 ### Changing the commit interval
 
-Changing the commit interval restarts the sink with the new setting.
-Any data that was buffered but not yet committed at the time of the change
-is committed immediately after the restart.
-All subsequent commits follow the new interval.
+Starting in v26.34, you can change the commit interval of an existing sink.
+Changing the commit interval restarts the sink with the new setting. Any data
+that was buffered but not yet committed at the time of the change is committed
+immediately after the restart. All subsequent commits follow the new interval.
 
 Setting the commit interval to its current value is a no-op and does not restart the sink.
 However, values are compared textually rather than by duration.
