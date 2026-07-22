@@ -206,8 +206,12 @@ impl Client {
             .query_one(
                 r#"
                 SELECT EXISTS(
-                    SELECT 1 FROM mz_catalog.mz_objects
-                    WHERE name = 'mz_cluster_auto_scaling_strategies'
+                    SELECT 1
+                    FROM mz_catalog.mz_objects AS o
+                    JOIN mz_catalog.mz_schemas AS s ON o.schema_id = s.id
+                    WHERE o.name = 'mz_cluster_auto_scaling_strategies'
+                      AND o.type = 'materialized-view'
+                      AND s.name = 'mz_internal'
                 ) AS exists
                 "#,
                 &[],

@@ -2350,8 +2350,14 @@ def workflow_autoscaling(c: Composition, parser: WorkflowArgumentParser) -> None
             c, "autoscaling/v2", "stage", "--deploy-id", "as1", "--allow-dirty"
         )
         assert result.returncode == 0, f"stage as1 failed: {result.stderr}"
-        assert live_strategy("scaled_as1") == live_strategy(
-            "scaled"
+        # Pin the concrete policy rather than comparing the two clusters, which
+        # would pass vacuously if neither had a policy.
+        production = live_strategy("scaled")
+        assert production == ("scale=1,workers=2", 60), (
+            f"expected the production policy to be set, got {production}"
+        )
+        assert (
+            live_strategy("scaled_as1") == production
         ), "staging cluster must inherit the production autoscaling policy"
         result = run_mz_deploy(c, "autoscaling/v2", "abort", "as1")
         assert result.returncode == 0, f"abort as1 failed: {result.stderr}"

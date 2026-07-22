@@ -15,7 +15,7 @@ idempotently.
 2. For each cluster definition:
    - If the cluster does not exist, creates it.
    - If the cluster exists but size, replication factor, or the
-     auto scaling strategy policy has drifted, alters it to match.
+     auto scaling strategy has drifted, alters it to match.
    - Applies associated `GRANT` statements.
    - Applies associated `COMMENT` statements.
 3. Reports status per cluster:

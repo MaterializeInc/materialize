@@ -115,14 +115,13 @@ async fn plan_cluster(
             if to_set.is_empty() && to_reset.is_empty() {
                 ObjectAction::UpToDate
             } else {
-                if !to_set.is_empty() {
-                    let alter_sql = format!(
-                        "ALTER CLUSTER {} SET ({})",
-                        quote_identifier(cluster_name),
-                        render_option_list(&to_set)
-                    );
-                    executor.execute_sql(&alter_sql).await?;
-                }
+                // RESET must run before SET. When an edit both raises SIZE and
+                // drops AUTO SCALING STRATEGY, running the SET first would
+                // validate the new size against the still-live policy, and the
+                // server rejects a hydration size equal to the cluster size with
+                // `HYDRATION SIZE must differ from the cluster SIZE`. Clearing
+                // the policy first lets the size change land.
+                //
                 // SET and RESET cannot be combined in one statement.
                 if !to_reset.is_empty() {
                     let reset_sql = format!(
@@ -131,6 +130,14 @@ async fn plan_cluster(
                         render_option_list(&to_reset)
                     );
                     executor.execute_sql(&reset_sql).await?;
+                }
+                if !to_set.is_empty() {
+                    let alter_sql = format!(
+                        "ALTER CLUSTER {} SET ({})",
+                        quote_identifier(cluster_name),
+                        render_option_list(&to_set)
+                    );
+                    executor.execute_sql(&alter_sql).await?;
                 }
                 ObjectAction::Altered
             }
