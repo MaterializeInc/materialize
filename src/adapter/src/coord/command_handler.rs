@@ -66,7 +66,7 @@ use tracing::{Instrument, debug_span, info, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
-use crate::catalog::Op;
+use crate::catalog::{DropObjectInfo, Op};
 use crate::command::{
     CatalogSnapshot, Command, ExecuteResponse, Response, SASLChallengeResponse,
     SASLVerifyProofResponse, StartupResponse, SuperuserAttribute,
@@ -1973,7 +1973,39 @@ impl Coordinator {
         // waits for its own retraction before it observes retirement.
         drop(retire_notify);
 
-        self.drop_temp_items(&conn_id).await;
+        // Drop all temporary items owned by the session and remove its
+        // session record from the catalog in a single catalog transaction.
+        // Skipped in read-only mode, where no session record was written at
+        // connect time and no temporary items can be created. A session whose
+        // cleanup fails to commit (e.g. because this process is being fenced
+        // out) is reclaimed the next time a catalog is opened with write
+        // intent.
+        if !self.controller.read_only() {
+            let uuid = self
+                .active_conns
+                .get(&conn_id)
+                .expect("conn must exist")
+                .uuid();
+            let temp_items = self.catalog().state().get_temp_items(&conn_id).collect();
+            let all_items = self.catalog().object_dependents(&temp_items, &conn_id);
+            let mut ops: Vec<_> = if all_items.is_empty() {
+                Vec::new()
+            } else {
+                vec![Op::DropObjects(
+                    all_items
+                        .into_iter()
+                        .map(DropObjectInfo::manual_drop_from_object_id)
+                        .collect(),
+                )]
+            };
+            ops.push(Op::DropSession { uuid });
+            if let Err(err) = self
+                .catalog_transact_with_context(Some(&conn_id), None, ops)
+                .await
+            {
+                warn!(%conn_id, "failed to clean up session in catalog: {err:?}");
+            }
+        }
         // Only call catalog_mut() if a temporary schema actually exists for this connection.
         // This avoids an expensive Arc::make_mut clone for the common case where the connection
         // never created any temporary objects.
@@ -1992,17 +2024,6 @@ impl Coordinator {
         self.cancel_pending_watchsets(&conn_id);
         self.cancel_pending_copy(&conn_id);
         self.end_session_for_statement_logging(conn.uuid());
-
-        // Durably remove the session record from the catalog. Skipped in
-        // read-only mode, where no record was written at connect time. A
-        // record that fails to be removed here is reclaimed the next time a
-        // catalog is opened with write intent.
-        if !self.controller.read_only() {
-            let op = Op::DropSession { uuid: conn.uuid() };
-            if let Err(err) = self.catalog_transact(None, vec![op]).await {
-                warn!(%conn_id, "failed to remove session record from catalog: {err:?}");
-            }
-        }
     }
 
     /// Returns the necessary metadata for appending to a webhook source, and a channel to send

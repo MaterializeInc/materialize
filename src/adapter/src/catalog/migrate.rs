@@ -15,7 +15,7 @@ use maplit::btreeset;
 use mz_catalog::builtin::{BUILTINS, BuiltinTable};
 use mz_catalog::durable::objects::{SystemObjectDescription, SystemObjectMapping};
 use mz_catalog::durable::{MOCK_AUTHENTICATION_NONCE_KEY, Transaction};
-use mz_catalog::memory::objects::{BootstrapStateUpdateKind, StateUpdate};
+use mz_catalog::memory::objects::{StateUpdate, StateUpdateKind};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
 use mz_persist_types::ShardId;
@@ -121,7 +121,7 @@ where
 pub(crate) struct MigrateResult {
     pub(crate) builtin_table_updates: Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
     pub(crate) catalog_updates: Vec<ParsedStateUpdate>,
-    pub(crate) post_item_updates: Vec<(BootstrapStateUpdateKind, Timestamp, Diff)>,
+    pub(crate) post_item_updates: Vec<(StateUpdateKind, Timestamp, Diff)>,
 }
 
 /// Migrates all user items and loads them into `state`.
@@ -176,9 +176,7 @@ pub(crate) async fn migrate(
         .into_iter()
         // The only post-item update kind we currently generate is to
         // update storage collection metadata.
-        .partition(|(kind, _, _)| {
-            matches!(kind, BootstrapStateUpdateKind::StorageCollectionMetadata(_))
-        });
+        .partition(|(kind, _, _)| matches!(kind, StateUpdateKind::StorageCollectionMetadata(_)));
 
     let item_updates = item_updates
         .into_iter()

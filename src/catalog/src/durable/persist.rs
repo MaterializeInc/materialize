@@ -1328,16 +1328,18 @@ impl UnopenedPersistCatalogState {
 
             // Opening the catalog with write intent fences out every previous
             // catalog owner, so all sessions recorded by previous owners are
-            // dead. Reclaim their session records here, before anything else
-            // reads the catalog. A same-generation restart also invalidates
-            // all sessions, so this reclaims every record, not just those of
-            // older deploy generations. Read-only catalogs follow a live
-            // writer whose sessions are alive, and must not locally diverge
-            // from the shard contents.
+            // dead. Reclaim their session records and the temporary items
+            // they owned here, before anything else reads the catalog. A
+            // same-generation restart also invalidates all sessions, so this
+            // reclaims every record, not just those of older deploy
+            // generations. Read-only catalogs follow a live writer whose
+            // sessions are alive, and must not locally diverge from the shard
+            // contents.
             if mode != Mode::Readonly {
                 let stale_sessions: BTreeSet<_> =
                     txn.get_sessions().map(|session| session.uuid).collect();
                 txn.remove_sessions(&stale_sessions);
+                txn.remove_ephemeral_items();
             }
 
             txn.set_catalog_content_version(catalog_content_version)?;

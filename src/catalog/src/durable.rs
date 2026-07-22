@@ -35,7 +35,7 @@ pub use crate::durable::objects::{
     BurstState, Cluster, ClusterConfig, ClusterReplica, ClusterSystemConfiguration, ClusterVariant,
     ClusterVariantManaged, Comment, Database, DefaultPrivilege, IntrospectionSourceIndex, Item,
     NetworkPolicy, ReconfigurationState, ReconfigurationStatus, ReconfigurationTarget,
-    ReplicaConfig, ReplicaLocation, ReplicaSystemConfiguration, Role, RoleAuth, Schema,
+    ReplicaConfig, ReplicaLocation, ReplicaSystemConfiguration, Role, RoleAuth, Schema, Session,
     SourceReference, SourceReferences, StorageCollectionMetadata, SystemConfiguration,
     SystemObjectDescription, SystemObjectMapping, UnfinalizedShard,
 };

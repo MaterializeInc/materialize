@@ -33,7 +33,7 @@ use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterReplica, Database, Func, Index, Log, NetworkPolicy,
     Role, RoleAuth, Schema, Source, StateDiff, StateUpdate, StateUpdateKind, Table,
-    TableDataSource, TemporaryItem, Type, UpdateFrom,
+    TableDataSource, Type, UpdateFrom,
 };
 use mz_compute_types::config::ComputeReplicaConfig;
 use mz_compute_types::dataflows::DataflowDescription;
@@ -43,7 +43,8 @@ use mz_expr::MirScalarExpr;
 use mz_ore::collections::CollectionExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{
-    instrument, soft_assert_eq_or_log, soft_assert_no_log, soft_assert_or_log, soft_panic_or_log,
+    assert_none, instrument, soft_assert_eq_or_log, soft_assert_no_log, soft_assert_or_log,
+    soft_panic_or_log,
 };
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
@@ -90,7 +91,6 @@ struct InProgressRetractions {
     clusters: BTreeMap<ClusterKey, Cluster>,
     network_policies: BTreeMap<NetworkPolicyKey, NetworkPolicy>,
     items: BTreeMap<ItemKey, CatalogEntry>,
-    temp_items: BTreeMap<CatalogItemId, CatalogEntry>,
     introspection_source_indexes: BTreeMap<CatalogItemId, CatalogEntry>,
     system_object_mappings: BTreeMap<CatalogItemId, CatalogEntry>,
 }
@@ -155,11 +155,7 @@ impl CatalogState {
 
             // Clean up plans and optimizer notices for items that
             // were retracted but not replaced (i.e., truly dropped).
-            let dropped_entries: Vec<CatalogEntry> = retractions
-                .items
-                .into_values()
-                .chain(retractions.temp_items.into_values())
-                .collect();
+            let dropped_entries: Vec<CatalogEntry> = retractions.items.into_values().collect();
             if !dropped_entries.is_empty() {
                 let dropped_notices = self.drop_optimizer_notices(dropped_entries);
                 if self.system_config().enable_mz_notices() {
@@ -359,8 +355,8 @@ impl CatalogState {
                     local_expression_cache,
                 );
             }
-            StateUpdateKind::TemporaryItem(item) => {
-                self.apply_temporary_item_update(item, diff, retractions, local_expression_cache);
+            StateUpdateKind::Session(session) => {
+                self.apply_session_update(session, diff);
             }
             StateUpdateKind::Item(item) => {
                 self.apply_item_update(item, diff, retractions, local_expression_cache)?;
@@ -1150,133 +1146,23 @@ impl CatalogState {
     }
 
     #[instrument(level = "debug")]
-    fn apply_temporary_item_update(
-        &mut self,
-        temporary_item: TemporaryItem,
-        diff: StateDiff,
-        retractions: &mut InProgressRetractions,
-        local_expression_cache: &mut LocalExpressionCache,
-    ) {
+    /// Maintains the session UUID to connection mapping that temporary item
+    /// updates rely on to locate the owning connection's temporary schema.
+    #[instrument(level = "debug")]
+    fn apply_session_update(&mut self, session: mz_catalog::durable::Session, diff: StateDiff) {
+        let conn_id = ConnectionId::Static(session.connection_id);
         match diff {
             StateDiff::Addition => {
-                let TemporaryItem {
-                    id,
-                    oid,
-                    global_id,
-                    schema_id,
-                    name,
-                    conn_id,
-                    create_sql,
-                    owner_id,
-                    privileges,
-                    extra_versions,
-                } = temporary_item;
-                // Lazily create the temporary schema if it doesn't exist yet.
-                // We need the conn_id to create the schema, and it should always be Some for temp items.
-                let temp_conn_id = conn_id
-                    .as_ref()
-                    .expect("temporary items must have a connection id");
-                if !self.temporary_schemas.contains_key(temp_conn_id) {
-                    self.create_temporary_schema(temp_conn_id, owner_id)
-                        .expect("failed to create temporary schema");
-                }
-                let schema = self.find_temp_schema(&schema_id);
-                let name = QualifiedItemName {
-                    qualifiers: ItemQualifiers {
-                        database_spec: schema.database().clone(),
-                        schema_spec: schema.id().clone(),
-                    },
-                    item: name.clone(),
-                };
-
-                let entry = match retractions.temp_items.remove(&id) {
-                    Some(mut retraction) => {
-                        assert_eq!(retraction.id, id);
-
-                        // We only reparse the SQL if it's changed. Otherwise, we use the existing
-                        // item. This is a performance optimization and not needed for correctness.
-                        // This makes it difficult to use the `UpdateFrom` trait, but the structure
-                        // is still the same as the trait.
-                        if retraction.create_sql() != create_sql {
-                            let mut catalog_item = self
-                                .deserialize_item(
-                                    global_id,
-                                    &create_sql,
-                                    &extra_versions,
-                                    local_expression_cache,
-                                    Some(retraction.item),
-                                )
-                                .unwrap_or_else(|e| {
-                                    panic!("{e:?}: invalid persisted SQL: {create_sql}")
-                                });
-                            // Have to patch up the item because parsing doesn't
-                            // take into account temporary schemas/conn_id.
-                            // NOTE(aljoscha): I don't like how we're patching
-                            // this in here, but it's but one of the ways in
-                            // which temporary items are a bit weird. So, here
-                            // we are ...
-                            catalog_item.set_conn_id(conn_id);
-                            // Deserializing replans the SQL, and the planner's
-                            // canonical printing can differ from `create_sql`,
-                            // for example when a feature flag changed how
-                            // references are printed since `create_sql` was
-                            // produced. Keep the exact input. A later op in the
-                            // same transaction retracts this item by
-                            // re-serializing it, and that retraction must
-                            // cancel byte-for-byte against this addition during
-                            // consolidation, else two retractions of the same
-                            // id survive and applying them panics.
-                            catalog_item.set_create_sql(create_sql);
-                            retraction.item = catalog_item;
-                        }
-
-                        retraction.id = id;
-                        retraction.oid = oid;
-                        retraction.name = name;
-                        retraction.owner_id = owner_id;
-                        retraction.privileges = PrivilegeMap::from_mz_acl_items(privileges);
-                        retraction
-                    }
-                    None => {
-                        let mut catalog_item = self
-                            .deserialize_item(
-                                global_id,
-                                &create_sql,
-                                &extra_versions,
-                                local_expression_cache,
-                                None,
-                            )
-                            .unwrap_or_else(|e| {
-                                panic!("{e:?}: invalid persisted SQL: {create_sql}")
-                            });
-
-                        // Have to patch up the item because parsing doesn't
-                        // take into account temporary schemas/conn_id.
-                        // NOTE(aljoscha): I don't like how we're patching this
-                        // in here, but it's but one of the ways in which
-                        // temporary items are a bit weird. So, here we are ...
-                        catalog_item.set_conn_id(conn_id);
-                        // Keep the exact input create_sql, not the replanned
-                        // printing. See the comment on the reparse above.
-                        catalog_item.set_create_sql(create_sql);
-
-                        CatalogEntry {
-                            item: catalog_item,
-                            referenced_by: Vec::new(),
-                            used_by: Vec::new(),
-                            id,
-                            oid,
-                            name,
-                            owner_id,
-                            privileges: PrivilegeMap::from_mz_acl_items(privileges),
-                        }
-                    }
-                };
-                self.insert_entry(entry);
+                let prev = self
+                    .session_conns_by_uuid
+                    .insert(session.uuid, conn_id.clone());
+                assert_none!(prev, "duplicate session record");
+                self.session_uuids_by_conn.insert(conn_id, session.uuid);
             }
             StateDiff::Retraction => {
-                let entry = self.drop_item(temporary_item.id);
-                retractions.temp_items.insert(temporary_item.id, entry);
+                let conn = self.session_conns_by_uuid.remove(&session.uuid);
+                assert!(conn.is_some(), "retraction of unknown session record");
+                self.session_uuids_by_conn.remove(&conn_id);
             }
         }
     }
@@ -1302,45 +1188,98 @@ impl CatalogState {
                     owner_id,
                     privileges,
                     extra_versions,
-                    ephemeral_owner_session: _,
+                    ephemeral_owner_session,
                 } = item;
-                let schema = self.find_non_temp_schema(&schema_id);
-                let name = QualifiedItemName {
-                    qualifiers: ItemQualifiers {
-                        database_spec: schema.database().clone(),
-                        schema_spec: schema.id().clone(),
-                    },
-                    item: name.clone(),
-                };
-                let entry = match retractions.items.remove(&key) {
-                    Some(retraction) => {
-                        assert_eq!(retraction.id, item.id);
 
-                        let item = self
-                            .deserialize_item(
-                                global_id,
-                                &create_sql,
-                                &extra_versions,
-                                local_expression_cache,
-                                Some(retraction.item),
-                            )
-                            .unwrap_or_else(|e| {
-                                panic!("{e:?}: invalid persisted SQL: {create_sql}")
-                            });
-
-                        CatalogEntry {
-                            item,
-                            id,
-                            oid,
-                            name,
-                            owner_id,
-                            privileges: PrivilegeMap::from_mz_acl_items(privileges),
-                            referenced_by: retraction.referenced_by,
-                            used_by: retraction.used_by,
+                // Temporary items live in the temporary schema of the owning
+                // session's connection, not in the schema named by
+                // `schema_id` (which is the temporary schema sentinel). The
+                // owning session's record is always applied before its items.
+                let conn_id = ephemeral_owner_session.map(|owner| {
+                    self.session_conns_by_uuid
+                        .get(&owner)
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            panic!("no session record applied for temporary item owner {owner}")
+                        })
+                });
+                let name = match &conn_id {
+                    Some(conn_id) => {
+                        // Lazily create the temporary schema if it doesn't
+                        // exist yet.
+                        if !self.temporary_schemas.contains_key(conn_id) {
+                            self.create_temporary_schema(conn_id, owner_id)
+                                .expect("failed to create temporary schema");
+                        }
+                        QualifiedItemName {
+                            qualifiers: ItemQualifiers {
+                                database_spec: ResolvedDatabaseSpecifier::Ambient,
+                                schema_spec: SchemaSpecifier::Temporary,
+                            },
+                            item: name.clone(),
                         }
                     }
                     None => {
-                        let catalog_item = self
+                        let schema = self.find_non_temp_schema(&schema_id);
+                        QualifiedItemName {
+                            qualifiers: ItemQualifiers {
+                                database_spec: schema.database().clone(),
+                                schema_spec: schema.id().clone(),
+                            },
+                            item: name.clone(),
+                        }
+                    }
+                };
+                let entry = match retractions.items.remove(&key) {
+                    Some(mut retraction) => {
+                        assert_eq!(retraction.id, id);
+
+                        // We only reparse the SQL if it's changed. Otherwise, we use the existing
+                        // item. This is a performance optimization and not needed for correctness.
+                        // This makes it difficult to use the `UpdateFrom` trait, but the structure
+                        // is still the same as the trait.
+                        if retraction.create_sql() != create_sql {
+                            let mut catalog_item = self
+                                .deserialize_item(
+                                    global_id,
+                                    &create_sql,
+                                    &extra_versions,
+                                    local_expression_cache,
+                                    Some(retraction.item),
+                                )
+                                .unwrap_or_else(|e| {
+                                    panic!("{e:?}: invalid persisted SQL: {create_sql}")
+                                });
+                            if conn_id.is_some() {
+                                // Have to patch up the item because parsing
+                                // doesn't take into account temporary
+                                // schemas/conn_id.
+                                catalog_item.set_conn_id(conn_id.clone());
+                                // Deserializing replans the SQL, and the
+                                // planner's canonical printing can differ from
+                                // `create_sql`, for example when a feature flag
+                                // changed how references are printed since
+                                // `create_sql` was produced. Keep the exact
+                                // input. A later op in the same transaction
+                                // retracts this item by re-serializing it, and
+                                // that retraction must cancel byte-for-byte
+                                // against this addition during consolidation,
+                                // else two retractions of the same id survive
+                                // and applying them panics.
+                                catalog_item.set_create_sql(create_sql);
+                            }
+                            retraction.item = catalog_item;
+                        }
+
+                        retraction.id = id;
+                        retraction.oid = oid;
+                        retraction.name = name;
+                        retraction.owner_id = owner_id;
+                        retraction.privileges = PrivilegeMap::from_mz_acl_items(privileges);
+                        retraction
+                    }
+                    None => {
+                        let mut catalog_item = self
                             .deserialize_item(
                                 global_id,
                                 &create_sql,
@@ -1351,6 +1290,13 @@ impl CatalogState {
                             .unwrap_or_else(|e| {
                                 panic!("{e:?}: invalid persisted SQL: {create_sql}")
                             });
+
+                        if conn_id.is_some() {
+                            // See the patch-up comments on the reparse above.
+                            catalog_item.set_conn_id(conn_id.clone());
+                            catalog_item.set_create_sql(create_sql);
+                        }
+
                         CatalogEntry {
                             item: catalog_item,
                             referenced_by: Vec::new(),
@@ -1532,7 +1478,6 @@ impl CatalogState {
                     vec![]
                 }
             }
-            StateUpdateKind::TemporaryItem(item) => self.pack_item_update(item.id, diff),
             StateUpdateKind::Item(item) => self.pack_item_update(item.id, diff),
             StateUpdateKind::Comment(_) => Vec::new(),
             StateUpdateKind::SourceReferences(source_references) => {
@@ -1542,6 +1487,9 @@ impl CatalogState {
             // mz_internal.mz_catalog_raw, so audit log rows do not produce
             // builtin table updates here.
             StateUpdateKind::AuditLog(_) => Vec::new(),
+            // mz_sessions is a MaterializedView backed by
+            // mz_internal.mz_catalog_raw.
+            StateUpdateKind::Session(_) => Vec::new(),
             StateUpdateKind::Database(_)
             | StateUpdateKind::Schema(_)
             | StateUpdateKind::NetworkPolicy(_)
@@ -2282,17 +2230,19 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     let mut builtin_item_updates = Vec::new();
     let mut item_retractions = Vec::new();
     let mut item_additions = Vec::new();
-    let mut temp_item_retractions = Vec::new();
-    let mut temp_item_additions = Vec::new();
     let mut post_item_retractions = Vec::new();
     let mut post_item_additions = Vec::new();
     for update in updates {
         let diff = update.diff.clone();
         match update.kind {
+            // Sessions are applied before items so that the additions of
+            // temporary items, which are visible only to their owning
+            // session, can resolve their owner's connection.
             StateUpdateKind::Role(_)
             | StateUpdateKind::RoleAuth(_)
             | StateUpdateKind::Database(_)
             | StateUpdateKind::Schema(_)
+            | StateUpdateKind::Session(_)
             | StateUpdateKind::DefaultPrivilege(_)
             | StateUpdateKind::SystemPrivilege(_)
             | StateUpdateKind::SystemConfiguration(_)
@@ -2315,12 +2265,6 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             StateUpdateKind::SystemObjectMapping(system_object_mapping) => {
                 builtin_item_updates.push((system_object_mapping, update.ts, update.diff))
             }
-            StateUpdateKind::TemporaryItem(item) => push_update(
-                (item, update.ts, update.diff),
-                diff,
-                &mut temp_item_retractions,
-                &mut temp_item_additions,
-            ),
             StateUpdateKind::Item(item) => push_update(
                 (item, update.ts, update.diff),
                 diff,
@@ -2479,107 +2423,23 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             .collect()
     }
 
-    let item_retractions = sort_item_updates(item_retractions);
-    let item_additions = sort_item_updates(item_additions);
-
-    /// Sort temporary item updates by dependency.
-    ///
-    /// The logic of this function should match [`sort_item_updates`].
-    fn sort_temp_item_updates(
-        temp_item_updates: Vec<(TemporaryItem, Timestamp, StateDiff)>,
-    ) -> VecDeque<(TemporaryItem, Timestamp, StateDiff)> {
-        // Partition items into groups s.t. each item in one group has a predefined order with all
-        // items in other groups. For example, all sinks are ordered greater than all tables.
-        let mut types = Vec::new();
-        // N.B. Functions can depend on system tables, but not user tables.
-        let mut funcs = Vec::new();
-        let mut secrets = Vec::new();
-        let mut connections = Vec::new();
-        let mut sources = Vec::new();
-        let mut tables = Vec::new();
-        let mut derived_items = Vec::new();
-        let mut sinks = Vec::new();
-        for update in temp_item_updates {
-            match update.0.item_type() {
-                CatalogItemType::Type => types.push(update),
-                CatalogItemType::Func => funcs.push(update),
-                CatalogItemType::Secret => secrets.push(update),
-                CatalogItemType::Connection => connections.push(update),
-                CatalogItemType::Source => sources.push(update),
-                CatalogItemType::Table => tables.push(update),
-                CatalogItemType::View
-                | CatalogItemType::MaterializedView
-                | CatalogItemType::Index => derived_items.push(update),
-                CatalogItemType::Sink => sinks.push(update),
-            }
-        }
-
-        // Within each group, sort by ID.
-        for group in [
-            &mut types,
-            &mut funcs,
-            &mut secrets,
-            &mut connections,
-            &mut sources,
-            &mut tables,
-            &mut derived_items,
-            &mut sinks,
-        ] {
-            group.sort_by_key(|(item, _, _)| item.id);
-        }
-
-        iter::empty()
-            .chain(types)
-            .chain(funcs)
-            .chain(secrets)
-            .chain(connections)
-            .chain(sources)
-            .chain(tables)
-            .chain(derived_items)
-            .chain(sinks)
-            .collect()
-    }
-    let temp_item_retractions = sort_temp_item_updates(temp_item_retractions);
-    let temp_item_additions = sort_temp_item_updates(temp_item_additions);
-
-    /// Concatenate sorted persistent and temporary item updates, persistent
-    /// first.
-    ///
-    /// Both inputs are already in dependency (type-group) order internally. A
-    /// non-temporary item can never depend on a temporary one (enforced at
-    /// creation, see `ErrorKind::InvalidTemporaryDependency`), so emitting every
-    /// persistent item before every temporary item keeps dependencies ahead of
-    /// dependents for additions. (Retractions reuse this via a reversal by the
-    /// caller, which puts temporary items first. Also, a retraction only drops
-    /// the item and does not re-resolve `create_sql`.)
-    ///
-    /// NOTE: Do not interleave the two by raw id. The inputs are ordered by
-    /// dependency group, which is not id order, so an id merge can place a
-    /// temporary dependent ahead of the persistent item it references and panic
-    /// apply with an unresolvable id.
-    fn merge_item_updates(
+    // Temporary and non-temporary items sort together: the type groups order
+    // cross-type dependencies and the topological sorts order dependencies
+    // within a group, regardless of which items are temporary.
+    fn into_state_updates(
         item_updates: VecDeque<(mz_catalog::durable::Item, Timestamp, StateDiff)>,
-        temp_item_updates: VecDeque<(TemporaryItem, Timestamp, StateDiff)>,
     ) -> Vec<StateUpdate> {
-        let mut state_updates = Vec::with_capacity(item_updates.len() + temp_item_updates.len());
-        for (item, ts, diff) in item_updates {
-            state_updates.push(StateUpdate {
+        item_updates
+            .into_iter()
+            .map(|(item, ts, diff)| StateUpdate {
                 kind: StateUpdateKind::Item(item),
                 ts,
                 diff,
-            });
-        }
-        for (temp_item, ts, diff) in temp_item_updates {
-            state_updates.push(StateUpdate {
-                kind: StateUpdateKind::TemporaryItem(temp_item),
-                ts,
-                diff,
-            });
-        }
-        state_updates
+            })
+            .collect()
     }
-    let item_retractions = merge_item_updates(item_retractions, temp_item_retractions);
-    let item_additions = merge_item_updates(item_additions, temp_item_additions);
+    let item_retractions = into_state_updates(sort_item_updates(item_retractions));
+    let item_additions = into_state_updates(sort_item_updates(item_additions));
 
     // Put everything back together.
     iter::empty()
@@ -2628,7 +2488,7 @@ impl ApplyState {
                 Self::BuiltinViewAdditions(vec![view_addition])
             }
 
-            IntrospectionSourceIndex(_) | SystemObjectMapping(_) | TemporaryItem(_) | Item(_) => {
+            IntrospectionSourceIndex(_) | SystemObjectMapping(_) | Item(_) => {
                 Self::Items(vec![update])
             }
 
@@ -2636,6 +2496,7 @@ impl ApplyState {
             | RoleAuth(_)
             | Database(_)
             | Schema(_)
+            | Session(_)
             | DefaultPrivilege(_)
             | SystemPrivilege(_)
             | SystemConfiguration(_)

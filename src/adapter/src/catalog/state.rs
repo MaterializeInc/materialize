@@ -93,6 +93,7 @@ use serde::Serialize;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
+use uuid::Uuid;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::AdapterError;
@@ -168,6 +169,22 @@ pub struct CatalogState {
     // active connections, so this must be `#[serde(skip)]`.
     #[serde(skip)]
     pub(super) temporary_schemas: imbl::OrdMap<ConnectionId, Schema>,
+
+    // Derived from durable session records. Maps the owning session of
+    // temporary objects to the connection whose temporary schema holds them,
+    // and back.
+    //
+    // NOTE: The connection IDs may belong to another envd, e.g. when
+    // following the catalog read-only during a zero-downtime deployment, and
+    // connection IDs from different envds can collide. Today a catalog
+    // follower serves no user sessions, so nothing resolves through a
+    // colliding entry. Multi-envd support will need to qualify these entries
+    // by their owning envd (see the durable temporary objects design doc).
+    // `#[serde(skip)]` for the same reason as `temporary_schemas`.
+    #[serde(skip)]
+    pub(super) session_conns_by_uuid: imbl::OrdMap<Uuid, ConnectionId>,
+    #[serde(skip)]
+    pub(super) session_uuids_by_conn: imbl::OrdMap<ConnectionId, Uuid>,
 
     // Read-only state not derived from the durable catalog.
     #[serde(skip)]
@@ -305,6 +322,8 @@ impl CatalogState {
             ambient_schemas_by_name: Default::default(),
             ambient_schemas_by_id: Default::default(),
             temporary_schemas: Default::default(),
+            session_conns_by_uuid: Default::default(),
+            session_uuids_by_conn: Default::default(),
             clusters_by_id: Default::default(),
             clusters_by_name: Default::default(),
             network_policies_by_name: Default::default(),
@@ -839,6 +858,37 @@ impl CatalogState {
     /// any temporary objects.
     pub fn has_temporary_schema(&self, conn: &ConnectionId) -> bool {
         self.temporary_schemas.contains_key(conn)
+    }
+
+    /// Converts an in-memory catalog entry into its durable representation.
+    ///
+    /// The durable owner of a temporary entry is the session whose connection
+    /// currently holds it, resolved from the durable session records.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `entry` is temporary and its connection has no session
+    /// record, which means either the record was never written or the entry
+    /// outlived its session.
+    pub(super) fn durable_item(&self, entry: CatalogEntry) -> mz_catalog::durable::Item {
+        let ephemeral_owner_session = entry.conn_id().map(|conn_id| {
+            *self.session_uuids_by_conn.get(conn_id).unwrap_or_else(|| {
+                panic!("no session record for connection {conn_id} owning temporary item")
+            })
+        });
+        let (create_sql, global_id, extra_versions) = entry.item.into_serialized();
+        mz_catalog::durable::Item {
+            id: entry.id,
+            oid: entry.oid,
+            global_id,
+            schema_id: entry.name.qualifiers.schema_spec.into(),
+            name: entry.name.item,
+            create_sql,
+            owner_id: entry.owner_id,
+            privileges: entry.privileges.into_all_values().collect(),
+            extra_versions,
+            ephemeral_owner_session,
+        }
     }
 
     /// Gets a type named `name` from exactly one of the system schemas.

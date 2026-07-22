@@ -214,21 +214,29 @@ impl<'a> Transaction<'a> {
                 schema_unique_fn,
                 schema_unique_fn,
             )?,
+            // Temporary items from different sessions may share a name in the
+            // temporary schema (whose durable schema id is a sentinel shared
+            // by every session), so name uniqueness is additionally scoped by
+            // the owning session.
             items: TableTransaction::new_with_uniqueness_fn(
                 items,
                 |a: &ItemValue, b| {
-                    a.schema_id == b.schema_id && a.name == b.name && {
-                        // `item_type` is slow, only compute if needed.
-                        let a_type = a.item_type();
-                        let b_type = b.item_type();
-                        (a_type != CatalogItemType::Type && b_type != CatalogItemType::Type)
-                            || (a_type == CatalogItemType::Type && b_type.conflicts_with_type())
-                            || (b_type == CatalogItemType::Type && a_type.conflicts_with_type())
-                    }
+                    a.schema_id == b.schema_id
+                        && a.name == b.name
+                        && a.ephemeral_owner_session == b.ephemeral_owner_session
+                        && {
+                            // `item_type` is slow, only compute if needed.
+                            let a_type = a.item_type();
+                            let b_type = b.item_type();
+                            (a_type != CatalogItemType::Type && b_type != CatalogItemType::Type)
+                                || (a_type == CatalogItemType::Type && b_type.conflicts_with_type())
+                                || (b_type == CatalogItemType::Type && a_type.conflicts_with_type())
+                        }
                 },
                 |prev: &ItemValue, next| {
                     prev.schema_id == next.schema_id
                         && prev.name == next.name
+                        && prev.ephemeral_owner_session == next.ephemeral_owner_session
                         // `item_type` is slow, only compute it once name and schema match.
                         && prev.item_type() == next.item_type()
                 },
@@ -358,31 +366,6 @@ impl<'a> Transaction<'a> {
             privileges,
             oid,
             None,
-        )?;
-        Ok((id, oid))
-    }
-
-    /// Inserts the temporary schema for the session identified by
-    /// `owner_session`. The schema lives in the ambient database and is only
-    /// visible to that session.
-    pub fn insert_temporary_schema(
-        &mut self,
-        owner_session: Uuid,
-        owner_id: RoleId,
-        privileges: Vec<MzAclItem>,
-        temporary_oids: &HashSet<u32>,
-    ) -> Result<(SchemaId, u32), CatalogError> {
-        let id = self.get_and_increment_id(SCHEMA_ID_ALLOC_KEY.to_string())?;
-        let id = SchemaId::User(id);
-        let oid = self.allocate_oid(temporary_oids)?;
-        self.insert_schema(
-            id,
-            None,
-            mz_repr::namespaces::MZ_TEMP_SCHEMA.to_string(),
-            owner_id,
-            privileges,
-            oid,
-            Some(owner_session),
         )?;
         Ok((id, oid))
     }
@@ -876,6 +859,21 @@ impl<'a> Transaction<'a> {
     pub fn remove_sessions(&mut self, uuids: &BTreeSet<Uuid>) {
         let keys = uuids.iter().map(|uuid| SessionKey { uuid: *uuid });
         self.sessions.delete_by_keys(keys, self.op_id);
+    }
+
+    /// Removes every item owned by an ephemeral session from the transaction.
+    ///
+    /// Used to reclaim temporary items when the catalog is opened with write
+    /// intent, at which point every session that could own one is dead.
+    pub fn remove_ephemeral_items(&mut self) {
+        let keys: Vec<_> = self
+            .items
+            .items()
+            .into_iter()
+            .filter(|(_, value)| value.ephemeral_owner_session.is_some())
+            .map(|(key, _)| key.clone())
+            .collect();
+        self.items.delete_by_keys(keys, self.op_id);
     }
 
     pub fn get_sessions(&self) -> impl Iterator<Item = Session> + use<> {
@@ -2574,10 +2572,10 @@ impl<'a> Transaction<'a> {
             audit_log_updates,
             storage_collection_metadata,
             unfinalized_shards,
+            sessions,
             // Not representable as a `StateUpdate`.
             id_allocator: _,
             configs: _,
-            sessions: _,
             settings: _,
             txn_wal_shard: _,
             upper,
@@ -2604,6 +2602,11 @@ impl<'a> Transaction<'a> {
             .chain(get_collection_op_updates(
                 schemas,
                 StateUpdateKind::Schema,
+                self.op_id,
+            ))
+            .chain(get_collection_op_updates(
+                sessions,
+                StateUpdateKind::Session,
                 self.op_id,
             ))
             .chain(get_collection_op_updates(

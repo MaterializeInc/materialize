@@ -512,6 +512,10 @@ impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                 let schema = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::Schema(schema))
             }
+            StateUpdateKind::Session(key, value) => {
+                let session = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::Session(session))
+            }
             StateUpdateKind::SourceReferences(key, value) => {
                 let source_references = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::SourceReferences(
@@ -568,7 +572,6 @@ impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
             StateUpdateKind::Config(_, _)
             | StateUpdateKind::FenceToken(_)
             | StateUpdateKind::IdAllocator(_, _)
-            | StateUpdateKind::Session(_, _)
             | StateUpdateKind::Setting(_, _)
             | StateUpdateKind::TxnWalShard(_, _) => None,
         })
