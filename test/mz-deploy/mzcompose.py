@@ -2353,9 +2353,10 @@ def workflow_autoscaling(c: Composition, parser: WorkflowArgumentParser) -> None
         # Pin the concrete policy rather than comparing the two clusters, which
         # would pass vacuously if neither had a policy.
         production = live_strategy("scaled")
-        assert production == ("scale=1,workers=2", 60), (
-            f"expected the production policy to be set, got {production}"
-        )
+        assert production == (
+            "scale=1,workers=2",
+            60,
+        ), f"expected the production policy to be set, got {production}"
         assert (
             live_strategy("scaled_as1") == production
         ), "staging cluster must inherit the production autoscaling policy"
