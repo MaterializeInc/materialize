@@ -91,7 +91,7 @@ describe("UsagePage", () => {
           days: oneDay([
             {
               external_customer_id: "parent-org",
-              name: "",
+              name: "Built-Prod",
               clusters: [
                 {
                   environment_id: "environment-parent-0",
@@ -147,6 +147,10 @@ describe("UsagePage", () => {
     expect(accountRows).toHaveLength(2);
     expect(within(accountRows[0]).getByText(formatCurrency(14))).toBeVisible();
     expect(within(accountRows[1]).getByText(formatCurrency(5))).toBeVisible();
+    // The parent has a display name (SAS-142) and renders it in place of the
+    // UUID; the child has none, so its row falls back to the short UUID.
+    expect(within(accountRows[0]).getByText("Built-Prod")).toBeVisible();
+    expect(within(accountRows[1]).getByText("child-or…")).toBeVisible();
     // Each account row also shows its share of the period total (SAS-144):
     // parent 14/19 ≈ 73.7%, child 5/19 ≈ 26.3%.
     expect(within(accountRows[0]).getByText("73.7%")).toBeVisible();
