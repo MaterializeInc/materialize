@@ -22,9 +22,9 @@ use mz_catalog::builtin::{
     MZ_KAFKA_SINKS, MZ_KAFKA_SOURCE_TABLES, MZ_LICENSE_KEYS, MZ_LIST_TYPES, MZ_MAP_TYPES,
     MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_MYSQL_SOURCE_TABLES, MZ_OBJECT_DEPENDENCIES,
     MZ_OBJECT_GLOBAL_IDS, MZ_OPERATORS, MZ_POSTGRES_SOURCE_TABLES, MZ_PSEUDO_TYPES,
-    MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_SESSIONS, MZ_SINKS, MZ_SOURCE_REFERENCES,
-    MZ_SQL_SERVER_SOURCE_TABLES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD,
-    MZ_SUBSCRIPTIONS, MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
+    MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_SINKS, MZ_SOURCE_REFERENCES, MZ_SQL_SERVER_SOURCE_TABLES,
+    MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_TABLES,
+    MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::durable::SourceReferences;
@@ -66,7 +66,6 @@ use smallvec::smallvec;
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::active_compute_sink::ActiveSubscribe;
 use crate::catalog::CatalogState;
-use crate::coord::ConnMeta;
 
 /// An update to a built-in table.
 #[derive(Debug, Clone)]
@@ -1441,25 +1440,6 @@ impl CatalogState {
         packer.push_list(depends_on.iter().map(|s| Datum::String(s)));
 
         BuiltinTableUpdate::row(&*MZ_SUBSCRIPTIONS, row, diff)
-    }
-
-    pub fn pack_session_update(
-        &self,
-        conn: &ConnMeta,
-        diff: Diff,
-    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
-        let connect_dt = mz_ore::now::to_datetime(conn.connected_at());
-        BuiltinTableUpdate::row(
-            &*MZ_SESSIONS,
-            Row::pack_slice(&[
-                Datum::Uuid(conn.uuid()),
-                Datum::UInt32(conn.conn_id().unhandled()),
-                Datum::String(&conn.authenticated_role_id().to_string()),
-                Datum::from(conn.client_ip().map(|ip| ip.to_string()).as_deref()),
-                Datum::TimestampTz(connect_dt.try_into().expect("must fit")),
-            ]),
-            diff,
-        )
     }
 
     fn pack_privilege_array_row(&self, privileges: &PrivilegeMap) -> Row {

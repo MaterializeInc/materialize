@@ -135,6 +135,7 @@ impl StateUpdate {
             databases,
             schemas,
             items,
+            sessions,
             comments,
             roles,
             role_auth,
@@ -162,6 +163,7 @@ impl StateUpdate {
         let databases = from_batch(databases, StateUpdateKind::Database);
         let schemas = from_batch(schemas, StateUpdateKind::Schema);
         let items = from_batch(items, StateUpdateKind::Item);
+        let sessions = from_batch(sessions, StateUpdateKind::Session);
         let comments = from_batch(comments, StateUpdateKind::Comment);
         let roles = from_batch(roles, StateUpdateKind::Role);
         let role_auth = from_batch(role_auth, StateUpdateKind::RoleAuth);
@@ -201,6 +203,7 @@ impl StateUpdate {
         databases
             .chain(schemas)
             .chain(items)
+            .chain(sessions)
             .chain(comments)
             .chain(roles)
             .chain(role_auth)
@@ -250,6 +253,7 @@ pub enum StateUpdateKind {
     Role(proto::RoleKey, proto::RoleValue),
     RoleAuth(proto::RoleAuthKey, proto::RoleAuthValue),
     Schema(proto::SchemaKey, proto::SchemaValue),
+    Session(proto::SessionKey, proto::SessionValue),
     Setting(proto::SettingKey, proto::SettingValue),
     SourceReferences(proto::SourceReferencesKey, proto::SourceReferencesValue),
     SystemConfiguration(
@@ -294,6 +298,7 @@ impl StateUpdateKind {
             StateUpdateKind::Role(_, _) => Some(CollectionType::Role),
             StateUpdateKind::RoleAuth(_, _) => Some(CollectionType::RoleAuth),
             StateUpdateKind::Schema(_, _) => Some(CollectionType::Schema),
+            StateUpdateKind::Session(_, _) => Some(CollectionType::Session),
             StateUpdateKind::Setting(_, _) => Some(CollectionType::Setting),
             StateUpdateKind::SourceReferences(_, _) => Some(CollectionType::SourceReferences),
             StateUpdateKind::SystemConfiguration(_, _) => Some(CollectionType::SystemConfiguration),
@@ -563,6 +568,7 @@ impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
             StateUpdateKind::Config(_, _)
             | StateUpdateKind::FenceToken(_)
             | StateUpdateKind::IdAllocator(_, _)
+            | StateUpdateKind::Session(_, _)
             | StateUpdateKind::Setting(_, _)
             | StateUpdateKind::TxnWalShard(_, _) => None,
         })
@@ -667,6 +673,9 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
             StateUpdateKind::Schema(key, value) => {
                 proto::StateUpdateKind::Schema(proto::Schema { key, value })
             }
+            StateUpdateKind::Session(key, value) => {
+                proto::StateUpdateKind::Session(proto::Session { key, value })
+            }
             StateUpdateKind::Setting(key, value) => {
                 proto::StateUpdateKind::Setting(proto::Setting { key, value })
             }
@@ -758,6 +767,9 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
             }
             proto::StateUpdateKind::Schema(proto::Schema { key, value }) => {
                 StateUpdateKind::Schema(key, value)
+            }
+            proto::StateUpdateKind::Session(proto::Session { key, value }) => {
+                StateUpdateKind::Session(key, value)
             }
             proto::StateUpdateKind::Setting(proto::Setting { key, value }) => {
                 StateUpdateKind::Setting(key, value)

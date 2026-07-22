@@ -1848,6 +1848,7 @@ impl CatalogState {
                 },
                 id: SchemaSpecifier::Temporary,
                 oid,
+                ephemeral_owner_session: None,
                 items: BTreeMap::new(),
                 functions: BTreeMap::new(),
                 types: BTreeMap::new(),

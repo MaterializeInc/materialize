@@ -48,10 +48,18 @@ use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
 use mz_sql::plan::{AutoScalingStrategy, ClusterSchedule, NetworkPolicyRule, OnTimeoutAction};
 #[cfg(test)]
 use proptest_derive::Arbitrary;
+use uuid::Uuid;
 
 use crate::builtin::RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL;
 use crate::durable::Epoch;
 use crate::durable::objects::serialization::proto;
+
+/// A proptest strategy for [`Uuid`]s, which don't implement `Arbitrary`.
+#[cfg(test)]
+fn any_uuid() -> impl proptest::strategy::Strategy<Value = Uuid> {
+    use proptest::strategy::Strategy;
+    proptest::arbitrary::any::<u128>().prop_map(Uuid::from_u128)
+}
 
 // Structs used to pass information to outside modules.
 
@@ -133,6 +141,9 @@ pub struct Schema {
     pub database_id: Option<DatabaseId>,
     pub owner_id: RoleId,
     pub privileges: Vec<MzAclItem>,
+    /// `Some(uuid)` marks a temporary schema owned by, and only visible to,
+    /// the session with that UUID. `None` is a normal durable schema.
+    pub ephemeral_owner_session: Option<Uuid>,
 }
 
 impl DurableType for Schema {
@@ -148,6 +159,7 @@ impl DurableType for Schema {
                 name: self.name,
                 owner_id: self.owner_id,
                 privileges: self.privileges,
+                ephemeral_owner_session: self.ephemeral_owner_session,
             },
         )
     }
@@ -160,6 +172,7 @@ impl DurableType for Schema {
             database_id: value.database_id,
             owner_id: value.owner_id,
             privileges: value.privileges,
+            ephemeral_owner_session: value.ephemeral_owner_session,
         }
     }
 
@@ -289,6 +302,56 @@ impl DurableType for NetworkPolicy {
 
     fn key(&self) -> Self::Key {
         NetworkPolicyKey { id: self.id }
+    }
+}
+
+/// A session connected to some environmentd.
+///
+/// The envd instance owning the session is identified by
+/// `deploy_generation`. Only one envd serves an environment at a time, fenced
+/// by the deploy generation, so any session record whose generation is not the
+/// current one belongs to a dead envd and can be cleaned up, along with all
+/// items and schemas whose `ephemeral_owner_session` names it.
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct Session {
+    pub uuid: Uuid,
+    pub deploy_generation: u64,
+    pub connection_id: u32,
+    pub role_id: RoleId,
+    pub client_ip: Option<String>,
+    pub connected_at: u64,
+}
+
+impl DurableType for Session {
+    type Key = SessionKey;
+    type Value = SessionValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        (
+            SessionKey { uuid: self.uuid },
+            SessionValue {
+                deploy_generation: self.deploy_generation,
+                connection_id: self.connection_id,
+                role_id: self.role_id,
+                client_ip: self.client_ip,
+                connected_at: self.connected_at,
+            },
+        )
+    }
+
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
+        Self {
+            uuid: key.uuid,
+            deploy_generation: value.deploy_generation,
+            connection_id: value.connection_id,
+            role_id: value.role_id,
+            client_ip: value.client_ip,
+            connected_at: value.connected_at,
+        }
+    }
+
+    fn key(&self) -> Self::Key {
+        SessionKey { uuid: self.uuid }
     }
 }
 
@@ -607,6 +670,9 @@ pub struct Item {
     pub owner_id: RoleId,
     pub privileges: Vec<MzAclItem>,
     pub extra_versions: BTreeMap<RelationVersion, GlobalId>,
+    /// `Some(uuid)` marks a temporary item owned by, and only visible to, the
+    /// session with that UUID. `None` is a normal durable item.
+    pub ephemeral_owner_session: Option<Uuid>,
 }
 
 impl Item {
@@ -631,6 +697,7 @@ impl DurableType for Item {
                 owner_id: self.owner_id,
                 privileges: self.privileges,
                 extra_versions: self.extra_versions,
+                ephemeral_owner_session: self.ephemeral_owner_session,
             },
         )
     }
@@ -646,6 +713,7 @@ impl DurableType for Item {
             owner_id: value.owner_id,
             privileges: value.privileges,
             extra_versions: value.extra_versions,
+            ephemeral_owner_session: value.ephemeral_owner_session,
         }
     }
 
@@ -1307,6 +1375,7 @@ pub struct Snapshot {
     pub roles: BTreeMap<proto::RoleKey, proto::RoleValue>,
     pub role_auth: BTreeMap<proto::RoleAuthKey, proto::RoleAuthValue>,
     pub items: BTreeMap<proto::ItemKey, proto::ItemValue>,
+    pub sessions: BTreeMap<proto::SessionKey, proto::SessionValue>,
     pub comments: BTreeMap<proto::CommentKey, proto::CommentValue>,
     pub clusters: BTreeMap<proto::ClusterKey, proto::ClusterValue>,
     pub network_policies: BTreeMap<proto::NetworkPolicyKey, proto::NetworkPolicyValue>,
@@ -1480,6 +1549,8 @@ pub struct SchemaValue {
     pub(crate) owner_id: RoleId,
     pub(crate) privileges: Vec<MzAclItem>,
     pub(crate) oid: u32,
+    #[cfg_attr(test, proptest(strategy = "proptest::option::of(any_uuid())"))]
+    pub(crate) ephemeral_owner_session: Option<Uuid>,
 }
 
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash, Debug)]
@@ -1499,12 +1570,31 @@ pub struct ItemValue {
     pub(crate) oid: u32,
     pub(crate) global_id: GlobalId,
     pub(crate) extra_versions: BTreeMap<RelationVersion, GlobalId>,
+    #[cfg_attr(test, proptest(strategy = "proptest::option::of(any_uuid())"))]
+    pub(crate) ephemeral_owner_session: Option<Uuid>,
 }
 
 impl ItemValue {
     pub fn item_type(&self) -> CatalogItemType {
         item_type(&self.create_sql)
     }
+}
+
+#[derive(Clone, Copy, PartialOrd, PartialEq, Eq, Ord, Hash, Debug)]
+#[cfg_attr(test, derive(Arbitrary))]
+pub struct SessionKey {
+    #[cfg_attr(test, proptest(strategy = "any_uuid()"))]
+    pub(crate) uuid: Uuid,
+}
+
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+#[cfg_attr(test, derive(Arbitrary))]
+pub struct SessionValue {
+    pub(crate) deploy_generation: u64,
+    pub(crate) connection_id: u32,
+    pub(crate) role_id: RoleId,
+    pub(crate) client_ip: Option<String>,
+    pub(crate) connected_at: u64,
 }
 
 pub fn item_type(create_sql: &str) -> CatalogItemType {

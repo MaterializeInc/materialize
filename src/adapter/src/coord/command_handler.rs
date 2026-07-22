@@ -15,7 +15,6 @@ use differential_dataflow::lattice::Lattice;
 use mz_adapter_types::dyncfgs::ALLOW_USER_SESSIONS;
 use mz_auth::AuthenticatorKind;
 use mz_auth::password::Password;
-use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
 use mz_sql::catalog::AutoProvisionSource;
 use mz_sql::session::metadata::SessionMetadata;
 use std::collections::{BTreeMap, BTreeSet};
@@ -33,7 +32,7 @@ use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{instrument, soft_panic_or_log};
 use mz_repr::role_id::RoleId;
-use mz_repr::{Diff, GlobalId, SqlScalarType, Timestamp};
+use mz_repr::{GlobalId, SqlScalarType, Timestamp};
 use mz_sql::ast::{
     AlterConnectionAction, AlterConnectionStatement, AlterSourceAction, AstInfo, ConstantVisitor,
     CopyRelation, CopyStatement, CreateSourceOptionName, Raw, Statement, StatementKind,
@@ -67,6 +66,7 @@ use tracing::{Instrument, debug_span, info, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
+use crate::catalog::Op;
 use crate::command::{
     CatalogSnapshot, Command, ExecuteResponse, Response, SASLChallengeResponse,
     SASLVerifyProofResponse, StartupResponse, SuperuserAttribute,
@@ -846,42 +846,32 @@ impl Coordinator {
                     authenticated_role: role_id,
                     deferred_lock: None,
                 };
-                let update = self.catalog().state().pack_session_update(&conn, Diff::ONE);
-                let update = self.catalog().state().resolve_builtin_table_update(update);
+                // Durably record the session in the catalog. `mz_sessions` is
+                // a materialized view over these records, and temporary
+                // objects hang their visibility and cleanup off of them.
+                //
+                // Skipped in read-only mode: the catalog is not writable
+                // there, and a read-only envd reboots on promotion, which
+                // terminates all of its sessions anyway.
+                if !self.controller.read_only() {
+                    let op = Op::CreateSession {
+                        uuid,
+                        connection_id: conn_id.unhandled(),
+                        role_id,
+                        client_ip: client_ip.map(|ip| ip.to_string()),
+                        connected_at: conn.connected_at(),
+                    };
+                    if let Err(err) = self.catalog_transact(None, vec![op]).await {
+                        let _ = tx.send(Err(err));
+                        return;
+                    }
+                }
                 self.begin_session_for_statement_logging(&conn);
                 self.active_conns.insert(conn_id.clone(), conn);
 
-                // Note: Do NOT await the notify here, we pass this back to
-                // whatever requested the startup to prevent blocking startup
-                // and the Coordinator on a builtin table update.
-                let updates = vec![update];
-                // It's not a hard error if our list is missing a builtin table, but we want to
-                // make sure these two things stay in-sync.
-                if mz_ore::assert::soft_assertions_enabled() {
-                    let required_tables: BTreeSet<_> = super::appends::REQUIRED_BUILTIN_TABLES
-                        .iter()
-                        .map(|table| self.catalog().resolve_builtin_table(*table))
-                        .collect();
-                    let updates_tracked = updates
-                        .iter()
-                        .all(|update| required_tables.contains(&update.id));
-                    let all_mz_internal = super::appends::REQUIRED_BUILTIN_TABLES
-                        .iter()
-                        .all(|table| table.schema == MZ_INTERNAL_SCHEMA);
-                    mz_ore::soft_assert_or_log!(
-                        updates_tracked,
-                        "not tracking all required builtin table updates!"
-                    );
-                    // TODO(parkmycar): When checking if a query depends on these builtin table
-                    // writes we do not check the transitive dependencies of the query, because
-                    // we don't support creating views on mz_internal objects. If one of these
-                    // tables is promoted out of mz_internal then we'll need to add this check.
-                    mz_ore::soft_assert_or_log!(
-                        all_mz_internal,
-                        "not all builtin tables are in mz_internal! need to check transitive depends",
-                    )
-                }
-                let notify = self.builtin_table_update().background(updates);
+                // The session record is durable before we respond, so there
+                // are no builtin table writes for this session to wait on.
+                let notify = self.builtin_table_update().background(Vec::new());
 
                 let catalog = self.owned_catalog();
                 let build_info_human_version =
@@ -2003,16 +1993,16 @@ impl Coordinator {
         self.cancel_pending_copy(&conn_id);
         self.end_session_for_statement_logging(conn.uuid());
 
-        // Queue the builtin table update, but do not wait for it to complete. We explicitly do
-        // this to prevent blocking the Coordinator in the case that a lot of connections are
-        // closed at once, which occurs regularly in some workflows.
-        let update = self
-            .catalog()
-            .state()
-            .pack_session_update(&conn, Diff::MINUS_ONE);
-        let update = self.catalog().state().resolve_builtin_table_update(update);
-
-        let _builtin_update_notify = self.builtin_table_update().defer(vec![update]);
+        // Durably remove the session record from the catalog. Skipped in
+        // read-only mode, where no record was written at connect time. A
+        // record that fails to be removed here is reclaimed the next time a
+        // catalog is opened with write intent.
+        if !self.controller.read_only() {
+            let op = Op::DropSession { uuid: conn.uuid() };
+            if let Err(err) = self.catalog_transact(None, vec![op]).await {
+                warn!(%conn_id, "failed to remove session record from catalog: {err:?}");
+            }
+        }
     }
 
     /// Returns the necessary metadata for appending to a webhook source, and a channel to send

@@ -40,6 +40,7 @@ use mz_sql_parser::ast::QualifiedReplica;
 use mz_storage_client::controller::StorageTxn;
 use mz_storage_types::controller::StorageError;
 use tracing::warn;
+use uuid::Uuid;
 
 use crate::builtin::BuiltinLog;
 use crate::durable::initialize::{
@@ -57,10 +58,11 @@ use crate::durable::objects::{
     IntrospectionSourceIndex, Item, ItemKey, ItemValue, NetworkPolicyKey, NetworkPolicyValue,
     ReplicaConfig, ReplicaSystemConfiguration, ReplicaSystemConfigurationKey,
     ReplicaSystemConfigurationValue, Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue,
-    ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
-    SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
-    StorageCollectionMetadataValue, SystemObjectDescription, SystemObjectMapping,
-    SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
+    ServerConfigurationKey, ServerConfigurationValue, Session, SessionKey, SessionValue,
+    SettingKey, SettingValue, SourceReference, SourceReferencesKey, SourceReferencesValue,
+    StorageCollectionMetadataKey, StorageCollectionMetadataValue, SystemObjectDescription,
+    SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue,
+    UnfinalizedShardKey,
 };
 use crate::durable::{
     AUDIT_LOG_ID_ALLOC_KEY, BUILTIN_MIGRATION_SHARD_KEY, CATALOG_CONTENT_VERSION_KEY, CatalogError,
@@ -88,6 +90,7 @@ pub struct Transaction<'a> {
     databases: TableTransaction<DatabaseKey, DatabaseValue>,
     schemas: TableTransaction<SchemaKey, SchemaValue>,
     items: TableTransaction<ItemKey, ItemValue>,
+    sessions: TableTransaction<SessionKey, SessionValue>,
     comments: TableTransaction<CommentKey, CommentValue>,
     roles: TableTransaction<RoleKey, RoleValue>,
     role_auth: TableTransaction<RoleAuthKey, RoleAuthValue>,
@@ -158,6 +161,7 @@ impl<'a> Transaction<'a> {
             roles,
             role_auth,
             items,
+            sessions,
             comments,
             clusters,
             network_policies,
@@ -183,8 +187,14 @@ impl<'a> Transaction<'a> {
         // predicate answers both "do these two conflict?" and "did this update keep the same key?".
         let database_unique_fn: fn(&DatabaseValue, &DatabaseValue) -> bool =
             |a, b| a.name == b.name;
-        let schema_unique_fn: fn(&SchemaValue, &SchemaValue) -> bool =
-            |a, b| a.database_id == b.database_id && a.name == b.name;
+        // Temporary schemas from different sessions may share a name (every
+        // session's temporary schema is called "mz_temp"), so name uniqueness
+        // is additionally scoped by the owning session.
+        let schema_unique_fn: fn(&SchemaValue, &SchemaValue) -> bool = |a, b| {
+            a.database_id == b.database_id
+                && a.name == b.name
+                && a.ephemeral_owner_session == b.ephemeral_owner_session
+        };
         let role_key: fn(&RoleValue, &RoleValue) -> bool = |a, b| a.name == b.name;
         let cluster_unique_fn: fn(&ClusterValue, &ClusterValue) -> bool = |a, b| a.name == b.name;
         let network_policy_unique_fn: fn(&NetworkPolicyValue, &NetworkPolicyValue) -> bool =
@@ -223,6 +233,7 @@ impl<'a> Transaction<'a> {
                         && prev.item_type() == next.item_type()
                 },
             )?,
+            sessions: TableTransaction::new(sessions)?,
             comments: TableTransaction::new(comments)?,
             roles: TableTransaction::new_with_uniqueness_fn(roles, role_key, role_key)?,
             role_auth: TableTransaction::new(role_auth)?,
@@ -346,6 +357,32 @@ impl<'a> Transaction<'a> {
             owner_id,
             privileges,
             oid,
+            None,
+        )?;
+        Ok((id, oid))
+    }
+
+    /// Inserts the temporary schema for the session identified by
+    /// `owner_session`. The schema lives in the ambient database and is only
+    /// visible to that session.
+    pub fn insert_temporary_schema(
+        &mut self,
+        owner_session: Uuid,
+        owner_id: RoleId,
+        privileges: Vec<MzAclItem>,
+        temporary_oids: &HashSet<u32>,
+    ) -> Result<(SchemaId, u32), CatalogError> {
+        let id = self.get_and_increment_id(SCHEMA_ID_ALLOC_KEY.to_string())?;
+        let id = SchemaId::User(id);
+        let oid = self.allocate_oid(temporary_oids)?;
+        self.insert_schema(
+            id,
+            None,
+            mz_repr::namespaces::MZ_TEMP_SCHEMA.to_string(),
+            owner_id,
+            privileges,
+            oid,
+            Some(owner_session),
         )?;
         Ok((id, oid))
     }
@@ -359,7 +396,15 @@ impl<'a> Transaction<'a> {
         oid: u32,
     ) -> Result<(), CatalogError> {
         let id = SchemaId::System(schema_id);
-        self.insert_schema(id, None, schema_name.to_string(), owner_id, privileges, oid)
+        self.insert_schema(
+            id,
+            None,
+            schema_name.to_string(),
+            owner_id,
+            privileges,
+            oid,
+            None,
+        )
     }
 
     pub(crate) fn insert_schema(
@@ -370,6 +415,7 @@ impl<'a> Transaction<'a> {
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         oid: u32,
+        ephemeral_owner_session: Option<Uuid>,
     ) -> Result<(), CatalogError> {
         match self.schemas.insert(
             SchemaKey { id: schema_id },
@@ -379,6 +425,7 @@ impl<'a> Transaction<'a> {
                 owner_id,
                 privileges,
                 oid,
+                ephemeral_owner_session,
             },
             self.op_id,
         ) {
@@ -742,10 +789,20 @@ impl<'a> Transaction<'a> {
         privileges: Vec<MzAclItem>,
         temporary_oids: &HashSet<u32>,
         versions: BTreeMap<RelationVersion, GlobalId>,
+        ephemeral_owner_session: Option<Uuid>,
     ) -> Result<u32, CatalogError> {
         let oid = self.allocate_oid(temporary_oids)?;
         self.insert_item(
-            id, oid, global_id, schema_id, item_name, create_sql, owner_id, privileges, versions,
+            id,
+            oid,
+            global_id,
+            schema_id,
+            item_name,
+            create_sql,
+            owner_id,
+            privileges,
+            versions,
+            ephemeral_owner_session,
         )?;
         Ok(oid)
     }
@@ -761,6 +818,7 @@ impl<'a> Transaction<'a> {
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         extra_versions: BTreeMap<RelationVersion, GlobalId>,
+        ephemeral_owner_session: Option<Uuid>,
     ) -> Result<(), CatalogError> {
         match self.items.insert(
             ItemKey { id },
@@ -773,12 +831,59 @@ impl<'a> Transaction<'a> {
                 oid,
                 global_id,
                 extra_versions,
+                ephemeral_owner_session,
             },
             self.op_id,
         ) {
             Ok(_) => Ok(()),
             Err(_) => Err(SqlCatalogError::ItemAlreadyExists(id, item_name.to_owned()).into()),
         }
+    }
+
+    /// Records a new session, owned by the envd incarnation that opened the
+    /// durable catalog.
+    ///
+    /// Session UUIDs are generated randomly per connection, so a duplicate
+    /// key indicates a bug in the caller.
+    pub fn insert_session(
+        &mut self,
+        uuid: Uuid,
+        connection_id: u32,
+        role_id: RoleId,
+        client_ip: Option<String>,
+        connected_at: u64,
+    ) -> Result<(), CatalogError> {
+        let deploy_generation = self.durable_catalog.deploy_generation();
+        self.sessions
+            .insert(
+                SessionKey { uuid },
+                SessionValue {
+                    deploy_generation,
+                    connection_id,
+                    role_id,
+                    client_ip,
+                    connected_at,
+                },
+                self.op_id,
+            )
+            .map_err(CatalogError::from)
+    }
+
+    /// Removes the sessions identified by `uuids` from the transaction.
+    ///
+    /// Unknown UUIDs are ignored, so this is safe to call with sessions that
+    /// may already have been reclaimed.
+    pub fn remove_sessions(&mut self, uuids: &BTreeSet<Uuid>) {
+        let keys = uuids.iter().map(|uuid| SessionKey { uuid: *uuid });
+        self.sessions.delete_by_keys(keys, self.op_id);
+    }
+
+    pub fn get_sessions(&self) -> impl Iterator<Item = Session> + use<> {
+        self.sessions
+            .items()
+            .into_iter()
+            .map(|(k, v)| DurableType::from_key_value(k.clone(), v.clone()))
+            .sorted_by_key(|Session { uuid, .. }| *uuid)
     }
 
     pub fn get_and_increment_id(&mut self, key: String) -> Result<u64, CatalogError> {
@@ -1076,6 +1181,7 @@ impl<'a> Transaction<'a> {
             roles: self.roles.current_items_proto(),
             role_auth: self.role_auth.current_items_proto(),
             items: self.items.current_items_proto(),
+            sessions: self.sessions.current_items_proto(),
             comments: self.comments.current_items_proto(),
             clusters: self.clusters.current_items_proto(),
             network_policies: self.network_policies.current_items_proto(),
@@ -2471,6 +2577,7 @@ impl<'a> Transaction<'a> {
             // Not representable as a `StateUpdate`.
             id_allocator: _,
             configs: _,
+            sessions: _,
             settings: _,
             txn_wal_shard: _,
             upper,
@@ -2635,6 +2742,7 @@ impl<'a> Transaction<'a> {
             databases: self.databases.pending(),
             schemas: self.schemas.pending(),
             items: self.items.pending(),
+            sessions: self.sessions.pending(),
             comments: self.comments.pending(),
             roles: self.roles.pending(),
             role_auth: self.role_auth.pending(),
@@ -2688,6 +2796,7 @@ impl<'a> Transaction<'a> {
             databases,
             schemas,
             items,
+            sessions,
             comments,
             roles,
             role_auth,
@@ -2717,6 +2826,7 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(databases);
         differential_dataflow::consolidation::consolidate_updates(schemas);
         differential_dataflow::consolidation::consolidate_updates(items);
+        differential_dataflow::consolidation::consolidate_updates(sessions);
         differential_dataflow::consolidation::consolidate_updates(comments);
         differential_dataflow::consolidation::consolidate_updates(roles);
         differential_dataflow::consolidation::consolidate_updates(role_auth);
@@ -2912,6 +3022,7 @@ pub struct TransactionBatch {
     pub(crate) databases: Vec<(proto::DatabaseKey, proto::DatabaseValue, Diff)>,
     pub(crate) schemas: Vec<(proto::SchemaKey, proto::SchemaValue, Diff)>,
     pub(crate) items: Vec<(proto::ItemKey, proto::ItemValue, Diff)>,
+    pub(crate) sessions: Vec<(proto::SessionKey, proto::SessionValue, Diff)>,
     pub(crate) comments: Vec<(proto::CommentKey, proto::CommentValue, Diff)>,
     pub(crate) roles: Vec<(proto::RoleKey, proto::RoleValue, Diff)>,
     pub(crate) role_auth: Vec<(proto::RoleAuthKey, proto::RoleAuthValue, Diff)>,
@@ -2978,6 +3089,7 @@ impl TransactionBatch {
             databases,
             schemas,
             items,
+            sessions,
             comments,
             roles,
             role_auth,
@@ -3005,6 +3117,7 @@ impl TransactionBatch {
         databases.is_empty()
             && schemas.is_empty()
             && items.is_empty()
+            && sessions.is_empty()
             && comments.is_empty()
             && roles.is_empty()
             && role_auth.is_empty()
@@ -3095,6 +3208,7 @@ mod unique_name {
         IdAllocValue,
         ReplicaSystemConfigurationValue,
         ServerConfigurationValue,
+        SessionValue,
         SettingValue,
         SourceReferencesValue,
         StorageCollectionMetadataValue,

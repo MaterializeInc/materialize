@@ -73,6 +73,7 @@ use serde::ser::SerializeSeq;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 use tracing::debug;
+use uuid::Uuid;
 
 use crate::builtin::{MZ_CATALOG_SERVER_CLUSTER, MZ_SYSTEM_CLUSTER};
 use crate::durable;
@@ -158,6 +159,9 @@ pub struct Schema {
     pub types: BTreeMap<String, CatalogItemId>,
     pub owner_id: RoleId,
     pub privileges: PrivilegeMap,
+    /// `Some(uuid)` marks a temporary schema owned by, and only visible to,
+    /// the session with that UUID. `None` is a normal durable schema.
+    pub ephemeral_owner_session: Option<Uuid>,
 }
 
 impl From<Schema> for durable::Schema {
@@ -169,6 +173,7 @@ impl From<Schema> for durable::Schema {
             database_id: schema.name.database.id(),
             owner_id: schema.owner_id,
             privileges: schema.privileges.into_all_values().collect(),
+            ephemeral_owner_session: schema.ephemeral_owner_session,
         }
     }
 }
@@ -182,6 +187,7 @@ impl From<durable::Schema> for Schema {
             database_id,
             owner_id,
             privileges,
+            ephemeral_owner_session,
         }: durable::Schema,
     ) -> Schema {
         Schema {
@@ -196,6 +202,7 @@ impl From<durable::Schema> for Schema {
             types: BTreeMap::new(),
             owner_id,
             privileges: PrivilegeMap::from_mz_acl_items(privileges),
+            ephemeral_owner_session,
         }
     }
 }
@@ -210,6 +217,7 @@ impl UpdateFrom<durable::Schema> for Schema {
             database_id,
             owner_id,
             privileges,
+            ephemeral_owner_session,
         }: durable::Schema,
     ) {
         self.name = QualifiedSchemaName {
@@ -220,6 +228,7 @@ impl UpdateFrom<durable::Schema> for Schema {
         self.oid = oid;
         self.owner_id = owner_id;
         self.privileges = PrivilegeMap::from_mz_acl_items(privileges);
+        self.ephemeral_owner_session = ephemeral_owner_session;
     }
 }
 
@@ -870,6 +879,7 @@ impl From<CatalogEntry> for durable::Item {
             owner_id: entry.owner_id,
             privileges: entry.privileges.into_all_values().collect(),
             extra_versions,
+            ephemeral_owner_session: None,
         }
     }
 }

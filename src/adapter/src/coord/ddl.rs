@@ -1346,7 +1346,9 @@ impl Coordinator {
                 | Op::UpdateScopedSystemParameters { .. }
                 | Op::Comment { .. }
                 | Op::CheckClusterState { .. }
-                | Op::InjectAuditEvents { .. } => {}
+                | Op::InjectAuditEvents { .. }
+                | Op::CreateSession { .. }
+                | Op::DropSession { .. } => {}
             }
         }
 

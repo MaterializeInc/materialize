@@ -71,6 +71,7 @@ use mz_sql_parser::ast::{QualifiedReplica, Value};
 use mz_storage_client::storage_collections::StorageCollections;
 use serde::{Deserialize, Serialize};
 use tracing::{info, trace};
+use uuid::Uuid;
 
 use crate::AdapterError;
 use crate::catalog::state::LocalExpressionCache;
@@ -167,6 +168,17 @@ pub enum Op {
         name: QualifiedItemName,
         item: CatalogItem,
         owner_id: RoleId,
+    },
+    CreateSession {
+        uuid: Uuid,
+        connection_id: u32,
+        role_id: RoleId,
+        client_ip: Option<String>,
+        connected_at: mz_ore::now::EpochMillis,
+    },
+
+    DropSession {
+        uuid: Uuid,
     },
     CreateNetworkPolicy {
         rules: Vec<NetworkPolicyRule>,
@@ -1801,6 +1813,7 @@ impl Catalog {
                         privileges.clone(),
                         &temporary_oids,
                         versions,
+                        None,
                     )?;
                     info!(
                         "create {} {} ({})",
@@ -1977,6 +1990,18 @@ impl Catalog {
                         }),
                     )?;
                 }
+            }
+            Op::CreateSession {
+                uuid,
+                connection_id,
+                role_id,
+                client_ip,
+                connected_at,
+            } => {
+                tx.insert_session(uuid, connection_id, role_id, client_ip, connected_at)?;
+            }
+            Op::DropSession { uuid } => {
+                tx.remove_sessions(&BTreeSet::from([uuid]));
             }
             Op::UpdateSourceReferences {
                 source_id,
@@ -3352,6 +3377,7 @@ fn tx_replace_item(
         owner_id,
         privileges,
         extra_versions,
+        ephemeral_owner_session,
     } = new_entry.into();
 
     tx.remove_item(id)?;
@@ -3365,6 +3391,7 @@ fn tx_replace_item(
         owner_id,
         privileges,
         extra_versions,
+        ephemeral_owner_session,
     )?;
 
     Ok(())

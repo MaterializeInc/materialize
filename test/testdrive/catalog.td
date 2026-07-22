@@ -616,7 +616,6 @@ mz_object_global_ids                     ""
 mz_optimizer_notices                     ""
 mz_postgres_source_tables                ""
 mz_replacements                          ""
-mz_sessions                              ""
 mz_source_references                     ""
 mz_sql_server_source_tables              ""
 mz_storage_usage_by_shard                ""
@@ -734,6 +733,7 @@ mz_overridden_system_parameters mz_catalog_server   ""
 mz_pending_cluster_replicas    mz_catalog_server   ""
 mz_postgres_sources            mz_catalog_server   ""
 mz_replica_system_parameters   mz_catalog_server   ""
+mz_sessions                    mz_catalog_server   ""
 
 # Check default sources, tables, and views in mz_introspection.
 

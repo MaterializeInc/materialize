@@ -207,6 +207,10 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send + Sync {
     /// NB: We may remove this in later iterations of Pv2.
     fn epoch(&self) -> Epoch;
 
+    /// Returns the deploy generation of this catalog's fence token, i.e. the
+    /// generation of the envd incarnation that opened it.
+    fn deploy_generation(&self) -> u64;
+
     /// Returns the metrics for this catalog state.
     fn metrics(&self) -> &Metrics;
 

@@ -1187,7 +1187,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_AWS_PRIVATELINK_CONNECTIONS),
         Builtin::Table(&MZ_AWS_CONNECTIONS),
         Builtin::Table(&MZ_SUBSCRIPTIONS),
-        Builtin::Table(&MZ_SESSIONS),
+        Builtin::MaterializedView(&MZ_SESSIONS),
         Builtin::MaterializedView(&MZ_OVERRIDDEN_SYSTEM_PARAMETERS),
         Builtin::MaterializedView(&MZ_CLUSTER_SYSTEM_PARAMETERS),
         Builtin::MaterializedView(&MZ_REPLICA_SYSTEM_PARAMETERS),
