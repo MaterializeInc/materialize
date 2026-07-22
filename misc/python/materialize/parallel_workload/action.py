@@ -2109,32 +2109,65 @@ class FlipFlagsAction(Action):
             "default_hydration_burst_linger",
         ]
 
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            # `EXPERIMENTAL ARRANGEMENT COMPRESSION` is managed-only. The
+            # tracked `managed` flag can lag reality (e.g. an in-flight CREATE
+            # lost to a kill), so the option can land on a cluster that is
+            # unmanaged by the time the ALTER runs.
+            "EXPERIMENTAL ARRANGEMENT COMPRESSION not supported for unmanaged clusters",
+        ] + super().errors_to_ignore(exe)
+
     def run(self, exe: Executor) -> bool:
-        flag_name = self.rng.choice(list(self.flags_with_values.keys()))
+        # A tenth of the time set a random cluster's arrangement dictionary
+        # compression instead of flipping a global flag. The per-cluster option
+        # and the global `enable_arrangement_dictionary_compression_alpha` flag
+        # interact: the flag only gates whether a replica honors the configured
+        # value at creation time, so exercising both concurrently is what makes
+        # this interesting.
+        cluster: Cluster | None = None
+        flag_name = ""
+        flag_value = ""
 
-        # TODO: Remove when https://linear.app/materializeinc/issue/DB-138 is fixed
-        if exe.db.scenario == Scenario.ZeroDowntimeDeploy and flag_name.startswith(
-            "persist_use_critical_since_"
-        ):
-            return False
+        if self.rng.random() < 0.1:
+            with exe.db.lock:
+                # Skip the first cluster: it hosts sources and sinks, and a
+                # compression change reprovisions the cluster's replicas.
+                # EXPERIMENTAL ARRANGEMENT COMPRESSION is only valid on managed
+                # clusters.
+                managed = [c for c in exe.db.clusters[1:] if c.managed]
+            if not managed:
+                return False
+            cluster = self.rng.choice(managed)
+        else:
+            flag_name = self.rng.choice(list(self.flags_with_values.keys()))
 
-        # `persist_pg_consensus_read_committed` requires a Postgres consensus
-        # backend. The external scenarios run against CockroachDB, where it
-        # panics persist, so never flip it on there.
-        if (
-            flag_name == "persist_pg_consensus_read_committed"
-            and exe.db.scenario in COCKROACH_SCENARIOS
-        ):
-            return False
+            # TODO: Remove when https://linear.app/materializeinc/issue/DB-138 is fixed
+            if exe.db.scenario == Scenario.ZeroDowntimeDeploy and flag_name.startswith(
+                "persist_use_critical_since_"
+            ):
+                return False
 
-        flag_value = self.rng.choice(self.flags_with_values[flag_name])
+            # `persist_pg_consensus_read_committed` requires a Postgres consensus
+            # backend. The external scenarios run against CockroachDB, where it
+            # panics persist, so never flip it on there.
+            if (
+                flag_name == "persist_pg_consensus_read_committed"
+                and exe.db.scenario in COCKROACH_SCENARIOS
+            ):
+                return False
+
+            flag_value = self.rng.choice(self.flags_with_values[flag_name])
 
         conn = None
 
         try:
             conn = self.create_system_connection(exe)
-            self.flip_flag(conn, flag_name, flag_value)
-            exe.db.flags[flag_name] = flag_value
+            if cluster is not None:
+                self.set_cluster_compression(conn, cluster)
+            else:
+                self.flip_flag(conn, flag_name, flag_value)
+                exe.db.flags[flag_name] = flag_value
             return True
         except OperationalError:
             # ignore it
@@ -2150,6 +2183,18 @@ class FlipFlagsAction(Action):
             cur.execute(
                 f"ALTER SYSTEM SET {flag_name} = {flag_value};".encode(),
             )
+
+    def set_cluster_compression(self, conn: Connection, cluster: Cluster) -> None:
+        # Randomly set an explicit value or reset to the default. On a managed
+        # cluster this reprovisions the controller-owned replicas, so it
+        # exercises the per-cluster and per-replica configuration path.
+        if self.rng.choice([True, False]):
+            value = self.rng.choice(["TRUE", "FALSE"])
+            option = f"SET (EXPERIMENTAL ARRANGEMENT COMPRESSION = {value})"
+        else:
+            option = "RESET (EXPERIMENTAL ARRANGEMENT COMPRESSION)"
+        with conn.cursor() as cur:
+            cur.execute(f"ALTER CLUSTER {cluster} {option};".encode())
 
 
 class CreateViewAction(Action):
