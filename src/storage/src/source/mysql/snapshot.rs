@@ -208,7 +208,7 @@ fn worker_pk_range(
     owner_worker_id: usize,
     worker_count: usize,
 ) -> Option<PkRange> {
-    let partition = (worker_id + worker_count - owner_worker_id % worker_count) % worker_count;
+    let partition = (worker_id + worker_count - owner_worker_id) % worker_count;
     let partitions = splits.boundaries.len() + 1;
     if partition >= partitions {
         return None;
@@ -779,17 +779,17 @@ pub(crate) fn render<'scope>(
                 };
 
                 // Receive the leader's broadcast: `Some` on success, `None` on leader failure.
-                let snapshot_info: Option<SnapshotInfo> = 'recv: loop {
+                let snapshot_info: Option<SnapshotInfo> = loop {
                     match snapshot_input.next().await {
                         Some(AsyncEvent::Data(_, mut data)) => {
                             if let Some(msg) = data.pop() {
-                                break 'recv msg;
+                                break msg;
                             }
                         }
                         Some(AsyncEvent::Progress(_)) => continue,
                         // Feedback closed without data: the leader failed and already
                         // propagated the error.
-                        None => break 'recv None,
+                        None => break None,
                     }
                 };
                 let snapshot_info = match snapshot_info {
@@ -861,7 +861,6 @@ pub(crate) fn render<'scope>(
                     trace!(%id, "timely-{worker_id} has no tables to snapshot.");
                     return Ok(());
                 }
-
 
                 let mut conn = connection_config
                     .connect(
@@ -1029,7 +1028,7 @@ pub(crate) fn render<'scope>(
                             let size = update.fuel_size();
                             raw_handle.give_fueled(&data_cap_set[0], update, size).await;
                         }
-                        // This overcounting maintains existing behavior but will be removed one readers no longer rely on the value.
+                        // This overcounting maintains existing behavior but will be removed once readers no longer rely on the value.
                         snapshot_staged_total += u64::cast_from(outputs.len());
                         if snapshot_staged_total % 1000 == 0 {
                             for statistics in export_statistics.get(table).unwrap() {
@@ -1228,7 +1227,8 @@ where
         .set_at(&mut stats.count_latency)
         .await
         .map_err(classify_query_error)?;
-    // `COUNT(*)` always returns exactly one row.
+    // `COUNT(*)` returns exactly one row, so `None` should be impossible. Default to 0
+    // defensively rather than failing the snapshot on a protocol quirk.
     stats.count = count_row.unwrap_or(0);
 
     Ok(stats)
