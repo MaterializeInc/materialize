@@ -682,13 +682,7 @@ const BillingPage = ({
                 upgradeButtonProps={{ onClick: handleUpgrade }}
               />
             ) : (
-              // We don't want to display a daily average or a last 30 days summary,
-              // thus we pass null for dailyCosts and timeSpan.
-              <UpgradedPlanDetails
-                region="all"
-                dailyCosts={null}
-                timeSpan={null}
-              />
+              <UpgradedPlanDetails />
             )}
           </GridItem>
         </Grid>
