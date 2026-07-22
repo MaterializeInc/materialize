@@ -138,6 +138,7 @@ impl<'g, T: RenderTimestamp> Context<'g, T> {
             ComputeSinkConnection::CopyToS3Oneshot(_) => {
                 format!("CopyToS3OneshotSink({:?})", sink_id)
             }
+            ComputeSinkConnection::MetricSink(_) => format!("MetricSink({:?})", sink_id),
         };
         outer_scope.clone().region_named(&region_name, |inner| {
             let sink_render = get_sink_render_for(&sink.connection);
@@ -185,5 +186,6 @@ fn get_sink_render_for<'scope>(
         ComputeSinkConnection::Subscribe(connection) => Box::new(connection.clone()),
         ComputeSinkConnection::MaterializedView(connection) => Box::new(connection.clone()),
         ComputeSinkConnection::CopyToS3Oneshot(connection) => Box::new(connection.clone()),
+        ComputeSinkConnection::MetricSink(connection) => Box::new(connection.clone()),
     }
 }

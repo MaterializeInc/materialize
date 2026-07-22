@@ -41,6 +41,7 @@
 //! }
 //! ```
 
+use std::any::Any;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
@@ -286,6 +287,42 @@ impl MetricsRegistry {
         self.inner
             .register(Box::new(collector))
             .expect("registering pre-defined metrics collector");
+    }
+
+    /// Register a pre-defined collector and return a handle that unregisters it on drop.
+    ///
+    /// Use this for collectors with a bounded lifetime (e.g. a metric sink that is torn down with
+    /// its dataflow), so the collector's series stop being scraped once the owner drops the handle.
+    /// The returned value is opaque: the caller only needs to hold it for as long as the collector
+    /// should stay registered, then drop it.
+    ///
+    /// `prometheus::Registry::unregister` matches a collector by the id of its `Desc`s, not by
+    /// object identity, so the guard keeps a clone of the collector and hands it back to
+    /// `unregister` on drop.
+    ///
+    /// If a collector with the same descriptor id is already registered this soft-panics and
+    /// returns a handle that owns no registration. A duplicate registration is a logic error, but
+    /// panicking here would run on a worker thread and could crash the process, so it degrades to
+    /// missing series rather than taking down the whole scrape.
+    pub fn register_collector_with_dropper<C>(&self, collector: C) -> Box<dyn Any + Send + Sync>
+    where
+        C: 'static + prometheus::core::Collector + Clone + Send + Sync,
+    {
+        match self.inner.register(Box::new(collector.clone())) {
+            Ok(()) => {
+                // `prometheus::Registry` is `Arc`-backed, so this clone is cheap and shares the
+                // same underlying registry the collector was registered into.
+                let registry = self.inner.clone();
+                Box::new(scopeguard::guard(collector, move |c| {
+                    let _ = registry.unregister(Box::new(c));
+                }))
+            }
+            Err(e) => {
+                crate::soft_panic_or_log!("collector already registered: {e}");
+                // Nothing was registered, so the handle must not unregister anything on drop.
+                Box::new(())
+            }
+        }
     }
 
     /// Registers a metric postprocessor.
@@ -1126,5 +1163,22 @@ mod tests {
         let wall_counter = wall_metric[0].get_counter();
         // We filtered wall time to < 10ms, so our wall time metric should be filtered out.
         assert_eq!(wall_counter.value(), 0.0);
+    }
+
+    #[crate::test]
+    fn collector_drop_handle_unregisters() {
+        use prometheus::IntGauge;
+
+        let registry = MetricsRegistry::new();
+        let gauge = IntGauge::new("mz_test_guarded", "help").unwrap();
+        gauge.set(7);
+        let before = registry.gather().len();
+
+        let handle = registry.register_collector_with_dropper(gauge.clone());
+        assert_eq!(registry.gather().len(), before + 1);
+
+        // Dropping the handle unregisters the collector, so its series stops being scraped.
+        drop(handle);
+        assert_eq!(registry.gather().len(), before);
     }
 }
