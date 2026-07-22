@@ -211,9 +211,12 @@ impl Coordinator {
                 if cancel_enabled {
                     // Channel to await cancellation. Insert a new channel, but check if the previous one
                     // was already canceled.
-                    if let Some((_prev_tx, prev_rx)) = self
+                    if let Some((_prev_operation_id, _prev_tx, prev_rx)) = self
                         .connection_cancel_watches
-                        .insert(session.conn_id().clone(), watch::channel(false))
+                        .insert(session.conn_id().clone(), {
+                            let (tx, rx) = watch::channel(false);
+                            (None, tx, rx)
+                        })
                     {
                         let was_canceled = *prev_rx.borrow();
                         if was_canceled {
@@ -270,7 +273,7 @@ impl Coordinator {
         T: Send + 'static,
         F: FnOnce(C, T) + Send + 'static,
     {
-        let rx: BoxFuture<()> = if let Some((_tx, rx)) = ctx
+        let rx: BoxFuture<()> = if let Some((_operation_id, _tx, rx)) = ctx
             .session()
             .and_then(|session| self.connection_cancel_watches.get(session.conn_id()))
         {
@@ -4241,6 +4244,7 @@ impl Coordinator {
         _: plan::AlterSystemResetAllPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session, None)?;
+        self.reject_reset_all_if_startup_only_nondefault()?;
         let op = catalog::Op::ResetAllSystemConfiguration;
         self.catalog_transact(Some(session), vec![op]).await?;
         session.add_notice(AdapterNotice::VarDefaultUpdated {
@@ -4281,6 +4285,28 @@ impl Coordinator {
                  changed at runtime; set it via system_parameter_default and \
                  restart environmentd to change it"
             )));
+        }
+        Ok(())
+    }
+
+    fn reject_reset_all_if_startup_only_nondefault(&self) -> Result<(), AdapterError> {
+        let config = self.catalog().system_config();
+        let defaults = config.defaults();
+        for name in [
+            FRONTEND_READ_THEN_WRITE.name(),
+            MAX_CONCURRENT_OCC_WRITES.name(),
+        ] {
+            let current = config.get(name)?.value();
+            if defaults
+                .get(name)
+                .is_some_and(|default| default != &current)
+            {
+                return Err(AdapterError::Unstructured(anyhow!(
+                    "ALTER SYSTEM RESET ALL would reset {name}, which is read once at \
+                     environmentd startup. Reset it via system_parameter_default and restart \
+                     environmentd"
+                )));
+            }
         }
         Ok(())
     }

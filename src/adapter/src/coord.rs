@@ -2071,7 +2071,8 @@ pub struct Coordinator {
     /// Consumers install/remove these watches while they have cancellable work
     /// in flight. This is used both by coordinator staged sequencing and by
     /// frontend read-then-write sequencing.
-    connection_cancel_watches: BTreeMap<ConnectionId, (watch::Sender<bool>, watch::Receiver<bool>)>,
+    connection_cancel_watches:
+        BTreeMap<ConnectionId, (Option<Uuid>, watch::Sender<bool>, watch::Receiver<bool>)>,
     /// Active introspection subscribes.
     introspection_subscribes: BTreeMap<GlobalId, IntrospectionSubscribe>,
 
@@ -3994,7 +3995,6 @@ impl Coordinator {
                         // writes.
                         let user_write_spans = self.pending_writes.iter().flat_map(|x| match x {
                             PendingWriteTxn::User { span, .. } => Some(span),
-                            PendingWriteTxn::InternalTimestamped(w) => Some(&w.span),
                             PendingWriteTxn::System { .. } => None,
                         });
                         let span = match user_write_spans.exactly_one() {
