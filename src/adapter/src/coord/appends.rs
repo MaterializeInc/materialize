@@ -875,7 +875,9 @@ impl Coordinator {
                         UserWriteResponder::Internal { conn_id, result } => {
                             let acquired = missing
                                 .into_iter()
-                                .map(|id| self.try_grant_object_write_lock(id).map(|lock| (id, lock)))
+                                .map(|id| {
+                                    self.try_grant_object_write_lock(id).map(|lock| (id, lock))
+                                })
                                 .collect::<Option<Vec<_>>>();
                             if let Some(acquired) = acquired {
                                 for (id, lock) in acquired {
@@ -894,7 +896,6 @@ impl Coordinator {
                                     write_locks: None,
                                     responder: UserWriteResponder::Internal { conn_id, result },
                                 });
-                                self.trigger_group_commit();
                             }
                         }
                     }
