@@ -342,6 +342,13 @@ impl Coordinator {
                     }
                     Some((compaction_estimate, refresh_mvs)) => {
                         let oracle = self.get_local_timestamp_oracle();
+                        // NOTE: this is one oracle read per scheduled cluster
+                        // per tick, and the controller awaits each pull before
+                        // the next, so the reads are sequential and the
+                        // batching oracle cannot coalesce them. Fine at the
+                        // tick cadence for realistic scheduled-cluster counts.
+                        // TODO: hoist to one read per tick if that stops
+                        // holding.
                         spawn(|| "cluster_controller_refresh_window_read_ts", async move {
                             let read_ts = oracle.read_ts().await;
                             let _ = tx.send(Some(RefreshWindowInputs {

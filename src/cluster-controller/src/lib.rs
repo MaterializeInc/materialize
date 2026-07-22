@@ -424,15 +424,15 @@ fn join<T: PartialEq>(
 /// - For each shape, if actual count < desired count we create the difference;
 ///   if actual count > desired count we drop the difference, picking specific
 ///   excess replicas. A replica of a shape no strategy desires is dropped.
-/// - Creates carry the highest-precedence [`CreateReason`] among the slots that
-///   desired the shape (see [`CreateReason::precedence`]). Drops carry no
+/// - Creates carry the winning [`CreateReason`] among the slots that
+///   desired the shape (see [`CreateReason::outranks`]). Drops carry no
 ///   attribution. A drop happens exactly when no strategy desires the replica.
 fn reconcile_replicas(
     state: &ClusterState,
     contributions: &[Vec<DesiredReplica>],
 ) -> Vec<Decision> {
     // Desired count per shape = max over strategies of how many that strategy
-    // wants of the shape, carrying the highest-precedence reason among the
+    // wants of the shape, carrying the highest-ranking reason among the
     // slots.
     let mut desired: Vec<DesiredShape> = Vec::new();
     for slots in contributions {
@@ -446,7 +446,7 @@ fn reconcile_replicas(
             {
                 Some((_, count, reason)) => {
                     *count += 1;
-                    if slot.reason.precedence() > reason.precedence() {
+                    if slot.reason.outranks(reason) {
                         *reason = slot.reason.clone();
                     }
                 }
@@ -457,7 +457,7 @@ fn reconcile_replicas(
             match desired.iter_mut().find(|d| d.shape.matches(&shape)) {
                 Some(existing) => {
                     existing.count = existing.count.max(count);
-                    if reason.precedence() > existing.reason.precedence() {
+                    if reason.outranks(&existing.reason) {
                         existing.reason = reason;
                     }
                 }
@@ -538,7 +538,7 @@ fn reconcile_replicas(
     decisions
 }
 
-/// A shape the union desires, how many, and the highest-precedence reason of
+/// A shape the union desires, how many, and the highest-ranking reason of
 /// the strategies that wanted it.
 struct DesiredShape {
     shape: ReplicaShape,

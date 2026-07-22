@@ -103,8 +103,8 @@ pub struct RefreshMvInfo {
 
 /// Why a strategy desires a replica slot: the audit attribution a create
 /// decision carries. When several strategies desire the same shape the
-/// highest-precedence reason wins (see [`CreateReason::precedence`]), since
-/// the audit event carries exactly one reason.
+/// winning reason is decided by [`CreateReason::outranks`], since the audit
+/// event carries exactly one reason.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CreateReason {
     /// The implicit baseline: the user's own cluster config calls for the
@@ -125,10 +125,17 @@ pub enum CreateReason {
 }
 
 impl CreateReason {
-    /// The rank deciding which reason a create carries when several strategies
-    /// desire the same shape: higher wins. Hand-written rather than a derived
-    /// `Ord`, since comparing the `OnRefresh` payload would be meaningless.
-    pub fn precedence(&self) -> u8 {
+    /// Whether this reason wins over `other` when several strategies desire
+    /// the same shape, so the create audits this reason.
+    ///
+    /// A pairwise check rather than `Ord`: an `Ord` ranking by variant would
+    /// have to call two `OnRefresh` reasons with different window decisions
+    /// equal while `Eq` says they differ, violating the `Ord` contract.
+    pub fn outranks(&self, other: &CreateReason) -> bool {
+        self.rank() > other.rank()
+    }
+
+    fn rank(&self) -> u8 {
         match self {
             // Graceful wins over burst when both desire a shape (their shapes
             // differ in practice, so this is a stable tie-break), both win
@@ -326,8 +333,8 @@ impl StateWrite {
 #[derive(Clone, Debug)]
 pub enum Decision {
     /// Create a replica of the given shape under a deterministic fresh name.
-    /// `reason` is the audit attribution: the highest-precedence
-    /// [`CreateReason`] among the strategies that desired the shape.
+    /// `reason` is the audit attribution: the winning [`CreateReason`] among
+    /// the strategies that desired the shape (see [`CreateReason::outranks`]).
     CreateReplica {
         cluster_id: ClusterId,
         name: String,

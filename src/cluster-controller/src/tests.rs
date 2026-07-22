@@ -720,13 +720,16 @@ fn create_reason_precedence_total_order() {
         objects_needing_compaction: Vec::new(),
         hydration_time_estimate: Duration::ZERO,
     };
-    let baseline = CreateReason::Baseline.precedence();
-    let on_refresh = CreateReason::OnRefresh(decision).precedence();
-    let burst = CreateReason::HydrationBurst.precedence();
-    let graceful = CreateReason::GracefulReconfiguration.precedence();
-    assert!(baseline < on_refresh);
-    assert!(on_refresh < burst);
-    assert!(burst < graceful);
+    let baseline = CreateReason::Baseline;
+    let on_refresh = CreateReason::OnRefresh(decision);
+    let burst = CreateReason::HydrationBurst;
+    let graceful = CreateReason::GracefulReconfiguration;
+    assert!(on_refresh.outranks(&baseline) && !baseline.outranks(&on_refresh));
+    assert!(burst.outranks(&on_refresh) && !on_refresh.outranks(&burst));
+    assert!(graceful.outranks(&burst) && !burst.outranks(&graceful));
+    // A reason never outranks itself, so the first contributor of a shared
+    // rank wins the merge.
+    assert!(!graceful.outranks(&graceful));
 }
 
 #[mz_ore::test]
