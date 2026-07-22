@@ -306,6 +306,8 @@ impl Client {
             segment_client: self.segment_client.clone(),
             peek_client,
             enable_frontend_peek_sequencing: false, // initialized below, once we have a ConnCatalog
+            enable_pipelined_peek_shared_timestamp: false, // initialized below
+            enable_pipelined_peek_overlap: false,   // initialized below
         };
 
         let session = client.session();
@@ -444,9 +446,21 @@ Issue a SQL query to get started. Need help?
             }
         }
 
-        client.enable_frontend_peek_sequencing = ENABLE_FRONTEND_PEEK_SEQUENCING
+        // Read both connection-cached flags while `catalog` (which borrows the
+        // session, and thus `client`) is still alive, then assign them once the
+        // borrow has ended.
+        let enable_frontend_peek_sequencing = ENABLE_FRONTEND_PEEK_SEQUENCING
             .require(catalog.system_vars())
             .is_ok();
+        let enable_pipelined_peek_shared_timestamp =
+            mz_adapter_types::dyncfgs::ENABLE_PIPELINED_PEEK_SHARED_TIMESTAMP
+                .get(catalog.system_vars().dyncfgs());
+        let enable_pipelined_peek_overlap =
+            mz_adapter_types::dyncfgs::ENABLE_PIPELINED_PEEK_OVERLAP
+                .get(catalog.system_vars().dyncfgs());
+        client.enable_frontend_peek_sequencing = enable_frontend_peek_sequencing;
+        client.enable_pipelined_peek_shared_timestamp = enable_pipelined_peek_shared_timestamp;
+        client.enable_pipelined_peek_overlap = enable_pipelined_peek_overlap;
 
         Ok(client)
     }
@@ -630,9 +644,44 @@ pub struct SessionClient {
     // check the actual feature flag value at every peek (without a Coordinator call) once we'll
     // always have a catalog snapshot at hand.
     pub enable_frontend_peek_sequencing: bool,
+    /// Whether to drain and share one read timestamp across a pipelined burst of
+    /// peeks (`ENABLE_PIPELINED_PEEK_SHARED_TIMESTAMP`). Cached at startup like
+    /// `enable_frontend_peek_sequencing`.
+    enable_pipelined_peek_shared_timestamp: bool,
+    /// Whether to overlap the compute-result awaits of a pipelined burst of
+    /// peeks (`ENABLE_PIPELINED_PEEK_OVERLAP`). Cached at startup.
+    enable_pipelined_peek_overlap: bool,
 }
 
 impl SessionClient {
+    /// Open a burst of pipelined peeks that may share one oracle read timestamp.
+    /// The pgwire layer calls this after draining a run of already-arrived
+    /// pipelined messages. See [`PeekClient::begin_pipeline_burst`].
+    pub fn begin_pipeline_burst(&mut self) {
+        self.peek_client.begin_pipeline_burst();
+    }
+
+    /// Close the current pipeline burst. See [`PeekClient::end_pipeline_burst`].
+    pub fn end_pipeline_burst(&mut self) {
+        self.peek_client.end_pipeline_burst();
+    }
+
+    /// Whether the pgwire layer should drain pipelined messages into a burst.
+    /// Requires the frontend-peek path (where the optimizations take effect) and
+    /// at least one burst feature flag; inert by default.
+    pub fn should_drain_pipeline_burst(&self) -> bool {
+        self.enable_frontend_peek_sequencing
+            && (self.enable_pipelined_peek_shared_timestamp || self.enable_pipelined_peek_overlap)
+    }
+
+    /// Whether the pgwire layer should process a drained burst by issuing all
+    /// its peeks first and then draining their row streams in order, overlapping
+    /// the compute-result awaits. When false a drained burst is processed
+    /// serially (only `enable_pipelined_peek_shared_timestamp` takes effect).
+    pub fn should_overlap_pipeline_burst(&self) -> bool {
+        self.enable_frontend_peek_sequencing && self.enable_pipelined_peek_overlap
+    }
+
     /// Parses a SQL expression, reporting failures as a telemetry event if
     /// possible.
     pub fn parse<'a>(
@@ -817,6 +866,11 @@ impl SessionClient {
             // `Command::Execute` will handle it.
             // (This is not true if we bailed out _after_ the frontend peek sequencing has already
             // begun its own statement logging. That case would be a bug.)
+
+            // This statement is not a frontend read-only peek, so it may write.
+            // Drop any shared pipeline-burst timestamp so a following peek
+            // re-reads and observes the write (read-your-writes).
+            self.peek_client.dirty_pipeline_burst();
         }
 
         let response = self

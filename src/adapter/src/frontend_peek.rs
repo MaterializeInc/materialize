@@ -593,11 +593,18 @@ impl PeekClient {
         let needs_linearized_read_ts =
             Coordinator::needs_linearized_read_ts(&isolation_level, when);
 
+        // A burst of pipelined autocommit peeks may share one oracle read_ts
+        // (see `PeekClient::burst_read_ts`). Only implicit (single-statement)
+        // transactions participate, so explicit-transaction timestamp handling
+        // is untouched. Outside an open burst this is a no-op and each query
+        // reads a fresh timestamp as before.
+        let share_burst_ts = session.transaction().is_implicit()
+            && mz_adapter_types::dyncfgs::ENABLE_PIPELINED_PEEK_SHARED_TIMESTAMP
+                .get(catalog.system_config().dyncfgs());
+
         let oracle_read_ts = match timeline {
             Some(timeline) if needs_linearized_read_ts => {
-                let oracle = self.ensure_oracle(timeline).await?;
-                let oracle_read_ts = oracle.read_ts().await;
-                Some(oracle_read_ts)
+                Some(self.burst_read_ts(timeline, share_burst_ts).await?)
             }
             Some(_) | None => None,
         };

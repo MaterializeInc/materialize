@@ -49,6 +49,23 @@ use crate::{AdapterError, Client, CollectionIdBundle, ReadHolds, statement_loggi
 pub type StorageCollectionsHandle =
     Arc<dyn mz_storage_client::storage_collections::StorageCollections + Send + Sync>;
 
+/// A shared read timestamp for a burst of pipelined peeks on one connection.
+///
+/// When the pgwire layer drains a run of already-arrived pipelined messages it
+/// opens a burst (`begin_pipeline_burst`). The first peek of each timeline
+/// fetches a `read_ts` and records it here. Because every message in the burst
+/// had arrived before that fetch, the timestamp is within the real-time bounds
+/// of all of them, so the rest of the burst reuses it instead of paying another
+/// oracle round-trip. This is the `BatchingTimestampOracle` correctness argument
+/// applied across a pipeline (see `guide-adapter.md`).
+///
+/// A write dirties the burst (`dirty`), dropping the cached timestamps so a
+/// following peek re-reads and observes the write (read-your-writes).
+#[derive(Debug, Default)]
+struct PipelineBurst {
+    read_ts: BTreeMap<Timeline, Timestamp>,
+}
+
 /// Clients needed for peek sequencing in the Adapter Frontend.
 #[derive(Debug)]
 pub struct PeekClient {
@@ -60,6 +77,9 @@ pub struct PeekClient {
     /// Holds a `Weak` so that an idle session does not keep a superseded
     /// catalog version alive.
     catalog_cache: Weak<Catalog>,
+    /// Shared read timestamp for the current burst of pipelined peeks, if the
+    /// pgwire layer has opened one. `None` outside a burst.
+    pipeline_burst: Option<PipelineBurst>,
     /// Channels to talk to each compute Instance task directly. Lazily populated.
     /// Note that these are never cleaned up. In theory, this could lead to a very slow memory leak
     /// if a long-running user session keeps peeking on clusters that are being created and dropped
@@ -94,6 +114,7 @@ impl PeekClient {
         Self {
             coordinator_client,
             catalog_cache: Arc::downgrade(catalog),
+            pipeline_burst: None,
             compute_instances: Default::default(), // lazily populated
             storage_collections,
             transient_id_gen,
@@ -122,6 +143,56 @@ impl PeekClient {
             .get(&compute_instance)
             .expect("ensured above")
             .clone())
+    }
+
+    /// Open a burst of pipelined peeks that may share one oracle `read_ts`.
+    ///
+    /// The caller (pgwire) must only open a burst once it has drained a run of
+    /// messages that had *already arrived* on the connection, so a timestamp
+    /// fetched during the burst is within every statement's real-time bounds.
+    pub fn begin_pipeline_burst(&mut self) {
+        self.pipeline_burst = Some(PipelineBurst::default());
+    }
+
+    /// Close the current burst, dropping any shared timestamps. The next
+    /// statement is read fresh from the socket and may have arrived after the
+    /// shared timestamp, so it must not reuse it.
+    pub fn end_pipeline_burst(&mut self) {
+        self.pipeline_burst = None;
+    }
+
+    /// Drop the burst's cached timestamps without closing the burst. Called
+    /// when a statement other than a frontend read-only peek runs (it may have
+    /// written), so a following peek re-reads and observes the write.
+    pub fn dirty_pipeline_burst(&mut self) {
+        if let Some(burst) = &mut self.pipeline_burst {
+            burst.read_ts.clear();
+        }
+    }
+
+    /// Fetch a linearized `read_ts` for `timeline`, reusing the current burst's
+    /// shared timestamp when `share` is set and one has already been taken for
+    /// this timeline. Outside a burst (or when `share` is false) this always
+    /// takes a fresh timestamp, matching the non-pipelined behavior.
+    pub async fn burst_read_ts(
+        &mut self,
+        timeline: Timeline,
+        share: bool,
+    ) -> Result<Timestamp, AdapterError> {
+        if share {
+            if let Some(burst) = &self.pipeline_burst {
+                if let Some(ts) = burst.read_ts.get(&timeline) {
+                    return Ok(*ts);
+                }
+            }
+        }
+        let ts = self.ensure_oracle(timeline.clone()).await?.read_ts().await;
+        if share {
+            if let Some(burst) = &mut self.pipeline_burst {
+                burst.read_ts.insert(timeline, ts);
+            }
+        }
+        Ok(ts)
     }
 
     pub async fn ensure_oracle(
