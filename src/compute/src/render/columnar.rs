@@ -511,7 +511,7 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn concat_many_mixed_upgrades_to_columnar() {
+    fn concat_many_concatenates_columnar() {
         let rows = test_rows();
         let expected: Vec<_> = {
             let mut updates: Vec<_> = rows
@@ -530,7 +530,7 @@ mod tests {
                 let edge = CollectionEdge::concat_many(
                     scope,
                     [
-                        CollectionEdge::Vec(collection1),
+                        CollectionEdge::Columnar(vec_to_columnar(collection1)),
                         CollectionEdge::Columnar(vec_to_columnar(collection2)),
                     ],
                 );
