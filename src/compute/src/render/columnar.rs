@@ -165,7 +165,7 @@ where
 
 /// Consolidates a [`ColumnarCollection`] natively, without a row round-trip.
 ///
-/// Mirrors the `Vec` arm's [`CollectionExt::consolidate_named`], but keeps the
+/// Mirrors the `Vec` arm's `CollectionExt::consolidate_named`, but keeps the
 /// data columnar throughout: a [`ColumnChunker`] sorts and consolidates the
 /// input columns and a [`ColumnMergeBatcher`] merges them under a
 /// [`columnar_exchange_data`] pact. Both hold their data in [`Column`], and the
