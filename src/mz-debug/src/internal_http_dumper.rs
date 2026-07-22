@@ -518,7 +518,7 @@ pub async fn dump_emulator_http_resources(
                     "{}:{}/{}",
                     emulator_context.container_ip,
                     get_default_port(&emulator_context.http_connection_auth_mode).heap_profile_port,
-                    ENVD_HEAP_PROFILE_ENDPOINT
+                    get_profile_endpoint(&ServiceType::Environmentd)
                 ),
                 &resource_name,
             )
@@ -554,11 +554,15 @@ pub async fn dump_emulator_http_resources(
         let port = get_default_port(&emulator_context.http_connection_auth_mode).heap_profile_port;
         let cpu_endpoint = format!(
             "{}:{}/{}",
-            emulator_context.container_ip, port, ENVD_CPU_PROFILE_ENDPOINT
+            emulator_context.container_ip,
+            port,
+            get_cpu_profile_endpoint(&ServiceType::Environmentd)
         );
         let mode_endpoint = format!(
             "{}:{}/{}",
-            emulator_context.container_ip, port, ENVD_PROF_MODE_ENDPOINT
+            emulator_context.container_ip,
+            port,
+            get_prof_mode_endpoint(&ServiceType::Environmentd)
         );
 
         info!(
