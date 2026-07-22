@@ -12,6 +12,7 @@ E2E tests for mz-debug
 """
 
 import urllib.request
+from pathlib import Path
 
 from materialize import spawn
 from materialize.mzcompose.composition import (
@@ -136,6 +137,55 @@ def _assert_cpu_capture_preserves_heap_profile(
     )
 
 
+def _newest_dump_dir() -> Path:
+    """Returns the most recently written `mz_debug_<timestamp>` directory in the
+    working directory, where `mz-debug` writes its output."""
+    dump_dirs = [p for p in Path.cwd().glob("mz_debug_*") if p.is_dir()]
+    assert dump_dirs, "mz-debug did not create an mz_debug_* output directory"
+    return max(dump_dirs, key=lambda p: p.stat().st_mtime)
+
+
+def _assert_default_dump_files(dump_dir: Path, container_id: str) -> None:
+    """Asserts that a default `mz-debug emulator` run wrote every artifact it is
+    meant to.
+
+    A default run enables every collector, so `dump_dir` must contain the docker
+    dumps, the heap and CPU profiles, the prometheus metrics, the tool's own log,
+    and a non-empty system catalog dump. A sibling `.zip` archive of the whole
+    directory must also exist.
+    """
+    expected_files = [
+        dump_dir / "tracing.log",
+        dump_dir / "profiles" / "environmentd.memprof.pprof.gz",
+        dump_dir / "profiles" / "environmentd.cpuprof.pprof.gz",
+        dump_dir / "prom_metrics" / "environmentd.metrics.txt",
+        dump_dir / "docker" / container_id / "logs-stdout.txt",
+        dump_dir / "docker" / container_id / "logs-stderr.txt",
+        dump_dir / "docker" / container_id / "inspect.txt",
+        dump_dir / "docker" / container_id / "stats.txt",
+        dump_dir / "docker" / container_id / "top.txt",
+    ]
+    missing = [str(p) for p in expected_files if not p.is_file()]
+
+    # The system catalog is dumped as one CSV per relation. The exact set is
+    # large and partly depends on live replicas, so require at least one CSV
+    # rather than enumerating relations.
+    catalog_dir = dump_dir / "system_catalog"
+    if not any(catalog_dir.rglob("*.csv")):
+        missing.append(f"{catalog_dir}/**/*.csv (system catalog dump is empty)")
+
+    # The whole directory is also archived as a sibling zip.
+    zip_path = dump_dir.with_name(f"{dump_dir.name}.zip")
+    if not zip_path.is_file():
+        missing.append(str(zip_path))
+
+    assert (
+        not missing
+    ), "mz-debug default run did not produce all expected files:\n" + "\n".join(
+        f"  - {m}" for m in missing
+    )
+
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.up("materialized", Service("mz-debug", idle=True))
     c.invoke("cp", "mz-debug:/usr/local/bin/mz-debug", ".")
@@ -147,7 +197,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     _assert_cpu_capture_preserves_heap_profile(c, container_id)
 
     # Smoke test: a full `mz-debug` run against the emulator completes without
-    # error.
+    # error and produces the complete set of default output files.
     spawn.runv(
         [
             "./mz-debug",
@@ -155,6 +205,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "--docker-container-id",
             container_id,
             "--mz-connection-url",
-            "postgres://mz_system@localhost:6877/materialize",
+            "postgres://mz_system@127.0.0.1:6877/materialize",
         ]
     )
+    _assert_default_dump_files(_newest_dump_dir(), container_id)
