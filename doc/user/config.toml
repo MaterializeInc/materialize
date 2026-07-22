@@ -27,6 +27,14 @@ name = "Get started"
 weight = 5
 
 #
+# Bring Your Own Cloud
+#
+[[menu.main]]
+identifier = "byoc"
+name = "Bring Your Own Cloud"
+weight = 8
+
+#
 # Connect sources
 #
 
