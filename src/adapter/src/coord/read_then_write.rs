@@ -109,9 +109,8 @@ impl Coordinator {
         };
         active_subscribe.initialize();
 
-        let write_notify_fut = self
-            .add_active_compute_sink(sink_id, ActiveComputeSink::Subscribe(active_subscribe))
-            .await;
+        let write_notify_fut =
+            self.add_active_compute_sink(sink_id, ActiveComputeSink::Subscribe(active_subscribe));
         let ship_dataflow_fut = self.ship_dataflow(df_desc, cluster_id, replica_id);
         let ((), ()) = futures::future::join(write_notify_fut, ship_dataflow_fut).await;
 
@@ -141,7 +140,7 @@ impl Coordinator {
         use std::collections::BTreeMap;
         use tracing::Span;
 
-        let result = InternalWriteResponder::new(result_tx);
+        let result = InternalWriteResponder::new(result_tx, target_global_id);
         if !self.active_conns.contains_key(&conn_id) {
             result.send(WriteResult::Canceled);
             return;

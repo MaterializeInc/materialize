@@ -38,7 +38,8 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::time::Duration;
 
 use bytesize::ByteSize;
 use differential_dataflow::consolidation;
@@ -79,6 +80,51 @@ use crate::statement_logging::{
 };
 use crate::{PeekClient, PeekResponseUnary, TimelineContext, optimize};
 
+#[derive(Clone, Copy)]
+pub(crate) enum FrontendWriteCancellation {
+    Canceled = 1,
+    StatementTimeout = 2,
+}
+
+pub(crate) struct FrontendWriteAttemptState {
+    write_submitted: AtomicBool,
+    cancellation: AtomicU8,
+}
+
+impl FrontendWriteAttemptState {
+    pub(crate) fn new() -> Self {
+        Self {
+            write_submitted: AtomicBool::new(false),
+            cancellation: AtomicU8::new(0),
+        }
+    }
+
+    pub(crate) fn mark_write_submitted(&self) {
+        self.write_submitted.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn write_submitted(&self) -> bool {
+        self.write_submitted.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn request(&self, cancellation: FrontendWriteCancellation) {
+        let _ = self.cancellation.compare_exchange(
+            0,
+            cancellation as u8,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+
+    fn requested_error(&self) -> Option<AdapterError> {
+        match self.cancellation.load(Ordering::Acquire) {
+            1 => Some(AdapterError::Canceled),
+            2 => Some(AdapterError::StatementTimeout),
+            _ => None,
+        }
+    }
+}
+
 /// A handle to an internal subscribe (not visible in introspection collections
 /// like `mz_subscriptions`). A `Drop` impl ensures the subscribe's dataflow is
 /// cleaned up when dropped.
@@ -106,7 +152,7 @@ impl Drop for SubscribeHandle {
         if let Some(client) = self.client.take() {
             // Fire-and-forget: if the coordinator is gone, the subscribe will
             // be cleaned up when the process exits anyway.
-            client.send(Command::DropInternalSubscribe {
+            client.try_send(Command::DropInternalSubscribe {
                 sink_id: self.sink_id,
             });
         }
@@ -123,13 +169,15 @@ impl PeekClient {
         session: &mut Session,
         plan: plan::ReadThenWritePlan,
         target_cluster: TargetCluster,
+        catalog: Arc<Catalog>,
         params: &Params,
         logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
         lifecycle_timestamps: Option<LifecycleTimestamps>,
         outer_ctx_extra: &mut Option<ExecuteContextGuard>,
+        attempt_state: Arc<FrontendWriteAttemptState>,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let catalog = self.catalog_snapshot("frontend_read_then_write").await;
-
+        // The caller verified and planned the portal against this snapshot.
+        // Keep it through optimization and write-target generation capture.
         // The guard's `Drop` impl emits `Aborted` if the inner future is
         // dropped mid-flight, so the end-execution event is never skipped.
         let logging_guard = self.begin_statement_logging(
@@ -148,6 +196,7 @@ impl PeekClient {
                 target_cluster,
                 &catalog,
                 logging_guard.id(),
+                attempt_state,
             )
             .await;
 
@@ -165,6 +214,7 @@ impl PeekClient {
         target_cluster: TargetCluster,
         catalog: &Arc<Catalog>,
         statement_logging_id: Option<StatementLoggingId>,
+        attempt_state: Arc<FrontendWriteAttemptState>,
     ) -> Result<ExecuteResponse, AdapterError> {
         let validation_result =
             self.validate_read_then_write(catalog, session, &plan, target_cluster)?;
@@ -277,7 +327,6 @@ impl PeekClient {
         let max_query_result_size = session.vars().max_query_result_size();
         let row_set_finishing_seconds = session.metrics().row_set_finishing_seconds().clone();
         let max_occ_retries = usize::cast_from(catalog.system_config().max_occ_retries());
-        let statement_timeout = *session.vars().statement_timeout();
 
         // Linearize the read BEFORE subscribing or writing: block until
         // the oracle for this query's timeline has advanced to `as_of`.
@@ -320,10 +369,10 @@ impl PeekClient {
                 row_set_finishing_seconds,
                 max_occ_retries,
                 table_desc,
-                statement_timeout,
                 conn_id,
                 statement_logging_id,
                 as_of,
+                attempt_state,
             )
             .await;
 
@@ -367,14 +416,21 @@ impl PeekClient {
         // Validate read dependencies. The plan was built against an earlier
         // catalog snapshot; an item it depends on may have been dropped by
         // concurrent DDL before we got here.
-        for gid in plan.selection.depends_on() {
-            let item_id = catalog.try_resolve_item_id(&gid).ok_or_else(|| {
-                AdapterError::Catalog(mz_catalog::memory::error::Error {
-                    kind: ErrorKind::Sql(CatalogError::UnknownItem(gid.to_string())),
+        let dependency_ids = plan
+            .selection
+            .depends_on()
+            .into_iter()
+            .map(|gid| {
+                catalog.try_resolve_item_id(&gid).ok_or_else(|| {
+                    AdapterError::Catalog(mz_catalog::memory::error::Error {
+                        kind: ErrorKind::Sql(CatalogError::UnknownItem(gid.to_string())),
+                    })
                 })
-            })?;
-            validate_read_then_write_dependencies(catalog, &item_id)?;
-        }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let max_rw_dependencies = mz_adapter_types::dyncfgs::READ_THEN_WRITE_MAX_DEPENDENCIES
+            .get(catalog.system_config().dyncfgs());
+        validate_read_then_write_dependencies(catalog, dependency_ids, max_rw_dependencies)?;
 
         let cluster = catalog.resolve_target_cluster(target_cluster, session)?;
         let cluster_id = cluster.id;
@@ -471,7 +527,12 @@ impl PeekClient {
         let (_, sink_id) = self.transient_id_gen.allocate_id();
         let debug_name = format!("frontend-read-then-write-subscribe-{}", sink_id);
         let optimizer_config = optimize::OptimizerConfig::from(catalog.system_config())
-            .override_from(&catalog.get_cluster(cluster_id).config.features());
+            .override_from(&catalog.get_cluster(cluster_id).config.features())
+            .override_from(
+                &catalog
+                    .state()
+                    .cluster_scoped_optimizer_overrides(cluster_id),
+            );
 
         let mut optimizer = optimize::subscribe::Optimizer::new(
             Arc::<Catalog>::clone(catalog),
@@ -652,22 +713,14 @@ impl PeekClient {
         row_set_finishing_seconds: Histogram,
         max_occ_retries: usize,
         table_desc: RelationDesc,
-        statement_timeout: Duration,
         conn_id: mz_adapter_types::connection::ConnectionId,
         statement_logging_id: Option<StatementLoggingId>,
         as_of: Timestamp,
+        attempt_state: Arc<FrontendWriteAttemptState>,
     ) -> (
         usize,
         Result<(ExecuteResponse, Option<Timestamp>), AdapterError>,
     ) {
-        // Timeout of 0 is equivalent to "off", meaning we will wait "forever."
-        let effective_timeout = if statement_timeout == Duration::ZERO {
-            Duration::MAX
-        } else {
-            statement_timeout
-        };
-        let start_time = Instant::now();
-
         let mut state = OccState::new();
 
         // Correctness invariant for retries:
@@ -686,16 +739,12 @@ impl PeekClient {
         // logically empty (all diffs cancel out), `all_diffs` will be empty
         // and we early-return without attempting a write.
         let result = loop {
-            // Check for timeout
-            let remaining = effective_timeout.saturating_sub(start_time.elapsed());
-            if remaining.is_zero() {
-                // Guard handles cleanup on drop.
-                break Err(AdapterError::StatementTimeout);
+            if let Some(error) = attempt_state.requested_error() {
+                break Err(error);
             }
-
-            let msg = match tokio::time::timeout(remaining, subscribe_handle.recv()).await {
-                Ok(Some(msg)) => msg,
-                Ok(None) => {
+            let msg = match subscribe_handle.recv().await {
+                Some(msg) => msg,
+                None => {
                     // Channel closed cleanly: the SELECT is constant (no
                     // table dependency). Submit the accumulated diffs as a
                     // blind write — the oracle picks the timestamp at group
@@ -722,6 +771,7 @@ impl PeekClient {
                         .iter()
                         .map(|(row, _ts, diff)| (row.clone(), *diff))
                         .collect_vec();
+                    attempt_state.mark_write_submitted();
                     let result = self
                         .call_coordinator(|tx| Command::AttemptWrite {
                             conn_id: conn_id.clone(),
@@ -750,7 +800,11 @@ impl PeekClient {
                                 "blind write unexpectedly got TimestampPassed".into(),
                             ));
                         }
-                        WriteResult::Canceled => break Err(AdapterError::Canceled),
+                        WriteResult::Canceled => {
+                            break Err(attempt_state
+                                .requested_error()
+                                .unwrap_or(AdapterError::Canceled));
+                        }
                         WriteResult::ReadOnly => break Err(AdapterError::ReadOnly),
                         WriteResult::TargetChanged => {
                             break Err(AdapterError::Unstructured(anyhow::anyhow!(
@@ -762,10 +816,6 @@ impl PeekClient {
                                 .into(),
                         )),
                     }
-                }
-                Err(_) => {
-                    // Timed out
-                    break Err(AdapterError::StatementTimeout);
                 }
             };
 
@@ -839,6 +889,7 @@ impl PeekClient {
                     // lot of row-cloning work. If this shows up in profiles,
                     // consider storing `Arc<Row>` in `all_diffs` to make the
                     // per-attempt copy cheap.
+                    attempt_state.mark_write_submitted();
                     let result = self
                         .call_coordinator(|tx| Command::AttemptWrite {
                             conn_id: conn_id.clone(),
@@ -877,7 +928,10 @@ impl PeekClient {
                             // on `TimestampPassed` we wait for the subscribe to
                             // progress and retry using that observed frontier.
                             state.retry_count += 1;
-                            if state.retry_count >= max_occ_retries {
+                            if let Some(error) = attempt_state.requested_error() {
+                                break Err(error);
+                            }
+                            if state.retry_count > max_occ_retries {
                                 // High contention is a user-visible
                                 // condition, not an internal invariant
                                 // violation. Surface it as
@@ -895,7 +949,11 @@ impl PeekClient {
                             );
                             continue;
                         }
-                        WriteResult::Canceled => break Err(AdapterError::Canceled),
+                        WriteResult::Canceled => {
+                            break Err(attempt_state
+                                .requested_error()
+                                .unwrap_or(AdapterError::Canceled));
+                        }
                         WriteResult::ReadOnly => break Err(AdapterError::ReadOnly),
                         WriteResult::TargetChanged => {
                             break Err(AdapterError::Unstructured(anyhow::anyhow!(

@@ -186,13 +186,24 @@ pub enum WriteResult {
 
 /// Delivers an internal write result, including on task shutdown.
 #[derive(Debug)]
-pub(crate) struct InternalWriteResponder {
+pub struct InternalWriteResponder {
     tx: Option<oneshot::Sender<WriteResult>>,
+    expected_target_global_id: GlobalId,
 }
 
 impl InternalWriteResponder {
-    pub(crate) fn new(tx: oneshot::Sender<WriteResult>) -> Self {
-        Self { tx: Some(tx) }
+    pub(crate) fn new(
+        tx: oneshot::Sender<WriteResult>,
+        expected_target_global_id: GlobalId,
+    ) -> Self {
+        Self {
+            tx: Some(tx),
+            expected_target_global_id,
+        }
+    }
+
+    fn expected_target_global_id(&self) -> GlobalId {
+        self.expected_target_global_id
     }
 
     pub(crate) fn send(mut self, result: WriteResult) {
@@ -432,17 +443,21 @@ impl GroupCommitter {
             .observe(append_start.elapsed().as_secs_f64());
 
         match append_result {
-            Ok(()) => {}
-            Err(StorageError::InvalidUppers(_)) => {
+            Ok(Ok(())) => {}
+            Ok(Err(StorageError::InvalidUppers(_))) => {
                 result.send(WriteResult::TimestampPassed {
                     target_timestamp,
                     next_eligible_timestamp: advance_to,
                 });
                 return true;
             }
-            Err(other) => {
+            Ok(Err(other)) => {
                 Err::<(), _>(other).unwrap_or_terminate("cannot fail to write to txns shard");
                 unreachable!("unwrap_or_terminate does not return on Err");
+            }
+            Err(_recv) => {
+                warn!("table write worker gone with a timestamped write outstanding");
+                return false;
             }
         }
 
@@ -955,10 +970,21 @@ impl Coordinator {
                     responder: UserWriteResponder::Internal { result, .. },
                 } => {
                     assert_none!(write_locks, "should have merged together all locks above");
+                    let current_global_id = if writes.len() == 1 {
+                        writes.keys().next().and_then(|id| {
+                            self.catalog()
+                                .try_get_entry(id)
+                                .map(|entry| entry.latest_global_id())
+                        })
+                    } else {
+                        None
+                    };
+                    if current_global_id != Some(result.expected_target_global_id()) {
+                        result.send(WriteResult::TargetChanged);
+                        continue;
+                    }
                     for (id, table_data) in writes {
-                        if self.catalog().try_get_entry(&id).is_some() {
-                            appends.entry(id).or_default().extend(table_data);
-                        }
+                        appends.entry(id).or_default().extend(table_data);
                     }
                     internal_results.push(result);
                 }

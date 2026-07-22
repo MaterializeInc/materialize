@@ -61,6 +61,7 @@ use crate::command::{
 use crate::config::{ScopedParameters, ScopedParametersScope, SystemParameterFrontend};
 use crate::coord::{Coordinator, ExecuteContextGuard};
 use crate::error::AdapterError;
+use crate::frontend_read_then_write::{FrontendWriteAttemptState, FrontendWriteCancellation};
 use crate::metrics::{self, Metrics};
 use crate::optimize::dataflows::{EvalTime, ExprPrepOneShot};
 use crate::optimize::{self, Optimize, OptimizerError};
@@ -612,10 +613,15 @@ Issue a SQL query to get started. Need help?
     }
 
     #[instrument(level = "debug")]
-    pub(crate) fn send(&self, cmd: Command) {
+    pub(crate) fn try_send(&self, cmd: Command) -> bool {
         self.inner_cmd_tx
             .send((OpenTelemetryContext::obtain(), cmd))
-            .expect("coordinator unexpectedly gone");
+            .is_ok()
+    }
+
+    #[instrument(level = "debug")]
+    pub(crate) fn send(&self, cmd: Command) {
+        assert!(self.try_send(cmd), "coordinator unexpectedly gone");
     }
 }
 
@@ -646,14 +652,16 @@ pub struct SessionClient {
 /// duration of a frontend read-then-write attempt.
 struct FrontendConnectionCancelWatchGuard {
     conn_id: ConnectionId,
+    operation_id: Uuid,
     client: Option<Client>,
 }
 
 impl Drop for FrontendConnectionCancelWatchGuard {
     fn drop(&mut self) {
         if let Some(client) = self.client.take() {
-            client.send(Command::UnregisterConnectionCancelWatch {
+            client.try_send(Command::UnregisterConnectionCancelWatch {
                 conn_id: self.conn_id.clone(),
+                operation_id: self.operation_id,
             });
         }
     }
@@ -983,7 +991,7 @@ impl SessionClient {
         // Hand off the logging id to `outer_ctx_extra`. `try_frontend_peek`
         // / `try_frontend_read_then_write` retire it themselves once they
         // take ownership.
-        if let Some(g) = held_guard.take() {
+        if let Some(mut g) = held_guard.take() {
             let id = g.id();
             g.defuse();
             // Soft invariant: the next caller (`try_frontend_peek` /
@@ -1514,60 +1522,17 @@ impl SessionClient {
         cancel_future: impl Future<Output = ()> + Send,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         let conn_id = self.session().conn_id().clone();
-
-        // Bound the whole operation by `statement_timeout`: the select! below
-        // owns the operation's lifetime, so a deadline here covers every phase,
-        // including the pre-OCC-loop ones (e.g. `ensure_read_linearized`, which
-        // can park indefinitely for a far-future `as_of`). 0 means "off".
         let statement_timeout = *self.session().vars().statement_timeout();
-
         let inner_client = self.inner().clone();
-        let mut cancel_future = pin::pin!(cancel_future);
-
-        // Cancellation can arrive via two independent paths:
-        //
-        // 1) `cancel_future`: local/session-side cancellation (e.g. client
-        // connection closes). For this path we must still forward a privileged
-        // cancel to the coordinator so in-flight work owned there is canceled.
-        //
-        // 2) `connection_cancel`: coordinator-side cancellation (e.g.
-        // `pg_cancel_backend`) reflected through the connection cancel watch.
-        // This can trigger while frontend RTW is still planning or optimizing,
-        // before coordinator-owned subscribe/write steps are installed.
-        //
-        // We select on both so frontend RTW exits promptly regardless of where
-        // cancellation originated.
-
-        let mut connection_cancel_rx = self
-            .peek_client
-            .call_coordinator(|tx| Command::RegisterConnectionCancelWatch {
-                conn_id: conn_id.clone(),
-                tx,
-            })
-            .await;
+        let operation_id = Uuid::new_v4();
+        let attempt_state = Arc::new(FrontendWriteAttemptState::new());
         let _connection_cancel_guard = FrontendConnectionCancelWatchGuard {
             conn_id: conn_id.clone(),
+            operation_id,
             client: Some(inner_client.clone()),
         };
-        if *connection_cancel_rx.borrow() {
-            return Err(AdapterError::Canceled);
-        }
-        let connection_cancel = async move {
-            let was_cancelled = connection_cancel_rx.wait_for(|v| *v).await.is_ok();
-            if !was_cancelled {
-                // The watch sender was dropped without signaling
-                // cancellation. This can happen due to a race between a
-                // fire-and-forget UnregisterConnectionCancelWatch from a
-                // previous operation and our RegisterConnectionCancelWatch.
-                // This is not a real cancellation, so wait forever (letting
-                // the other select! branches handle completion/cancel).
-                futures::future::pending::<()>().await;
-            }
-        };
-        tokio::pin!(connection_cancel);
 
-        // A zero timeout means "wait forever": use a future that never resolves
-        // rather than a zero-duration sleep that would fire immediately.
+        let mut cancel_future = pin::pin!(cancel_future);
         let statement_timeout = async move {
             if statement_timeout.is_zero() {
                 futures::future::pending::<()>().await;
@@ -1577,35 +1542,72 @@ impl SessionClient {
         };
         tokio::pin!(statement_timeout);
 
-        let mut frontend_read_then_write =
-            pin::pin!(self.try_frontend_read_then_write(portal_name, outer_ctx_extra));
-
-        tokio::select! {
-            response = &mut frontend_read_then_write => response,
-            _ = &mut cancel_future => {
-                // This originates from a pgwire session disconnect. Let the
-                // Coordinator know so it can do cleanups.
-                inner_client.send(Command::PrivilegedCancelRequest {
-                    conn_id: conn_id.clone(),
-                });
-
-                Err(AdapterError::Canceled)
+        // Registration is part of the statement lifetime. The operation ID
+        // prevents this guard from removing a newer operation's watch.
+        let mut connection_cancel_rx = {
+            let register =
+                self.peek_client
+                    .call_coordinator(|tx| Command::RegisterConnectionCancelWatch {
+                        conn_id: conn_id.clone(),
+                        operation_id,
+                        tx,
+                    });
+            tokio::pin!(register);
+            tokio::select! {
+                rx = &mut register => rx,
+                _ = &mut cancel_future => {
+                    inner_client.try_send(Command::PrivilegedCancelRequest {
+                        conn_id: conn_id.clone(),
+                    });
+                    return Err(AdapterError::Canceled);
+                }
+                _ = &mut statement_timeout => {
+                    inner_client.try_send(Command::PrivilegedCancelRequest {
+                        conn_id: conn_id.clone(),
+                    });
+                    return Err(AdapterError::StatementTimeout);
+                }
             }
-            _ = &mut connection_cancel => {
-                Err(AdapterError::Canceled)
-            }
-            _ = &mut statement_timeout => {
-                // Dropping the operation future (by returning) releases the OCC
-                // permit, read holds, and subscribe handle. Forward a privileged
-                // cancel, like the `cancel_future` arm, to clean up any
-                // coordinator-owned work.
-                inner_client.send(Command::PrivilegedCancelRequest {
-                    conn_id: conn_id.clone(),
-                });
-
-                Err(AdapterError::StatementTimeout)
-            }
+        };
+        if *connection_cancel_rx.borrow() {
+            return Err(AdapterError::Canceled);
         }
+        let connection_cancel = async move {
+            if connection_cancel_rx.wait_for(|v| *v).await.is_err() {
+                futures::future::pending::<()>().await;
+            }
+        };
+        tokio::pin!(connection_cancel);
+
+        let frontend_read_then_write = self.try_frontend_read_then_write(
+            portal_name,
+            outer_ctx_extra,
+            Arc::clone(&attempt_state),
+        );
+        tokio::pin!(frontend_read_then_write);
+
+        let requested = tokio::select! {
+            response = &mut frontend_read_then_write => return response,
+            _ = &mut cancel_future => FrontendWriteCancellation::Canceled,
+            _ = &mut connection_cancel => FrontendWriteCancellation::Canceled,
+            _ = &mut statement_timeout => FrontendWriteCancellation::StatementTimeout,
+        };
+
+        attempt_state.request(requested);
+        inner_client.try_send(Command::PrivilegedCancelRequest {
+            conn_id: conn_id.clone(),
+        });
+
+        if !attempt_state.write_submitted() {
+            return Err(match requested {
+                FrontendWriteCancellation::Canceled => AdapterError::Canceled,
+                FrontendWriteCancellation::StatementTimeout => AdapterError::StatementTimeout,
+            });
+        }
+
+        // A submitted write can already be durable. Await its definitive result
+        // rather than reporting cancellation or timeout incorrectly.
+        frontend_read_then_write.await
     }
 
     /// Attempt to sequence a read-then-write (DELETE/UPDATE/INSERT INTO ..
@@ -1618,6 +1620,7 @@ impl SessionClient {
         &mut self,
         portal_name: &str,
         outer_ctx_extra: &mut Option<ExecuteContextGuard>,
+        attempt_state: Arc<FrontendWriteAttemptState>,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         use mz_expr::RowSetFinishing;
         use mz_sql::plan::{MutationKind, Plan, ReadThenWritePlan};
@@ -1632,18 +1635,13 @@ impl SessionClient {
 
         let catalog = self.catalog_snapshot("try_frontend_read_then_write").await;
 
-        let (stmt, params, logging, lifecycle_timestamps) = {
+        let stmt = {
             let session = self.session.as_ref().expect("SessionClient invariant");
             let portal = match session.get_portal_unverified(portal_name) {
                 Some(portal) => portal,
                 None => return Ok(None), // Portal doesn't exist, fall back
             };
-            (
-                portal.stmt.clone(),
-                portal.parameters.clone(),
-                Arc::clone(&portal.logging),
-                portal.lifecycle_timestamps.clone(),
-            )
+            portal.stmt.clone()
         };
 
         let stmt = match stmt {
@@ -1663,14 +1661,57 @@ impl SessionClient {
             }
         };
 
+        // The OCC path commits immediately. Explicit transactions must use the
+        // coordinator path, which preserves normal transaction semantics.
+        if !self
+            .session
+            .as_ref()
+            .expect("SessionClient invariant")
+            .transaction()
+            .is_implicit()
+        {
+            return Ok(None);
+        }
+
+        if self
+            .session
+            .as_ref()
+            .expect("SessionClient invariant")
+            .vars()
+            .transaction_isolation()
+            .is_bounded_staleness()
+        {
+            return Err(AdapterError::BoundedStalenessReadOnly);
+        }
+
+        // Verify and plan against one catalog snapshot. Pairing a stale plan
+        // with a newer target generation could direct a write incorrectly.
+        Coordinator::verify_portal(
+            &catalog,
+            self.session.as_mut().expect("SessionClient invariant"),
+            portal_name,
+        )?;
+
+        let (params, logging, lifecycle_timestamps) = {
+            let portal = self
+                .session
+                .as_ref()
+                .expect("SessionClient invariant")
+                .get_portal_unverified(portal_name)
+                .expect("verified above");
+            (
+                portal.parameters.clone(),
+                Arc::clone(&portal.logging),
+                portal.lifecycle_timestamps.clone(),
+            )
+        };
+
         // Reject mutations in read-only mode (e.g. during 0dt upgrades). Done
         // early, before any planning or fast-path dispatch, so every sub-path
         // (constant INSERT, OCC INSERT/UPDATE/DELETE) is covered uniformly.
         if self.peek_client.read_only {
             return Err(AdapterError::ReadOnly);
         }
-
-        let stmt_string = stmt.to_string();
 
         let (plan, target_cluster, resolved_ids, sql_impl_ids) = {
             let session = self.session.as_mut().expect("SessionClient invariant");
@@ -1716,7 +1757,7 @@ impl SessionClient {
             }
             if let Err(e) = mz_sql::rbac::check_plan(
                 &conn_catalog,
-                None::<fn(u32) -> Option<mz_repr::role_id::RoleId>>,
+                None,
                 session,
                 &plan,
                 target_cluster_id,
@@ -1888,15 +1929,16 @@ impl SessionClient {
             }
         };
 
-        // The OCC path commits writes immediately and they cannot be rolled
-        // back, so reject explicit transaction blocks. (Constant INSERTs are
-        // handled above and don't go through OCC.)
-        {
-            let session = self.session.as_ref().expect("SessionClient invariant");
-            if !session.transaction().is_implicit() {
-                return Err(AdapterError::OperationProhibitsTransaction(stmt_string));
-            }
-        }
+        // The transaction mode was checked before portal verification and
+        // planning, so reaching this point cannot fall back after consuming
+        // frontend logging or session state.
+        debug_assert!(
+            self.session
+                .as_ref()
+                .expect("SessionClient invariant")
+                .transaction()
+                .is_implicit()
+        );
 
         let session = self.session.as_mut().expect("SessionClient invariant");
         self.peek_client
@@ -1904,10 +1946,12 @@ impl SessionClient {
                 session,
                 rtw_plan,
                 target_cluster,
+                Arc::clone(&catalog),
                 &params,
                 &logging,
                 lifecycle_timestamps,
                 outer_ctx_extra,
+                attempt_state,
             )
             .await
             .map(Some)

@@ -614,7 +614,11 @@ impl Coordinator {
                 Command::FrontendStatementLogging(event) => {
                     self.handle_frontend_statement_logging_event(event);
                 }
-                Command::RegisterConnectionCancelWatch { conn_id, tx } => {
+                Command::RegisterConnectionCancelWatch {
+                    conn_id,
+                    operation_id,
+                    tx,
+                } => {
                     // Always replace any existing entry. Another code path
                     // (e.g. `sequence_staged`) may have left a stale watch
                     // here, possibly already signaled `true` from a prior
@@ -624,11 +628,20 @@ impl Coordinator {
                     // it hasn't been cancelled.
                     let (watch_tx, watch_rx) = watch::channel(false);
                     self.connection_cancel_watches
-                        .insert(conn_id, (watch_tx, watch_rx.clone()));
+                        .insert(conn_id, (Some(operation_id), watch_tx, watch_rx.clone()));
                     let _ = tx.send(watch_rx);
                 }
-                Command::UnregisterConnectionCancelWatch { conn_id } => {
-                    self.connection_cancel_watches.remove(&conn_id);
+                Command::UnregisterConnectionCancelWatch {
+                    conn_id,
+                    operation_id,
+                } => {
+                    if self
+                        .connection_cancel_watches
+                        .get(&conn_id)
+                        .is_some_and(|(registered_id, _, _)| *registered_id == Some(operation_id))
+                    {
+                        self.connection_cancel_watches.remove(&conn_id);
+                    }
                 }
                 Command::CreateInternalSubscribe {
                     df_desc,
@@ -2047,7 +2060,7 @@ impl Coordinator {
         self.cancel_cluster_reconfigurations_for_conn(&conn_id)
             .await;
         self.cancel_pending_copy(&conn_id);
-        if let Some((tx, _rx)) = self.connection_cancel_watches.get_mut(&conn_id) {
+        if let Some((_operation_id, tx, _rx)) = self.connection_cancel_watches.get_mut(&conn_id) {
             let _ = tx.send(true);
         }
     }

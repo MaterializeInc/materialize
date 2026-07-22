@@ -400,12 +400,14 @@ pub enum Command {
     /// read-then-write execution.
     RegisterConnectionCancelWatch {
         conn_id: ConnectionId,
+        operation_id: Uuid,
         tx: oneshot::Sender<watch::Receiver<bool>>,
     },
 
     /// Unregisters a previously registered connection-scoped cancellation watch.
     UnregisterConnectionCancelWatch {
         conn_id: ConnectionId,
+        operation_id: Uuid,
     },
 
     /// Creates an internal subscribe (not visible in introspection) and returns
