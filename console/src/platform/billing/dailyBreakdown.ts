@@ -14,9 +14,9 @@ import {
 } from "~/api/cloudGlobalApi";
 
 /**
- * Names aren't available yet (SAS-141/142), so accounts are labelled by their
- * `external_customer_id` UUID. The full id is very wide for a chip or a table
- * cell, so callers show this short prefix and keep the whole id in a tooltip.
+ * Fallback label for an account whose `name` is empty. The full
+ * `external_customer_id` UUID is very wide for a chip or a table cell, so
+ * callers show this short prefix and keep the whole id in a tooltip.
  */
 export function shortAccountId(accountId: string): string {
   return `${accountId.slice(0, 8)}…`;
