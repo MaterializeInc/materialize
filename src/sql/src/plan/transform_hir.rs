@@ -16,7 +16,7 @@ use std::{iter, mem};
 use itertools::Itertools;
 use mz_expr::WindowFrame;
 use mz_expr::func::variadic::RecordCreate;
-use mz_expr::visit::Visit;
+use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{ColumnOrder, UnaryFunc, VariadicFunc};
 use mz_ore::stack::RecursionLimitError;
 use mz_repr::{ColumnName, SqlColumnType, SqlRelationType, SqlScalarType};
@@ -171,66 +171,77 @@ pub fn try_simplify_quantified_comparisons(
     expr: &mut HirRelationExpr,
     simplify_join_on: bool,
 ) -> Result<(), RecursionLimitError> {
+    // There is nothing to simplify unless the query contains a subquery. Bail
+    // early in that common case: `walk_relation` recomputes `input.typ()` at
+    // every level, which is O(depth^2) over a deep relation tree (e.g. a long
+    // JOIN or CTE chain) and would wedge the coordinator.
+    if !relation_contains_subquery(expr) {
+        return Ok(());
+    }
+
     fn walk_relation(
         expr: &mut HirRelationExpr,
         outers: &[SqlRelationType],
         simplify_join_on: bool,
     ) -> Result<(), RecursionLimitError> {
-        match expr {
-            HirRelationExpr::Map { scalars, input } => {
-                walk_relation(input, outers, simplify_join_on)?;
-                let mut outers = outers.to_vec();
-                outers.insert(0, input.typ(&outers, &NO_PARAMS));
-                for scalar in scalars {
-                    walk_scalar(scalar, &outers, false, simplify_join_on)?;
-                    let (inner, outers) = outers
-                        .split_first_mut()
-                        .expect("outers known to have at least one element");
-                    let scalar_type = scalar.typ(outers, inner, &NO_PARAMS);
-                    inner.column_types.push(scalar_type);
+        // Grow the stack: recurses over a user-controlled-depth relation tree.
+        mz_ore::stack::maybe_grow(|| {
+            match expr {
+                HirRelationExpr::Map { scalars, input } => {
+                    walk_relation(input, outers, simplify_join_on)?;
+                    let mut outers = outers.to_vec();
+                    outers.insert(0, input.typ(&outers, &NO_PARAMS));
+                    for scalar in scalars {
+                        walk_scalar(scalar, &outers, false, simplify_join_on)?;
+                        let (inner, outers) = outers
+                            .split_first_mut()
+                            .expect("outers known to have at least one element");
+                        let scalar_type = scalar.typ(outers, inner, &NO_PARAMS);
+                        inner.column_types.push(scalar_type);
+                    }
+                }
+                HirRelationExpr::Filter { predicates, input } => {
+                    walk_relation(input, outers, simplify_join_on)?;
+                    let mut outers = outers.to_vec();
+                    outers.insert(0, input.typ(&outers, &NO_PARAMS));
+                    for pred in predicates {
+                        walk_scalar(pred, &outers, true, simplify_join_on)?;
+                    }
+                }
+                HirRelationExpr::CallTable { exprs, .. } => {
+                    let mut outers = outers.to_vec();
+                    outers.insert(0, SqlRelationType::empty());
+                    for scalar in exprs {
+                        walk_scalar(scalar, &outers, false, simplify_join_on)?;
+                    }
+                }
+                HirRelationExpr::Join {
+                    left, right, on, ..
+                } => {
+                    walk_relation(left, outers, simplify_join_on)?;
+                    let left_type = left.typ(outers, &NO_PARAMS);
+                    let mut outers = outers.to_vec();
+                    outers.insert(0, left_type);
+                    walk_relation(right, &outers, simplify_join_on)?;
+                    if simplify_join_on {
+                        // Build outers with the full join output type, since the
+                        // ON clause can reference columns from both sides.
+                        let right_type = right.typ(&outers, &NO_PARAMS);
+                        let mut join_columns = outers[0].column_types.clone();
+                        join_columns.extend(right_type.column_types);
+                        outers[0] = SqlRelationType::new(join_columns);
+                        walk_scalar(on, &outers, true, simplify_join_on)?;
+                    }
+                }
+                expr => {
+                    #[allow(deprecated)]
+                    let _ = expr.visit1_mut(0, &mut |expr, _| -> Result<(), RecursionLimitError> {
+                        walk_relation(expr, outers, simplify_join_on)
+                    });
                 }
             }
-            HirRelationExpr::Filter { predicates, input } => {
-                walk_relation(input, outers, simplify_join_on)?;
-                let mut outers = outers.to_vec();
-                outers.insert(0, input.typ(&outers, &NO_PARAMS));
-                for pred in predicates {
-                    walk_scalar(pred, &outers, true, simplify_join_on)?;
-                }
-            }
-            HirRelationExpr::CallTable { exprs, .. } => {
-                let mut outers = outers.to_vec();
-                outers.insert(0, SqlRelationType::empty());
-                for scalar in exprs {
-                    walk_scalar(scalar, &outers, false, simplify_join_on)?;
-                }
-            }
-            HirRelationExpr::Join {
-                left, right, on, ..
-            } => {
-                walk_relation(left, outers, simplify_join_on)?;
-                let left_type = left.typ(outers, &NO_PARAMS);
-                let mut outers = outers.to_vec();
-                outers.insert(0, left_type);
-                walk_relation(right, &outers, simplify_join_on)?;
-                if simplify_join_on {
-                    // Build outers with the full join output type, since the
-                    // ON clause can reference columns from both sides.
-                    let right_type = right.typ(&outers, &NO_PARAMS);
-                    let mut join_columns = outers[0].column_types.clone();
-                    join_columns.extend(right_type.column_types);
-                    outers[0] = SqlRelationType::new(join_columns);
-                    walk_scalar(on, &outers, true, simplify_join_on)?;
-                }
-            }
-            expr => {
-                #[allow(deprecated)]
-                let _ = expr.visit1_mut(0, &mut |expr, _| -> Result<(), RecursionLimitError> {
-                    walk_relation(expr, outers, simplify_join_on)
-                });
-            }
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     fn walk_scalar(
@@ -305,6 +316,30 @@ pub fn try_simplify_quantified_comparisons(
     }
 
     walk_relation(expr, &[], simplify_join_on)
+}
+
+/// Returns whether `expr` contains any subquery (`HirScalarExpr::Exists` or
+/// `HirScalarExpr::Select`). Both the relation tree and the per-node scalars are
+/// traversed iteratively, so this is stack-safe on deeply nested inputs: a long
+/// JOIN/CTE chain grows the relation tree, and a flat `CASE` with many arms
+/// lowers to a deep right-nested `If` chain in a single scalar. `visit_pre` on
+/// `HirScalarExpr` stops at `Exists`/`Select` (they are scalar leaves), so the
+/// scan never descends into subquery bodies. The relation walk already yields
+/// those bodies as its own children.
+fn relation_contains_subquery(expr: &HirRelationExpr) -> bool {
+    let mut found = false;
+    expr.visit_post(&mut |r: &HirRelationExpr| {
+        if !found {
+            VisitChildren::<HirScalarExpr>::visit_children(r, |s| {
+                s.visit_pre(&mut |e: &HirScalarExpr| {
+                    if matches!(e, HirScalarExpr::Exists(..) | HirScalarExpr::Select(..)) {
+                        found = true;
+                    }
+                });
+            });
+        }
+    });
+    found
 }
 
 /// An empty parameter type map.
@@ -771,4 +806,69 @@ pub fn fuse_window_functions(
         }
         Ok(())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A deeply nested, subquery-free relation tree must plan without
+    /// overflowing the stack. The pre-decorrelation HIR walks
+    /// (`split_subquery_predicates`, `try_simplify_quantified_comparisons`)
+    /// recurse over its full, user-controlled depth, and the latter would
+    /// otherwise recompute `input.typ()` at every level (O(depth^2)).
+    #[mz_ore::test]
+    fn deep_relation_chain_does_not_overflow() {
+        const DEPTH: usize = 100_000;
+        let mut expr = HirRelationExpr::constant(vec![], SqlRelationType::empty());
+        for _ in 0..DEPTH {
+            expr = HirRelationExpr::Filter {
+                predicates: vec![],
+                input: Box::new(expr),
+            };
+        }
+
+        split_subquery_predicates(&mut expr).unwrap();
+        try_simplify_quantified_comparisons(&mut expr, false).unwrap();
+
+        // Dismantle iteratively: dropping the deep tree recursively would itself
+        // overflow the stack.
+        while let HirRelationExpr::Filter { input, .. } = expr {
+            expr = *input;
+        }
+    }
+
+    /// A shallow relation whose scalar is a deeply nested `If` chain must plan
+    /// without overflowing the stack. A flat `CASE` with many arms consumes no
+    /// per-arm parser recursion but lowers to a right-nested `If` chain of that
+    /// depth, so the subquery scan in `try_simplify_quantified_comparisons` must
+    /// scan the scalar iteratively, not once per `If` node.
+    #[mz_ore::test]
+    fn deep_scalar_if_chain_does_not_overflow() {
+        const DEPTH: usize = 100_000;
+        let mut scalar = HirScalarExpr::literal_true();
+        for _ in 0..DEPTH {
+            scalar = HirScalarExpr::if_then_else(
+                HirScalarExpr::literal_true(),
+                HirScalarExpr::literal_true(),
+                scalar,
+            );
+        }
+        let mut expr = HirRelationExpr::Map {
+            input: Box::new(HirRelationExpr::constant(vec![], SqlRelationType::empty())),
+            scalars: vec![scalar],
+        };
+
+        try_simplify_quantified_comparisons(&mut expr, false).unwrap();
+
+        // Dismantle the `If` chain iteratively: dropping it recursively would
+        // itself overflow the stack.
+        let HirRelationExpr::Map { mut scalars, .. } = expr else {
+            unreachable!()
+        };
+        let mut scalar = scalars.pop().unwrap();
+        while let HirScalarExpr::If { els, .. } = scalar {
+            scalar = *els;
+        }
+    }
 }
