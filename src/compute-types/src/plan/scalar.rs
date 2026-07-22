@@ -35,7 +35,10 @@ pub enum LirScalarExpr {
     Column(usize, TreatAsEqual<Option<Arc<str>>>),
     /// A literal value.
     /// (Stored as a row, because we can't own a Datum)
-    Literal(Result<Row, EvalError>, ReprColumnType),
+    Literal(
+        #[serde(with = "literal_value_serde")] Result<Row, EvalError>,
+        ReprColumnType,
+    ),
     /// A function call that takes one expression as an argument.
     CallUnary {
         /// Function
@@ -73,6 +76,58 @@ pub enum LirScalarExpr {
         /// Else branch
         els: Box<LirScalarExpr>,
     },
+}
+
+pub use literal_value_serde::LiteralValue;
+
+/// Serializes `LirScalarExpr::Literal`'s value through the named
+/// [`LiteralValue`] mirror enum instead of std `Result`.
+///
+/// The stable LIR schema registry maps each container name to a single
+/// format, and `Result` would clash with the differently instantiated
+/// `Result` in `LirRelationNode::Constant`. The mirror has the same variant
+/// order as `Result`, so the encoded bytes are unchanged.
+mod literal_value_serde {
+    use mz_expr::EvalError;
+    use mz_repr::Row;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    /// The serialized form of `LirScalarExpr::Literal`'s value.
+    #[derive(Debug, Serialize, Deserialize)]
+    pub enum LiteralValue {
+        /// See `Result::Ok`.
+        Ok(Row),
+        /// See `Result::Err`.
+        Err(EvalError),
+    }
+
+    /// Borrowing mirror of [`LiteralValue`], to serialize without cloning.
+    #[derive(Serialize)]
+    #[serde(rename = "LiteralValue")]
+    enum LiteralValueRef<'a> {
+        Ok(&'a Row),
+        Err(&'a EvalError),
+    }
+
+    pub fn serialize<S: Serializer>(
+        value: &Result<Row, EvalError>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        let mirror = match value {
+            Ok(row) => LiteralValueRef::Ok(row),
+            Err(err) => LiteralValueRef::Err(err),
+        };
+        mirror.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Result<Row, EvalError>, D::Error> {
+        Ok(match LiteralValue::deserialize(deserializer)? {
+            LiteralValue::Ok(row) => Ok(row),
+            LiteralValue::Err(err) => Err(err),
+        })
+    }
 }
 
 impl LirScalarExpr {
