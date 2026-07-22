@@ -7,17 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import { http, HttpResponse } from "msw";
 import React, { ReactElement } from "react";
 
-import { DailyCosts, Organization } from "~/api/cloudGlobalApi";
+import { CostBreakdownAccount, Organization } from "~/api/cloudGlobalApi";
 import {
   buildCloudOrganizationsResponse,
   buildCloudRegionsReponse,
   buildCreditsResponse,
-  buildDailyCostResponse,
+  buildDailyCostBreakdownResponse,
   buildInvoicesResponse,
-  generateDailyCostResponsePayload,
 } from "~/api/mocks/cloudGlobalApiHandlers";
 import server from "~/api/mocks/server";
 import {
@@ -26,12 +26,10 @@ import {
   selectReactSelectOption,
   setFakeEnvironment,
 } from "~/test/utils";
-import { assert } from "~/util";
 import { formatCurrency } from "~/utils/format";
 
-import { getTimeRange } from "./queries";
+import { getDayAlignedRange } from "./queries";
 import UsagePage from "./UsagePage";
-import { getTimeRangeSlice } from "./utils";
 
 const Wrapper = await createProviderWrapper({
   initializeState: ({ set }) =>
@@ -41,6 +39,17 @@ const Wrapper = await createProviderWrapper({
 const renderComponent = (element: ReactElement) => {
   return render(<Wrapper>{element}</Wrapper>);
 };
+
+// Wrap accounts in a single UTC-day bucket — the minimal `/api/costs/breakdown/
+// daily` payload. Per-day cost is additive, so a one-day window reproduces the
+// period totals the breakdown asserts on.
+const oneDay = (accounts: CostBreakdownAccount[]) => [
+  {
+    startDate: "2024-01-15T00:00:00Z",
+    endDate: "2024-01-16T00:00:00Z",
+    accounts,
+  },
+];
 
 const buildOrganization = (overrides: Partial<Organization> = {}) => {
   return {
@@ -63,6 +72,7 @@ describe("UsagePage", () => {
       buildCloudRegionsReponse(),
       buildInvoicesResponse(),
       buildCreditsResponse(),
+      buildDailyCostBreakdownResponse(),
       buildCloudOrganizationsResponse({
         payload: buildOrganization(),
       }),
@@ -74,104 +84,486 @@ describe("UsagePage", () => {
     vi.clearAllMocks();
   });
 
-  it("renders successfully for all regions", async () => {
-    const [startDate, endDate] = getTimeRange(7);
-    const payload = generateDailyCostResponsePayload(startDate, endDate);
-    expect(payload.daily.length).toEqual(30);
-    server.use(buildDailyCostResponse({ payload }));
+  it("renders a unified account & cluster ledger for a parent org", async () => {
+    server.use(
+      buildDailyCostBreakdownResponse({
+        payload: {
+          days: oneDay([
+            {
+              external_customer_id: "parent-org",
+              name: "",
+              clusters: [
+                {
+                  environment_id: "environment-parent-0",
+                  cluster_grouping_key: "quickstart.r1",
+                  category: "",
+                  region: "aws/us-east-1",
+                  amounts: { "price-compute": "10.00" },
+                  usage: 0,
+                },
+                {
+                  environment_id: "environment-parent-0",
+                  cluster_grouping_key: "compute.r1",
+                  category: "",
+                  region: "aws/us-east-1",
+                  amounts: { "price-compute": "4.00" },
+                  usage: 0,
+                },
+              ],
+            },
+            {
+              external_customer_id: "child-org",
+              name: "",
+              clusters: [
+                {
+                  environment_id: "environment-child-0",
+                  cluster_grouping_key: "prod.r1",
+                  category: "",
+                  region: "aws/us-east-1",
+                  amounts: { "price-compute": "5.00" },
+                  usage: 0,
+                },
+              ],
+            },
+          ]),
+        },
+      }),
+    );
     renderComponent(<UsagePage />);
 
-    const regionSelect = await screen.findByTestId(
-      "region-select",
-      {},
-      { timeout: 5_000 },
+    const breakdown = within(
+      await screen.findByTestId(
+        "account-spend-breakdown",
+        {},
+        { timeout: 5_000 },
+      ),
     );
-    expect(regionSelect).toBeVisible();
-
-    const timeRangeSelect = await screen.findByTestId("time-range-select");
-    expect(timeRangeSelect).toBeVisible();
-
-    const spend = await screen.findByTestId("all-spend-amount");
-    const timeRangeSubtotal = payload.daily
-      .slice(-7)
-      .reduce((subtotal, day) => subtotal + parseFloat(day.subtotal), 0);
-    expect(spend.textContent).toEqual(formatCurrency(timeRangeSubtotal));
-
-    await waitFor(async () =>
-      expect(await screen.findByTestId("chart")).toBeVisible(),
-    );
+    // The ledger lives in its own full-width grid row below the chart and
+    // plan-details columns (SAS-154).
+    const ledger = within(await screen.findByTestId("account-spend-ledger"));
+    // One expandable row per account, biggest spender first, each showing that
+    // account's period total (parent 14 = 10 + 4, child 5).
+    const accountRows = await ledger.findAllByTestId("account-row");
+    expect(accountRows).toHaveLength(2);
+    expect(within(accountRows[0]).getByText(formatCurrency(14))).toBeVisible();
+    expect(within(accountRows[1]).getByText(formatCurrency(5))).toBeVisible();
+    // Each account row also shows its share of the period total (SAS-144):
+    // parent 14/19 ≈ 73.7%, child 5/19 ≈ 26.3%.
+    expect(within(accountRows[0]).getByText("73.7%")).toBeVisible();
+    expect(within(accountRows[1]).getByText("26.3%")).toBeVisible();
+    // Accounts render expanded, so every cluster row is visible inline,
+    // region-qualified ("aws/us-east-1 / <cluster>").
+    for (const cluster of ["quickstart.r1", "compute.r1", "prod.r1"]) {
+      expect(
+        await ledger.findByText(`aws/us-east-1 / ${cluster}`),
+      ).toBeVisible();
+    }
+    // The segmented-by-account chart and the grand-total row (19 = 14 + 5) are
+    // present.
+    expect(await breakdown.findByTestId("account-spend-chart")).toBeVisible();
+    const totalRow = within(await ledger.findByTestId("account-total-row"));
+    expect(totalRow.getByText(formatCurrency(19))).toBeVisible();
+    // A Usage column sits between "Account / cluster" and "Share of total"
+    // (SAS-145): the endpoint doesn't carry usage quantities yet, so each of
+    // the 3 cluster rows shows a placeholder rather than a number.
+    expect(await ledger.findByText("Usage")).toBeVisible();
+    expect(ledger.getAllByText("—")).toHaveLength(3);
+    // The section leads with the period total (19 = 14 + 5), mirroring the
+    // legacy chart panel, and a "Spend between …" range above the table,
+    // mirroring the legacy "Spend between …" breakdown. oneDay()'s single
+    // bucket is 2024-01-15, so the range collapses to that one date.
+    expect(
+      within(await breakdown.findByTestId("account-spend-total")).getByText(
+        formatCurrency(19),
+      ),
+    ).toBeVisible();
+    const range = within(await ledger.findByTestId("account-spend-range"));
+    expect(range.getByText("Spend between", { exact: false })).toBeVisible();
+    expect(range.getAllByText("01-15-24")).toHaveLength(2);
   });
 
-  it("changing the region filters the totals", async () => {
-    const [startDate, endDate] = getTimeRange(7);
-    const payload = generateDailyCostResponsePayload(startDate, endDate);
-    server.use(buildDailyCostResponse({ payload }));
+  it("sends bare inclusive UTC calendar dates to the breakdown endpoint (SAS-151)", async () => {
+    // Regression guard for the timestamp-serialization bug class: the query
+    // params must be plain YYYY-MM-DD (no time component, no local-zone
+    // offset for a shifted wall-clock date to hide in), computed from UTC
+    // calendar fields, both ends inclusive.
+    const captured: URLSearchParams[] = [];
+    server.use(
+      http.get("*/api/costs/breakdown/daily", ({ request }) => {
+        captured.push(new URL(request.url).searchParams);
+        return HttpResponse.json({ days: [] });
+      }),
+    );
+    // Computed before render so a UTC-midnight rollover mid-test can't skew
+    // the expectation.
+    const now = new Date();
+    const utcDay = (offset: number) =>
+      new Date(
+        Date.UTC(
+          now.getUTCFullYear(),
+          now.getUTCMonth(),
+          now.getUTCDate() + offset,
+        ),
+      )
+        .toISOString()
+        .slice(0, 10);
+
+    renderComponent(<UsagePage />);
+    // The page fires two breakdown queries: the selected range (default
+    // "Last 7 days") and the fixed 30-day plan-details window.
+    await waitFor(() => expect(captured.length).toBeGreaterThanOrEqual(2));
+
+    for (const params of captured) {
+      expect(params.get("startDate")).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(params.get("endDate")).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    }
+    // "Last N days" is the N inclusive UTC days ending today, so exactly N
+    // buckets can come back — the 31-buckets-for-30-days symptom is pinned
+    // out here.
+    const sevenDay = captured.find((p) => p.get("startDate") === utcDay(-6));
+    expect(sevenDay?.get("endDate")).toBe(utcDay(0));
+    const thirtyDay = captured.find((p) => p.get("startDate") === utcDay(-29));
+    expect(thirtyDay?.get("endDate")).toBe(utcDay(0));
+  });
+
+  it("shows an error state when the breakdown request fails", async () => {
+    server.use(buildDailyCostBreakdownResponse({ status: 500 }));
+    renderComponent(<UsagePage />);
+    expect(
+      await screen.findByText("An error occurred loading your usage"),
+    ).toBeVisible();
+  });
+
+  it("shows an empty state when the window has no usage", async () => {
+    // beforeEach's default handler already returns { days: [] }.
+    renderComponent(<UsagePage />);
+    expect(await screen.findByTestId("account-breakdown-empty")).toBeVisible();
+  });
+
+  it("renders 0.0% shares for an all-zero period instead of NaN (SAS-144)", async () => {
+    server.use(
+      buildDailyCostBreakdownResponse({
+        payload: {
+          days: oneDay([
+            {
+              external_customer_id: "parent-org",
+              name: "",
+              clusters: [
+                {
+                  environment_id: "environment-parent-0",
+                  cluster_grouping_key: "quickstart.r1",
+                  category: "",
+                  region: "aws/us-east-1",
+                  amounts: { "price-compute": "0.00" },
+                  usage: 0,
+                },
+              ],
+            },
+            {
+              external_customer_id: "child-org",
+              name: "",
+              clusters: [
+                {
+                  environment_id: "environment-child-0",
+                  cluster_grouping_key: "prod.r1",
+                  category: "",
+                  region: "aws/us-east-1",
+                  amounts: { "price-compute": "0.00" },
+                  usage: 0,
+                },
+              ],
+            },
+          ]),
+        },
+      }),
+    );
     renderComponent(<UsagePage />);
 
-    const regionSelect = screen.getByTestId<HTMLElement>("region-select");
-    expect(regionSelect).toBeVisible();
-    await waitFor(async () =>
-      expect(await screen.findByTestId("chart")).toBeVisible(),
+    const ledger = within(
+      await screen.findByTestId("account-spend-ledger", {}, { timeout: 5_000 }),
     );
-    const spendElement = await screen.findByTestId("all-spend-amount");
-    const allSpend = parseFloat(
-      spendElement.textContent!.replace("$", "").replace(",", ""),
+    const accountRows = await ledger.findAllByTestId("account-row");
+    expect(accountRows).toHaveLength(2);
+    for (const row of accountRows) {
+      expect(within(row).getByText("0.0%")).toBeVisible();
+    }
+    expect(ledger.queryByText(/NaN/)).not.toBeInTheDocument();
+  });
+
+  it("shows a plan-details box beside the breakdown, itemizing last 30 days by account", async () => {
+    server.use(
+      buildDailyCostBreakdownResponse({
+        payload: {
+          days: oneDay([
+            {
+              external_customer_id: "parent-org",
+              name: "",
+              clusters: [
+                {
+                  environment_id: "environment-parent-0",
+                  cluster_grouping_key: "quickstart.r1",
+                  category: "",
+                  region: "aws/us-east-1",
+                  amounts: { "price-compute": "10.00" },
+                  usage: 0,
+                },
+                {
+                  environment_id: "environment-parent-0",
+                  cluster_grouping_key: "compute.r1",
+                  category: "",
+                  region: "aws/us-east-1",
+                  amounts: { "price-compute": "4.00" },
+                  usage: 0,
+                },
+              ],
+            },
+            {
+              external_customer_id: "child-org",
+              name: "",
+              clusters: [
+                {
+                  environment_id: "environment-child-0",
+                  cluster_grouping_key: "prod.r1",
+                  category: "",
+                  region: "aws/us-east-1",
+                  amounts: { "price-compute": "5.00" },
+                  usage: 0,
+                },
+              ],
+            },
+          ]),
+        },
+      }),
+    );
+    renderComponent(<UsagePage />);
+
+    const planDetails = within(
+      await screen.findByTestId("account-plan-details", {}, { timeout: 5_000 }),
+    );
+    // The box renders before the breakdown resolves, so await the spend rows.
+    // Every figure is derived from /api/costs/breakdown/daily, not
+    // /api/costs/daily.
+    expect(await planDetails.findByText("Total spend")).toBeVisible();
+    expect(await planDetails.findByText("Last 30 days")).toBeVisible();
+    expect(await planDetails.findByText("Daily average")).toBeVisible();
+    // "Last 30 days" is itemized by account (parent 14 = 10 + 4, child 5),
+    // biggest spender first, under the window total.
+    expect(await planDetails.findByText(formatCurrency(14))).toBeVisible();
+    expect(await planDetails.findByText(formatCurrency(5))).toBeVisible();
+  });
+
+  it("renders storage and egress as distinct region-qualified rows", async () => {
+    server.use(
+      buildDailyCostBreakdownResponse({
+        payload: {
+          days: oneDay([
+            {
+              external_customer_id: "standalone-org",
+              name: "",
+              clusters: [
+                {
+                  environment_id: "environment-standalone-0",
+                  cluster_grouping_key: "default.r1",
+                  category: "",
+                  region: "aws/us-east-1",
+                  amounts: { "price-compute": "3.00" },
+                  usage: 0,
+                },
+                {
+                  // Storage and egress both have an empty cluster_grouping_key;
+                  // their `category` keeps them on separate rows, rendered as
+                  // "<region> / Storage" and "<region> / Egress".
+                  environment_id: "environment-standalone-0",
+                  cluster_grouping_key: "",
+                  category: "Storage",
+                  region: "aws/us-east-1",
+                  amounts: { "price-storage": "0.50" },
+                  usage: 0,
+                },
+                {
+                  environment_id: "environment-standalone-0",
+                  cluster_grouping_key: "",
+                  category: "Egress",
+                  region: "aws/us-east-1",
+                  amounts: { "price-egress": "0.25" },
+                  usage: 0,
+                },
+              ],
+            },
+          ]),
+        },
+      }),
+    );
+    renderComponent(<UsagePage />);
+
+    const ledger = within(
+      await screen.findByTestId("account-spend-ledger", {}, { timeout: 5_000 }),
+    );
+    // The account renders expanded, so its clusters are visible inline. Scope
+    // lookups to the ledger table. Storage and egress (both empty
+    // cluster_grouping_key) stay on separate rows via `category`.
+    expect(await ledger.findByText("aws/us-east-1 / default.r1")).toBeVisible();
+    expect(await ledger.findByText("aws/us-east-1 / Storage")).toBeVisible();
+    expect(await ledger.findByText("aws/us-east-1 / Egress")).toBeVisible();
+  });
+
+  it("falls back to 'Other' when a row has neither cluster key nor category", async () => {
+    // Defensive: a non-compute row with an empty cluster_grouping_key and no
+    // category can only occur against a backend that predates the `category`
+    // field. It should render "<region> / Other" rather than mislabel as a
+    // cluster or crash.
+    server.use(
+      buildDailyCostBreakdownResponse({
+        payload: {
+          days: oneDay([
+            {
+              external_customer_id: "standalone-org",
+              name: "",
+              clusters: [
+                {
+                  environment_id: "environment-standalone-0",
+                  cluster_grouping_key: "",
+                  category: "",
+                  region: "aws/us-east-1",
+                  amounts: { "price-storage": "0.50" },
+                  usage: 0,
+                },
+              ],
+            },
+          ]),
+        },
+      }),
+    );
+    renderComponent(<UsagePage />);
+
+    const ledger = within(
+      await screen.findByTestId("account-spend-ledger", {}, { timeout: 5_000 }),
+    );
+    // The account renders expanded, so its one cluster row is visible inline.
+    expect(await ledger.findByText("aws/us-east-1 / Other")).toBeVisible();
+  });
+
+  it("filters the ledger by region", async () => {
+    server.use(
+      buildDailyCostBreakdownResponse({
+        payload: {
+          days: oneDay([
+            {
+              external_customer_id: "east-org",
+              name: "",
+              clusters: [
+                {
+                  environment_id: "environment-east-0",
+                  cluster_grouping_key: "quickstart.r1",
+                  category: "",
+                  region: "aws/us-east-1",
+                  amounts: { "price-compute": "10.00" },
+                  usage: 0,
+                },
+              ],
+            },
+            {
+              external_customer_id: "west-org",
+              name: "",
+              clusters: [
+                {
+                  environment_id: "environment-west-0",
+                  cluster_grouping_key: "quickstart.r1",
+                  category: "",
+                  region: "aws/eu-west-1",
+                  amounts: { "price-compute": "5.00" },
+                  usage: 0,
+                },
+              ],
+            },
+          ]),
+        },
+      }),
+    );
+    renderComponent(<UsagePage />);
+
+    const ledger = within(
+      await screen.findByTestId("account-spend-ledger", {}, { timeout: 5_000 }),
+    );
+    // Both accounts show before filtering.
+    expect(await ledger.findAllByTestId("account-row")).toHaveLength(2);
+    const totalRowBefore = within(
+      await ledger.findByTestId("account-total-row"),
+    );
+    expect(totalRowBefore.getByText(formatCurrency(15))).toBeVisible();
+
+    const planDetails = within(
+      await screen.findByTestId("account-plan-details", {}, { timeout: 5_000 }),
+    );
+    const totalSpendLabel = await planDetails.findByText("Total spend");
+    // The plan-details summary must track the same region filter as the
+    // ledger, so it starts at the unfiltered $15 total too.
+    expect(
+      within(totalSpendLabel.parentElement as HTMLElement).getByText(
+        formatCurrency(15),
+      ),
+    ).toBeVisible();
+
+    const regionSelect = screen.getByTestId<HTMLElement>(
+      "account-region-select",
     );
     await selectReactSelectOption(regionSelect, "aws/us-east-1");
-    const regionElement = await screen.findByTestId(
-      "aws/us-east-1-spend-amount",
-    );
-    const regionSpend = parseFloat(
-      regionElement.textContent!.replace("$", "").replace(",", ""),
-    );
-    expect(regionSpend, JSON.stringify(payload)).toBeLessThan(allSpend);
-  });
 
-  it("changing the time range filters the totals", async () => {
-    let [startDate, endDate] = getTimeRange(7);
-    let payload = generateDailyCostResponsePayload(startDate, endDate);
-    server.use(buildDailyCostResponse({ payload }));
-    renderComponent(<UsagePage />);
+    // Only the us-east-1 account remains, and the grand total drops to just
+    // its cost — the eu-west-1 account is filtered out entirely.
+    await waitFor(async () => {
+      expect(await ledger.findAllByTestId("account-row")).toHaveLength(1);
+    });
+    const accountRows = await ledger.findAllByTestId("account-row");
+    expect(within(accountRows[0]).getByText(formatCurrency(10))).toBeVisible();
+    const totalRowAfter = within(
+      await ledger.findByTestId("account-total-row"),
+    );
+    expect(totalRowAfter.getByText(formatCurrency(10))).toBeVisible();
 
-    const timeRangeSelect =
-      screen.getByTestId<HTMLElement>("time-range-select");
-    expect(timeRangeSelect).toBeVisible();
-    await waitFor(async () =>
-      expect(await screen.findByTestId("chart")).toBeVisible(),
-    );
-
-    const spendElement = await screen.findByTestId("all-spend-amount");
-    const originalSpend = parseFloat(
-      spendElement.textContent!.replace("$", "").replace(",", ""),
-    );
-
-    [startDate, endDate] = getTimeRange(14);
-    payload = generateDailyCostResponsePayload(startDate, endDate);
-    server.use(buildDailyCostResponse({ payload }));
-    await selectReactSelectOption(timeRangeSelect, "Last 14 days");
-    await waitFor(async () =>
-      expect(await screen.findByTestId("chart")).toBeVisible(),
-    );
-    const newSpend = parseFloat(
-      spendElement.textContent!.replace("$", "").replace(",", ""),
-    );
-    expect(originalSpend).toBeLessThan(newSpend);
-  });
-
-  it("displays a generic error if there's an issue querying the server", async () => {
-    server.use(buildDailyCostResponse({ status: 500 }));
-    renderComponent(<UsagePage />);
-    await waitFor(async () =>
-      expect(await screen.findByTestId("chart-error")).toBeVisible(),
-    );
+    // The plan-details summary follows the same filter: total spend drops to
+    // the us-east-1-only figure, matching the ledger.
+    await waitFor(() => {
+      expect(
+        within(totalSpendLabel.parentElement as HTMLElement).getByText(
+          formatCurrency(10),
+        ),
+      ).toBeVisible();
+    });
   });
 
   it("displays the invoices table for direct-billed organizations", async () => {
-    server.use(buildDailyCostResponse());
+    server.use(
+      buildInvoicesResponse({
+        invoices: [
+          {
+            issueDate: "2026-06-02T00:00:00Z",
+            currency: "usd",
+            total: "100.00",
+            amountDue: "100.00",
+            createdAt: "2026-06-02T00:00:00Z",
+            status: "paid",
+            invoiceNumber: "INV-001",
+          },
+        ],
+      }),
+    );
     renderComponent(<UsagePage />);
     await waitFor(async () =>
       expect(await screen.findByTestId("invoice-table")).toBeVisible(),
     );
+  });
+
+  it("hides the invoice history section entirely for an account with no invoices (e.g. an Orb hierarchy leaf account, which never has its own)", async () => {
+    server.use(buildInvoicesResponse({ invoices: [] }));
+    renderComponent(<UsagePage />);
+    await waitFor(async () =>
+      expect(
+        await screen.findByTestId("account-spend-breakdown"),
+      ).toBeVisible(),
+    );
+    expect(screen.queryByText("Invoice history")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("invoice-table")).not.toBeInTheDocument();
   });
 
   it("hides the invoices table for AWS Marketplace-billed organizations", async () => {
@@ -184,7 +576,6 @@ describe("UsagePage", () => {
           },
         }),
       }),
-      buildDailyCostResponse(),
     );
     renderComponent(<UsagePage />);
 
@@ -193,59 +584,8 @@ describe("UsagePage", () => {
     );
   });
 
-  it("correctly slices the right number of records for the time range when the range is equal to the number of days", () => {
-    const dailyCosts: DailyCosts["daily"] = [
-      {
-        startDate: "2024-01-13T00:00:00Z",
-        endDate: "2024-01-14T00:00:00Z",
-        costs: {
-          compute: { prices: [], subtotal: "0.00", total: "0.00" },
-          storage: { prices: [], subtotal: "0.00", total: "0.00" },
-        },
-        total: "0.00",
-        subtotal: "0.00",
-      },
-      {
-        startDate: "2024-01-14T00:00:00Z",
-        endDate: "2024-01-14T12:00:00Z",
-        costs: {
-          compute: { prices: [], subtotal: "0.00", total: "0.00" },
-          storage: { prices: [], subtotal: "0.00", total: "0.00" },
-        },
-        total: "0.00",
-        subtotal: "0.00",
-      },
-      {
-        startDate: "2024-01-14T12:00:00Z",
-        endDate: "2024-01-15T00:00:00Z",
-        costs: {
-          compute: { prices: [], subtotal: "0.00", total: "0.00" },
-          storage: { prices: [], subtotal: "0.00", total: "0.00" },
-        },
-        total: "0.00",
-        subtotal: "0.00",
-      },
-      {
-        startDate: "2024-01-15T00:00:00Z",
-        endDate: "2024-01-16T00:00:00Z",
-        costs: {
-          compute: { prices: [], subtotal: "0.00", total: "0.00" },
-          storage: { prices: [], subtotal: "0.00", total: "0.00" },
-        },
-        total: "0.00",
-        subtotal: "0.00",
-      },
-    ];
-    // Get 3 days of the time range
-    const sliced = getTimeRangeSlice(dailyCosts, 3);
-    assert(sliced !== null);
-    expect(sliced).toHaveLength(4);
-    expect(sliced[0].startDate).toEqual(dailyCosts[0].startDate);
-    expect(sliced[3].startDate).toEqual(dailyCosts[3].startDate);
-  });
-
   it("generates appropriate time components for a time range", () => {
-    const [start, end] = getTimeRange(7);
+    const [start, end] = getDayAlignedRange(7);
     expect(start.getUTCHours()).toEqual(0);
     expect(start.getUTCHours()).toEqual(0);
     expect(start.getUTCMinutes()).toEqual(0);

@@ -23,8 +23,9 @@ import {
   setFakeEnvironment,
 } from "~/test/utils";
 
+import { ROLLING_AVG_TIME_RANGE_LOOKBACK_DAYS } from "./constants";
 import { UpgradedPlanDetails } from "./PlanDetails";
-import { getTimeRange } from "./queries";
+import { getDayAlignedRange } from "./queries";
 import { summarizePlanCosts } from "./utils";
 
 const Wrapper = await createProviderWrapper({
@@ -42,7 +43,9 @@ describe("UpgradedPlanDetails", () => {
   });
 
   it("renders successfully for all regions", async () => {
-    const [startDate, endDate] = getTimeRange(7);
+    const [startDate, endDate] = getDayAlignedRange(
+      ROLLING_AVG_TIME_RANGE_LOOKBACK_DAYS,
+    );
     const payload = generateDailyCostResponsePayload(startDate, endDate);
     renderComponent(
       <UpgradedPlanDetails region="all" dailyCosts={payload} timeSpan={7} />,
@@ -53,7 +56,9 @@ describe("UpgradedPlanDetails", () => {
   });
 
   it("hides region breakdown when filtering regions", async () => {
-    const [startDate, endDate] = getTimeRange(7);
+    const [startDate, endDate] = getDayAlignedRange(
+      ROLLING_AVG_TIME_RANGE_LOOKBACK_DAYS,
+    );
     const payload = generateDailyCostResponsePayload(startDate, endDate);
     renderComponent(
       <UpgradedPlanDetails
