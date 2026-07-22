@@ -15,8 +15,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use columnar::Columnar;
 use mz_expr::{
-    CollectionPlan, EvalError, Id, LetRecLimit, LocalId, MapFilterProject, MfpPlan, MirScalarExpr,
-    OptimizedMirRelationExpr, SafeMfpPlan, TableFunc,
+    CollectionPlan, EvalError, Id, LetRecLimit, LocalId, MfpPlan, OptimizedMirRelationExpr,
+    SafeMfpPlan, TableFunc,
 };
 use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 use crate::dataflows::DataflowDescription;
 use crate::plan::join::JoinPlan;
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
-use crate::plan::scalar::{LirScalarExpr, mfp_mir_to_lir_plan};
+use crate::plan::scalar::LirScalarExpr;
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
 use crate::plan::transform::{Transform, TransformConfig};
@@ -578,11 +578,10 @@ impl LirRelationExpr {
         features: &OptimizerFeatures,
         metrics: Option<&LoweringMetrics>,
     ) -> Result<DataflowDescription<Self>, String> {
-        // First, we lower the dataflow description from MIR to LIR.
+        // First, we lower the dataflow description from MIR to LIR. Lowering
+        // also moves common parts of the MFPs pushed onto each source's reads into the source
+        // itself (see `Context::refine_source_mfps`).
         let mut dataflow = Self::lower_dataflow(desc, features, metrics)?;
-
-        // Subsequently, we perform plan refinements for the dataflow.
-        Self::refine_source_mfps(&mut dataflow);
 
         // Note: `consolidate_output` for `Union` and per-input
         // `temporal_bucketing_strategies` are decided at lowering time (see the
@@ -648,123 +647,6 @@ impl LirRelationExpr {
         mz_repr::explain::trace_plan(&dataflow);
 
         Ok(dataflow)
-    }
-
-    /// Refines the source instance descriptions for sources imported by `dataflow` to
-    /// push down common MFP expressions.
-    #[mz_ore::instrument(
-        target = "optimizer",
-        level = "debug",
-        fields(path.segment = "refine_source_mfps")
-    )]
-    fn refine_source_mfps(dataflow: &mut DataflowDescription<Self>) {
-        use crate::plan::scalar::mfp_plan_lir_to_mir;
-
-        for (source_id, source_import) in dataflow.source_imports.iter_mut() {
-            let source = &mut source_import.desc;
-            let source_id = *source_id;
-            let mut identity_present = false;
-
-            // First pass: swap MfpPlans out of GetPlan::Collection nodes,
-            // recording their LirId so we can put them back.
-            let mut taken: Vec<(LirId, MfpPlan<LirScalarExpr>)> = Vec::new();
-            for build_desc in dataflow.objects_to_build.iter_mut() {
-                let mut todo = vec![&mut build_desc.plan];
-                while let Some(expression) = todo.pop() {
-                    let lir_id = expression.lir_id;
-                    let node = &mut expression.node;
-                    if let LirRelationNode::Get { id, plan, .. } = node {
-                        if *id == mz_expr::Id::Global(source_id) {
-                            match plan {
-                                GetPlan::Collection(mfp_plan) => {
-                                    let arity = mfp_plan.safe_mfp().projection.len();
-                                    let placeholder = MfpPlan::from_parts(
-                                        mz_expr::SafeMfpPlan::from_mfp(MapFilterProject::new(
-                                            arity,
-                                        )),
-                                        Vec::new(),
-                                        Vec::new(),
-                                    );
-                                    taken.push((lir_id, std::mem::replace(mfp_plan, placeholder)));
-                                }
-                                GetPlan::PassArrangements => {
-                                    identity_present = true;
-                                }
-                                GetPlan::Arrangement(..) => {
-                                    panic!("Surprising `GetPlan` for imported source: {:?}", plan);
-                                }
-                            }
-                        }
-                    } else {
-                        todo.extend(node.children_mut());
-                    }
-                }
-            }
-
-            // Direct exports of sources are possible, and prevent pushdown.
-            identity_present |= dataflow
-                .index_exports
-                .values()
-                .any(|(x, _)| x.on_id == source_id);
-            identity_present |= dataflow.sink_exports.values().any(|x| x.from == source_id);
-
-            // Build a map from LirId → new MfpPlan to put back.
-            let replacements: BTreeMap<LirId, MfpPlan<LirScalarExpr>> =
-                if !identity_present && !taken.is_empty() {
-                    // Convert LIR MfpPlans → MIR MapFilterProjects by folding
-                    // temporal bounds back as mz_now() predicates, so that
-                    // extract_common's column remapping applies uniformly.
-                    let mut mir_mfps: Vec<(LirId, MapFilterProject<MirScalarExpr>)> = taken
-                        .into_iter()
-                        .map(|(lir_id, lir_plan)| {
-                            let mir_mfp = mfp_plan_lir_to_mir(lir_plan).into_map_filter_project();
-                            (lir_id, mir_mfp)
-                        })
-                        .collect();
-                    let mut mfp_refs: Vec<&mut MapFilterProject<MirScalarExpr>> =
-                        mir_mfps.iter_mut().map(|(_, mfp)| mfp).collect();
-
-                    let common = MapFilterProject::extract_common(&mut mfp_refs[..]);
-                    let mut source_mfp = if let Some(mfp) = source.arguments.operators.take() {
-                        MapFilterProject::compose(mfp, common)
-                    } else {
-                        common
-                    };
-                    source_mfp.optimize();
-                    source.arguments.operators = Some(source_mfp);
-
-                    // Convert mutated MIR MFPs back to LIR MfpPlans.
-                    mir_mfps
-                        .into_iter()
-                        .map(|(lir_id, mir_mfp)| (lir_id, mfp_mir_to_lir_plan(mir_mfp)))
-                        .collect()
-                } else {
-                    taken.into_iter().collect()
-                };
-
-            // Second pass: put the MfpPlans back by LirId.
-            for build_desc in dataflow.objects_to_build.iter_mut() {
-                let mut todo = vec![&mut build_desc.plan];
-                while let Some(expression) = todo.pop() {
-                    if let Some(replacement) = replacements.get(&expression.lir_id) {
-                        if let LirRelationNode::Get {
-                            plan: GetPlan::Collection(mfp_plan),
-                            ..
-                        } = &mut expression.node
-                        {
-                            *mfp_plan = replacement.clone();
-                        } else {
-                            panic!(
-                                "LirId {:?} was a GetPlan::Collection but is now {:?}",
-                                expression.lir_id, expression.node
-                            );
-                        }
-                    }
-                    todo.extend(expression.node.children_mut());
-                }
-            }
-        }
-        mz_repr::explain::trace_plan(dataflow);
     }
 
     /// Refines the plans of objects to be built as part of a single-time `dataflow` to relax
