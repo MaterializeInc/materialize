@@ -19,14 +19,12 @@ import {
   useTheme,
   VStack,
 } from "@chakra-ui/react";
-import { useAtom } from "jotai";
 import React, { PropsWithChildren, useMemo } from "react";
 
 import { useCurrentOrganization } from "~/api/auth";
-import { CostBreakdownDay, DailyCosts } from "~/api/cloudGlobalApi";
+import { CostBreakdownDay } from "~/api/cloudGlobalApi";
 import ScheduleDemoLink from "~/components/ScheduleDemoLink";
 import SupportLink from "~/components/SupportLink";
-import { cloudRegionsSelector } from "~/store/cloudRegions";
 import LowerLeftCornerIcon from "~/svg/LowerLeftCornerIcon";
 import { MaterializeTheme } from "~/theme";
 import { formatDateInUtc, FRIENDLY_DATE_FORMAT } from "~/utils/dateFormat";
@@ -40,13 +38,7 @@ import {
   shortAccountId,
 } from "./dailyBreakdown";
 import { useCreditBalance } from "./queries";
-import { calculateNextOnDemandPaymentDate, summarizePlanCosts } from "./utils";
-
-type UpgradedPlanDetailsProps = {
-  region: "all" | string;
-  dailyCosts: DailyCosts | null;
-  timeSpan: number | null;
-};
+import { calculateNextOnDemandPaymentDate } from "./utils";
 
 const planTypeDisplayNames = {
   partner: "Partner",
@@ -137,30 +129,11 @@ const ContactUsContainer = ({ children }: PropsWithChildren) => {
   );
 };
 
-export const UpgradedPlanDetails = ({
-  region,
-  dailyCosts,
-  timeSpan,
-}: UpgradedPlanDetailsProps) => {
+export const UpgradedPlanDetails = () => {
   const { organization } = useCurrentOrganization();
   const { colors } = useTheme<MaterializeTheme>();
   const { data: creditBalance } = useCreditBalance();
-  const [cloudRegions] = useAtom(cloudRegionsSelector);
 
-  const { spanSummary, last30Summary } = useMemo(() => {
-    if (!timeSpan) {
-      return {
-        spanSummary: null,
-        last30Summary: null,
-      };
-    }
-    return summarizePlanCosts(
-      dailyCosts ? dailyCosts.daily : null,
-      timeSpan,
-      cloudRegions,
-    );
-  }, [dailyCosts, timeSpan, cloudRegions]);
-  const isRegionFiltered = region !== "all";
   return (
     <PlanDetailsContainer>
       <Heading as="h3" fontSize="sm" fontWeight="500" px="4" py="3">
@@ -186,52 +159,6 @@ export const UpgradedPlanDetails = ({
             />
           </PlanSection>
         </Collapse>
-        {last30Summary && (
-          <PlanSection>
-            <PlanSectionHeader
-              title="Last 30 days"
-              value={formatCurrency(
-                isRegionFiltered
-                  ? (last30Summary.regions.get(region) ?? 0)
-                  : last30Summary.total,
-              )}
-            />
-            <Collapse in={!isRegionFiltered}>
-              {[...last30Summary.regions.entries()].map(
-                ([regionId, regionTotal]) => (
-                  <PlanSectionItem
-                    key={regionId}
-                    title={regionId}
-                    value={formatCurrency(regionTotal)}
-                  />
-                ),
-              )}
-            </Collapse>
-          </PlanSection>
-        )}
-        {spanSummary && timeSpan && (
-          <PlanSection showDivider>
-            <PlanSectionHeader
-              title="Daily average"
-              value={formatCurrency(
-                (isRegionFiltered
-                  ? (spanSummary.regions.get(region) ?? 0)
-                  : spanSummary.total) / timeSpan,
-              )}
-            />
-            <Collapse in={!isRegionFiltered}>
-              {[...spanSummary.regions.entries()].map(
-                ([regionId, regionTotal]) => (
-                  <PlanSectionItem
-                    key={regionId}
-                    title={regionId}
-                    value={formatCurrency(regionTotal / timeSpan)}
-                  />
-                ),
-              )}
-            </Collapse>
-          </PlanSection>
-        )}
       </VStack>
       <Collapse in={organization?.subscription?.type === "on-demand"}>
         <PlanSection>
