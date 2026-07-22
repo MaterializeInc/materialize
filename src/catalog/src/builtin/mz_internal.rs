@@ -5398,8 +5398,7 @@ pub static MZ_SHOW_ALL_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| Builtin
     )
     SELECT schema_id, name, type, COALESCE(comment, '') AS comment
     FROM mz_catalog.mz_objects AS objs
-    LEFT JOIN comments ON objs.id = comments.id
-    WHERE (comments.object_type = objs.type OR comments.object_type IS NULL)",
+    LEFT JOIN comments ON objs.id = comments.id AND comments.object_type = objs.type",
     access: vec![PUBLIC_SELECT],
     ontology: None,
 });
@@ -5897,7 +5896,7 @@ FROM
             ON mz_catalog.mz_cluster_replicas.id = statuses.replica_id
         LEFT JOIN mz_internal.mz_comments comments
             ON mz_catalog.mz_cluster_replicas.id = comments.id
-WHERE (comments.object_type = 'cluster-replica' OR comments.object_type IS NULL)
+            AND comments.object_type = 'cluster-replica'
 ORDER BY 1, 2"#,
     access: vec![PUBLIC_SELECT],
     ontology: None,
@@ -5957,8 +5956,8 @@ LEFT JOIN mz_clusters c_idx ON c_idx.id = i.cluster_id
 LEFT JOIN mz_clusters c_obj ON c_obj.id = o.cluster_id
 LEFT JOIN mz_internal.mz_show_my_cluster_privileges cp
     ON cp.name = COALESCE(c_idx.name, c_obj.name) AND cp.privilege_type = 'USAGE'
-LEFT JOIN mz_internal.mz_comments cts_idx ON cts_idx.id = i.id AND cts_idx.object_sub_id IS NULL
-LEFT JOIN mz_internal.mz_comments cts_obj ON cts_obj.id = o.id AND cts_obj.object_sub_id IS NULL
+LEFT JOIN mz_internal.mz_comments cts_idx ON cts_idx.id = i.id AND cts_idx.object_type = 'index' AND cts_idx.object_sub_id IS NULL
+LEFT JOIN mz_internal.mz_comments cts_obj ON cts_obj.id = o.id AND cts_obj.object_type = o.type AND cts_obj.object_sub_id IS NULL
 WHERE op.privilege_type = 'SELECT'
   AND (o.type = 'materialized-view'
        OR (o.type = 'view' AND i.id IS NOT NULL AND cp.name IS NOT NULL))
@@ -6087,9 +6086,9 @@ LEFT JOIN mz_clusters c_idx ON c_idx.id = i.cluster_id
 LEFT JOIN mz_clusters c_obj ON c_obj.id = o.cluster_id
 LEFT JOIN mz_internal.mz_show_my_cluster_privileges cp
     ON cp.name = COALESCE(c_idx.name, c_obj.name) AND cp.privilege_type = 'USAGE'
-LEFT JOIN mz_internal.mz_comments cts_idx ON cts_idx.id = i.id AND cts_idx.object_sub_id IS NULL
-LEFT JOIN mz_internal.mz_comments cts_obj ON cts_obj.id = o.id AND cts_obj.object_sub_id IS NULL
-LEFT JOIN mz_internal.mz_comments cts_col ON cts_col.id = o.id AND cts_col.object_sub_id = ccol.position
+LEFT JOIN mz_internal.mz_comments cts_idx ON cts_idx.id = i.id AND cts_idx.object_type = 'index' AND cts_idx.object_sub_id IS NULL
+LEFT JOIN mz_internal.mz_comments cts_obj ON cts_obj.id = o.id AND cts_obj.object_type = o.type AND cts_obj.object_sub_id IS NULL
+LEFT JOIN mz_internal.mz_comments cts_col ON cts_col.id = o.id AND cts_col.object_type = o.type AND cts_col.object_sub_id = ccol.position
 WHERE op.privilege_type = 'SELECT'
   AND (o.type = 'materialized-view'
        OR (o.type = 'view' AND i.id IS NOT NULL AND cp.name IS NOT NULL))
