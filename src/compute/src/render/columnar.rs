@@ -238,8 +238,11 @@ where
 
 /// Repacks a row-based collection into columnar batches.
 ///
-/// A transitional seam-healer, visible in rendered dataflows as a
-/// `VecToColumnar` operator. Repacking copies row bytes but allocates no
+/// The sanctioned leaf encode from `Vec` to the columnar edge, visible in
+/// rendered dataflows as a `VecToColumnar` operator. Row-serializing leaves
+/// (sinks, `LetRec`, temporal bucketing, join internals, TopK fallible-limit)
+/// stay `Vec`-shaped internally and encode to the columnar edge at their
+/// boundary through this pass. Repacking copies row bytes but allocates no
 /// per-record `Row`s.
 pub fn vec_to_columnar<'scope, T>(
     collection: VecCollection<'scope, T, Row, Diff>,
@@ -268,10 +271,12 @@ where
 
 /// Decodes columnar batches into a row-based collection.
 ///
-/// A transitional seam-healer, visible in rendered dataflows as a
-/// `ColumnarToVec` operator. Decoding allocates an owned [`Row`] per record,
-/// so it should only guard consumers that have not yet learned the columnar
-/// form.
+/// The sanctioned leaf decode from the columnar edge to `Vec`, visible in
+/// rendered dataflows as a `ColumnarToVec` operator. Row-serializing leaves
+/// (sinks, `LetRec`, temporal bucketing, join internals, TopK fallible-limit)
+/// decode the columnar edge at their boundary through this pass. Decoding
+/// allocates an owned [`Row`] per record, so it stays confined to those leaf
+/// boundaries.
 pub fn columnar_to_vec<'scope, T>(
     collection: ColumnarCollection<'scope, T, Row, Diff>,
 ) -> VecCollection<'scope, T, Row, Diff>
