@@ -1311,3 +1311,61 @@ def workflow_parser_statement_size_limit_bypass(c: Composition) -> None:
         assert (
             SIZE_LIMIT_ERROR in msg
         ), f"parse_item_name processed oversized name: {msg[:200]}"
+
+
+def workflow_auth_failure_modes(c: Composition) -> None:
+    """Auth rejection at the HTTP layer, against an OIDC listener.
+
+    The existing OIDC workflows cover the discovery documents and the
+    unauthenticated challenge. These cover what happens when a client does
+    present credentials but they are unusable: a malformed Authorization
+    header, or a bearer token that cannot be validated against the
+    configured issuer. All must be rejected, never accepted or 500'd.
+    """
+    with c.override(
+        Materialized(
+            listeners_config_path=f"{MZ_ROOT}/test/mcp/listener_config_oidc.json",
+        )
+    ):
+        c.up("materialized")
+        base = f"http://localhost:{c.port('materialized', 6876)}"
+        # A real-looking issuer with no reachable JWKS: no bearer token can
+        # be validated against it, which is exactly what we want to assert.
+        c.sql(
+            "ALTER SYSTEM SET oidc_issuer = 'https://issuer.example.com'",
+            user="mz_system",
+            port=6877,
+            print_statement=False,
+        )
+
+        agent = f"{base}/api/mcp/agent"
+
+        # A structurally valid JWT (header.payload.signature) that cannot be
+        # verified against the configured issuer.
+        unverifiable_jwt = (
+            "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9"
+            ".eyJzdWIiOiJhdHRhY2tlciIsImlzcyI6Imh0dHBzOi8vZXZpbC5leGFtcGxlLmNvbSJ9"
+            ".c2lnbmF0dXJl"
+        )
+
+        cases = {
+            "malformed_authorization_header": "Garbage",
+            "bearer_without_token": "Bearer ",
+            "bearer_non_jwt": "Bearer not-a-jwt",
+            "bearer_unverifiable_jwt": f"Bearer {unverifiable_jwt}",
+        }
+        for name, header in cases.items():
+            with c.test_case(f"auth_rejected_{name}"):
+                r = requests.post(
+                    agent,
+                    json=jsonrpc("tools/list"),
+                    headers={"Authorization": header},
+                )
+                # Rejected as unauthorized, never accepted and never a 5xx.
+                assert r.status_code == 401, f"{name}: {r.status_code}: {r.text}"
+
+        with c.test_case("get_returns_405_on_oidc_listener"):
+            # 405 is decided by routing before auth, so it holds even on an
+            # authenticated listener with no credentials presented.
+            r = requests.get(agent)
+            assert r.status_code == 405, f"{r.status_code}: {r.text}"
