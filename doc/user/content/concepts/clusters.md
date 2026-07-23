@@ -78,7 +78,7 @@ volumes.
 
 As your workload changes, you can [resize a cluster](/sql/alter-cluster/).
 
-To speed up hydration without permanently paying for a larger cluster, you can
+To handle the temporary compute increases during hydration, you can
 configure an [autoscaling
 strategy](/sql/alter-cluster/#speed-up-hydration-by-autoscaling-to-a-larger-size)
 that provisions an extra burst replica at a larger size while the cluster has

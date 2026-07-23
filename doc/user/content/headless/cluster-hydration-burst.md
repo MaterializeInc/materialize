@@ -5,27 +5,28 @@ headless: true
 Cluster autoscaling
 {{% /public-preview %}}
 
-When you create an index or materialized view, or when a cluster restarts, the
-cluster must [hydrate](/concepts/clusters/#consider-hydration-requirements) the
-affected objects before they can serve results. Hydration reads the input data
+When you create an index, materialized view, or Kafka upsert source, or when a
+cluster restarts, the cluster must
+[hydrate](/concepts/clusters/#consider-hydration-requirements) the affected
+objects before they can serve results. Hydration reads the input data
 and rebuilds in-memory state, and its speed scales with the cluster
 [size](#available-sizes).
 
-The `AUTO SCALING STRATEGY (ON HYDRATION)` option lets a cluster **automatically provision an
-extra burst replica at a larger size while it has un-hydrated objects**. This
-speeds up hydration without manually scaling the cluster up before hydration and
-back down afterward. The steady-size replicas continue hydrating in parallel with the burst replica. 
-Once one of the steady-size replicas catches up with the burst, the burst replica lingers for `LINGER DURATION`, and the burst replica is then removed.
-The burst replica is an ordinary cluster replica, billed only for the time it is
+The `AUTO SCALING STRATEGY (ON HYDRATION)` option lets a cluster **automatically
+provision an extra burst replica at the configured `HYDRATION SIZE` while it has
+un-hydrated objects**. This speeds up hydration without manually scaling the
+cluster up before hydration and back down afterward. The steady-size replicas
+continue hydrating in parallel, and once one of them catches up with the burst,
+the burst replica lingers for the `LINGER DURATION` and is then removed. The
+burst replica is an ordinary cluster replica, billed only for the time it is
 provisioned. See [Usage & billing](/administration/billing/) for details.
 
-The burst can also speed up deployments that hydrate new objects, especially
-[blue/green deployments](/manage/blue-green/), where a new cluster must hydrate
-before the cutover.
+`AUTO SCALING STRATEGY (ON HYDRATION)` is particularly useful for [blue/green
+deployments](/manage/blue-green/), where a new cluster must hydrate before the
+cutover. It is only available on **managed clusters**, and cannot be combined
+with a cluster `SCHEDULE` other than the default `MANUAL`.
 
-`AUTO SCALING STRATEGY (ON HYDRATION)` is only available on **managed clusters**. It is not
-supported on unmanaged clusters, and it cannot be combined with a cluster
-`SCHEDULE` other than the default `MANUAL`.
+For example, the following cluster can provision a burst replica of size `800cc`:
 
 ```mzsql
 CREATE CLUSTER fast_start (
@@ -52,8 +53,7 @@ spare resources (for example, available nodes) to schedule the burst replica.
 
 The burst is best-effort and never blocks the cluster: if the burst replica
 cannot be provisioned, the steady-size replicas still come up and hydrate as
-usual, as long as there are enough resources for them. The burst replica is
-always cleaned up, even if it was never provisioned.
+usual, as long as there are enough resources for them.
 
 To remove the autoscaling strategy from a cluster, use `ALTER CLUSTER ... RESET
 (AUTO SCALING STRATEGY)` or set an empty strategy with `AUTO SCALING STRATEGY =
