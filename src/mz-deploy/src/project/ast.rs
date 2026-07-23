@@ -34,25 +34,38 @@ pub struct DatabaseIdent {
     pub object: Ident,
 }
 
-impl From<UnresolvedItemName> for DatabaseIdent {
-    fn from(value: UnresolvedItemName) -> Self {
+impl TryFrom<UnresolvedItemName> for DatabaseIdent {
+    /// A human-readable reason the name could not be interpreted as an object
+    /// identifier.
+    type Error = String;
+
+    /// Interpret an `UnresolvedItemName` as an object identifier.
+    ///
+    /// Object references carry at most three qualification levels
+    /// (`database.schema.object`). The SQL parser accepts arbitrarily deep
+    /// dotted names, so a reference with zero or four-plus parts is rejected
+    /// here rather than panicking.
+    fn try_from(value: UnresolvedItemName) -> Result<Self, Self::Error> {
         match value.0.as_slice() {
-            [object] => Self {
+            [object] => Ok(Self {
                 database: None,
                 schema: None,
                 object: object.clone(),
-            },
-            [schema, object] => Self {
+            }),
+            [schema, object] => Ok(Self {
                 database: None,
                 schema: Some(schema.clone()),
                 object: object.clone(),
-            },
-            [database, schema, object] => Self {
+            }),
+            [database, schema, object] => Ok(Self {
                 database: Some(database.clone()),
                 schema: Some(schema.clone()),
                 object: object.clone(),
-            },
-            _ => unreachable!(),
+            }),
+            _ => Err(format!(
+                "'{}' has too many qualification levels; expected at most database.schema.object",
+                value
+            )),
         }
     }
 }
@@ -191,22 +204,28 @@ impl Statement {
     /// Extracts the database identifier from the statement.
     ///
     /// Returns the object name (potentially qualified with schema/database)
-    /// declared in the CREATE statement.
+    /// declared in the CREATE statement. A name with more than three
+    /// qualification levels yields an object that matches nothing, so name
+    /// validation reports it rather than this method panicking.
     pub fn ident(&self) -> DatabaseIdent {
-        match self {
+        let name = match self {
             Statement::CreateSink(s) => s
                 .name
                 .clone()
-                .expect("CREATE SINK statement should have a name")
-                .into(),
-            Statement::CreateView(v) => v.definition.name.clone().into(),
-            Statement::CreateMaterializedView(m) => m.name.clone().into(),
-            Statement::CreateTable(t) => t.name.clone().into(),
-            Statement::CreateTableFromSource(t) => t.name.clone().into(),
-            Statement::CreateSource(s) => s.name.clone().into(),
-            Statement::CreateSecret(s) => s.name.clone().into(),
-            Statement::CreateConnection(c) => c.name.clone().into(),
-        }
+                .expect("CREATE SINK statement should have a name"),
+            Statement::CreateView(v) => v.definition.name.clone(),
+            Statement::CreateMaterializedView(m) => m.name.clone(),
+            Statement::CreateTable(t) => t.name.clone(),
+            Statement::CreateTableFromSource(t) => t.name.clone(),
+            Statement::CreateSource(s) => s.name.clone(),
+            Statement::CreateSecret(s) => s.name.clone(),
+            Statement::CreateConnection(c) => c.name.clone(),
+        };
+        DatabaseIdent::try_from(name.clone()).unwrap_or_else(|_| DatabaseIdent {
+            database: None,
+            schema: None,
+            object: Ident::new_unchecked(name.to_string()),
+        })
     }
 }
 
@@ -323,5 +342,21 @@ mod tests {
         };
 
         assert!(!ident4.matches(&ident2));
+    }
+
+    #[mz_ore::test]
+    fn test_database_ident_try_from_arity() {
+        let name = |parts: &[&str]| {
+            UnresolvedItemName(parts.iter().map(|p| Ident::new_unchecked(*p)).collect())
+        };
+
+        assert!(DatabaseIdent::try_from(name(&["obj"])).is_ok());
+        assert!(DatabaseIdent::try_from(name(&["schema", "obj"])).is_ok());
+        assert!(DatabaseIdent::try_from(name(&["db", "schema", "obj"])).is_ok());
+
+        // Four qualification levels is not a valid object reference. It must
+        // error rather than panic.
+        assert!(DatabaseIdent::try_from(name(&["a", "b", "c", "d"])).is_err());
+        assert!(DatabaseIdent::try_from(name(&[])).is_err());
     }
 }
