@@ -445,18 +445,27 @@ struct Redacting<A: Debug> {
     debug_mode: bool,
 }
 
+/// The character masking applied by [redact]: digits become `#`, alphabetic
+/// characters become `X`, everything else is unchanged.
+///
+/// Exposed so that renderings that cannot go through [redact]'s `Debug`
+/// wrapper (e.g. JSON values) can apply the identical masking.
+pub fn redact_char(c: char) -> char {
+    if c.is_digit(10) {
+        '#'
+    } else if c.is_alphabetic() {
+        'X'
+    } else {
+        c
+    }
+}
+
 struct RedactingWriter<'a, 'b>(&'a mut Formatter<'b>);
 
 impl<'a, 'b> Write for RedactingWriter<'a, 'b> {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         for c in s.chars() {
-            self.0.write_char(if c.is_digit(10) {
-                '#'
-            } else if c.is_alphabetic() {
-                'X'
-            } else {
-                c
-            })?;
+            self.0.write_char(redact_char(c))?;
         }
         Ok(())
     }
