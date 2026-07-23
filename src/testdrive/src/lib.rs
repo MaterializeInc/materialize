@@ -164,6 +164,11 @@ pub(crate) async fn run_line_reader(
     for e in state.join_background_tasks().await {
         errors.push(e.into());
     }
+    if errors.is_empty()
+        && let Err(e) = action::verify_kafka_topics_exhausted(&state).await
+    {
+        errors.push(e.into());
+    }
     let mut consistency_checks_succeeded = true;
     if config.consistency_checks == action::consistency::Level::File {
         if let Err(e) = action::consistency::run_consistency_checks(&state).await {

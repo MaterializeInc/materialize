@@ -853,7 +853,7 @@ Sets the variable named VAR to the ID of the key schema with which data was
 written. The variable is only set if the format of the key was Confluent Avro
 or Protobuf.
 
-#### `kafka-verify-data format=avro [sink=... | topic=...] [sort-messages=true] [partial-search=usize]`
+#### `kafka-verify-data format=avro [sink=... | topic=...] [sort-messages=true] [partial-search=usize] [exhaustive=bool]`
 
 Obtains the data from the specified `sink` or `topic` and compares it to the expected data recorded in the test.
 
@@ -866,9 +866,14 @@ be ordered according to the following rules:
 
 The action consumes exactly as many messages as the test expects and stops. Consecutive
 `$ kafka-verify-data` commands on the same topic resume where the previous one stopped, so a topic
-is verified in chunks. This also means a single `$ kafka-verify-data` does not detect extra or
-duplicated records past the expected count. They only surface as a mismatch in a subsequent
-`$ kafka-verify-data` on the same topic.
+is verified in chunks. At the end of the test file, testdrive verifies that no records remain after
+the final `$ kafka-verify-data` for each topic. This catches extra or duplicated records that the
+chunked verification would otherwise miss.
+
+Set `exhaustive=false` to exempt a topic from that end-of-file check. Use it when the topic
+legitimately keeps records this command does not verify, for example a topic written by more than one
+sink, a topic that also serves as a sink's progress topic, or a topic whose later records are checked
+by other means.
 
 It is possible to call `$ kafka-verify-data` multiple times on the same topic in case the test needs to check
 that the data arrives in some partial order. For example, to make sure that all of timestamp `1` arrived
@@ -888,7 +893,9 @@ If `partial-search=usize` is specified, up to `partial-search` records will be r
 compared to the provided records. The records do not have to match starting at the beginning of the sink but
 once one record matches, the following must all match.  There are permitted to be records remaining in the
 topic after the matching is complete.  Note that if the topic is not required to have `partial-search`
-elements in it but there will be an attempt to read up to this number with a blocking read.
+elements in it but there will be an attempt to read up to this number with a blocking read. A final
+`$ kafka-verify-data` with `partial-search` disables the end-of-file check for that topic because
+remaining records are explicitly permitted.
 
 #### `kafka-verify-topic [sink=... | topic=...] [await-value-schema=false] [await-key-schema=false]`
 

@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 
 use std::path::PathBuf;
@@ -85,6 +85,10 @@ mod sql;
 mod sql_server;
 mod version_check;
 mod webhook;
+
+pub(crate) async fn verify_kafka_topics_exhausted(state: &State) -> Result<(), anyhow::Error> {
+    kafka::verify_topics_exhausted(state).await
+}
 
 /// User-settable configuration parameters.
 #[derive(Debug, Clone)]
@@ -258,6 +262,8 @@ pub struct State {
     kafka_default_partitions: usize,
     kafka_producer: rdkafka::producer::FutureProducer<MzClientContext>,
     kafka_topics: BTreeMap<String, usize>,
+    /// Topics whose final `kafka-verify-data` must consume the complete topic.
+    kafka_verify_topics: BTreeSet<String>,
 
     // === AWS state. ===
     aws_account: String,
@@ -1258,6 +1264,7 @@ pub async fn create_state(
         kafka_default_partitions: config.kafka_default_partitions,
         kafka_producer,
         kafka_topics,
+        kafka_verify_topics: BTreeSet::new(),
 
         // === AWS state. ===
         aws_account: config.aws_account.clone(),
