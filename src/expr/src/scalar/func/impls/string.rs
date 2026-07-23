@@ -727,7 +727,10 @@ impl LazyUnaryFunc for CastStringToRange {
                 .eval(&[Datum::String(elem_text)], temp_storage)
         })?;
 
-        range.canonicalize()?;
+        // Canonicalize using the target range's declared element type rather than
+        // the parsed bound's Datum tag (correct discrete-step width at the
+        // element type's boundary).
+        range.canonicalize_with_type(self.return_ty.unwrap_range_element_type())?;
 
         Ok(temp_storage.make_datum(|packer| {
             packer

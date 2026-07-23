@@ -359,7 +359,7 @@ impl CastFunc {
                 }))
             }
             CastFunc::CastStringToRange {
-                return_ty: _,
+                return_ty,
                 cast_expr,
             } => {
                 let mut range = strconv::parse_range(a, |elem_text| {
@@ -369,7 +369,9 @@ impl CastFunc {
                     };
                     cast_expr.eval(&[Datum::String(elem_text)], arena)
                 })?;
-                range.canonicalize()?;
+                // Canonicalize using the target range's declared element type
+                // rather than the parsed bound's Datum tag.
+                range.canonicalize_with_type(return_ty.unwrap_range_element_type())?;
                 Ok(arena.make_datum(|packer| {
                     packer
                         .push_range(range)
