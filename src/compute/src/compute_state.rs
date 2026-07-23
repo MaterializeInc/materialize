@@ -1076,6 +1076,19 @@ impl<'a> ActiveComputeState<'a> {
         // state rather than falling through to the `collections.remove` below, which would panic on
         // the missing entry and abort the whole process under two-runtime shared fate.
         if self.cancel_deferred_dataflow(id) {
+            // The controller created this collection (initializing its per-replica frontiers to the
+            // as_of) and acquired read holds on its storage inputs, but the worker never built the
+            // dataflow, so it never reported any frontier. The controller releases those input read
+            // holds only once the collection's frontiers all reach the empty antichain. Report them
+            // empty here so it can clean the collection up. Skipping this strands the input read
+            // holds and pins the inputs' read frontiers (a stale `since` on any index/MV the
+            // deferred read imported).
+            let frontiers = FrontiersResponse {
+                write_frontier: Some(Antichain::new()),
+                input_frontier: Some(Antichain::new()),
+                output_frontier: Some(Antichain::new()),
+            };
+            self.send_compute_response(ComputeResponse::Frontiers(id, frontiers));
             return;
         }
 
