@@ -111,7 +111,7 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use differential_dataflow::dynamic::pointstamp::PointStamp;
-use differential_dataflow::lattice::Lattice;
+use differential_dataflow::lattice::{Lattice, antichain_join};
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::arrange::ShutdownButton;
 use differential_dataflow::operators::iterate::Variable;
@@ -599,6 +599,9 @@ pub fn build_compute_dataflow(
 /// to `as_of`. Keeping them alive (for example in the dataflow's token set) pins the shared trace at
 /// `as_of`; dropping them releases the hold, after which maintenance may compact past `as_of`.
 ///
+/// Panics if the slot's `since` is already beyond `as_of` at import time: the controller offered
+/// an `as_of` the shared trace can no longer read accurately, a protocol error.
+///
 /// The import replays the published chain and tracks the shared trace's frontier, presenting the
 /// accumulation at `as_of` bounded by `until`. Its output capability drops once the trace seals past
 /// `until`, so a single-time interactive read completes. The returned `stream` and `trace` stay
@@ -635,6 +638,25 @@ fn import_shared_index<'outer>(
     // the caller's read-hold tokens. The hold releases only when the caller drops them.
     let mut oks_hold = oks_handle.clone();
     let mut errs_hold = errs_handle.clone();
+
+    // A published slot's `since` may already sit above `as_of` if the controller offered an
+    // unreadable `as_of`, a protocol error. Check before advancing the holds below: doing so
+    // first would pull `since` up to `as_of` and make this assert trivially true. A fresh
+    // placeholder's `since` is `minimum`, so this holds vacuously for an unadopted slot. Mirrors
+    // the maintenance path's `TraceBundle::compaction_frontier` assert in `import_index`, joining
+    // the two handles' compaction frontiers the same way `shared_index_peek_response` does.
+    let since = antichain_join(
+        &oks_hold.get_logical_compaction(),
+        &errs_hold.get_logical_compaction(),
+    );
+    assert!(
+        PartialOrder::less_equal(&since, as_of),
+        "Index {idx_id} has been allowed to compact beyond the dataflow as_of: \
+         since {:?}, as_of {:?}",
+        since.elements(),
+        as_of.elements(),
+    );
+
     oks_hold.set_logical_compaction(as_of.borrow());
     oks_hold.set_physical_compaction(as_of.borrow());
     errs_hold.set_logical_compaction(as_of.borrow());
@@ -2691,6 +2713,55 @@ mod interactive_import_tests {
                 released_oks.snapshot_at(&as_of_time).is_none(),
                 "after the hold drops, the trace must be free to compact past `as_of`"
             );
+        });
+    }
+
+    /// A published slot's `since` may already sit above the dataflow's requested `as_of` if the
+    /// controller offered an unreadable `as_of`, a protocol error: `import_shared_index` must
+    /// panic rather than let the read silently see coalesced data, mirroring the maintenance
+    /// path's `compaction_frontier` assert in `import_index`.
+    ///
+    /// Advances the writer's compaction well past `as_of` with no reader hold registered yet, the
+    /// same `publish_without_readers_does_not_pin_compaction` scenario `shared_trace.rs` covers,
+    /// so a freshly minted handle's hold starts at the already-advanced `since`. Importing at
+    /// `as_of` afterward must panic.
+    #[mz_ore::test]
+    #[should_panic(expected = "since")]
+    fn import_asserts_since_at_most_as_of() {
+        let id = GlobalId::User(1);
+        let rows = test_rows();
+        let as_of = Antichain::from_elem(Timestamp::from(1_u64));
+        let registry = ArrangementSharingRegistry::new();
+
+        timely::execute_directly(move |worker| {
+            let (mut oks_input, _errs_input, mut oks_writer) =
+                worker.dataflow::<Timestamp, _, _>(|scope| {
+                    publish_index_with_writer(scope, &registry, id, rows.clone())
+                });
+
+            // Advance the writer's compaction well past `as_of`, with no reader hold registered
+            // yet, then tick so the publisher forwards it into the published `since`.
+            let target = Antichain::from_elem(Timestamp::from(10_u64));
+            oks_writer.set_logical_compaction(target.borrow());
+            oks_writer.set_physical_compaction(target.borrow());
+            tick(
+                worker,
+                &mut oks_input,
+                Timestamp::from(5_u64),
+                Timestamp::from(6_u64),
+            );
+
+            // Importing at `as_of` now finds a `since` already beyond it: the assert must panic.
+            worker.dataflow::<Timestamp, _, _>(|scope| {
+                let _ = import_shared_index(
+                    scope.clone(),
+                    &registry,
+                    id,
+                    "Index",
+                    &as_of,
+                    &Antichain::new(),
+                );
+            });
         });
     }
 
