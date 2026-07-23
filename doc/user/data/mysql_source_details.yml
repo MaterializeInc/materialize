@@ -116,7 +116,7 @@
     subsource into an error state, which prevents you from reading from the
     subsource.
 
-    To handle incompatible [schema changes](#schema-changes), use [`DROP
+    To handle incompatible [schema changes](#schema-changes-legacy-source-syntax), use [`DROP
     SOURCE`](/sql/alter-source/#context) to first drop the affected subsource,
     and then [`ALTER SOURCE...ADD SUBSOURCE`](/sql/alter-source/) to add the
     subsource back to the source. When you add the subsource, it will have the
