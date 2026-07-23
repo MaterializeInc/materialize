@@ -773,6 +773,13 @@ pub(crate) fn render<'scope>(
                     Ok(()) => (),
                 };
 
+                // This connection sits idle while the leader samples and locks. Restore
+                // the server-default wait_timeout (28800) so a lowered global value
+                // cannot reap it before the leader's broadcast arrives.
+                #[allow(clippy::disallowed_methods)] // static SQL string
+                conn.query_drop("SET @@session.wait_timeout = 28800")
+                    .await?;
+
                 let mut lock_conn = if is_snapshot_leader {
                     match lock_and_prepare_snapshot(
                         &config,
