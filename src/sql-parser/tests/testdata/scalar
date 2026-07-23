@@ -679,6 +679,86 @@ parse-scalar
 Op { op: Op { namespace: Some([Ident("pg_catalog")]), op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }
 
 parse-scalar
+1 OPERATOR(=) 2
+----
+Op { op: Op { namespace: Some([]), op: "=" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }
+
+parse-scalar roundtrip
+1 OPERATOR(=) 2
+----
+1 OPERATOR(=) 2
+
+parse-scalar
+1 OPERATOR(pg_catalog.=) 2
+----
+Op { op: Op { namespace: Some([Ident("pg_catalog")]), op: "=" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }
+
+parse-scalar roundtrip
+1 OPERATOR(pg_catalog.=) 2
+----
+1 OPERATOR(pg_catalog.=) 2
+
+parse-scalar
+OPERATOR(pg_catalog.-) 1
+----
+Op { op: Op { namespace: Some([Ident("pg_catalog")]), op: "-" }, expr1: Value(Number("1")), expr2: None }
+
+parse-scalar roundtrip
+OPERATOR(pg_catalog.-) 1
+----
+OPERATOR(pg_catalog.-) 1
+
+parse-scalar roundtrip
+OPERATOR(-) 1
+----
+OPERATOR(-) 1
+
+parse-scalar
+OPERATOR(pg_catalog.-) 1 + 2
+----
+Op { op: Op { namespace: Some([Ident("pg_catalog")]), op: "-" }, expr1: Op { op: Op { namespace: None, op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }, expr2: None }
+
+parse-scalar roundtrip
+OPERATOR(pg_catalog.-) (1 + 2)
+----
+OPERATOR(pg_catalog.-) (1 + 2)
+
+parse-scalar roundtrip
+OPERATOR(pg_catalog.-) 1 + 2
+----
+OPERATOR(pg_catalog.-) 1 + 2
+
+parse-scalar roundtrip
+2 * OPERATOR(pg_catalog.-) 3 + 4
+----
+2 * OPERATOR(pg_catalog.-) 3 + 4
+
+parse-scalar roundtrip
+~ 1 + 2
+----
+~ 1 + 2
+
+parse-scalar
+OPERATOR(pg_catalog.-) 1 < 2
+----
+Op { op: Op { namespace: None, op: "<" }, expr1: Op { op: Op { namespace: Some([Ident("pg_catalog")]), op: "-" }, expr1: Value(Number("1")), expr2: None }, expr2: Some(Value(Number("2"))) }
+
+parse-scalar roundtrip
+OPERATOR(pg_catalog.-) 1 < 2
+----
+OPERATOR(pg_catalog.-) 1 < 2
+
+parse-scalar
+2 * OPERATOR(pg_catalog.-) 3
+----
+Op { op: Op { namespace: None, op: "*" }, expr1: Value(Number("2")), expr2: Some(Op { op: Op { namespace: Some([Ident("pg_catalog")]), op: "-" }, expr1: Value(Number("3")), expr2: None }) }
+
+parse-scalar
+OPERATOR(-) OPERATOR(-) 1
+----
+Op { op: Op { namespace: Some([]), op: "-" }, expr1: Op { op: Op { namespace: Some([]), op: "-" }, expr1: Value(Number("1")), expr2: None }, expr2: None }
+
+parse-scalar
 1 < ANY (SELECT 2)
 ----
 AnySubquery { left: Value(Number("1")), op: Op { namespace: None, op: "<" }, right: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None } }
