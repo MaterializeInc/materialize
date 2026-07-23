@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, bail};
@@ -123,9 +124,10 @@ pub async fn run_verify(
     );
 
     // Finding the published schema is retryable because it's published
-    // asynchronously and only after the source/sink is created.
+    // asynchronously and only after the source/sink is created. Use
+    // `state.timeout` so `$ set-sql-timeout` extends this wait too.
     let actual_schema = mz_ore::retry::Retry::default()
-        .max_duration(state.default_timeout)
+        .max_duration(state.timeout)
         .retry_async(|_| async {
             match state.ccsr_client.get_schema_by_subject(&subject).await {
                 Ok(s) => mz_ore::retry::RetryResult::Ok(s.raw),
@@ -180,7 +182,11 @@ pub async fn run_wait(
 
     // Run action.
 
-    let mut waiting_for_kafka = false;
+    // Tracks whether the schemas have been confirmed, so later retry attempts
+    // skip straight to the topic check. An `AtomicBool` because a plain `bool`
+    // would be copied into each `async move` future and updates would be lost.
+    let waiting_for_kafka = AtomicBool::new(false);
+    let waiting_for_kafka = &waiting_for_kafka;
 
     println!(
         "Waiting for schema for subjects {:?} to become available in the schema registry...",
@@ -194,7 +200,7 @@ pub async fn run_wait(
         .factor(1.5)
         .max_duration(state.timeout)
         .retry_async_canceling(|_| async move {
-            if !waiting_for_kafka {
+            if !waiting_for_kafka.load(Ordering::Relaxed) {
                 futures::future::try_join_all(subjects.iter().map(|subject| async move {
                     state
                         .ccsr_client
@@ -207,11 +213,11 @@ pub async fn run_wait(
                 }))
                 .await?;
 
-                waiting_for_kafka = true;
+                waiting_for_kafka.store(true, Ordering::Relaxed);
                 println!("Waiting for Kafka topic {} to exist", topic);
             }
 
-            if waiting_for_kafka {
+            if waiting_for_kafka.load(Ordering::Relaxed) {
                 super::kafka::check_topic_exists(topic, state).await?
             }
 

@@ -83,6 +83,7 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
     let query = &cmd.query;
     print_query(query, Some(&stmt));
     let expected_output = &cmd.expected_output;
+    let raw_output = cmd.raw_output;
     state.error_line_count = 0;
     state.error_string = "".to_string();
     let (state, res) = match should_retry {
@@ -94,9 +95,14 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
         false => Retry::default().max_duration(state.timeout).max_tries(1),
     }
     .retry_async_with_state(state, |retry_state, state| async move {
-        let should_continue = retry_state.i + 1 < state.max_tries && should_retry;
+        // `next_backoff` is `None` exactly on the final attempt, whether the
+        // retry budget is bounded by `max_tries` or by `max_duration`. Result
+        // rewriting must only happen on the final attempt, so key off that
+        // rather than `max_tries` (which is usize::MAX by default and would
+        // never mark an attempt as final).
+        let should_continue = retry_state.next_backoff.is_some() && should_retry;
         let start = SystemTime::now();
-        match try_run_sql(state, query, expected_output, should_continue).await {
+        match try_run_sql(state, query, expected_output, raw_output, should_continue).await {
             Ok(()) => {
                 let now = SystemTime::now();
                 let epoch = SystemTime::UNIX_EPOCH;
@@ -180,24 +186,48 @@ fn rewrite_result(
     state: &mut State,
     columns: Vec<&str>,
     content: Vec<Vec<String>>,
+    raw_output: bool,
 ) -> Result<(), anyhow::Error> {
+    // A line starting with a sigil would terminate the expected block and be
+    // parsed as a new command (e.g. a `?column?` header would read as a `?`
+    // command). The parser strips one leading backslash, so escape with that.
+    fn escape_line_start(line: String) -> String {
+        match line.chars().next() {
+            Some('$' | '>' | '!' | '?' | '#' | '\\') => format!("\\{line}"),
+            _ => line,
+        }
+    }
+
     let mut buf = String::new();
-    writeln!(buf, "{}", columns.join(" "))?;
-    writeln!(buf, "----")?;
-    for row in content {
-        let mut formatted_row = Vec::<String>::new();
-        for value in row {
-            if value.is_empty()
-                || value.contains(|x: char| char::is_ascii_whitespace(&x))
-                || value.contains('"')
-                || value.contains('\\')
-            {
-                formatted_row.push(escape_for_parser(&value));
-            } else {
-                formatted_row.push(value);
+    if raw_output {
+        // `?` commands expect the raw result text with no column header and no
+        // escaping, so emit the values verbatim.
+        for row in content {
+            for value in row {
+                buf.push_str(&value);
+                if !value.ends_with('\n') {
+                    buf.push('\n');
+                }
             }
         }
-        writeln!(buf, "{}", formatted_row.join(" "))?;
+    } else {
+        writeln!(buf, "{}", escape_line_start(columns.join(" ")))?;
+        writeln!(buf, "----")?;
+        for row in content {
+            let mut formatted_row = Vec::<String>::new();
+            for value in row {
+                if value.is_empty()
+                    || value.contains(|x: char| char::is_ascii_whitespace(&x))
+                    || value.contains('"')
+                    || value.contains('\\')
+                {
+                    formatted_row.push(escape_for_parser(&value));
+                } else {
+                    formatted_row.push(value);
+                }
+            }
+            writeln!(buf, "{}", escape_line_start(formatted_row.join(" ")))?;
+        }
     }
     state.rewrites.push(Rewrite {
         content: buf,
@@ -212,6 +242,7 @@ async fn try_run_sql(
     state: &mut State,
     query: &str,
     expected_output: &SqlOutput,
+    raw_output: bool,
     should_retry: bool,
 ) -> Result<(), anyhow::Error> {
     let stmt = state
@@ -268,7 +299,7 @@ async fn try_run_sql(
             if let Some(column_names) = column_names {
                 if actual_columns.iter().ne(column_names) {
                     if state.rewrite_results && !should_retry {
-                        rewrite_result(state, actual_columns, actual)?;
+                        rewrite_result(state, actual_columns, actual, raw_output)?;
                         return Ok(());
                     } else {
                         bail!(
@@ -282,7 +313,7 @@ async fn try_run_sql(
             if &actual == expected_rows {
                 Ok(())
             } else if state.rewrite_results && !should_retry {
-                rewrite_result(state, actual_columns, actual)?;
+                rewrite_result(state, actual_columns, actual, raw_output)?;
                 Ok(())
             } else {
                 let (mut left, mut right) = (0, 0);
@@ -312,7 +343,7 @@ async fn try_run_sql(
                     right += 1;
                 }
                 if state.rewrite_results && !should_retry {
-                    rewrite_result(state, actual_columns, actual)?;
+                    rewrite_result(state, actual_columns, actual, raw_output)?;
                     Ok(())
                 } else if let Some(raw_actual) = raw_actual {
                     bail!(

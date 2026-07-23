@@ -7,10 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::LazyLock;
 use std::time::Duration;
 use std::{env, fs};
@@ -48,6 +49,7 @@ use rdkafka::ClientConfig;
 use rdkafka::producer::Producer;
 use regex::{Captures, Regex};
 use semver::Version;
+use tokio_postgres::CancelToken;
 use tokio_postgres::error::{DbError, SqlState};
 use tracing::info;
 use url::Url;
@@ -83,6 +85,10 @@ mod sql;
 mod sql_server;
 mod version_check;
 mod webhook;
+
+pub(crate) async fn verify_kafka_topics_exhausted(state: &State) -> Result<(), anyhow::Error> {
+    kafka::verify_topics_exhausted(state).await
+}
 
 /// User-settable configuration parameters.
 #[derive(Debug, Clone)]
@@ -256,6 +262,8 @@ pub struct State {
     kafka_default_partitions: usize,
     kafka_producer: rdkafka::producer::FutureProducer<MzClientContext>,
     kafka_topics: BTreeMap<String, usize>,
+    /// Topics whose final `kafka-verify-data` must consume the complete topic.
+    kafka_verify_topics: BTreeSet<String>,
 
     // === AWS state. ===
     aws_account: String,
@@ -266,6 +274,9 @@ pub struct State {
     mysql_clients: BTreeMap<String, mysql_async::Conn>,
     postgres_clients: BTreeMap<String, tokio_postgres::Client>,
     sql_server_clients: BTreeMap<String, mz_sql_server_util::Client>,
+    /// Tasks spawned by `postgres-execute background=true`. Joined at the end
+    /// of the file so their failures fail the test.
+    background_tasks: Vec<BackgroundTask>,
 
     // === Fivetran state. ===
     fivetran_destination_url: String,
@@ -285,6 +296,47 @@ pub struct Rewrite {
     pub content: String,
     pub start: usize,
     pub end: usize,
+}
+
+/// A query spawned by `postgres-execute background=true`, retained so it can be
+/// joined at the end of the file.
+///
+/// Aborting `handle` stops the Rust task from awaiting the query's response,
+/// but it does not stop the query on the server. The tokio-postgres connection
+/// driver waits for every pending response before it closes the connection, so
+/// dropping the client leaves the SQL running until Materialize replies. To
+/// actually stop a query that overran its deadline we send an out-of-band
+/// cancel request through `cancel_token`, the same mechanism psql uses for
+/// Ctrl-C, before aborting the task.
+pub(crate) struct BackgroundTask {
+    desc: String,
+    handle: task::JoinHandle<Result<(), anyhow::Error>>,
+    cancel_token: CancelToken,
+    /// Connection URL, used to rebuild the TLS connector that the cancel
+    /// request opens its own connection with.
+    url: String,
+}
+
+/// Best-effort cancellation of the in-progress query on the connection
+/// `cancel_token` was derived from. Opens a fresh connection to send the cancel
+/// request. Cancellation is inherently racy and the caller aborts the task
+/// regardless, so failures are logged rather than propagated.
+async fn cancel_background_query(cancel_token: &CancelToken, url: &str, timeout: Duration) {
+    let tls = match tokio_postgres::Config::from_str(url)
+        .map_err(anyhow::Error::from)
+        .and_then(|config| make_tls(&config).map_err(anyhow::Error::from))
+    {
+        Ok(tls) => tls,
+        Err(e) => {
+            tracing::warn!("could not build TLS connector to cancel background query: {e}");
+            return;
+        }
+    };
+    match tokio::time::timeout(timeout, cancel_token.cancel_query(tls)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::warn!("cancel request for background query failed: {e}"),
+        Err(_) => tracing::warn!("cancel request for background query timed out"),
+    }
 }
 
 impl State {
@@ -442,6 +494,41 @@ impl State {
     /// the consistency checks should be skipped for this current run.
     pub fn clear_skip_consistency_checks(&mut self) -> bool {
         std::mem::replace(&mut self.consistency_checks_adhoc_skip, false)
+    }
+
+    /// Joins all tasks spawned by `postgres-execute background=true`,
+    /// returning one error per task that failed or did not complete within the
+    /// default timeout. Must be called before the end of the file so that
+    /// background failures fail the test.
+    pub(crate) async fn join_background_tasks(&mut self) -> Vec<anyhow::Error> {
+        let mut errors = Vec::new();
+        for BackgroundTask {
+            desc,
+            mut handle,
+            cancel_token,
+            url,
+        } in self.background_tasks.drain(..)
+        {
+            // Poll the handle by reference so it survives a timeout. Dropping a
+            // `JoinHandle` only detaches the task, it does not stop it, and a
+            // detached background query would keep running SQL against the same
+            // Materialize instance while later files execute.
+            match tokio::time::timeout(self.default_timeout, &mut handle).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => errors.push(e.context(format!("background query failed: {desc}"))),
+                Err(_) => {
+                    // Aborting `handle` alone leaves the query running on the
+                    // server. Cancel it first so it cannot overlap consistency
+                    // checks or later files, then abort and reap the task.
+                    cancel_background_query(&cancel_token, &url, self.default_timeout).await;
+                    handle.abort_and_wait().await;
+                    errors.push(anyhow!(
+                        "background query did not complete before the end of the file: {desc}"
+                    ));
+                }
+            }
+        }
+        errors
     }
 
     pub async fn reset_materialize(&self) -> Result<(), anyhow::Error> {
@@ -967,6 +1054,14 @@ impl Run for PosCommand {
                     }
                     SqlExpectedError::Timeout => SqlExpectedError::Timeout,
                 };
+                sql.expected_detail = match sql.expected_detail {
+                    Some(s) => Some(subst(&s, &state.cmd_vars)?),
+                    None => None,
+                };
+                sql.expected_hint = match sql.expected_hint {
+                    Some(s) => Some(subst(&s, &state.cmd_vars)?),
+                    None => None,
+                };
                 sql::run_fail_sql(sql, state).await
             }
         };
@@ -1169,6 +1264,7 @@ pub async fn create_state(
         kafka_default_partitions: config.kafka_default_partitions,
         kafka_producer,
         kafka_topics,
+        kafka_verify_topics: BTreeSet::new(),
 
         // === AWS state. ===
         aws_account: config.aws_account.clone(),
@@ -1179,6 +1275,7 @@ pub async fn create_state(
         mysql_clients: BTreeMap::new(),
         postgres_clients: BTreeMap::new(),
         sql_server_clients: BTreeMap::new(),
+        background_tasks: Vec::new(),
 
         // === Fivetran state. ===
         fivetran_destination_url: config.fivetran_destination_url.clone(),
