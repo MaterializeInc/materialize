@@ -981,7 +981,10 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
                 compute_state.traces.set(idx_id, trace);
 
                 // Mirror the trace aliasing in the sharing registry: re-register the arrangement
-                // already published under `gid` on this worker under `idx_id` as well.
+                // already published under `gid` on this worker under `idx_id` as well. This arm
+                // builds no streams of its own, so it installs no seal-signal tap like the `Local`
+                // arm above. `reexport` records `idx_id` as an alias of `gid` so `gid`'s tap wakes
+                // interactive peeks waiting on `idx_id`'s seal. Without that, such a peek hangs.
                 if should_publish_index(&compute_state.worker_config, compute_state.role()) {
                     compute_state.sharing_registry.reexport(
                         &gid,
