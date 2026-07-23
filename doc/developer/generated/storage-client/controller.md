@@ -1,6 +1,6 @@
 ---
 source: src/storage-client/src/controller.rs
-revision: bbe8b6977e
+revision: a60edac7f1
 ---
 
 # storage-client::controller

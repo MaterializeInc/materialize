@@ -1,6 +1,6 @@
 ---
 source: src/ore/src/cgroup.rs
-revision: 6dc0b37208
+revision: f2082d0163
 ---
 
 # mz-ore::cgroup

@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/statement_logging.rs
-revision: 770c31e9f8
+revision: a60edac7f1
 ---
 
 # adapter::coord::statement_logging

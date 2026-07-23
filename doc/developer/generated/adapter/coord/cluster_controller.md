@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/cluster_controller.rs
-revision: bbe8b6977e
+revision: a60edac7f1
 ---
 
 # adapter::coord::cluster_controller

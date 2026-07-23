@@ -1,6 +1,6 @@
 ---
 source: src/repr/src/optimize.rs
-revision: 3d7eb1c1da
+revision: b6b85cfcef
 ---
 
 # mz-repr::optimize

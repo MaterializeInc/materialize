@@ -1,6 +1,6 @@
 ---
 source: src/adapter-types/src/cluster_state.rs
-revision: 74f18a3354
+revision: fca741734d
 ---
 
 # adapter-types::cluster_state
