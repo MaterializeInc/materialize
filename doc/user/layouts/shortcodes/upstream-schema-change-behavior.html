@@ -44,7 +44,9 @@ table in Materialize to resume:
 - Dropping a table (`DROP TABLE`){{ if $is_postgres }}, removing it from the publication (`ALTER PUBLICATION ... DROP TABLE`), or dropping the publication (`DROP PUBLICATION`){{ end }}
 - Renaming a column
 - Renaming a table or moving it to a different schema
-- Changing a column's data type (except changing it to `text`)
-{{ if $is_postgres }}- Setting a table's replica identity to anything other than `FULL` (`ALTER TABLE ... REPLICA IDENTITY`)
+{{ if $is_postgres }}- Changing a column's data type, except changing it to `text`
+{{ else if eq $connector "mysql" }}- Changing a column's data type to one that maps to a different Materialize type (changes within the same Materialize type — for example `tinyint` ↔ `smallint`, the `text`/`tinytext`/`mediumtext`/`longtext` family, or adjusting `bit(n)` precision — do not error; appending values to an existing enum is safe, but removing enum values errors)
+{{ else if eq $connector "sql-server" }}- Changing a column's data type (any `ALTER COLUMN`)
+{{ end }}{{ if $is_postgres }}- Setting a table's replica identity to anything other than `FULL` (`ALTER TABLE ... REPLICA IDENTITY`)
 {{ end }}{{ if ne $connector "sql-server" }}- Truncating a table (`TRUNCATE`)
 {{ end }}
