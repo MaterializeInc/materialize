@@ -9,7 +9,7 @@
 
 //! Render arm for `MetricSinkConnection`.
 //!
-//! A metric sink funnels every row of its source collection to one worker per process, folds
+//! A metric sink funnels every row of its source collection to one worker, folds
 //! it into a [`SinkState`], and exposes that state to the process's Prometheus registry through
 //! a [`SinkCollector`]. `SinkState` is shared between the timely operator (the sole writer) and
 //! `SinkCollector::collect` (the reader, invoked from whatever thread scrapes the registry) via
