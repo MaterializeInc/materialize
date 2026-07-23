@@ -96,6 +96,7 @@ pub enum AdapterNotice {
         reason: String,
     },
     RbacUserDisabled,
+    RbacDisableDeprecated,
     RoleMembershipAlreadyExists {
         role_name: String,
         member_name: String,
@@ -193,6 +194,7 @@ impl AdapterNotice {
             AdapterNotice::StrongSessionSerializable => Severity::Notice,
             AdapterNotice::BadStartupSetting { .. } => Severity::Notice,
             AdapterNotice::RbacUserDisabled => Severity::Notice,
+            AdapterNotice::RbacDisableDeprecated => Severity::Warning,
             AdapterNotice::RoleMembershipAlreadyExists { .. } => Severity::Notice,
             AdapterNotice::RoleMembershipDoesNotExists { .. } => Severity::Warning,
             AdapterNotice::AutoRunOnCatalogServerCluster => Severity::Debug,
@@ -258,6 +260,7 @@ impl AdapterNotice {
                 }
             },
             AdapterNotice::RbacUserDisabled => Some("To enable RBAC globally run `ALTER SYSTEM SET enable_rbac_checks TO TRUE` as a superuser. TO enable RBAC for just this session run `SET enable_session_rbac_checks TO TRUE`.".into()),
+            AdapterNotice::RbacDisableDeprecated => Some("Instead of disabling RBAC, grant roles the privileges they need.".into()),
             AdapterNotice::AlterIndexOwner {name: _} => Some("Change the ownership of the index's relation, instead.".into()),
             AdapterNotice::UnknownSessionDatabase(_) => Some(
                 "Create the database with CREATE DATABASE \
@@ -302,6 +305,7 @@ impl AdapterNotice {
             AdapterNotice::StrongSessionSerializable => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::BadStartupSetting { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::RbacUserDisabled => SqlState::SUCCESSFUL_COMPLETION,
+            AdapterNotice::RbacDisableDeprecated => SqlState::WARNING,
             AdapterNotice::RoleMembershipAlreadyExists { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::RoleMembershipDoesNotExists { .. } => SqlState::WARNING,
             AdapterNotice::AutoRunOnCatalogServerCluster => SqlState::SUCCESSFUL_COMPLETION,
@@ -426,6 +430,12 @@ impl fmt::Display for AdapterNotice {
             }
             AdapterNotice::BadStartupSetting { name, reason } => {
                 write!(f, "startup setting {name} not set: {reason}")
+            }
+            AdapterNotice::RbacDisableDeprecated => {
+                write!(
+                    f,
+                    "disabling RBAC is deprecated and will be removed in a future release"
+                )
             }
             AdapterNotice::RbacUserDisabled => {
                 write!(

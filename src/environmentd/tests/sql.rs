@@ -2513,6 +2513,57 @@ fn test_isolation_level_notice() {
         .unwrap();
 }
 
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_rbac_disable_deprecation_notice() {
+    let server = test_util::TestHarness::default().start_blocking();
+
+    let (tx, mut rx) = futures::channel::mpsc::unbounded();
+    let mut client = server
+        .pg_config_internal()
+        .notice_callback(move |notice| {
+            tx.unbounded_send(notice).unwrap();
+        })
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    client
+        .batch_execute("ALTER SYSTEM SET enable_rbac_checks TO false")
+        .unwrap();
+
+    Retry::default()
+        .max_duration(Duration::from_secs(10))
+        .retry(|_| match rx.try_recv() {
+            Ok(msg) if msg.message().contains("disabling RBAC is deprecated") => Ok(()),
+            Ok(_) => Err("wrong message"),
+            Err(futures::channel::mpsc::TryRecvError::Closed) => panic!("unexpected channel close"),
+            Err(_) => Err("no messages available"),
+        })
+        .unwrap();
+
+    // Re-enabling emits only the variable-updated notice, no deprecation
+    // warning.
+    client
+        .batch_execute("ALTER SYSTEM SET enable_rbac_checks TO true")
+        .unwrap();
+
+    Retry::default()
+        .max_duration(Duration::from_secs(10))
+        .retry(|_| match rx.try_recv() {
+            Ok(msg) => {
+                assert!(
+                    !msg.message().contains("deprecated"),
+                    "unexpected deprecation notice: {}",
+                    msg.message()
+                );
+                Ok(())
+            }
+            Err(futures::channel::mpsc::TryRecvError::Closed) => panic!("unexpected channel close"),
+            Err(_) => Err("no messages available"),
+        })
+        .unwrap();
+}
+
 #[test] // allow(test-attribute)
 #[allow(clippy::disallowed_methods)]
 fn test_emit_tracing_notice() {
