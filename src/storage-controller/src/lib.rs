@@ -1669,10 +1669,10 @@ impl StorageController for Controller {
             id,
             description: StorageSinkDesc {
                 from: from_id,
-                from_desc: new_description.sink.from_desc,
-                connection: new_description.sink.connection,
+                from_desc: new_description.sink.from_desc.clone(),
+                connection: new_description.sink.connection.clone(),
                 envelope: new_description.sink.envelope,
-                as_of: new_description.sink.as_of,
+                as_of: new_description.sink.as_of.clone(),
                 version: new_description.sink.version,
                 from_storage_metadata,
                 with_snapshot,
@@ -1691,6 +1691,23 @@ impl StorageController for Controller {
             })?;
 
         instance.send(StorageCommand::RunSink(Box::new(cmd)));
+
+        // Store the new description as the export's current definition, so
+        // that later operations work off the sink we just told the cluster to
+        // run. In particular, alter_export_connections diffs an updated
+        // connection against this description with alter_compatible. Leaving
+        // the old description in place makes any later connection alter fail
+        // against a sink definition the catalog has already moved past, which
+        // panics the coordinator.
+        let state = self
+            .collections
+            .get_mut(&id)
+            .expect("export known to exist");
+        let DataSource::Sink { desc } = &mut state.data_source else {
+            panic!("export known to exist")
+        };
+        *desc = new_description;
+
         Ok(())
     }
 
@@ -1723,6 +1740,14 @@ impl StorageController for Controller {
 
                 (export_description, as_of)
             };
+            // If the connection hasn't changed, there's no sense in restarting
+            // the sink dataflow. Catalog changes that don't affect the
+            // connection's runtime config, like GRANT and REVOKE, also arrive
+            // here.
+            if new_export_description.sink.connection == connection {
+                continue;
+            }
+
             let current_sink = new_export_description.sink.clone();
 
             new_export_description.sink.connection = connection;
