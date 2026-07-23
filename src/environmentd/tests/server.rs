@@ -5890,6 +5890,80 @@ fn test_mcp_developer_rbac_passthrough() {
     assert_both_denied(select_view, 31);
 }
 
+/// Regression pin for CLO-158: `/api/mcp/developer` on the internal HTTP
+/// listener must honor an `x-materialize-user` header injected by a trusted
+/// upstream proxy (Teleport), matching the behavior of `/api/sql` on the same
+/// listener. Today it does not: `x_materialize_user_header_auth` is layered
+/// onto `base_router` at `http.rs:667` but not onto `mcp_router`, so MCP
+/// sessions on port 6878 always resolve to `anonymous_http_user` regardless of
+/// the injected header. That makes the endpoint unusable for support in Cloud,
+/// where Teleport injects `X-Materialize-User: mz_support` via the app rewrite
+/// (`cloud/src/environment-controller/src/controller/teleport.rs:302-310`).
+///
+/// This test is intentionally left un-ignored so it fails until the middleware
+/// is wired to `mcp_router` in the same pattern `ws_router` uses at
+/// `http.rs:336-339`. Once fixed, it becomes the regression pin that keeps
+/// this working going forward.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+#[allow(clippy::disallowed_methods)]
+fn test_mcp_developer_honors_x_materialize_user_header() {
+    let server = test_util::TestHarness::default()
+        .with_mcp_routes(false, true)
+        .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string())
+        .start_blocking();
+
+    // Control: `/api/sql` on the same internal listener already honors the
+    // header. If this ever breaks, we want to know because it is a larger
+    // regression than CLO-158.
+    let sql_url = format!("http://{}/api/sql", server.internal_http_local_addr());
+    let sql_res = Client::new()
+        .post(&sql_url)
+        .header("x-materialize-user", "mz_support")
+        .json(&serde_json::json!({"query": "SELECT current_user"}))
+        .send()
+        .unwrap();
+    assert_eq!(sql_res.status(), StatusCode::OK);
+    let sql_text = sql_res.text().unwrap();
+    assert!(
+        sql_text.contains("mz_support"),
+        "control: /api/sql on the internal listener should resolve to mz_support, got: {sql_text}"
+    );
+
+    // The regression pin: same listener, same header, different route.
+    // MCP developer must also resolve the session as the injected user.
+    let mcp_url = format!(
+        "http://{}/api/mcp/developer",
+        server.internal_http_local_addr()
+    );
+    let res = Client::new()
+        .post(&mcp_url)
+        .header("x-materialize-user", "mz_support")
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "query_system_catalog",
+                "arguments": {
+                    "sql_query": "SELECT current_user, count(*) FROM mz_catalog.mz_databases"
+                }
+            }
+        }))
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body: serde_json::Value = res.json().unwrap();
+    let result_text = body["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        result_text.contains("mz_support"),
+        "MCP developer on the internal listener must resolve the session to mz_support \
+         via injected x-materialize-user header, got result: {result_text}, full body: {body}"
+    );
+}
+
 /// Helper to POST a JSON-RPC request to an MCP endpoint and return the parsed response.
 fn mcp_post(url: &str, json: serde_json::Value) -> (reqwest::StatusCode, serde_json::Value) {
     let res = Client::new().post(url).json(&json).send().unwrap();
