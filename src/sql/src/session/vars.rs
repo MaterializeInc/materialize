@@ -1422,8 +1422,14 @@ impl SystemVars {
     /// Returns an iterator over the configuration parameters and their current
     /// values on disk. Compared to [`SystemVars::iter`], this should omit vars
     /// that shouldn't be synced by SystemParameterFrontend.
+    ///
+    /// `enable_launchdarkly` is excluded so the remote configuration system
+    /// cannot disable its own kill switch. `enable_rbac_checks` is excluded so
+    /// remote configuration cannot turn off access control. Both may only be
+    /// changed through `ALTER SYSTEM` or startup defaults.
     pub fn iter_synced(&self) -> impl Iterator<Item = &dyn Var> {
-        self.iter().filter(|v| v.name() != ENABLE_LAUNCHDARKLY.name)
+        self.iter()
+            .filter(|v| v.name() != ENABLE_LAUNCHDARKLY.name && v.name() != ENABLE_RBAC_CHECKS.name)
     }
 
     /// Returns an iterator over the configuration parameters that can be overriden per-Session.
