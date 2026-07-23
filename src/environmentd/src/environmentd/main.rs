@@ -1007,6 +1007,10 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         })
     };
 
+    // The metadata backend URL may carry persist KMS encryption query params.
+    // They flow through to the consensus URL, where persist strips them before
+    // connecting to Postgres, but must be removed from the timestamp oracle
+    // URL, whose Postgres driver would reject them as unknown params.
     let consensus_uri = args.persist_consensus_url.unwrap_or_else(|| {
         args.metadata_backend_url
             .as_ref()
@@ -1025,9 +1029,10 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         args.metadata_backend_url
             .as_ref()
             .map(|metadata_backend_url| {
+                let stripped = mz_persist::cfg::strip_kms_query_params(metadata_backend_url);
                 SensitiveUrl(
                     Url::parse_with_params(
-                        metadata_backend_url.0.as_ref(),
+                        stripped.0.as_ref(),
                         &[("options", "--search_path=tsoracle")],
                     )
                     .unwrap(),
