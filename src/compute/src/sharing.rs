@@ -636,7 +636,8 @@ mod tests {
     #[mz_ore::test]
     fn placeholder_close_terminates_importers() {
         // An import over a never-adopted placeholder pins its frontier at the minimum. Closing the
-        // placeholder pushes a terminal empty frontier, so the importer completes rather than wedging.
+        // placeholder pushes a terminal empty frontier, so the importer completes rather than
+        // wedging, regardless of the `until` bound (this test uses a single-time read).
         let (capture_tx, capture_rx) = mpsc::channel();
 
         timely::execute_directly(move |worker| {
@@ -647,7 +648,9 @@ mod tests {
 
             let probe = ProbeHandle::new();
             worker.dataflow::<Timestamp, _, _>(|scope| {
-                let arr = oks.import(scope.clone(), "import placeholder");
+                let as_of = Antichain::from_elem(Timestamp::from(0_u64));
+                let until = Antichain::from_elem(Timestamp::from(1_u64));
+                let arr = oks.import_snapshot_at(scope.clone(), "import placeholder", as_of, until);
                 arr.as_collection(|_k, _v| ())
                     .inner
                     .probe_with(&probe)
@@ -1180,11 +1183,12 @@ mod tests {
     /// The core spike: a maintenance-published index consumed *as an arrangement* by a join.
     ///
     /// Two `RowRow` indexes are published (each sealing several batches), imported through
-    /// `SharedTraceHandle::import`, and joined with differential's `join_core`, which drives the
-    /// same `cursor_through`/`batches_through` boundary as `mz_join_core`. The join runs live
-    /// alongside the publishers in one worker, so the imported batches arrive incrementally and the
-    /// join performs incremental `cursor_through` cuts as its acknowledged frontiers advance. The
-    /// captured output must equal the join computed directly.
+    /// `SharedTraceHandle::import_snapshot_at` over the full `[0, seal)` range so every distinct time
+    /// stays visible, and joined with differential's `join_core`, which drives the same
+    /// `cursor_through`/`batches_through` boundary as `mz_join_core`. The join runs live alongside
+    /// the publishers in one worker, so the imported batches arrive incrementally and the join
+    /// performs incremental `cursor_through` cuts as its acknowledged frontiers advance. The captured
+    /// output must equal the join computed directly.
     ///
     /// Publisher and importer share a worker only to step in lockstep for a deterministic read. The
     /// handle that crosses between them is `Send` and the code exercised (import replay, chain cut)
@@ -1220,11 +1224,20 @@ mod tests {
             let (oks_a, _errs_a) = registry.handles(&id_a, worker_index).expect("A published");
             let (oks_b, _errs_b) = registry.handles(&id_b, worker_index).expect("B published");
 
-            // Interactive side: import both as arrangements and join them.
+            // Interactive side: import both as arrangements and join them. `as_of = 0` matches the
+            // earliest real time in either input, so no update coalesces; `until = seal` keeps every
+            // distinct time in `[0, seal)` visible.
+            let as_of = Antichain::from_elem(Timestamp::from(0_u64));
+            let until = Antichain::from_elem(Timestamp::from(seal));
             let probe = ProbeHandle::new();
             worker.dataflow::<Timestamp, _, _>(|scope| {
-                let arr_a = oks_a.import(scope.clone(), "import A");
-                let arr_b = oks_b.import(scope.clone(), "import B");
+                let arr_a = oks_a.import_snapshot_at(
+                    scope.clone(),
+                    "import A",
+                    as_of.clone(),
+                    until.clone(),
+                );
+                let arr_b = oks_b.import_snapshot_at(scope.clone(), "import B", as_of, until);
                 let joined = arr_a.join_core(arr_b, |key, v1, v2| {
                     let row =
                         Row::pack(key.into_iter().chain(v1.into_iter()).chain(v2.into_iter()));
@@ -1377,11 +1390,19 @@ mod tests {
             // Interactive side: import both as arrangements and join them. A is imported over the
             // EMPTY placeholder. `join_core` captures `arr_a.trace` by value here, before A has any
             // publisher. This is exactly the construction-time capture that late-binding import must
-            // survive.
+            // survive. `as_of = 0` matches the earliest real time in either input, so no update
+            // coalesces; `until = seal` keeps every distinct time in `[0, seal)` visible.
+            let as_of = Antichain::from_elem(Timestamp::from(0_u64));
+            let until = Antichain::from_elem(Timestamp::from(seal));
             let probe = ProbeHandle::new();
             worker.dataflow::<Timestamp, _, _>(|scope| {
-                let arr_a = oks_a.import(scope.clone(), "import A (placeholder)");
-                let arr_b = oks_b.import(scope.clone(), "import B");
+                let arr_a = oks_a.import_snapshot_at(
+                    scope.clone(),
+                    "import A (placeholder)",
+                    as_of.clone(),
+                    until.clone(),
+                );
+                let arr_b = oks_b.import_snapshot_at(scope.clone(), "import B", as_of, until);
                 let joined = arr_a.join_core(arr_b, |key, v1, v2| {
                     let row =
                         Row::pack(key.into_iter().chain(v1.into_iter()).chain(v2.into_iter()));
