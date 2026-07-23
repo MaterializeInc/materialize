@@ -33,7 +33,7 @@ use mz_audit_log::{
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::BuiltinLog;
-use mz_catalog::durable::{NetworkPolicy, Snapshot, Transaction};
+use mz_catalog::durable::{DryRunTransaction, NetworkPolicy, Snapshot, Transaction};
 use mz_catalog::expr_cache::LocalExpressions;
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
@@ -559,6 +559,10 @@ impl Catalog {
             replication_factor,
             availability_zones,
             logging,
+            // The append-only audit payload records the target shape's size,
+            // replication factor, availability zones, and logging. Arrangement
+            // compression is intentionally not part of it.
+            arrangement_compression: _,
         } = target;
         Ok(AlterClusterReconfigurationV1 {
             cluster_id: cluster_id.to_string(),
@@ -711,11 +715,13 @@ impl Catalog {
             .transaction()
             .await
             .unwrap_or_terminate("starting catalog transaction");
+        // Empty progress may have overtaken the timestamp chosen before opening the transaction.
+        let commit_ts = std::cmp::max(oracle_write_ts, tx.upper());
 
         let new_state = Self::transact_inner(
             TransactInnerMode::Commit,
             storage_collections,
-            oracle_write_ts,
+            commit_ts,
             session,
             ops,
             temporary_ids,
@@ -731,7 +737,7 @@ impl Catalog {
         // process if this fails, because we have to restart envd due to
         // indeterminate catalog state, which we only reconcile during catalog
         // init.
-        tx.commit(oracle_write_ts)
+        tx.commit(commit_ts)
             .await
             .unwrap_or_terminate("catalog storage transaction commit must succeed");
 
@@ -796,10 +802,11 @@ impl Catalog {
         } else {
             // First statement: fresh transaction from durable storage, which
             // is in sync with the real catalog state.
-            storage
+            let tx = storage
                 .transaction()
                 .await
-                .unwrap_or_terminate("starting catalog transaction")
+                .unwrap_or_terminate("starting catalog transaction");
+            DryRunTransaction::new(tx)
         };
 
         // Process only the new ops against the accumulated state in dry-run mode.
@@ -813,7 +820,7 @@ impl Catalog {
             &mut builtin_table_updates,
             &mut catalog_updates,
             &mut audit_events,
-            &mut tx,
+            tx.transaction_mut(),
             base_state,
         )
         .await?;
@@ -3639,6 +3646,7 @@ mod tests {
                 size: "small".into(),
                 availability_zones: Vec::new(),
                 logging: logging.clone(),
+                arrangement_compression: false,
                 replication_factor: 1,
                 optimizer_feature_overrides: OptimizerFeatureOverrides::default(),
                 schedule: Default::default(),
@@ -3657,6 +3665,7 @@ mod tests {
                     log_logging: true,
                     interval: Some(Duration::from_secs(5)),
                 },
+                arrangement_compression: false,
             },
             deadline: Timestamp::from(400u64),
             on_timeout: mz_sql::plan::OnTimeoutAction::Rollback,
@@ -3739,6 +3748,7 @@ mod tests {
                     log_logging: false,
                     interval: None,
                 },
+                arrangement_compression: false,
                 replication_factor: 1,
                 optimizer_feature_overrides: OptimizerFeatureOverrides::default(),
                 schedule: Default::default(),
@@ -3761,6 +3771,7 @@ mod tests {
                     log_logging: false,
                     interval: Some(Duration::from_secs(1)),
                 },
+                arrangement_compression: false,
             },
             deadline: Timestamp::from(400u64),
             on_timeout: mz_sql::plan::OnTimeoutAction::Rollback,
@@ -3820,6 +3831,7 @@ mod tests {
                     log_logging: false,
                     interval: None,
                 },
+                arrangement_compression: false,
                 replication_factor: 1,
                 optimizer_feature_overrides: OptimizerFeatureOverrides::default(),
                 schedule: Default::default(),
@@ -3891,6 +3903,7 @@ mod tests {
                 log_logging: false,
                 interval: None,
             },
+            arrangement_compression: false,
             replication_factor,
             optimizer_feature_overrides: OptimizerFeatureOverrides::default(),
             schedule: Default::default(),
@@ -3953,6 +3966,7 @@ mod tests {
                     log_logging: false,
                     interval: None,
                 },
+                arrangement_compression: false,
                 replication_factor: 1,
                 optimizer_feature_overrides: OptimizerFeatureOverrides::default(),
                 schedule: Default::default(),

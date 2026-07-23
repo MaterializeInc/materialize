@@ -15,8 +15,8 @@ use columnar::Len;
 use itertools::Itertools;
 use mz_expr::JoinImplementation::{DeltaQuery, Differential, IndexedFilter, Unimplemented};
 use mz_expr::{
-    AggregateExpr, Columns, Id, JoinInputMapper, MapFilterProject, MirRelationExpr, MirScalarExpr,
-    OptimizedMirRelationExpr, SafeMfpPlan, TableFunc, permutation_for_arrangement,
+    AggregateExpr, Columns, Id, JoinInputMapper, MapFilterProject, MfpPlan, MirRelationExpr,
+    MirScalarExpr, OptimizedMirRelationExpr, SafeMfpPlan, TableFunc, permutation_for_arrangement,
 };
 use mz_ore::{assert_none, soft_assert_eq_or_log, soft_panic_or_log};
 use mz_repr::optimize::OptimizerFeatures;
@@ -25,7 +25,9 @@ use mz_repr::{GlobalId, Timestamp};
 use crate::dataflows::{BuildDesc, DataflowDescription, IndexImport};
 use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
-use crate::plan::scalar::{LirScalarExpr, lses_from_mses, mfp_mir_to_lir, mfp_mir_to_lir_plan};
+use crate::plan::scalar::{
+    LirScalarExpr, lses_from_mses, mfp_mir_to_lir, mfp_mir_to_lir_plan, mfp_plan_mir_to_lir,
+};
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
 use crate::plan::{
@@ -84,6 +86,17 @@ pub(super) struct Context {
     /// while lowering the recursive bindings of a `LetRec`, whose values are not
     /// restricted to a single time.
     single_time: bool,
+    /// Global ids of the dataflow's source imports.
+    source_imports: BTreeSet<GlobalId>,
+    /// MIR `MfpPlan`s pushed onto `Get::Collection` reads of source imports,
+    /// keyed by the `Get`'s `LirId`.
+    ///
+    /// `refine_source_mfps` identifies common parts across sibling reads and pushes the
+    /// common part into the shared source MFP. That pass runs on MIR because
+    /// only MIR can utter the `mz_now()` predicates that temporal bounds fold
+    /// into. Retaining the MIR form here lets it find common parts without
+    /// round-tripping the LIR plans back through MIR.
+    source_get_mfps: BTreeMap<LirId, MfpPlan<MirScalarExpr>>,
 }
 
 impl Context {
@@ -104,6 +117,8 @@ impl Context {
             metrics: metrics.cloned(),
             // Set from the dataflow in `lower` before any expression is lowered.
             single_time: false,
+            source_imports: Default::default(),
+            source_get_mfps: Default::default(),
         }
     }
 
@@ -150,6 +165,7 @@ impl Context {
             self.arrangements
                 .entry(Id::Global(*id))
                 .or_insert_with(AvailableCollections::new_raw);
+            self.source_imports.insert(*id);
         }
 
         // One-shot `SELECT` dataflows run at a single time, which lets us select
@@ -174,7 +190,7 @@ impl Context {
             objects_to_build.push(BuildDesc { id: build.id, plan });
         }
 
-        Ok(DataflowDescription {
+        let mut dataflow = DataflowDescription {
             source_imports: desc.source_imports,
             index_imports: desc.index_imports,
             objects_to_build,
@@ -186,7 +202,120 @@ impl Context {
             refresh_schedule: desc.refresh_schedule,
             debug_name: desc.debug_name,
             time_dependence: desc.time_dependence,
-        })
+        };
+
+        // Refining: identify the common parts in the MFPs pushed onto a
+        // source's reads and hoist the shared prefix into the source itself.
+        self.refine_source_mfps(&mut dataflow);
+
+        Ok(dataflow)
+    }
+
+    /// Identifies common parts of the `MapFilterProject`s pushed onto sibling `Get::Collection`
+    /// reads of each imported source, hoisting the shared prefix into the
+    /// source's own MFP.
+    ///
+    /// The reads' MFPs are lowering artifacts (MIR sees only `Get(GlobalId)`),
+    /// so this belongs in lowering. We run on MIR because only MIR can
+    /// utter the `mz_now()` predicates that temporal bounds fold into, so it
+    /// consumes the MIR `MfpPlan`s stashed in [`Self::source_get_mfps`] rather
+    /// than round-tripping the lowered LIR plans back through MIR.
+    fn refine_source_mfps(&mut self, dataflow: &mut DataflowDescription<LirRelationExpr>) {
+        for (source_id, source_import) in dataflow.source_imports.iter_mut() {
+            let source = &mut source_import.desc;
+            let source_id = *source_id;
+            let mut identity_present = false;
+
+            // Collect the MIR `MfpPlan`s pushed onto this source's
+            // `Get::Collection` reads. Folding their temporal bounds back into
+            // `mz_now()` predicates (`into_map_filter_project`) lets
+            // `extract_common`'s column remapping apply uniformly across the
+            // whole MFP. Also note identity reads, which block pushdown.
+            let mut taken: Vec<(LirId, MapFilterProject<MirScalarExpr>)> = Vec::new();
+            for build_desc in dataflow.objects_to_build.iter() {
+                let mut todo = vec![&build_desc.plan];
+                while let Some(expression) = todo.pop() {
+                    let node = &expression.node;
+                    if let LirRelationNode::Get { id, plan, .. } = node {
+                        if *id == Id::Global(source_id) {
+                            match plan {
+                                GetPlan::Collection(_) => {
+                                    let mir_plan = self
+                                        .source_get_mfps
+                                        .remove(&expression.lir_id)
+                                        .expect("stashed MIR MfpPlan for source Get::Collection");
+                                    taken.push((
+                                        expression.lir_id,
+                                        mir_plan.into_map_filter_project(),
+                                    ));
+                                }
+                                GetPlan::PassArrangements => {
+                                    identity_present = true;
+                                }
+                                GetPlan::Arrangement(..) => {
+                                    panic!("Surprising `GetPlan` for imported source: {:?}", plan);
+                                }
+                            }
+                        }
+                    } else {
+                        todo.extend(node.children());
+                    }
+                }
+            }
+
+            // Direct exports of sources are possible, and prevent pushdown.
+            identity_present |= dataflow
+                .index_exports
+                .values()
+                .any(|(x, _)| x.on_id == source_id);
+            identity_present |= dataflow.sink_exports.values().any(|x| x.from == source_id);
+
+            if identity_present || taken.is_empty() {
+                // Nothing to push down. The reads already carry their final LIR
+                // MFPs, so leave them untouched.
+                continue;
+            }
+
+            // Extract the common prefix and push it into the source's MFP.
+            let mut mfp_refs: Vec<&mut MapFilterProject<MirScalarExpr>> =
+                taken.iter_mut().map(|(_, mfp)| mfp).collect();
+            let common = MapFilterProject::extract_common(&mut mfp_refs[..]);
+            let mut source_mfp = if let Some(mfp) = source.arguments.operators.take() {
+                MapFilterProject::compose(mfp, common)
+            } else {
+                common
+            };
+            source_mfp.optimize();
+            source.arguments.operators = Some(source_mfp);
+
+            // Convert each residual MFP back to an LIR `MfpPlan` once, and
+            // install it on the corresponding read by `LirId`.
+            let replacements: BTreeMap<LirId, MfpPlan<LirScalarExpr>> = taken
+                .into_iter()
+                .map(|(lir_id, mir_mfp)| (lir_id, mfp_mir_to_lir_plan(mir_mfp)))
+                .collect();
+
+            for build_desc in dataflow.objects_to_build.iter_mut() {
+                let mut todo = vec![&mut build_desc.plan];
+                while let Some(expression) = todo.pop() {
+                    if let Some(replacement) = replacements.get(&expression.lir_id) {
+                        if let LirRelationNode::Get {
+                            plan: GetPlan::Collection(mfp_plan),
+                            ..
+                        } = &mut expression.node
+                        {
+                            *mfp_plan = replacement.clone();
+                        } else {
+                            panic!(
+                                "LirId {:?} was a GetPlan::Collection but is now {:?}",
+                                expression.lir_id, expression.node
+                            );
+                        }
+                    }
+                    todo.extend(expression.node.children_mut());
+                }
+            }
+        }
     }
 
     /// This method converts a MirRelationExpr into a plan that can be directly rendered.
@@ -291,6 +420,10 @@ impl Context {
                     })
                     .max_by_key(|(key, _val)| key.0.len());
 
+                // A source-import `Get::Collection`'s MIR `MfpPlan`, retained for
+                // `refine_source_mfps`. Stashed by `LirId` once the id is allocated below.
+                let mut source_get_mfp: Option<MfpPlan<MirScalarExpr>> = None;
+
                 // Determine the plan of action for the `Get` stage.
                 let plan = if let Some(((key, permutation, thinning), val)) = &key_val {
                     // This code path used to handle looking up literals from indexes, but it's
@@ -320,7 +453,13 @@ impl Context {
                             vec![(key.clone(), permutation.clone(), thinning.clone())];
                         GetPlan::Arrangement(key.clone(), None, mfp_mir_to_lir_plan(mfp))
                     } else {
-                        GetPlan::Collection(mfp_mir_to_lir_plan(mfp))
+                        let mir_plan = mfp.into_plan().expect("MFP planning failed");
+                        if let Id::Global(gid) = id {
+                            if self.source_imports.contains(gid) {
+                                source_get_mfp = Some(mir_plan.clone());
+                            }
+                        }
+                        GetPlan::Collection(mfp_plan_mir_to_lir(mir_plan))
                     }
                 } else {
                     // By default, just pass input arrangements through.
@@ -348,6 +487,9 @@ impl Context {
                     };
 
                 let lir_id = self.allocate_lir_id();
+                if let Some(mir_plan) = source_get_mfp {
+                    self.source_get_mfps.insert(lir_id, mir_plan);
+                }
                 let node = LirRelationNode::Get {
                     id: id.clone(),
                     keys: in_keys,

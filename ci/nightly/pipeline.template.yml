@@ -1602,6 +1602,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: launchdarkly-flag-consistency
         branches: "main"
+        skip: "TODO: Reenable when Dennis is back"
 
       - id: launchdarkly-reconnect
         label: "LaunchDarkly reconnect"

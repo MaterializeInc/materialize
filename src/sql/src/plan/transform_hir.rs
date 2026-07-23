@@ -16,13 +16,13 @@ use std::{iter, mem};
 use itertools::Itertools;
 use mz_expr::WindowFrame;
 use mz_expr::func::variadic::RecordCreate;
-use mz_expr::visit::Visit;
+use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{ColumnOrder, UnaryFunc, VariadicFunc};
 use mz_ore::stack::RecursionLimitError;
 use mz_repr::{ColumnName, SqlColumnType, SqlRelationType, SqlScalarType};
 
 use crate::plan::hir::{
-    AbstractExpr, AggregateFunc, AggregateWindowExpr, HirRelationExpr, HirScalarExpr,
+    AbstractExpr, AggregateFunc, AggregateWindowExpr, ColumnRef, HirRelationExpr, HirScalarExpr,
     ValueWindowExpr, ValueWindowFunc, WindowExpr,
 };
 use crate::plan::{AggregateExpr, WindowExprType};
@@ -305,6 +305,205 @@ pub fn try_simplify_quantified_comparisons(
     }
 
     walk_relation(expr, &[], simplify_join_on)
+}
+
+/// Collapses `EXISTS` over a FROM-less subquery into an equivalent scalar
+/// predicate on the outer row, so that decorrelation produces a plain `Filter`
+/// rather than a semijoin (for `EXISTS`) or an antijoin (for `NOT EXISTS`).
+///
+/// A FROM-less subquery is a chain of `Map`, `Project`, and `Filter` nodes over
+/// a single-row `Constant` (the join identity of a query with no `FROM`
+/// clause). Such a subquery yields exactly one row when every `Filter`
+/// predicate is `TRUE` and zero rows otherwise, so
+///
+/// ```text
+/// EXISTS(<from-less subquery with predicates p1, p2, ...>) == (p1 AND p2 AND ...) IS TRUE
+/// ```
+///
+/// evaluated on the outer row. The `IS TRUE` is mandatory for null safety. An
+/// empty subquery (some predicate `FALSE` or `NULL`) must make `EXISTS` return
+/// `FALSE`, which `IS TRUE` reproduces while a bare predicate would leak `NULL`.
+/// `NOT EXISTS` then becomes `NOT ((...) IS TRUE)`, which is `... IS NOT TRUE`
+/// and likewise null-safe.
+///
+/// The rewrite fires only on correlated subqueries, where the predicate
+/// references at least one outer column. This keeps it to the pure existence
+/// check that a genuine anti/semi-join would otherwise be lowered to, and it
+/// avoids changing whether an uncorrelated erroring subquery is evaluated when
+/// the outer relation is empty.
+///
+/// This closes database-issues#2613 (`x IN (SELECT ... WHERE p)`, which
+/// [`try_simplify_quantified_comparisons`] has already turned into an `EXISTS`)
+/// and database-issues#2969 (`NOT EXISTS (SELECT ... WHERE p)`). It must run
+/// after [`try_simplify_quantified_comparisons`].
+pub fn simplify_from_less_existence_subqueries(
+    expr: &mut HirRelationExpr,
+) -> Result<(), RecursionLimitError> {
+    // `try_visit_mut_post` walks every relation node, and because
+    // `VisitChildren<Self>` for `HirRelationExpr` descends into the bodies of
+    // `Exists`/`Select` subqueries, it reaches existence checks at every nesting
+    // level. Post-order guarantees a subquery body is simplified before the
+    // `Exists` that encloses it.
+    expr.try_visit_mut_post(&mut |rel| {
+        rel.try_visit_mut_children(|scalar: &mut HirScalarExpr| {
+            scalar.try_visit_mut_pre(&mut |e| {
+                if let HirScalarExpr::Exists(input, _name) = e {
+                    if let Some(pred) = from_less_existence_predicate(input) {
+                        *e = pred.call_unary(UnaryFunc::IsTrue(mz_expr::func::IsTrue));
+                    }
+                }
+                Ok(())
+            })
+        })
+    })
+}
+
+/// If `sub` is a FROM-less subquery (see
+/// [`simplify_from_less_existence_subqueries`]) whose existence check is
+/// correlated on the outer row, returns the predicate `p1 AND p2 AND ...`
+/// expressed in the outer row's frame. Returns `None` otherwise.
+fn from_less_existence_predicate(sub: &HirRelationExpr) -> Option<HirScalarExpr> {
+    // A FROM-less subquery is a linear Map/Project/Filter chain over a single-row
+    // `Constant`. Both properties of the base are load-bearing for soundness: the
+    // single row is what lets EXISTS reduce to "the predicate holds on that row",
+    // and the constant is what lets its columns be inlined into the lifted
+    // predicate below. A 0-row, multi-row, or non-constant base is a genuine
+    // anti/semi-join and bails at the `_` arm.
+    //
+    // Record the chain top to bottom here; it is replayed bottom to top below.
+    let mut chain = Vec::new();
+    let mut cur = sub;
+    let (row, typ) = loop {
+        match cur {
+            HirRelationExpr::Filter { input, .. }
+            | HirRelationExpr::Map { input, .. }
+            | HirRelationExpr::Project { input, .. } => {
+                chain.push(cur);
+                cur = input.as_ref();
+            }
+            HirRelationExpr::Constant { rows, typ } if rows.len() == 1 => break (&rows[0], typ),
+            _ => return None,
+        }
+    };
+
+    // `env` holds the value of each column of the current relation, expressed in
+    // the subquery's own frame. Because level-0 references are resolved as we go,
+    // env entries only ever contain constants and outer (level >= 1) references.
+    let mut env: Vec<HirScalarExpr> = row
+        .iter()
+        .zip_eq(typ.column_types.iter())
+        .map(|(datum, col_type)| HirScalarExpr::literal(datum, col_type.scalar_type.clone()))
+        .collect();
+
+    // Replay the chain bottom to top so each node sees the `env` built by the nodes
+    // beneath it: `Map` extends `env`, `Filter` reads it, `Project` permutes it.
+    let mut preds: Vec<HirScalarExpr> = Vec::new();
+    for node in chain.iter().rev() {
+        match node {
+            HirRelationExpr::Filter { predicates, .. } => {
+                for predicate in predicates {
+                    preds.push(resolve_local_columns(predicate, &env)?);
+                }
+            }
+            HirRelationExpr::Map { scalars, .. } => {
+                for scalar in scalars {
+                    let resolved = resolve_local_columns(scalar, &env)?;
+                    env.push(resolved);
+                }
+            }
+            HirRelationExpr::Project { outputs, .. } => {
+                env = outputs
+                    .iter()
+                    .map(|i| env.get(*i).cloned())
+                    .collect::<Option<Vec<_>>>()?;
+            }
+            _ => unreachable!("chain only contains Filter, Map, and Project nodes"),
+        }
+    }
+
+    let mut pred = HirScalarExpr::variadic_and(preds);
+
+    // `pred` is built only from predicates that `resolve_local_columns` accepted,
+    // and that rejects any subquery, so `pred` contains no nested subqueries. Every
+    // column reference is therefore in the subquery's own frame at nesting depth 0,
+    // and an outer reference is exactly one with `level > 0`.
+
+    // Require correlation: the predicate must reference an outer column. Without
+    // correlation this is not the existence check a genuine anti/semi-join lowers
+    // to, and firing would risk changing when a constant erroring predicate is
+    // evaluated.
+    let mut correlated = false;
+    pred.visit_post(&mut |e| {
+        if let HirScalarExpr::Column(col, _name) = e {
+            if col.level > 0 {
+                correlated = true;
+            }
+        }
+    });
+    if !correlated {
+        return None;
+    }
+
+    // Lift the predicate out of the subquery: references to the immediately
+    // enclosing (outer) scope move down one level.
+    pred.visit_mut_post(&mut |e| {
+        if let HirScalarExpr::Column(col, _name) = e {
+            if col.level > 0 {
+                col.level -= 1;
+            }
+        }
+    });
+
+    Some(pred)
+}
+
+/// Returns `expr` with every reference to the current scope (a [`ColumnRef`]
+/// with `level == 0`) replaced by its value from `env`. Returns `None` if `expr`
+/// cannot be soundly lifted into the outer scope, or references a column absent
+/// from `env`.
+fn resolve_local_columns(expr: &HirScalarExpr, env: &[HirScalarExpr]) -> Option<HirScalarExpr> {
+    // Every scalar in the FROM-less body is substituted into the outer scope, so
+    // reject any that cannot be evaluated equivalently there. The match is
+    // exhaustive on purpose: a new `HirScalarExpr` variant must be classified here
+    // rather than silently treated as liftable.
+    let mut unliftable = false;
+    expr.visit_post(&mut |e| {
+        let liftable = match e {
+            // Row-local: the value depends only on the row, so it is the same in
+            // the subquery's frame and the outer frame.
+            HirScalarExpr::Column(..)
+            | HirScalarExpr::Parameter(..)
+            | HirScalarExpr::Literal(..)
+            | HirScalarExpr::CallUnmaterializable(..)
+            | HirScalarExpr::CallUnary { .. }
+            | HirScalarExpr::CallBinary { .. }
+            | HirScalarExpr::CallVariadic { .. }
+            | HirScalarExpr::If { .. } => true,
+            // A subquery carries its own nested scopes that this flat substitution
+            // does not handle. A window function over the single-row body (e.g.
+            // `row_number() OVER ()` is always 1) is not the same function over the
+            // multi-row outer relation. Neither may cross the subquery boundary.
+            HirScalarExpr::Exists(..)
+            | HirScalarExpr::Select(..)
+            | HirScalarExpr::Windowing(..) => false,
+        };
+        unliftable |= !liftable;
+    });
+    if unliftable {
+        return None;
+    }
+
+    let mut expr = expr.clone();
+    let mut ok = true;
+    expr.visit_mut_post(&mut |e| {
+        if let HirScalarExpr::Column(ColumnRef { level: 0, column }, _name) = e {
+            match env.get(*column) {
+                Some(value) => *e = value.clone(),
+                None => ok = false,
+            }
+        }
+    });
+    ok.then_some(expr)
 }
 
 /// An empty parameter type map.

@@ -7,10 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { formatRFC3339 } from "date-fns";
 import createClient from "openapi-fetch";
 
 import { NOT_SUPPORTED_MESSAGE } from "~/config/AppConfig";
+import { addUtcDays } from "~/util";
+import { formatDateInUtc } from "~/utils/dateFormat";
 
 import { apiClient } from "./apiClient";
 import {
@@ -26,13 +27,13 @@ export type Invoice = components["schemas"]["Invoice"];
 export type Region = components["schemas"]["Region"];
 export type Regions = components["schemas"]["Paginated_Region"];
 export type CreditBlock = components["schemas"]["CreditBlock"];
-export type DailyCosts = components["schemas"]["DailyCostResponse"];
-export type AllCosts = components["schemas"]["AllCosts"];
-export type DailyCostKey = keyof components["schemas"]["AllCosts"];
-export type Prices =
-  | components["schemas"]["ComputePrice"]
-  | components["schemas"]["StoragePrice"]
-  | components["schemas"]["NetworkPrice"];
+export type CostBreakdownAccount =
+  components["schemas"]["CostBreakdownAccount"];
+export type CostBreakdownCluster =
+  components["schemas"]["CostBreakdownCluster"];
+export type CostBreakdownDay = components["schemas"]["CostBreakdownDay"];
+export type DailyCostBreakdown =
+  components["schemas"]["DailyCostBreakdownResponse"];
 export type Marketplace = components["schemas"]["Marketplace"];
 export type IntercomJwtResponse = components["schemas"]["IntercomJwtResponse"];
 export type CreateLicenseKeyRequest =
@@ -147,23 +148,31 @@ export async function getCredits(requestOptions: OpenApiRequestOptions = {}) {
   return handleOpenApiResponseWithBody(data, response);
 }
 
-export async function getDailyCosts(
+export async function getCostsBreakdownDaily(
   startDate: Date,
   endDate: Date,
   requestOptions: OpenApiRequestOptions = {},
 ) {
   const { headers, ...options } = requestOptions;
-  const { data, response } = await getClient().GET("/api/costs/daily", {
-    params: {
-      query: {
-        startDate: formatRFC3339(startDate),
-        endDate: formatRFC3339(endDate),
+  const { data, response } = await getClient().GET(
+    "/api/costs/breakdown/daily",
+    {
+      params: {
+        query: {
+          // Both query params are inclusive calendar days (bare `YYYY-MM-DD`,
+          // no time component — see `DateRange` in cloud's interface.rs),
+          // unlike every other date param on this client. `startDate`/`endDate`
+          // here are the internal [start, end) convention used throughout the
+          // console, so the exclusive `endDate` becomes the day before it.
+          startDate: formatDateInUtc(startDate, "yyyy-MM-dd"),
+          endDate: formatDateInUtc(addUtcDays(endDate, -1), "yyyy-MM-dd"),
+        },
       },
+      signal: requestOptions?.signal,
+      headers,
+      ...options,
     },
-    signal: requestOptions?.signal,
-    headers,
-    ...options,
-  });
+  );
   return handleOpenApiResponseWithBody(data, response);
 }
 

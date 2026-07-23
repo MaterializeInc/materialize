@@ -34,6 +34,7 @@
 //! Most sub-client types are internal; this module re-exports the key public
 //! types so that consumers only need `use crate::client::*`.
 
+pub(crate) mod auto_scaling;
 mod connection;
 mod deployment_ops;
 mod dev_overlays;

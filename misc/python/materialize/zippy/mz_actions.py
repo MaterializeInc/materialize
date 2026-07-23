@@ -8,52 +8,25 @@
 # by the Apache License, Version 2.0.
 
 
-import os
-
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import (
     LEADER_STATUS_HEALTHCHECK,
     DeploymentStatus,
     Materialized,
 )
+from materialize.zippy.balancerd_actions import restart_balancerd
 from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
 from materialize.zippy.blob_store_capabilities import BlobStoreIsRunning
 from materialize.zippy.crdb_capabilities import CockroachIsRunning
 from materialize.zippy.framework import (
     Action,
-    ActionFactory,
-    Capabilities,
     Capability,
     Mz0dtDeployBaseAction,
     State,
 )
 from materialize.zippy.mz_capabilities import MzIsRunning
+from materialize.zippy.table_capabilities import TableExists
 from materialize.zippy.view_capabilities import ViewExists
-
-
-class MzStartParameterized(ActionFactory):
-    """Starts a Mz instance with custom paramters."""
-
-    @classmethod
-    def requires(cls) -> set[type[Capability]]:
-        return {CockroachIsRunning, BlobStoreIsRunning}
-
-    @classmethod
-    def incompatible_with(cls) -> set[type[Capability]]:
-        return {MzIsRunning}
-
-    def __init__(
-        self, additional_system_parameter_defaults: dict[str, str] = {}
-    ) -> None:
-        self.additional_system_parameter_defaults = additional_system_parameter_defaults
-
-    def new(self, capabilities: Capabilities) -> list[Action]:
-        return [
-            MzStart(
-                capabilities=capabilities,
-                additional_system_parameter_defaults=self.additional_system_parameter_defaults,
-            )
-        ]
 
 
 class MzStart(Action):
@@ -67,31 +40,9 @@ class MzStart(Action):
     def incompatible_with(cls) -> set[type[Capability]]:
         return {MzIsRunning}
 
-    def __init__(
-        self,
-        capabilities: Capabilities,
-        additional_system_parameter_defaults: dict[str, str] = {},
-    ) -> None:
-        if additional_system_parameter_defaults:
-            self.additional_system_parameter_defaults = (
-                additional_system_parameter_defaults
-            )
-        else:
-            self.additional_system_parameter_defaults = {}
-            system_parameter_default = os.getenv("CI_MZ_SYSTEM_PARAMETER_DEFAULT", "")
-            if system_parameter_default:
-                for val in system_parameter_default.split(";"):
-                    x = val.split("=", maxsplit=1)
-                    assert (
-                        len(x) == 2
-                    ), f"CI_MZ_SYSTEM_PARAMETER_DEFAULT '{val}' should be the format <key>=<val>"
-                    self.additional_system_parameter_defaults[x[0]] = x[1]
-
-        super().__init__(capabilities)
-
     def run(self, c: Composition, state: State) -> None:
         print(
-            f"Starting Mz with additional_system_parameter_defaults = {self.additional_system_parameter_defaults}"
+            f"Starting Mz with additional_system_parameter_defaults = {state.additional_system_parameter_defaults}"
         )
 
         with c.override(
@@ -104,7 +55,7 @@ class MzStart(Action):
                 system_parameter_defaults=state.system_parameter_defaults,
                 sanity_restart=False,
                 restart="on-failure",
-                additional_system_parameter_defaults=self.additional_system_parameter_defaults,
+                additional_system_parameter_defaults=state.additional_system_parameter_defaults,
                 metadata_store="cockroach",
                 default_replication_factor=2,
             )
@@ -183,6 +134,7 @@ class MzRestart(Action):
                 system_parameter_defaults=state.system_parameter_defaults,
                 sanity_restart=False,
                 restart="on-failure",
+                additional_system_parameter_defaults=state.additional_system_parameter_defaults,
                 metadata_store="cockroach",
                 default_replication_factor=2,
             )
@@ -218,6 +170,7 @@ class Mz0dtDeploy(Mz0dtDeployBaseAction):
                 sanity_restart=False,
                 restart="on-failure",
                 healthcheck=LEADER_STATUS_HEALTHCHECK,
+                additional_system_parameter_defaults=state.additional_system_parameter_defaults,
                 metadata_store="cockroach",
                 default_replication_factor=2,
             ),
@@ -237,13 +190,20 @@ class Mz0dtDeploy(Mz0dtDeployBaseAction):
                 wait=True,
             )
 
+        # Balancerd's resolver is fixed at startup and still points at the
+        # previous generation. Re-point it at the new leader.
+        if c.is_running("balancerd"):
+            restart_balancerd(c, state)
+
 
 class KillClusterd(Action):
     """Kills the clusterd processes in the environmentd container. The process orchestrator will restart them."""
 
     @classmethod
-    def requires(cls) -> set[type[Capability]]:
-        return {MzIsRunning, ViewExists}
+    def requires(cls) -> list[set[type[Capability]]]:
+        # Only kill once a dataflow-bearing object exists, so the kill has
+        # something to disrupt.
+        return [{MzIsRunning, ViewExists}, {MzIsRunning, TableExists}]
 
     def run(self, c: Composition, state: State) -> None:
         # Depending on the workload, clusterd may not be running, hence the || true

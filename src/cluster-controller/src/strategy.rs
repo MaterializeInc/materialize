@@ -287,6 +287,7 @@ impl Strategy for GracefulReconfigurationStrategy {
                 new_replication_factor: Some(record.target.replication_factor),
                 new_availability_zones: Some(record.target.availability_zones.0.clone()),
                 new_logging: Some(record.target.logging.clone()),
+                new_arrangement_compression: Some(record.target.arrangement_compression),
                 reconfiguration: Some(ReconfigurationWrite {
                     record: Some(ReconfigurationRecord {
                         status: ReconfigurationStatus::Finalized,
@@ -598,6 +599,7 @@ impl Strategy for HydrationBurstStrategy {
                 size: record.burst_size.clone(),
                 availability_zones: AvailabilityZones(state.availability_zones.clone()),
                 logging: state.logging.clone(),
+                arrangement_compression: state.arrangement_compression,
             },
         }]
     }

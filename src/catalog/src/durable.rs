@@ -12,7 +12,7 @@
 use std::fmt::Debug;
 use std::num::NonZeroI64;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use mz_audit_log::VersionedEvent;
@@ -41,8 +41,8 @@ pub use crate::durable::objects::{
 };
 pub use crate::durable::persist::shard_id;
 use crate::durable::persist::{Timestamp, UnopenedPersistCatalogState};
-pub use crate::durable::transaction::Transaction;
 use crate::durable::transaction::TransactionBatch;
+pub use crate::durable::transaction::{DryRunTransaction, Transaction};
 pub use crate::durable::upgrade::CATALOG_VERSION;
 use crate::memory;
 
@@ -274,6 +274,12 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send + Sync {
         target_upper: Timestamp,
     ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError>;
 
+    /// Checks for unapplied catalog content before `target_upper` without consuming it.
+    ///
+    /// Returns an error if this instance has been fenced out.
+    async fn ensure_not_out_of_sync(&mut self, target_upper: Timestamp)
+    -> Result<(), CatalogError>;
+
     /// Fetch the current upper of the catalog state.
     async fn current_upper(&mut self) -> Timestamp;
 }
@@ -291,18 +297,18 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     /// Marks the bootstrap process as complete.
     async fn mark_bootstrap_complete(&mut self);
 
-    /// Creates a new durable catalog state transaction.
+    /// Creates a transaction only if no durable catalog content is pending.
+    ///
+    /// Empty upper progress is accepted.
     async fn transaction(&mut self) -> Result<Transaction, CatalogError>;
 
-    /// Creates a new transaction initialized from the given [`Snapshot`]
-    /// instead of reading from durable storage. Used for incremental DDL
-    /// dry runs where the transaction state from a previous dry run has been
-    /// saved and needs to be restored so it stays in sync with the accumulated
-    /// `CatalogState`.
+    /// Creates a non-committable dry-run transaction from the given [`Snapshot`].
+    ///
+    /// The snapshot may include changes accumulated by earlier incremental dry runs.
     fn transaction_from_snapshot(
         &mut self,
         snapshot: Snapshot,
-    ) -> Result<Transaction, CatalogError>;
+    ) -> Result<DryRunTransaction, CatalogError>;
 
     /// Commits a durable catalog state transaction. The transaction will be committed at
     /// `commit_ts`.
@@ -317,34 +323,23 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         commit_ts: Timestamp,
     ) -> Result<Timestamp, CatalogError>;
 
-    /// Advances the upper of the catalog shard to `new_upper`.
+    /// Advances the catalog upper to at least `new_upper`.
     ///
-    /// This implicitly confirms leadership, as attempting to advance the catalog frontier will
-    /// fail if the writer has been fenced out.
+    /// A durable attempt observes fencing and reports concurrent non-fencing content as
+    /// [`DurableCatalogError::CatalogOutOfSync`]. A no-op only validates a fence already observed
+    /// by this handle.
     async fn advance_upper(&mut self, new_upper: Timestamp) -> Result<(), CatalogError>;
 
     /// Allocates and returns `amount` IDs of `id_type`.
     ///
-    /// See [`Self::commit_transaction`] for details on `commit_ts`.
-    #[mz_ore::instrument(level = "debug")]
+    /// Allocation rebases over empty upper progress. Fresh IDs do not require a catalog
+    /// staleness check.
     async fn allocate_id(
         &mut self,
         id_type: &str,
         amount: u64,
         commit_ts: Timestamp,
-    ) -> Result<Vec<u64>, CatalogError> {
-        let start = Instant::now();
-        if amount == 0 {
-            return Ok(Vec::new());
-        }
-        let mut txn = self.transaction().await?;
-        let ids = txn.get_and_increment_id_by(id_type.to_string(), amount)?;
-        txn.commit_internal(commit_ts).await?;
-        self.metrics()
-            .allocate_id_seconds
-            .observe(start.elapsed().as_secs_f64());
-        Ok(ids)
-    }
+    ) -> Result<Vec<u64>, CatalogError>;
 
     /// Allocates and returns `amount` many user [`CatalogItemId`] and [`GlobalId`].
     ///

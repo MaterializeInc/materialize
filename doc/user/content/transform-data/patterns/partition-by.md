@@ -4,6 +4,7 @@ description: "Declare how collections are stored."
 aliases:
   - /guides/partition-by/
   - /sql/patterns/partition-by/
+  - /self-managed/v25.2/transform-data/patterns/partition-by/
 menu:
   main:
     parent: 'sql-patterns'

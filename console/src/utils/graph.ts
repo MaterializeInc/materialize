@@ -157,8 +157,12 @@ export function buildXYGraphLayoutProps({
   height: number;
   margin: { top: number; right: number; bottom: number; left: number };
 }) {
-  const innerGraphWidth = width - margin.left - margin.right;
-  const innerGraphHeight = height - margin.top - margin.bottom;
+  // Clamped to 0: ParentSize renders once with width/height 0 before its
+  // ResizeObserver reports the real size, and a negative value here would
+  // flow into an SVG rect's width/height attribute (e.g. GraphEventOverlay),
+  // which throws.
+  const innerGraphWidth = Math.max(0, width - margin.left - margin.right);
+  const innerGraphHeight = Math.max(0, height - margin.top - margin.bottom);
 
   // Uses the SVG coordinate system (ascending top to bottom)
   const innerGraphTop = margin.top;

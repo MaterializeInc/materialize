@@ -946,8 +946,8 @@ impl Coordinator {
             // logging around to indicate when an actual dependency error might
             // occur.
             if !tables_to_drop.is_empty() {
-                let ts = self.get_local_write_ts().await;
-                self.drop_tables(tables_to_drop.into_iter().collect_vec(), ts.timestamp);
+                self.drop_tables(tables_to_drop.into_iter().collect_vec())
+                    .await;
             }
 
             if !sources_to_drop.is_empty() {
@@ -1099,41 +1099,45 @@ impl Coordinator {
         table_collections_to_create: BTreeMap<GlobalId, CollectionDescription>,
         execution_timestamps_to_set: BTreeSet<StatementLoggingId>,
     ) -> Result<(), AdapterError> {
-        // If we have tables, determine the initial validity for the table.
+        // Storage filters table catalog items that are not managed by txn-wal.
+        let table_ids: Vec<GlobalId> = table_collections_to_create.keys().copied().collect();
+        let collections = table_collections_to_create.into_iter().collect_vec();
+
+        // Confirm leadership after allocating the collections' initial timestamp.
         let write_ts = self.get_local_write_ts().await;
         let register_ts = write_ts.timestamp;
-
-        // After acquiring `register_ts` but before using it, we need to
-        // be sure we're still the leader. Otherwise a new generation
-        // may also be trying to use `register_ts` for a different
-        // purpose. See materialize#28216.
-        //
-        // We also should advance the upper of the catalog shard, to ensure it
-        // is readable at the oracle read ts after we bump it to the
-        // `register_ts` below. Both of these needs are served by calling
-        // `advance_upper`.
         self.catalog
             .advance_upper(write_ts.advance_to)
             .await
             .unwrap_or_terminate("unable to advance catalog upper");
 
-        for id in execution_timestamps_to_set {
-            self.set_statement_execution_timestamp(id, register_ts);
+        {
+            let storage_metadata = self.catalog.state().storage_metadata();
+            self.controller
+                .storage
+                .create_collections(storage_metadata, Some(register_ts), collections)
+                .await
+                .unwrap_or_terminate("cannot fail to create collections");
         }
 
-        let storage_metadata = self.catalog.state().storage_metadata();
-
-        self.controller
+        // Registration can choose a later timestamp than the collections' initial since. Reads
+        // remain above the applied registration timestamp.
+        let registrations = self
+            .controller
             .storage
-            .create_collections(
-                storage_metadata,
-                Some(register_ts),
-                table_collections_to_create.into_iter().collect_vec(),
-            )
-            .await
-            .unwrap_or_terminate("cannot fail to create collections");
+            .table_registrations(table_ids)
+            .unwrap_or_terminate("cannot fail to look up table registrations");
+        let table_ts = if registrations.is_empty() {
+            // Without txn-wal registration, this timestamp still makes the collections readable.
+            self.apply_local_write(register_ts).await;
+            register_ts
+        } else {
+            self.register_tables_via_committer(registrations).await
+        };
 
-        self.apply_local_write(register_ts).await;
+        for id in execution_timestamps_to_set {
+            self.set_statement_execution_timestamp(id, table_ts);
+        }
 
         Ok(())
     }
@@ -1361,28 +1365,26 @@ impl Coordinator {
             .desc
             .at_version(RelationVersionSelector::Specific(new_version));
 
+        // Confirm leadership before mutating controller state.
         let write_ts = self.get_local_write_ts().await;
-        let register_ts = write_ts.timestamp;
-
-        // Ensure the catalog will be immediately readable at the read ts we're
-        // about to bump.
         self.catalog
             .advance_upper(write_ts.advance_to)
             .await
             .unwrap_or_terminate("unable to advance catalog upper");
 
-        // Alter the table description, creating a "new" collection.
         self.controller
             .storage
-            .alter_table_desc(
-                existing_gid,
-                new_gid,
-                new_desc,
-                expected_version,
-                register_ts,
-            )
+            .alter_table_desc(existing_gid, new_gid, new_desc, expected_version)
             .await
-            .expect("failed to alter desc of table");
+            .unwrap_or_terminate("failed to alter desc of table");
+
+        // FIFO registration follows all staged writes to the old collection.
+        let registrations = self
+            .controller
+            .storage
+            .table_registrations(vec![new_gid])
+            .unwrap_or_terminate("cannot fail to look up table registrations");
+        self.register_tables_via_committer(registrations).await;
 
         // Initialize the ReadPolicy which ensures we have the correct read holds.
         let compaction_window = new_table
@@ -1396,8 +1398,6 @@ impl Coordinator {
             compaction_window,
         )
         .await;
-
-        self.apply_local_write(register_ts).await;
 
         // Alter is complete! We can drop our read hold.
         drop(existing_table_read_hold);

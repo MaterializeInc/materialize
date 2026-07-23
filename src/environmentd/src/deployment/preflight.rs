@@ -257,6 +257,12 @@ async fn check_ddl_changes(
         .await
         .unwrap_or_terminate("can open in savepoint mode");
 
+    // `transaction` rejects unapplied catalog content. This reader has no derived catalog to
+    // update, so discard the initial update stream before opening the transaction.
+    let _ = catalog
+        .sync_to_current_updates()
+        .await
+        .unwrap_or_terminate("unexpected error while draining initial catalog updates");
     let tx = catalog
         .transaction()
         .await
@@ -344,6 +350,12 @@ async fn get_next_ids(
         .await
         .unwrap_or_terminate("can open in savepoint mode");
 
+    // `transaction` rejects unapplied catalog content. This reader has no derived catalog to
+    // update, so discard the initial update stream before opening the transaction.
+    let _ = catalog
+        .sync_to_current_updates()
+        .await
+        .unwrap_or_terminate("unexpected error while draining initial catalog updates");
     let tx = catalog
         .transaction()
         .await

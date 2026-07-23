@@ -303,6 +303,43 @@ impl StorageWriteOp {
     }
 }
 
+/// Metadata required to register a table with the txns shard.
+#[derive(Debug, Clone)]
+pub struct TableRegistration {
+    pub id: GlobalId,
+    pub data_shard: ShardId,
+    pub relation_desc: RelationDesc,
+}
+
+/// Queues txns-shard operations on the storage table worker.
+///
+/// The adapter's group committer is the sole runtime caller, preserving FIFO order across appends,
+/// registrations, and forgets. On [`StorageError::InvalidUppers`], the writable implementation
+/// restores its bookkeeping and the caller must retry at a fresh timestamp.
+pub trait TableWriteHandle: Debug + Send + Sync {
+    /// Appends `commands` at `write_ts` and advances all registered tables to `advance_to`.
+    fn append(
+        &self,
+        write_ts: Timestamp,
+        advance_to: Timestamp,
+        commands: Vec<(GlobalId, Vec<TableData>)>,
+    ) -> oneshot::Receiver<Result<(), StorageError>>;
+
+    /// Registers `tables` at `register_ts`.
+    fn register(
+        &self,
+        register_ts: Timestamp,
+        tables: Vec<TableRegistration>,
+    ) -> oneshot::Receiver<Result<(), StorageError>>;
+
+    /// Forgets registered `ids` at `forget_ts`, ignoring unknown IDs.
+    fn forget(
+        &self,
+        forget_ts: Timestamp,
+        ids: Vec<GlobalId>,
+    ) -> oneshot::Receiver<Result<(), StorageError>>;
+}
+
 #[async_trait(?Send)]
 pub trait StorageController: Debug {
     /// Marks the end of any initialization commands.
@@ -452,10 +489,14 @@ pub trait StorageController: Debug {
     /// collections and leave the controller in an inconsistent state. It is almost
     /// always wrong to do anything but abort the process on `Err`.
     ///
-    /// The `register_ts` is used as the initial timestamp that tables are available for reads. (We
+    /// The `register_ts` is the initial timestamp at which tables become available for reads. (We
     /// might later give non-tables the same treatment, but hold off on that initially.) Callers
     /// must provide a Some if any of the collections is a table. A None may be given if none of the
     /// collections are a table (i.e. all materialized views, sources, etc).
+    ///
+    /// This sets up storage but does not register tables in the txns shard. Runtime registration
+    /// must go through the adapter's group committer. Bootstrap uses
+    /// [`Self::register_table_collections`].
     async fn create_collections(
         &mut self,
         storage_metadata: &StorageMetadata,
@@ -513,14 +554,37 @@ pub trait StorageController: Debug {
         source_exports: BTreeMap<GlobalId, SourceExportDataConfig>,
     ) -> Result<(), StorageError>;
 
+    /// Evolves a table's schema without registering the new collection in the txns shard.
+    ///
+    /// Runtime registration must go through the adapter's group committer.
     async fn alter_table_desc(
         &mut self,
         existing_collection: GlobalId,
         new_collection: GlobalId,
         new_desc: RelationDesc,
         expected_version: RelationVersion,
-        register_ts: Timestamp,
     ) -> Result<(), StorageError>;
+
+    /// Registers the `DataSource::Table` collections among `ids` during bootstrap.
+    ///
+    /// Runtime registration must go through the adapter's group committer. In read-only mode, only
+    /// migrated tables are registered.
+    async fn register_table_collections(
+        &mut self,
+        register_ts: Timestamp,
+        ids: Vec<GlobalId>,
+    ) -> Result<(), StorageError>;
+
+    /// Returns registration metadata for the `DataSource::Table` collections among `ids`.
+    ///
+    /// Other data sources are ignored.
+    fn table_registrations(
+        &self,
+        ids: Vec<GlobalId>,
+    ) -> Result<Vec<TableRegistration>, StorageError>;
+
+    /// Returns the `DataSource::Table` IDs among `ids`.
+    fn txns_table_ids(&self, ids: Vec<GlobalId>) -> Result<Vec<GlobalId>, StorageError>;
 
     /// Acquire an immutable reference to the export state, should it exist.
     fn export(&self, id: GlobalId) -> Result<&ExportState, StorageError>;
@@ -554,12 +618,14 @@ pub trait StorageController: Debug {
         exports: BTreeMap<GlobalId, StorageSinkConnection>,
     ) -> Result<(), StorageError>;
 
-    /// Drops the read capability for the tables and allows their resources to be reclaimed.
+    /// Schedules controller cleanup for tables.
+    ///
+    /// The txn-wal tables among `identifiers` must first be forgotten through the adapter's group
+    /// committer.
     fn drop_tables(
         &mut self,
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
-        ts: Timestamp,
     ) -> Result<(), StorageError>;
 
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
@@ -608,20 +674,19 @@ pub trait StorageController: Debug {
         identifiers: Vec<GlobalId>,
     ) -> Result<(), StorageError>;
 
-    /// Append `updates` into the local input named `id` and advance its upper to `upper`.
+    /// Appends to tables during bootstrap.
     ///
-    /// The method returns a oneshot that can be awaited to indicate completion of the write.
-    /// The method may return an error, indicating an immediately visible error, and also the
-    /// oneshot may return an error if one is encountered during the write.
-    ///
-    /// All updates in `commands` are applied atomically.
-    // TODO(petrosagg): switch upper to `Antichain<Timestamp>`
+    /// Runtime writes must go through the adapter's group committer. The returned receiver resolves
+    /// when the atomic write completes.
     fn append_table(
         &mut self,
         write_ts: Timestamp,
         advance_to: Timestamp,
         commands: Vec<(GlobalId, Vec<TableData>)>,
     ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError>;
+
+    /// Returns the process-lifetime storage mechanism used by the adapter's group committer.
+    fn table_write_handle(&self) -> Arc<dyn TableWriteHandle>;
 
     /// Returns a [`MonotonicAppender`] which is a channel that can be used to monotonically
     /// append to the specified [`GlobalId`].

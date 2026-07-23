@@ -349,6 +349,8 @@ pub struct ClusterVariantManaged {
     pub size: String,
     pub availability_zones: Vec<String>,
     pub logging: ReplicaLogging,
+    /// Whether arrangements on this cluster's replicas request dictionary compression.
+    pub arrangement_compression: bool,
     pub replication_factor: u32,
     pub optimizer_feature_overrides: BTreeMap<String, String>,
     pub schedule: ClusterSchedule,
@@ -410,6 +412,7 @@ pub struct ReconfigurationTarget {
     pub replication_factor: u32,
     pub availability_zones: Vec<String>,
     pub logging: ReplicaLogging,
+    pub arrangement_compression: bool,
 }
 
 /// An active hydration burst the controller is running.
@@ -524,6 +527,7 @@ impl DurableType for ClusterReplica {
 pub struct ReplicaConfig {
     pub location: ReplicaLocation,
     pub logging: ReplicaLogging,
+    pub arrangement_compression: bool,
 }
 
 impl From<mz_controller::clusters::ReplicaConfig> for ReplicaConfig {
@@ -531,6 +535,7 @@ impl From<mz_controller::clusters::ReplicaConfig> for ReplicaConfig {
         Self {
             location: config.location.into(),
             logging: config.compute.logging,
+            arrangement_compression: config.compute.arrangement_compression,
         }
     }
 }

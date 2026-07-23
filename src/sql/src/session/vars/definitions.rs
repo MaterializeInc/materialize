@@ -2312,6 +2312,12 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
+        name: enable_simplify_from_less_existence,
+        desc: "Allow the optimizer to collapse EXISTS/NOT EXISTS over a FROM-less correlated subquery into a plain Filter during HIR-to-MIR lowering.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
         name: enable_coalesce_case_transform,
         desc: "Allow the optimizer to push `COALESCE` into `CASE WHEN`.",
         default: true,
@@ -2353,6 +2359,7 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_cast_elimination: vars.enable_cast_elimination(),
             enable_case_literal_transform: vars.enable_case_literal_transform(),
             enable_simplify_quantified_comparisons: vars.enable_simplify_quantified_comparisons(),
+            enable_simplify_from_less_existence: vars.enable_simplify_from_less_existence(),
             enable_coalesce_case_transform: vars.enable_coalesce_case_transform(),
             enable_will_distinct_propagation: vars.enable_will_distinct_propagation(),
             enable_fixed_correlated_cte_lowering: vars.enable_fixed_correlated_cte_lowering(),
@@ -2396,6 +2403,7 @@ mod tests {
             enable_cast_elimination,
             enable_case_literal_transform,
             enable_simplify_quantified_comparisons,
+            enable_simplify_from_less_existence,
             enable_coalesce_case_transform,
             enable_will_distinct_propagation,
             enable_fixed_correlated_cte_lowering,
@@ -2427,6 +2435,7 @@ mod tests {
         set_var!(enable_cast_elimination);
         set_var!(enable_case_literal_transform);
         set_var!(enable_simplify_quantified_comparisons);
+        set_var!(enable_simplify_from_less_existence);
         set_var!(enable_coalesce_case_transform);
         set_var!(enable_will_distinct_propagation);
         set_var!(enable_fixed_correlated_cte_lowering);

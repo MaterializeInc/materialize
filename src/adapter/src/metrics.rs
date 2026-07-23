@@ -286,7 +286,7 @@ impl Metrics {
             )),
             group_commit_catalog_upper_seconds: registry.register(metric!(
                 name: "mz_group_commit_catalog_upper_seconds",
-                help: "The time it takes to advance the catalog shard upper during group commit.",
+                help: "The time it takes to advance the catalog shard upper for a txns-shard write (group commits and table register/forget).",
                 buckets: histogram_seconds_buckets(0.001, 32.0),
             )),
         }

@@ -281,6 +281,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_replica_targeted_materialized_views
     enable_s3_tables_region_check
     enable_session_timelines
+    enable_simplify_from_less_existence
     enable_simplify_quantified_comparisons
     enable_time_at_time_zone
     enable_unlimited_retain_history
@@ -538,6 +539,7 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
 KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     allow_real_time_recency
     allowed_cluster_replica_sizes
+    column_paged_batcher_budget_fraction
     compute_dataflow_max_inflight_bytes
     compute_peek_response_stash_threshold_bytes
     compute_subscribe_snapshot_optimization

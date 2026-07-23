@@ -10,6 +10,7 @@ menu:
 aliases:
   - /ops/diagnosing-using-sql/
   - /ops/troubleshooting/
+  - /self-managed/v25.2/ingest-data/troubleshooting/
 ---
 
 As you wire up data ingestion in Materialize, you might run into some snags or

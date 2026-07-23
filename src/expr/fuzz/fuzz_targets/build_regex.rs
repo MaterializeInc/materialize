@@ -10,8 +10,12 @@
 //! Fuzz target: `func::build_regex` compiles an untrusted regular expression
 //! (and flags) for the `regexp_*` SQL functions, and the result matches
 //! untrusted text. A user controls both, so a panic compiling or matching is a
-//! real availability bug. (The `regex` crate is linear-time and size-limited,
-//! so an oversized pattern returns an error rather than hanging or OOMing.)
+//! real availability bug. The `regex` crate is size-limited, so an oversized
+//! pattern returns an error rather than OOMing. Single-match ops
+//! (`is_match`/`find`/`captures`) run in linear time, but the all-matches ops
+//! (`replace_all`/`split`) re-scan from every match via `find_iter` and are
+//! superlinear in the text length for adversarial patterns, so the match text
+//! is capped very short (see `drive`).
 //!
 //! A random pattern often compiles, but random *text* rarely matches it, so the
 //! match-found paths (capture extraction, `replace_all`, `split` on real splits)
@@ -164,7 +168,13 @@ const REPLACEMENT: &str = "x$1-${g0}-$0-$$-$99y";
 
 fn drive(pattern: &str, flags: &str, text: &str) {
     let pattern = cap(pattern, 4096);
-    let text = cap(text, 4096);
+    // The all-matches ops below (`replace_all`, `split`) drive `find_iter`,
+    // which re-scans from each match and is superlinear in the text length for
+    // adversarial patterns. Coverage instrumentation amplifies that by orders of
+    // magnitude, so keep the match text very short to stay within libFuzzer's
+    // per-unit timeout. Pattern length compiles fast and is not the amplifier,
+    // so it stays generous.
+    let text = cap(text, 16);
     let Ok(regex) = func::build_regex(pattern, flags) else {
         return;
     };

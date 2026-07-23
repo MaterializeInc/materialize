@@ -526,31 +526,6 @@ const BillingDetails = ({
   );
 };
 
-const OnDemandPricing = () => {
-  const { colors } = useTheme<MaterializeTheme>();
-  return (
-    <>
-      <Text textStyle="heading-xs" mb="2">
-        On-Demand Pricing
-      </Text>
-      <Text textStyle="text-small" mb="4" color={colors.foreground.secondary}>
-        The following represents our on-demand pricing structure for compute,
-        storage, and network resources. To calculate your estimated compute
-        costs, multiply your projected compute credit usage by the listed price
-        per credit.
-      </Text>
-      <HStack alignItems="start">
-        <IFrameWrapper
-          src="https://materialize.com/pdfs/pricing.pdf"
-          title="Materialize Pricing PDF"
-          width="100%"
-          height="320px"
-        />
-      </HStack>
-    </>
-  );
-};
-
 const CTABanner = ({
   organization,
   onUpgradeAndPay,
@@ -687,7 +662,6 @@ const BillingPage = ({
         <Grid
           templateAreas={`
             "billingDetails planDetails"
-            "onDemandPricing onDemandPricing"
             `}
           gridTemplateColumns="minmax(500px, 70%) minmax(300px, 3fr)"
           gridColumnGap={12}
@@ -708,17 +682,8 @@ const BillingPage = ({
                 upgradeButtonProps={{ onClick: handleUpgrade }}
               />
             ) : (
-              // We don't want to display a daily average or a last 30 days summary,
-              // thus we pass null for dailyCosts and timeSpan.
-              <UpgradedPlanDetails
-                region="all"
-                dailyCosts={null}
-                timeSpan={null}
-              />
+              <UpgradedPlanDetails />
             )}
-          </GridItem>
-          <GridItem area="onDemandPricing">
-            <OnDemandPricing />
           </GridItem>
         </Grid>
         <Modal isOpen={isOpen} onClose={onClose} size="xl">

@@ -809,17 +809,17 @@ metrics:
   source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_group_commit_catalog_upper_seconds_bucket
-  help: The time it takes to advance the catalog shard upper during group commit.
+  help: The time it takes to advance the catalog shard upper for a txns-shard write (group commits and table register/forget).
   labels:
   - le
   source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_group_commit_catalog_upper_seconds_count
-  help: The time it takes to advance the catalog shard upper during group commit.
+  help: The time it takes to advance the catalog shard upper for a txns-shard write (group commits and table register/forget).
   source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_group_commit_catalog_upper_seconds_sum
-  help: The time it takes to advance the catalog shard upper during group commit.
+  help: The time it takes to advance the catalog shard upper for a txns-shard write (group commits and table register/forget).
   source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_handle_scheduling_decisions_seconds_bucket

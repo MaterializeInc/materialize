@@ -62,6 +62,7 @@ fn shape(size: &str) -> ReplicaShape {
         size: size.to_string(),
         availability_zones: AvailabilityZones(Vec::new()),
         logging: ComputeReplicaLogging::default(),
+        arrangement_compression: false,
     }
 }
 
@@ -103,6 +104,7 @@ fn state(
         replication_factor,
         availability_zones: Vec::new(),
         logging: ComputeReplicaLogging::default(),
+        arrangement_compression: false,
         auto_scaling_policy: None,
         reconfiguration: None,
         burst: None,
@@ -315,6 +317,7 @@ impl FakeCtx {
                     new_replication_factor,
                     new_availability_zones,
                     new_logging,
+                    new_arrangement_compression,
                     reconfiguration,
                     burst,
                 } = write;
@@ -329,6 +332,9 @@ impl FakeCtx {
                 }
                 if let Some(logging) = new_logging {
                     state.logging = logging.clone();
+                }
+                if let Some(arrangement_compression) = new_arrangement_compression {
+                    state.arrangement_compression = *arrangement_compression;
                 }
                 if let Some(reconfiguration) = reconfiguration {
                     state.reconfiguration = reconfiguration.record.clone();
@@ -656,6 +662,7 @@ async fn caa_conflict_is_rejected_and_recovered() {
                             replication_factor: state.replication_factor,
                             availability_zones: AvailabilityZones(Vec::new()),
                             logging: ComputeReplicaLogging::default(),
+                            arrangement_compression: false,
                         },
                         deadline: now,
                         on_timeout: OnTimeout::Rollback,
@@ -722,6 +729,7 @@ async fn caa_conflict_is_rejected_and_recovered() {
                 replication_factor: 1,
                 availability_zones: AvailabilityZones(Vec::new()),
                 logging: ComputeReplicaLogging::default(),
+                arrangement_compression: false,
                 auto_scaling_policy: None,
                 reconfiguration: None,
                 burst: None,
@@ -820,6 +828,7 @@ async fn create_drop_is_caa_guarded_and_recovers() {
                 replication_factor: 1,
                 availability_zones: AvailabilityZones(Vec::new()),
                 logging: ComputeReplicaLogging::default(),
+                arrangement_compression: false,
                 auto_scaling_policy: None,
                 reconfiguration: None,
                 burst: None,
@@ -1080,6 +1089,7 @@ fn record_on_timeout(
             replication_factor: rf,
             availability_zones: AvailabilityZones(Vec::new()),
             logging: ComputeReplicaLogging::default(),
+            arrangement_compression: false,
         },
         deadline: Timestamp::from(deadline),
         on_timeout,
@@ -1103,6 +1113,7 @@ fn reconfiguring_state(
         replication_factor: rf,
         availability_zones: Vec::new(),
         logging: ComputeReplicaLogging::default(),
+        arrangement_compression: false,
         auto_scaling_policy: None,
         reconfiguration: Some(rec),
         burst: None,
@@ -1541,6 +1552,7 @@ fn graceful_az_only_reconfiguration_is_a_shape_change() {
         replication_factor: 1,
         availability_zones: vec!["az1".to_string()],
         logging: ComputeReplicaLogging::default(),
+        arrangement_compression: false,
         auto_scaling_policy: None,
         reconfiguration: Some(ReconfigurationRecord {
             target: ReconfigurationTarget {
@@ -1548,6 +1560,7 @@ fn graceful_az_only_reconfiguration_is_a_shape_change() {
                 replication_factor: 1,
                 availability_zones: AvailabilityZones(vec!["az2".to_string()]),
                 logging: ComputeReplicaLogging::default(),
+                arrangement_compression: false,
             },
             deadline: Timestamp::from(5000u64),
             on_timeout: OnTimeout::Rollback,
@@ -1561,6 +1574,7 @@ fn graceful_az_only_reconfiguration_is_a_shape_change() {
                 size: "100cc".to_string(),
                 availability_zones: AvailabilityZones(vec!["az1".to_string()]),
                 logging: ComputeReplicaLogging::default(),
+                arrangement_compression: false,
             }),
             internal: false,
             billed_as: false,
@@ -2165,6 +2179,7 @@ mod hydration_burst {
             size: "400cc".to_string(),
             availability_zones: AvailabilityZones(s.availability_zones.clone()),
             logging: ComputeReplicaLogging::default(),
+            arrangement_compression: false,
         };
         assert!(desired[0].shape.matches(&expected));
     }

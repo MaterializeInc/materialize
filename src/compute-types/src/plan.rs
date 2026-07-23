@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use columnar::Columnar;
 use mz_expr::{
-    CollectionPlan, EvalError, Id, LetRecLimit, LocalId, MapFilterProject, MfpPlan, MirScalarExpr,
+    CollectionPlan, EvalError, Id, LetRecLimit, LocalId, MapFilterProject, MfpPlan,
     OptimizedMirRelationExpr, SafeMfpPlan, TableFunc,
 };
 use mz_ore::metric;
@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 use crate::dataflows::DataflowDescription;
 use crate::plan::join::JoinPlan;
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
-use crate::plan::scalar::{LirScalarExpr, mfp_mir_to_lir_plan};
+use crate::plan::scalar::LirScalarExpr;
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
 use crate::plan::transform::{Transform, TransformConfig};
@@ -578,11 +578,10 @@ impl LirRelationExpr {
         features: &OptimizerFeatures,
         metrics: Option<&LoweringMetrics>,
     ) -> Result<DataflowDescription<Self>, String> {
-        // First, we lower the dataflow description from MIR to LIR.
+        // First, we lower the dataflow description from MIR to LIR. Lowering
+        // also moves common parts of the MFPs pushed onto each source's reads into the source
+        // itself (see `Context::refine_source_mfps`).
         let mut dataflow = Self::lower_dataflow(desc, features, metrics)?;
-
-        // Subsequently, we perform plan refinements for the dataflow.
-        Self::refine_source_mfps(&mut dataflow);
 
         // Note: `consolidate_output` for `Union` and per-input
         // `temporal_bucketing_strategies` are decided at lowering time (see the
@@ -620,6 +619,118 @@ impl LirRelationExpr {
 
             let config = TransformConfig { monotonic_ids };
             Self::refine_single_time_consolidation(&mut dataflow, &config)?;
+
+            // For non-recursive delta joins in single-time dataflows, only the delta path for the
+            // first relation produces updates: the other paths discard updates at the as-of, which
+            // is the only time present. We keep just that path and, where the first input's
+            // arrangement existed solely to seed it, drop the arrangement and consume the input as a
+            // raw collection. This requires rewriting the path's initial closure to address the raw
+            // row layout rather than the arranged `(key, value)` layout.
+            for build_desc in dataflow.objects_to_build.iter_mut() {
+                // Worklist of plan nodes. `LetRec` bodies are explored but `LetRec` values are not,
+                // which excludes recursive (WMR) joins from this transform.
+                let mut todo = vec![&mut build_desc.plan];
+                while let Some(expr) = todo.pop() {
+                    match &mut expr.node {
+                        // TODO: also handle binary differential joins, which can likewise shed a
+                        // bespoke arrangement on their first input.
+                        LirRelationNode::Join {
+                            inputs,
+                            plan: JoinPlan::Delta(plan),
+                        } => {
+                            // Only the first relation's path survives at a single time.
+                            plan.path_plans.truncate(1);
+
+                            let source_relation = plan.path_plans[0].source_relation;
+                            // Replace the source input's bespoke arrangement with a raw collection,
+                            // but only when the surviving path's source is fed by an `ArrangeBy`
+                            // that exists solely to build that arrangement. A source backed directly
+                            // by an arranged import has no `ArrangeBy` node here, so this guard skips
+                            // it and the path keeps reading it arranged.
+                            if let Some(source_key) = plan.path_plans[0].source_key.clone() {
+                                if let LirRelationNode::ArrangeBy { forms, .. } =
+                                    &mut inputs[source_relation].node
+                                {
+                                    // Drop arrangement forms other than the source key, which the
+                                    // remaining path no longer needs.
+                                    forms.arranged.retain(|(key, _, _)| key == &source_key);
+                                    if let Some((to_key, permutation, thinning)) =
+                                        forms.arranged.pop()
+                                    {
+                                        // Make the input a raw collection and unset the source key.
+                                        // Clearing every arrangement form is safe: `truncate(1)`
+                                        // already dropped the sibling paths that were the only other
+                                        // consumers, and this `ArrangeBy` is private to this join
+                                        // input. What remains is the input's raw collection.
+                                        forms.raw = true;
+                                        forms.arranged.clear();
+                                        plan.path_plans[0].source_key = None;
+
+                                        // The initial closure addresses the arranged `(key, value)`
+                                        // layout: columns `[0, K)` are key datums and columns
+                                        // `[K, K + M)` are the thinned value datums. We rewrite it to
+                                        // address the raw row instead.
+                                        //
+                                        // `to_key` (length `K`) are the key expressions over a row.
+                                        // `permutation` (length `A`, the raw arity) maps each row
+                                        // column to its position in the `(key, value)` concatenation.
+                                        // `thinning` (length `M`) lists the row columns that form the
+                                        // value.
+                                        let key_len = to_key.len();
+                                        let row_arity = permutation.len();
+                                        let closure = &mut plan.path_plans[0].initial_closure;
+
+                                        // Step 1: rewrite `ready_equivalences`, which reference the
+                                        // arranged layout. A key column becomes its defining
+                                        // expression. A value column becomes the row column it was
+                                        // projected from.
+                                        for class in closure.ready_equivalences.iter_mut() {
+                                            for expr in class.iter_mut() {
+                                                let mut todo = vec![expr];
+                                                while let Some(expr) = todo.pop() {
+                                                    if let LirScalarExpr::Column(c, _) = expr {
+                                                        if let Some(key_expr) = to_key.get(*c) {
+                                                            *expr = key_expr.clone();
+                                                        } else {
+                                                            *c = thinning[*c - key_len];
+                                                        }
+                                                    } else {
+                                                        todo.extend(expr.children_mut());
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // Step 2: rewrite the `before` MFP. Starting from a raw row,
+                                        // materialize the key datums and project to the arranged
+                                        // `(key, value)` layout the original MFP expects, then apply
+                                        // it.
+                                        let (m, f, p) = closure.before.as_map_filter_project();
+                                        let mfp = MapFilterProject::new(row_arity)
+                                            .map(to_key)
+                                            .project(
+                                                (row_arity..row_arity + key_len).chain(thinning),
+                                            )
+                                            .map(m)
+                                            .filter(f)
+                                            .project(p);
+                                        closure.before =
+                                            mfp.into_plan().unwrap().into_nontemporal().unwrap();
+                                    }
+                                }
+                            }
+
+                            todo.extend(inputs.iter_mut());
+                        }
+                        LirRelationNode::LetRec { body, .. } => {
+                            todo.push(body);
+                        }
+                        x => {
+                            todo.extend(x.children_mut());
+                        }
+                    }
+                }
+            }
         }
 
         soft_assert_eq_no_log!(dataflow.check_invariants(), Ok(()));
@@ -648,123 +759,6 @@ impl LirRelationExpr {
         mz_repr::explain::trace_plan(&dataflow);
 
         Ok(dataflow)
-    }
-
-    /// Refines the source instance descriptions for sources imported by `dataflow` to
-    /// push down common MFP expressions.
-    #[mz_ore::instrument(
-        target = "optimizer",
-        level = "debug",
-        fields(path.segment = "refine_source_mfps")
-    )]
-    fn refine_source_mfps(dataflow: &mut DataflowDescription<Self>) {
-        use crate::plan::scalar::mfp_plan_lir_to_mir;
-
-        for (source_id, source_import) in dataflow.source_imports.iter_mut() {
-            let source = &mut source_import.desc;
-            let source_id = *source_id;
-            let mut identity_present = false;
-
-            // First pass: swap MfpPlans out of GetPlan::Collection nodes,
-            // recording their LirId so we can put them back.
-            let mut taken: Vec<(LirId, MfpPlan<LirScalarExpr>)> = Vec::new();
-            for build_desc in dataflow.objects_to_build.iter_mut() {
-                let mut todo = vec![&mut build_desc.plan];
-                while let Some(expression) = todo.pop() {
-                    let lir_id = expression.lir_id;
-                    let node = &mut expression.node;
-                    if let LirRelationNode::Get { id, plan, .. } = node {
-                        if *id == mz_expr::Id::Global(source_id) {
-                            match plan {
-                                GetPlan::Collection(mfp_plan) => {
-                                    let arity = mfp_plan.safe_mfp().projection.len();
-                                    let placeholder = MfpPlan::from_parts(
-                                        mz_expr::SafeMfpPlan::from_mfp(MapFilterProject::new(
-                                            arity,
-                                        )),
-                                        Vec::new(),
-                                        Vec::new(),
-                                    );
-                                    taken.push((lir_id, std::mem::replace(mfp_plan, placeholder)));
-                                }
-                                GetPlan::PassArrangements => {
-                                    identity_present = true;
-                                }
-                                GetPlan::Arrangement(..) => {
-                                    panic!("Surprising `GetPlan` for imported source: {:?}", plan);
-                                }
-                            }
-                        }
-                    } else {
-                        todo.extend(node.children_mut());
-                    }
-                }
-            }
-
-            // Direct exports of sources are possible, and prevent pushdown.
-            identity_present |= dataflow
-                .index_exports
-                .values()
-                .any(|(x, _)| x.on_id == source_id);
-            identity_present |= dataflow.sink_exports.values().any(|x| x.from == source_id);
-
-            // Build a map from LirId → new MfpPlan to put back.
-            let replacements: BTreeMap<LirId, MfpPlan<LirScalarExpr>> =
-                if !identity_present && !taken.is_empty() {
-                    // Convert LIR MfpPlans → MIR MapFilterProjects by folding
-                    // temporal bounds back as mz_now() predicates, so that
-                    // extract_common's column remapping applies uniformly.
-                    let mut mir_mfps: Vec<(LirId, MapFilterProject<MirScalarExpr>)> = taken
-                        .into_iter()
-                        .map(|(lir_id, lir_plan)| {
-                            let mir_mfp = mfp_plan_lir_to_mir(lir_plan).into_map_filter_project();
-                            (lir_id, mir_mfp)
-                        })
-                        .collect();
-                    let mut mfp_refs: Vec<&mut MapFilterProject<MirScalarExpr>> =
-                        mir_mfps.iter_mut().map(|(_, mfp)| mfp).collect();
-
-                    let common = MapFilterProject::extract_common(&mut mfp_refs[..]);
-                    let mut source_mfp = if let Some(mfp) = source.arguments.operators.take() {
-                        MapFilterProject::compose(mfp, common)
-                    } else {
-                        common
-                    };
-                    source_mfp.optimize();
-                    source.arguments.operators = Some(source_mfp);
-
-                    // Convert mutated MIR MFPs back to LIR MfpPlans.
-                    mir_mfps
-                        .into_iter()
-                        .map(|(lir_id, mir_mfp)| (lir_id, mfp_mir_to_lir_plan(mir_mfp)))
-                        .collect()
-                } else {
-                    taken.into_iter().collect()
-                };
-
-            // Second pass: put the MfpPlans back by LirId.
-            for build_desc in dataflow.objects_to_build.iter_mut() {
-                let mut todo = vec![&mut build_desc.plan];
-                while let Some(expression) = todo.pop() {
-                    if let Some(replacement) = replacements.get(&expression.lir_id) {
-                        if let LirRelationNode::Get {
-                            plan: GetPlan::Collection(mfp_plan),
-                            ..
-                        } = &mut expression.node
-                        {
-                            *mfp_plan = replacement.clone();
-                        } else {
-                            panic!(
-                                "LirId {:?} was a GetPlan::Collection but is now {:?}",
-                                expression.lir_id, expression.node
-                            );
-                        }
-                    }
-                    todo.extend(expression.node.children_mut());
-                }
-            }
-        }
-        mz_repr::explain::trace_plan(dataflow);
     }
 
     /// Refines the plans of objects to be built as part of a single-time `dataflow` to relax

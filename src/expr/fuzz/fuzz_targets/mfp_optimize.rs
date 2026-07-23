@@ -21,14 +21,25 @@
 //! `int4`/`int8` arithmetic and the `int4`↔`int8` casts (the latter is fallible,
 //! so it feeds optimize's error-handling). The target runs in one of two modes:
 //!
-//!  * **Non-temporal preservation.** Evaluate the original and the `optimize`d
-//!    clone on a batch of random input rows. The oracle is one-directional,
+//!  * **Non-temporal preservation.** Evaluate the raw, *unoptimized* MFP and the
+//!    once-`optimize`d plan on a batch of random input rows, and compare. Neither
+//!    side is routed through `into_plan`, because `MfpPlan::create_from`
+//!    unconditionally runs `optimize` first. The raw reference is evaluated
+//!    directly (`eval_raw`), and the optimized side is wrapped straight from the
+//!    once-optimized MFP (`SafeMfpPlan::from_mfp`). Routing the reference through
+//!    `into_plan` would compare `optimize` against `optimize`-of-`optimize`,
+//!    testing only idempotence and silently passing any miscompile stable under a
+//!    second pass. Routing the optimized side through it would compare against a
+//!    twice-optimized plan, which can repair a first-pass miscompile that
+//!    production `into_plan`-on-raw callers still execute. `optimize` only
+//!    iterates while the expression size strictly decreases, so a fresh second
+//!    call is not guaranteed to be a no-op. The oracle is one-directional,
 //!    mirroring the contract optimize actually owes: optimize is allowed to
-//!    *drop* an error or a row that the original would reject, because it removes
+//!    *drop* an error or a row that the raw MFP would reject, because it removes
 //!    unused map expressions and reorders predicates. But for every input row the
-//!    *original* passes through cleanly with output `out`, the optimized plan
-//!    must also pass it through with the byte-identical `out`. (When the original
-//!    errors or filters a row we assert nothing.)
+//!    raw MFP passes through cleanly with output `out`, the optimized plan must
+//!    also pass it through with the byte-identical `out`. (When the raw MFP errors
+//!    or filters a row we assert nothing.)
 //!
 //!  * **Temporal lowering.** Add predicates of the form `mz_now() <cmp> e` (and
 //!    conjunctions of them) over a bounded `mz_timestamp` expression `e`, then
@@ -50,7 +61,9 @@
 
 use libfuzzer_sys::arbitrary::{self, Arbitrary, Unstructured};
 use libfuzzer_sys::fuzz_target;
-use mz_expr::{func, EvalError, MapFilterProject, MirScalarExpr, UnmaterializableFunc};
+use mz_expr::{
+    func, Eval, EvalError, MapFilterProject, MirScalarExpr, SafeMfpPlan, UnmaterializableFunc,
+};
 use mz_repr::{Datum, Diff, ReprScalarType, Row, RowArena, Timestamp};
 
 // Input schema: int4 columns, then int8 columns, then bool columns.
@@ -366,7 +379,48 @@ fn temporal_interval(plan: &mz_expr::MfpPlan, row: &Row) -> Result<Interval, ()>
     Ok(Some((lower.unwrap_or_else(|| Timestamp::new(0)), upper)))
 }
 
-/// Non-temporal preservation: the original optimize-vs-clone output equivalence.
+/// Evaluate the raw, *unoptimized* MFP against `row`, replicating
+/// `SafeMfpPlan::evaluate_inner` plus the projection directly. This is the
+/// ground truth `optimize` must preserve.
+///
+/// We deliberately do not build the reference through `into_plan`:
+/// `MfpPlan::create_from` unconditionally runs `optimize` first, so a reference
+/// routed through it would compare `optimize` against `optimize`-of-`optimize`
+/// and only test idempotence.
+///
+/// Returns `Some(Some(out))` for a clean pass with projected output `out`,
+/// `Some(None)` for a cleanly filtered row, and `None` on an evaluation error
+/// in any map or predicate.
+fn eval_raw(mfp: &MapFilterProject, row: &Row) -> Option<Option<Row>> {
+    let arena = RowArena::new();
+    let mut datums: Vec<Datum> = row.iter().collect();
+    // Interleave map evaluation with predicate checks exactly as
+    // `evaluate_inner`: a predicate positioned at `support` runs once the maps
+    // producing columns below `support` have been appended.
+    let mut expression = 0;
+    for (support, predicate) in &mfp.predicates {
+        while mfp.input_arity + expression < *support {
+            datums.push(mfp.expressions[expression].eval(&datums[..], &arena).ok()?);
+            expression += 1;
+        }
+        match predicate.eval(&datums[..], &arena) {
+            Ok(Datum::True) => {}
+            Ok(_) => return Some(None),
+            Err(_) => return None,
+        }
+    }
+    while expression < mfp.expressions.len() {
+        datums.push(mfp.expressions[expression].eval(&datums[..], &arena).ok()?);
+        expression += 1;
+    }
+    let mut out = Row::default();
+    out.packer()
+        .extend(mfp.projection.iter().map(|c| datums[*c]));
+    Some(Some(out))
+}
+
+/// Non-temporal preservation: raw unoptimized MFP semantics vs. the `optimize`d
+/// plan's output.
 fn run_nontemporal(
     u: &mut Unstructured,
     mfp: MapFilterProject,
@@ -375,48 +429,34 @@ fn run_nontemporal(
     let mut optimized = mfp.clone();
     optimized.optimize();
 
-    let Ok(plan_orig) = mfp.into_plan() else {
-        return Ok(());
-    };
-    let Ok(safe_orig) = plan_orig.into_nontemporal() else {
-        return Ok(());
-    };
-    let Ok(plan_opt) = optimized.into_plan() else {
-        return Ok(());
-    };
-    let Ok(safe_opt) = plan_opt.into_nontemporal() else {
-        return Ok(());
-    };
+    // Evaluate the once-optimized MFP directly, not through `into_plan`.
+    // `into_plan` reaches `MfpPlan::create_from`, which runs `optimize` a second
+    // time, so the compared side would reflect two passes instead of the single
+    // pass a production `into_plan` caller on the raw MFP executes. Non-temporal
+    // mode never generates `mz_now()` predicates, so there is nothing for
+    // `into_plan`'s temporal extraction to do here.
+    let safe_opt = SafeMfpPlan::from_mfp(optimized);
 
     for _ in 0..ROWS_PER_MFP {
         let row = gen_input_row(u, types)?;
-        let arena = RowArena::new();
 
-        let mut datums_o: Vec<Datum> = row.iter().collect();
-        let mut buf_o = Row::default();
-        // Reduce the result to pass/fail/error, ending the borrow of `buf_o`.
-        let orig = match safe_orig.evaluate_into(&mut datums_o, &arena, &mut buf_o) {
-            Ok(Some(_)) => Some(true),
-            Ok(None) => Some(false),
-            Err(_) => None,
+        // Only a row the raw MFP passes through cleanly constrains the optimized
+        // plan. An error or a filtered row lets optimize legitimately differ.
+        let Some(Some(out_ref)) = eval_raw(&mfp, &row) else {
+            continue;
         };
 
-        // Only a row the original passes through cleanly constrains the optimized
-        // plan. An error or a filtered row lets optimize legitimately differ.
-        if orig != Some(true) {
-            continue;
-        }
-
+        let arena = RowArena::new();
         let mut datums_p: Vec<Datum> = row.iter().collect();
         let mut buf_p = Row::default();
         match safe_opt.evaluate_into(&mut datums_p, &arena, &mut buf_p) {
             Ok(Some(out)) => assert_eq!(
-                &buf_o, out,
-                "optimize changed the projected output\n  row = {row:?}\n  out_orig = {buf_o:?}\n  out_opt  = {out:?}"
+                &out_ref, out,
+                "optimize changed the projected output\n  row = {row:?}\n  out_ref = {out_ref:?}\n  out_opt = {out:?}"
             ),
-            Ok(None) => panic!("optimize filtered out a row the original passed\n  row = {row:?}"),
+            Ok(None) => panic!("optimize filtered out a row the raw MFP passed\n  row = {row:?}"),
             Err(e) => panic!(
-                "optimize errored on a row the original passed cleanly\n  row = {row:?}\n  err = {e:?}"
+                "optimize errored on a row the raw MFP passed cleanly\n  row = {row:?}\n  err = {e:?}"
             ),
         }
     }

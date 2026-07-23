@@ -7,6 +7,7 @@ aliases:
   - /connect-sources/amazon-kafka/
   - /ingest-data/kafka-self-hosted/
   - /ingest-data/kafka/upstash-kafka/
+  - /self-managed/v25.2/ingest-data/kafka/kafka-self-hosted/
 menu:
   main:
     parent: "kafka"

@@ -36,6 +36,7 @@ pub(crate) fn project_expected(managed: &ClusterVariantManaged) -> ExpectedClust
         size,
         availability_zones,
         logging,
+        arrangement_compression,
         replication_factor,
         optimizer_feature_overrides: _,
         schedule: _,
@@ -48,6 +49,7 @@ pub(crate) fn project_expected(managed: &ClusterVariantManaged) -> ExpectedClust
         replication_factor: *replication_factor,
         availability_zones: AvailabilityZones(availability_zones.clone()),
         logging: logging.clone(),
+        arrangement_compression: *arrangement_compression,
         auto_scaling_policy: auto_scaling_strategy.as_ref().map(auto_scaling_policy),
         reconfiguration: reconfiguration.as_ref().map(reconfiguration_record),
         burst: burst.as_ref().map(burst_record),
@@ -87,6 +89,7 @@ fn reconfiguration_record(record: &ReconfigurationState) -> ReconfigurationRecor
         replication_factor,
         availability_zones,
         logging,
+        arrangement_compression,
     } = target;
     ReconfigurationRecord {
         target: ReconfigurationTarget {
@@ -94,6 +97,7 @@ fn reconfiguration_record(record: &ReconfigurationState) -> ReconfigurationRecor
             replication_factor: *replication_factor,
             availability_zones: AvailabilityZones(availability_zones.clone()),
             logging: logging.clone(),
+            arrangement_compression: *arrangement_compression,
         },
         deadline: *deadline,
         on_timeout: on_timeout(*on_timeout_action),

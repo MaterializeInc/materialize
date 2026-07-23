@@ -515,8 +515,10 @@ def print_stats(
     # attempt when it is rare and the run is DDL-heavy, e.g. SwapSchema), and
     # the replacement lifecycle refusing a second or a sealed replacement
     # (ReplaceMaterializedView, whose replacements pile up unfinalized in the
-    # workload). Tracked separately so such actions don't trip the
-    # broken-action assertion below.
+    # workload). "unknown cluster 'dont_exist'" comes from FlipFlags setting the
+    # default cluster to a nonexistent one to hunt for panics, so any action
+    # needing a cluster fails with it while that flag is live. Tracked
+    # separately so such actions don't trip the broken-action assertion below.
     noise = {
         "must be owner of",
         "permission denied for",
@@ -524,6 +526,7 @@ def print_stats(
         "another session modified the catalog while this DDL transaction was open",
         "because it already has a replacement",
         "is sealed and thus cannot be replaced",
+        "unknown cluster 'dont_exist'",
     }
     if scenario == Scenario.Rename:
         # Concurrent renames invalidate the qualified names an action captured

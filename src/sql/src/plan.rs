@@ -621,6 +621,10 @@ pub struct ComputeReplicaIntrospectionConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ComputeReplicaConfig {
     pub introspection: Option<ComputeReplicaIntrospectionConfig>,
+    /// Whether arrangements on this replica request dictionary compression. The
+    /// gating feature flag decides whether a replica honors this value at
+    /// creation time.
+    pub arrangement_compression: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -2100,6 +2104,7 @@ pub struct PlanClusterOption {
     pub availability_zones: AlterOptionParameter<Vec<String>>,
     pub introspection_debugging: AlterOptionParameter<bool>,
     pub introspection_interval: AlterOptionParameter<OptionalDuration>,
+    pub arrangement_compression: AlterOptionParameter<bool>,
     pub managed: AlterOptionParameter<bool>,
     pub replicas: AlterOptionParameter<Vec<(String, ReplicaConfig)>>,
     pub replication_factor: AlterOptionParameter<u32>,
@@ -2117,6 +2122,7 @@ impl Default for PlanClusterOption {
             availability_zones: AlterOptionParameter::Unchanged,
             introspection_debugging: AlterOptionParameter::Unchanged,
             introspection_interval: AlterOptionParameter::Unchanged,
+            arrangement_compression: AlterOptionParameter::Unchanged,
             managed: AlterOptionParameter::Unchanged,
             replicas: AlterOptionParameter::Unchanged,
             replication_factor: AlterOptionParameter::Unchanged,

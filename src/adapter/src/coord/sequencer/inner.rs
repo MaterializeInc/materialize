@@ -4953,7 +4953,7 @@ impl Coordinator {
     ///   `set_dataflow_metainfo`,
     /// - and returns a future that resolves once the builtin-table append
     ///   has been observed, or `None` if nothing was appended.
-    async fn persist_dataflow_metainfo(
+    fn persist_dataflow_metainfo(
         &mut self,
         df_meta: DataflowMetainfo<Arc<OptimizerNotice>>,
         export_id: GlobalId,
@@ -4973,12 +4973,7 @@ impl Coordinator {
             // Save the metainfo.
             self.catalog_mut().set_dataflow_metainfo(export_id, df_meta);
 
-            Some(
-                self.builtin_table_update()
-                    .execute(builtin_table_updates)
-                    .await
-                    .0,
-            )
+            Some(self.builtin_table_update().execute(builtin_table_updates))
         } else {
             // Save the metainfo.
             self.catalog_mut().set_dataflow_metainfo(export_id, df_meta);
