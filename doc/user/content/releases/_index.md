@@ -23,15 +23,27 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-07-21* <br>
 *Released to Materialize Self-Managed: 2026-07-21* <br>
 
-### Background cluster reconfiguration {#v26.34-background-cluster-reconfiguration}
-The cluster controller is now enabled by default. `ALTER CLUSTER` for configuration changes (such as resizing) now returns immediately and converges in the background, rather than blocking until the new replica set is ready. `CREATE CLUSTER` and `ALTER CLUSTER` also accept the new `AUTO SCALING STRATEGY` option for configuring hydration-burst autoscaling behavior.
+### Graceful Cluster Reconfiguration {#v26.34-background-cluster-reconfiguration}
+`ALTER CLUSTER` for configuration changes (such as resizing) now returns immediately and converges in the background, rather than blocking until the new replica set is ready. `CREATE CLUSTER` and `ALTER CLUSTER` also accept the new `AUTO SCALING STRATEGY` option for configuring hydration-burst autoscaling behavior.
+
+### Autoscaling to speed up hydration {#v26.34-autoscaling-hydration}
+Managed clusters can now temporarily scale up while hydrating and scale back down once caught up, reducing hydration time without permanently provisioning a larger cluster. Configure this behavior with the new `AUTO SCALING STRATEGY` option on [`CREATE CLUSTER`](/sql/create-cluster/) and `ALTER CLUSTER`.
 
 ### AWS Glue Schema Registry Support for Sinks {#v26.34-aws-glue-schema-registry-support-sinks}
-Kafka sinks can now use AWS Glue Schema Registry for Avro schema management via the new `FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY` syntax on `CREATE SINK`, as an alternative to the Confluent Schema Registry. This is currently available on Materialize Cloud only.
+
+<red>*Materialize Cloud only*</red>
+
+Kafka sinks can now use [AWS Glue Schema Registry](/sql/create-connection/#aws-glue-schema-registry) for Avro schema management via the new `FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY` syntax on `CREATE SINK`, as an alternative to the Confluent Schema Registry.
+
+### Role Mapping via SCIM {#v26.34-role-mapping-scim}
+
+<red>*Materialize Cloud only*</red>
+
+You can now map identity provider groups to Materialize roles via SCIM, automatically syncing group membership from your identity provider to role assignments in Materialize. For details, see [Sync IdP groups](/security/cloud/users-service-accounts/sync-idp-groups/).
 
 ### Improvements {#v26.34-improvements}
-- **Azure SQL source support**: Materialize can now ingest data from Azure SQL databases using the SQL Server source connector.
-- **Configurable Iceberg sink commit interval**: The commit interval of an existing Iceberg sink can now be altered using `ALTER ... SET COMMIT INTERVAL`, with a minimum of 1 second.
+- **Azure SQL source support**: Materialize can now ingest data from Azure SQL databases using the [SQL Server source connector](/ingest-data/sql-server/).
+- **Configurable Iceberg sink commit interval**: The [commit interval](/sql/create-sink/iceberg/#commit-interval-tradeoffs) of an existing Iceberg sink can now be altered using `ALTER ... SET COMMIT INTERVAL`, with a minimum of 1 second.
 - **MCP query tool replica routing**: The MCP developer query tool now accepts a `cluster_replica` parameter, enabling `EXPLAIN ANALYZE` on clusters with more than one replica.
 - **Smaller container images**: The `environmentd` and `clusterd` container images now use a distroless base, reducing image size and attack surface for Self-Managed deployments.
 
