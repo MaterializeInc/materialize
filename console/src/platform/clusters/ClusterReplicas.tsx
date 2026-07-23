@@ -42,6 +42,7 @@ import {
 } from "~/layouts/listPageComponents";
 import docUrls from "~/mz-doc-urls.json";
 import { ClusterParams } from "~/platform/clusters/ClusterRoutes";
+import { useAllClusters } from "~/store/allClusters";
 import { MaterializeTheme } from "~/theme";
 import { assert } from "~/util";
 
@@ -49,8 +50,8 @@ import { CLUSTERS_FETCH_ERROR_MESSAGE } from "./constants";
 import NewReplicaModal from "./NewReplicaModal";
 import {
   useClusterReplicasWithUtilization,
-  useClusters,
   useMaxReplicasPerCluster,
+  useOwners,
 } from "./queries";
 
 export const ClusterReplicasPage = () => {
@@ -70,8 +71,12 @@ const ClusterReplicasInner = () => {
 
   const { clusterId, clusterName } = useParams<ClusterParams>();
   assert(clusterId);
-  const { getClusterById } = useClusters();
+  const { getClusterById } = useAllClusters();
   const cluster = getClusterById(clusterId);
+  const { data: ownersById } = useOwners();
+  const isClusterOwner = cluster
+    ? (ownersById?.get(cluster.ownerId) ?? false)
+    : false;
   const { data: replicas, refetch } = useClusterReplicasWithUtilization({
     clusterId,
   });
@@ -93,7 +98,7 @@ const ClusterReplicasInner = () => {
         <Text textStyle="heading-sm">Replicas</Text>
         {cluster &&
           !cluster.managed &&
-          cluster.isOwner &&
+          isClusterOwner &&
           replicas &&
           maxReplicas &&
           replicas.length < maxReplicas && (

@@ -18,6 +18,9 @@ import {
   mapKyselyToTabular,
 } from "~/api/mocks/buildSqlQueryHandler";
 import server from "~/api/mocks/server";
+import { getStore } from "~/jotai";
+import { allClusters } from "~/store/allClusters";
+import { mockSubscribeState } from "~/test/mockSubscribe";
 import { renderComponent } from "~/test/utils";
 
 import ClusterReplicas from "./ClusterReplicas";
@@ -44,11 +47,8 @@ const replicasWithUtilizationColumns = buildColumns([
   { name: "isOwner", type_oid: MzDataType.bool },
 ]);
 
-const {
-  detailPageCluster,
-  detailPageSetupHandler,
-  detailPageInitialRouteEntries,
-} = detailPageSetupHelpers();
+const { detailPageCluster, detailPageInitialRouteEntries } =
+  detailPageSetupHelpers();
 
 const emptyReplicaListHandler = buildSqlQueryHandlerV2({
   queryKey: clusterQueryKeys.replicasWithUtilization({
@@ -85,7 +85,8 @@ const validReplicaListHandler = buildSqlQueryHandlerV2({
 
 describe("ClusterReplicas", () => {
   beforeEach(() => {
-    server.use(detailPageSetupHandler);
+    const store = getStore();
+    store.set(allClusters, mockSubscribeState({ data: [detailPageCluster] }));
   });
 
   it("shows a spinner initially", async () => {
