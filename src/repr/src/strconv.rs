@@ -1778,8 +1778,10 @@ struct ListElementEscaper;
 
 impl ElementEscaper for ListElementEscaper {
     fn needs_escaping(elem: &[u8]) -> bool {
+        // The parser treats any case variant of unquoted "NULL" as null, so
+        // any such element must be quoted to round-trip.
         elem.is_empty()
-            || elem == b"NULL"
+            || elem.eq_ignore_ascii_case(b"NULL")
             || elem
                 .iter()
                 .any(|c| matches!(c, b'{' | b'}' | b',' | b'"' | b'\\') || c.is_ascii_whitespace())
@@ -1795,7 +1797,7 @@ struct MapElementEscaper;
 impl ElementEscaper for MapElementEscaper {
     fn needs_escaping(elem: &[u8]) -> bool {
         elem.is_empty()
-            || elem == b"NULL"
+            || elem.eq_ignore_ascii_case(b"NULL")
             || elem.iter().any(|c| {
                 matches!(c, b'{' | b'}' | b',' | b'"' | b'=' | b'>' | b'\\')
                     || c.is_ascii_whitespace()
