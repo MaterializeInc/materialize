@@ -89,6 +89,8 @@ additional applications in the [Service accounts](#service-accounts) section.
 
    **Custom domains:** When the authorization server **Issuer** is set to **Dynamic (based on Request Domain)**, Okta issues tokens whose `iss` claim uses your custom domain (for example, `https://sso.your-org.com/oauth2/default`) instead of the default Okta URL. Configure the `oidc_issuer` system parameter in Materialize to match that issuer value exactly.
 
+   {{% include-headless "/headless/okta-custom-authorization-server-warning" %}}
+
 1. Go to the **Assignments** tab and assign the users or groups that should have
    access to Materialize.
 
@@ -479,6 +481,91 @@ Materialize validates the token at **connection time only**. Once a connection
 is established, it persists until disconnected, regardless of token expiry.
 {{</ note >}}
 
+
+## Connecting MCP clients
+
+*OAuth sign-in for MCP clients is available starting in v26.31.*
+
+Materialize provides built-in [MCP servers](/integrations/mcp-server/) at
+`/api/mcp/agent` and `/api/mcp/developer`. When SSO is enabled, MCP clients
+can authenticate with OAuth instead of an [MCP
+token](/integrations/mcp-server/mcp-agent/#method-2-token-based-authentication).
+Materialize publishes OAuth 2.0 Protected Resource Metadata ([RFC
+9728](https://datatracker.ietf.org/doc/html/rfc9728)) at
+`/.well-known/oauth-protected-resource`, which MCP-aware clients use to
+discover your identity provider automatically.
+
+Unlike the console, which authenticates with an ID token, MCP clients present
+an OAuth **access token**. Access tokens have additional requirements:
+
+1. **Pre-register an OIDC client for MCP.** The MCP specification expects the
+   IdP to support anonymous Dynamic Client Registration ([RFC
+   7591](https://datatracker.ietf.org/doc/html/rfc7591)). Most enterprise
+   IdPs, including Okta, do not allow anonymous registration, so MCP clients
+   fail during registration (in Okta, with HTTP 403 `E0000005`). Instead,
+   create or reuse a public OIDC client with PKCE, add
+   `http://localhost:<port>/callback` as a sign-in redirect URI, and configure
+   the MCP client with the client ID explicitly.
+
+1. **Include the authentication claim in access tokens.** IdPs typically
+   include claims like `email` only in ID tokens. If
+   `oidc_authentication_claim` is set to `email`, configure your authorization
+   server to add an `email` claim to access tokens (in Okta, a claim with
+   value `user.email`, included in the access token). Otherwise Materialize
+   rejects the token because the authentication claim is missing.
+
+1. **Add the authorization server audience to `oidc_audience`.** The `aud`
+   claim of an access token is the authorization server's audience value, not
+   the client ID. For Okta's default authorization server this is
+   `api://default`. Materialize also validates ID tokens (browser sign-in),
+   whose `aud` claim is the console client ID, so both values must be
+   present in `oidc_audience`. Add the audience entries to the array,
+   preserving any existing values:
+
+   ```mzsql
+   ALTER SYSTEM SET oidc_audience = '["YOUR_CLIENT_ID", "api://default"]';
+   ```
+
+   If several applications share this authorization server, consider
+   creating a Materialize-dedicated custom authorization server in Okta so
+   only tokens issued for Materialize carry the `api://materialize`-style
+   audience. Otherwise any application on the same authorization server
+   receives tokens with `aud=api://default`, which Materialize would then
+   accept.
+
+1. **Optional: define an `mcp.read` scope.** Materialize advertises the
+   `mcp.read` scope in its resource metadata. The scope is not enforced by
+   Materialize (authorization happens through
+   [RBAC](/security/self-managed/access-control/)), but clients that request
+   advertised scopes fail against IdPs that reject unknown scopes, such as
+   Okta, unless the scope exists on the authorization server.
+
+1. **Optional: add the `offline_access` scope for refresh tokens.** MCP
+   clients typically request `offline_access` so they can refresh access
+   tokens without a new browser sign-in. Okta and most enterprise IdPs
+   require this scope to exist on the authorization server. If the client
+   fails to reconnect after the first access token expires, add
+   `offline_access` to the authorization server's scopes.
+
+1. **Connect your MCP client.** For example, to connect Claude Code to the
+   `materialize-agent` MCP server with a pre-registered client:
+
+   ```shell
+   claude mcp add --transport http materialize-agent \
+     https://<host>:6876/api/mcp/agent \
+     --client-id <YOUR_CLIENT_ID> --callback-port 8080
+   ```
+
+   The `--callback-port` value must match the
+   `http://localhost:<port>/callback` redirect URI registered on the OIDC
+   client. For more information, see
+   [MCP servers](/integrations/mcp-server/).
+
+{{< note >}}
+Deployments behind a load balancer or proxy that rewrites the `Host` header
+must set the `http_host_name` configuration so that the URLs Materialize
+publishes in its resource metadata are correct.
+{{</ note >}}
 
 ## Provisioning roles
 
@@ -944,6 +1031,9 @@ DROP ROLE <username>;
 | "Invalid token" error on psql connection | Wrong or expired JWT token | Obtain a fresh token; verify `oidc_issuer` matches the token's `iss` claim |
 | "Audience validation failed" | Client ID not in `oidc_audience` | Add the client ID to `oidc_audience`: `ALTER SYSTEM SET oidc_audience = '["your-client-id"]'` |
 | User gets wrong role name | `oidc_authentication_claim` set to wrong claim | Verify the claim name and check the JWT contents (e.g., using [jwt.io](https://jwt.io)) |
+| MCP client fails during registration with the IdP (HTTP 403) | The IdP does not support anonymous Dynamic Client Registration | Pre-register an OIDC client and configure the MCP client with its client ID. See [Connecting MCP clients](#connecting-mcp-clients) |
+| MCP client login fails with `invalid_scope` | The client requested the advertised `mcp.read` scope, which does not exist on the authorization server | Add an `mcp.read` scope to the authorization server, or configure the client to request only standard scopes |
+| MCP client completes login but the connection is rejected | Access token `aud` is not in `oidc_audience`, or the authentication claim is missing from access tokens | See [Connecting MCP clients](#connecting-mcp-clients) |
 
 To inspect the current OIDC configuration, login as `mz_system` and run the following SQL:
 

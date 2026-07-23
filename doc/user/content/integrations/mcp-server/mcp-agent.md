@@ -321,8 +321,13 @@ URL: `<baseURL>/api/mcp/agent`.
 
 {{< tab "Self-Managed" >}}
 
-Self-Managed deployments using OAuth require SSO, which uses TLS. Get your MCP
-server URL from the Materialize Console:
+Self-Managed deployments using OAuth require SSO, which uses TLS. Your
+identity provider may also need additional configuration for MCP clients, such
+as a pre-registered OAuth client if your IdP does not support anonymous
+dynamic client registration. See [Connecting MCP
+clients](/security/self-managed/sso/#connecting-mcp-clients).
+
+Get your MCP server URL from the Materialize Console:
 
 1. Log in via the Materialize Console.
 
@@ -357,6 +362,21 @@ In the following, replace `<baseURL>` with the MCP server URL from [Step
    claude mcp add --transport http "materialize-agent" \
      "<baseURL>/api/mcp/agent"
    ```
+
+   For Self-Managed deployments using OAuth with a pre-registered OIDC
+   client, add `--client-id` and `--callback-port`:
+
+   ```sh
+   claude mcp add --transport http "materialize-agent" \
+     "<baseURL>/api/mcp/agent" \
+     --client-id <YOUR_CLIENT_ID> --callback-port 8080
+   ```
+
+   The `--callback-port` value must match the
+   `http://localhost:<port>/callback` redirect URI registered on the OIDC
+   client. See [Connecting MCP
+   clients](/security/self-managed/sso/#connecting-mcp-clients) for
+   the full IdP configuration.
 
 1. Restart Claude Code. On first connection, your browser opens to complete
    sign-in and connect.
