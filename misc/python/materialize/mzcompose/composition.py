@@ -1393,6 +1393,19 @@ class Composition:
 
             self.kill("materialized")
             self.up("materialized")
+
+            # The SIGKILL above severed every SQL connection the workflow left
+            # cached (`sql`/`sql_query` reuse connections by default). Close and
+            # forget them so the checks below reconnect to the restarted
+            # `environmentd`. Reusing a dead socket would surface as a spurious
+            # "server closed the connection unexpectedly".
+            for conn in self.conns.values():
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            self.conns.clear()
+
             self.sql("SELECT 1")
 
             NUM_RETRIES = 60
