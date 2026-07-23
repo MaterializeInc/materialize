@@ -10,11 +10,9 @@
 import { render, screen } from "@testing-library/react";
 import React, { ReactElement } from "react";
 
-import { DailyCosts } from "~/api/cloudGlobalApi";
 import {
   buildCloudRegionsReponse,
   buildCreditsResponse,
-  generateDailyCostResponsePayload,
 } from "~/api/mocks/cloudGlobalApiHandlers";
 import server from "~/api/mocks/server";
 import {
@@ -23,10 +21,7 @@ import {
   setFakeEnvironment,
 } from "~/test/utils";
 
-import { ROLLING_AVG_TIME_RANGE_LOOKBACK_DAYS } from "./constants";
 import { UpgradedPlanDetails } from "./PlanDetails";
-import { getDayAlignedRange } from "./queries";
-import { summarizePlanCosts } from "./utils";
 
 const Wrapper = await createProviderWrapper({
   initializeState: ({ set }) =>
@@ -42,144 +37,10 @@ describe("UpgradedPlanDetails", () => {
     server.use(buildCloudRegionsReponse(), buildCreditsResponse());
   });
 
-  it("renders successfully for all regions", async () => {
-    const [startDate, endDate] = getDayAlignedRange(
-      ROLLING_AVG_TIME_RANGE_LOOKBACK_DAYS,
-    );
-    const payload = generateDailyCostResponsePayload(startDate, endDate);
-    renderComponent(
-      <UpgradedPlanDetails region="all" dailyCosts={payload} timeSpan={7} />,
-    );
+  it("renders successfully", async () => {
+    renderComponent(<UpgradedPlanDetails />);
 
     expect(await screen.findByText("Capacity")).toBeVisible();
     expect(await screen.findByText("Total balance")).toBeVisible();
-  });
-
-  it("hides region breakdown when filtering regions", async () => {
-    const [startDate, endDate] = getDayAlignedRange(
-      ROLLING_AVG_TIME_RANGE_LOOKBACK_DAYS,
-    );
-    const payload = generateDailyCostResponsePayload(startDate, endDate);
-    renderComponent(
-      <UpgradedPlanDetails
-        region="aws/us-east-1"
-        dailyCosts={payload}
-        timeSpan={7}
-      />,
-    );
-    const planDetails = await screen.findByTestId("plan-details");
-    expect(planDetails.textContent).toContain("Capacity");
-    expect(planDetails.textContent).toContain("Total balance");
-    expect(screen.queryAllByText("aws/us-east-1")[0]).not.toBeVisible();
-  });
-
-  it("correctly handles midday plan changes", () => {
-    const costData: DailyCosts["daily"] = [
-      {
-        startDate: "2024-01-12T00:00:00Z",
-        endDate: "2024-01-13T12:00:00Z",
-        subtotal: "1.00",
-        total: "1.00",
-        costs: {
-          compute: {
-            subtotal: "0.50",
-            total: "0.50",
-            prices: [
-              {
-                regionId: "aws/us-east-1",
-                replicaSize: "large",
-                unitAmount: "1.20",
-                subtotal: "0.50",
-              },
-            ],
-          },
-          storage: {
-            subtotal: "0.50",
-            total: "0.50",
-            prices: [
-              {
-                regionId: "aws/us-east-1",
-                unitAmount: "0.000081",
-                subtotal: "0.50",
-              },
-            ],
-          },
-        },
-      },
-      {
-        startDate: "2024-01-13T00:00:00Z",
-        endDate: "2024-01-13T12:00:00Z",
-        subtotal: "1.00",
-        total: "1.00",
-        costs: {
-          compute: {
-            subtotal: "0.50",
-            total: "0.50",
-            prices: [
-              {
-                regionId: "aws/us-east-1",
-                replicaSize: "large",
-                unitAmount: "1.20",
-                subtotal: "0.50",
-              },
-            ],
-          },
-          storage: {
-            subtotal: "0.50",
-            total: "0.50",
-            prices: [
-              {
-                regionId: "aws/us-east-1",
-                unitAmount: "0.000081",
-                subtotal: "0.50",
-              },
-            ],
-          },
-        },
-      },
-      {
-        startDate: "2024-01-13T12:00:00Z",
-        endDate: "2024-01-14T00:00:00Z",
-        subtotal: "2.00",
-        total: "2.00",
-        costs: {
-          compute: {
-            subtotal: "1.50",
-            total: "1.50",
-            prices: [
-              {
-                regionId: "aws/us-east-1",
-                replicaSize: "large",
-                unitAmount: "1.50",
-                subtotal: "1.50",
-              },
-            ],
-          },
-          storage: {
-            subtotal: "0.50",
-            total: "0.50",
-            prices: [
-              {
-                regionId: "aws/us-east-1",
-                unitAmount: "0.000081",
-                subtotal: "0.50",
-              },
-            ],
-          },
-        },
-      },
-    ];
-    const { spanSummary, last30Summary } = summarizePlanCosts(
-      costData,
-      2,
-      new Map([
-        [
-          "aws/us-east-1",
-          { provider: "aws", region: "us-east-1", regionApiUrl: "example.com" },
-        ],
-      ]),
-    );
-    expect(spanSummary.total).toEqual(4);
-    expect(last30Summary.total).toEqual(4);
   });
 });

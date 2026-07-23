@@ -3749,10 +3749,11 @@ def workflow_test_profile_fetch(c: Composition) -> None:
     # Regression test for CLU-109: a sampling frequency of zero used to reach
     # pprof's `Timer::new`, which computes `1_000_000 / hz` and panicked with a
     # division by zero, crashing the whole process. It must now be rejected with
-    # a clean error response instead.
+    # a clean error response instead. Parameter validation catches it at the
+    # request boundary and returns a 400.
     test_post(
         {"action": "time_fg", "time_secs": "1", "hz": "0"},
-        make_check(500, "Sampling frequency must be greater than zero."),
+        make_check(400, "`hz` must be greater than zero"),
     )
 
     # Deactivate memory profiling.

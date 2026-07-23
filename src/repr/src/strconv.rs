@@ -940,7 +940,7 @@ where
             }
 
             if builder.elements.is_empty() {
-                // Per PG, empty arrays are represented by empty dimensions
+                // Empty arrays are represented by empty dimensions
                 // rather than one dimension with 0 length.
                 return Ok((vec![], vec![]));
             }
@@ -1039,7 +1039,14 @@ where
             // Commit an element of this dimension
             self.commit_element(false)?;
 
+            let ndims = self.dimensions.len();
             let d = &mut self.dimensions[self.current_dim];
+
+            // Empty dimensions are only permitted in one-dimensional
+            // arrays, i.e. the only valid empty array literal is `{}`.
+            if d.committed_element_count == 0 && ndims > 1 {
+                return Err(UnexpectedChar(self.current_command_char));
+            }
 
             // Ensure that the elements in this dimension conform to the expected shape.
             match d.length {

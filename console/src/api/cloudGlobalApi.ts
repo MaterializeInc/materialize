@@ -27,7 +27,6 @@ export type Invoice = components["schemas"]["Invoice"];
 export type Region = components["schemas"]["Region"];
 export type Regions = components["schemas"]["Paginated_Region"];
 export type CreditBlock = components["schemas"]["CreditBlock"];
-export type DailyCosts = components["schemas"]["DailyCostResponse"];
 export type CostBreakdownAccount =
   components["schemas"]["CostBreakdownAccount"];
 export type CostBreakdownCluster =
@@ -35,12 +34,6 @@ export type CostBreakdownCluster =
 export type CostBreakdownDay = components["schemas"]["CostBreakdownDay"];
 export type DailyCostBreakdown =
   components["schemas"]["DailyCostBreakdownResponse"];
-export type AllCosts = components["schemas"]["AllCosts"];
-export type DailyCostKey = keyof components["schemas"]["AllCosts"];
-export type Prices =
-  | components["schemas"]["ComputePrice"]
-  | components["schemas"]["StoragePrice"]
-  | components["schemas"]["NetworkPrice"];
 export type Marketplace = components["schemas"]["Marketplace"];
 export type IntercomJwtResponse = components["schemas"]["IntercomJwtResponse"];
 export type CreateLicenseKeyRequest =

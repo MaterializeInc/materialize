@@ -7,13 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { addDays, differenceInDays, formatISO } from "date-fns";
 import { http, HttpResponse } from "msw";
 
 import {
   CreditBlock,
   DailyCostBreakdown,
-  DailyCosts,
   Invoice,
   Organization,
   Region,
@@ -45,69 +43,6 @@ export const buildCloudRegionsReponse = (
     };
     return HttpResponse.json(response, { status: options.status ?? 200 });
   });
-
-export function generateDailyCostResponsePayload(
-  startDate: Date,
-  endDate: Date,
-) {
-  const windowDuration = differenceInDays(endDate, startDate);
-  const days: DailyCosts["daily"] = [];
-  for (let dayOffset = 0; dayOffset < windowDuration; dayOffset++) {
-    const storagePrices: DailyCosts["daily"][0]["costs"]["storage"]["prices"] =
-      [];
-    const computePrices: DailyCosts["daily"][0]["costs"]["compute"]["prices"] =
-      [];
-    let computeSubtotal = 0,
-      storageSubtotal = 0;
-    for (const regionId of ["aws/us-east-1", "aws/eu-west-1"]) {
-      for (const replicaSize of ["xsmall", "small", "medium"]) {
-        const subtotal = Math.random() * 10_000;
-        computeSubtotal += subtotal;
-        computePrices.push({
-          unitAmount: "1.00",
-          regionId,
-          replicaSize,
-          subtotal: subtotal.toString(),
-        });
-      }
-      const subtotal = Math.random() * 10;
-      storageSubtotal += subtotal;
-      storagePrices.push({
-        subtotal: subtotal.toString(),
-        regionId: regionId,
-        unitAmount: "1.00",
-      });
-    }
-    days.push({
-      costs: {
-        storage: {
-          subtotal: storageSubtotal.toString(),
-          total: storageSubtotal.toString(),
-          prices: storagePrices,
-        },
-        compute: {
-          subtotal: computeSubtotal.toString(),
-          total: computeSubtotal.toString(),
-          prices: computePrices,
-        },
-      },
-      subtotal: (computeSubtotal + storageSubtotal).toString(),
-      total: (computeSubtotal + storageSubtotal).toString(),
-      startDate: formatISO(addDays(startDate, dayOffset)),
-      endDate: formatISO(addDays(startDate, dayOffset + 1)),
-    });
-  }
-  const subtotal = days.reduce(
-    (prevValue, day) => parseFloat(day.subtotal) + prevValue,
-    0,
-  );
-  const response: DailyCosts = {
-    subtotal: subtotal.toString(),
-    total: subtotal.toString(),
-    daily: days,
-  };
-  return response;
-}
 
 export const buildDailyCostBreakdownResponse = (
   options: { payload?: DailyCostBreakdown; status?: number } = {},

@@ -439,7 +439,7 @@ const AccountLedgerGroup = ({
             />
             <Tooltip label={account.external_customer_id}>
               <Text whiteSpace="nowrap">
-                {shortAccountId(account.external_customer_id)}
+                {account.name || shortAccountId(account.external_customer_id)}
               </Text>
             </Tooltip>
           </LedgerCell>

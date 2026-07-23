@@ -8,79 +8,10 @@
 // by the Apache License, Version 2.0.
 
 import { UTCDate } from "@date-fns/utc";
-import { addMonths, parseISO, startOfMonth, subDays } from "date-fns";
+import { addMonths, startOfMonth } from "date-fns";
 
-import { DailyCosts, Organization } from "~/api/cloudGlobalApi";
+import { Organization } from "~/api/cloudGlobalApi";
 import { components } from "~/api/schemas/global-api";
-import { CloudRegion } from "~/store/cloudRegions";
-
-import { ROLLING_AVG_TIME_RANGE_LOOKBACK_DAYS } from "./constants";
-import { RegionGroupedSummary } from "./types";
-
-export function summarizePlanCosts(
-  dailyCosts: DailyCosts["daily"] | null,
-  timeSpan: number,
-  availableRegions: Map<string, CloudRegion>,
-) {
-  // Since we only return non-zero buckets from the API endpoint, ensure we're
-  // always showing known-available regions.
-  const defaultRegionEntries: Array<[string, number]> = Array.from(
-    availableRegions.keys(),
-  ).map((regionId) => [regionId, 0]);
-  const spanSummary: RegionGroupedSummary = {
-    total: 0,
-    regions: new Map(defaultRegionEntries),
-  };
-  const last30Summary: RegionGroupedSummary = {
-    total: 0,
-    regions: new Map(defaultRegionEntries),
-  };
-  if (dailyCosts === null) return { spanSummary, last30Summary };
-  const lastStartDate = parseISO(dailyCosts[dailyCosts.length - 1].startDate);
-  // If a plan has changed mid-day, the start date of the last slice may not
-  // start at midnight. Align the time component to the start of the day.
-  lastStartDate.setUTCHours(0, 0, 0, 0);
-  for (const day of dailyCosts) {
-    const startDate = parseISO(day.startDate);
-    const isWithin30Days =
-      subDays(
-        lastStartDate,
-        ROLLING_AVG_TIME_RANGE_LOOKBACK_DAYS - 1,
-      ).getTime() <= startDate.getTime();
-    // Whether or not the day being computed is within the filtered window. We
-    // need to check this because the minimum queried span is 30 days, but the
-    // client may filter down to as low as 7 days.
-    const isWithinTimeRange =
-      subDays(lastStartDate, timeSpan - 1).getTime() <= startDate.getTime();
-    for (const costCategory of Object.values(day.costs)) {
-      for (const { regionId, subtotal } of costCategory.prices) {
-        if (regionId === "global") {
-          // Unattributable to a region.
-          continue;
-        }
-        if (isWithinTimeRange) {
-          spanSummary.regions.set(
-            regionId,
-            // Don't assume the region entry exists (a customer could have lost
-            // access to a region)
-            (spanSummary.regions.get(regionId) ?? 0) + parseFloat(subtotal),
-          );
-          spanSummary.total += parseFloat(subtotal);
-        }
-        if (isWithin30Days) {
-          last30Summary.regions.set(
-            regionId,
-            // Don't assume the region entry exists (a customer could have lost
-            // access to a region)
-            (last30Summary.regions.get(regionId) ?? 0) + parseFloat(subtotal),
-          );
-          last30Summary.total += parseFloat(subtotal);
-        }
-      }
-    }
-  }
-  return { spanSummary, last30Summary };
-}
 
 export function getIsUpgradedPlan(
   planType: components["schemas"]["PlanType"] | undefined,
