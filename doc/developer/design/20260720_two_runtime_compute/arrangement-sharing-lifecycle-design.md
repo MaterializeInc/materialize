@@ -6,14 +6,15 @@ The interactive compute runtime reads index arrangements maintained by the
 maintenance runtime through a per-process sharing registry.
 A per-process multiplexer fronts both runtimes, splitting the controller's one
 command stream between them.
-Today the interactive sub-protocol is malformed (it references maintained ids it
-never created), and the read path hand-rolls differential's stream and trace
-consistency across the two-timely-world boundary, which panics.
+Today the read path hand-rolls differential's stream and trace consistency across
+the two-timely-world boundary, which panics, and the interactive sub-protocol
+imports maintained ids it never created.
 
 This document defines the lifecycle on three principles:
 build on a correct protocol and panic on anything outside it, keep dataflow
 construction deterministic across workers, and have the multiplexer split the one
-correct protocol into two correct sub-protocols.
+controller protocol into a standard maintenance sub-protocol and an interactive
+sub-protocol whose index imports are shared registry imports.
 It corrects the read path rather than replacing it, keeping the frontier-tracked
 replay that gives a differential join its correctness and fixing only the
 unsynchronized feed that panics.
@@ -55,12 +56,13 @@ process-wide once two runtimes share one arrangement.
    reader has completed. Teardown safety follows from this, with no lease and no
    withheld command. A panic takes down both runtimes of the process, which is
    correct: the two runtimes share fate, and there is nothing to isolate.
-2. **The multiplexer splits into two correct sub-protocols.** The multiplexer
-   splits the controller's one correct protocol into two, one per runtime, each
-   itself a correct instantiation. The maintenance sub-protocol is well-formed
-   already. The interactive sub-protocol references maintained ids created on the
-   maintenance side, so the multiplexer makes it well-formed with an `Import`
-   command (below).
+2. **The multiplexer splits into two well-defined sub-protocols.** The
+   maintenance sub-protocol is the standard protocol. The interactive
+   sub-protocol is a variant: its index imports are shared registry imports, a
+   self-describing import kind that references a maintained id without a prior
+   local `CreateDataflow`. This is not an ad-hoc exception, it is the definition
+   of what the interactive runtime does, since it holds no traces of its own and
+   reads every index it imports from the registry.
 3. **Deterministic construction.** All workers of a runtime must build dataflows
    in the same order, because timely allocates exchange-channel identifiers from
    a per-worker construction-order counter. We render in command arrival order
@@ -83,9 +85,9 @@ Only process 0's multiplexer receives the routable commands (`Peek`,
 `CreateDataflow`, `AllowCompaction`).
 It forwards them onto the runtime command channel, whose worker-0 broadcast
 delivers them to every worker of that runtime on every process.
-So the `Import` commands the multiplexer synthesizes are authored once on
-process 0 and reach every worker through the existing broadcast, with no shared
-memory and no per-process coordination.
+So the multiplexer's routing decisions are made once on process 0 and cover every
+worker through the existing broadcast, with no shared memory and no per-process
+coordination.
 
 ## The bounded-read boundary
 
@@ -155,9 +157,8 @@ The `TraceAgent` that writes it lives in the publisher's sink closure, not in
 
 Whichever runtime touches an id first creates its publication point.
 
-* Interactive-first: on `Import(id)` (or when a read of `id` renders) the
-  interactive runtime creates a placeholder slot and builds live imports against
-  it.
+* Interactive-first: when a read of `id` renders, the interactive runtime creates
+  a placeholder slot and builds a live import against it.
 * Maintenance-first: the maintenance runtime creates the slot and adopts it in
   the same step, the current behavior.
 
@@ -173,12 +174,17 @@ a dedicated cross-thread test.
 An import registered against a placeholder that is never adopted, because index
 creation is cancelled before it publishes, would otherwise hold its frontier at
 the minimum forever.
-The publication point supports a terminal close: it is marked closed and its
-importer queues receive a terminal empty frontier, mirroring the publisher's
-existing close-on-drop path, which completes the interactive read rather than
-wedging it.
-The `Import` withdrawal is what triggers the close, so a placeholder is closed
-exactly when the controller withdraws the maintained id.
+Two events close a placeholder, both already in the system:
+
+* Adopted then dropped: when the maintenance publisher drops the index, its
+  existing close-on-drop path pushes a terminal empty frontier to every importer.
+* Never adopted: the query importing the placeholder is itself dropped or
+  cancelled by the controller (its dependency's creation failed), which releases
+  the import. The registry evicts the placeholder when its last reader is gone.
+
+So no explicit withdrawal command is needed. Teardown rides the reader's own
+lifecycle and the maintenance drop, both of which a correct protocol delivers
+after every reader has completed.
 
 ## The import: frontier-tracked replay, single-sourced
 
@@ -219,43 +225,34 @@ A violation is a protocol error (the controller offered an `as_of` below the
 readable frontier), so it panics rather than reading coalesced data silently.
 This is the check the interactive path is missing today.
 
-## The interactive sub-protocol: the Import command
+## The interactive sub-protocol: shared imports
 
 The controller's protocol is well-formed for one instance: every id a `Peek` or a
 `CreateDataflow` references was created by a prior `CreateDataflow` and not yet
 compacted to empty.
-The multiplexer splits that protocol in two.
-The maintenance sub-protocol keeps the durable creates and drops and stays
-well-formed.
-The interactive sub-protocol keeps the reads, but those reference maintained ids
-created on the maintenance side, so on its own it is malformed.
+The interactive sub-protocol keeps the reads, which reference maintained ids
+created on the maintenance side, so it cannot obey that rule as written.
 
-The multiplexer makes it well-formed with an `Import` command, a new command the
-controller never sends and never sees.
-When the multiplexer routes a maintained index's `CreateDataflow` to maintenance,
-it also sends `Import(id)` to interactive, declaring that `id` is available to
-import from the shared registry.
-When it routes that index's drop, it sends the matching withdrawal to interactive.
-A `Peek` or `CreateDataflow` that references `id` on the interactive runtime is
-then well-formed, since `id` was declared by a prior `Import`.
+It obeys a variant rule instead: an index import on the interactive runtime is a
+shared import, satisfied from the registry rather than from a locally created
+collection.
+This needs no new command.
+An interactive query's `Get(id)` is already a dataflow import, and the interactive
+runtime already resolves it from the registry by role, since it holds no traces of
+its own.
+We formalize that: the interactive sub-protocol's index imports are shared imports,
+self-describing references to registry ids that require no prior local creation.
 
-`Import` also carries the placeholder lifecycle.
-On `Import(id)` the interactive runtime get-or-creates the registry slot for `id`,
-a placeholder if maintenance has not published yet, the real arrangement once it
-has.
-On the withdrawal it closes that slot, delivering a terminal empty frontier to
-any importer still bound to it.
-This is the close that a placeholder needs, since a placeholder's `since` is the
-minimum frontier and the `since` check below cannot fire for it.
-Because a correct protocol drops `id` only after every reader has completed
-(Principle 1), the withdrawal arrives after interactive's reads of `id` are done,
-so the close is safe.
+Nothing declares `id` ahead of the read and nothing withdraws it.
+The read's `Get(id)` creates or binds the registry slot through get-or-create,
+placeholder or adopted, and teardown rides the reader's own lifecycle and the
+maintenance drop, as described under Never adopted.
 
-There is no lease, no refcount, and no withheld command.
-Teardown safety is the controller's read-hold discipline, which a correct
-protocol already provides.
-The multiplexer's only job is to keep each sub-protocol well-formed, and a
-reference the tracking cannot explain is a malformed protocol, so it panics.
+There is no lease, no refcount, no withheld command, and no import command.
+Teardown safety is the controller's read-hold discipline, which a correct protocol
+already provides.
+The multiplexer's only jobs are to route by the bounded-read predicate and to
+forward each sub-protocol unchanged otherwise.
 
 ## What changes
 
@@ -263,11 +260,9 @@ reference the tracking cannot explain is a malformed protocol, so it panics.
   replay from a single trace-derived source.
 * `SharedTrace` gains a placeholder constructor and an adopt path, and the
   registry gains get-or-create in place of create-and-overwrite.
-* The publication point gains a terminal close, triggered by the `Import`
-  withdrawal.
-* The multiplexer synthesizes `Import(id)` and its withdrawal to the interactive
-  runtime, mirroring maintained-index creates and drops, and gains the
-  bounded-read routing predicate.
+* The publication point gains a terminal close on its last reader leaving an
+  unadopted placeholder, alongside the existing close on the maintenance drop.
+* The multiplexer gains the bounded-read routing predicate. It adds no command.
 * Live `import()` (the unbounded, non-snapshot import) is removed, since the
   interactive runtime never issues an unbounded read. Its only callers are tests.
 
@@ -278,14 +273,12 @@ malformed one. It panics, which under shared fate takes down both runtimes.
 
 * `since > as_of` at capture: a protocol error (bad `as_of`), so it panics via the
   assert, rather than reading coalesced data silently.
-* A reference on the interactive runtime to an id no `Import` declared: a
-  malformed sub-protocol, so it panics rather than wedging on a missing slot.
 * An index dropped while a read is outstanding does not occur under a correct
   protocol, since the controller drops a maintained id only after every reader
   has completed.
-* Reconciliation drop-and-recreate of the same id: the withdrawal closes the old
-  slot, a fresh `Import` and get-or-create make a new one, and a placeholder import
-  fills in place. No spurious failure.
+* Reconciliation drop-and-recreate of the same id: the maintenance drop closes the
+  old slot, and a get-or-create for the recreated id makes a new one that a
+  placeholder import fills in place. No spurious failure.
 * Non-bounded, subscribe, or copy-to dataflow reaching the interactive router:
   routed to maintenance instead, with a `debug_assert` on the interactive
   `CreateDataflow` path as a tripwire for a routing bug, itself a protocol error.
@@ -297,11 +290,11 @@ malformed one. It panics, which under shared fate takes down both runtimes.
   with no doubling. A single-sourced replay feed does not panic when the trace
   advances ahead of the stream within a step.
 * Unit, `sharing.rs`: get-or-create races between a placeholder-creating reader
-  and an adopting publisher, cross-thread, converge on one slot. The `Import`
-  withdrawal closes a placeholder's importers with a terminal frontier.
-* Unit, multiplexer: `Import(id)` is synthesized to interactive on a maintained
-  index create and its withdrawal on the drop. The bounded-read predicate routes
-  a subscribe and a copy-to to maintenance and a bounded query to interactive.
+  and an adopting publisher, cross-thread, converge on one slot. A placeholder
+  whose last reader leaves, and one whose adopted index is dropped, both close
+  their importers with a terminal frontier.
+* Unit, multiplexer: the bounded-read predicate routes a subscribe and a copy-to
+  to maintenance and a bounded query to interactive.
 * Regression under two-runtime on: `information_schema_columns.slt` and
   `object_ownership.slt` (row-doubling), `linear-join-fuel.td` (the panic),
   `materializations.td` (drop index), and the reported slt pairs.
@@ -310,8 +303,8 @@ malformed one. It panics, which under shared fate takes down both runtimes.
 
 ## Non-goals
 
-* No new controller-visible command or response. `Import` is internal to the
-  multiplexer-to-interactive stream, never seen by the controller.
+* No new command or response, and no import command. The interactive
+  sub-protocol's shared imports are an import kind, not a new verb.
 * No teardown coordination in compute. A correct protocol drops a maintained id
   only after every reader has completed.
 * No change to subscribe or copy-to routing beyond making the copy-to exclusion
@@ -326,16 +319,15 @@ malformed one. It panics, which under shared fate takes down both runtimes.
   single-source feed, including delta and merge handling that matches
   differential's `TraceAgent` import, is the remaining mechanism to validate with
   a spike before implementation.
-* **`Import` across reconnect.** `Import` and its withdrawal are commands in the
-  interactive sub-protocol, so they belong in the interactive command history and
-  reconcile like any other command. Confirm the multiplexer re-derives them
-  deterministically from the replayed controller commands on reconnect, so the
-  interactive history stays consistent with maintenance's.
+* **Placeholder eviction.** A never-adopted placeholder must be evicted from the
+  registry when its last reader leaves, so a cancelled query's placeholder does
+  not linger. Confirm the eviction races cleanly against a late adoption (a
+  publish that arrives just as the last reader leaves must not lose the slot).
 
 ## Rollout
 
 This is a proof-of-concept branch (`mh/two-runtime-stage2`).
 The changes are gated behind `enable_two_runtime_compute`, default on only in the
 test suites that exercise it.
-`Import` is internal to the compute layer and requires no catalog or
+The changes are internal to the compute layer and require no catalog or
 controller-protocol version change.
