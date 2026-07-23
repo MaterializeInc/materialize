@@ -151,6 +151,10 @@ impl PgConn {
         err_field_typs: Vec<char>,
         ignore: BTreeSet<String>,
     ) -> anyhow::Result<Vec<String>> {
+        // ParameterStatus messages are skipped unless the test explicitly
+        // expects them, because the server may send them at surprising times
+        // (e.g. during connection startup).
+        let expect_parameter_status = until.iter().any(|m| m.starts_with("ParameterStatus"));
         let mut msgs = Vec::with_capacity(until.len());
         for expect in until {
             loop {
@@ -296,7 +300,18 @@ impl PgConn {
                             parameters: body.parameters().collect().unwrap(),
                         })?,
                     ),
-                    Message::ParameterStatus(_) => continue,
+                    Message::ParameterStatus(body) => {
+                        if !expect_parameter_status {
+                            continue;
+                        }
+                        (
+                            "ParameterStatus",
+                            serde_json::to_string(&ParameterStatus {
+                                name: body.name()?.to_string(),
+                                value: body.value()?.to_string(),
+                            })?,
+                        )
+                    }
                     Message::NoData => ("NoData", "".to_string()),
                     Message::EmptyQueryResponse => ("EmptyQueryResponse", "".to_string()),
                     _ => ("UNKNOWN", format!("'{}'", ch)),
@@ -451,6 +466,12 @@ pub struct CopyOut {
 #[derive(Serialize)]
 pub struct ParameterDescription {
     parameters: Vec<u32>,
+}
+
+#[derive(Serialize)]
+pub struct ParameterStatus {
+    pub name: String,
+    pub value: String,
 }
 
 #[derive(Serialize)]

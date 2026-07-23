@@ -554,8 +554,8 @@ impl Coordinator {
                         let (_, retire_notify) = self.clear_transaction(ctx.session_mut()).await;
                         ctx.delay_response_until(retire_notify);
                         self.drop_temp_items(ctx.session().conn_id()).await;
-                        ctx.session_mut().reset();
-                        Ok(ExecuteResponse::DiscardedAll)
+                        let params = ctx.session_mut().reset();
+                        Ok(ExecuteResponse::DiscardedAll { params })
                     } else {
                         Err(AdapterError::OperationProhibitsTransaction(
                             "DISCARD ALL".into(),

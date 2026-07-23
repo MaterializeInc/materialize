@@ -640,7 +640,10 @@ pub enum ExecuteResponse {
     /// The temporary objects associated with the session have been discarded.
     DiscardedTemp,
     /// All state associated with the session has been discarded.
-    DiscardedAll,
+    DiscardedAll {
+        /// Session parameters that changed because the session was reset.
+        params: BTreeMap<&'static str, String>,
+    },
     /// The requested object was dropped.
     DroppedObject(ObjectType),
     /// The requested objects were dropped.
@@ -802,7 +805,7 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
             ExecuteResponseKind::DeclaredCursor => Ok(ExecuteResponse::DeclaredCursor),
             ExecuteResponseKind::Deleted => Err(()),
             ExecuteResponseKind::DiscardedTemp => Ok(ExecuteResponse::DiscardedTemp),
-            ExecuteResponseKind::DiscardedAll => Ok(ExecuteResponse::DiscardedAll),
+            ExecuteResponseKind::DiscardedAll => Err(()),
             ExecuteResponseKind::DroppedObject => Err(()),
             ExecuteResponseKind::DroppedOwned => Ok(ExecuteResponse::DroppedOwned),
             ExecuteResponseKind::EmptyQuery => Ok(ExecuteResponse::EmptyQuery),
@@ -864,7 +867,7 @@ impl ExecuteResponse {
             DeclaredCursor => Some("DECLARE CURSOR".into()),
             Deleted(n) => Some(format!("DELETE {}", n)),
             DiscardedTemp => Some("DISCARD TEMP".into()),
-            DiscardedAll => Some("DISCARD ALL".into()),
+            DiscardedAll { .. } => Some("DISCARD ALL".into()),
             DroppedObject(o) => Some(format!("DROP {o}")),
             DroppedOwned => Some("DROP OWNED".into()),
             EmptyQuery => None,

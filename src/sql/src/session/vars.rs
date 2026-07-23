@@ -521,11 +521,22 @@ impl SessionVars {
     }
 
     /// Resets all variables to their default value.
-    pub fn reset_all(&mut self) {
+    ///
+    /// Returns the parameters whose value changed as a result, with their new
+    /// values, so that callers can report the changes to the client.
+    pub fn reset_all(&mut self) -> BTreeMap<&'static str, String> {
+        let mut changed = BTreeMap::new();
         let names: Vec<_> = self.vars.keys().copied().collect();
         for name in names {
-            self.vars[name].reset(false);
+            let var = &mut self.vars[name];
+            let before = var.value();
+            var.reset(false);
+            let after = var.value();
+            if before != after {
+                changed.insert(var.name(), after);
+            }
         }
+        changed
     }
 
     /// Returns a [`Var`] representing the configuration parameter with the
