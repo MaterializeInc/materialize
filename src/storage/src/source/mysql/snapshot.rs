@@ -69,10 +69,11 @@
 //! last sampled boundary) land on a different worker per table rather than always the last worker.
 //! Tables without a suitable PK fall back to single-worker-per-table mode. The
 //! `mysql_source_snapshot_parallelism` dyncfg disables splitting entirely, putting every table in
-//! that fallback mode. This holds up to `worker_count + 1` upstream connections per source (one
-//! per ranged worker plus the leader's lock connection). To handle various charsets and collation
-//! gracefully we rely on MySQL's sort order and never attempt to compare or order strings in
-//! Rust. To handle possible races with
+//! that fallback mode. Workers open their connections while the leader samples and locks, so
+//! setup briefly holds up to `2 * worker_count + 1` upstream connections per source, settling to
+//! one per ranged worker plus the leader's lock connection. To handle various charsets and
+//! collation gracefully we rely on MySQL's sort order and never attempt to compare or order
+//! strings in Rust. To handle possible races with
 //! changes to collation each worker validates in its read transaction that the boundaries are
 //! strictly increasing under the table's current collation, retrying transiently if not. The
 //! repeatable read snapshots should then succeed if they start reading from the table before DDL
@@ -748,6 +749,31 @@ pub(crate) fn render<'scope>(
                 // Exact per-table row counts, computed once during PK sampling and reused
                 // by the leader to publish the snapshot size gauge.
                 let mut snapshot_counts: BTreeMap<MySqlTableName, u64> = BTreeMap::new();
+
+                let mut conn = connection_config
+                    .connect(
+                        &task_name,
+                        &config.config.connection_context.ssh_tunnel_manager,
+                    )
+                    .await?;
+
+                // Verify the MySQL system settings are correct for consistent row-based replication using GTIDs
+                match validate_mysql_repl_settings(&mut conn).await {
+                    Err(err @ MySqlError::InvalidSystemSetting { .. }) => {
+                        return Ok(return_definite_error(
+                            DefiniteError::ServerConfigurationError(err.to_string()),
+                            &all_outputs,
+                            &raw_handle,
+                            data_cap_set,
+                            &definite_error_handle,
+                            definite_error_cap_set,
+                        )
+                        .await);
+                    }
+                    Err(err) => Err(err)?,
+                    Ok(()) => (),
+                };
+
                 let mut lock_conn = if is_snapshot_leader {
                     match lock_and_prepare_snapshot(
                         &config,
@@ -871,30 +897,6 @@ pub(crate) fn render<'scope>(
                     trace!(%id, "timely-{worker_id} has no tables to snapshot.");
                     return Ok(());
                 }
-
-                let mut conn = connection_config
-                    .connect(
-                        &task_name,
-                        &config.config.connection_context.ssh_tunnel_manager,
-                    )
-                    .await?;
-
-                // Verify the MySQL system settings are correct for consistent row-based replication using GTIDs
-                match validate_mysql_repl_settings(&mut conn).await {
-                    Err(err @ MySqlError::InvalidSystemSetting { .. }) => {
-                        return Ok(return_definite_error(
-                            DefiniteError::ServerConfigurationError(err.to_string()),
-                            &all_outputs,
-                            &raw_handle,
-                            data_cap_set,
-                            &definite_error_handle,
-                            definite_error_cap_set,
-                        )
-                        .await);
-                    }
-                    Err(err) => Err(err)?,
-                    Ok(()) => (),
-                };
 
                 trace!(%id, "timely-{worker_id} starting transaction with \
                              consistent snapshot at: {}", snapshot_gtid_frontier.pretty());

@@ -1848,11 +1848,13 @@ class MySqlSources(Generator):
             f"$ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}"
         )
         print("$ mysql-execute name=mysql")
-        # Each source can hold several upstream connections at once: the leader's
-        # LOCK TABLES connection, up to two parallel snapshot read connections (the
-        # table owner plus the leader when it owns no range), and one replication
-        # connection at steady state. Budget four per source so every source can be
-        # mid-snapshot at the same time, plus two for testdrive's own admin sessions.
+        # Each source can hold several upstream connections at once: every worker
+        # opens its snapshot connection up front while the leader samples and
+        # locks, so with this test's one-worker clusters a source holds the
+        # leader's LOCK TABLES connection plus one worker connection during the
+        # snapshot, and one replication connection at steady state. Budget four
+        # per source for headroom so every source can be mid-snapshot at the same
+        # time, plus two for testdrive's own admin sessions.
         print(f"SET GLOBAL max_connections={cls.COUNT * 4 + 2}")
         print("DROP DATABASE IF EXISTS public;")
         print("CREATE DATABASE public;")
