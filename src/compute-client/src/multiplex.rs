@@ -33,21 +33,10 @@ use std::collections::BTreeMap;
 use async_trait::async_trait;
 use mz_repr::GlobalId;
 use mz_service::client::GenericClient;
-use timely::progress::Antichain;
 
 use crate::protocol::command::ComputeCommand;
-use crate::protocol::response::{ComputeResponse, FrontiersResponse};
+use crate::protocol::response::ComputeResponse;
 use crate::service::ComputeClient;
-
-/// Whether a [`FrontiersResponse`] reports only empty frontiers, i.e. every frontier it carries is
-/// the empty antichain. This is the terminal report a collection emits when it is dropped.
-fn frontiers_all_empty(frontiers: &FrontiersResponse) -> bool {
-    let empty =
-        |f: &Option<Antichain<mz_repr::Timestamp>>| f.as_ref().map_or(true, |f| f.is_empty());
-    empty(&frontiers.write_frontier)
-        && empty(&frontiers.input_frontier)
-        && empty(&frontiers.output_frontier)
-}
 
 /// Which of a process's two compute runtimes a piece of work lives on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -102,27 +91,29 @@ impl Multiplexer {
 
     /// Decides whether a response received from `source` is forwarded to the controller.
     ///
-    /// One response kind is filtered; the rest forward verbatim:
+    /// Only `Frontiers` reports are filtered; every other response forwards verbatim.
     ///
-    /// * A `Frontiers` report from a runtime that does not own the collection. Both runtimes
-    ///   install the internally-created logging/introspection dataflows (the interactive runtime's
-    ///   are empty, see `initialize_logging`), so both would report frontiers for the same
-    ///   collection ids. The controller tracks one frontier stream per collection, so a second
-    ///   stream regresses it (the interactive runtime's empty collection reports the empty frontier,
-    ///   then maintenance's real one reports a finite frontier). Forwarding only the owner's report
-    ///   keeps the interactive runtime's copies off the wire while still delivering frontiers for
-    ///   the transient collections it does own.
+    /// Each runtime reports frontiers only for collections it exclusively hosts, so the two streams
+    /// never overlap on a collection id:
     ///
-    /// The exception is the empty (terminal) `Frontiers` report the interactive runtime emits when
-    /// one of its transient collections is dropped. `AllowCompaction{empty}` evicts the transient's
-    /// ownership above (to bound `transient_owner`), and that eviction races ahead of this response.
-    /// Without the exception the owner check would then drop the report, and the controller would
-    /// never learn the collection finished. It waits for exactly that empty frontier before releasing
-    /// the collection's read holds on its inputs, so dropping it strands those holds and pins the
-    /// inputs' read frontiers (a stale `since` on any upstream index/MV the transient read). Always
-    /// forwarding the interactive runtime's terminal report for a transient id closes that gap. It is
-    /// safe: the maintenance runtime never hosts the interactive runtime's transients, so there is no
-    /// competing report for the same id.
+    /// * The maintenance runtime hosts every durable, maintained collection, plus the internally
+    ///   created logging/introspection indexes, and owns their frontiers. Its transient collections
+    ///   are subscribes and copy-tos, which do not emit `Frontiers` (they report through
+    ///   `SubscribeResponse`/`CopyToResponse`). So maintenance reports frontiers only for
+    ///   non-transient ids.
+    /// * The interactive runtime hosts only wholly-transient query dataflows. It installs empty
+    ///   copies of maintenance's introspection indexes but does not report their frontiers (see
+    ///   `report_frontiers`, which reports only transient collections on the interactive runtime). So
+    ///   interactive reports frontiers only for transient ids.
+    ///
+    /// Filtering on `id.is_transient()` for the interactive source captures that split exactly. It
+    /// deliberately does not consult `transient_owner`: that map is evicted when a collection's
+    /// `AllowCompaction{empty}` drop is forwarded, which races ahead of the collection's final
+    /// (empty) frontier reports. Gating on ownership would drop those trailing reports, so the
+    /// controller would never observe the collection's frontiers reach the empty antichain, would
+    /// never run `cleanup_collections` for it, and would strand its read holds on its inputs (a stale
+    /// `since` on any upstream index/MV the transient read). Forwarding on `is_transient()` delivers
+    /// every frontier report for the collections interactive owns, terminal or not.
     fn filter_response(
         &self,
         source: Runtime,
@@ -130,14 +121,11 @@ impl Multiplexer {
     ) -> Option<ComputeResponse> {
         match response {
             ComputeResponse::Frontiers(id, frontiers) => {
-                let terminal_transient_drop = source == Runtime::Interactive
-                    && id.is_transient()
-                    && frontiers_all_empty(&frontiers);
-                if source == self.owner_of(id) || terminal_transient_drop {
-                    Some(ComputeResponse::Frontiers(id, frontiers))
-                } else {
-                    None
-                }
+                let forward = match source {
+                    Runtime::Maintenance => true,
+                    Runtime::Interactive => id.is_transient(),
+                };
+                forward.then_some(ComputeResponse::Frontiers(id, frontiers))
             }
             other => Some(other),
         }
@@ -687,11 +675,14 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    async fn terminal_transient_frontier_forwarded_after_eviction() {
-        // A transient collection's drop evicts its ownership (`AllowCompaction{empty}`), which races
-        // ahead of the interactive runtime's terminal empty-frontier report. That report must still
-        // be forwarded: the controller releases the collection's read holds only on seeing it, so
-        // dropping it would strand the holds and pin upstream read frontiers.
+    async fn interactive_transient_frontiers_forwarded_including_after_eviction() {
+        // The interactive runtime reports frontiers only for the transient collections it hosts, so
+        // every such report forwards, regardless of `transient_owner`. In particular the trailing
+        // (empty) reports a dropped transient emits must reach the controller even though its
+        // `AllowCompaction{empty}` already evicted the ownership entry: the controller runs
+        // `cleanup_collections` and releases the collection's input read holds only once it observes
+        // all of those frontiers reach the empty antichain. Dropping any of them strands the holds
+        // and pins upstream read frontiers.
         let mut h = harness();
         let id = GlobalId::Transient(7);
         h.mux.send(create_dataflow(&[id], &[])).await.expect("send");
@@ -704,7 +695,22 @@ mod tests {
             .expect("send");
         // Ownership is now evicted, so `owner_of(id)` resolves to maintenance.
 
-        // The terminal all-empty report from interactive is still forwarded.
+        // A non-empty trailing report for the evicted transient still forwards (not gated on
+        // ownership).
+        h.inter_tx.send(frontiers(id, 5)).expect("send inter");
+        let got = h.mux.recv().await.expect("recv");
+        match got {
+            Some(ComputeResponse::Frontiers(g, f)) => {
+                assert_eq!(g, id);
+                assert_eq!(
+                    f.write_frontier,
+                    Some(Antichain::from_elem(Timestamp::from(5u64)))
+                );
+            }
+            other => panic!("expected forwarded interactive frontier, got {other:?}"),
+        }
+
+        // The terminal all-empty report also forwards.
         h.inter_tx
             .send(ComputeResponse::Frontiers(
                 id,
@@ -720,24 +726,6 @@ mod tests {
             matches!(got, Some(ComputeResponse::Frontiers(g, _)) if g == id),
             "terminal transient frontier must be forwarded after eviction, got {got:?}"
         );
-
-        // A non-empty (non-terminal) interactive report for the evicted transient stays dropped: it
-        // is not the owner and the exception only covers all-empty reports. Maintenance's finite
-        // report for the same id is what the multiplexer forwards next.
-        h.inter_tx.send(frontiers(id, 5)).expect("send inter");
-        h.maint_tx.send(frontiers(id, 200)).expect("send maint");
-        let got = h.mux.recv().await.expect("recv");
-        match got {
-            Some(ComputeResponse::Frontiers(g, f)) => {
-                assert_eq!(g, id);
-                assert_eq!(
-                    f.write_frontier,
-                    Some(Antichain::from_elem(Timestamp::from(200u64))),
-                    "non-terminal interactive report dropped; maintenance's forwarded"
-                );
-            }
-            other => panic!("expected maintenance frontier, got {other:?}"),
-        }
     }
 
     #[mz_ore::test(tokio::test)]
