@@ -82,8 +82,8 @@ use crate::{PeekClient, PeekResponseUnary, TimelineContext, optimize};
 
 #[derive(Clone, Copy)]
 pub(crate) enum FrontendWriteCancellation {
-    Canceled = 1,
-    StatementTimeout = 2,
+    Canceled,
+    StatementTimeout,
 }
 
 pub(crate) struct FrontendWriteAttemptState {
@@ -112,12 +112,13 @@ impl FrontendWriteAttemptState {
     }
 
     pub(crate) fn request(&self, cancellation: FrontendWriteCancellation) {
-        let _ = self.cancellation.compare_exchange(
-            0,
-            cancellation as u8,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        );
+        let code = match cancellation {
+            FrontendWriteCancellation::Canceled => 1,
+            FrontendWriteCancellation::StatementTimeout => 2,
+        };
+        let _ = self
+            .cancellation
+            .compare_exchange(0, code, Ordering::AcqRel, Ordering::Acquire);
     }
 
     fn requested_error(&self) -> Option<AdapterError> {
