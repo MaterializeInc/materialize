@@ -35,7 +35,7 @@ guide](/ingest-data/sql-server/source-versioning/).
 All other schema changes to upstream tables will set the corresponding subsource
 into an error state, which prevents you from reading from the source.
 
-To handle incompatible [schema changes](#schema-changes), use [`DROP SOURCE`](/sql/alter-source/#context)
+To handle incompatible [schema changes](#schema-changes-legacy-source-syntax), use [`DROP SOURCE`](/sql/alter-source/#context)
 and [`ALTER SOURCE...ADD SUBSOURCE`](/sql/alter-source/) to first drop the
 affected subsource, and then add the table back to the source. When you add the
 subsource, it will have the updated schema from the corresponding upstream
