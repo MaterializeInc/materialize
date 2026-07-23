@@ -9,8 +9,8 @@ incurs downtime for the duration it takes for all objects in the cluster to
 [hydrate](/ingest-data/#hydration).
 
 You might want to let the new-sized replica hydrate before shutting down the
-current replica. See [zero-downtime cluster
-resizing](/sql/alter-cluster/#zero-downtime-cluster-resizing) about automating
+current replica. See the [resizing
+process](/sql/alter-cluster/#resizing-process) about automating
 this process.
 
 {{% /note %}}

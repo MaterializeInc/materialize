@@ -351,7 +351,7 @@ tolerance](#replication-factor-and-fault-tolerance), not its work capacity.
 
 By default, altering the cluster size is graceful and incurs **no downtime**.
 The command returns immediately and the resize proceeds in the background. See
-[Zero-downtime cluster resizing](#zero-downtime-cluster-resizing) and
+[Resizing process](#resizing-process) and
 [Monitoring a resize](#monitoring-a-resize).
 
 ```mzsql

@@ -171,7 +171,7 @@ In versions before v26.34, resizing could incur downtime, and zero-downtime
 resizing required the `WAIT UNTIL READY` option.
 
 See the reference documentation for [`ALTER
-CLUSTER`](/sql/alter-cluster#zero-downtime-cluster-resizing) for more details
+CLUSTER`](/sql/alter-cluster/#resizing) for more details
 on cluster resizing.
 
 ### Autoscaling
