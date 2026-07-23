@@ -116,164 +116,280 @@ WHERE
         }),
     }
 });
-pub static MZ_POSTGRES_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_postgres_source_tables",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::TABLE_MZ_POSTGRES_SOURCE_TABLES_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("schema_name", SqlScalarType::String.nullable(false))
-        .with_column("table_name", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "id",
-            "The ID of the subsource or table. Corresponds to `mz_catalog.mz_sources.id` or `mz_catalog.mz_tables.id`.",
-        ),
-        (
-            "schema_name",
-            "The schema of the upstream table being ingested.",
-        ),
-        (
-            "table_name",
-            "The name of the upstream table being ingested.",
-        ),
-    ]),
-    is_retained_metrics_object: true,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "postgres_source_table",
-        description: "Postgres source table-level details",
-        links: &const {
-            [OntologyLink {
-                name: "describes_source_table",
-                target: "table",
-                properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
-            }]
-        },
-        column_semantic_types: &[("id", SemanticType::CatalogItemId)],
-    }),
+// The three relational source-table views (postgres, mysql, sql-server) share
+// the same shape. Each reads Item rows from `mz_catalog_raw`, pulls the parent
+// source id and external reference out of the persisted `create_sql` via
+// `parse_source_export_details`, and joins `mz_sources` to keep only exports
+// whose parent is of the matching connection type. The external reference for
+// postgres and sql-server is `[database, schema, table]`, so schema/table come
+// from positions 1 and 2. MySQL references are `[schema, table]`, so positions
+// 0 and 1. This is the same slicing the removed packers applied.
+pub static MZ_POSTGRES_SOURCE_TABLES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_postgres_source_tables",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_POSTGRES_SOURCE_TABLES_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("schema_name", SqlScalarType::String.nullable(false))
+            .with_column("table_name", SqlScalarType::String.nullable(false))
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "id",
+                "The ID of the subsource or table. Corresponds to `mz_catalog.mz_sources.id` or `mz_catalog.mz_tables.id`.",
+            ),
+            (
+                "schema_name",
+                "The schema of the upstream table being ingested.",
+            ),
+            (
+                "table_name",
+                "The name of the upstream table being ingested.",
+            ),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL schema_name,
+    ASSERT NOT NULL table_name
+) AS
+SELECT
+    mz_internal.parse_catalog_id(r.data->'key'->'gid') AS id,
+    details->'external_reference'->>1 AS schema_name,
+    details->'external_reference'->>2 AS table_name
+FROM
+    mz_internal.mz_catalog_raw r,
+    LATERAL (
+        SELECT mz_internal.parse_source_export_details(
+            r.data->'value'->'definition'->'V1'->>'create_sql')
+    ) AS d(details)
+    JOIN mz_catalog.mz_sources s
+        ON s.id = details->>'source_id' AND s.type = 'postgres'
+WHERE
+    r.data->>'kind' = 'Item' AND
+    details IS NOT NULL",
+        is_retained_metrics_object: true,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "postgres_source_table",
+            description: "Postgres source table-level details",
+            links: &const {
+                [OntologyLink {
+                    name: "describes_source_table",
+                    target: "table",
+                    properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+                }]
+            },
+            column_semantic_types: &[("id", SemanticType::CatalogItemId)],
+        }),
+    }
 });
-pub static MZ_MYSQL_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_mysql_source_tables",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::TABLE_MZ_MYSQL_SOURCE_TABLES_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("schema_name", SqlScalarType::String.nullable(false))
-        .with_column("table_name", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "id",
-            "The ID of the subsource or table. Corresponds to `mz_catalog.mz_sources.id` or `mz_catalog.mz_tables.id`.",
-        ),
-        (
-            "schema_name",
-            "The schema (or, database) of the upstream table being ingested.",
-        ),
-        (
-            "table_name",
-            "The name of the upstream table being ingested.",
-        ),
-    ]),
-    is_retained_metrics_object: true,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "mysql_source_table",
-        description: "MySQL source table-level details",
-        links: &const {
-            [OntologyLink {
-                name: "describes_source_table",
-                target: "table",
-                properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
-            }]
-        },
-        column_semantic_types: &[("id", SemanticType::CatalogItemId)],
-    }),
+pub static MZ_MYSQL_SOURCE_TABLES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_mysql_source_tables",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_MYSQL_SOURCE_TABLES_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("schema_name", SqlScalarType::String.nullable(false))
+            .with_column("table_name", SqlScalarType::String.nullable(false))
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "id",
+                "The ID of the subsource or table. Corresponds to `mz_catalog.mz_sources.id` or `mz_catalog.mz_tables.id`.",
+            ),
+            (
+                "schema_name",
+                "The schema (or, database) of the upstream table being ingested.",
+            ),
+            (
+                "table_name",
+                "The name of the upstream table being ingested.",
+            ),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL schema_name,
+    ASSERT NOT NULL table_name
+) AS
+SELECT
+    mz_internal.parse_catalog_id(r.data->'key'->'gid') AS id,
+    details->'external_reference'->>0 AS schema_name,
+    details->'external_reference'->>1 AS table_name
+FROM
+    mz_internal.mz_catalog_raw r,
+    LATERAL (
+        SELECT mz_internal.parse_source_export_details(
+            r.data->'value'->'definition'->'V1'->>'create_sql')
+    ) AS d(details)
+    JOIN mz_catalog.mz_sources s
+        ON s.id = details->>'source_id' AND s.type = 'mysql'
+WHERE
+    r.data->>'kind' = 'Item' AND
+    details IS NOT NULL",
+        is_retained_metrics_object: true,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "mysql_source_table",
+            description: "MySQL source table-level details",
+            links: &const {
+                [OntologyLink {
+                    name: "describes_source_table",
+                    target: "table",
+                    properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+                }]
+            },
+            column_semantic_types: &[("id", SemanticType::CatalogItemId)],
+        }),
+    }
 });
-pub static MZ_SQL_SERVER_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_sql_server_source_tables",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::TABLE_MZ_SQL_SERVER_SOURCE_TABLES_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("schema_name", SqlScalarType::String.nullable(false))
-        .with_column("table_name", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "id",
-            "The ID of the subsource or table. Corresponds to `mz_catalog.mz_sources.id` or `mz_catalog.mz_tables.id`.",
-        ),
-        (
-            "schema_name",
-            "The schema of the upstream table being ingested.",
-        ),
-        (
-            "table_name",
-            "The name of the upstream table being ingested.",
-        ),
-    ]),
-    is_retained_metrics_object: true,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "sql_server_source_table",
-        description: "SQL Server source table-level details",
-        links: &const {
-            [OntologyLink {
-                name: "describes_source_table",
-                target: "table",
-                properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
-            }]
-        },
-        column_semantic_types: &[("id", SemanticType::CatalogItemId)],
-    }),
+pub static MZ_SQL_SERVER_SOURCE_TABLES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_sql_server_source_tables",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_SQL_SERVER_SOURCE_TABLES_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("schema_name", SqlScalarType::String.nullable(false))
+            .with_column("table_name", SqlScalarType::String.nullable(false))
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "id",
+                "The ID of the subsource or table. Corresponds to `mz_catalog.mz_sources.id` or `mz_catalog.mz_tables.id`.",
+            ),
+            (
+                "schema_name",
+                "The schema of the upstream table being ingested.",
+            ),
+            (
+                "table_name",
+                "The name of the upstream table being ingested.",
+            ),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL schema_name,
+    ASSERT NOT NULL table_name
+) AS
+SELECT
+    mz_internal.parse_catalog_id(r.data->'key'->'gid') AS id,
+    details->'external_reference'->>1 AS schema_name,
+    details->'external_reference'->>2 AS table_name
+FROM
+    mz_internal.mz_catalog_raw r,
+    LATERAL (
+        SELECT mz_internal.parse_source_export_details(
+            r.data->'value'->'definition'->'V1'->>'create_sql')
+    ) AS d(details)
+    JOIN mz_catalog.mz_sources s
+        ON s.id = details->>'source_id' AND s.type = 'sql-server'
+WHERE
+    r.data->>'kind' = 'Item' AND
+    details IS NOT NULL",
+        is_retained_metrics_object: true,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "sql_server_source_table",
+            description: "SQL Server source table-level details",
+            links: &const {
+                [OntologyLink {
+                    name: "describes_source_table",
+                    target: "table",
+                    properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+                }]
+            },
+            column_semantic_types: &[("id", SemanticType::CatalogItemId)],
+        }),
+    }
 });
-pub static MZ_KAFKA_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_kafka_source_tables",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::TABLE_MZ_KAFKA_SOURCE_TABLES_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("topic", SqlScalarType::String.nullable(false))
-        .with_column("envelope_type", SqlScalarType::String.nullable(true))
-        .with_column("key_format", SqlScalarType::String.nullable(true))
-        .with_column("value_format", SqlScalarType::String.nullable(true))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "id",
-            "The ID of the table. Corresponds to `mz_catalog.mz_tables.id`.",
-        ),
-        ("topic", "The topic being ingested."),
-        (
-            "envelope_type",
-            "The envelope type: `none`, `upsert`, or `debezium`. `NULL` for other source types.",
-        ),
-        (
-            "key_format",
-            "The format of the Kafka message key: `avro`, `csv`, `regex`, `bytes`, `json`, `text`, or `NULL`.",
-        ),
-        (
-            "value_format",
-            "The format of the Kafka message value: `avro`, `csv`, `regex`, `bytes`, `json`, `text`. `NULL` for other source types.",
-        ),
-    ]),
-    is_retained_metrics_object: true,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "kafka_source_table",
-        description: "Kafka source table-level details",
-        links: &const {
-            [OntologyLink {
-                name: "describes_source_table",
-                target: "table",
-                properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
-            }]
-        },
-        column_semantic_types: &[("id", SemanticType::CatalogItemId)],
-    }),
+pub static MZ_KAFKA_SOURCE_TABLES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_kafka_source_tables",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_KAFKA_SOURCE_TABLES_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("topic", SqlScalarType::String.nullable(false))
+            .with_column("envelope_type", SqlScalarType::String.nullable(true))
+            .with_column("key_format", SqlScalarType::String.nullable(true))
+            .with_column("value_format", SqlScalarType::String.nullable(true))
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "id",
+                "The ID of the table. Corresponds to `mz_catalog.mz_tables.id`.",
+            ),
+            ("topic", "The topic being ingested."),
+            (
+                "envelope_type",
+                "The envelope type: `none`, `upsert`, or `debezium`. `NULL` for other source types.",
+            ),
+            (
+                "key_format",
+                "The format of the Kafka message key: `avro`, `csv`, `regex`, `bytes`, `json`, `text`, or `NULL`.",
+            ),
+            (
+                "value_format",
+                "The format of the Kafka message value: `avro`, `csv`, `regex`, `bytes`, `json`, `text`. `NULL` for other source types.",
+            ),
+        ]),
+        // Kafka exports are only ever created with the new
+        // `CREATE TABLE ... FROM SOURCE` syntax (kafka has no subsource path),
+        // so the topic sits at position 0 of the single-part external
+        // reference. `parse_source_export_details` resolves the envelope and
+        // key/value formats straight from the table's own `create_sql`,
+        // reproducing the runtime `DataSourceDesc::formats()`/`envelope()` the
+        // old packer read.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL topic
+) AS
+SELECT
+    mz_internal.parse_catalog_id(r.data->'key'->'gid') AS id,
+    details->'external_reference'->>0 AS topic,
+    details->>'envelope_type' AS envelope_type,
+    details->>'key_format' AS key_format,
+    details->>'value_format' AS value_format
+FROM
+    mz_internal.mz_catalog_raw r,
+    LATERAL (
+        SELECT mz_internal.parse_source_export_details(
+            r.data->'value'->'definition'->'V1'->>'create_sql')
+    ) AS d(details)
+    JOIN mz_catalog.mz_sources s
+        ON s.id = details->>'source_id' AND s.type = 'kafka'
+WHERE
+    r.data->>'kind' = 'Item' AND
+    details IS NOT NULL",
+        is_retained_metrics_object: true,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "kafka_source_table",
+            description: "Kafka source table-level details",
+            links: &const {
+                [OntologyLink {
+                    name: "describes_source_table",
+                    target: "table",
+                    properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+                }]
+            },
+            column_semantic_types: &[("id", SemanticType::CatalogItemId)],
+        }),
+    }
 });
 pub static MZ_OBJECT_DEPENDENCIES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_object_dependencies",
@@ -2466,96 +2582,161 @@ pub static MZ_STORAGE_USAGE_BY_SHARD: LazyLock<BuiltinTable> = LazyLock::new(|| 
     }),
 });
 
-pub static MZ_AWS_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_aws_connections",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::TABLE_MZ_AWS_CONNECTIONS_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("endpoint", SqlScalarType::String.nullable(true))
-        .with_column("region", SqlScalarType::String.nullable(true))
-        .with_column("access_key_id", SqlScalarType::String.nullable(true))
-        .with_column(
-            "access_key_id_secret_id",
-            SqlScalarType::String.nullable(true),
+// Reads Item rows from `mz_catalog_raw`, pulls the create_sql-derived fields
+// (endpoint, region, credentials, assume-role options) out via
+// `parse_connection_details`, and keeps only aws connections. The three
+// context-derived columns (principal, external_id, example_trust_policy) apply
+// to assume-role connections only and are reconstructed here from the plan-time
+// AWS context functions, because they depend on the environment, not on
+// create_sql. On an environment without the AWS context those functions fold to
+// NULL, so the columns are NULL, matching the nullable table this replaces.
+pub static MZ_AWS_CONNECTIONS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_aws_connections",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_AWS_CONNECTIONS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("endpoint", SqlScalarType::String.nullable(true))
+            .with_column("region", SqlScalarType::String.nullable(true))
+            .with_column("access_key_id", SqlScalarType::String.nullable(true))
+            .with_column(
+                "access_key_id_secret_id",
+                SqlScalarType::String.nullable(true),
+            )
+            .with_column(
+                "secret_access_key_secret_id",
+                SqlScalarType::String.nullable(true),
+            )
+            .with_column("session_token", SqlScalarType::String.nullable(true))
+            .with_column(
+                "session_token_secret_id",
+                SqlScalarType::String.nullable(true),
+            )
+            .with_column("assume_role_arn", SqlScalarType::String.nullable(true))
+            .with_column(
+                "assume_role_session_name",
+                SqlScalarType::String.nullable(true),
+            )
+            .with_column("principal", SqlScalarType::String.nullable(true))
+            .with_column("external_id", SqlScalarType::String.nullable(true))
+            .with_column("example_trust_policy", SqlScalarType::Jsonb.nullable(true))
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "The ID of the connection."),
+            ("endpoint", "The value of the `ENDPOINT` option, if set."),
+            ("region", "The value of the `REGION` option, if set."),
+            (
+                "access_key_id",
+                "The value of the `ACCESS KEY ID` option, if provided in line.",
+            ),
+            (
+                "access_key_id_secret_id",
+                "The ID of the secret referenced by the `ACCESS KEY ID` option, if provided via a secret.",
+            ),
+            (
+                "secret_access_key_secret_id",
+                "The ID of the secret referenced by the `SECRET ACCESS KEY` option, if set.",
+            ),
+            (
+                "session_token",
+                "The value of the `SESSION TOKEN` option, if provided in line.",
+            ),
+            (
+                "session_token_secret_id",
+                "The ID of the secret referenced by the `SESSION TOKEN` option, if provided via a secret.",
+            ),
+            (
+                "assume_role_arn",
+                "The value of the `ASSUME ROLE ARN` option, if set.",
+            ),
+            (
+                "assume_role_session_name",
+                "The value of the `ASSUME ROLE SESSION NAME` option, if set.",
+            ),
+            (
+                "principal",
+                "The ARN of the AWS principal Materialize will use when assuming the provided role, if the connection is configured to use role assumption.",
+            ),
+            (
+                "external_id",
+                "The external ID Materialize will use when assuming the provided role, if the connection is configured to use role assumption.",
+            ),
+            (
+                "example_trust_policy",
+                "An example of an IAM role trust policy that allows this connection's principal and external ID to assume the role.",
+            ),
+        ]),
+        // `external_id` reproduces `AwsAssumeRole::external_id` and
+        // `example_trust_policy` reproduces `AwsAssumeRole::example_trust_policy`
+        // (both in src/storage-types/src/connections/aws.rs). Keep them in sync.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id
+) AS
+SELECT
+    mz_internal.parse_catalog_id(r.data->'key'->'gid') AS id,
+    details->>'endpoint' AS endpoint,
+    details->>'region' AS region,
+    details->>'access_key_id' AS access_key_id,
+    details->>'access_key_id_secret_id' AS access_key_id_secret_id,
+    details->>'secret_access_key_secret_id' AS secret_access_key_secret_id,
+    details->>'session_token' AS session_token,
+    details->>'session_token_secret_id' AS session_token_secret_id,
+    details->>'assume_role_arn' AS assume_role_arn,
+    details->>'assume_role_session_name' AS assume_role_session_name,
+    CASE WHEN details->>'auth_kind' = 'assume-role'
+        THEN mz_aws_connection_role_arn()
+    END AS principal,
+    CASE WHEN details->>'auth_kind' = 'assume-role'
+        THEN 'mz_' || mz_aws_external_id_prefix() || '_'
+            || mz_internal.parse_catalog_id(r.data->'key'->'gid')
+    END AS external_id,
+    CASE WHEN details->>'auth_kind' = 'assume-role'
+        THEN jsonb_build_object(
+            'Version', '2012-10-17',
+            'Statement', jsonb_build_array(jsonb_build_object(
+                'Effect', 'Allow',
+                'Principal', jsonb_build_object('AWS', mz_aws_connection_role_arn()),
+                'Action', 'sts:AssumeRole',
+                'Condition', jsonb_build_object(
+                    'StringEquals', jsonb_build_object(
+                        'sts:ExternalId',
+                        'mz_' || mz_aws_external_id_prefix() || '_'
+                            || mz_internal.parse_catalog_id(r.data->'key'->'gid')
+                    )
+                )
+            ))
         )
-        .with_column(
-            "secret_access_key_secret_id",
-            SqlScalarType::String.nullable(true),
-        )
-        .with_column("session_token", SqlScalarType::String.nullable(true))
-        .with_column(
-            "session_token_secret_id",
-            SqlScalarType::String.nullable(true),
-        )
-        .with_column("assume_role_arn", SqlScalarType::String.nullable(true))
-        .with_column(
-            "assume_role_session_name",
-            SqlScalarType::String.nullable(true),
-        )
-        .with_column("principal", SqlScalarType::String.nullable(true))
-        .with_column("external_id", SqlScalarType::String.nullable(true))
-        .with_column("example_trust_policy", SqlScalarType::Jsonb.nullable(true))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("id", "The ID of the connection."),
-        ("endpoint", "The value of the `ENDPOINT` option, if set."),
-        ("region", "The value of the `REGION` option, if set."),
-        (
-            "access_key_id",
-            "The value of the `ACCESS KEY ID` option, if provided in line.",
-        ),
-        (
-            "access_key_id_secret_id",
-            "The ID of the secret referenced by the `ACCESS KEY ID` option, if provided via a secret.",
-        ),
-        (
-            "secret_access_key_secret_id",
-            "The ID of the secret referenced by the `SECRET ACCESS KEY` option, if set.",
-        ),
-        (
-            "session_token",
-            "The value of the `SESSION TOKEN` option, if provided in line.",
-        ),
-        (
-            "session_token_secret_id",
-            "The ID of the secret referenced by the `SESSION TOKEN` option, if provided via a secret.",
-        ),
-        (
-            "assume_role_arn",
-            "The value of the `ASSUME ROLE ARN` option, if set.",
-        ),
-        (
-            "assume_role_session_name",
-            "The value of the `ASSUME ROLE SESSION NAME` option, if set.",
-        ),
-        (
-            "principal",
-            "The ARN of the AWS principal Materialize will use when assuming the provided role, if the connection is configured to use role assumption.",
-        ),
-        (
-            "external_id",
-            "The external ID Materialize will use when assuming the provided role, if the connection is configured to use role assumption.",
-        ),
-        (
-            "example_trust_policy",
-            "An example of an IAM role trust policy that allows this connection's principal and external ID to assume the role.",
-        ),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "aws_connection",
-        description: "AWS connection configuration details",
-        links: &const {
-            [OntologyLink {
-                name: "details_of",
-                target: "connection",
-                properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
-            }]
-        },
-        column_semantic_types: &[],
-    }),
+    END AS example_trust_policy
+FROM
+    mz_internal.mz_catalog_raw r,
+    LATERAL (
+        SELECT mz_internal.parse_connection_details(
+            r.data->'value'->'definition'->'V1'->>'create_sql')
+    ) AS d(details)
+WHERE
+    r.data->>'kind' = 'Item' AND
+    details IS NOT NULL AND
+    mz_internal.parse_catalog_create_sql(
+        r.data->'value'->'definition'->'V1'->>'create_sql')->>'connection_type' = 'aws'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "aws_connection",
+            description: "AWS connection configuration details",
+            links: &const {
+                [OntologyLink {
+                    name: "details_of",
+                    target: "connection",
+                    properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+                }]
+            },
+            column_semantic_types: &[],
+        }),
+    }
 });
 
 pub static MZ_CLUSTER_REPLICA_METRICS_HISTORY: LazyLock<BuiltinSource> =

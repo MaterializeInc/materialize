@@ -849,7 +849,6 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 16692  mz_message_counts_sent_raw
 16693  mz_dataflow_operator_reachability_raw
 16694  mz_kafka_sinks
-16695  mz_kafka_connections
 16696  mz_kafka_sources
 16697  mz_postgres_sources
 16698  mz_object_dependencies
@@ -863,7 +862,6 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 16706  mz_index_columns
 16707  mz_tables
 16708  mz_connections
-16709  mz_ssh_tunnel_connections
 16710  mz_sources
 16711  mz_sinks
 16712  mz_views
@@ -909,8 +907,6 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 16753  mz_sink_statuses
 16754  mz_storage_usage_by_shard
 16755  mz_egress_ips
-16756  mz_aws_privatelink_connections
-16757  mz_aws_connections
 16758  mz_cluster_replica_metrics
 16759  mz_cluster_replica_frontiers
 16760  mz_frontiers
@@ -1096,8 +1092,6 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 16945  mz_role_parameters
 16946  mz_materialized_view_refresh_strategies
 16947  mz_cluster_schedules
-16948  mz_postgres_source_tables
-16949  mz_mysql_source_tables
 16950  mz_kafka_sources_ind
 16951  mz_webhook_sources_ind
 16952  mz_history_retention_strategies
@@ -1167,7 +1161,6 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17022  mz_wallclock_global_lag_history
 17023  mz_wallclock_global_lag_recent_history
 17024  mz_wallclock_global_lag_recent_history_ind
-17025  mz_kafka_source_tables
 17030  mz_objects_id_namespace_types
 17031  mz_object_history
 17032  mz_object_history_ind
@@ -1191,7 +1184,6 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17054  mz_wallclock_global_lag
 17055  mz_wallclock_global_lag_histogram_raw
 17056  mz_wallclock_global_lag_histogram
-17057  mz_sql_server_source_tables
 17058  mz_license_keys
 17059  mz_role_auth
 17060  mz_iceberg_sinks
@@ -1240,3 +1232,16 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17104  mz_cluster_auto_scaling_strategies_ind
 17105  parse_postgres_source_details
 17106  parse_kafka_source_details
+17107  mz_postgres_source_tables
+17108  mz_mysql_source_tables
+17109  mz_sql_server_source_tables
+17110  mz_kafka_source_tables
+17111  parse_source_export_details
+17112  mz_kafka_connections
+17113  mz_ssh_tunnel_connections
+17114  parse_connection_details
+17115  mz_aws_connections
+17116  mz_aws_privatelink_connections
+17117  mz_aws_account_id
+17118  mz_aws_external_id_prefix
+17119  mz_aws_connection_role_arn

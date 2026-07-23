@@ -4514,6 +4514,16 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_aws_privatelink_connections";
+----
+mz_catalog.mz_aws_privatelink_connections:
+  →Constant (0 rows)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
 EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_cluster_replicas";
 ----
 mz_catalog.mz_cluster_replicas:
@@ -4872,6 +4882,70 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_kafka_connections";
+----
+mz_catalog.mz_kafka_connections:
+  →With
+    cte l0 =
+      →Read mz_internal.mz_catalog_raw
+    cte l1 =
+      →Distinct GroupAggregate
+        →Fused with Child Map/Filter/Project
+          Project: #1
+            →Read l0
+    cte l2 =
+      →Non-incremental GroupAggregate
+        Aggregation: array_agg[order_by=[#0 asc nulls_last]](row(array[#1], #2))
+        Key:
+          Project: #0
+        →Table Function jsonb_array_elements_text[with_ordinality]((#0{details} -> "brokers"))
+          →Arranged l1
+    cte l3 =
+      →Union
+        →Unarranged Raw Stream
+          →Arranged l2
+        →Map/Filter/Project
+          Project: #0, #1
+          Map: null
+            →Consolidating Union
+              →Negate Diffs
+                →Fused with Child Map/Filter/Project
+                  Project: #0
+                    →Arranged l2
+                      Key: (#0)
+              →Unarranged Raw Stream
+                →Arranged l1
+  →Return
+    →Differential Join %1[#0] » %0:l0[#1]
+      after %0:
+        Project: #3..=#5
+        Map: parse_catalog_id(((#2{data} -> "key") -> "gid")), (#1 || {}), coalesce((#0{details} ->> "progress_topic"), ("_materialize-progress-local-az1-<ENV_ID>-" || #3))
+      →Arrange (#1)
+        →Stream l0
+      →Arrange (#0)
+        →Union
+          →Stream l3
+          →Map/Filter/Project
+            Project: #0, #1
+            Map: null
+              →Consolidating Union
+                →Negate Diffs
+                  →Fused with Child Map/Filter/Project
+                    Project: #0
+                      →Read l3
+                →Unarranged Raw Stream
+                  →Arranged l1
+
+Source mz_internal.mz_catalog_raw
+  project=(#0, #2)
+  filter=(("Item" = (#0{data} ->> "kind")) AND ("kafka" = (parse_catalog_create_sql(#1) ->> "connection_type")))
+  map=(((((#0{data} -> "value") -> "definition") -> "V1") ->> "create_sql"), parse_connection_details(#1))
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
 EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_kafka_sources";
 ----
 mz_catalog.mz_kafka_sources:
@@ -4923,7 +4997,7 @@ mz_catalog.mz_materialized_views:
           Project: #4, #0, #5, #1, #6, #2, #9, #8, #3, #7
           Map: {=r/s1, s1=r/s1}, "s1"
       →Arrange (#1{schema_name}, #2{name})
-        →Constant (29 rows)
+        →Constant (37 rows)
       →Arrange (empty key) (#0{schema_name}) (#0{schema_name}, #1{name})
         →Fused with Child Map/Filter/Project
           Project: #4, #3, #5
@@ -5199,6 +5273,21 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_ssh_tunnel_connections";
+----
+mz_catalog.mz_ssh_tunnel_connections:
+  →Read mz_internal.mz_catalog_raw
+
+Source mz_internal.mz_catalog_raw
+  project=(#3..=#5)
+  filter=(("Item" = (#0{data} ->> "kind")) AND ("ssh-tunnel" = (parse_catalog_create_sql(#1) ->> "connection_type")))
+  map=(((((#0{data} -> "value") -> "definition") -> "V1") ->> "create_sql"), parse_connection_details(#1), parse_catalog_id(((#0{data} -> "key") -> "gid")), (#2{details} ->> "public_key_1"), (#2{details} ->> "public_key_2"))
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
 EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_system_privileges";
 ----
 mz_catalog.mz_system_privileges:
@@ -5209,6 +5298,21 @@ mz_catalog.mz_system_privileges:
 
 Source mz_internal.mz_catalog_raw
   filter=(("SystemPrivileges" = (#0{data} ->> "kind")))
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_internal"."mz_aws_connections";
+----
+mz_internal.mz_aws_connections:
+  →Read mz_internal.mz_catalog_raw
+
+Source mz_internal.mz_catalog_raw
+  project=(#3..=#12, #14..=#16)
+  filter=(("Item" = (#0{data} ->> "kind")) AND ("aws" = (parse_catalog_create_sql(#1) ->> "connection_type")))
+  map=(((((#0{data} -> "value") -> "definition") -> "V1") ->> "create_sql"), parse_connection_details(#1), parse_catalog_id(((#0{data} -> "key") -> "gid")), (#2{details} ->> "endpoint"), (#2{details} ->> "region"), (#2{details} ->> "access_key_id"), (#2{details} ->> "access_key_id_secret_id"), (#2{details} ->> "secret_access_key_secret_id"), (#2{details} ->> "session_token"), (#2{details} ->> "session_token_secret_id"), (#2{details} ->> "assume_role_arn"), (#2{details} ->> "assume_role_session_name"), ("assume-role" = (#2{details} ->> "auth_kind")), case when #13 then "arn:aws:iam::123456789000:role/MaterializeConnection" else null end, case when #13 then ("mz_test-aws-external-id-prefix_" || #3) else null end, case when #13 then jsonb_build_object("Version", "2012-10-17", "Statement", jsonbable_to_jsonb(jsonb_build_array(jsonbable_to_jsonb(jsonb_build_object("Effect", "Allow", "Principal", {AWS: "arn:aws:iam::123456789000:role/MaterializeConnection"}, "Action", "sts:AssumeRole", "Condition", jsonbable_to_jsonb(jsonb_build_object("StringEquals", jsonbable_to_jsonb(jsonb_build_object("sts:ExternalId", jsonbable_to_jsonb(("mz_test-aws-external-id-prefix_" || #3))))))))))) else null end)
 
 Target cluster: mz_catalog_server
 
@@ -5320,6 +5424,102 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_internal"."mz_kafka_source_tables";
+----
+mz_internal.mz_kafka_source_tables:
+  →Delta Join [%0:mz_catalog_raw[#0] » %1[#0] » %2:mz_sources[#0{id}]] [%1[#0] » %2:mz_sources[#0{id}] » %0:mz_catalog_raw[#0]] [%2:mz_sources[#0{id}] » %1[(#1{details} ->> "source_id")] » %0:mz_catalog_raw[#0]]
+    path %0:
+      after %1:
+        Project: #2, #1, #3..=#6
+        Map: ((#2{details} -> "external_reference") ->> 0), (#2{details} ->> "envelope_type"), (#2{details} ->> "key_format"), (#2{details} ->> "value_format")
+      after %2:
+        Project: #2..=#6
+        Filter: (#10{type} = "kafka")
+    path %1:
+      after %2:
+        Project: #1, #3..=#6
+        Filter: (#10{type} = "kafka")
+      after %0:
+        Project: #5, #1..=#4
+        Map: parse_catalog_id(((#0{data} -> "key") -> "gid"))
+    path %2:
+      after %1:
+        Project: #1, #3..=#6
+        Map: ((#2{details} -> "external_reference") ->> 0), (#2{details} ->> "envelope_type"), (#2{details} ->> "key_format"), (#2{details} ->> "value_format")
+      after %0:
+        Project: #5, #1..=#4
+        Map: parse_catalog_id(((#0{data} -> "key") -> "gid"))
+    →Arrange (#0)
+      →Read mz_internal.mz_catalog_raw
+    →Arrange (#0) ((#1{details} ->> "source_id"))
+      →Map/Filter/Project
+        Project: #0, #1
+        Map: parse_source_export_details(((((#0{data} -> "value") -> "definition") -> "V1") ->> "create_sql"))
+          →Distinct GroupAggregate
+            →Fused with Child Map/Filter/Project
+              Filter: ((parse_source_export_details(((((#0 -> "value") -> "definition") -> "V1") ->> "create_sql")) ->> "source_id")) IS NOT NULL
+                →Read mz_internal.mz_catalog_raw
+    →Arranged mz_catalog.mz_sources
+
+Source mz_internal.mz_catalog_raw
+  filter=(("Item" = (#0{data} ->> "kind")))
+
+Used Indexes:
+  - mz_catalog.mz_sources_ind (delta join lookup)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_internal"."mz_mysql_source_tables";
+----
+mz_internal.mz_mysql_source_tables:
+  →Delta Join [%0:mz_catalog_raw[#0] » %1[#0] » %2:mz_sources[#0{id}]] [%1[#0] » %2:mz_sources[#0{id}] » %0:mz_catalog_raw[#0]] [%2:mz_sources[#0{id}] » %1[(#1{details} ->> "source_id")] » %0:mz_catalog_raw[#0]]
+    path %0:
+      after %1:
+        Project: #2, #1, #4, #5
+        Map: (#2{details} -> "external_reference"), (#3 ->> 0), (#3 ->> 1)
+      after %2:
+        Project: #2..=#4
+        Filter: (#8{type} = "mysql")
+    path %1:
+      after %2:
+        Project: #1, #3, #4
+        Filter: (#8{type} = "mysql")
+      after %0:
+        Project: #3, #1, #2
+        Map: parse_catalog_id(((#0{data} -> "key") -> "gid"))
+    path %2:
+      after %1:
+        Project: #1, #4, #5
+        Map: (#2{details} -> "external_reference"), (#3 ->> 0), (#3 ->> 1)
+      after %0:
+        Project: #3, #1, #2
+        Map: parse_catalog_id(((#0{data} -> "key") -> "gid"))
+    →Arrange (#0)
+      →Read mz_internal.mz_catalog_raw
+    →Arrange (#0) ((#1{details} ->> "source_id"))
+      →Map/Filter/Project
+        Project: #0, #1
+        Map: parse_source_export_details(((((#0{data} -> "value") -> "definition") -> "V1") ->> "create_sql"))
+          →Distinct GroupAggregate
+            →Fused with Child Map/Filter/Project
+              Filter: ((parse_source_export_details(((((#0 -> "value") -> "definition") -> "V1") ->> "create_sql")) ->> "source_id")) IS NOT NULL
+                →Read mz_internal.mz_catalog_raw
+    →Arranged mz_catalog.mz_sources
+
+Source mz_internal.mz_catalog_raw
+  filter=(("Item" = (#0{data} ->> "kind")))
+
+Used Indexes:
+  - mz_catalog.mz_sources_ind (delta join lookup)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
 EXPLAIN MATERIALIZED VIEW "mz_internal"."mz_network_policies";
 ----
 mz_internal.mz_network_policies:
@@ -5382,6 +5582,54 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_internal"."mz_postgres_source_tables";
+----
+mz_internal.mz_postgres_source_tables:
+  →Delta Join [%0:mz_catalog_raw[#0] » %1[#0] » %2:mz_sources[#0{id}]] [%1[#0] » %2:mz_sources[#0{id}] » %0:mz_catalog_raw[#0]] [%2:mz_sources[#0{id}] » %1[(#1{details} ->> "source_id")] » %0:mz_catalog_raw[#0]]
+    path %0:
+      after %1:
+        Project: #2, #1, #4, #5
+        Map: (#2{details} -> "external_reference"), (#3 ->> 1), (#3 ->> 2)
+      after %2:
+        Project: #2..=#4
+        Filter: (#8{type} = "postgres")
+    path %1:
+      after %2:
+        Project: #1, #3, #4
+        Filter: (#8{type} = "postgres")
+      after %0:
+        Project: #3, #1, #2
+        Map: parse_catalog_id(((#0{data} -> "key") -> "gid"))
+    path %2:
+      after %1:
+        Project: #1, #4, #5
+        Map: (#2{details} -> "external_reference"), (#3 ->> 1), (#3 ->> 2)
+      after %0:
+        Project: #3, #1, #2
+        Map: parse_catalog_id(((#0{data} -> "key") -> "gid"))
+    →Arrange (#0)
+      →Read mz_internal.mz_catalog_raw
+    →Arrange (#0) ((#1{details} ->> "source_id"))
+      →Map/Filter/Project
+        Project: #0, #1
+        Map: parse_source_export_details(((((#0{data} -> "value") -> "definition") -> "V1") ->> "create_sql"))
+          →Distinct GroupAggregate
+            →Fused with Child Map/Filter/Project
+              Filter: ((parse_source_export_details(((((#0 -> "value") -> "definition") -> "V1") ->> "create_sql")) ->> "source_id")) IS NOT NULL
+                →Read mz_internal.mz_catalog_raw
+    →Arranged mz_catalog.mz_sources
+
+Source mz_internal.mz_catalog_raw
+  filter=(("Item" = (#0{data} ->> "kind")))
+
+Used Indexes:
+  - mz_catalog.mz_sources_ind (delta join lookup)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
 EXPLAIN MATERIALIZED VIEW "mz_internal"."mz_postgres_sources";
 ----
 mz_internal.mz_postgres_sources:
@@ -5406,6 +5654,54 @@ Source mz_internal.mz_catalog_raw
   project=(#2..=#4)
   filter=(("ReplicaSystemConfiguration" = (#0{data} ->> "kind")))
   map=((#0{data} -> "key"), parse_catalog_id((#1 -> "replica_id")), (#1 ->> "name"), ((#0{data} -> "value") ->> "value"))
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_internal"."mz_sql_server_source_tables";
+----
+mz_internal.mz_sql_server_source_tables:
+  →Delta Join [%0:mz_catalog_raw[#0] » %1[#0] » %2:mz_sources[#0{id}]] [%1[#0] » %2:mz_sources[#0{id}] » %0:mz_catalog_raw[#0]] [%2:mz_sources[#0{id}] » %1[(#1{details} ->> "source_id")] » %0:mz_catalog_raw[#0]]
+    path %0:
+      after %1:
+        Project: #2, #1, #4, #5
+        Map: (#2{details} -> "external_reference"), (#3 ->> 1), (#3 ->> 2)
+      after %2:
+        Project: #2..=#4
+        Filter: (#8{type} = "sql-server")
+    path %1:
+      after %2:
+        Project: #1, #3, #4
+        Filter: (#8{type} = "sql-server")
+      after %0:
+        Project: #3, #1, #2
+        Map: parse_catalog_id(((#0{data} -> "key") -> "gid"))
+    path %2:
+      after %1:
+        Project: #1, #4, #5
+        Map: (#2{details} -> "external_reference"), (#3 ->> 1), (#3 ->> 2)
+      after %0:
+        Project: #3, #1, #2
+        Map: parse_catalog_id(((#0{data} -> "key") -> "gid"))
+    →Arrange (#0)
+      →Read mz_internal.mz_catalog_raw
+    →Arrange (#0) ((#1{details} ->> "source_id"))
+      →Map/Filter/Project
+        Project: #0, #1
+        Map: parse_source_export_details(((((#0{data} -> "value") -> "definition") -> "V1") ->> "create_sql"))
+          →Distinct GroupAggregate
+            →Fused with Child Map/Filter/Project
+              Filter: ((parse_source_export_details(((((#0 -> "value") -> "definition") -> "V1") ->> "create_sql")) ->> "source_id")) IS NOT NULL
+                →Read mz_internal.mz_catalog_raw
+    →Arranged mz_catalog.mz_sources
+
+Source mz_internal.mz_catalog_raw
+  filter=(("Item" = (#0{data} ->> "kind")))
+
+Used Indexes:
+  - mz_catalog.mz_sources_ind (delta join lookup)
 
 Target cluster: mz_catalog_server
 
@@ -7666,7 +7962,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_materialized_views";
 ----
 Explained Query (fast path):
-  →Constant (29 rows)
+  →Constant (37 rows)
 
 Target cluster: mz_catalog_server
 

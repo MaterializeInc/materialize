@@ -19,8 +19,10 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{ArrayRustType, Datum, Row, RowPacker, SqlColumnType, SqlScalarType, strconv};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    AstInfo, Format, FormatSpecifier, KafkaSourceConfigOptionName, PgConfigOptionName,
-    RawClusterName, RawItemName, Value, WithOptionValue,
+    AstInfo, AvroSchema, ConnectionOption, ConnectionOptionName, CreateConnectionType,
+    CreateSubsourceOptionName, Format, FormatSpecifier, KafkaSourceConfigOptionName,
+    PgConfigOptionName, ProtobufSchema, RawClusterName, RawItemName, SourceEnvelope,
+    SourceErrorPolicy, Value, WithOptionValue,
 };
 use prost::Message as _;
 use serde::{Deserialize, Serialize};
@@ -702,6 +704,346 @@ fn parse_kafka_source_details<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
     Ok(jsonb)
 }
 
+/// Extracts source-export (source table) metadata from a catalog `create_sql`.
+///
+/// Returns, for a `CREATE TABLE ... FROM SOURCE` or a non-progress
+/// `CREATE SUBSOURCE ... OF SOURCE ...` statement:
+///
+/// ```json
+/// {
+///   "source_id": "<parent source item id>",
+///   "external_reference": ["part1", "part2", ...],
+///   "envelope_type": <text | null>,
+///   "key_format": <text | null>,
+///   "value_format": <text | null>
+/// }
+/// ```
+///
+/// `envelope_type`, `key_format`, and `value_format` are always null for a
+/// `CREATE SUBSOURCE` (the postgres/mysql/sql-server exports that use the old
+/// subsource syntax carry neither format nor envelope). They may also be null
+/// for a `CREATE TABLE ... FROM SOURCE` that omits FORMAT/ENVELOPE.
+///
+/// Returns jsonb `null` for progress subsources and for any statement that is
+/// not a source export. The caller distinguishes the four source-table views
+/// by joining `source_id` against `mz_sources` and filtering on the parent's
+/// type, so this helper stays connection-type agnostic.
+///
+/// Errors if the statement fails to parse, references an unresolved item name,
+/// or is a non-progress subsource missing its OF SOURCE or EXTERNAL REFERENCE.
+///
+/// The `key_format`/`value_format` derivation mirrors the runtime
+/// `DataSourceDesc::formats()` that the removed `pack_kafka_source_tables_update`
+/// packer read. A bare FORMAT only carries a key when it resolves to an
+/// encoding that has one, which among bare formats is only Avro or Protobuf
+/// read from a Confluent Schema Registry whose purified seed carries a key
+/// schema. A KEY FORMAT ... VALUE FORMAT ... spec always carries both.
+#[sqlfunc]
+fn parse_source_export_details<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
+    fn get_item_id(item: RawItemName) -> Result<String, &'static str> {
+        match item {
+            RawItemName::Id(id, _, _) => Ok(id),
+            RawItemName::Name(_) => Err("unresolved item name"),
+        }
+    }
+
+    fn format_name<T: AstInfo>(fmt: &Format<T>) -> &'static str {
+        match fmt {
+            Format::Bytes => "bytes",
+            Format::Avro(_) => "avro",
+            Format::Protobuf(_) => "protobuf",
+            Format::Regex(_) => "regex",
+            Format::Csv { .. } => "csv",
+            Format::Json { .. } => "json",
+            Format::Text => "text",
+        }
+    }
+
+    // A bare FORMAT resolves to an encoding with a key only for Avro or
+    // Protobuf read from a schema registry whose purified seed carries a key
+    // schema. Every other bare format is value-only.
+    fn bare_format_has_key<T: AstInfo>(fmt: &Format<T>) -> bool {
+        match fmt {
+            Format::Avro(AvroSchema::Csr { csr_connection }) => csr_connection
+                .seed
+                .as_ref()
+                .is_some_and(|seed| seed.key_schema.is_some()),
+            Format::Protobuf(ProtobufSchema::Csr { csr_connection }) => csr_connection
+                .seed
+                .as_ref()
+                .is_some_and(|seed| seed.key.is_some()),
+            _ => false,
+        }
+    }
+
+    fn key_value_formats<T: AstInfo>(
+        spec: &FormatSpecifier<T>,
+    ) -> (Option<&'static str>, Option<&'static str>) {
+        match spec {
+            FormatSpecifier::KeyValue { key, value } => {
+                (Some(format_name(key)), Some(format_name(value)))
+            }
+            FormatSpecifier::Bare(fmt) => {
+                let value = Some(format_name(fmt));
+                let key = bare_format_has_key(fmt).then(|| format_name(fmt));
+                (key, value)
+            }
+        }
+    }
+
+    fn envelope_name(envelope: &SourceEnvelope) -> &'static str {
+        match envelope {
+            SourceEnvelope::None => "none",
+            SourceEnvelope::Debezium => "debezium",
+            SourceEnvelope::Upsert {
+                value_decode_err_policy,
+            } => {
+                if value_decode_err_policy
+                    .iter()
+                    .any(|p| matches!(p, SourceErrorPolicy::Inline { .. }))
+                {
+                    "upsert-value-err-inline"
+                } else {
+                    "upsert"
+                }
+            }
+            SourceEnvelope::CdcV2 => "materialize",
+        }
+    }
+
+    let parse = || -> Result<serde_json::Value, String> {
+        let mut stmts = mz_sql_parser::parser::parse_statements(a)
+            .map_err(|e| format!("failed to parse create_sql: {e}"))?;
+        let stmt = match stmts.len() {
+            1 => stmts.remove(0).ast,
+            n => return Err(format!("expected a single statement, found {n}")),
+        };
+
+        use mz_sql_parser::ast::Statement::{CreateSubsource, CreateTableFromSource};
+        match stmt {
+            CreateTableFromSource(stmt) => {
+                let source_id = get_item_id(stmt.source)?;
+                let external_reference = stmt
+                    .external_reference
+                    .ok_or("missing external reference on CREATE TABLE FROM SOURCE")?
+                    .0
+                    .into_iter()
+                    .map(|ident| ident.into_string())
+                    .collect::<Vec<_>>();
+
+                let envelope_type = stmt.envelope.as_ref().map(envelope_name);
+                let (key_format, value_format) = match &stmt.format {
+                    Some(spec) => key_value_formats(spec),
+                    None => (None, None),
+                };
+
+                Ok(json!({
+                    "source_id": source_id,
+                    "external_reference": external_reference,
+                    "envelope_type": envelope_type,
+                    "key_format": key_format,
+                    "value_format": value_format,
+                }))
+            }
+            CreateSubsource(stmt) => {
+                // Progress subsources track ingestion progress and are not
+                // source tables. They have no external reference.
+                let is_progress = stmt
+                    .with_options
+                    .iter()
+                    .any(|o| matches!(o.name, CreateSubsourceOptionName::Progress));
+                if is_progress {
+                    return Ok(serde_json::Value::Null);
+                }
+
+                let source_id = stmt
+                    .of_source
+                    .ok_or("non-progress CREATE SUBSOURCE without OF SOURCE")
+                    .and_then(get_item_id)?;
+
+                let external_reference = stmt
+                    .with_options
+                    .into_iter()
+                    .find(|o| matches!(o.name, CreateSubsourceOptionName::ExternalReference))
+                    .and_then(|o| match o.value {
+                        Some(WithOptionValue::UnresolvedItemName(name)) => Some(name),
+                        _ => None,
+                    })
+                    .ok_or("CREATE SUBSOURCE missing EXTERNAL REFERENCE option")?
+                    .0
+                    .into_iter()
+                    .map(|ident| ident.into_string())
+                    .collect::<Vec<_>>();
+
+                Ok(json!({
+                    "source_id": source_id,
+                    "external_reference": external_reference,
+                    "envelope_type": serde_json::Value::Null,
+                    "key_format": serde_json::Value::Null,
+                    "value_format": serde_json::Value::Null,
+                }))
+            }
+            _ => Ok(serde_json::Value::Null),
+        }
+    };
+
+    let val = parse().map_err(|e| EvalError::InvalidCatalogJson(e.into()))?;
+    let jsonb = Jsonb::from_serde_json(val).expect("valid JSONB");
+    Ok(jsonb)
+}
+
+/// Extracts connection-detail metadata from a catalog `create_sql`.
+///
+/// Returns a per-connection-type object with the fields that the
+/// `mz_kafka_connections`, `mz_ssh_tunnel_connections`, and `mz_aws_connections`
+/// builtin views need. For everything else (other connection types, including
+/// aws-privatelink whose only detail is context-derived, and non-connection
+/// statements) it returns jsonb `null`, so callers filter on `IS NOT NULL` and
+/// gate on the connection type separately (via
+/// `parse_catalog_create_sql(...)->>'connection_type'`, the way `mz_connections`
+/// already does).
+///
+/// The shape per type:
+///
+/// ```json
+/// // kafka
+/// { "brokers": ["host:port", ...], "progress_topic": <text | null> }
+/// // ssh-tunnel
+/// { "public_key_1": "<text>", "public_key_2": "<text>" }
+/// // aws
+/// {
+///   "auth_kind": "credentials" | "assume-role",
+///   "endpoint": <text | null>, "region": <text | null>,
+///   "access_key_id": <text | null>, "access_key_id_secret_id": <text | null>,
+///   "secret_access_key_secret_id": <text | null>,
+///   "session_token": <text | null>, "session_token_secret_id": <text | null>,
+///   "assume_role_arn": <text | null>, "assume_role_session_name": <text | null>
+/// }
+/// ```
+///
+/// `progress_topic` is null when the connection does not set an explicit
+/// `PROGRESS TOPIC`. The default (`_materialize-progress-<env>-<conn_id>`) is
+/// reconstructed by the view, not here, because it needs the environment id and
+/// the connection's own id. Values derived only from environment context
+/// (AWS principal, external id, trust policy, privatelink principal) are also
+/// left to the view. This keeps the helper a pure function of the `create_sql`.
+///
+/// For aws, an option is either an inline value or a secret reference. Inline
+/// values land in `access_key_id`/`session_token`; a secret reference lands in
+/// the matching `*_secret_id` as the referenced secret's catalog item id (the
+/// persisted `create_sql` stores resolved references as `[uNNN AS name]`).
+/// `auth_kind` is `assume-role` when `ASSUME ROLE ARN` is present, else
+/// `credentials`, matching the `AwsAuth` variant the removed packer read.
+///
+/// Errors if the statement fails to parse.
+#[sqlfunc]
+fn parse_connection_details<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
+    // The persisted `create_sql` stores an inline broker as a single `BROKER`
+    // option and a broker list as a `BROKERS (...)` sequence. Either way we
+    // only need the addresses, which are present regardless of the tunnel
+    // (direct, SSH, or PrivateLink).
+    fn broker_addresses<T: AstInfo>(values: &[ConnectionOption<T>]) -> Vec<String> {
+        let mut brokers = Vec::new();
+        for opt in values {
+            match (&opt.name, &opt.value) {
+                (ConnectionOptionName::Broker, Some(WithOptionValue::ConnectionKafkaBroker(b))) => {
+                    brokers.push(b.address.clone());
+                }
+                (ConnectionOptionName::Brokers, Some(WithOptionValue::Sequence(seq))) => {
+                    for v in seq {
+                        if let WithOptionValue::ConnectionKafkaBroker(b) = v {
+                            brokers.push(b.address.clone());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        brokers
+    }
+
+    fn string_option<T: AstInfo>(
+        values: &[ConnectionOption<T>],
+        name: ConnectionOptionName,
+    ) -> Option<String> {
+        values.iter().find_map(|o| match &o.value {
+            Some(WithOptionValue::Value(Value::String(s))) if o.name == name => Some(s.clone()),
+            _ => None,
+        })
+    }
+
+    // The catalog id of the secret a `SECRET ...` option references. Resolved
+    // references persist as `RawItemName::Id`, so an unresolved name yields
+    // None (the same treatment `parse_source_export_details` gives item names).
+    fn secret_id_option<T: AstInfo<ItemName = RawItemName>>(
+        values: &[ConnectionOption<T>],
+        name: ConnectionOptionName,
+    ) -> Option<String> {
+        values.iter().find_map(|o| match &o.value {
+            Some(WithOptionValue::Secret(RawItemName::Id(id, _, _))) if o.name == name => {
+                Some(id.clone())
+            }
+            _ => None,
+        })
+    }
+
+    let parse = || -> Result<serde_json::Value, String> {
+        let mut stmts = mz_sql_parser::parser::parse_statements(a)
+            .map_err(|e| format!("failed to parse create_sql: {e}"))?;
+        let stmt = match stmts.len() {
+            1 => stmts.remove(0).ast,
+            n => return Err(format!("expected a single statement, found {n}")),
+        };
+
+        use mz_sql_parser::ast::Statement::CreateConnection;
+        let stmt = match stmt {
+            CreateConnection(stmt) => stmt,
+            _ => return Ok(serde_json::Value::Null),
+        };
+
+        match stmt.connection_type {
+            CreateConnectionType::Kafka => Ok(json!({
+                "brokers": broker_addresses(&stmt.values),
+                "progress_topic": string_option(&stmt.values, ConnectionOptionName::ProgressTopic),
+            })),
+            CreateConnectionType::Ssh => Ok(json!({
+                "public_key_1": string_option(&stmt.values, ConnectionOptionName::PublicKey1),
+                "public_key_2": string_option(&stmt.values, ConnectionOptionName::PublicKey2),
+            })),
+            CreateConnectionType::Aws => {
+                let assume_role_arn =
+                    string_option(&stmt.values, ConnectionOptionName::AssumeRoleArn);
+                let auth_kind = if assume_role_arn.is_some() {
+                    "assume-role"
+                } else {
+                    "credentials"
+                };
+                Ok(json!({
+                    "auth_kind": auth_kind,
+                    "endpoint": string_option(&stmt.values, ConnectionOptionName::Endpoint),
+                    "region": string_option(&stmt.values, ConnectionOptionName::Region),
+                    "access_key_id": string_option(&stmt.values, ConnectionOptionName::AccessKeyId),
+                    "access_key_id_secret_id":
+                        secret_id_option(&stmt.values, ConnectionOptionName::AccessKeyId),
+                    "secret_access_key_secret_id":
+                        secret_id_option(&stmt.values, ConnectionOptionName::SecretAccessKey),
+                    "session_token": string_option(&stmt.values, ConnectionOptionName::SessionToken),
+                    "session_token_secret_id":
+                        secret_id_option(&stmt.values, ConnectionOptionName::SessionToken),
+                    "assume_role_arn": assume_role_arn,
+                    "assume_role_session_name":
+                        string_option(&stmt.values, ConnectionOptionName::AssumeRoleSessionName),
+                }))
+            }
+            _ => Ok(serde_json::Value::Null),
+        }
+    };
+
+    let val = parse().map_err(|e| EvalError::InvalidCatalogJson(e.into()))?;
+    let jsonb = Jsonb::from_serde_json(val).expect("valid JSONB");
+    Ok(jsonb)
+}
+
 #[cfg(test)]
 mod tests {
     use mz_repr::adt::jsonb::Jsonb;
@@ -890,5 +1232,320 @@ mod tests {
             matches!(err, EvalError::InvalidCatalogJson(msg) if msg.contains("unresolved item name")),
             "wrong error variant/message"
         );
+    }
+
+    // --- parse_source_export_details -----------------------------------------
+
+    fn table_from_source_sql(reference: &str, suffix: &str) -> String {
+        format!(
+            "CREATE TABLE \"materialize\".\"public\".\"tbl\" \
+             FROM SOURCE [u1 AS \"materialize\".\"public\".\"src\"] \
+             (REFERENCE = {reference}){suffix}"
+        )
+    }
+
+    #[mz_ore::test]
+    fn export_table_postgres_style_no_format() {
+        // Postgres/mysql/sql-server tables carry a multi-part external
+        // reference and no format or envelope.
+        let sql = table_from_source_sql("\"db\".\"public\".\"t\"", "");
+        let out = super::parse_source_export_details(&sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "source_id": "u1",
+                "external_reference": ["db", "public", "t"],
+                "envelope_type": null,
+                "key_format": null,
+                "value_format": null,
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    fn export_table_kafka_bare_value_only() {
+        // A bare non-registry FORMAT is value-only: no key format.
+        let sql = table_from_source_sql("\"topic\"", " FORMAT TEXT ENVELOPE NONE");
+        let out = super::parse_source_export_details(&sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "source_id": "u1",
+                "external_reference": ["topic"],
+                "envelope_type": "none",
+                "key_format": null,
+                "value_format": "text",
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    fn export_table_kafka_key_value_format() {
+        let sql = table_from_source_sql(
+            "\"topic\"",
+            " KEY FORMAT TEXT VALUE FORMAT TEXT ENVELOPE NONE",
+        );
+        let out = super::parse_source_export_details(&sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "source_id": "u1",
+                "external_reference": ["topic"],
+                "envelope_type": "none",
+                "key_format": "text",
+                "value_format": "text",
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn export_table_kafka_bare_avro_seed_with_key() {
+        // A bare Avro CSR format whose seed carries a key schema resolves to
+        // an encoding with a key, so key_format mirrors value_format. This is
+        // the upsert/debezium path.
+        let sql = table_from_source_sql(
+            "\"topic\"",
+            " FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY \
+             CONNECTION [u5 AS \"materialize\".\"public\".\"csr\"] \
+             SEED KEY SCHEMA 'k' VALUE SCHEMA 'v' ENVELOPE UPSERT",
+        );
+        let out = super::parse_source_export_details(&sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "source_id": "u1",
+                "external_reference": ["topic"],
+                "envelope_type": "upsert",
+                "key_format": "avro",
+                "value_format": "avro",
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn export_table_kafka_bare_avro_seed_without_key() {
+        // A bare Avro CSR seed with only a value schema is value-only.
+        let sql = table_from_source_sql(
+            "\"topic\"",
+            " FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY \
+             CONNECTION [u5 AS \"materialize\".\"public\".\"csr\"] \
+             SEED VALUE SCHEMA 'v' ENVELOPE NONE",
+        );
+        let out = super::parse_source_export_details(&sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "source_id": "u1",
+                "external_reference": ["topic"],
+                "envelope_type": "none",
+                "key_format": null,
+                "value_format": "avro",
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    fn export_subsource_non_progress() {
+        // Old-syntax subsource: external reference lives in a WITH option, and
+        // there is never a format or envelope.
+        let sql = "CREATE SUBSOURCE \"materialize\".\"public\".\"sub\" (id int4) \
+             OF SOURCE [u1 AS \"materialize\".\"public\".\"src\"] \
+             WITH (EXTERNAL REFERENCE = \"db\".\"public\".\"t\")";
+        let out = super::parse_source_export_details(sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "source_id": "u1",
+                "external_reference": ["db", "public", "t"],
+                "envelope_type": null,
+                "key_format": null,
+                "value_format": null,
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    fn export_progress_subsource_returns_null_jsonb() {
+        let sql = "CREATE SUBSOURCE \"materialize\".\"public\".\"progress\" (id int4) \
+             WITH (PROGRESS)";
+        let out = super::parse_source_export_details(sql).expect("ok");
+        assert_eq!(as_serde(out), serde_json::Value::Null);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn export_non_source_export_returns_null_jsonb() {
+        let sql = "CREATE VIEW v AS SELECT 1";
+        let out = super::parse_source_export_details(sql).expect("ok");
+        assert_eq!(as_serde(out), serde_json::Value::Null);
+    }
+
+    #[mz_ore::test]
+    fn export_unresolved_source_name_errors() {
+        let sql = "CREATE TABLE \"materialize\".\"public\".\"tbl\" \
+             FROM SOURCE src (REFERENCE = \"topic\")";
+        let err = super::parse_source_export_details(sql).unwrap_err();
+        assert!(
+            matches!(err, EvalError::InvalidCatalogJson(msg) if msg.contains("unresolved item name")),
+            "wrong error variant/message"
+        );
+    }
+
+    // --- parse_connection_details --------------------------------------------
+
+    #[mz_ore::test]
+    fn connection_kafka_single_broker_default_progress() {
+        // No explicit PROGRESS TOPIC: the helper leaves it null and the view
+        // reconstructs the default.
+        let sql = "CREATE CONNECTION \"materialize\".\"public\".\"c\" TO KAFKA \
+             (BROKER = 'localhost:9092', SECURITY PROTOCOL = plaintext)";
+        let out = super::parse_connection_details(sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "brokers": ["localhost:9092"],
+                "progress_topic": null,
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    fn connection_kafka_explicit_progress_topic() {
+        let sql = "CREATE CONNECTION \"materialize\".\"public\".\"c\" TO KAFKA \
+             (BROKER = 'localhost:9092', PROGRESS TOPIC = 'override', \
+              SECURITY PROTOCOL = plaintext)";
+        let out = super::parse_connection_details(sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "brokers": ["localhost:9092"],
+                "progress_topic": "override",
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    fn connection_kafka_broker_list() {
+        let sql = "CREATE CONNECTION \"materialize\".\"public\".\"c\" TO KAFKA \
+             (BROKERS ('b1:9092', 'b2:9092'), SECURITY PROTOCOL = plaintext)";
+        let out = super::parse_connection_details(sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "brokers": ["b1:9092", "b2:9092"],
+                "progress_topic": null,
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    fn connection_ssh_public_keys() {
+        let sql = "CREATE CONNECTION \"materialize\".\"public\".\"c\" TO SSH TUNNEL \
+             (HOST = 'ssh.example.com', PORT = 22, USER = 'mz', \
+              PUBLIC KEY 1 = 'ssh-ed25519 AAAA', PUBLIC KEY 2 = 'ssh-ed25519 BBBB')";
+        let out = super::parse_connection_details(sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "public_key_1": "ssh-ed25519 AAAA",
+                "public_key_2": "ssh-ed25519 BBBB",
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    fn connection_aws_credentials_inline_key() {
+        // Inline ACCESS KEY ID, secret SECRET ACCESS KEY. Assume-role columns
+        // stay null and auth_kind is credentials.
+        let sql = "CREATE CONNECTION \"materialize\".\"public\".\"c\" TO AWS \
+             (ACCESS KEY ID = 'AKIAEXAMPLE', \
+              SECRET ACCESS KEY = SECRET [u1 AS \"materialize\".\"public\".\"sk\"])";
+        let out = super::parse_connection_details(sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "auth_kind": "credentials",
+                "endpoint": null,
+                "region": null,
+                "access_key_id": "AKIAEXAMPLE",
+                "access_key_id_secret_id": null,
+                "secret_access_key_secret_id": "u1",
+                "session_token": null,
+                "session_token_secret_id": null,
+                "assume_role_arn": null,
+                "assume_role_session_name": null,
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    fn connection_aws_credentials_secret_key_and_session_token() {
+        // Every credential provided as a secret reference lands in the matching
+        // *_secret_id column as the referenced secret's catalog id.
+        let sql = "CREATE CONNECTION \"materialize\".\"public\".\"c\" TO AWS \
+             (ENDPOINT = 'http://localhost', REGION = 'us-east-1', \
+              ACCESS KEY ID = SECRET [u1 AS \"materialize\".\"public\".\"ak\"], \
+              SECRET ACCESS KEY = SECRET [u2 AS \"materialize\".\"public\".\"sk\"], \
+              SESSION TOKEN = SECRET [u3 AS \"materialize\".\"public\".\"st\"])";
+        let out = super::parse_connection_details(sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "auth_kind": "credentials",
+                "endpoint": "http://localhost",
+                "region": "us-east-1",
+                "access_key_id": null,
+                "access_key_id_secret_id": "u1",
+                "secret_access_key_secret_id": "u2",
+                "session_token": null,
+                "session_token_secret_id": "u3",
+                "assume_role_arn": null,
+                "assume_role_session_name": null,
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    fn connection_aws_assume_role() {
+        // Assume-role sets auth_kind and the assume-role columns; credential
+        // columns stay null.
+        let sql = "CREATE CONNECTION \"materialize\".\"public\".\"c\" TO AWS \
+             (ASSUME ROLE ARN 'arn:aws:iam::123:role/mz', \
+              ASSUME ROLE SESSION NAME 'sess')";
+        let out = super::parse_connection_details(sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "auth_kind": "assume-role",
+                "endpoint": null,
+                "region": null,
+                "access_key_id": null,
+                "access_key_id_secret_id": null,
+                "secret_access_key_secret_id": null,
+                "session_token": null,
+                "session_token_secret_id": null,
+                "assume_role_arn": "arn:aws:iam::123:role/mz",
+                "assume_role_session_name": "sess",
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    fn connection_other_type_returns_null_jsonb() {
+        // A connection type without a detail view (postgres) yields null.
+        let sql = "CREATE CONNECTION \"materialize\".\"public\".\"c\" TO POSTGRES \
+             (HOST = 'db', DATABASE = 'postgres', USER = 'mz')";
+        let out = super::parse_connection_details(sql).expect("ok");
+        assert_eq!(as_serde(out), serde_json::Value::Null);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn connection_non_connection_returns_null_jsonb() {
+        let sql = "CREATE VIEW v AS SELECT 1";
+        let out = super::parse_connection_details(sql).expect("ok");
+        assert_eq!(as_serde(out), serde_json::Value::Null);
     }
 }

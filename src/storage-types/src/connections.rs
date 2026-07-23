@@ -1124,6 +1124,11 @@ impl<C: ConnectionAccess> KafkaConnection<C> {
     ///
     /// The caller is responsible for providing the connection ID as it is not
     /// known to `KafkaConnection`.
+    ///
+    /// NOTE: the `mz_catalog.mz_kafka_connections` builtin materialized view
+    /// reconstructs the default (`_materialize-progress-<env>-<conn>`) in SQL
+    /// (see `MZ_KAFKA_CONNECTIONS` in `src/catalog/src/builtin/mz_catalog.rs`).
+    /// Keep the two in sync.
     pub fn progress_topic(
         &self,
         connection_context: &ConnectionContext,

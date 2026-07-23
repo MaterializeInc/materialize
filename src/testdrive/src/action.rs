@@ -22,7 +22,7 @@ use aws_credential_types::provider::ProvideCredentials;
 use aws_types::SdkConfig;
 use futures::future::FutureExt;
 use itertools::Itertools;
-use mz_adapter::catalog::{Catalog, ConnCatalog};
+use mz_adapter::catalog::{Catalog, ConnCatalog, DebugAwsContext};
 use mz_adapter::session::Session;
 use mz_build_info::BuildInfo;
 use mz_catalog::config::ClusterReplicaSizeMap;
@@ -218,6 +218,16 @@ pub struct MaterializeState {
     pgclient: tokio_postgres::Client,
     environment_id: EnvironmentId,
     bootstrap_args: BootstrapArgs,
+    // The AWS environment context, queried once from the running environmentd at
+    // startup, the same way environment_id is. The builtin AWS connection views
+    // fold these values into their optimized expressions, so the catalog copy
+    // opened for the consistency check must resolve them the same way. Queried
+    // at startup rather than at check time because a check-time query runs after
+    // arbitrary test state and is less reliable, while startup runs against a
+    // clean session on the currently connected version.
+    aws_account_id: Option<String>,
+    aws_external_id_prefix: Option<String>,
+    aws_connection_role_arn: Option<String>,
 }
 
 pub struct State {
@@ -464,6 +474,11 @@ impl State {
                 &self.persist_clients,
             )
             .await?;
+            let aws_context = DebugAwsContext {
+                aws_account_id: self.materialize.aws_account_id.clone(),
+                aws_external_id_prefix: self.materialize.aws_external_id_prefix.clone(),
+                aws_connection_role_arn: self.materialize.aws_connection_role_arn.clone(),
+            };
             let catalog = Catalog::open_debug_read_only_persist_catalog_config(
                 persist_client,
                 SYSTEM_TIME.clone(),
@@ -472,6 +487,7 @@ impl State {
                 build_info,
                 bootstrap_args,
                 enable_expression_cache_override,
+                Some(aws_context),
             )
             .await?;
             let res = f(catalog.for_session(&Session::dummy()));
@@ -1349,6 +1365,27 @@ async fn create_materialize_state(
         .parse()
         .context("parsing environment ID")?;
 
+    // Tolerate the functions not existing: upgrade tests run testdrive against an
+    // older environmentd whose catalog predates them. A version without them has
+    // no context-folding views either, so no context is the correct fold.
+    let (aws_account_id, aws_external_id_prefix, aws_connection_role_arn) = match pg_query_one(
+        &pgclient,
+        pg_sql!(
+            "SELECT mz_aws_account_id(), mz_aws_external_id_prefix(), \
+                 mz_aws_connection_role_arn()"
+        ),
+        &[],
+    )
+    .await
+    {
+        Ok(row) => (
+            row.get::<_, Option<String>>(0),
+            row.get::<_, Option<String>>(1),
+            row.get::<_, Option<String>>(2),
+        ),
+        Err(_) => (None, None, None),
+    };
+
     let bootstrap_args = BootstrapArgs {
         cluster_replica_size_map: config.materialize_cluster_replica_sizes.clone(),
         default_cluster_replica_size: "ABC".to_string(),
@@ -1369,6 +1406,9 @@ async fn create_materialize_state(
         pgclient,
         environment_id,
         bootstrap_args,
+        aws_account_id,
+        aws_external_id_prefix,
+        aws_connection_role_arn,
     };
 
     Ok(materialize_state)
