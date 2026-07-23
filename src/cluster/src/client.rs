@@ -9,6 +9,7 @@
 
 //! An interactive cluster server.
 
+use std::borrow::Cow;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 use std::thread::Thread;
@@ -167,6 +168,15 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
     /// The name of this cluster ("compute" or "storage").
     const NAME: &str;
 
+    /// The name recorded on the per-worker Timely tracing span.
+    ///
+    /// Defaults to [`Self::NAME`]. A spec that runs more than one cluster of the same kind in a
+    /// process (for example the maintenance and interactive compute runtimes) overrides this to
+    /// keep their spans distinguishable in the logs.
+    fn cluster_name(&self) -> Cow<'static, str> {
+        Cow::Borrowed(Self::NAME)
+    }
+
     /// Run the given Timely worker.
     fn run_worker(
         &self,
@@ -257,11 +267,12 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
         }
 
         let spec = self.clone();
+        let cluster_name = self.cluster_name();
         let worker_guards = execute_from(builders, other, worker_config, move |timely_worker| {
             let worker_idx = timely_worker.index();
 
             // Per worker tracing span, lets us identify Timely clusters and workers in the logs.
-            let span = info_span!("timely", name = Self::NAME, worker_id = worker_idx);
+            let span = info_span!("timely", name = %cluster_name, worker_id = worker_idx);
             let _span_guard = span.enter();
 
             let _tokio_guard = tokio_executor.enter();

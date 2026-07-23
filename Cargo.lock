@@ -3093,8 +3093,7 @@ checksum = "56254986775e3233ffa9c4d7d3faaf6d36a2c09d30b20687e9f88bc8bafc16c8"
 [[package]]
 name = "differential-dataflow"
 version = "0.25.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2677690d1dfbf4d8427eef2fdcf350ab0b258d3be20d01dd37dca07ca6f50bcc"
+source = "git+https://github.com/antiguru/differential-dataflow?branch=claude%2Fspines-differential-arc-j93mho#c6f92e966f8176f1baa4d22db528b4158f61bee3"
 dependencies = [
  "columnar",
  "columnation",
@@ -3108,8 +3107,7 @@ dependencies = [
 [[package]]
 name = "differential-dogs3"
 version = "0.25.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52c9eee4acc936da45f096424617c91df981c619a92f3f8b4b2a324db7969b34"
+source = "git+https://github.com/antiguru/differential-dataflow?branch=claude%2Fspines-differential-arc-j93mho#c6f92e966f8176f1baa4d22db528b4158f61bee3"
 dependencies = [
  "differential-dataflow",
  "serde",
@@ -6760,6 +6758,7 @@ dependencies = [
  "futures",
  "itertools 0.14.0",
  "lgalloc",
+ "libc",
  "mz-cluster",
  "mz-cluster-client",
  "mz-compute-client",
@@ -6774,6 +6773,7 @@ dependencies = [
  "mz-proto",
  "mz-repr",
  "mz-row-spine",
+ "mz-secrets",
  "mz-storage-operators",
  "mz-storage-types",
  "mz-timely-util",

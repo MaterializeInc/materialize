@@ -68,6 +68,12 @@ pub const ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE: Config<bool> = Config::new(
     "Aggressively downgrade input read holds for indexes on zero-replica clusters.",
 );
 
+pub const ENABLE_TWO_RUNTIME_COMPUTE: Config<bool> = Config::new(
+    "enable_two_runtime_compute",
+    false,
+    "Whether to launch compute replicas with a second, interactive compute timely runtime.",
+);
+
 /// Adds the full set of all controller `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -80,4 +86,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&TIMELY_ZERO_COPY_LIMIT)
         .add(&ARRANGEMENT_EXERT_PROPORTIONALITY)
         .add(&ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE)
+        .add(&ENABLE_TWO_RUNTIME_COMPUTE)
 }

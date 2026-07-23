@@ -487,6 +487,18 @@ pub const MV_SINK_ADVANCE_PERSIST_FRONTIERS: Config<bool> = Config::new(
     "Whether the MV sink's write operator advances its internal persist frontiers to the as_of.",
 );
 
+/// Whether maintained index arrangements are published into the per-process arrangement sharing
+/// registry, so their `oks` and `errs` traces can be read from another thread or runtime.
+///
+/// Publishing has a per-batch cost even with no readers, so it is opt-in. Disabled by default; with
+/// the flag off nothing publishes and the render path is behavior-unchanged.
+pub const ENABLE_INDEX_ARRANGEMENT_SHARING: Config<bool> = Config::new(
+    "enable_index_arrangement_sharing",
+    false,
+    "Whether to publish maintained index arrangements into the per-process sharing registry so \
+     they can be read from another thread or runtime.",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -536,6 +548,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COMPUTE_PROMETHEUS_INTROSPECTION_SCRAPE_INTERVAL)
         .add(&SUBSCRIBE_SNAPSHOT_OPTIMIZATION)
         .add(&MV_SINK_ADVANCE_PERSIST_FRONTIERS)
+        .add(&ENABLE_INDEX_ARRANGEMENT_SHARING)
         .add(&ENABLE_COLUMN_PAGED_BATCHER)
         .add(&ENABLE_COLUMN_PAGED_BATCHER_SPILL)
         .add(&COLUMN_PAGED_BATCHER_BUDGET_FRACTION)
