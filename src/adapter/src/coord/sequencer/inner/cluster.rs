@@ -42,6 +42,7 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::{
     MAX_CREDIT_CONSUMPTION_RATE, MAX_REPLICAS_PER_CLUSTER, SystemVars, Var,
 };
+use mz_storage_types::configuration::{StorageReplicaConfig, StorageReplicaLogging};
 use tracing::{Instrument, Span, debug};
 
 use mz_adapter_types::dyncfgs::{
@@ -1435,6 +1436,11 @@ impl Coordinator {
             ReplicaLogging::default()
         };
 
+        let storage_logging = StorageReplicaLogging {
+            log_logging: logging.log_logging,
+            interval: logging.interval.clone(),
+        };
+
         let config = ReplicaConfig {
             location: self.catalog().concretize_replica_location(
                 location,
@@ -1447,6 +1453,9 @@ impl Coordinator {
             compute: ComputeReplicaConfig {
                 logging,
                 arrangement_compression: compute.arrangement_compression,
+            },
+            storage: StorageReplicaConfig {
+                logging: storage_logging,
             },
         };
 
@@ -1598,6 +1607,10 @@ impl Coordinator {
             } else {
                 ReplicaLogging::default()
             };
+            let storage_logging = StorageReplicaLogging {
+                log_logging: logging.log_logging,
+                interval: logging.interval.clone(),
+            };
 
             let role_id = session.role_metadata().current_role;
             let config = ReplicaConfig {
@@ -1612,6 +1625,9 @@ impl Coordinator {
                 compute: ComputeReplicaConfig {
                     logging,
                     arrangement_compression: compute.arrangement_compression,
+                },
+                storage: StorageReplicaConfig {
+                    logging: storage_logging,
                 },
             };
 
@@ -1717,6 +1733,10 @@ impl Coordinator {
         } else {
             ReplicaLogging::default()
         };
+        let storage_logging = StorageReplicaLogging {
+            log_logging: logging.log_logging,
+            interval: logging.interval.clone(),
+        };
 
         let role_id = session.role_metadata().current_role;
         let config = ReplicaConfig {
@@ -1733,6 +1753,9 @@ impl Coordinator {
             compute: ComputeReplicaConfig {
                 logging,
                 arrangement_compression: compute.arrangement_compression,
+            },
+            storage: StorageReplicaConfig {
+                logging: storage_logging,
             },
         };
 

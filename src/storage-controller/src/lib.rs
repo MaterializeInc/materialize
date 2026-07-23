@@ -70,7 +70,7 @@ use mz_storage_client::statistics::{
     ControllerSinkStatistics, ControllerSourceStatistics, WebhookStatistics,
 };
 use mz_storage_client::storage_collections::StorageCollections;
-use mz_storage_types::configuration::StorageConfiguration;
+use mz_storage_types::configuration::{StorageConfiguration, StorageReplicaConfig};
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::controller::{AlterError, CollectionMetadata, StorageError, TxnsCodecRow};
@@ -598,6 +598,7 @@ impl StorageController for Controller {
         instance_id: StorageInstanceId,
         replica_id: ReplicaId,
         location: ClusterReplicaLocation,
+        config: StorageReplicaConfig,
     ) {
         let instance = self
             .instances
@@ -608,6 +609,7 @@ impl StorageController for Controller {
             build_info: self.build_info,
             location,
             grpc_client: self.config.parameters.grpc_client.clone(),
+            logging: config.logging,
         };
         instance.add_replica(replica_id, config);
     }

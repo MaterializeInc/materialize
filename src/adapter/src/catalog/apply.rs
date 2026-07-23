@@ -59,6 +59,7 @@ use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql::session::vars::{VarError, VarInput};
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::Expr;
+use mz_storage_types::configuration::{StorageReplicaConfig, StorageReplicaLogging};
 use mz_storage_types::sources::Timeline;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
@@ -761,15 +762,22 @@ impl CatalogState {
                 );
             }
             StateDiff::Addition => {
-                let logging = ReplicaLogging {
+                let compute_logging = ReplicaLogging {
+                    log_logging: cluster_replica.config.logging.log_logging,
+                    interval: cluster_replica.config.logging.interval,
+                };
+                let storage_logging = StorageReplicaLogging {
                     log_logging: cluster_replica.config.logging.log_logging,
                     interval: cluster_replica.config.logging.interval,
                 };
                 let config = ReplicaConfig {
                     location,
                     compute: ComputeReplicaConfig {
-                        logging,
+                        logging: compute_logging,
                         arrangement_compression: cluster_replica.config.arrangement_compression,
+                    },
+                    storage: StorageReplicaConfig {
+                        logging: storage_logging,
                     },
                 };
                 let mem_cluster_replica = ClusterReplica {

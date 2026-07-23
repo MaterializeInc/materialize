@@ -32,6 +32,7 @@ use mz_storage_client::client::{
     RunIngestionCommand, RunSinkCommand, Status, StatusUpdate, StorageCommand, StorageResponse,
 };
 use mz_storage_client::metrics::{InstanceMetrics, ReplicaMetrics};
+use mz_storage_types::configuration::StorageReplicaLogging;
 use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::{IngestionDescription, SourceConnection};
 use timely::progress::Antichain;
@@ -748,6 +749,7 @@ pub(super) struct ReplicaConfig {
     pub build_info: &'static BuildInfo,
     pub location: ClusterReplicaLocation,
     pub grpc_client: GrpcClientParameters,
+    pub logging: StorageReplicaLogging,
 }
 
 /// State maintained about individual replicas.
