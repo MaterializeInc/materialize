@@ -2845,6 +2845,18 @@ steps:
                composition: race-condition
                run: rotate-keys-race
 
+       - id: race-condition-create-secret-db-drop
+         topics: [iceberg, kafka, mysql, postgres, sql-server]
+         label: "CREATE SECRET vs DROP DATABASE race"
+         depends_on: build-x86_64
+         timeout_in_minutes: 15
+         agents:
+           queue: hetzner-x86-64-4cpu-8gb
+         plugins:
+           - ./ci/plugins/mzcompose:
+               composition: race-condition
+               run: create-secret-db-drop-race
+
   - id: mz-deploy
     topics: [kafka, postgres]
     label: "mz-deploy"
