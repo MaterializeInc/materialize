@@ -195,3 +195,134 @@ SELECT ROW(1)::scoping_composite
 ----
 row
 (1)
+
+# Regression tests for SQL-313: a relation whose alias exposes zero columns
+# must still be visible to name resolution, so that it shadows outer aliases
+# of the same name and participates in duplicate table name detection.
+
+statement ok
+CREATE TABLE sq_t (a int)
+
+statement ok
+INSERT INTO sq_t VALUES (1), (2)
+
+# The inner zero-column alias q shadows the outer q, so q.a must not bind to
+# the outer q. PostgreSQL errors here too.
+query error column "q.a" does not exist
+SELECT q.a FROM sq_t AS q WHERE EXISTS (SELECT 1 FROM (SELECT FROM generate_series(1,1)) AS q WHERE q.a > 0)
+
+query error column "q.a" does not exist
+SELECT q.a FROM (SELECT) AS q
+
+# Duplicate table name detection must see zero-column aliases.
+query error table name "sq_t" specified more than once
+SELECT * FROM sq_t, (SELECT) AS sq_t
+
+query error table name "sq_t" specified more than once
+SELECT * FROM (SELECT) AS sq_t, sq_t
+
+query error table name "sq_t" specified more than once
+SELECT sq_t.a FROM sq_t JOIN (SELECT) AS sq_t ON true
+
+query error table name "sq_t" specified more than once
+SELECT sq_t.a FROM sq_t CROSS JOIN (SELECT) AS sq_t
+
+query error table name "sq_t" specified more than once
+SELECT sq_t.a FROM sq_t NATURAL JOIN (SELECT) AS sq_t
+
+query error table name "q" specified more than once
+SELECT * FROM (SELECT) AS q, (SELECT) AS q
+
+query error table name "nullary" specified more than once
+SELECT * FROM nullary, sq_t AS nullary
+
+# Zero-column CTEs behave the same way.
+query error table name "q" specified more than once
+WITH q AS (SELECT) SELECT * FROM q, sq_t AS q
+
+query error column "q.a" does not exist
+SELECT q.a FROM sq_t AS q WHERE EXISTS (WITH q AS (SELECT) SELECT 1 FROM q WHERE q.a > 0)
+
+# Distinct names are still fine.
+query I rowsort
+SELECT sq_t.a FROM sq_t, (SELECT) AS q
+----
+1
+2
+
+query I rowsort
+SELECT * FROM sq_t, (SELECT) AS q
+----
+1
+2
+
+# Outer joins with a zero-arity side still work.
+query I rowsort
+SELECT sq_t.a FROM sq_t LEFT JOIN (SELECT) AS q ON true
+----
+1
+2
+
+query I rowsort
+SELECT sq_t.a FROM sq_t FULL JOIN (SELECT) AS q ON true
+----
+1
+2
+
+# Shadowing also applies with LATERAL and survives grouping.
+query error column "q.a" does not exist
+SELECT * FROM sq_t AS q, LATERAL (SELECT q.a FROM (SELECT) AS q) x
+
+query error column "q.a" does not exist
+SELECT (SELECT q.a) FROM sq_t AS q2, (SELECT) AS q GROUP BY q2.a
+
+# A non-lateral sibling subquery cannot see the zero-arity alias, so the
+# reference binds to the outer q, per PostgreSQL.
+query I rowsort
+SELECT * FROM sq_t AS q WHERE EXISTS (SELECT * FROM (SELECT) AS q JOIN (SELECT q.a) x ON true)
+----
+1
+2
+
+# An alias on a parenthesized join hides a zero-arity inner name.
+query I rowsort
+SELECT y.a FROM (sq_t JOIN (SELECT) AS x ON true) AS y, generate_series(1, 1) AS x
+----
+1
+2
+
+# A USING join alias conflicts with a zero-arity name already in scope.
+query error table name "z" specified more than once
+SELECT * FROM (sq_t JOIN (SELECT) AS z ON true) JOIN t1 USING (a) AS z
+
+# An outer alias of the same name remains visible when the inner relation
+# uses a different alias.
+query I
+SELECT count(*) FROM sq_t AS q WHERE EXISTS (SELECT 1 FROM (SELECT) AS q2 WHERE q.a > 0)
+----
+2
+
+# Qualified wildcards work on zero-column relations.
+query
+SELECT nullary.* FROM nullary
+----
+
+query I
+SELECT count(*) FROM (SELECT q.* FROM (SELECT) AS q) AS x
+----
+1
+
+query I rowsort
+SELECT a FROM sq_t AS q WHERE EXISTS (SELECT q.* FROM (SELECT) AS q)
+----
+1
+2
+
+# A whole-row reference to a zero-column relation is not supported.
+# PostgreSQL returns an empty record here.
+query error column "q" does not exist
+SELECT q FROM (SELECT) AS q
+
+# DELETE ... USING also detects duplicate zero-column aliases.
+statement error table name "sq_t" specified more than once
+DELETE FROM sq_t USING (SELECT) AS sq_t
