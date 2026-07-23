@@ -30,7 +30,8 @@
 //!   [`SharedTraceHandle`]s.
 //! * [`SharedTraceHandle`] implements [`TraceReader`], so it drives compaction and cursors like any
 //!   trace handle. [`SharedTraceHandle::snapshot_at`] serves a point or full-scan read from any
-//!   thread. [`SharedTraceHandle::import`] replays the shared arrangement into another scope.
+//!   thread. [`SharedTraceHandle::import_snapshot_at`] replays the shared arrangement into another
+//!   scope.
 //!
 //! ## Compaction
 //!
@@ -209,7 +210,7 @@ where
     /// observes the filled chain: the handle is a live proxy into the shared state, not a snapshot.
     ///
     /// `peers` must equal the total peer count of the scope that later adopts the point, the same
-    /// invariant [`SharedTraceHandle::import`] enforces.
+    /// invariant [`SharedTraceHandle::import_snapshot_at`] enforces.
     pub fn placeholder(peers: usize) -> Self {
         Published {
             shared: Arc::new(SharedTrace::new_empty(peers)),
@@ -742,31 +743,56 @@ where
     Tr::Time: Lattice + Clone,
     Tr::Batch: Navigable,
 {
-    /// Imports the published arrangement into `scope`, returning an [`Arranged`] backed by this
-    /// shared trace.
+    /// Imports the published arrangement restricted to `[as_of, until)`, presented at `as_of`.
+    ///
+    /// This is the port of differential's `TraceAgent::import_frontier_core` onto the shared trace.
+    /// It registers a replay queue seeded with the current chain and drains it as the publisher
+    /// appends, wrapping the emitted batches in [`BatchFrontier`] and the trace in [`TraceFrontier`],
+    /// both advanced to `as_of` and bounded by `until`. Every update at a time not beyond `as_of`
+    /// therefore coalesces to `as_of`, so pre-`as_of` retractions cancel and a downstream monotonic
+    /// operator sees only the accumulation at `as_of`.
+    ///
+    /// The wrapper advances times on read, so the shared `Arc` batches are reused as-is, never
+    /// re-arranged.
     ///
     /// Requires `scope`'s total peer count (workers-per-process times processes) to equal the
     /// publisher's, panicking otherwise. Pairwise import (importer worker `i` reads publisher
     /// worker `i`) is sound only when both sides shard by the same `key.hashed() % peers`; a
     /// mismatched peer count would silently read the wrong shard instead of failing loudly.
     ///
-    /// The importer registers a replay queue seeded with the current chain and drains it as the
-    /// publisher appends. The registration is owned by the source operator, so dropping the import
-    /// dataflow deregisters it and releases its holds even while other handle clones and the reader
-    /// worker live on.
-    pub fn import<'scope>(
+    /// The importer registration is owned by the source operator, so dropping the import dataflow
+    /// deregisters it and releases its holds even while other handle clones and the reader worker
+    /// live on.
+    ///
+    /// # Why replay rather than a one-shot emit
+    ///
+    /// The returned [`Arranged`]'s `stream` and `trace` must stay consistent: the trace is the
+    /// accumulation of the stream, and their frontiers advance together. A differential join relies
+    /// on this (it computes `A.stream x B.trace + B.stream x A.trace`, counting each match once only
+    /// when the trace never runs ahead of the stream). Driving the output capability off the replayed
+    /// `Frontier` instructions keeps `stream.frontier == trace.upper`. A one-shot emit that shipped
+    /// the whole chain and then dropped straight to the empty frontier would leave the pre-populated
+    /// shared trace ahead of the stream, and the join would read the same record from both and double
+    /// it.
+    ///
+    /// For a single-time interactive read pass `until = as_of.step_forward()`: the capability then
+    /// drops once the trace's frontier passes `as_of`, so the one-shot result completes. An empty
+    /// `until` performs no bounding and the import stays live with the trace.
+    pub fn import_snapshot_at<'scope>(
         &self,
         scope: Scope<'scope, Tr::Time>,
         name: &str,
-    ) -> Arranged<'scope, SharedTraceHandle<Tr>> {
+        as_of: Antichain<Tr::Time>,
+        until: Antichain<Tr::Time>,
+    ) -> Arranged<'scope, TraceFrontier<SharedTraceHandle<Tr>>> {
         assert_eq!(
             scope.peers(),
             self.shared.peers,
             "shared-trace import requires equal total peers (workers_per_process * num_processes)"
         );
 
+        let trace = TraceFrontier::make_from(self.clone(), as_of.borrow(), until.borrow());
         let shared = Arc::clone(&self.shared);
-        let trace = self.clone();
 
         let stream = source(scope, name, move |capability, info| {
             let activator = scope.worker().sync_activator_for(info.address.to_vec());
@@ -791,136 +817,6 @@ where
                 // so seed our own. Otherwise a late importer would drain the chain and then wait
                 // forever for a frontier that never arrives, leaking its capability. Mirrors the
                 // `state.closed` guard in `snapshot_at`.
-                if state.closed {
-                    instructions.push_back(TraceReplayInstruction::Frontier(Antichain::new()));
-                }
-                state.queues.insert(
-                    reg_id,
-                    ImportQueue {
-                        instructions,
-                        activator,
-                    },
-                );
-                reg_id
-            };
-
-            let mut capabilities = Some(CapabilitySet::new());
-            capabilities.as_mut().unwrap().insert(capability);
-
-            // Deregisters the queue when the source operator (and thus this closure) drops.
-            let _guard = QueueGuard {
-                shared: Arc::clone(&shared),
-                reg_id,
-            };
-
-            move |output| {
-                let _guard = &_guard;
-                let mut drained = Vec::new();
-                {
-                    let mut state = shared.state.lock().expect("shared trace poisoned");
-                    if let Some(queue) = state.queues.get_mut(&reg_id) {
-                        drained.extend(queue.instructions.drain(..));
-                    }
-                }
-
-                if let Some(caps) = capabilities.as_mut() {
-                    for instruction in drained {
-                        match instruction {
-                            TraceReplayInstruction::Frontier(frontier) => {
-                                if frontier.is_empty() {
-                                    // Terminal frontier: publisher closed, no more capabilities.
-                                    capabilities = None;
-                                    break;
-                                }
-                                caps.downgrade(&frontier.borrow()[..]);
-                            }
-                            TraceReplayInstruction::Batch(batch, hint) => {
-                                if let Some(time) = hint {
-                                    if !batch.is_empty() {
-                                        // Emit under a capability delayed to the batch's hint, a
-                                        // lower bound on its times. Never the batch upper: that
-                                        // would let the frontier pass updates still in the batch.
-                                        let cap = caps.delayed(&time);
-                                        output.session(&cap).give(batch);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        });
-
-        Arranged { stream, trace }
-    }
-
-    /// Imports the published arrangement restricted to `[as_of, until)`, presented at `as_of`.
-    ///
-    /// This is the port of differential's `TraceAgent::import_frontier_core` onto the shared trace.
-    /// It replays the published chain (the current batches, then a frontier stream tracking the
-    /// trace's `upper`) exactly as [`Self::import`] does, but wraps the emitted batches in
-    /// [`BatchFrontier`] and the trace in [`TraceFrontier`], both advanced to `as_of` and bounded by
-    /// `until`. Every update at a time not beyond `as_of` therefore coalesces to `as_of`, so
-    /// pre-`as_of` retractions cancel and a downstream monotonic operator sees only the accumulation
-    /// at `as_of`.
-    ///
-    /// The wrapper advances times on read, so the shared `Arc` batches are reused as-is, never
-    /// re-arranged.
-    ///
-    /// # Why replay rather than a one-shot emit
-    ///
-    /// The returned [`Arranged`]'s `stream` and `trace` must stay consistent: the trace is the
-    /// accumulation of the stream, and their frontiers advance together. A differential join relies
-    /// on this (it computes `A.stream x B.trace + B.stream x A.trace`, counting each match once only
-    /// when the trace never runs ahead of the stream). Driving the output capability off the replayed
-    /// `Frontier` instructions keeps `stream.frontier == trace.upper`. A one-shot emit that shipped
-    /// the whole chain and then dropped straight to the empty frontier would leave the pre-populated
-    /// shared trace ahead of the stream, and the join would read the same record from both and double
-    /// it.
-    ///
-    /// For a single-time interactive read pass `until = as_of.step_forward()`: the capability then
-    /// drops once the trace's frontier passes `as_of`, so the one-shot result completes. An empty
-    /// `until` performs no bounding and the import stays live with the trace.
-    ///
-    /// Requires `scope`'s total peer count to equal the publisher's, as [`Self::import`] does.
-    pub fn import_snapshot_at<'scope>(
-        &self,
-        scope: Scope<'scope, Tr::Time>,
-        name: &str,
-        as_of: Antichain<Tr::Time>,
-        until: Antichain<Tr::Time>,
-    ) -> Arranged<'scope, TraceFrontier<SharedTraceHandle<Tr>>> {
-        assert_eq!(
-            scope.peers(),
-            self.shared.peers,
-            "shared-trace import requires equal total peers (workers_per_process * num_processes)"
-        );
-
-        let trace = TraceFrontier::make_from(self.clone(), as_of.borrow(), until.borrow());
-        let shared = Arc::clone(&self.shared);
-
-        let stream = source(scope, name, move |capability, info| {
-            let activator = scope.worker().sync_activator_for(info.address.to_vec());
-
-            // Register under one lock acquisition: seed the queue with the current chain (hint
-            // `minimum`, as the local replay does for historical batches) followed by the current
-            // upper, and install the queue. Later batches append; earlier ones are seeded. Mirrors
-            // [`Self::import`].
-            let reg_id = {
-                let mut state = shared.state.lock().expect("shared trace poisoned");
-                let reg_id = state.next_id;
-                state.next_id += 1;
-                let mut instructions = VecDeque::new();
-                for batch in state.chain.iter() {
-                    instructions.push_back(TraceReplayInstruction::Batch(
-                        batch.clone(),
-                        Some(batch_min::<Tr>()),
-                    ));
-                }
-                instructions.push_back(TraceReplayInstruction::Frontier(state.upper.clone()));
-                // A late importer whose publisher already closed seeds its own terminal frontier,
-                // else it would drain the chain and wait forever. Mirrors the `state.closed` guard in
-                // `import`.
                 if state.closed {
                     instructions.push_back(TraceReplayInstruction::Frontier(Antichain::new()));
                 }
@@ -1336,8 +1232,8 @@ mod tests {
 
     /// A publisher on a two-worker runtime (`peers() == 2`) hands its handle to an importer on a
     /// single-threaded runtime (`peers() == 1`). Pairwise import assumes both sides shard keys the
-    /// same way, which requires equal total peers, so `import` must assert and panic rather than
-    /// silently reading the wrong shard.
+    /// same way, which requires equal total peers, so `import_snapshot_at` must assert and panic
+    /// rather than silently reading the wrong shard.
     ///
     /// Ported from the differential-dataflow primitive's own `tests/sharing.rs`
     /// `import_asserts_equal_peers`.
@@ -1376,11 +1272,14 @@ mod tests {
         let handle = handle_rx.recv().expect("publisher did not send a handle");
 
         // Importer runtime: single-threaded (`execute_directly` never spawns worker threads), so
-        // `peers()` is 1, mismatching the publisher's 2. `import` runs on this same thread, so its
-        // panic unwinds directly into the test rather than being swallowed at a thread boundary.
+        // `peers()` is 1, mismatching the publisher's 2. `import_snapshot_at` runs on this same
+        // thread, so its panic unwinds directly into the test rather than being swallowed at a
+        // thread boundary.
         timely::execute_directly(move |worker| {
             worker.dataflow::<Timestamp, _, _>(|scope| {
-                let _imported = handle.import(scope, "Import");
+                let as_of = Antichain::from_elem(Timestamp::from(0_u64));
+                let until = Antichain::from_elem(Timestamp::from(1_u64));
+                let _imported = handle.import_snapshot_at(scope, "Import", as_of, until);
             });
         });
     }
@@ -1474,6 +1373,13 @@ mod tests {
     /// with `hint` below it panics. Here we drive a real published arrangement's importer and inject
     /// exactly that hazardous ordering into its replay queue, using a real non-empty `Arc` batch, so
     /// the panic is raised by the production drain-and-emit loop rather than a reconstruction.
+    ///
+    /// This drain-and-emit loop, including the `caps.delayed(hint)` call that panics, is shared code
+    /// between every mode of `import_snapshot_at`, not something specific to a since-removed live
+    /// import. An unbounded `until` (`Antichain::new()`) reproduces the exact same failure as the
+    /// pre-bound-checking import once did: with a finite `until` the frontier-reached check in
+    /// `import_snapshot_at` would drop the capability before the injected batch is ever replayed,
+    /// masking the hazard instead of exercising it.
     #[mz_ore::test]
     #[should_panic(expected = "failed to create a delayed capability")]
     fn frontier_ahead_of_batch_trips_delayed_capability() {
@@ -1515,9 +1421,13 @@ mod tests {
             };
 
             // Register a real importer, then step so its source seeds and drains the current chain,
-            // leaving its `CapabilitySet` at the published upper (1).
+            // leaving its `CapabilitySet` at the published upper (1). `until` is left unbounded so
+            // the injected frontier below cannot trip the early "reached until" exit before the
+            // hazardous batch is replayed.
+            let as_of = Antichain::from_elem(Timestamp::from(1_u64));
+            let until = Antichain::new();
             worker.dataflow::<Timestamp, _, _>(|scope| {
-                let _imp = handle.import(scope, "hazard import");
+                let _imp = handle.import_snapshot_at(scope, "hazard import", as_of, until);
             });
             for _ in 0..4 {
                 worker.step();
@@ -1657,10 +1567,16 @@ mod tests {
             let ha = pub_a.handle();
             let hb = pub_b.handle();
 
+            // `as_of = 0` matches the earliest real time in either input, so no update coalesces;
+            // `until = seal` (open) keeps every distinct time in `[0, seal)` visible, matching what
+            // the old live import would have produced over this same run.
+            let as_of = Antichain::from_elem(Timestamp::from(0_u64));
+            let until = Antichain::from_elem(Timestamp::from(seal));
             let probe = ProbeHandle::new();
             worker.dataflow::<Timestamp, _, _>(|scope| {
-                let arr_a = ha.import(scope.clone(), "import A");
-                let arr_b = hb.import(scope.clone(), "import B");
+                let arr_a =
+                    ha.import_snapshot_at(scope.clone(), "import A", as_of.clone(), until.clone());
+                let arr_b = hb.import_snapshot_at(scope.clone(), "import B", as_of, until);
                 let joined = arr_a.join_core(arr_b, |key, v1, v2| {
                     let row =
                         Row::pack(key.into_iter().chain(v1.into_iter()).chain(v2.into_iter()));
