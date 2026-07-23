@@ -179,15 +179,17 @@ export function accountIdsByTotal(series: Map<string, number[]>): string[] {
  * broken by id, matching `accountIdsByTotal`), plus the window total. Used to
  * itemize the "Last 30 days" row by account. `null` if there's no data.
  */
-export function breakdownByAccount(
-  days: CostBreakdownDay[] | null,
-): { total: number; accounts: { id: string; total: number }[] } | null {
+export function breakdownByAccount(days: CostBreakdownDay[] | null): {
+  total: number;
+  accounts: { id: string; name: string; total: number }[];
+} | null {
   if (!days || days.length === 0) {
     return null;
   }
   const accounts = aggregateDays(days)
     .accounts.map((account) => ({
       id: account.external_customer_id,
+      name: account.name,
       total: accountTotal(account),
     }))
     .sort((a, b) => b.total - a.total || a.id.localeCompare(b.id));
