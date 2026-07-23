@@ -1456,6 +1456,7 @@ fn test_cancel_long_running_query() {
 // Test that frontend-sequenced read-then-write statements honor pgwire cancel
 // requests and do not run to completion after cancellation.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_cancel_frontend_read_then_write_long_running_query() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -1550,6 +1551,7 @@ fn test_cancel_frontend_read_then_write_long_running_query() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_frontend_read_then_write_constant_insert_prepares_unmaterializable_functions() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -1576,6 +1578,7 @@ fn test_frontend_read_then_write_constant_insert_prepares_unmaterializable_funct
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_frontend_read_then_write_constant_insert_respects_max_result_size() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -1608,6 +1611,7 @@ fn test_frontend_read_then_write_constant_insert_respects_max_result_size() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_frontend_read_then_write_constant_insert_mz_now_uses_legacy_error() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -1636,6 +1640,7 @@ fn test_frontend_read_then_write_constant_insert_mz_now_uses_legacy_error() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_frontend_read_then_write_returning_error_does_not_commit_write() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -1678,6 +1683,7 @@ fn test_frontend_read_then_write_returning_error_does_not_commit_write() {
 // empty-match cases and asserts the operations return zero without
 // hanging or writing.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_frontend_read_then_write_empty_snapshot_returns_zero() {
     let server = test_util::TestHarness::default()
         .with_system_parameter_default(
@@ -1731,6 +1737,7 @@ fn test_frontend_read_then_write_empty_snapshot_returns_zero() {
 // every UPDATE and that at least one observation reports a retry, so the
 // retry-count metric stays wired up to the OCC loop.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_frontend_read_then_write_concurrent_updates_retry() {
     const NUM_WORKERS: usize = 4;
     const UPDATES_PER_WORKER: usize = 25;
@@ -7819,6 +7826,7 @@ fn qa_occ_server() -> test_util::TestServerWithRuntime {
 /// committed deletes should sum to M, the table must end empty, and the
 /// stored multiplicity must never go negative.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn qa_occ_concurrent_delete_no_overdelete() {
     const MULTIPLICITY: i32 = 7;
     const NUM_WORKERS: usize = 6;
@@ -7871,6 +7879,7 @@ fn qa_occ_concurrent_delete_no_overdelete() {
 /// Multiset multiplicity must be reflected in affected-row counts for
 /// DELETE / UPDATE / INSERT...SELECT.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn qa_occ_duplicate_row_multiplicity_counts() {
     let server = qa_occ_server();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -7916,6 +7925,7 @@ fn qa_occ_duplicate_row_multiplicity_counts() {
 /// NOT NULL constraint violations via UPDATE and INSERT...SELECT must error
 /// and leave the table unchanged (no partial commit).
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn qa_occ_not_null_constraint_enforced() {
     let server = qa_occ_server();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -7967,6 +7977,7 @@ fn qa_occ_not_null_constraint_enforced() {
 /// RETURNING must produce new values for UPDATE, old values for DELETE,
 /// and inserted values for INSERT.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn qa_occ_returning_values_correct() {
     let server = qa_occ_server();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -8029,6 +8040,7 @@ fn qa_occ_returning_values_correct() {
 /// produce the correct final set (exercises the Let/Negate/map MIR
 /// transform with consolidation overlap).
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn qa_occ_update_moves_overlapping_rows() {
     let server = qa_occ_server();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -8068,6 +8080,7 @@ fn qa_occ_update_moves_overlapping_rows() {
 /// correctly. Exercises the TimestampDependent timeline + linearization
 /// defaulting to EpochMilliseconds.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn qa_occ_insert_select_from_mv() {
     let server = qa_occ_server();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -8098,6 +8111,7 @@ fn qa_occ_insert_select_from_mv() {
 /// not panic the coordinator or produce internal errors, and the server must
 /// remain responsive afterward.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn qa_occ_concurrent_mixed_dml_no_internal_error() {
     const NUM_WORKERS: usize = 8;
     const ITERS: usize = 30;
@@ -8164,6 +8178,7 @@ fn qa_occ_concurrent_mixed_dml_no_internal_error() {
 /// NOTE: the fix is OCC-path-only. The legacy path still hangs on the same
 /// scenario — see `qa_legacy_far_future_refresh_mv_statement_timeout`.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn qa_occ_far_future_refresh_mv_respects_statement_timeout() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -8266,6 +8281,7 @@ fn qa_occ_far_future_refresh_mv_respects_statement_timeout() {
 /// still hang in CI.
 #[mz_ore::test]
 #[ignore = "legacy path far-future hang is out of scope for the OCC statement_timeout fix"]
+#[allow(clippy::disallowed_methods)]
 fn qa_legacy_far_future_refresh_mv_statement_timeout() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -8331,6 +8347,7 @@ fn qa_legacy_far_future_refresh_mv_statement_timeout() {
 /// blocked behind the starved pool now honors its own `statement_timeout` and
 /// returns promptly with a statement-timeout error instead of hanging.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn qa_occ_far_future_rtw_starves_permit_pool() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()

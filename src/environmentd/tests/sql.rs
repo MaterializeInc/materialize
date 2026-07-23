@@ -1747,6 +1747,7 @@ fn test_read_then_write_serializability_frontend_occ() {
     test_read_then_write_serializability_inner(true);
 }
 
+#[allow(clippy::disallowed_methods)]
 fn test_read_then_write_serializability_inner(frontend_occ: bool) {
     let mut harness = test_util::TestHarness::default();
     if frontend_occ {
