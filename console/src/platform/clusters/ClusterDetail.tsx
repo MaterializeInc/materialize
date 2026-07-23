@@ -27,6 +27,7 @@ import {
   ClusterParams,
 } from "~/platform/clusters/ClusterRoutes";
 import { SentryRoutes } from "~/sentry";
+import { useAllClusters } from "~/store/allClusters";
 import { assert } from "~/util";
 
 import { replaceClusterIdAndName } from "../routeHelpers";
@@ -35,7 +36,7 @@ import ClusterOverview from "./ClusterOverview";
 import ClusterReplicas from "./ClusterReplicas";
 import IndexList from "./IndexList";
 import MaterializedViewsList from "./MaterializedViewsList";
-import { useClusters } from "./queries";
+import { useOwners } from "./queries";
 import Sinks from "./Sinks";
 import Sources from "./Sources";
 import { useShowSystemObjects } from "./useShowSystemObjects";
@@ -43,15 +44,17 @@ import { useShowSystemObjects } from "./useShowSystemObjects";
 const ClusterDetailBreadcrumbs = (props: { crumbs: Breadcrumb[] }) => {
   const [showSystemObjects] = useShowSystemObjects();
   const { clusterId, clusterName } = useParams<ClusterParams>();
-  const { data: clusters, getClusterById } = useClusters();
+  const { data: clusters, getClusterById } = useAllClusters();
+  const { data: ownersById } = useOwners();
   const { pathname, search } = useLocation();
   assert(clusterId);
   assert(clusterName);
   const cluster = getClusterById(clusterId);
 
-  const clustersToShow = showSystemObjects
-    ? clusters
-    : clusters.filter((c) => c.id.startsWith("u"));
+  // The subscribe upserts by id, so the atom's order is arbitrary.
+  const clustersToShow = clusters
+    .filter((c) => showSystemObjects || c.id.startsWith("u"))
+    .sort((a, b) => a.name.localeCompare(b.name));
 
   const menu = (
     <>
@@ -79,7 +82,16 @@ const ClusterDetailBreadcrumbs = (props: { crumbs: Breadcrumb[] }) => {
     <PageBreadcrumbs
       crumbs={props.crumbs}
       contextMenuChildren={menu}
-      rightSideChildren={cluster && <OverflowMenuContainer cluster={cluster} />}
+      rightSideChildren={
+        cluster && (
+          <OverflowMenuContainer
+            cluster={{
+              ...cluster,
+              isOwner: ownersById?.get(cluster.ownerId) ?? false,
+            }}
+          />
+        )
+      }
     />
   );
 };

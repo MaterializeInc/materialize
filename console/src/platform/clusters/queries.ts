@@ -78,6 +78,7 @@ import {
 } from "~/api/materialize/cluster/replicaUtilizationHistory";
 import { fetchLagHistory } from "~/api/materialize/freshness/lagHistory";
 import { assertNoMoreThanOneRow } from "~/api/materialize/MoreThanOneRowError";
+import { fetchOwners } from "~/api/materialize/owners";
 import { useSubscribe } from "~/api/materialize/useSubscribe";
 import { DataPoint, GraphLineSeries } from "~/components/FreshnessGraph/types";
 import { useEnvironmentGate } from "~/store/environments";
@@ -164,6 +165,8 @@ export const clusterQueryKeys = {
       ...clusterQueryKeys.all(),
       buildQueryKeyPart("clusterFreshness", params),
     ] as const,
+  owners: () =>
+    [...clusterQueryKeys.all(), buildQueryKeyPart("owners")] as const,
 };
 
 export function useClusters(filters?: ClusterListFilters) {
@@ -199,6 +202,22 @@ export function useClusters(filters?: ClusterListFilters) {
     refetch,
     getClusterById,
   };
+}
+
+/**
+ * Returns a map from role id to whether the current user can act as that
+ * role, for deriving `isOwner` on rows from the allClusters subscribe.
+ */
+export function useOwners() {
+  return useQuery({
+    refetchInterval: 60_000,
+    queryKey: clusterQueryKeys.owners(),
+    queryFn: ({ queryKey, signal }) => {
+      return fetchOwners({ queryKey, requestOptions: { signal } });
+    },
+    select: (result) =>
+      new Map(result.rows.map((row) => [row.id, row.isOwner])),
+  });
 }
 
 export type AlterClusterParams = AlterClusterSettingsParams &

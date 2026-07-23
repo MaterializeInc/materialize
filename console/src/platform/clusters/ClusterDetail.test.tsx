@@ -12,11 +12,13 @@ import userEvent from "@testing-library/user-event";
 import React from "react";
 import { Route, Routes } from "react-router-dom";
 
-import server from "~/api/mocks/server";
-import { validClustersResponse } from "~/test/clusterQueryBuilders";
+import { getStore } from "~/jotai";
+import { allClusters } from "~/store/allClusters";
+import { mockSubscribeState } from "~/test/mockSubscribe";
 import { renderComponent, RenderWithPathname } from "~/test/utils";
 
 import ClusterDetail from "./ClusterDetail";
+import { buildClusterServerResponse } from "./clustersTestUtils";
 
 vi.mock("~/platform/clusters/ClusterOverview", () => ({
   default: function () {
@@ -26,7 +28,18 @@ vi.mock("~/platform/clusters/ClusterOverview", () => ({
 
 describe("ClusterRoutes", () => {
   it("breadcrumb context menu allows switching clusters", async () => {
-    server.use(validClustersResponse);
+    const store = getStore();
+    store.set(
+      allClusters,
+      mockSubscribeState({
+        data: [
+          buildClusterServerResponse({ id: "u1", name: "default" }),
+          buildClusterServerResponse({ id: "u2", name: "quickstart" }),
+          buildClusterServerResponse({ id: "s1", name: "mz_system" }),
+          buildClusterServerResponse({ id: "s2", name: "mz_catalog_server" }),
+        ],
+      }),
+    );
     renderComponent(
       <RenderWithPathname>
         <Routes>
