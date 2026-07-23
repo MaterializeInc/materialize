@@ -73,12 +73,11 @@
 //! setup briefly holds up to `2 * worker_count + 1` upstream connections per source, settling to
 //! one per ranged worker plus the leader's lock connection. To handle various charsets and
 //! collation gracefully we rely on MySQL's sort order and never attempt to compare or order
-//! strings in Rust. To handle possible races with
-//! changes to collation each worker validates in its read transaction that the boundaries are
-//! strictly increasing under the table's current collation, retrying transiently if not. The
-//! repeatable read snapshots should then succeed if they start reading from the table before DDL
-//! runs, or if DDL does run before one of the workers reads the table, that worker's transaction
-//! should fail with an ER_TABLE_DEF_CHANGED.
+//! strings in Rust. To handle possible races with changes to collation each worker validates in
+//! its read transaction that the boundaries are strictly increasing under the table's current
+//! collation, retrying transiently if not. The repeatable read snapshots should then succeed if
+//! they start reading from the table before DDL runs, or if DDL does run before one of the
+//! workers reads the table, that worker's transaction should fail with an ER_TABLE_DEF_CHANGED.
 //!
 //! ## Rewinding the snapshot to a specific point in time.
 //!
