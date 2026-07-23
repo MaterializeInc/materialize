@@ -13,6 +13,9 @@
 
 # Allow access to confluent_kafka.admin submodule
 from confluent_kafka import admin as admin
+from confluent_kafka.cimpl import OFFSET_BEGINNING as OFFSET_BEGINNING
+from confluent_kafka.cimpl import Consumer as Consumer
 from confluent_kafka.cimpl import KafkaError as KafkaError
 from confluent_kafka.cimpl import Message as Message
 from confluent_kafka.cimpl import Producer as Producer
+from confluent_kafka.cimpl import TopicPartition as TopicPartition
