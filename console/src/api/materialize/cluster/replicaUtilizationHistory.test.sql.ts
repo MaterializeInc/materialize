@@ -18,8 +18,13 @@ import {
 import { testdrive } from "~/test/sql/mzcompose";
 
 import {
+  attachOfflineEvents,
+  rebucketUtilizationSamples,
+} from "./replicaUtilizationBinning";
+import {
   buildConsoleClusterUtilizationOverviewQuery,
   buildConsoleClusterUtilizationUnbinned3hQuery,
+  buildReplicaOfflineEventsQuery,
   buildReplicaUtilizationHistoryQuery,
 } from "./replicaUtilizationHistory";
 
@@ -505,6 +510,115 @@ describe("console cluster utilization indexed views", () => {
     });
     expect(res.rows[0].bucketStart.toISOString()).toEqual(
       "2030-01-01T01:00:00.000Z",
+    );
+  });
+
+  // The <=3h tier reads `_overview_3h`, which
+  // has no status columns, so offline/OOM events are fetched separately
+  // (buildReplicaOfflineEventsQuery) and merged into the client-binned buckets
+  // (attachOfflineEvents). The ad-hoc path joins status history in SQL, so
+  // both paths must surface the same OOM.
+  it("surfaces OOM/offline events in the <=3h unbinned path", async () => {
+    const client = await getMaterializeClient();
+
+    await testdrive(`
+        > DROP CLUSTER IF EXISTS c CASCADE;
+        > CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'));
+        > CREATE SCHEMA IF NOT EXISTS internal_test;
+        > SET schema = internal_test;
+        # Qualify the drops. An unqualified name that is missing from
+        # internal_test falls through the search path to the system table.
+        > DROP TABLE IF EXISTS internal_test.mz_cluster_replica_metrics_history;
+        > DROP TABLE IF EXISTS internal_test.mz_cluster_replica_status_history;
+        > DROP TABLE IF EXISTS internal_test.mz_cluster_replica_sizes;
+        > DROP TABLE IF EXISTS internal_test.mz_console_cluster_utilization_overview_3h;
+        > CREATE TABLE mz_cluster_replica_metrics_history (
+            occurred_at TIMESTAMP NOT NULL, replica_id TEXT NOT NULL, process_id uint8 NOT NULL,
+            cpu_nano_cores double, memory_bytes double, disk_bytes double, heap_bytes double, heap_limit double);
+        > CREATE TABLE mz_cluster_replica_status_history (
+            replica_id TEXT NOT NULL, process_id uint8 NOT NULL, occurred_at TIMESTAMP NOT NULL,
+            status TEXT NOT NULL, reason TEXT);
+        > CREATE TABLE mz_cluster_replica_sizes (
+            size TEXT NOT NULL, processes uint8 NOT NULL, cpu_nano_cores uint8 NOT NULL,
+            memory_bytes uint8 NOT NULL, disk_bytes uint8);
+        > INSERT INTO internal_test.mz_cluster_replica_sizes VALUES
+            ('scale=1,workers=1', 1, ${size25cc.cpuNanoCores}, ${size25cc.memoryBytes}, ${size25cc.diskBytes});
+        # The un-binned 3h view has no status/offline columns.
+        > CREATE TABLE mz_console_cluster_utilization_overview_3h (
+            replica_id TEXT, cluster_id TEXT, size TEXT, name TEXT, occurred_at TIMESTAMPTZ, cpu_percent DOUBLE,
+            memory_percent DOUBLE, disk_percent DOUBLE, heap_percent DOUBLE, memory_and_disk_percent DOUBLE);
+    `);
+
+    await client.query(`SET search_path TO ${mockedSearchPath};`);
+
+    const {
+      rows: [cluster],
+    } = await client.query("select id from mz_clusters where name = 'c'");
+    const {
+      rows: [replica],
+    } = await client.query(
+      `SELECT id, name FROM mz_cluster_replicas WHERE cluster_id = '${cluster.id}' ORDER BY id`,
+    );
+
+    const startTime = "2030-01-01T00:00:00Z";
+    const ts = "2030-01-01T00:00:30.000Z";
+
+    // A utilization sample and a coincident OOM for the same replica and bucket.
+    await client.query(`INSERT INTO internal_test.mz_cluster_replica_metrics_history VALUES
+      (TIMESTAMP '${ts}', '${replica.id}', 0, 5789441, 46788608, 937984, NULL, NULL)`);
+    await client.query(`INSERT INTO internal_test.mz_cluster_replica_status_history VALUES
+      ('${replica.id}', 0, TIMESTAMP '${ts}', 'offline', 'oom-killed')`);
+    await client.query(`INSERT INTO internal_test.mz_console_cluster_utilization_overview_3h VALUES
+      ('${replica.id}', '${cluster.id}', 'scale=1,workers=1', '${replica.name}', '${ts}', 0.1, 0.2, 0.3, 0.4, 0.5)`);
+
+    // The ad-hoc path surfaces the OOM in SQL.
+    const adHoc = (
+      await run(
+        buildReplicaUtilizationHistoryQuery({
+          startDate: startTime,
+          bucketSizeMs: 60_000,
+          clusterIds: [cluster.id],
+        }).compile(),
+      )
+    ).rows;
+    expect(adHoc.find((r) => r.offlineEvents)?.offlineEvents).toEqual([
+      {
+        replicaId: replica.id,
+        reason: "oom-killed",
+        status: "offline",
+        occurredAt: "2030-01-01 00:00:30",
+      },
+    ]);
+
+    // The un-binned path: bin the samples, fetch events, and merge.
+    const samples = (
+      await run(
+        buildConsoleClusterUtilizationUnbinned3hQuery({
+          clusterIds: [cluster.id],
+        }).compile(),
+      )
+    ).rows;
+    const offlineEvents = (
+      await run(
+        buildReplicaOfflineEventsQuery({
+          clusterIds: [cluster.id],
+          startDate: startTime,
+        }).compile(),
+      )
+    ).rows;
+    const rows = attachOfflineEvents(
+      rebucketUtilizationSamples(
+        samples,
+        60_000,
+        new Date(startTime).getTime(),
+      ),
+      offlineEvents,
+      60_000,
+    );
+    expect(rows.length).toBeGreaterThan(0);
+    const events = rows.flatMap((r) => r.offlineEvents ?? []);
+    expect(events).toContainEqual(
+      expect.objectContaining({ status: "offline", reason: "oom-killed" }),
     );
   });
 });
