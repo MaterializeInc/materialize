@@ -244,4 +244,16 @@ mod tests {
 
         assert!(!sync.synchronized().is_empty());
     }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+    fn test_rbac_not_ld_controllable() {
+        // Remote configuration must not be able to disable access control or
+        // its own kill switch. See `SystemVars::iter_synced`.
+        let vars = SystemVars::default();
+        let sync = SynchronizedParameters::new(vars);
+
+        assert!(!sync.is_synchronized("enable_rbac_checks"));
+        assert!(!sync.is_synchronized("enable_launchdarkly"));
+    }
 }

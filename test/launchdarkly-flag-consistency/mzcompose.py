@@ -162,8 +162,10 @@ SESSION_VARIABLES = {
     # Pseudo-variables added by SessionVars::iter.
     "mz_version",
     "is_superuser",
-    # The LaunchDarkly kill switch, explicitly excluded from iter_synced.
+    # The LaunchDarkly kill switch and the RBAC enforcement flag, explicitly
+    # excluded from iter_synced so remote configuration cannot change them.
     "enable_launchdarkly",
+    "enable_rbac_checks",
 }
 
 # Tag used by `test/launchdarkly` and `ci/cleanup/launchdarkly.py` for the
@@ -274,7 +276,6 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_projection_pushdown_after_relation_cse
     enable_public_metrics_endpoint
     enable_raise_statement
-    enable_rbac_checks
     enable_redacted_test_option
     enable_repeat_row
     enable_repeat_row_non_negative
