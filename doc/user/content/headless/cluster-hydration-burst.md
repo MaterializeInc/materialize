@@ -11,11 +11,11 @@ affected objects before they can serve results. Hydration reads the input data
 and rebuilds in-memory state, and its speed scales with the cluster
 [size](#available-sizes).
 
-The `AUTO SCALING STRATEGY` option lets a cluster **automatically provision an
+The `AUTO SCALING STRATEGY (ON HYDRATION)` option lets a cluster **automatically provision an
 extra burst replica at a larger size while it has un-hydrated objects**. This
 speeds up hydration without manually scaling the cluster up before hydration and
-back down afterward. The steady-size replicas continue hydrating in parallel,
-and once one of them catches up with the burst, the burst replica is retired.
+back down afterward. The steady-size replicas continue hydrating in parallel with the burst replica. 
+Once one of the steady-size replicas catches up with the burst, the burst replica lingers for `LINGER DURATION`, and the burst replica is then removed.
 The burst replica is an ordinary cluster replica, billed only for the time it is
 provisioned. See [Usage & billing](/administration/billing/) for details.
 
@@ -23,16 +23,9 @@ The burst can also speed up deployments that hydrate new objects, especially
 [blue/green deployments](/manage/blue-green/), where a new cluster must hydrate
 before the cutover.
 
-`AUTO SCALING STRATEGY` is only available on **managed clusters**. It is not
+`AUTO SCALING STRATEGY (ON HYDRATION)` is only available on **managed clusters**. It is not
 supported on unmanaged clusters, and it cannot be combined with a cluster
 `SCHEDULE` other than the default `MANUAL`.
-
-`AUTO SCALING STRATEGY` currently supports a single sub-strategy, `ON
-HYDRATION`. With `ON HYDRATION`, whenever the cluster has un-hydrated objects,
-Materialize provisions an extra replica at the configured `HYDRATION SIZE`
-alongside the steady-size replicas. The burst replica hydrates faster and can
-serve results before the steady replicas finish. Once the steady replicas
-hydrate, the burst replica lingers for `LINGER DURATION` and is then removed.
 
 ```mzsql
 CREATE CLUSTER fast_start (
@@ -46,7 +39,7 @@ CREATE CLUSTER fast_start (
 );
 ```
 
-The `ON HYDRATION` strategy accepts the following:
+You can specify the following options:
 
 Option | Description
 -------|------------
