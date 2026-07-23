@@ -13,13 +13,16 @@
 //! allocations, as well as a `dictionary` encoding wrapper that is able to rewrite
 //! the byte slices to use spare tags in each column to reference common values.
 
+pub use self::arc_batch::{ArcBatch, ArcBuilder};
 pub use self::dictionary::DatumContainer;
 pub use self::dictionary::DatumSeq;
 pub use self::offset_opt::OffsetOptimized;
+
+mod arc_batch;
 pub use self::spines::{
-    RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowRowColPagedBuilder, RowRowSpine,
-    RowSpine, RowValBatcher, RowValBuilder, RowValSpine, ValRowBatcher, ValRowBuilder,
-    ValRowColPagedBuilder, ValRowSpine,
+    ArcOrdKeyBuilder, ArcOrdKeySpine, ArcOrdValBuilder, ArcOrdValSpine, RowBatcher, RowBuilder,
+    RowRowBatcher, RowRowBuilder, RowRowColPagedBuilder, RowRowSpine, RowSpine, RowValBatcher,
+    RowValBuilder, RowValSpine, ValRowBatcher, ValRowBuilder, ValRowColPagedBuilder, ValRowSpine,
 };
 use differential_dataflow::trace::implementations::OffsetList;
 
@@ -29,18 +32,19 @@ pub static DICTIONARY_COMPRESSION: std::sync::atomic::AtomicBool =
 
 /// Spines specialized to contain `Row` types in keys and values.
 mod spines {
-    use std::rc::Rc;
-
     use columnation::Columnation;
     use differential_dataflow::trace::implementations::Layout;
     use differential_dataflow::trace::implementations::Update;
+    use differential_dataflow::trace::implementations::Vector;
     use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
-    use differential_dataflow::trace::implementations::ord_neu::{OrdKeyBatch, OrdValBatch};
+    use differential_dataflow::trace::implementations::ord_neu::{
+        OrdKeyBatch, OrdKeyBuilder, OrdValBatch, OrdValBuilder,
+    };
     use differential_dataflow::trace::implementations::spine_fueled::Spine;
-    use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
     use mz_repr::Row;
     use mz_timely_util::columnation::{ColInternalMerger, ColumnationStack};
 
+    use crate::arc_batch::{ArcBatch, ArcBuilder};
     use crate::{DatumContainer, OffsetOptimized};
 
     /// Batcher matching `mz_compute::typedefs::KeyValBatcher`, redeclared
@@ -48,9 +52,9 @@ mod spines {
     type KeyValBatcher<K, V, T, D> = MergeBatcher<ColInternalMerger<(K, V), T, D>>;
     type KeyBatcher<K, T, D> = KeyValBatcher<K, (), T, D>;
 
-    pub type RowRowSpine<T, R> = Spine<Rc<OrdValBatch<RowRowLayout<((Row, Row), T, R)>>>>;
+    pub type RowRowSpine<T, R> = Spine<ArcBatch<OrdValBatch<RowRowLayout<((Row, Row), T, R)>>>>;
     pub type RowRowBatcher<T, R> = KeyValBatcher<Row, Row, T, R>;
-    pub type RowRowBuilder<T, R> = RcBuilder<crate::dictionary::builders::RowRowBuilder<T, R>>;
+    pub type RowRowBuilder<T, R> = ArcBuilder<crate::dictionary::builders::RowRowBuilder<T, R>>;
 
     /// `RowRowBuilder` variant that consumes [`Column`] chunks. Pairs with
     /// [`Col2ValPagedBatcher`] for the spillable arrange path. Installs a
@@ -61,21 +65,21 @@ mod spines {
     /// [`Col2ValPagedBatcher`]: mz_timely_util::columnar::Col2ValPagedBatcher
     /// [`Column`]: mz_timely_util::columnar::Column
     pub type RowRowColPagedBuilder<T, R> =
-        RcBuilder<crate::dictionary::builders::RowRowColPagedBuilder<T, R>>;
+        ArcBuilder<crate::dictionary::builders::RowRowColPagedBuilder<T, R>>;
 
-    pub type RowValSpine<V, T, R> = Spine<Rc<OrdValBatch<RowValLayout<((Row, V), T, R)>>>>;
+    pub type RowValSpine<V, T, R> = Spine<ArcBatch<OrdValBatch<RowValLayout<((Row, V), T, R)>>>>;
     pub type RowValBatcher<V, T, R> = KeyValBatcher<Row, V, T, R>;
     pub type RowValBuilder<V, T, R> =
-        RcBuilder<crate::dictionary::builders::RowValBuilder<V, T, R>>;
+        ArcBuilder<crate::dictionary::builders::RowValBuilder<V, T, R>>;
 
-    pub type RowSpine<T, R> = Spine<Rc<OrdKeyBatch<RowLayout<((Row, ()), T, R)>>>>;
+    pub type RowSpine<T, R> = Spine<ArcBatch<OrdKeyBatch<RowLayout<((Row, ()), T, R)>>>>;
     pub type RowBatcher<T, R> = KeyBatcher<Row, T, R>;
-    pub type RowBuilder<T, R> = RcBuilder<crate::dictionary::builders::RowBuilder<T, R>>;
+    pub type RowBuilder<T, R> = ArcBuilder<crate::dictionary::builders::RowBuilder<T, R>>;
 
-    pub type ValRowSpine<K, T, R> = Spine<Rc<OrdValBatch<ValRowLayout<((K, Row), T, R)>>>>;
+    pub type ValRowSpine<K, T, R> = Spine<ArcBatch<OrdValBatch<ValRowLayout<((K, Row), T, R)>>>>;
     pub type ValRowBatcher<K, T, R> = KeyValBatcher<K, Row, T, R>;
     pub type ValRowBuilder<K, T, R> =
-        RcBuilder<crate::dictionary::builders::ValRowBuilder<K, T, R>>;
+        ArcBuilder<crate::dictionary::builders::ValRowBuilder<K, T, R>>;
 
     /// `ValRowBuilder` variant that consumes [`Column`] chunks. Pairs with
     /// `Col2ValPagedBatcher<K, Row, T, R>` for the spillable arrange path where
@@ -86,7 +90,21 @@ mod spines {
     ///
     /// [`Column`]: mz_timely_util::columnar::Column
     pub type ValRowColPagedBuilder<K, T, R> =
-        RcBuilder<crate::dictionary::builders::ValRowColPagedBuilder<K, T, R>>;
+        ArcBuilder<crate::dictionary::builders::ValRowColPagedBuilder<K, T, R>>;
+
+    /// A generic `Arc`-backed key/value spine, for callers outside `mz_compute` that need an
+    /// arrangement over non-`Row`-specialized types. Mirrors the differential fork's
+    /// `ArcOrdValSpine`, but backed by the local [`ArcBatch`] newtype instead of the fork's
+    /// `arc_blanket_impls`.
+    pub type ArcOrdValSpine<K, V, T, R> = Spine<ArcBatch<OrdValBatch<Vector<((K, V), T, R)>>>>;
+    /// Generic `Arc`-backed key-only spine. See [`ArcOrdValSpine`].
+    pub type ArcOrdKeySpine<K, T, R> = Spine<ArcBatch<OrdKeyBatch<Vector<((K, ()), T, R)>>>>;
+    /// Builder pairing with [`ArcOrdValSpine`].
+    pub type ArcOrdValBuilder<K, V, T, R> =
+        ArcBuilder<OrdValBuilder<Vector<((K, V), T, R)>, Vec<((K, V), T, R)>>>;
+    /// Builder pairing with [`ArcOrdKeySpine`].
+    pub type ArcOrdKeyBuilder<K, T, R> =
+        ArcBuilder<OrdKeyBuilder<Vector<((K, ()), T, R)>, Vec<((K, ()), T, R)>>>;
 
     /// A layout based on timely stacks
     pub struct RowRowLayout<U: Update<Key = Row, Val = Row>> {
@@ -155,10 +173,28 @@ mod spines {
 #[cfg(test)]
 mod tests {
     use crate::DatumContainer;
+    use crate::spines::{RowLayout, RowRowLayout, RowValLayout};
     use differential_dataflow::trace::implementations::BatchContainer;
+    use differential_dataflow::trace::implementations::ord_neu::{OrdKeyBatch, OrdValBatch};
     use mz_repr::adt::date::Date;
     use mz_repr::adt::interval::Interval;
-    use mz_repr::{Datum, Row, SqlScalarType};
+    use mz_repr::{Datum, Diff, Row, SqlScalarType, Timestamp};
+    use mz_timely_util::columnation::ColumnationStack;
+
+    fn assert_send_sync<T: Send + Sync>() {}
+
+    /// The batch types backing our spines must stay `Send + Sync`, so that batches
+    /// can be shared across threads (for example behind an `Arc`) to serve reads
+    /// from outside the worker that maintains the trace. This holds because the
+    /// backing containers bottom out in `Vec`s, lgalloc regions, and `CompactBytes`,
+    /// all of which are thread-safe.
+    #[mz_ore::test]
+    fn batches_are_send_sync() {
+        assert_send_sync::<OrdValBatch<RowRowLayout<((Row, Row), Timestamp, Diff)>>>();
+        assert_send_sync::<OrdValBatch<RowValLayout<((Row, Row), Timestamp, Diff)>>>();
+        assert_send_sync::<OrdKeyBatch<RowLayout<((Row, ()), Timestamp, Diff)>>>();
+        assert_send_sync::<ColumnationStack<((Row, Row), Timestamp, Diff)>>();
+    }
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: integer-to-pointer casts and `ptr::with_exposed_provenance` are not supported

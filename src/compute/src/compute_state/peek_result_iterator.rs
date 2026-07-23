@@ -14,10 +14,10 @@ use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 
 /// The merged cursor a [`TraceReader::cursor`] hands out over all of a trace's batches: a
-/// [`CursorList`] over the per-batch cursors.
-type TraceCursor<Tr> = CursorList<BatchCursor<Tr>>;
+/// `CursorList` over the per-batch cursors.
+pub(crate) type TraceCursor<Tr> = CursorList<BatchCursor<Tr>>;
 /// Backing storage for a [`TraceCursor`]: the batches the cursor borrows from.
-type TraceStorage<Tr> = Vec<<Tr as TraceReader>::Batch>;
+pub(crate) type TraceStorage<Tr> = Vec<<Tr as TraceReader>::Batch>;
 use mz_ore::result::ResultExt;
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena};
@@ -128,6 +128,34 @@ where
         trace_reader: &mut Tr,
     ) -> Self {
         let (mut cursor, storage) = trace_reader.cursor();
+        let literals = literal_constraints
+            .map(|constraints| Literals::new(constraints, &mut cursor, &storage));
+
+        Self {
+            target_id,
+            cursor,
+            storage,
+            map_filter_project,
+            peek_timestamp,
+            row_builder: Row::default(),
+            datum_vec: DatumVec::new(),
+            literals,
+        }
+    }
+
+    /// Builds a [`PeekResultIterator`] over an already-owned cursor and its backing storage.
+    ///
+    /// Unlike [`Self::new`], this takes the `(cursor, storage)` pair directly rather than a live
+    /// `&mut Tr`, so a caller that already holds an owned cursor (for example one obtained off a
+    /// registry `SharedTraceHandle`) can feed it without borrowing a trace for the walk.
+    pub fn new_over_cursor(
+        target_id: GlobalId,
+        map_filter_project: mz_expr::SafeMfpPlan,
+        peek_timestamp: mz_repr::Timestamp,
+        literal_constraints: Option<&mut [Row]>,
+        mut cursor: TraceCursor<Tr>,
+        storage: TraceStorage<Tr>,
+    ) -> Self {
         let literals = literal_constraints
             .map(|constraints| Literals::new(constraints, &mut cursor, &storage));
 

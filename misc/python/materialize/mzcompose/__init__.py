@@ -271,12 +271,22 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
+            "enable_index_arrangement_sharing",
+            "false",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
             "enable_scoped_system_parameters",
             "false",
             ["true", "false"],
         ),
         VariableSystemParameter(
             "enable_simplify_from_less_existence",
+            "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
+            "enable_two_runtime_compute",
             "true",
             ["true", "false"],
         ),

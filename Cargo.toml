@@ -644,6 +644,12 @@ debug-assertions = true
 # merged), after which point it becomes impossible to build that historical
 # version of Materialize.
 [patch.crates-io]
+# Arc'd batches for cross-thread arrangement sharing, from the branch behind
+# TimelyDataflow/differential-dataflow#807. Prototype plumbing: repoint at a
+# released version (and drop the patch) once that PR lands upstream.
+differential-dataflow = { git = "https://github.com/antiguru/differential-dataflow", branch = "claude/spines-differential-arc-j93mho" }
+differential-dogs3 = { git = "https://github.com/antiguru/differential-dataflow", branch = "claude/spines-differential-arc-j93mho" }
+
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
