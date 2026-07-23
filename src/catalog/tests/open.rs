@@ -84,6 +84,7 @@ impl Debug for StableSnapshot<'_> {
             roles,
             role_auth,
             items,
+            sessions,
             comments,
             clusters,
             network_policies,
@@ -115,6 +116,7 @@ impl Debug for StableSnapshot<'_> {
             .field("roles", roles)
             .field("role_auth", role_auth)
             .field("items", items)
+            .field("sessions", sessions)
             .field("comments", comments)
             .field("clusters", clusters)
             .field("network_policies", network_policies)
@@ -323,6 +325,7 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
                     database_id: Some(db_id),
                     owner_id: RoleId::User(i),
                     privileges: Vec::new(),
+                    ephemeral_owner_session: None,
                 },
             ));
         }

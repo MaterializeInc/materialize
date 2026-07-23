@@ -110,6 +110,34 @@ fn role_login_status(role: Option<&Role>) -> RoleLoginStatus {
     }
 }
 
+/// A session catalog op waiting to be folded into the next batched session
+/// commit. See [`Coordinator::enqueue_session_op`].
+#[derive(Debug)]
+pub(crate) struct PendingSessionOp {
+    op: Op,
+    completion: SessionOpCompletion,
+}
+
+/// What to do after a batched session op commits.
+#[derive(Debug)]
+pub(crate) enum SessionOpCompletion {
+    /// Finish connection startup and respond to the client.
+    Startup(Box<DeferredStartup>),
+    /// Nothing, the op is fire-and-forget.
+    None,
+}
+
+/// A connection startup whose response is deferred until the session's
+/// catalog record has been committed.
+#[derive(Debug)]
+pub(crate) struct DeferredStartup {
+    tx: oneshot::Sender<Result<StartupResponse, AdapterError>>,
+    conn: ConnMeta,
+    role_id: RoleId,
+    session_defaults: BTreeMap<String, OwnedVarInput>,
+    superuser_attribute: SuperuserAttribute,
+}
+
 impl Coordinator {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 58KB. This would
     /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
@@ -827,11 +855,6 @@ impl Coordinator {
             .await
         {
             Ok((role_id, superuser_attribute, session_defaults)) => {
-                let session_type = metrics::session_type_label_value(&user);
-                self.metrics
-                    .active_sessions
-                    .with_label_values(&[session_type])
-                    .inc();
                 let conn = ConnMeta {
                     secret_key,
                     notice_tx,
@@ -846,57 +869,35 @@ impl Coordinator {
                     authenticated_role: role_id,
                     deferred_lock: None,
                 };
-                // Durably record the session in the catalog. `mz_sessions` is
-                // a materialized view over these records, and temporary
-                // objects hang their visibility and cleanup off of them.
-                //
-                // Skipped in read-only mode: the catalog is not writable
-                // there, and a read-only envd reboots on promotion, which
-                // terminates all of its sessions anyway.
-                if !self.controller.read_only() {
+                let startup = DeferredStartup {
+                    tx,
+                    conn,
+                    role_id,
+                    session_defaults,
+                    superuser_attribute,
+                };
+                if self.controller.read_only() {
+                    // No session record is written in read-only mode: the
+                    // catalog is not writable there, and a read-only envd
+                    // reboots on promotion, which terminates all of its
+                    // sessions anyway.
+                    self.complete_startup(startup, Ok(())).await;
+                } else {
+                    // Durably record the session in the catalog before
+                    // responding. `mz_sessions` is a materialized view over
+                    // these records, and temporary objects hang their
+                    // visibility and cleanup off of them. The write rides the
+                    // next batched session commit and startup completes from
+                    // there, so the coordinator is not blocked on a catalog
+                    // commit per connection.
                     let op = Op::CreateSession {
                         uuid,
                         connection_id: conn_id.unhandled(),
                         role_id,
                         client_ip: client_ip.map(|ip| ip.to_string()),
-                        connected_at: conn.connected_at(),
+                        connected_at: startup.conn.connected_at(),
                     };
-                    if let Err(err) = self.catalog_transact(None, vec![op]).await {
-                        let _ = tx.send(Err(err));
-                        return;
-                    }
-                }
-                self.begin_session_for_statement_logging(&conn);
-                self.active_conns.insert(conn_id.clone(), conn);
-
-                // The session record is durable before we respond, so there
-                // are no builtin table writes for this session to wait on.
-                let notify = self.builtin_table_update().background(Vec::new());
-
-                let catalog = self.owned_catalog();
-                let build_info_human_version =
-                    catalog.state().config().build_info.human_version(None);
-
-                let statement_logging_frontend = self
-                    .statement_logging
-                    .create_frontend(build_info_human_version);
-
-                let resp = Ok(StartupResponse {
-                    role_id,
-                    write_notify: notify,
-                    session_defaults,
-                    catalog,
-                    storage_collections: Arc::clone(&self.controller.storage_collections),
-                    transient_id_gen: Arc::clone(&self.transient_id_gen),
-                    optimizer_metrics: self.optimizer_metrics.clone(),
-                    persist_client: self.persist_client.clone(),
-                    statement_logging_frontend,
-                    superuser_attribute,
-                });
-                if tx.send(resp).is_err() {
-                    // Failed to send to adapter, but everything is setup so we can terminate
-                    // normally.
-                    self.handle_terminate(conn_id).await;
+                    self.enqueue_session_op(op, SessionOpCompletion::Startup(Box::new(startup)));
                 }
             }
             Err(e) => {
@@ -908,6 +909,123 @@ impl Coordinator {
                 // handle failures to send the error back; we've already
                 // cleaned up all necessary state.
                 let _ = tx.send(Err(e));
+            }
+        }
+    }
+
+    /// Finishes connection startup after the session's catalog record has
+    /// been committed (or was skipped, in read-only mode) and responds to the
+    /// client.
+    async fn complete_startup(
+        &mut self,
+        startup: DeferredStartup,
+        result: Result<(), AdapterError>,
+    ) {
+        let DeferredStartup {
+            tx,
+            conn,
+            role_id,
+            session_defaults,
+            superuser_attribute,
+        } = startup;
+
+        if let Err(err) = result {
+            let _ = tx.send(Err(err));
+            return;
+        }
+
+        let session_type = metrics::session_type_label_value(conn.user());
+        self.metrics
+            .active_sessions
+            .with_label_values(&[session_type])
+            .inc();
+        let conn_id = conn.conn_id().clone();
+        self.begin_session_for_statement_logging(&conn);
+        self.active_conns.insert(conn_id.clone(), conn);
+
+        // The session record is durable before we respond, so there
+        // are no builtin table writes for this session to wait on.
+        let notify = self.builtin_table_update().background(Vec::new());
+
+        let catalog = self.owned_catalog();
+        let build_info_human_version = catalog.state().config().build_info.human_version(None);
+
+        let statement_logging_frontend = self
+            .statement_logging
+            .create_frontend(build_info_human_version);
+
+        let resp = Ok(StartupResponse {
+            role_id,
+            write_notify: notify,
+            session_defaults,
+            catalog,
+            storage_collections: Arc::clone(&self.controller.storage_collections),
+            transient_id_gen: Arc::clone(&self.transient_id_gen),
+            optimizer_metrics: self.optimizer_metrics.clone(),
+            persist_client: self.persist_client.clone(),
+            statement_logging_frontend,
+            superuser_attribute,
+        });
+        if tx.send(resp).is_err() {
+            // Failed to send to adapter, but everything is setup so we can terminate
+            // normally.
+            self.handle_terminate(conn_id).await;
+        }
+    }
+
+    /// Queues a session catalog op for the next batched session commit,
+    /// scheduling one if none is pending yet.
+    ///
+    /// Ops that arrive while a flush is already scheduled are picked up by
+    /// that flush. This is what batches a burst of session connects and
+    /// disconnects into a small number of catalog commits.
+    pub(crate) fn enqueue_session_op(&mut self, op: Op, completion: SessionOpCompletion) {
+        if self.pending_session_ops.is_empty() {
+            // Failures to send the message can only happen during shutdown,
+            // in which case the client connections are going away anyway.
+            let _ = self.internal_cmd_tx.send(Message::FlushSessionOps);
+        }
+        self.pending_session_ops
+            .push(PendingSessionOp { op, completion });
+    }
+
+    /// Commits all pending session catalog ops in one catalog transaction and
+    /// runs their completions.
+    pub(crate) async fn flush_session_ops(&mut self) {
+        let pending = std::mem::take(&mut self.pending_session_ops);
+        if pending.is_empty() {
+            return;
+        }
+        let count = pending.len();
+        let (ops, completions): (Vec<_>, Vec<_>) = pending
+            .into_iter()
+            .map(|pending| (pending.op, pending.completion))
+            .unzip();
+        tracing::debug!(%count, "committing batched session ops");
+        // The ops share one commit, so they all succeed or all fail. Session
+        // ops cannot fail semantic validation (session UUIDs are unique and
+        // removals of unknown sessions are ignored), so an error here means
+        // the commit itself failed, e.g. because this process is being fenced
+        // out.
+        let result = self.catalog_transact(None, ops).await;
+        if let Err(err) = &result {
+            warn!(%count, "failed to commit batched session ops: {err:?}");
+        }
+        for completion in completions {
+            match completion {
+                SessionOpCompletion::Startup(startup) => {
+                    let result = match &result {
+                        Ok(()) => Ok(()),
+                        Err(err) => Err(AdapterError::Unstructured(anyhow::anyhow!(
+                            "failed to record session in the catalog: {err}"
+                        ))),
+                    };
+                    self.complete_startup(*startup, result).await;
+                }
+                // Session removals need no completion: a record whose removal
+                // failed to commit is reclaimed the next time a catalog is
+                // opened with write intent.
+                SessionOpCompletion::None => {}
             }
         }
     }
@@ -1973,13 +2091,12 @@ impl Coordinator {
         // waits for its own retraction before it observes retirement.
         drop(retire_notify);
 
-        // Drop all temporary items owned by the session and remove its
-        // session record from the catalog in a single catalog transaction.
-        // Skipped in read-only mode, where no session record was written at
-        // connect time and no temporary items can be created. A session whose
-        // cleanup fails to commit (e.g. because this process is being fenced
-        // out) is reclaimed the next time a catalog is opened with write
-        // intent.
+        // Remove the session's record, and any temporary items it owns, from
+        // the catalog. Skipped in read-only mode, where no session record was
+        // written at connect time and no temporary items can be created. A
+        // session whose cleanup fails to commit (e.g. because this process is
+        // being fenced out) is reclaimed the next time a catalog is opened
+        // with write intent.
         if !self.controller.read_only() {
             let uuid = self
                 .active_conns
@@ -1988,22 +2105,28 @@ impl Coordinator {
                 .uuid();
             let temp_items = self.catalog().state().get_temp_items(&conn_id).collect();
             let all_items = self.catalog().object_dependents(&temp_items, &conn_id);
-            let mut ops: Vec<_> = if all_items.is_empty() {
-                Vec::new()
+            if all_items.is_empty() {
+                // No temporary items: the record removal can ride the next
+                // batched session commit, nothing depends on observing it.
+                self.enqueue_session_op(Op::DropSession { uuid }, SessionOpCompletion::None);
             } else {
-                vec![Op::DropObjects(
-                    all_items
-                        .into_iter()
-                        .map(DropObjectInfo::manual_drop_from_object_id)
-                        .collect(),
-                )]
-            };
-            ops.push(Op::DropSession { uuid });
-            if let Err(err) = self
-                .catalog_transact_with_context(Some(&conn_id), None, ops)
-                .await
-            {
-                warn!(%conn_id, "failed to clean up session in catalog: {err:?}");
+                // Temporary items and the session record drop in one catalog
+                // transaction, so the two cannot diverge.
+                let ops = vec![
+                    Op::DropObjects(
+                        all_items
+                            .into_iter()
+                            .map(DropObjectInfo::manual_drop_from_object_id)
+                            .collect(),
+                    ),
+                    Op::DropSession { uuid },
+                ];
+                if let Err(err) = self
+                    .catalog_transact_with_context(Some(&conn_id), None, ops)
+                    .await
+                {
+                    warn!(%conn_id, "failed to clean up session in catalog: {err:?}");
+                }
             }
         }
         // Only call catalog_mut() if a temporary schema actually exists for this connection.

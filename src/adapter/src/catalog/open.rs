@@ -276,20 +276,20 @@ impl Catalog {
                 | StateUpdateKind::Cluster(_)
                 | StateUpdateKind::NetworkPolicy(_)
                 | StateUpdateKind::ClusterReplica(_) => pre_item_updates.push(StateUpdate {
-                    kind: kind,
+                    kind,
                     ts,
                     diff: diff.try_into().expect("valid diff"),
                 }),
                 StateUpdateKind::IntrospectionSourceIndex(_)
                 | StateUpdateKind::SystemObjectMapping(_) => {
                     system_item_updates.push(StateUpdate {
-                        kind: kind,
+                        kind,
                         ts,
                         diff: diff.try_into().expect("valid diff"),
                     })
                 }
                 StateUpdateKind::Item(_) => item_updates.push(StateUpdate {
-                    kind: kind,
+                    kind,
                     ts,
                     diff: diff.try_into().expect("valid diff"),
                 }),
@@ -301,7 +301,7 @@ impl Catalog {
                 }
                 StateUpdateKind::AuditLog(_) => {
                     audit_log_updates.push(StateUpdate {
-                        kind: kind,
+                        kind,
                         ts,
                         diff: diff.try_into().expect("valid diff"),
                     });
@@ -471,7 +471,7 @@ impl Catalog {
         let post_item_updates = post_item_updates
             .into_iter()
             .map(|(kind, ts, diff)| StateUpdate {
-                kind: kind,
+                kind,
                 ts,
                 diff: diff.try_into().expect("valid diff"),
             })

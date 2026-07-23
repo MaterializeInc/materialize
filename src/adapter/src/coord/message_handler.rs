@@ -143,6 +143,9 @@ impl Coordinator {
             Message::CancelPendingPeeks { conn_id } => {
                 self.cancel_pending_peeks(&conn_id);
             }
+            Message::FlushSessionOps => {
+                self.flush_session_ops().boxed_local().await;
+            }
             Message::LinearizeReads => {
                 self.message_linearize_reads().boxed_local().await;
             }
