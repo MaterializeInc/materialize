@@ -1,246 +1,341 @@
-# Two-runtime arrangement sharing: capture-based lifecycle
+# Two-runtime arrangement sharing lifecycle
 
 ## Summary
 
 The interactive compute runtime reads index arrangements maintained by the
 maintenance runtime through a per-process sharing registry.
-Today there is no compute-level handshake governing when it is safe for one
-runtime to act on shared state the other still references.
-Safety rests entirely on the controller's read-hold ordering plus immutable
-Arc'd batches, both of which live outside this code and are raced by the two
-runtimes executing on independent command channels with no cross-runtime
-ordering.
+A per-process multiplexer fronts both runtimes, splitting the controller's one
+command stream between them.
+Today the interactive sub-protocol is malformed (it references maintained ids it
+never created), and the read path hand-rolls differential's stream and trace
+consistency across the two-timely-world boundary, which panics.
 
-This document defines a capture-based lifecycle that makes the sharing sound at
-the compute level, and simplifies the primitive by removing the incremental
-replay machinery that is the direct cause of two memory-correctness-class bugs.
+This document defines the lifecycle on three principles:
+build on a correct protocol and panic on anything outside it, keep dataflow
+construction deterministic across workers, and have the multiplexer split the one
+correct protocol into two correct sub-protocols.
+It corrects the read path rather than replacing it, keeping the frontier-tracked
+replay that gives a differential join its correctness and fixing only the
+unsynchronized feed that panics.
+It adds no teardown coordination, because a correct protocol already drops a
+maintained arrangement only after every reader has completed.
 
 ## Motivation
 
-Four observed failures share one root cause, a missing capture/teardown
-handshake between the runtimes:
+Observed failures, all rooted in the missing cross-runtime lifecycle:
 
 * **Row-doubling.** A differential join over a shared import read a record from
-  both the trace and the stream because the publisher advances the two from
-  unsynchronized sources.
-* **Delayed-capability panic.** `import_snapshot_at` downgrades its capability to
-  the trace `upper` (read from `map_batches`) and then tries to emit a batch
-  whose hint (from the stream) is below that. The panic aborts the process under
-  two-runtime shared fate. Reproduced deterministically on
-  `linear-join-fuel.td` (a peek on `mz_dataflow_operators`, a fast-advancing
-  logging arrangement).
+  both the stream and the trace, because the two advanced from unsynchronized
+  sources. Fixed on the branch by a frontier-tracked replay that keeps
+  `stream.frontier == trace.upper`. That fix is load-bearing and is kept.
+* **Delayed-capability panic.** `import_snapshot_at`'s replay feed is
+  two-source: batches arrive from the arrangement stream, frontiers from the
+  trace's `map_batches`, which runs ahead. A frontier downgrade past a
+  not-yet-emitted batch's hint panics, aborting the process under shared fate.
+  Reproduced deterministically on `linear-join-fuel.td`.
 * **Drop-vs-pending-work hang and panic.** Dropping a maintained index removes
-  its registry slot on the maintenance runtime only. An interactive pending peek
-  on that id re-enqueues forever rather than failing, and a deferred interactive
+  its registry slot on the maintenance runtime only. An interactive deferred
   build treats the removal signal as a publication and builds into a
-  `handles() == None` panic.
-* **Silent stale read.** The interactive import path lacks the `since <= as_of`
-  assertion the maintenance import path has, so a compaction that races past
-  `as_of` yields coalesced (inaccurate) data with no error.
+  `handles() == None` panic, and a pending peek can wait indefinitely.
+* **Silent stale read.** The interactive dataflow-import path lacks the
+  `since <= as_of` check the maintenance import path has, so a compaction that
+  races past `as_of` yields coalesced data with no error.
 
-The unifying observation is that the single-instance protocol invariant, "when
-the worker processes `AllowCompaction{empty}`, nothing local still reads X", no
-longer holds process-wide once two runtimes share one arrangement.
+The single-instance protocol invariant, "when the worker processes
+`AllowCompaction{empty}`, nothing local still reads X", no longer holds
+process-wide once two runtimes share one arrangement.
 
-## The single-time invariant
+## Design principles
 
-The interactive runtime only ever performs single-time reads.
+1. **Build on a correct protocol, panic outside it.** Compute assumes the command
+   protocol it receives is a correct instantiation of the spec. A protocol
+   outside the spec is undefined behavior, and compute panics rather than
+   defending against it locally. In particular, compute relies on the controller's
+   read-hold discipline: a maintained arrangement is dropped only after every
+   reader has completed. Teardown safety follows from this, with no lease and no
+   withheld command. A panic takes down both runtimes of the process, which is
+   correct: the two runtimes share fate, and there is nothing to isolate.
+2. **The multiplexer splits into two correct sub-protocols.** The multiplexer
+   splits the controller's one correct protocol into two, one per runtime, each
+   itself a correct instantiation. The maintenance sub-protocol is well-formed
+   already. The interactive sub-protocol references maintained ids created on the
+   maintenance side, so the multiplexer makes it well-formed with an `Import`
+   command (below).
+3. **Deterministic construction.** All workers of a runtime must build dataflows
+   in the same order, because timely allocates exchange-channel identifiers from
+   a per-worker construction-order counter. We render in command arrival order
+   and never reorder or defer a build. The current per-worker deferral, which
+   builds on each worker's own publication order, is a latent nondeterminism this
+   design removes.
 
-* Peeks are single-time.
-* Transient query dataflows are bounded at `until = as_of.step_forward()`, so
-  every input is read at one frontier.
-* The only multi-time consumers, subscribes and copy-tos, route to the
-  maintenance runtime.
-* The interactive runtime maintains no logging or introspection arrangements
-  (`enable_logging = false`).
+### Sharing is per-process
 
-This is not a simplification we accept for convenience.
-It is the correct boundary of the split.
-A continuously-maintained dataflow hosted on the interactive runtime would read
-shared arrangements that advance only as fast as the maintenance runtime seals
-them, so its output frontier is clamped to the maintenance tick rate and it
-gains no freshness.
-It would only move maintenance CPU into the interactive runtime, which is the
-low-latency uncontended read lane the split exists to protect.
-Maintained work therefore belongs on the maintenance runtime by definition.
+A timely compute runtime spans multiple processes.
+Arrangement sharing does not cross a process boundary: the shared batches are
+`Arc`'d in memory, so the interactive runtime in a process reads only the
+maintenance arrangements published in that same process, through that process's
+registry.
+Across processes the workers coordinate through timely's network exchanges, as
+any distributed dataflow does, but no arrangement `Arc` is shared between
+processes.
 
-We make this invariant an enforced contract rather than an assumption. See
-Barrier A'.
+Only process 0's multiplexer receives the routable commands (`Peek`,
+`CreateDataflow`, `AllowCompaction`).
+It forwards them onto the runtime command channel, whose worker-0 broadcast
+delivers them to every worker of that runtime on every process.
+So the `Import` commands the multiplexer synthesizes are authored once on
+process 0 and reach every worker through the existing broadcast, with no shared
+memory and no per-process coordination.
 
-## The capture-based lifecycle model
+## The bounded-read boundary
 
-A shared-arrangement reference is in exactly one of two states.
+The interactive runtime serves a read only when it is **bounded**: its `until` is
+a finite frontier.
+A bounded read at `[as_of, until)` is answerable from the maintained arrangement,
+since all of its data lies below `until`, which the source seals to.
+An **unbounded** read (`until` empty, that is live-follow such as a subscribe)
+runs on the maintenance runtime.
+It would otherwise track the source's live frontier and gain no freshness beyond
+the maintenance seal rate while consuming the interactive lane.
 
-* **Un-captured.** A pending peek or a deferred build. Vulnerable to teardown.
-  It must be explicitly resolved (served, failed, or cancelled) when the source
-  retires.
-* **Captured.** The published chain has been cloned under the registry lock, its
-  batches are Arc-pinned, and a read hold is registered. Immune to teardown. The
-  maintenance runtime may compact, merge, or drop the source freely, because the
-  Arc pins the specific captured batches. Spine teardown never frees batches an
-  importer already captured.
+This is broader than a single-time read.
+Multi-time bounded reads are fine on the interactive runtime.
+The read is still captured, not live-followed: the import tracks the source only
+up to `until`, then completes.
 
-The registration-under-lock inside `import_snapshot_at` is the capture
-transition, the concrete "safe because the Arc'd data has been captured" point.
-Two barriers make the model sound, one for each state.
+Routing keys on `until` finiteness, not on transience, since a maintained index
+has an unbounded `until` and so lands on maintenance regardless of id.
+Copy-to is a finite-`until` exception, since it drives an S3 sink and is refused
+by reconciliation, so it is routed to maintenance explicitly, alongside
+subscribes.
+Concretely, the multiplexer routes a `CreateDataflow` to interactive only when
+`until` is non-empty and the description has no subscribe or copy-to sink.
 
-### Barrier A: seal-gate the interactive build (capture)
+## Arrival-order rendering with pre-allocated publication points
 
-Today `handle_create_dataflow` defers an interactive dataflow only until each
-dependency is published, and `resolve_dirty` treats publication as terminal,
-ignoring later seal advances.
+Both runtimes render dataflows in command arrival order, identical across all
+workers, so timely construction order matches and exchange channels line up.
+There is no deferral and no reordering.
 
-Change: a dependency is ready for a build at `as_of` only when it is published
-**and** its published `upper` is beyond `as_of`.
-The seal-dirty wake already fires `note_frontier` on every frontier advance, so
-a deferred build re-checks the seal condition on each advance until the
-dependency seals past `as_of`, then builds.
-The check is per worker, against that worker's published `upper`, using the
-dataflow's own `as_of`.
-The registry exposes the published `upper` for an id and worker.
+When the interactive runtime renders a dataflow whose imported arrangement is not
+yet published, it must still build the import operator in order, against a real
+trace handle, because a differential join or reduce captures its input trace by
+value at construction. It cannot be swapped later.
+The mechanism is a pre-allocated publication point.
 
-With the build seal-gated, at registration time `upper > as_of` holds, so the
-cloned chain already covers `[.., as_of]` completely.
-The importer never needs the incremental path.
-This moves the seal-wait from the buggy incremental replay into clean build
-deferral at the same latency the peek path already pays.
+This mechanism was validated with a spike: a join built over an empty placeholder
+handle, captured by value at construction, produces the correct output once the
+same `Arc` is filled in place, with no doubling and no panic. It relies on
+`SharedTraceHandle` being a live proxy into shared state, so a trace filled in
+place is visible to every later cursor the join issues, which is differential's
+ordinary "an arrangement starts empty and fills" behavior.
 
-### Barrier A': enforce single-time at the routing boundary
+### Placeholder and adopt
 
-The multiplexer's `to_interactive` predicate gains a single-time requirement.
-A transient dataflow is routed to the interactive runtime only if it is
-single-time (`until == as_of.step_forward()`, no persistent exports).
-A non-single-time transient falls back to the maintenance runtime, which can
-host any dataflow, so a misclassification degrades gracefully rather than
-aborting the shared-fate process.
-The interactive `CreateDataflow` path carries a `debug_assert` for the same
-condition, a test-only tripwire for routing bugs.
+A publication point is an `Arc<SharedTrace>` holding the shared state (chain,
+`since`, `upper`, importer queues, reader holds).
+The `TraceAgent` that writes it lives in the publisher's sink closure, not in
+`SharedTrace`, so the writer is decoupled from the shared state.
 
-### `import_snapshot_at` becomes a pure one-shot
+* **Placeholder.** A publication point can be created empty: chain empty, `since`
+  and `upper` at the minimum frontier (`from_elem(minimum)`, never the empty
+  antichain, which reads as sealed through the end of time). Handles mint
+  immediately. An import built on a placeholder holds its output frontier at the
+  minimum while empty, so the downstream dataflow makes no progress, which is
+  correct, since it has no input yet.
+* **Adopt.** The maintenance publisher attaches its sink to an existing
+  publication-point `Arc` rather than constructing a fresh one. Publishing is the
+  degenerate case of adopting a publication point that has no prior reader.
+* **Hold forwarding.** A reader hold registered against a placeholder lands in
+  the shared `logical_holds` and `physical_holds`. The publisher forwards their
+  meet to its agent on its first refresh, so a hold taken before adoption pins
+  the adopted trace with no extra machinery.
 
-Because the build is seal-gated, `import_snapshot_at` no longer needs a replay
-queue.
-The operator:
+### Registry get-or-create
 
-1. Mints a handle, which registers a read hold at the current `since`.
-2. Checks `since <= as_of`, returning a graceful error otherwise (see Error
-   handling).
-3. Clones the chain under the state lock.
-4. Emits every batch wrapped in `BatchFrontier(as_of, until)` under a single
-   capability, then drops the capability.
+Whichever runtime touches an id first creates its publication point.
 
-There is no queue, no `Frontier` instruction stream, and no `delayed(hint)`.
-The delayed-capability panic and the row-doubling double-count are impossible by
-construction rather than patched.
-`import_snapshot_at` is the only interactive import path.
+* Interactive-first: on `Import(id)` (or when a read of `id` renders) the
+  interactive runtime creates a placeholder slot and builds live imports against
+  it.
+* Maintenance-first: the maintenance runtime creates the slot and adopts it in
+  the same step, the current behavior.
 
-### Barrier B: tombstone teardown (un-captured references)
+The registry replaces its create-fresh-and-overwrite `insert` with a
+get-or-create that returns the slot to adopt, so a placeholder a reader already
+imports is filled in place and never overwritten out from under it.
+The slot covers both the oks and errs arrangements.
+This get-or-create is where the genuine two-runtime race on an id lives and gets
+a dedicated cross-thread test.
 
-The registry distinguishes "not yet published" from "dropped".
-Today both are `handles() == None`, which is why pending work cannot tell wait
-from fail.
-The registry gains three states for an id: `Published`, `Tombstoned`, `Absent`.
-`remove(id)` transitions the slot to `Tombstoned` and wakes importers.
+### Never adopted
 
-Interactive consumers resolve against the state:
+An import registered against a placeholder that is never adopted, because index
+creation is cancelled before it publishes, would otherwise hold its frontier at
+the minimum forever.
+The publication point supports a terminal close: it is marked closed and its
+importer queues receive a terminal empty frontier, mirroring the publisher's
+existing close-on-drop path, which completes the interactive read rather than
+wedging it.
+The `Import` withdrawal is what triggers the close, so a placeholder is closed
+exactly when the controller withdraws the maintained id.
 
-* A pending peek on a `Tombstoned` dependency sends a definitive error
-  `PeekResponse` and drops from `pending_work`, rather than re-enqueuing forever.
-* A deferred build whose dependency becomes `Tombstoned` cancels via
-  `cancel_deferred_dataflow` and synthesizes empty `Frontiers`, rather than
-  building into a `handles() == None` panic.
+## The import: frontier-tracked replay, single-sourced
 
-Already-captured imports are unaffected, since their batches are Arc-pinned.
-Tombstones compose with the existing re-export alias rule: a source dropped
-while a re-export still imports it stays alive via its target until the target
-drops.
+The import stays a frontier-tracked replay.
+That is what keeps `stream.frontier == trace.upper`, which is what stops a
+differential join from reading a match from both stream and trace and doubling
+it. A one-shot dump of the chain under a single capability, with a trace that
+presents the whole chain at once, is exactly the doubling bug and is not used.
 
-### M3: graceful `since <= as_of` check
+The panic is not the replay. It is the replay's **feed**.
+The publisher splices two sources into each importer's queue: batches from the
+arrangement stream (hint = the stream capability time) and frontiers from the
+trace's `map_batches` (the authoritative upper).
+The trace advances ahead of the stream within a worker step, so a
+`Frontier(upper)` can be enqueued before a `Batch` whose hint is below it. The
+importer downgrades its capability to `upper` and then cannot delay a later batch
+to its lower hint.
 
-The interactive import path adds the `since <= as_of` check the maintenance
-import path already has (`render.rs` `import_index`).
-Because a compute-worker panic aborts the process under shared fate, the check
-degrades to a dataflow or peek error rather than a panic.
+The fix is to feed the replay from a single source, the trace, so a batch and the
+frontier that closes it are always mutually ordered.
+On each refresh the publisher derives both the batch delta and the new upper from
+one `map_batches` snapshot, and never advertises an upper beyond the batches it
+has enqueued.
+This matches how differential's own `TraceAgent` import replays a trace, batches
+before the frontier that closes them, from a single authoritative source.
+The delta and merge handling (emitting only the part of a merged batch beyond the
+importer's frontier) mirrors differential's import and is the second mechanism to
+validate with a spike, as the placeholder mechanism was.
 
-## What gets deleted
+The readiness and `since` checks operate on the meet of the oks and errs
+frontiers, since an index publishes two arrangements whose frontiers advance
+independently.
+The import is ready to complete when `meet(oks.upper, errs.upper)` is at or beyond
+`until`.
+The import asserts `meet(oks.since, errs.since) <= as_of` at capture, matching the
+assert the maintenance import path already makes.
+A violation is a protocol error (the controller offered an `as_of` below the
+readable frontier), so it panics rather than reading coalesced data silently.
+This is the check the interactive path is missing today.
 
-Once single-time is enforced, the following are dead and are removed:
+## The interactive sub-protocol: the Import command
 
-* Live `import()` (the multi-time import) in `shared_trace.rs`.
-* The `ImportQueue` and per-importer replay `queues`.
-* The publisher's per-importer instruction push (the `arrived` stream batches
-  and `Frontier(upper)` pushes), which is the two-source hazard.
+The controller's protocol is well-formed for one instance: every id a `Peek` or a
+`CreateDataflow` references was created by a prior `CreateDataflow` and not yet
+compacted to empty.
+The multiplexer splits that protocol in two.
+The maintenance sub-protocol keeps the durable creates and drops and stays
+well-formed.
+The interactive sub-protocol keeps the reads, but those reference maintained ids
+created on the maintenance side, so on its own it is malformed.
 
-The publisher shrinks to: refresh `chain`, `since`, and `upper` under the lock,
-wake importers so pending peeks and deferred builds re-check, and drive
-writer-driven compaction with the reader-hold meet.
-Both `snapshot_at` (fast-path peek) and `import_snapshot_at` (dataflow import)
-then read `state.chain` directly, a consistent under-lock snapshot, so the
-two-source class of bug cannot recur.
+The multiplexer makes it well-formed with an `Import` command, a new command the
+controller never sends and never sees.
+When the multiplexer routes a maintained index's `CreateDataflow` to maintenance,
+it also sends `Import(id)` to interactive, declaring that `id` is available to
+import from the shared registry.
+When it routes that index's drop, it sends the matching withdrawal to interactive.
+A `Peek` or `CreateDataflow` that references `id` on the interactive runtime is
+then well-formed, since `id` was declared by a prior `Import`.
 
-## Protocol framing
+`Import` also carries the placeholder lifecycle.
+On `Import(id)` the interactive runtime get-or-creates the registry slot for `id`,
+a placeholder if maintenance has not published yet, the real arrangement once it
+has.
+On the withdrawal it closes that slot, delivering a terminal empty frontier to
+any importer still bound to it.
+This is the close that a placeholder needs, since a placeholder's `since` is the
+minimum frontier and the `since` check below cannot fire for it.
+Because a correct protocol drops `id` only after every reader has completed
+(Principle 1), the withdrawal arrives after interactive's reads of `id` are done,
+so the close is safe.
 
-The controller addresses one logical compute instance.
-The multiplexer fans its command stream to two runtimes with no cross-runtime
-ordering.
-Lifecycle commands for a shared arrangement are split: create on maintenance,
-peek on interactive, drop on maintenance.
-This design does not add a new protocol command.
-It makes the registry the cross-runtime synchronization authority for the
-lifecycle of a shared arrangement:
+There is no lease, no refcount, and no withheld command.
+Teardown safety is the controller's read-hold discipline, which a correct
+protocol already provides.
+The multiplexer's only job is to keep each sub-protocol well-formed, and a
+reference the tracking cannot explain is a malformed protocol, so it panics.
 
-* The capture transition (registration under the lock, gated by seal via Barrier
-  A) is where the interactive runtime takes a self-sufficient reference.
-* The tombstone (Barrier B) is the teardown signal the interactive runtime reads
-  to resolve un-captured references.
+## What changes
 
-The controller's read-hold discipline remains the primary safety mechanism that
-prevents a drop from being issued while a captured reader is live.
-The barriers here make the compute layer sound under the async window the
-controller ordering does not itself close, converting hangs and process aborts
-into graceful, explicit outcomes.
+* The publisher stops splicing stream batches with trace frontiers. It feeds the
+  replay from a single trace-derived source.
+* `SharedTrace` gains a placeholder constructor and an adopt path, and the
+  registry gains get-or-create in place of create-and-overwrite.
+* The publication point gains a terminal close, triggered by the `Import`
+  withdrawal.
+* The multiplexer synthesizes `Import(id)` and its withdrawal to the interactive
+  runtime, mirroring maintained-index creates and drops, and gains the
+  bounded-read routing predicate.
+* Live `import()` (the unbounded, non-snapshot import) is removed, since the
+  interactive runtime never issues an unbounded read. Its only callers are tests.
 
 ## Error handling
 
-* Dependency `Tombstoned` while a peek is pending: definitive error
-  `PeekResponse`. Under correct controller ordering this cannot happen, so it is
-  a diagnostic for a controller or routing bug, not an expected path.
-* Dependency `Tombstoned` while a build is deferred: cancel the build, emit empty
-  `Frontiers` so the controller can release the input read holds.
-* `since > as_of` at capture: graceful dataflow or peek error, never a panic.
-* Non-single-time transient reaching the interactive router: routed to
-  maintenance instead. `debug_assert` tripwire on the interactive
-  `CreateDataflow` path.
-* Publisher close vs a late importer: unchanged. The `closed` flag observed under
-  the registration lock still lets a late importer seed its own terminal
-  frontier.
+Compute assumes a correct protocol and does not degrade gracefully around a
+malformed one. It panics, which under shared fate takes down both runtimes.
+
+* `since > as_of` at capture: a protocol error (bad `as_of`), so it panics via the
+  assert, rather than reading coalesced data silently.
+* A reference on the interactive runtime to an id no `Import` declared: a
+  malformed sub-protocol, so it panics rather than wedging on a missing slot.
+* An index dropped while a read is outstanding does not occur under a correct
+  protocol, since the controller drops a maintained id only after every reader
+  has completed.
+* Reconciliation drop-and-recreate of the same id: the withdrawal closes the old
+  slot, a fresh `Import` and get-or-create make a new one, and a placeholder import
+  fills in place. No spurious failure.
+* Non-bounded, subscribe, or copy-to dataflow reaching the interactive router:
+  routed to maintenance instead, with a `debug_assert` on the interactive
+  `CreateDataflow` path as a tripwire for a routing bug, itself a protocol error.
 
 ## Testing
 
-* Unit, `shared_trace.rs`: single-time snapshot import at `as_of` with
-  `upper > as_of` returns exact rows, including over a merged chain, and is
-  deterministic. Adapt the existing join and reduce tests to the one-shot path.
-* Unit, `sharing.rs`: a pending peek fails on tombstone, a deferred build cancels
-  on tombstone, and a captured import is immune to a subsequent `remove`.
+* Unit, `shared_trace.rs`: a join built over a placeholder, captured at
+  construction, produces the correct output once the slot is adopted and filled,
+  with no doubling. A single-sourced replay feed does not panic when the trace
+  advances ahead of the stream within a step.
+* Unit, `sharing.rs`: get-or-create races between a placeholder-creating reader
+  and an adopting publisher, cross-thread, converge on one slot. The `Import`
+  withdrawal closes a placeholder's importers with a terminal frontier.
+* Unit, multiplexer: `Import(id)` is synthesized to interactive on a maintained
+  index create and its withdrawal on the drop. The bounded-read predicate routes
+  a subscribe and a copy-to to maintenance and a bounded query to interactive.
 * Regression under two-runtime on: `information_schema_columns.slt` and
   `object_ownership.slt` (row-doubling), `linear-join-fuel.td` (the panic),
   `materializations.td` (drop index), and the reported slt pairs.
-* Concurrency: a create/drop/peek stress over shared indexes to exercise the
-  async window between the runtimes.
+* Concurrency: a create, drop, and peek stress over shared indexes to exercise
+  the async window between the runtimes.
 
 ## Non-goals
 
-* No new `ComputeCommand` or `ComputeResponse` variant.
-* No change to subscribe or copy-to routing.
-* No live or multi-time import on the interactive runtime. That capability is
-  removed, and the single-time contract is enforced.
-* No change to the controller's read-hold model. This design hardens the compute
-  layer beneath it.
+* No new controller-visible command or response. `Import` is internal to the
+  multiplexer-to-interactive stream, never seen by the controller.
+* No teardown coordination in compute. A correct protocol drops a maintained id
+  only after every reader has completed.
+* No change to subscribe or copy-to routing beyond making the copy-to exclusion
+  explicit.
+* No unbounded, live-following import on the interactive runtime. Bounded
+  multi-time reads remain.
+* No change to the controller's read-hold model. This design assumes it.
+
+## Open validations
+
+* **Single-sourced replay feed.** The placeholder mechanism is validated. The
+  single-source feed, including delta and merge handling that matches
+  differential's `TraceAgent` import, is the remaining mechanism to validate with
+  a spike before implementation.
+* **`Import` across reconnect.** `Import` and its withdrawal are commands in the
+  interactive sub-protocol, so they belong in the interactive command history and
+  reconcile like any other command. Confirm the multiplexer re-derives them
+  deterministically from the replayed controller commands on reconnect, so the
+  interactive history stays consistent with maintenance's.
 
 ## Rollout
 
 This is a proof-of-concept branch (`mh/two-runtime-stage2`).
 The changes are gated behind `enable_two_runtime_compute`, default on only in the
 test suites that exercise it.
-The single-time enforcement and the tombstone are internal to the compute layer
-and require no catalog or protocol version change.
+`Import` is internal to the compute layer and requires no catalog or
+controller-protocol version change.
