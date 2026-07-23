@@ -81,12 +81,17 @@ struct Args {
         default_value = "127.0.0.1:6878"
     )]
     internal_http_listen_addr: SocketAddr,
-    /// The FQDN of this process, for GRPC request validation.
+    /// Controller-assigned identity for this process, echoed in the CTP handshake so the
+    /// controller can detect misrouted/stale connections.
     ///
-    /// Not providing this value or setting it to the empty string disables host validation for
-    /// GRPC requests.
-    #[clap(long, env = "GRPC_HOST", value_name = "NAME")]
-    grpc_host: Option<String>,
+    /// The value is the replica-scoped prefix `<cluster_id>/<replica_id>`. This process appends
+    /// its own ordinal (`--process`) to form the full identity, because the ordinal is only known
+    /// to the running process. Kubernetes StatefulSet pods share a single arg template, so the
+    /// controller cannot bake the ordinal into a per-pod arg.
+    ///
+    /// Not providing this value or setting it to the empty string disables the CTP identity check.
+    #[clap(long, env = "CTP_IDENTITY", value_name = "TOKEN")]
+    ctp_identity: Option<String>,
 
     // === Timely cluster options. ===
     /// Configuration for the storage Timely cluster.
@@ -414,7 +419,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         None,
     );
 
-    let grpc_host = args.grpc_host.and_then(|h| (!h.is_empty()).then_some(h));
+    // Compose the full CTP identity by appending this process's ordinal to the controller-assigned
+    // prefix. Empty or unset disables the check by leaving the identity `None`.
+    let ctp_identity = args
+        .ctp_identity
+        .and_then(|prefix| (!prefix.is_empty()).then_some(prefix))
+        .map(|prefix| format!("{prefix}/{}", args.process));
     let cluster_server_metrics = ClusterServerMetrics::register_with(&metrics_registry);
 
     let mut storage_timely_config = args.storage_timely_config;
@@ -459,7 +469,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         transport::serve(
             args.storage_controller_listen_addr,
             BUILD_INFO.semver_version(),
-            grpc_host.clone(),
+            ctp_identity.clone(),
             Duration::MAX,
             storage_client_builder,
             cluster_server_metrics.for_server("storage"),
@@ -491,7 +501,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         transport::serve(
             args.compute_controller_listen_addr,
             BUILD_INFO.semver_version(),
-            grpc_host.clone(),
+            ctp_identity.clone(),
             Duration::MAX,
             compute_client_builder,
             cluster_server_metrics.for_server("compute"),

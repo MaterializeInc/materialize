@@ -467,10 +467,14 @@ impl Controller {
                 storagectl_addrs,
                 computectl_addrs,
             }) => {
+                // Unmanaged replicas are not launched by us, so we have no controller-assigned
+                // identity to expect. Skip the CTP identity check for every process.
                 compute_location = ClusterReplicaLocation {
+                    ctl_identities: vec![None; computectl_addrs.len()],
                     ctl_addrs: computectl_addrs,
                 };
                 storage_location = ClusterReplicaLocation {
+                    ctl_identities: vec![None; storagectl_addrs.len()],
                     ctl_addrs: storagectl_addrs,
                 };
                 metrics_task = None;
@@ -486,11 +490,23 @@ impl Controller {
                     enable_worker_core_affinity,
                     enable_storage_introspection_logs,
                 )?;
+                // Expect each process to advertise the same per-ordinal CTP identity that we pass
+                // it via `--ctp-identity` in `provision_replica`. This catches connections that
+                // reach the wrong replica or wrong process ordinal.
+                let ctl_identities = |addrs: &[String]| -> Vec<Option<String>> {
+                    (0..addrs.len())
+                        .map(|i| Some(format!("{cluster_id}/{replica_id}/{i}")))
+                        .collect()
+                };
+                let storagectl_addrs = service.addresses("storagectl");
+                let computectl_addrs = service.addresses("computectl");
                 storage_location = ClusterReplicaLocation {
-                    ctl_addrs: service.addresses("storagectl"),
+                    ctl_identities: ctl_identities(&storagectl_addrs),
+                    ctl_addrs: storagectl_addrs,
                 };
                 compute_location = ClusterReplicaLocation {
-                    ctl_addrs: service.addresses("computectl"),
+                    ctl_identities: ctl_identities(&computectl_addrs),
+                    ctl_addrs: computectl_addrs,
                 };
                 metrics_task = Some(metrics_task_join_handle);
 
@@ -763,6 +779,16 @@ impl Controller {
                         ),
                         format!("--opentelemetry-resource=cluster_id={}", cluster_id),
                         format!("--opentelemetry-resource=replica_id={}", replica_id),
+                        // Replica-scoped CTP identity prefix. clusterd appends its process ordinal
+                        // to form the full `<cluster_id>/<replica_id>/<ordinal>` identity, matching
+                        // the per-process `ctl_identities` we expect on the controller side. The
+                        // ordinal cannot be baked in here because Kubernetes StatefulSet pods share
+                        // one arg template.
+                        //
+                        // NOTE: The deploy generation/incarnation is intentionally not part of the
+                        // identity yet. This token catches wrong-replica and wrong-ordinal
+                        // misrouting, but not a same-identity stale pod.
+                        format!("--ctp-identity={cluster_id}/{replica_id}"),
                         format!("--persist-pubsub-url={}", persist_pubsub_url),
                         format!("--environment-id={}", environment_id),
                         format!(
