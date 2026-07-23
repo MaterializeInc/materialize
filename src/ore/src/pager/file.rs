@@ -79,15 +79,102 @@ fn init_subdir(root: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-pub(crate) fn scratch_path(id: u64) -> PathBuf {
+/// Identifies a scratch file within the backend's subdir. Wraps the monotonic
+/// counter value so file ids don't blend into the many other `u64`s in this
+/// module (offsets, lengths, byte counts); the backing file is
+/// `scratch_path(id)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FileId(u64);
+
+impl std::fmt::Display for FileId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+pub(crate) fn scratch_path(id: FileId) -> PathBuf {
     SUBDIR
         .get()
         .expect("mz_ore::pager file backend used before set_scratch_dir")
         .join(format!("{id}.bin"))
 }
 
-pub(crate) fn alloc_scratch_id() -> u64 {
-    SCRATCH_ID.fetch_add(1, Ordering::Relaxed)
+pub(crate) fn alloc_scratch_id() -> FileId {
+    FileId(SCRATCH_ID.fetch_add(1, Ordering::Relaxed))
+}
+
+/// Free-list of scratch slots: named files that still exist on disk but back no
+/// live handle. `take`/drop returns a slot here instead of unlinking, so the
+/// inode and its warm page cache survive for the next `pageout` to overwrite.
+/// This avoids the synchronous inode eviction and page-cache truncate that
+/// dominate unlink cost for the write-once / read-once / delete spill pattern.
+static FREE_SLOTS: Mutex<Vec<FileId>> = Mutex::new(Vec::new());
+
+/// Maximum slots retained on the free-list. A free slot pins up to
+/// [`MAX_RECYCLE_BYTES`] of (writeback-reclaimable) page cache, so the cap
+/// bounds retained memory at `FREE_LIST_CAP * MAX_RECYCLE_BYTES`. Reuse during
+/// a merge saturates at a handful of slots because `pageout` and `take`
+/// interleave (a `take` frees a slot the next `pageout` immediately reuses);
+/// the cap mostly absorbs burst phase transitions. Tuning candidate.
+const FREE_LIST_CAP: usize = 16;
+
+/// Don't recycle a slot whose payload exceeds this. A slot's on-disk file is
+/// the high-water mark of payloads written to it (reuse overwrites from offset
+/// 0 without truncating); refusing to recycle past this bound keeps every
+/// free-list file — and thus retained page cache — under the threshold.
+///
+/// Enforced at drop, not at pageout: an oversize payload can still pop and
+/// overwrite a free slot, growing that file past the bound, but the resulting
+/// handle's `len_u64s` then exceeds the threshold, so its drop unlinks rather
+/// than recycling. The grown file never re-enters the free-list, so free-listed
+/// files stay within the bound regardless of the unchecked pop.
+///
+/// Other recycling sites (the column pager's warm read-buffer pool, the merge
+/// batcher's column recycler) hold their own size caps; they share this value
+/// today but are tuned independently.
+const MAX_RECYCLE_BYTES: usize = 1 << 22;
+
+/// Locks the free-list, recovering from poisoning instead of propagating it.
+/// [`push_free_slot`] runs in [`FileInner::drop`], where an unwrap-on-poison
+/// would panic-in-drop and abort the process. A panic mid-operation can't
+/// corrupt the list beyond a lost or duplicated slot id, both harmless: a lost
+/// id just unlinks later, a duplicate is overwritten on reuse.
+fn lock_free_slots() -> std::sync::MutexGuard<'static, Vec<FileId>> {
+    FREE_SLOTS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Pops a recycled slot id, or `None` if the free-list is empty. The returned
+/// id usually names an existing file at `scratch_path(id)` holding stale bytes
+/// the caller overwrites — but not always: a slot recycled after its file was
+/// unlinked out from under us (a `take` that unlinked, then failed) names a
+/// missing file. The reused-slot write path opens with `create(true)` for
+/// exactly this case, recreating the file rather than erroring.
+fn pop_free_slot() -> Option<FileId> {
+    lock_free_slots().pop()
+}
+
+/// Returns slot `id` to the free-list, retaining its file for reuse. Returns
+/// `false` (and keeps nothing) if the list is already at [`FREE_LIST_CAP`], so
+/// the caller unlinks instead.
+fn push_free_slot(id: FileId) -> bool {
+    let mut slots = lock_free_slots();
+    if slots.len() >= FREE_LIST_CAP {
+        return false;
+    }
+    slots.push(id);
+    true
+}
+
+#[cfg(test)]
+fn free_slots_snapshot() -> Vec<FileId> {
+    lock_free_slots().clone()
+}
+
+#[cfg(test)]
+fn clear_free_slots() {
+    lock_free_slots().clear();
 }
 
 /// Storage for a file-backed handle. The file at `scratch_path(id)` holds the
@@ -96,12 +183,12 @@ pub(crate) fn alloc_scratch_id() -> u64 {
 /// No file descriptor is retained.
 #[derive(Debug)]
 pub(crate) struct FileInner {
-    pub(crate) id: u64,
+    pub(crate) id: FileId,
     pub(crate) len_u64s: usize,
 }
 
 impl FileInner {
-    pub(crate) fn new(id: u64, len_u64s: usize) -> Self {
+    pub(crate) fn new(id: FileId, len_u64s: usize) -> Self {
         Self { id, len_u64s }
     }
 }
@@ -117,6 +204,14 @@ impl Drop for FileInner {
         let Some(subdir) = SUBDIR.get() else {
             return;
         };
+        // Recycle the slot instead of unlinking: keep the file (and its warm
+        // page cache) alive for the next `pageout` to overwrite, sidestepping
+        // the inode eviction + page-cache truncate that unlink forces. Slots
+        // over the size bound, or past the free-list cap, fall through to
+        // unlink so retained page cache stays bounded.
+        if self.len_u64s.saturating_mul(8) <= MAX_RECYCLE_BYTES && push_free_slot(self.id) {
+            return;
+        }
         let path = subdir.join(format!("{}.bin", self.id));
         if let Err(err) = std::fs::remove_file(&path) {
             // ENOENT is fine: a successful `take` already unlinked.
@@ -138,9 +233,15 @@ pub(crate) fn try_pageout_file(chunks: &mut [Vec<u64>]) -> std::io::Result<Handl
         // short-circuits when `len_u64s == 0`.
         return Ok(Handle::from_file(FileInner::new(alloc_scratch_id(), 0)));
     }
-    let id = alloc_scratch_id();
+    // Reuse a recycled slot if one is free; otherwise mint a fresh id. A reused
+    // slot's file already exists and is overwritten from offset 0; a fresh slot
+    // must not collide with an existing file.
+    let (id, reused) = match pop_free_slot() {
+        Some(id) => (id, true),
+        None => (alloc_scratch_id(), false),
+    };
     let path = scratch_path(id);
-    match write_chunks(&path, chunks) {
+    match write_chunks(&path, chunks, reused) {
         Ok(()) => {
             for c in chunks.iter_mut() {
                 c.clear();
@@ -149,7 +250,9 @@ pub(crate) fn try_pageout_file(chunks: &mut [Vec<u64>]) -> std::io::Result<Handl
         }
         Err(err) => {
             // Best-effort cleanup; ignore secondary errors here so we surface
-            // the primary write error to the caller.
+            // the primary write error to the caller. A reused slot is unlinked
+            // rather than returned to the free-list: a failed write may have
+            // left it in an unknown state on a possibly-broken volume.
             let _ = std::fs::remove_file(&path);
             Err(err)
         }
@@ -161,8 +264,20 @@ pub(crate) fn pageout_file(chunks: &mut [Vec<u64>]) -> Handle {
         .unwrap_or_else(|err| panic!("mz_ore::pager: file pageout failed: {err}"))
 }
 
-fn write_chunks(path: &Path, chunks: &[Vec<u64>]) -> std::io::Result<()> {
-    let file = File::options().write(true).create_new(true).open(path)?;
+fn write_chunks(path: &Path, chunks: &[Vec<u64>], reused: bool) -> std::io::Result<()> {
+    // Reused slots already have a file; open it and overwrite from offset 0.
+    // Deliberately no `truncate`: shrinking would re-evict the tail pages — the
+    // cost recycling exists to avoid — and reads are length-bounded, so a stale
+    // tail is never observed. Fresh slots use `create_new` to catch id-reuse
+    // bugs: a fresh id must never name an existing file.
+    let mut opts = File::options();
+    opts.write(true);
+    if reused {
+        opts.create(true);
+    } else {
+        opts.create_new(true);
+    }
+    let file = opts.open(path)?;
     let mut slices: Vec<IoSlice<'_>> = chunks
         .iter()
         .filter(|c| !c.is_empty())
@@ -324,7 +439,8 @@ pub(crate) fn try_take_file(handle: Handle, dst: &mut Vec<u64>) -> std::io::Resu
         filled += n;
     }
     drop(file);
-    // FileInner::drop will unlink the scratch file.
+    // FileInner::drop reclaims the scratch file: recycled to the free-list for
+    // reuse, or unlinked if the list is full or the payload is oversize.
     drop(inner);
     Ok(())
 }
@@ -338,14 +454,28 @@ pub(crate) fn take_file(handle: Handle, dst: &mut Vec<u64>) {
 mod backend_tests {
     use super::*;
 
-    fn setup_dir() {
+    /// Serializes backend tests so the process-global free-list is exclusive to
+    /// one test at a time. `cargo test` runs a binary's tests on shared threads,
+    /// so without this a peer's `pageout`/`take` would pop or push slots
+    /// mid-assertion. (Under nextest each test is its own process and the lock
+    /// is uncontended.)
+    static SERIAL: Mutex<()> = Mutex::new(());
+
+    /// Acquires the serialization lock, sets up the shared scratch dir, and
+    /// hands back a clean free-list. The returned guard (already `#[must_use]`
+    /// as a `MutexGuard`) must outlive the test body. Recovers from a poisoned
+    /// lock so a `should_panic` test doesn't wedge its peers.
+    fn setup_dir() -> std::sync::MutexGuard<'static, ()> {
+        let guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let _ = super::tests::shared_scratch();
+        clear_free_slots();
+        guard
     }
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `writev` on OS `linux`
     fn pageout_writes_file_and_clears_capacity() {
-        setup_dir();
+        let _guard = setup_dir();
         let mut chunks = [vec![10u64, 20, 30], vec![40, 50]];
         let cap_before_0 = chunks[0].capacity();
         let cap_before_1 = chunks[1].capacity();
@@ -367,7 +497,7 @@ mod backend_tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `writev` on OS `linux`
     fn file_read_at_basic() {
-        setup_dir();
+        let _guard = setup_dir();
         let mut chunks = [vec![1u64, 2, 3, 4, 5]];
         let h = pageout_file(&mut chunks);
         let mut dst = Vec::new();
@@ -378,7 +508,7 @@ mod backend_tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `writev` on OS `linux`
     fn file_read_at_many_concats_and_coalesces() {
-        setup_dir();
+        let _guard = setup_dir();
         let mut chunks = [vec![10u64, 20, 30, 40, 50, 60]];
         let h = pageout_file(&mut chunks);
         let mut dst = Vec::new();
@@ -391,7 +521,7 @@ mod backend_tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `writev` on OS `linux`
     #[should_panic(expected = "out of bounds")]
     fn file_read_at_panics_on_oob() {
-        setup_dir();
+        let _guard = setup_dir();
         let mut chunks = [vec![1u64, 2]];
         let h = pageout_file(&mut chunks);
         let mut dst = Vec::new();
@@ -400,8 +530,8 @@ mod backend_tests {
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `writev` on OS `linux`
-    fn file_take_returns_data_and_unlinks() {
-        setup_dir();
+    fn file_take_returns_data_and_recycles() {
+        let _guard = setup_dir();
         let mut chunks = [vec![7u64; 100]];
         let h = pageout_file(&mut chunks);
         let inner_id = h.file_inner().unwrap().id;
@@ -410,25 +540,96 @@ mod backend_tests {
         let mut dst = Vec::new();
         take_file(h, &mut dst);
         assert_eq!(dst, vec![7u64; 100]);
-        assert!(!path.exists(), "scratch file should be unlinked after take");
+        // Recycled, not unlinked: the file survives for reuse and the slot is
+        // parked on the free-list.
+        assert!(path.exists(), "scratch file should survive take for reuse");
+        assert!(
+            free_slots_snapshot().contains(&inner_id),
+            "taken slot should be recycled onto the free-list"
+        );
     }
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `writev` on OS `linux`
-    fn file_drop_unlinks_when_not_taken() {
-        setup_dir();
+    fn file_drop_recycles_when_not_taken() {
+        let _guard = setup_dir();
         let mut chunks = [vec![1u64, 2, 3]];
         let h = pageout_file(&mut chunks);
         let id = h.file_inner().unwrap().id;
         let path = scratch_path(id);
         assert!(path.exists());
         drop(h);
-        assert!(!path.exists(), "scratch file should be unlinked on drop");
+        assert!(path.exists(), "scratch file should survive drop for reuse");
+        assert!(
+            free_slots_snapshot().contains(&id),
+            "dropped slot should be recycled onto the free-list"
+        );
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `writev` on OS `linux`
+    fn file_pageout_reuses_recycled_slot() {
+        let _guard = setup_dir();
+        // First handle: page out, then take to recycle the slot.
+        let mut a = [vec![1u64, 2, 3, 4, 5]];
+        let h1 = pageout_file(&mut a);
+        let id1 = h1.file_inner().unwrap().id;
+        let mut dst = Vec::new();
+        take_file(h1, &mut dst);
+        assert_eq!(dst, vec![1, 2, 3, 4, 5]);
+
+        // Second, shorter handle should reuse the freed slot and read back
+        // cleanly — the stale tail from the longer first payload is past the
+        // logical length and never observed.
+        let mut b = [vec![9u64; 3]];
+        let h2 = pageout_file(&mut b);
+        assert_eq!(
+            h2.file_inner().unwrap().id,
+            id1,
+            "pageout should reuse the recycled slot"
+        );
+        let mut dst2 = Vec::new();
+        take_file(h2, &mut dst2);
+        assert_eq!(dst2, vec![9u64; 3], "reused slot must not leak stale tail");
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `writev` on OS `linux`
+    fn file_oversize_payload_is_unlinked_not_recycled() {
+        let _guard = setup_dir();
+        // One u64 past the recycle threshold.
+        let len = (MAX_RECYCLE_BYTES / 8) + 1;
+        let mut chunks = [vec![0u64; len]];
+        let h = pageout_file(&mut chunks);
+        let id = h.file_inner().unwrap().id;
+        let path = scratch_path(id);
+        drop(h);
+        assert!(!path.exists(), "oversize scratch file should be unlinked");
+        assert!(
+            !free_slots_snapshot().contains(&id),
+            "oversize slot must not be recycled"
+        );
+    }
+
+    #[mz_ore::test]
+    fn free_list_respects_cap() {
+        let _guard = setup_dir();
+        for i in 0..u64::cast_from(FREE_LIST_CAP) {
+            assert!(
+                push_free_slot(FileId(i)),
+                "slots under the cap are accepted"
+            );
+        }
+        assert!(
+            !push_free_slot(FileId(u64::MAX)),
+            "a slot past the cap is rejected so the caller unlinks"
+        );
+        assert_eq!(free_slots_snapshot().len(), FREE_LIST_CAP);
     }
 
     #[mz_ore::test]
     fn file_empty_handle_round_trips() {
-        setup_dir();
+        let _guard = setup_dir();
         let mut chunks: [Vec<u64>; 0] = [];
         let h = pageout_file(&mut chunks);
         assert_eq!(h.len(), 0);
@@ -450,7 +651,7 @@ mod backend_tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `writev` on OS `linux`
     fn try_read_at_file_surfaces_missing_file() {
-        setup_dir();
+        let _guard = setup_dir();
         let mut chunks = [vec![1u64, 2, 3]];
         let h = pageout_file(&mut chunks);
         // Concurrently unlink the scratch file out from under us.
