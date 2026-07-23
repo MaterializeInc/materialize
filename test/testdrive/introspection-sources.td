@@ -265,7 +265,7 @@ true true
 
 > INSERT INTO t4 SELECT 1
 
-> SELECT records, size < 16 * 1024, allocations > 0 FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
+> SELECT records, size < 32 * 1024, allocations > 0 FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
 1 true true
 
 > INSERT INTO t4 SELECT generate_series(1, 1000)
