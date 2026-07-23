@@ -209,6 +209,14 @@ updated materialized view defintion:
    differs from target schema`.
    {{< /note >}}
 
+   The replacement materialized view:
+   - References the original view using `FOR auction_house.mv_winning_bids`.
+   - Specifies the same output schema as the original view (i.e., same column
+     names, column types, column order, nullability, and keys) in its `SELECT`
+     statement.
+   - Computes results independently while the original continues serving
+     queries.
+
    ```mzsql
    -- Create a replacement for the winning bids view
    CREATE REPLACEMENT MATERIALIZED VIEW auction_house.mv_winning_bids_v2
@@ -238,14 +246,6 @@ updated materialized view defintion:
    )
    AND b.amount > 50;  -- New filter: only include winning bids above 50
    ```
-
-   The replacement materialized view:
-   - References the original view using `FOR auction_house.mv_winning_bids`.
-   - Specifies the same output schema as the original view (i.e., same column
-     names, column types, column order, nullability, and keys) in its `SELECT`
-     statement.
-   - Computes results independently while the original continues serving
-     queries.
 
    {{< note >}}
    {{% include-headless "/headless/replacement-views/querying-replacement-view" %}}
