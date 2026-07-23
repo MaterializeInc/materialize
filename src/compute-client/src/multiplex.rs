@@ -148,10 +148,23 @@ impl GenericClient<ComputeCommand, ComputeResponse> for Multiplexer {
                 self.interactive.send(cmd).await?;
             }
             CreateDataflow(desc) => {
-                // Interactive serves only wholly-transient, non-subscribe dataflows. A mixed
-                // (non-homogeneous) dataflow returns `is_transient() == false` and stays on
-                // maintenance, which is safe.
-                let to_interactive = desc.is_transient() && desc.subscribe_ids().next().is_none();
+                // Interactive serves a dataflow only when it is wholly transient, has a bounded
+                // (non-empty) `until`, and carries no subscribe or copy-to sink. Transience is
+                // required, not just a finite `until`: a durable dataflow can also get a finite
+                // `until` (a `REFRESH AT` materialized view sets it to the last refresh, see
+                // `create_materialized_view.rs`), and `filter_response` forwards interactive's
+                // frontier reports only for transient ids. Routing such a dataflow to interactive
+                // would make its frontier reports get dropped by that gate, so it must stay on
+                // maintenance regardless of `until`. A finite `until` alone marks the dataflow as
+                // an ephemeral read that stops on its own, safe to render outside the durable,
+                // reconciled maintenance runtime. Subscribes stay on maintenance regardless of
+                // `until`. Copy-to is transient and finite-until too, but it drives an S3 sink and
+                // is refused by reconciliation, so it is excluded here for that reason, not a
+                // frontier one.
+                let to_interactive = desc.is_transient()
+                    && !desc.until.is_empty()
+                    && desc.subscribe_ids().next().is_none()
+                    && desc.copy_to_ids().next().is_none();
                 if to_interactive {
                     for id in desc.export_ids() {
                         self.transient_owner.insert(id, Runtime::Interactive);
@@ -302,18 +315,28 @@ mod tests {
         h.inter_sent.lock().expect("lock poisoned").clone()
     }
 
-    /// Builds a `CreateDataflow` command exporting `index_ids` as indexes and `subscribe_ids` as
-    /// subscribe sinks.
-    fn create_dataflow(index_ids: &[GlobalId], subscribe_ids: &[GlobalId]) -> ComputeCommand {
+    /// Builds a `CreateDataflow` command exporting `index_ids` as indexes, `subscribe_ids` as
+    /// subscribe sinks, and `copy_to_ids` as copy-to-S3 sinks, with the given `until` frontier.
+    fn create_dataflow_with(
+        index_ids: &[GlobalId],
+        subscribe_ids: &[GlobalId],
+        copy_to_ids: &[GlobalId],
+        until: Antichain<Timestamp>,
+    ) -> ComputeCommand {
         use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
         use mz_compute_types::plan::render_plan::RenderPlan;
         use mz_compute_types::sinks::{
-            ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection,
+            ComputeSinkConnection, ComputeSinkDesc, CopyToS3OneshotSinkConnection,
+            SubscribeSinkConnection,
         };
-        use mz_repr::ReprRelationType;
+        use mz_repr::{CatalogItemId, ReprRelationType};
+        use mz_storage_types::connections::aws::{AwsAuth, AwsConnection, AwsCredentials};
+        use mz_storage_types::connections::string_or_secret::StringOrSecret;
         use mz_storage_types::controller::CollectionMetadata;
+        use mz_storage_types::sinks::{S3SinkFormat, S3UploadInfo};
 
         let mut desc = DataflowDescription::<RenderPlan, CollectionMetadata>::new("test".into());
+        desc.until = until;
         for id in index_ids {
             desc.index_exports.insert(
                 *id,
@@ -342,7 +365,53 @@ mod tests {
                 },
             );
         }
+        for id in copy_to_ids {
+            desc.sink_exports.insert(
+                *id,
+                ComputeSinkDesc {
+                    from: *id,
+                    from_desc: RelationDesc::empty(),
+                    connection: ComputeSinkConnection::CopyToS3Oneshot(
+                        CopyToS3OneshotSinkConnection {
+                            upload_info: S3UploadInfo {
+                                uri: "s3://test-bucket/test-path".into(),
+                                max_file_size: 1024,
+                                desc: RelationDesc::empty(),
+                                format: S3SinkFormat::Parquet,
+                            },
+                            aws_connection: AwsConnection {
+                                auth: AwsAuth::Credentials(AwsCredentials {
+                                    access_key_id: StringOrSecret::String("access-key".into()),
+                                    secret_access_key: CatalogItemId::User(1),
+                                    session_token: None,
+                                }),
+                                region: None,
+                                endpoint: None,
+                            },
+                            connection_id: CatalogItemId::User(2),
+                            output_batch_count: 1,
+                        },
+                    ),
+                    with_snapshot: true,
+                    up_to: Antichain::new(),
+                    non_null_assertions: Vec::new(),
+                    refresh_schedule: None,
+                },
+            );
+        }
         ComputeCommand::CreateDataflow(Box::new(desc))
+    }
+
+    /// Builds a bounded `CreateDataflow` exporting `index_ids` as indexes and `subscribe_ids` as
+    /// subscribe sinks: the shape of a peek-serving dataflow, which is eligible for interactive
+    /// routing unless a subscribe sink is present.
+    fn create_dataflow(index_ids: &[GlobalId], subscribe_ids: &[GlobalId]) -> ComputeCommand {
+        create_dataflow_with(
+            index_ids,
+            subscribe_ids,
+            &[],
+            Antichain::from_elem(Timestamp::from(100u64)),
+        )
     }
 
     /// Builds a `Peek` command with the given uuid targeting an index.
@@ -389,8 +458,9 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     async fn maintained_dataflow_routes_to_maintenance() {
         let mut h = harness();
-        // A `User` (non-transient) export id makes the dataflow maintained.
-        let cmd = create_dataflow(&[GlobalId::User(7)], &[]);
+        // A plain index never bounds `until`, so an unbounded (empty) `until` keeps the dataflow
+        // on maintenance regardless of the export id's namespace.
+        let cmd = create_dataflow_with(&[GlobalId::User(7)], &[], &[], Antichain::new());
         h.mux.send(cmd).await.expect("send");
 
         assert_eq!(
@@ -447,6 +517,70 @@ mod tests {
             .await
             .expect("send");
         assert_eq!(maint_commands(&h).len(), 2);
+        assert!(inter_commands(&h).is_empty());
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn routing_excludes_copy_to_and_subscribe_and_unbounded() {
+        let bounded = Antichain::from_elem(Timestamp::from(100u64));
+
+        // A bounded, transient, sinkless dataflow routes to interactive.
+        let mut h = harness();
+        let cmd = create_dataflow_with(&[GlobalId::Transient(21)], &[], &[], bounded.clone());
+        h.mux.send(cmd).await.expect("send");
+        assert_eq!(
+            inter_commands(&h).len(),
+            1,
+            "bounded sinkless dataflow to interactive"
+        );
+        assert!(maint_commands(&h).is_empty());
+
+        // A copy-to dataflow (finite until, transient) routes to maintenance: it drives an S3
+        // sink and is refused by reconciliation, so it cannot live on interactive.
+        let mut h = harness();
+        let cmd = create_dataflow_with(&[], &[], &[GlobalId::Transient(22)], bounded.clone());
+        h.mux.send(cmd).await.expect("send");
+        assert_eq!(
+            maint_commands(&h).len(),
+            1,
+            "copy-to stays on maintenance despite bounded until"
+        );
+        assert!(inter_commands(&h).is_empty());
+
+        // A subscribe dataflow routes to maintenance.
+        let mut h = harness();
+        let cmd = create_dataflow_with(&[], &[GlobalId::Transient(23)], &[], bounded.clone());
+        h.mux.send(cmd).await.expect("send");
+        assert_eq!(
+            maint_commands(&h).len(),
+            1,
+            "subscribe stays on maintenance despite bounded until"
+        );
+        assert!(inter_commands(&h).is_empty());
+
+        // An unbounded-until (empty antichain) dataflow routes to maintenance.
+        let mut h = harness();
+        let cmd = create_dataflow_with(&[GlobalId::Transient(24)], &[], &[], Antichain::new());
+        h.mux.send(cmd).await.expect("send");
+        assert_eq!(
+            maint_commands(&h).len(),
+            1,
+            "unbounded until stays on maintenance"
+        );
+        assert!(inter_commands(&h).is_empty());
+
+        // A durable (non-transient), bounded, sinkless dataflow routes to maintenance: the shape
+        // of a `REFRESH AT` materialized view, whose `until` is set to its last refresh even
+        // though the collection itself is durable. Routing it to interactive would make its
+        // frontier reports get dropped by the `is_transient()` gate in `filter_response`.
+        let mut h = harness();
+        let cmd = create_dataflow_with(&[GlobalId::User(25)], &[], &[], bounded);
+        h.mux.send(cmd).await.expect("send");
+        assert_eq!(
+            maint_commands(&h).len(),
+            1,
+            "durable dataflow with bounded until stays on maintenance"
+        );
         assert!(inter_commands(&h).is_empty());
     }
 
