@@ -522,6 +522,7 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     # flag to a permanent category above.
     "compute_subscribe_snapshot_optimization",
     "enable_cast_elimination",
+    "enable_cluster_schedule_refresh",
     "enable_compute_correction_v2",
     "enable_compute_temporal_bucketing",
     "enable_new_outer_join_lowering",
