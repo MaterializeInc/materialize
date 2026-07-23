@@ -1,7 +1,7 @@
 ---
 headless: true
 ---
-### Schema changes
+### Schema changes (legacy source syntax)
 Materialize supports schema changes in the upstream database as follows:
 
 #### Compatible schema changes (Legacy syntax)
