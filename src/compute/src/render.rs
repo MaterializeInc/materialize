@@ -172,8 +172,8 @@ use crate::render::errors::DataflowErrorSer;
 use crate::server::ComputeRuntimeRole;
 use crate::shared_trace::PublishArrangement;
 use crate::sharing::{
-    ArrangementSharingRegistry, SharedErrsFrontier, SharedErrsHandle, SharedOksFrontier,
-    SharedOksHandle,
+    ArrangementSharingRegistry, SharedErrsFrontier, SharedErrsHandle, SharedIndexArrangement,
+    SharedOksFrontier, SharedOksHandle,
 };
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
 use mz_row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
@@ -581,13 +581,19 @@ pub fn build_compute_dataflow(
 /// `outer` as a static snapshot at `as_of`, bounded by `until`, via
 /// `SharedTraceHandle::import_snapshot_at`.
 ///
-/// Returns `None` if the arrangement is not yet published on `worker_index`.
+/// Binds through [`ArrangementSharingRegistry::get_or_create_placeholder`], which always returns a
+/// slot: an existing published arrangement, or a freshly created placeholder if the dependency is not
+/// yet published on `worker_index`. An import over an unadopted placeholder produces no data and holds
+/// its output frontier at the minimum until a maintenance publisher adopts the same slot. This is what
+/// lets `handle_create_dataflow` build every interactive dataflow immediately in command arrival order
+/// rather than deferring a build whose dependency is not yet published.
 ///
-/// This is a non-blocking `handles` probe, and it is only reached once all dependencies are
-/// published. `handle_create_dataflow` defers an interactive build whose imported shared indexes are
-/// not all published on this worker, replaying the command from the publication event, so by the
-/// time the build runs every dependency's slot is filled. The `None` arm therefore encodes a guarded
-/// invariant rather than a live race: the caller's `unwrap_or_else` panic is unreachable in practice.
+/// Returns the slot `Arc<SharedIndexArrangement>` alongside the arrangements and read holds. The
+/// caller MUST retain it for as long as the import is alive:
+/// [`ArrangementSharingRegistry::evict_unadopted`] detects the last reader of an unadopted placeholder
+/// by the slot Arc's strong count, and a `SharedTraceHandle` holds only the inner `Arc<SharedTrace>`
+/// one level down, which does not count. Dropping the slot Arc while the import is still live would let
+/// eviction remove a slot this reader depends on.
 ///
 /// The returned handle clones are the importing dataflow's read hold on the shared trace, advanced
 /// to `as_of`. Keeping them alive (for example in the dataflow's token set) pins the shared trace at
@@ -605,24 +611,24 @@ fn import_shared_index<'outer>(
     name: &str,
     as_of: &Antichain<mz_repr::Timestamp>,
     until: &Antichain<mz_repr::Timestamp>,
-) -> Option<(
+) -> (
     Arranged<'outer, SharedOksFrontier>,
     Arranged<'outer, SharedErrsFrontier>,
     SharedOksHandle,
     SharedErrsHandle,
-)> {
+    Arc<SharedIndexArrangement>,
+) {
     // Pairwise import reads publisher worker `i` from importer worker `i`, so worker indices must
     // line up. The primitive's import additionally asserts equal total peer counts.
     let worker_index = outer.index();
-    // NOTE: `handles` mints only `SharedTraceHandle`s, wrapping the inner `Arc<SharedTrace>`. It
-    // does not hand back the slot `Arc<SharedIndexArrangement>` itself, so this import does not
-    // count toward that Arc's strong count. `ArrangementSharingRegistry::evict_unadopted` detects
-    // the last reader by that strong count, so it currently cannot see readers minted here. This is
-    // harmless today because `evict_unadopted` has no caller, but once it is wired into a
-    // cancellation path, this import must also retain the slot `Arc<SharedIndexArrangement>` (for
-    // example alongside `oks_hold`/`errs_hold`) for as long as the import is alive, or eviction can
-    // remove a slot a live reader still depends on.
-    let (oks_handle, errs_handle) = registry.handles(&idx_id, worker_index)?;
+    let peers = outer.peers();
+    // Bind through get-or-create so a not-yet-published dependency yields a placeholder rather than
+    // failing. The returned slot Arc is handed back to the caller, which retains it (see the doc
+    // comment): eviction counts live readers by this Arc's strong count, and the handles minted below
+    // wrap only the inner `Arc<SharedTrace>`, which does not contribute to that count.
+    let slot = registry.get_or_create_placeholder(idx_id, worker_index, peers);
+    let oks_handle = slot.oks.handle();
+    let errs_handle = slot.errs.handle();
 
     // Cloning a `SharedTraceHandle` registers an independent hold. Advance these holds to `as_of` so
     // the shared trace does not compact past `as_of` before the snapshot is read, then keep them as
@@ -650,7 +656,7 @@ fn import_shared_index<'outer>(
         until.clone(),
     );
 
-    Some((oks_arranged, errs_arranged, oks_hold, errs_hold))
+    (oks_arranged, errs_arranged, oks_hold, errs_hold, slot)
 }
 
 // This implementation block allows child timestamps to vary from parent timestamps,
@@ -841,20 +847,14 @@ where
                 .iter()
                 .filter_map(|t| t.try_step_forward()),
         );
-        let (mut oks_arranged, errs_arranged, oks_hold, errs_hold) = import_shared_index(
+        let (mut oks_arranged, errs_arranged, oks_hold, errs_hold, slot) = import_shared_index(
             outer,
             &compute_state.sharing_registry,
             idx_id,
             &name,
             &self.as_of_frontier,
             &snapshot_until,
-        )
-        .unwrap_or_else(|| {
-            panic!(
-                "shared index {} not yet published while building dataflow {}",
-                idx_id, self.dataflow_id
-            )
-        });
+        );
 
         // Attach the input probe to the replayed batch stream so hydration tracking observes it,
         // mirroring the maintenance import.
@@ -877,8 +877,9 @@ where
         );
         self.update_id(Id::Global(idx.on_id), bundle);
 
-        // The read hold releases when this token drops with the dataflow.
-        tokens.insert(idx_id, Rc::new((oks_hold, errs_hold)));
+        // The read hold releases when this token drops with the dataflow. The slot Arc rides along so
+        // the import counts as a live reader for `evict_unadopted` for the dataflow's whole lifetime.
+        tokens.insert(idx_id, Rc::new((oks_hold, errs_hold, slot)));
     }
 }
 
@@ -2469,15 +2470,15 @@ mod interactive_import_tests {
             let probe = ProbeHandle::new();
             let (mut oks_hold, mut errs_hold) = worker.dataflow::<Timestamp, _, _>(|scope| {
                 // `until` empty: no upper suppression, so the whole snapshot at `as_of` flows.
-                let (oks_arranged, _errs_arranged, oks_hold, errs_hold) = import_shared_index(
-                    scope.clone(),
-                    &registry_in,
-                    id,
-                    "Index",
-                    &as_of_in,
-                    &Antichain::new(),
-                )
-                .expect("published arrangement available");
+                let (oks_arranged, _errs_arranged, oks_hold, errs_hold, _slot) =
+                    import_shared_index(
+                        scope.clone(),
+                        &registry_in,
+                        id,
+                        "Index",
+                        &as_of_in,
+                        &Antichain::new(),
+                    );
 
                 let collected = Arranged::<SharedOksFrontier>::flat_map_batches(
                     oks_arranged.stream,
@@ -2639,15 +2640,15 @@ mod interactive_import_tests {
             // production code drops them the same way once it has read out their `stream`s, keeping
             // only the hold pair alive in `tokens`.
             let (oks_hold, errs_hold) = worker.dataflow::<Timestamp, _, _>(|scope| {
-                let (_oks_arranged, _errs_arranged, oks_hold, errs_hold) = import_shared_index(
-                    scope.clone(),
-                    &registry,
-                    id,
-                    "Index",
-                    &as_of,
-                    &Antichain::new(),
-                )
-                .expect("published arrangement available");
+                let (_oks_arranged, _errs_arranged, oks_hold, errs_hold, _slot) =
+                    import_shared_index(
+                        scope.clone(),
+                        &registry,
+                        id,
+                        "Index",
+                        &as_of,
+                        &Antichain::new(),
+                    );
                 (oks_hold, errs_hold)
             });
 

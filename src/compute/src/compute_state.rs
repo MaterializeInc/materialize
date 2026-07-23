@@ -114,12 +114,13 @@ pub struct ComputeState {
     /// this map. They resolve through the notification-driven `pending_work`/`dep_index` store
     /// below.
     pub pending_peeks: BTreeMap<Uuid, PendingPeek>,
-    /// Interactive-runtime deferred work, keyed by a fresh `WorkId`, owning each item until it
-    /// resolves.
+    /// Interactive-runtime deferred fast-path peeks, keyed by a fresh `WorkId`, owning each item
+    /// until it resolves.
     ///
-    /// Empty on the maintenance runtime. An item is re-examined only when one of its dependency ids
-    /// is marked dirty in the sharing registry (publication or seal) and the worker is woken. See
-    /// `resolve_dirty`.
+    /// Empty on the maintenance runtime. An item is re-examined only when its target index id is
+    /// marked dirty in the sharing registry (publication or seal) and the worker is woken. See
+    /// `resolve_dirty`. Query dataflows do not defer, they build immediately and bind their imports
+    /// through registry placeholders, so only peeks live here.
     pub pending_work: BTreeMap<WorkId, PendingWork>,
     /// Dependency id to the set of `pending_work` items waiting on it.
     ///
@@ -182,17 +183,6 @@ pub struct ComputeState {
     /// dataflow. Multiple collections can reference the same token if they are exported by the
     /// same dataflow.
     suspended_collections: BTreeMap<GlobalId, Rc<dyn Any>>,
-
-    /// Ids for which `Schedule` arrived before the collection had a `suspended_collections` entry
-    /// to remove it from.
-    ///
-    /// This happens for an interactive query dataflow deferred under N3: the compute controller
-    /// always schedules a transient collection immediately after `CreateDataflow`, without waiting
-    /// for its inputs to become available (see `Instance::maybe_schedule_collection`), so `Schedule`
-    /// can arrive while the dataflow is still sitting in `pending_work` awaiting a dependency's
-    /// publication. `handle_create_dataflow` drains this set for the ids it is about to build,
-    /// replaying the missed `Schedule`s so the dataflow is not left suspended forever.
-    scheduled_before_build: BTreeSet<GlobalId>,
 
     /// Interval at which to perform server maintenance tasks. Set to a zero interval to
     /// perform maintenance with every `step_or_park` invocation.
@@ -259,7 +249,6 @@ impl ComputeState {
             metrics_registry,
             workers_per_process,
             suspended_collections: Default::default(),
-            scheduled_before_build: Default::default(),
             server_maintenance_interval: Duration::ZERO,
             init_system_time: mz_ore::now::SYSTEM_TIME(),
             replica_expiration: Antichain::default(),
@@ -324,38 +313,6 @@ impl ComputeState {
             waiters.remove(&work_id);
             !waiters.is_empty()
         });
-    }
-
-    /// Removes `work_id` from `dep`'s waiter set, dropping the set if it becomes empty. Used when a
-    /// deferred dataflow's dependency publishes, so a later event on an already-satisfied dep does
-    /// not re-wake the still-pending item.
-    fn unindex_dep(&mut self, dep: &GlobalId, work_id: WorkId) {
-        if let Some(waiters) = self.dep_index.get_mut(dep) {
-            waiters.remove(&work_id);
-            if waiters.is_empty() {
-                self.dep_index.remove(dep);
-            }
-        }
-    }
-
-    /// Stores a deferred query dataflow in `pending_work`, indexing it under each missing dependency
-    /// so a publication for any of them re-examines it.
-    fn enqueue_deferred_dataflow(
-        &mut self,
-        description: DataflowDescription<RenderPlan, CollectionMetadata>,
-        missing: BTreeSet<GlobalId>,
-    ) {
-        let work_id = self.next_work_id();
-        for dep in &missing {
-            self.dep_index.entry(*dep).or_default().insert(work_id);
-        }
-        self.pending_work.insert(
-            work_id,
-            PendingWork::Dataflow(DeferredDataflow {
-                description,
-                missing,
-            }),
-        );
     }
 
     /// Apply the current `worker_config` to the compute state.
@@ -676,32 +633,14 @@ impl<'a> ActiveComputeState<'a> {
         &mut self,
         dataflow: DataflowDescription<RenderPlan, CollectionMetadata>,
     ) {
-        // Interactive runtime slow-path gate: a query dataflow imports its maintenance-index inputs
-        // from the sharing registry (all `index_imports` are shared on this runtime, which holds no
-        // local traces). If any imported dependency is not yet published, defer the whole build
-        // until every missing dependency publishes. `resolve_dirty` replays this command on the
-        // publication event, so there is neither build-time blocking nor polling. The maintenance
-        // runtime imports from its local `TraceManager` and builds unconditionally.
-        if self.compute_state.role() == ComputeRuntimeRole::Interactive {
-            let worker_index = self.timely_worker.index();
-            let missing: BTreeSet<GlobalId> = dataflow
-                .index_imports
-                .keys()
-                .copied()
-                .filter(|id| {
-                    self.compute_state
-                        .sharing_registry
-                        .handles(id, worker_index)
-                        .is_none()
-                })
-                .collect();
-            if !missing.is_empty() {
-                self.compute_state
-                    .enqueue_deferred_dataflow(dataflow, missing);
-                return;
-            }
-        }
-
+        // Every dataflow builds immediately, in command arrival order. Timely allocates per-worker
+        // channel ids in construction order, so deferring a build until its dependencies publish
+        // would diverge that order across workers, latently unsound under a multi-worker interactive
+        // runtime. On the interactive runtime a query dataflow imports its maintenance-index inputs
+        // from the sharing registry, binding each through a registry placeholder that a maintenance
+        // publisher adopts later (see `render::import_shared_index`). A not-yet-published dependency
+        // therefore yields an empty import held at the minimum frontier, so the build is always
+        // possible without waiting.
         let dataflow_index = Rc::new(self.timely_worker.next_dataflow_index());
         let as_of = dataflow.as_of.clone().unwrap();
 
@@ -793,15 +732,6 @@ impl<'a> ActiveComputeState<'a> {
                 .suspended_collections
                 .insert(id, Rc::clone(&suspension_token));
         }
-        // Replay any `Schedule`s that arrived before this build (see `handle_schedule`): drop the
-        // just-inserted token for each such export id, exactly as if `Schedule` had arrived now.
-        // The dataflow starts once every export has been unsuspended this way or via a later,
-        // ordinary `Schedule`.
-        for id in dataflow.export_ids() {
-            if self.compute_state.scheduled_before_build.remove(&id) {
-                drop(self.compute_state.suspended_collections.remove(&id));
-            }
-        }
 
         crate::render::build_compute_dataflow(
             self.timely_worker,
@@ -819,22 +749,13 @@ impl<'a> ActiveComputeState<'a> {
         // dataflow can export multiple collections and they all share one suspension token, so the
         // computation of a dataflow will only start once all its exported collections have been
         // scheduled.
-        match self.compute_state.suspended_collections.remove(&id) {
-            Some(suspension_token) => drop(suspension_token),
-            // No entry yet: `id` belongs to a dataflow that has not been built (e.g. an
-            // interactive query dataflow N3 deferred pending a dependency's publication). Remember
-            // the schedule so `handle_create_dataflow` can honor it once it builds `id`, instead of
-            // leaving the collection suspended forever with no further `Schedule` ever arriving.
-            //
-            // Only the interactive runtime defers builds in `pending_work`, so only there can a
-            // `Schedule` legitimately precede the build. On the maintenance/solo runtime a
-            // `Schedule` with no suspended-collections entry is a stray or duplicate command that
-            // was a silent no-op, and must stay one rather than leaving a permanent
-            // `scheduled_before_build` entry that could later mis-unsuspend a reused id.
-            None if self.compute_state.role == ComputeRuntimeRole::Interactive => {
-                self.compute_state.scheduled_before_build.insert(id);
-            }
-            None => {}
+        //
+        // Every dataflow builds immediately on `CreateDataflow`, inserting its
+        // `suspended_collections` entry before the `Schedule` that follows in arrival order can
+        // reach us. A `Schedule` with no entry is therefore a stray or duplicate command, a silent
+        // no-op.
+        if let Some(suspension_token) = self.compute_state.suspended_collections.remove(&id) {
+            drop(suspension_token);
         }
     }
 
@@ -966,26 +887,6 @@ impl<'a> ActiveComputeState<'a> {
                             .insert(work_id, PendingWork::Peek(peek));
                     }
                 },
-                PendingWork::Dataflow(mut deferred) => {
-                    // Each dirtied dependency that this dataflow was missing is now published. Drop
-                    // it from both the missing set and the id index, so a later event on an
-                    // already-satisfied dep (for example a seal advance) does not re-wake this item.
-                    for dep in &dirty {
-                        if deferred.missing.remove(dep) {
-                            self.compute_state.unindex_dep(dep, work_id);
-                        }
-                    }
-                    if deferred.missing.is_empty() {
-                        // All dependencies published: hand back to the single build entry point,
-                        // which re-probes (all present now) and builds via `build_compute_dataflow`.
-                        self.handle_create_dataflow(deferred.description);
-                    } else {
-                        // Still waiting on other dependencies; keep it pending under those.
-                        self.compute_state
-                            .pending_work
-                            .insert(work_id, PendingWork::Dataflow(deferred));
-                    }
-                }
             }
         }
     }
@@ -1005,7 +906,6 @@ impl<'a> ActiveComputeState<'a> {
                 .find_map(|(work_id, work)| match work {
                     PendingWork::Peek(peek) if peek.peek.uuid == uuid => Some(*work_id),
                     PendingWork::Peek(_) => None,
-                    PendingWork::Dataflow(_) => None,
                 });
         if let Some(work_id) = work_id {
             let Some(PendingWork::Peek(peek)) = self.compute_state.pending_work.remove(&work_id)
@@ -1015,42 +915,6 @@ impl<'a> ActiveComputeState<'a> {
             self.compute_state.clear_dep_index(work_id);
             self.send_peek_response(PendingPeek::IndexShared(peek), PeekResponse::Canceled);
         }
-    }
-
-    /// Cancels an interactive query dataflow still deferred in `pending_work` that exports `id`,
-    /// returning whether one was found and removed.
-    ///
-    /// A deferred dataflow lives only in `pending_work`/`dep_index` (indexed under its missing
-    /// dependencies, not its exports) and never in `collections`, so a drop for one of its export
-    /// ids must clear it from that pending state. Removing it from `dep_index` and
-    /// `scheduled_before_build` is what makes the cancellation stick: a later publication of its
-    /// dependency must not resurrect and build it, and a replayed `Schedule` must not linger.
-    fn cancel_deferred_dataflow(&mut self, id: GlobalId) -> bool {
-        let work_id =
-            self.compute_state
-                .pending_work
-                .iter()
-                .find_map(|(work_id, work)| match work {
-                    PendingWork::Dataflow(deferred)
-                        if deferred.description.export_ids().any(|export| export == id) =>
-                    {
-                        Some(*work_id)
-                    }
-                    _ => None,
-                });
-        let Some(work_id) = work_id else {
-            return false;
-        };
-        let Some(PendingWork::Dataflow(deferred)) =
-            self.compute_state.pending_work.remove(&work_id)
-        else {
-            return false;
-        };
-        self.compute_state.clear_dep_index(work_id);
-        for export in deferred.description.export_ids() {
-            self.compute_state.scheduled_before_build.remove(&export);
-        }
-        true
     }
 
     fn handle_allow_writes(&mut self, id: GlobalId) {
@@ -1068,30 +932,6 @@ impl<'a> ActiveComputeState<'a> {
 
     /// Drop the given collection.
     fn drop_collection(&mut self, id: GlobalId) {
-        // A drop can arrive for an interactive query dataflow still DEFERRED in `pending_work` (its
-        // hydrating dependency has not published, so it was never built and has no `collections`
-        // entry). This is the feature's target window: a read whose deferred dependency is cancelled
-        // or times out, or a dropped cluster, makes the controller release its holds and send
-        // `AllowCompaction{empty}` for the transient id. Cancel the deferred item from the pending
-        // state rather than falling through to the `collections.remove` below, which would panic on
-        // the missing entry and abort the whole process under two-runtime shared fate.
-        if self.cancel_deferred_dataflow(id) {
-            // The controller created this collection (initializing its per-replica frontiers to the
-            // as_of) and acquired read holds on its storage inputs, but the worker never built the
-            // dataflow, so it never reported any frontier. The controller releases those input read
-            // holds only once the collection's frontiers all reach the empty antichain. Report them
-            // empty here so it can clean the collection up. Skipping this strands the input read
-            // holds and pins the inputs' read frontiers (a stale `since` on any index/MV the
-            // deferred read imported).
-            let frontiers = FrontiersResponse {
-                write_frontier: Some(Antichain::new()),
-                input_frontier: Some(Antichain::new()),
-                output_frontier: Some(Antichain::new()),
-            };
-            self.send_compute_response(ComputeResponse::Frontiers(id, frontiers));
-            return;
-        }
-
         let collection = self
             .compute_state
             .collections
@@ -1614,32 +1454,15 @@ impl<'a> ActiveComputeState<'a> {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct WorkId(u64);
 
-/// An interactive-runtime item deferred until its registry dependencies resolve.
+/// An interactive-runtime item deferred until its registry dependency resolves.
 ///
-/// Both variants wait on the same two events (publication, seal) keyed by `GlobalId`, so they share
-/// the notification path and id index. Only their READY action differs.
+/// A fast-path index peek waits on two events (publication, seal) keyed by `GlobalId`, resolving
+/// through the notification path and id index. A query dataflow does not defer: it builds immediately
+/// and binds its imports through registry placeholders (see `handle_create_dataflow`), so only peeks
+/// live here.
 pub enum PendingWork {
     /// A fast-path index peek, served inline once its target index is published and sealed.
     Peek(SharedIndexPeek),
-    /// A query dataflow whose imported shared-index dependencies are not all published yet. Built
-    /// through the unchanged `build_compute_dataflow` path once every missing dependency publishes.
-    Dataflow(DeferredDataflow),
-}
-
-/// An interactive query dataflow deferred until all its imported shared-index dependencies are
-/// published.
-///
-/// A query dataflow on the interactive runtime imports its maintenance-index inputs from the
-/// sharing registry. Building it eagerly pins read holds and drains change streams, so it must wait
-/// until every input is published. This owns the full `DataflowDescription` so the build can run
-/// later, unchanged, through the single `handle_create_dataflow` entry point.
-pub struct DeferredDataflow {
-    /// The create-dataflow command, replayed into `handle_create_dataflow` once every dependency is
-    /// published.
-    pub description: DataflowDescription<RenderPlan, CollectionMetadata>,
-    /// Imported shared-index dependency ids not yet published. The dataflow is indexed in
-    /// `dep_index` under each and built when this set empties.
-    pub missing: BTreeSet<GlobalId>,
 }
 
 /// A peek against either an index or a Persist collection.
@@ -2421,9 +2244,7 @@ mod index_peek_tests {
         OptimizedMirRelationExpr, RowSetFinishing,
     };
     use mz_repr::optimize::OptimizerFeatures;
-    use mz_repr::{
-        Datum, IntoRowIterator, RelationDesc, ReprRelationType, RowIterator, SqlScalarType,
-    };
+    use mz_repr::{Datum, RelationDesc, ReprRelationType, SqlScalarType};
     use mz_row_spine::{RowRowBatcher, RowRowBuilder};
     use mz_timely_util::columnation::{ColumnationChunker, ColumnationStack};
     use timely::container::PushInto;
@@ -3279,58 +3100,6 @@ mod index_peek_tests {
         to_render_dataflow(lowered)
     }
 
-    /// A real query dataflow that imports two maintenance indexes and exports `out_index_id` = the
-    /// union of the two collections, arranged by `[0]`. A union lowers faithfully (no optimization),
-    /// and the two imports give a multi-dependency deferral case.
-    fn union_two_indexes_dataflow(
-        idx_a: GlobalId,
-        on_a: GlobalId,
-        idx_b: GlobalId,
-        on_b: GlobalId,
-        union_id: GlobalId,
-        out_index_id: GlobalId,
-        as_of: Timestamp,
-    ) -> DataflowDescription<RenderPlan, CollectionMetadata> {
-        let on_type = two_int64_type();
-        let mut mir = DataflowDescription::<OptimizedMirRelationExpr, ()>::new("test-union".into());
-        mir.import_index(
-            idx_a,
-            IndexDesc {
-                on_id: on_a,
-                key: vec![MirScalarExpr::column(0)],
-            },
-            on_type.clone(),
-            false,
-        );
-        mir.import_index(
-            idx_b,
-            IndexDesc {
-                on_id: on_b,
-                key: vec![MirScalarExpr::column(0)],
-            },
-            on_type.clone(),
-            false,
-        );
-        let union = MirRelationExpr::Union {
-            base: Box::new(MirRelationExpr::global_get(on_a, on_type.clone())),
-            inputs: vec![MirRelationExpr::global_get(on_b, on_type)],
-        };
-        let union_type = union.typ();
-        mir.insert_plan(union_id, OptimizedMirRelationExpr::declare_optimized(union));
-        mir.set_as_of(Antichain::from_elem(as_of));
-        mir.export_index(
-            out_index_id,
-            IndexDesc {
-                on_id: union_id,
-                key: vec![MirScalarExpr::column(0)],
-            },
-            union_type,
-        );
-        let lowered = LirRelationExpr::finalize_dataflow(mir, &OptimizerFeatures::default(), None)
-            .expect("lowering the union dataflow");
-        to_render_dataflow(lowered)
-    }
-
     /// A peek over a single-column `int64` result, for reading a `count(*)` query output.
     fn make_count_peek(id: GlobalId, timestamp: Timestamp) -> Peek {
         let result_desc = RelationDesc::builder()
@@ -3352,36 +3121,18 @@ mod index_peek_tests {
         }
     }
 
-    /// Extracts the owned rows from a `PeekResponse::Rows`, mirroring the headless driver's reader.
-    fn peek_rows(response: PeekResponse) -> Vec<Row> {
-        match response {
-            PeekResponse::Rows(collections) => {
-                let mut rows = Vec::new();
-                for collection in collections {
-                    let mut iter = collection.into_row_iter();
-                    while let Some(row_ref) = iter.next() {
-                        rows.push(row_ref.to_owned());
-                    }
-                }
-                rows
-            }
-            other => panic!("expected a rows response, got {other:?}"),
-        }
-    }
-
-    /// An interactive query dataflow that imports a not-yet-published maintenance index is DEFERRED
-    /// (not built), stored in `pending_work`/`dep_index`; it is built via the unchanged
-    /// `build_compute_dataflow` path only once the dependency publishes and `resolve_dirty` runs on
-    /// that event, never on a bare tick. After the build, a result peek on the transient output is
-    /// served from the registry with the correct reduced rows.
+    /// An interactive query dataflow that imports a not-yet-published maintenance index is built
+    /// IMMEDIATELY in arrival order. The import binds through a registry placeholder rather than
+    /// deferring, so the output collection appears in `collections` right away and nothing lands in
+    /// `pending_work`. With the placeholder unadopted, the import produces no data and the output
+    /// frontier holds at the minimum, so a result peek at the as_of stays pending.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)]
-    fn interactive_query_dataflow_defers_then_builds_and_result_peek_resolves() {
+    fn interactive_build_is_immediate() {
         let index_id = GlobalId::User(1);
         let on_id = GlobalId::User(2);
         let reduce_id = GlobalId::User(3);
         let out_index_id = GlobalId::User(4);
-        let kv = vec![(row(1), row(10)), (row(2), row(20))];
         let (_rt, persist_clients) = test_persist_clients();
 
         timely::execute_directly(move |worker| {
@@ -3394,7 +3145,8 @@ mod index_peek_tests {
             let dataflow =
                 reduce_count_dataflow(index_id, on_id, reduce_id, out_index_id, Timestamp::new(0));
 
-            // The build is deferred: the imported index is not yet published.
+            // The build is NOT deferred, even though the imported index is unpublished: the import
+            // binds through a placeholder that a maintenance publisher adopts later.
             {
                 let mut active = ActiveComputeState {
                     timely_worker: &mut *worker,
@@ -3402,75 +3154,41 @@ mod index_peek_tests {
                     response_tx: &mut response_tx,
                 };
                 active.handle_create_dataflow(dataflow);
-                assert_eq!(
-                    active.compute_state.pending_work.len(),
-                    1,
-                    "an unpublished dependency must defer the build"
-                );
-                assert!(
-                    matches!(
-                        active.compute_state.pending_work.values().next(),
-                        Some(PendingWork::Dataflow(_))
-                    ),
-                    "the deferred item is a dataflow"
-                );
-                assert!(
-                    active.compute_state.dep_index.contains_key(&index_id),
-                    "the deferred dataflow is indexed under its missing dependency"
-                );
-                assert!(
-                    !active.compute_state.collections.contains_key(&out_index_id),
-                    "no output collection is built while deferred"
-                );
-
-                // No-polling: a re-examination with an empty dirty set builds nothing.
-                active.resolve_dirty(BTreeSet::new());
-                assert_eq!(
-                    active.compute_state.pending_work.len(),
-                    1,
-                    "a bare tick (empty dirty set) must not build a deferred dataflow"
-                );
-            }
-
-            // Publish the imported index. `insert` marks `index_id` dirty for worker 0.
-            publish_index_current_worker(worker, &registry, index_id, kv.clone());
-
-            // The genuine wake: drain the dirty inbox and resolve, which builds the dataflow.
-            let dirty = registry.take_dirty(0);
-            assert!(
-                dirty.contains(&index_id),
-                "publication must have marked the dependency dirty"
-            );
-            {
-                let mut active = ActiveComputeState {
-                    timely_worker: &mut *worker,
-                    compute_state: &mut compute_state,
-                    response_tx: &mut response_tx,
-                };
-                active.resolve_dirty(dirty);
                 assert!(
                     active.compute_state.pending_work.is_empty(),
-                    "the built dataflow is removed from pending_work"
+                    "an immediately-built dataflow must not sit in pending_work"
                 );
                 assert!(
                     active.compute_state.dep_index.is_empty(),
-                    "the built dataflow clears its dep index"
+                    "an immediately-built dataflow indexes nothing under its dependency"
                 );
                 assert!(
                     active.compute_state.collections.contains_key(&out_index_id),
-                    "the query output collection is built"
+                    "the query output collection is built immediately"
                 );
+                // Binding the import through get-or-create created a placeholder slot for the
+                // unpublished dependency, so its handles now exist.
+                assert!(
+                    active
+                        .compute_state
+                        .sharing_registry
+                        .handles(&index_id, 0)
+                        .is_some(),
+                    "the interactive import created a placeholder slot for its dependency"
+                );
+
                 // Start the (suspended) dataflow, as a `Schedule` command would.
                 active.handle_schedule(out_index_id);
             }
 
-            // Step so the reduce runs, publishes its output into the registry, and seals.
+            // Step so the reduce runs over the empty, unadopted placeholder input. Its output frontier
+            // is held at the minimum, so it never seals past the peek time.
             for _ in 0..64 {
                 worker.step();
             }
 
-            // A result peek on the transient output, served from the registry (Part C publishes it
-            // unconditionally). Drive it to completion on the output's seal notification if needed.
+            // A result peek at the as_of cannot resolve while the output frontier is held at the
+            // minimum: it stays pending rather than returning wrong (empty) rows.
             {
                 let mut active = ActiveComputeState {
                     timely_worker: &mut *worker,
@@ -3478,342 +3196,30 @@ mod index_peek_tests {
                     response_tx: &mut response_tx,
                 };
                 active.handle_peek(make_count_peek(out_index_id, Timestamp::new(0)));
-            }
-            for _ in 0..8 {
-                if !compute_state.pending_work.is_empty() {
-                    for _ in 0..16 {
-                        worker.step();
-                    }
-                    let dirty = registry.take_dirty(0);
-                    let mut active = ActiveComputeState {
-                        timely_worker: &mut *worker,
-                        compute_state: &mut compute_state,
-                        response_tx: &mut response_tx,
-                    };
-                    active.resolve_dirty(dirty);
-                } else {
-                    break;
-                }
-            }
-
-            let response = match rx.try_recv() {
-                Ok((ComputeResponse::PeekResponse(_, response, _), _)) => response,
-                other => panic!("expected a peek response, got {other:?}"),
-            };
-            // `count(*)` over the two published rows is a single row `[2]`.
-            assert_eq!(
-                peek_rows(response),
-                vec![row(2)],
-                "the result peek returns the reduced count"
-            );
-        });
-    }
-
-    /// The compute controller always sends `Schedule` for a transient collection immediately after
-    /// `CreateDataflow`, without waiting for its inputs to become available (see
-    /// `Instance::maybe_schedule_collection`'s "Always schedule transient collections immediately").
-    /// So for a deferred interactive query dataflow, `Schedule` routinely arrives while the
-    /// dataflow is still sitting in `pending_work`, well before the build in `resolve_dirty` ever
-    /// inserts its `suspended_collections` entry. Unlike the test above (which schedules only after
-    /// the build resolves), this drives that realistic ordering and asserts the query still
-    /// completes: `handle_schedule` must remember the early schedule (`scheduled_before_build`) and
-    /// `handle_create_dataflow` must honor it when it finally builds the dataflow, or the
-    /// collection is left suspended forever with no further `Schedule` ever arriving.
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)]
-    fn schedule_before_deferred_build_still_starts_the_dataflow() {
-        let index_id = GlobalId::User(11);
-        let on_id = GlobalId::User(12);
-        let reduce_id = GlobalId::User(13);
-        let out_index_id = GlobalId::User(14);
-        let kv = vec![(row(1), row(10)), (row(2), row(20))];
-        let (_rt, persist_clients) = test_persist_clients();
-
-        timely::execute_directly(move |worker| {
-            let registry = ArrangementSharingRegistry::new();
-            registry.register_waker(0, worker.sync_activator_for([].into()));
-            let mut compute_state = interactive_compute_state(persist_clients, registry.clone());
-            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-            let mut response_tx = ResponseSender::for_test(tx);
-
-            let dataflow =
-                reduce_count_dataflow(index_id, on_id, reduce_id, out_index_id, Timestamp::new(0));
-
-            {
-                let mut active = ActiveComputeState {
-                    timely_worker: &mut *worker,
-                    compute_state: &mut compute_state,
-                    response_tx: &mut response_tx,
-                };
-                active.handle_create_dataflow(dataflow);
                 assert_eq!(
                     active.compute_state.pending_work.len(),
                     1,
-                    "an unpublished dependency must defer the build"
-                );
-                // The controller-realistic race: `Schedule` arrives before the deferred
-                // dependency publishes, i.e. before the dataflow is actually built.
-                active.handle_schedule(out_index_id);
-                assert!(
-                    active
-                        .compute_state
-                        .scheduled_before_build
-                        .contains(&out_index_id),
-                    "the early schedule must be remembered, not dropped"
+                    "the result peek stays pending while the output frontier is held at the minimum"
                 );
             }
-
-            publish_index_current_worker(worker, &registry, index_id, kv.clone());
-            let dirty = registry.take_dirty(0);
-            {
-                let mut active = ActiveComputeState {
-                    timely_worker: &mut *worker,
-                    compute_state: &mut compute_state,
-                    response_tx: &mut response_tx,
-                };
-                active.resolve_dirty(dirty);
-                assert!(
-                    active.compute_state.collections.contains_key(&out_index_id),
-                    "the query output collection is built"
-                );
-                assert!(
-                    !active
-                        .compute_state
-                        .scheduled_before_build
-                        .contains(&out_index_id),
-                    "the replayed schedule must be consumed at build time"
-                );
-                assert!(
-                    !active
-                        .compute_state
-                        .suspended_collections
-                        .contains_key(&out_index_id),
-                    "the replayed schedule must have unsuspended the dataflow immediately"
-                );
-            }
-
-            for _ in 0..64 {
-                worker.step();
-            }
-
-            {
-                let mut active = ActiveComputeState {
-                    timely_worker: &mut *worker,
-                    compute_state: &mut compute_state,
-                    response_tx: &mut response_tx,
-                };
-                active.handle_peek(make_count_peek(out_index_id, Timestamp::new(0)));
-            }
-            for _ in 0..8 {
-                if !compute_state.pending_work.is_empty() {
-                    for _ in 0..16 {
-                        worker.step();
-                    }
-                    let dirty = registry.take_dirty(0);
-                    let mut active = ActiveComputeState {
-                        timely_worker: &mut *worker,
-                        compute_state: &mut compute_state,
-                        response_tx: &mut response_tx,
-                    };
-                    active.resolve_dirty(dirty);
-                } else {
-                    break;
-                }
-            }
-
-            let response = match rx.try_recv() {
-                Ok((ComputeResponse::PeekResponse(_, response, _), _)) => response,
-                other => panic!(
-                    "expected a peek response, got {other:?}; the dataflow that raced with \
-                     `Schedule` never started computing"
-                ),
-            };
-            assert_eq!(
-                peek_rows(response),
-                vec![row(2)],
-                "the query dataflow ran despite the early `Schedule` and returned the count"
-            );
-        });
-    }
-
-    /// A query dataflow importing two maintenance indexes is built only after BOTH publish.
-    /// Publishing the first leaves it deferred (still missing the second); publishing the second
-    /// builds it. Each build step is driven by the publication event, never a bare tick.
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)]
-    fn interactive_query_dataflow_multi_dep_builds_after_all_published() {
-        let idx_a = GlobalId::User(1);
-        let on_a = GlobalId::User(2);
-        let idx_b = GlobalId::User(3);
-        let on_b = GlobalId::User(4);
-        let union_id = GlobalId::User(5);
-        let out_index_id = GlobalId::User(6);
-        let (_rt, persist_clients) = test_persist_clients();
-
-        timely::execute_directly(move |worker| {
-            let registry = ArrangementSharingRegistry::new();
-            registry.register_waker(0, worker.sync_activator_for([].into()));
-            let mut compute_state = interactive_compute_state(persist_clients, registry.clone());
-            let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-            let mut response_tx = ResponseSender::for_test(tx);
-
-            let dataflow = union_two_indexes_dataflow(
-                idx_a,
-                on_a,
-                idx_b,
-                on_b,
-                union_id,
-                out_index_id,
-                Timestamp::new(0),
+            assert!(
+                rx.try_recv().is_err(),
+                "no result is produced while the placeholder input is unadopted"
             );
 
-            // Neither dependency is published: deferred, indexed under both.
+            // Tear down the built dataflow so the worker can shut down. Its import over the never
+            // adopted placeholder holds a frontier at the minimum forever, so without dropping it the
+            // dataflow never completes and `execute_directly` would wedge on teardown.
             {
                 let mut active = ActiveComputeState {
                     timely_worker: &mut *worker,
                     compute_state: &mut compute_state,
                     response_tx: &mut response_tx,
                 };
-                active.handle_create_dataflow(dataflow);
-                assert!(
-                    active.compute_state.dep_index.contains_key(&idx_a)
-                        && active.compute_state.dep_index.contains_key(&idx_b),
-                    "the deferred dataflow is indexed under both missing dependencies"
-                );
-            }
-
-            // Publish the first dependency and resolve: still deferred, now waiting only on `idx_b`.
-            publish_index_current_worker(worker, &registry, idx_a, vec![(row(1), row(10))]);
-            let dirty = registry.take_dirty(0);
-            {
-                let mut active = ActiveComputeState {
-                    timely_worker: &mut *worker,
-                    compute_state: &mut compute_state,
-                    response_tx: &mut response_tx,
-                };
-                active.resolve_dirty(dirty);
-                assert_eq!(
-                    active.compute_state.pending_work.len(),
-                    1,
-                    "one satisfied dependency must NOT build a two-dependency dataflow"
-                );
-                assert!(
-                    !active.compute_state.dep_index.contains_key(&idx_a),
-                    "the satisfied dependency is unindexed"
-                );
-                assert!(
-                    active.compute_state.dep_index.contains_key(&idx_b),
-                    "the still-missing dependency keeps the item indexed"
-                );
-                assert!(
-                    !active.compute_state.collections.contains_key(&out_index_id),
-                    "nothing is built until both dependencies publish"
-                );
-            }
-
-            // Publish the second dependency and resolve: now built.
-            publish_index_current_worker(worker, &registry, idx_b, vec![(row(2), row(20))]);
-            let dirty = registry.take_dirty(0);
-            {
-                let mut active = ActiveComputeState {
-                    timely_worker: &mut *worker,
-                    compute_state: &mut compute_state,
-                    response_tx: &mut response_tx,
-                };
-                active.resolve_dirty(dirty);
-                assert!(
-                    active.compute_state.pending_work.is_empty(),
-                    "both dependencies published: the dataflow is built"
-                );
-                assert!(
-                    active.compute_state.dep_index.is_empty(),
-                    "the built dataflow clears its dep index"
-                );
-                assert!(
-                    active.compute_state.collections.contains_key(&out_index_id),
-                    "the union output collection is built"
-                );
-            }
-        });
-    }
-
-    /// A drop signal (`AllowCompaction` with an empty frontier) can arrive for an interactive query
-    /// dataflow while it is still DEFERRED in `pending_work` awaiting its dependency's publication.
-    /// This is the feature's target window: a read whose hydrating dependency is deferred gets
-    /// cancelled or hits `statement_timeout`, or the cluster is dropped, so the controller releases
-    /// its holds and sends `AllowCompaction{empty}` for the transient id. The deferred dataflow
-    /// lives only in `pending_work`/`dep_index`, never in `collections`, so the drop must cancel it
-    /// cleanly: no panic, gone from the pending state, and it must NOT build later when its
-    /// dependency finally publishes.
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)]
-    fn drop_of_deferred_query_dataflow_cancels_without_panic() {
-        let index_id = GlobalId::User(21);
-        let on_id = GlobalId::User(22);
-        let reduce_id = GlobalId::User(23);
-        let out_index_id = GlobalId::User(24);
-        let kv = vec![(row(1), row(10)), (row(2), row(20))];
-        let (_rt, persist_clients) = test_persist_clients();
-
-        timely::execute_directly(move |worker| {
-            let registry = ArrangementSharingRegistry::new();
-            registry.register_waker(0, worker.sync_activator_for([].into()));
-            let mut compute_state = interactive_compute_state(persist_clients, registry.clone());
-            let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-            let mut response_tx = ResponseSender::for_test(tx);
-
-            let dataflow =
-                reduce_count_dataflow(index_id, on_id, reduce_id, out_index_id, Timestamp::new(0));
-
-            {
-                let mut active = ActiveComputeState {
-                    timely_worker: &mut *worker,
-                    compute_state: &mut compute_state,
-                    response_tx: &mut response_tx,
-                };
-                active.handle_create_dataflow(dataflow);
-                assert_eq!(
-                    active.compute_state.pending_work.len(),
-                    1,
-                    "an unpublished dependency must defer the build"
-                );
-                assert!(
-                    active.compute_state.dep_index.contains_key(&index_id),
-                    "the deferred dataflow is indexed under its missing dependency"
-                );
-
-                // The drop signal for the still-deferred transient id. Before the fix this panicked
-                // in `drop_collection` via `collections.remove(...).expect(...)`.
                 active.handle_allow_compaction(out_index_id, Antichain::new());
-                assert!(
-                    active.compute_state.pending_work.is_empty(),
-                    "the dropped deferred dataflow is removed from pending_work"
-                );
-                assert!(
-                    active.compute_state.dep_index.is_empty(),
-                    "the dropped deferred dataflow clears its dep index"
-                );
             }
-
-            // The dependency now publishes and `resolve_dirty` runs. The cancelled dataflow must
-            // NOT build: it left no pending state to resurrect it.
-            publish_index_current_worker(worker, &registry, index_id, kv.clone());
-            let dirty = registry.take_dirty(0);
-            {
-                let mut active = ActiveComputeState {
-                    timely_worker: &mut *worker,
-                    compute_state: &mut compute_state,
-                    response_tx: &mut response_tx,
-                };
-                active.resolve_dirty(dirty);
-                assert!(
-                    active.compute_state.pending_work.is_empty(),
-                    "a cancelled deferred dataflow does not reappear on publication"
-                );
-                assert!(
-                    !active.compute_state.collections.contains_key(&out_index_id),
-                    "a cancelled deferred dataflow must NOT build when its dependency publishes"
-                );
+            for _ in 0..16 {
+                worker.step();
             }
         });
     }

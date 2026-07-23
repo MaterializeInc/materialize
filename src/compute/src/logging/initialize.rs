@@ -38,7 +38,7 @@ use crate::logging::{BatchLogger, EventQueue, SharedLoggingState};
 use crate::render::errors::DataflowErrorSer;
 use crate::server::ComputeRuntimeRole;
 use crate::shared_trace::PublishArrangement;
-use crate::sharing::{ArrangementSharingRegistry, SharedIndexArrangement};
+use crate::sharing::ArrangementSharingRegistry;
 use crate::typedefs::{ErrAgent, ErrBatcher, ErrBuilder, RowRowAgent};
 
 /// Initialize logging dataflows.
@@ -424,15 +424,15 @@ fn publish_logging_index(
         }
     });
 
-    registry.insert(
-        id,
-        scope.index(),
-        scope.peers(),
-        SharedIndexArrangement {
-            oks: PublishArrangement::publish(&oks),
-            errs: PublishArrangement::publish(&errs),
-        },
-    );
+    // Adopt the registry's placeholder slot for `id` rather than publishing fresh and inserting:
+    // whichever side (this maintenance publish, or an interactive import ahead of it) touches `id`
+    // first creates the slot, so this fills it in place instead of overwriting a placeholder a reader
+    // has already imported. `get_or_create_placeholder` does not notify on create, so notify
+    // explicitly once both halves are adopted, mirroring the notification `insert` used to fire.
+    let slot = registry.get_or_create_placeholder(id, worker_index, scope.peers());
+    PublishArrangement::adopt(&oks, &slot.oks);
+    PublishArrangement::adopt(&errs, &slot.errs);
+    registry.notify(id, worker_index);
 }
 
 #[cfg(test)]

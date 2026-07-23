@@ -843,10 +843,6 @@ impl<'w> Worker<'w> {
                             logger.log(&PendingPeek::IndexShared(peek).as_log_event(false));
                         }
                     }
-                    PendingWork::Dataflow(_) => {
-                        // A deferred, never-built query dataflow. Dropping it releases the owned
-                        // command; there is nothing rendered to uninstall.
-                    }
                 }
             }
 

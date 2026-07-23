@@ -263,8 +263,8 @@ impl ArrangementSharingRegistry {
     /// [`Self::get_or_create_placeholder`]. A [`SharedTraceHandle`] holds an `Arc<SharedTrace>` one
     /// level down and does NOT contribute, so a reader MUST keep its `Arc<SharedIndexArrangement>`
     /// alive for as long as it imports. Then strong count 1 (the map alone) means no live reader.
-    /// NOTE: the reader import in `crate::render::import_shared_index` does not yet do this, see the
-    /// NOTE at its `handles` call.
+    /// The reader import in `crate::render::import_shared_index` keeps its slot Arc alive in the
+    /// dataflow's token set for exactly this reason.
     ///
     /// # Why this cannot race adoption
     ///
