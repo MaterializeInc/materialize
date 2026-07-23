@@ -41,6 +41,7 @@ use timely::progress::Antichain;
 use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
+use crate::sharing::SharedOksEnter;
 use crate::typedefs::{RowRowAgent, RowRowEnter};
 
 impl<'scope, T: RenderTimestamp> Context<'scope, T> {
@@ -400,6 +401,32 @@ where
             };
             (oks, errs2)
         }
+        // A maintenance index the interactive runtime imported from the sharing registry. Same
+        // shape as `Trace`, only the trace type differs (`SharedOksEnter`).
+        Some(ArrangementFlavor::SharedTrace(_, oks, errs)) => {
+            let (oks, errs2) = if source_precedes_lookup {
+                build_halfjoin_trace::<_, SharedOksEnter<_>, _>(
+                    updates,
+                    oks,
+                    prev_key,
+                    prev_thinning,
+                    |t1, t2| t1.le(t2),
+                    closure,
+                    config_set,
+                )
+            } else {
+                build_halfjoin_trace::<_, SharedOksEnter<_>, _>(
+                    updates,
+                    oks,
+                    prev_key,
+                    prev_thinning,
+                    |t1, t2| t1.lt(t2),
+                    closure,
+                    config_set,
+                )
+            };
+            (oks, errs2.concat(errs.as_collection(|k, _v| k.clone())))
+        }
         None => panic!("Arrangement promised by the planner is absent!"),
     }
 }
@@ -742,6 +769,17 @@ where
                 source_relation,
                 initial_closure,
             )
+        }
+        // A maintenance index the interactive runtime imported from the sharing registry. Same
+        // shape as `Trace`, only the trace type differs (`SharedOksEnter`).
+        Some(ArrangementFlavor::SharedTrace(_, oks, errs)) => {
+            let (oks, errs2) = build_update_stream_trace::<_, SharedOksEnter<_>>(
+                oks,
+                as_of,
+                source_relation,
+                initial_closure,
+            );
+            (oks, errs2.concat(errs.as_collection(|k, _v| k.clone())))
         }
         None => panic!("Arrangement promised by the planner is absent!"),
     }

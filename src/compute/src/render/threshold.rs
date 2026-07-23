@@ -24,6 +24,7 @@ use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
+use crate::sharing::SharedOksEnter;
 use crate::typedefs::{ErrBatcher, ErrBuilder, RowRowAgent, RowRowEnter, RowRowSpine};
 
 /// Thresholds a dataflow-local ok arrangement, keeping rows with a positive count.
@@ -68,6 +69,27 @@ fn threshold_trace<'scope, T: RenderTimestamp>(
     arrangement.mz_reduce_abelian::<_, RowRowBuilder<T, Diff>, RowRowSpine<T, Diff>, _>(name, logic)
 }
 
+/// Thresholds a shared-trace ok arrangement, keeping rows with a positive count.
+///
+/// Concrete-spine counterpart to [`threshold_trace`] for the shared-trace input the interactive
+/// runtime imports. See [`threshold_local`] for why the input trace type must be concrete here.
+fn threshold_shared_trace<'scope, T: RenderTimestamp>(
+    arrangement: Arranged<'scope, SharedOksEnter<T>>,
+    name: &str,
+) -> Arranged<'scope, RowRowAgent<T, Diff>> {
+    let logic = move |_key: DatumSeq<'_>, s: &[(DatumSeq<'_>, Diff)], t: &mut Vec<(Row, Diff)>| {
+        for (record, count) in s.iter() {
+            if count.is_positive() {
+                t.push((
+                    <BatchCursor<RowRowSpine<T, Diff>> as Cursor>::owned_val(*record),
+                    *count,
+                ));
+            }
+        }
+    };
+    arrangement.mz_reduce_abelian::<_, RowRowBuilder<T, Diff>, RowRowSpine<T, Diff>, _>(name, logic)
+}
+
 /// Build a dataflow to threshold the input data.
 ///
 /// This implementation maintains rows in the output, i.e. all rows that have a count greater than
@@ -86,6 +108,15 @@ pub fn build_threshold_basic<'scope, T: RenderTimestamp>(
         }
         ArrangementFlavor::Trace(_, oks, errs) => {
             let oks = threshold_trace(oks, "Threshold trace");
+            let errs: KeyCollection<_, _, _> = errs.as_collection(|k, _| k.clone()).into();
+            let errs = errs
+                .mz_arrange::<ColumnationChunker<_>, ErrBatcher<_, _>, ErrBuilder<_, _>, _>(
+                    "Arrange threshold basic err",
+                );
+            CollectionBundle::from_expressions(key, ArrangementFlavor::Local(oks, errs))
+        }
+        ArrangementFlavor::SharedTrace(_, oks, errs) => {
+            let oks = threshold_shared_trace(oks, "Threshold shared trace");
             let errs: KeyCollection<_, _, _> = errs.as_collection(|k, _| k.clone()).into();
             let errs = errs
                 .mz_arrange::<ColumnationChunker<_>, ErrBatcher<_, _>, ErrBuilder<_, _>, _>(
