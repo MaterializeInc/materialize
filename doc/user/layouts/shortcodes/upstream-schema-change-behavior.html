@@ -46,4 +46,5 @@ table in Materialize to resume:
 - Renaming a table or moving it to a different schema
 - Changing a column's data type (except changing it to `text`)
 {{ if $is_postgres }}- Setting a table's replica identity to anything other than `FULL` (`ALTER TABLE ... REPLICA IDENTITY`)
-{{ end }}- Truncating a table (`TRUNCATE`)
+{{ end }}{{ if ne $connector "sql-server" }}- Truncating a table (`TRUNCATE`)
+{{ end }}
