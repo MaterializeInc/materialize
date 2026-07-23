@@ -33,8 +33,7 @@ drop](/ingest-data/{{ $connector }}/source-versioning/#handle-upstream-column-dr
 Materialize ignores foreign key and `CHECK`{{ if $is_postgres }} and `EXCLUSION`{{ end }}
 constraints today, so you can change them with no impact to Materialize. Adding
 a new `UNIQUE` or `NOT NULL` constraint also has no impact. Dropping a `UNIQUE`
-or `NOT NULL` constraint isn't supported today. Support for ignoring constraints
-during ingestion is planned, which will let you handle a constraint drop safely.
+or `NOT NULL` constraint isn't supported today.
 
 ### Operations that require recreating the table
 
