@@ -361,7 +361,7 @@ pub trait ClusterTransformer: NameTransformer {
 impl<'a> ClusterTransformer for StagingTransformer<'a> {
     fn transform_cluster(&self, cluster_name: &Ident) -> Ident {
         // Transform: quickstart → quickstart_staging
-        let staging_name = format!("{}{}", cluster_name, self.staging_suffix);
+        let staging_name = format!("{}{}", cluster_name.as_str(), self.staging_suffix);
         Ident::new(&staging_name).expect("valid cluster identifier")
     }
 
