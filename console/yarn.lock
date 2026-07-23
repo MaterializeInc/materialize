@@ -6634,12 +6634,19 @@ __metadata:
   languageName: node
   linkType: hard
 
-"copy-to-clipboard@npm:3.3.3, copy-to-clipboard@npm:^3.3.3":
+"copy-to-clipboard@npm:3.3.3":
   version: 3.3.3
   resolution: "copy-to-clipboard@npm:3.3.3"
   dependencies:
     toggle-selection: "npm:^1.0.6"
   checksum: 10c0/3ebf5e8ee00601f8c440b83ec08d838e8eabb068c1fae94a9cda6b42f288f7e1b552f3463635f419af44bf7675afc8d0390d30876cf5c2d5d35f86d9c56a3e5f
+  languageName: node
+  linkType: hard
+
+"copy-to-clipboard@npm:^4.0.2":
+  version: 4.0.2
+  resolution: "copy-to-clipboard@npm:4.0.2"
+  checksum: 10c0/0a007c86cc5f235653ddd98ef9901fa8d52b40bd0aeadce4ecc92d6aad16f89136a526f2ae7050421de5b02a374d803de88a40cde1298915093d1b62aeadc9e5
   languageName: node
   linkType: hard
 
@@ -10992,7 +10999,7 @@ __metadata:
     buffer: "npm:^6.0.3"
     cacheable-lookup: "npm:7.0.0"
     codemirror: "npm:^6.0.1"
-    copy-to-clipboard: "npm:^3.3.3"
+    copy-to-clipboard: "npm:^4.0.2"
     core-js: "npm:^3.38.1"
     d3: "npm:^7.9.0"
     d3-graphviz: "npm:^5.6.0"
