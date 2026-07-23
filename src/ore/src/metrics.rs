@@ -303,7 +303,9 @@ impl MetricsRegistry {
     /// If a collector with the same descriptor id is already registered this soft-panics and
     /// returns a handle that owns no registration. A duplicate registration is a logic error, but
     /// panicking here would run on a worker thread and could crash the process, so it degrades to
-    /// missing series rather than taking down the whole scrape.
+    /// missing series rather than taking down the whole scrape. The contract is that a caller
+    /// replacing a collector must drop the old handle before registering the new one: doing so
+    /// unregisters the old descriptor id first, so the re-registration succeeds cleanly.
     pub fn register_collector_with_dropper<C>(&self, collector: C) -> Box<dyn Any + Send + Sync>
     where
         C: 'static + prometheus::core::Collector + Clone + Send + Sync,
@@ -1178,6 +1180,31 @@ mod tests {
         assert_eq!(registry.gather().len(), before + 1);
 
         // Dropping the handle unregisters the collector, so its series stops being scraped.
+        drop(handle);
+        assert_eq!(registry.gather().len(), before);
+    }
+
+    #[crate::test]
+    fn register_drop_then_reregister() {
+        use prometheus::IntGauge;
+
+        // Two collectors sharing a descriptor id: re-registering the second while the first is
+        // still registered would collide. This locks in the contract that dropping the old handle
+        // first clears the id so the re-registration succeeds cleanly, the ordering a caller
+        // replacing a collector (e.g. a metric sink re-rendered on reconciliation) must uphold.
+        let registry = MetricsRegistry::new();
+        let old = IntGauge::new("mz_test_reregister", "help").unwrap();
+        let new = IntGauge::new("mz_test_reregister", "help").unwrap();
+        let before = registry.gather().len();
+
+        let handle = registry.register_collector_with_dropper(old);
+        assert_eq!(registry.gather().len(), before + 1);
+
+        // Drop old before registering new, matching the required ordering.
+        drop(handle);
+        let handle = registry.register_collector_with_dropper(new);
+        assert_eq!(registry.gather().len(), before + 1);
+
         drop(handle);
         assert_eq!(registry.gather().len(), before);
     }

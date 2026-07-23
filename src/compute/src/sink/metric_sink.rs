@@ -67,6 +67,10 @@ impl<'scope> SinkRender<'scope> for MetricSinkConnection {
         // The registry is process-local, so every row must land on the same worker or the
         // series would be split across processes. Which worker is chosen doesn't matter, only
         // that all workers agree, so hash the sink's own id.
+        //
+        // Routing by metric key instead would spread the fold across workers, but each process
+        // has its own registry, so one metric family could then be split across processes' scrape
+        // outputs. Partition-by-key is a possible future refinement.
         let active_worker_id = usize::cast_from(sink_id.hashed()) % scope.peers();
 
         let ok_stream = sinked_collection
@@ -79,10 +83,14 @@ impl<'scope> SinkRender<'scope> for MetricSinkConnection {
         // Only the active worker registers a collector. The `MetricsRegistry` is shared by every
         // worker in the process.
         //
-        // NOTE: on replica reconciliation a sink dataflow may be re-rendered while the previous
-        // instance's collector is still registered, colliding on its `Desc` id. Registration then
-        // soft-panics and this instance publishes no series until the old handle drops. The per-sink
-        // installer that drives reconciliation must drop the old handle before re-rendering.
+        // NOTE: re-rendering this sink while the previous instance's collector is still registered
+        // would collide on its `Desc` id, and registration would then soft-panic and publish no
+        // series until the old handle drops. This does not happen because the old handle always
+        // drops first: it lives in the collection's `sink_token`, which reconciliation nulls during
+        // worker-local cleanup before applying the replacement, and a normal drop tears the
+        // dataflow down before any re-create. A retained (compatible) sink is never re-rendered.
+        // So registration collides only on a genuine logic error, where the soft-panic is
+        // the intended backstop.
         let drop_handle = (worker_id == active_worker_id).then(|| {
             let collector = SinkCollector::new(sink_id, Arc::clone(&state));
             compute_state
