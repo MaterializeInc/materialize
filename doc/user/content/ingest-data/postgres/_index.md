@@ -52,3 +52,7 @@ To help you get started, the following integration guides are available:
 
 {{% include-from-yaml data="postgres_source_details"
 name="postgres-considerations" %}}
+
+## Upstream schema changes and destructive operations
+
+{{% upstream-schema-change-behavior connector="postgres" %}}
