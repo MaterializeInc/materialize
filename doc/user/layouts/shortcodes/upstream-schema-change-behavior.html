@@ -35,6 +35,26 @@ constraints today, so you can change them with no impact to Materialize. Adding
 a new `UNIQUE` or `NOT NULL` constraint also has no impact. Dropping a `UNIQUE`
 or `NOT NULL` constraint isn't supported today.
 
+### Changing a column's data type
+
+{{ if $is_postgres -}}
+Changing a column's data type puts the affected table into an error state,
+unless you change it to `text`. Ingestion for that table stops, and you must
+drop and recreate the affected table in Materialize to resume.
+{{ else if eq $connector "mysql" -}}
+Changing a column's data type to one that maps to a different Materialize type
+puts the affected table into an error state. Ingestion for that table stops,
+and you must drop and recreate the affected table in Materialize to resume.
+
+Changes within the same Materialize type do not error. For example, `tinyint`
+↔ `smallint`, the `text`/`tinytext`/`mediumtext`/`longtext` family, and
+adjusting `bit(n)` precision are all safe. Appending values to an existing enum
+is also safe; removing enum values errors.
+{{ else if eq $connector "sql-server" -}}
+Any `ALTER COLUMN` puts the affected table into an error state. Ingestion for
+that table stops, and you must drop and recreate the affected table in
+Materialize to resume.
+{{ end }}
 ### Operations that require recreating the table
 
 The following upstream operations put the affected table into an error state.
@@ -44,9 +64,6 @@ table in Materialize to resume:
 - Dropping a table (`DROP TABLE`){{ if $is_postgres }}, removing it from the publication (`ALTER PUBLICATION ... DROP TABLE`), or dropping the publication (`DROP PUBLICATION`){{ end }}
 - Renaming a column
 - Renaming a table or moving it to a different schema
-{{ if $is_postgres }}- Changing a column's data type, except changing it to `text`
-{{ else if eq $connector "mysql" }}- Changing a column's data type to one that maps to a different Materialize type (changes within the same Materialize type — for example `tinyint` ↔ `smallint`, the `text`/`tinytext`/`mediumtext`/`longtext` family, or adjusting `bit(n)` precision — do not error; appending values to an existing enum is safe, but removing enum values errors)
-{{ else if eq $connector "sql-server" }}- Changing a column's data type (any `ALTER COLUMN`)
-{{ end }}{{ if $is_postgres }}- Setting a table's replica identity to anything other than `FULL` (`ALTER TABLE ... REPLICA IDENTITY`)
+{{ if $is_postgres }}- Setting a table's replica identity to anything other than `FULL` (`ALTER TABLE ... REPLICA IDENTITY`)
 {{ end }}{{ if ne $connector "sql-server" }}- Truncating a table (`TRUNCATE`)
 {{ end }}
