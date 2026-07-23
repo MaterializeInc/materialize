@@ -119,6 +119,78 @@ SHOW extra_float_digits
 ----
 3
 
+# Test that extra_float_digits values of zero or less limit the number of
+# significant digits in text-encoded floats, as in PostgreSQL. The simple query
+# protocol is used because it returns results in the text format, while this
+# test runner's regular query directives use the binary format.
+
+simple conn=efd
+SELECT 0.1::float8 + 0.2::float8, 123.456789::float4
+----
+0.30000000000000004,123.45679
+COMPLETE 1
+
+simple conn=efd
+SET extra_float_digits = 0;
+SELECT 0.1::float8 + 0.2::float8, 123.456789::float4;
+----
+COMPLETE 0
+0.3,123.457
+COMPLETE 1
+
+simple conn=efd
+SELECT 1e15::float8, 0.00001::float8, 1.5::float8
+----
+1e+15,1e-05,1.5
+COMPLETE 1
+
+simple conn=efd
+SELECT 'NaN'::float8, 'Infinity'::float8, '-Infinity'::float8
+----
+NaN,Infinity,-Infinity
+COMPLETE 1
+
+simple conn=efd
+SELECT ARRAY[0.1::float8 + 0.2], ROW(0.1::float8 + 0.2)
+----
+{0.3},(0.3)
+COMPLETE 1
+
+# Unlike PostgreSQL, an explicit cast to text is evaluated in the dataflow
+# layer and is unaffected: query results must not depend on session variables.
+simple conn=efd
+SELECT (0.1::float8 + 0.2::float8)::text
+----
+0.30000000000000004
+COMPLETE 1
+
+simple conn=efd
+SET extra_float_digits = -3;
+SELECT 1.23456789012345::float8, 123.456789::float4;
+----
+COMPLETE 0
+1.23456789012,123
+COMPLETE 1
+
+# Values below PostgreSQL's minimum of -15 are accepted and clamp to one
+# significant digit rather than erroring.
+simple conn=efd
+SET extra_float_digits = -100;
+SELECT 0.1::float8 + 0.2::float8, 123.456::float8;
+----
+COMPLETE 0
+0.3,1e+02
+COMPLETE 1
+
+# Positive values select the shortest round-trippable encoding.
+simple conn=efd
+SET extra_float_digits = 1;
+SELECT 0.1::float8 + 0.2::float8;
+----
+COMPLETE 0
+0.30000000000000004
+COMPLETE 1
+
 # Test that resetting a read-only variable succeeds.
 
 statement ok

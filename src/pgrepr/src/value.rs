@@ -16,6 +16,7 @@ use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use dec::OrderedDecimal;
 use itertools::Itertools;
 use mz_ore::cast::ReinterpretCast;
+use mz_ore::fmt::FormatBuffer;
 use mz_pgrepr_consts::oid::TYPE_INT2_OID;
 use mz_pgwire_common::Format;
 use mz_repr::adt::array::ArrayDimension;
@@ -349,10 +350,19 @@ impl Value {
     }
 
     /// Serializes this value to `buf` in the specified `format`.
-    pub fn encode(&self, ty: &Type, format: Format, buf: &mut BytesMut) -> Result<(), io::Error> {
+    ///
+    /// `extra_float_digits` adjusts the text encoding of `float4` and `float8`
+    /// values as in PostgreSQL. It has no effect on the binary encoding.
+    pub fn encode(
+        &self,
+        ty: &Type,
+        format: Format,
+        buf: &mut BytesMut,
+        extra_float_digits: i32,
+    ) -> Result<(), io::Error> {
         match format {
             Format::Text => {
-                self.encode_text(buf);
+                self.encode_text_with_float_digits(buf, extra_float_digits);
                 Ok(())
             }
             Format::Binary => self.encode_binary(ty, buf),
@@ -360,23 +370,40 @@ impl Value {
     }
 
     /// Serializes this value to `buf` using the [text encoding
-    /// format](Format::Text).
+    /// format](Format::Text) and the shortest round-trippable float encoding.
     pub fn encode_text(&self, buf: &mut BytesMut) -> Nestable {
+        // Any positive `extra_float_digits` selects the shortest encoding.
+        self.encode_text_with_float_digits(buf, 1)
+    }
+
+    /// Like [`Value::encode_text`], but adjusts the encoding of `float4` and
+    /// `float8` values (including those nested in containers) per PostgreSQL's
+    /// `extra_float_digits` parameter: positive values select the shortest
+    /// round-trippable encoding, while zero and negative values select
+    /// `FLT_DIG` or `DBL_DIG` plus `extra_float_digits` significant digits.
+    pub fn encode_text_with_float_digits(
+        &self,
+        buf: &mut BytesMut,
+        extra_float_digits: i32,
+    ) -> Nestable {
+        let nested = |elem: &Value, buf: &mut BytesMut| {
+            elem.encode_text_with_float_digits(buf, extra_float_digits)
+        };
         match self {
             Value::Array { dims, elements } => {
                 strconv::format_array(buf, dims, elements, |buf, elem| match elem {
                     None => Ok::<_, ()>(buf.write_null()),
-                    Some(elem) => Ok(elem.encode_text(buf.nonnull_buffer())),
+                    Some(elem) => Ok(nested(elem, buf.nonnull_buffer())),
                 })
                 .expect("provided closure never fails")
             }
             Value::Int2Vector { elements } => {
                 strconv::format_legacy_vector(buf, elements, |buf, elem| {
-                    Ok::<_, ()>(
+                    Ok::<_, ()>(nested(
                         elem.as_ref()
-                            .expect("Int2Vector does not support NULL values")
-                            .encode_text(buf.nonnull_buffer()),
-                    )
+                            .expect("Int2Vector does not support NULL values"),
+                        buf.nonnull_buffer(),
+                    ))
                 })
                 .expect("provided closure never fails")
             }
@@ -394,23 +421,27 @@ impl Value {
             Value::UInt4(u) => strconv::format_uint32(buf, u.0),
             Value::UInt8(u) => strconv::format_uint64(buf, u.0),
             Value::Interval(iv) => strconv::format_interval(buf, iv.0),
-            Value::Float4(f) => strconv::format_float32(buf, *f),
-            Value::Float8(f) => strconv::format_float64(buf, *f),
+            Value::Float4(f) if extra_float_digits > 0 => strconv::format_float32(buf, *f),
+            Value::Float4(f) => {
+                format_float_limited(buf, f64::from(*f), FLT_DIG + extra_float_digits)
+            }
+            Value::Float8(f) if extra_float_digits > 0 => strconv::format_float64(buf, *f),
+            Value::Float8(f) => format_float_limited(buf, *f, DBL_DIG + extra_float_digits),
             Value::Jsonb(js) => strconv::format_jsonb(buf, js.0.as_ref()),
             Value::List(elems) => strconv::format_list(buf, elems, |buf, elem| match elem {
                 None => Ok::<_, ()>(buf.write_null()),
-                Some(elem) => Ok(elem.encode_text(buf.nonnull_buffer())),
+                Some(elem) => Ok(nested(elem, buf.nonnull_buffer())),
             })
             .expect("provided closure never fails"),
             Value::Map(elems) => strconv::format_map(buf, elems, |buf, value| match value {
                 None => Ok::<_, ()>(buf.write_null()),
-                Some(elem) => Ok(elem.encode_text(buf.nonnull_buffer())),
+                Some(elem) => Ok(nested(elem, buf.nonnull_buffer())),
             })
             .expect("provided closure never fails"),
             Value::Oid(oid) => strconv::format_uint32(buf, *oid),
             Value::Record(elems) => strconv::format_record(buf, elems, |buf, elem| match elem {
                 None => Ok::<_, ()>(buf.write_null()),
-                Some(elem) => Ok(elem.encode_text(buf.nonnull_buffer())),
+                Some(elem) => Ok(nested(elem, buf.nonnull_buffer())),
             })
             .expect("provided closure never fails"),
             Value::Text(s) | Value::VarChar(s) | Value::BpChar(s) | Value::Name(s) => {
@@ -423,7 +454,7 @@ impl Value {
             Value::Numeric(d) => strconv::format_numeric(buf, &d.0),
             Value::MzTimestamp(t) => strconv::format_mz_timestamp(buf, *t),
             Value::Range(range) => strconv::format_range(buf, range, |buf, elem| match elem {
-                Some(elem) => Ok(elem.encode_text(buf.nonnull_buffer())),
+                Some(elem) => Ok(nested(elem, buf.nonnull_buffer())),
                 None => Ok::<_, ()>(buf.write_null()),
             })
             .expect("provided closure never fails"),
@@ -944,6 +975,53 @@ impl Value {
     }
 }
 
+/// `FLT_DIG` and `DBL_DIG` from C: the number of significant decimal digits
+/// that survive a round trip through `f32` and `f64` respectively.
+const FLT_DIG: i32 = 6;
+const DBL_DIG: i32 = 15;
+
+/// Formats `f` with `ndig` significant digits like C's `%.*g`, mirroring
+/// PostgreSQL's `float4out`/`float8out` when `extra_float_digits` is zero or
+/// negative. Like PostgreSQL, `ndig` values below 1 are clamped to 1, and
+/// non-finite values are spelled `NaN`, `Infinity`, and `-Infinity`.
+fn format_float_limited(buf: &mut BytesMut, f: f64, ndig: i32) -> Nestable {
+    if f.is_nan() {
+        buf.write_str("NaN");
+        return Nestable::Yes;
+    }
+    if f.is_infinite() {
+        buf.write_str(if f < 0.0 { "-Infinity" } else { "Infinity" });
+        return Nestable::Yes;
+    }
+    let ndig = ndig.max(1);
+    // Callers never exceed `DBL_DIG` significant digits, which guarantees the
+    // decimal-string round trip in the fixed-point branch below is exact.
+    debug_assert!(ndig <= DBL_DIG);
+    // Round to `ndig` significant digits. `sci` has the shape `d[.ddd]e<exp>`.
+    let prec = usize::try_from(ndig - 1).expect("ndig is at least 1");
+    let sci = format!("{:.prec$e}", f);
+    let (mantissa, exp) = sci.split_once('e').expect("e format has an exponent");
+    let exp: i32 = exp.parse().expect("valid exponent");
+    if exp < -4 || exp >= ndig {
+        // Scientific notation. `%g` strips the fraction's trailing zeros and
+        // pads the exponent to at least two digits.
+        let mantissa = mantissa.trim_end_matches('0').trim_end_matches('.');
+        write!(buf, "{mantissa}e{exp:+03}");
+    } else {
+        // Fixed-point notation, with the number of decimal places that yields
+        // `ndig` significant digits and the fraction's trailing zeros stripped.
+        let decimals = usize::try_from(ndig - 1 - exp).expect("exp is less than ndig");
+        let rounded: f64 = sci.parse().expect("valid float");
+        let fixed = format!("{rounded:.decimals$}");
+        let fixed = match fixed.contains('.') {
+            true => fixed.trim_end_matches('0').trim_end_matches('.'),
+            false => &fixed,
+        };
+        buf.write_str(fixed);
+    }
+    Nestable::Yes
+}
+
 /// Returns an error if `s` contains a NUL character, which PostgreSQL rejects
 /// in text values.
 fn reject_nul(s: &str) -> Result<(), Box<dyn Error + Sync + Send>> {
@@ -1047,6 +1125,41 @@ mod tests {
                 .encode_binary(&pg_ty, &mut buf)
                 .expect("encode_binary must succeed when binary_encoding_error returns Ok");
         });
+    }
+
+    /// [`format_float_limited`] must match C's `%.*g`, which PostgreSQL's
+    /// `float4out`/`float8out` use when `extra_float_digits` is zero or
+    /// negative.
+    #[mz_ore::test]
+    fn format_float_limited_matches_printf_g() {
+        for (f, ndig, expected) in [
+            (0.1_f64 + 0.2_f64, 15, "0.3"),
+            (0.1_f64 + 0.2_f64, 1, "0.3"),
+            (f64::from(123.45679_f32), 6, "123.457"),
+            (f64::from(123.45679_f32), 3, "123"),
+            (1e15, 15, "1e+15"),
+            (-123456.0, 3, "-1.23e+05"),
+            (999.999, 3, "1e+03"),
+            (0.0001, 15, "0.0001"),
+            (-0.00001, 15, "-1e-05"),
+            (0.0, 15, "0"),
+            (-0.0, 15, "-0"),
+            (100.0, 15, "100"),
+            (1.23456789012345, 12, "1.23456789012"),
+            (f64::NAN, 15, "NaN"),
+            (f64::INFINITY, 15, "Infinity"),
+            (f64::NEG_INFINITY, -100, "-Infinity"),
+            // `ndig` values below 1 clamp to 1.
+            (0.1_f64 + 0.2_f64, -5, "0.3"),
+        ] {
+            let mut buf = BytesMut::new();
+            format_float_limited(&mut buf, f, ndig);
+            assert_eq!(
+                str::from_utf8(&buf).unwrap(),
+                expected,
+                "{f} with {ndig} digits"
+            );
+        }
     }
 
     /// Verifies that we correctly print the chain of parsing errors, all the way through the stack.

@@ -729,6 +729,7 @@ fn test_record_types() {
 }
 
 fn pg_test_inner(path: &Path, mz_flags: bool) {
+    assert!(path.exists(), "missing pgtest file: {}", path.display());
     datadriven::walk(path.to_str().unwrap(), |tf| {
         let server = test_util::TestHarness::default()
             .unsafe_mode()
@@ -898,6 +899,14 @@ fn test_pgtest_mz_ddl_extended() {
 #[mz_ore::test]
 fn test_pgtest_mz_desc() {
     pg_test_inner(Path::new("../../test/pgtest-mz/desc.pt"), true);
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_extra_float_digits() {
+    pg_test_inner(
+        Path::new("../../test/pgtest-mz/extra-float-digits.pt"),
+        true,
+    );
 }
 
 #[mz_ore::test]
