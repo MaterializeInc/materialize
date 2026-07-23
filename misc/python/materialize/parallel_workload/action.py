@@ -2119,8 +2119,12 @@ class FlipFlagsAction(Action):
             # `EXPERIMENTAL ARRANGEMENT COMPRESSION` is managed-only. The
             # tracked `managed` flag can lag reality (e.g. an in-flight CREATE
             # lost to a kill), so the option can land on a cluster that is
-            # unmanaged by the time the ALTER runs.
+            # unmanaged by the time the ALTER runs. The condition surfaces as
+            # two different messages: the planner's when the cluster is already
+            # unmanaged at plan time, the sequencer's when it turns unmanaged
+            # between planning and sequencing.
             "EXPERIMENTAL ARRANGEMENT COMPRESSION not supported for unmanaged clusters",
+            "Cannot change EXPERIMENTAL ARRANGEMENT COMPRESSION of unmanaged clusters",
         ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> bool:
