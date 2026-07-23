@@ -104,7 +104,7 @@ SELECT interval '999' day
 query T
 SELECT interval '999' month
 ----
-83 years 3 months
+83 years 3 mons
 
 # test SQL-spec syntaxes for restricted field sets
 
@@ -116,7 +116,7 @@ SELECT interval '1' year
 query T
 SELECT interval '2' month
 ----
-2 months
+2 mons
 
 query T
 SELECT interval '3' day
@@ -141,12 +141,12 @@ SELECT interval '6' second
 query T
 SELECT interval '1' year to month
 ----
-1 month
+1 mon
 
 query T
 SELECT interval '1-2' year to month
 ----
-1 year 2 months
+1 year 2 mons
 
 # Not supported by Materialize.
 onlyif cockroach
@@ -370,7 +370,7 @@ SELECT interval '1-2 3' year
 query T
 SELECT interval '1-2 3' day
 ----
-1 year 2 months 3 days
+1 year 2 mons 3 days
 
 query T
 SELECT interval '2.1 00:'
@@ -493,7 +493,7 @@ INSERT INTO intervals VALUES
 query T
 SELECT '-2 years 11 months 1 day 01:02:03'::interval
 ----
--1 years -1 months +1 day 01:02:03
+-1 years -1 mons +1 day 01:02:03
 
 statement ok
 create table interval_parsing ( pk INT PRIMARY KEY, i TEXT )
@@ -508,9 +508,9 @@ INSERT INTO interval_parsing VALUES
 query T
 SELECT i FROM intervals ORDER BY pk
 ----
--2 years -11 months +1 day 04:05:06.123
+-2 years -11 mons +1 day 04:05:06.123
 1 day 04:06:08.123
-2 years 11 months -2 days +03:25:45.678
+2 years 11 mons -2 days +03:25:45.678
 
 # Not supported by Materialize.
 onlyif cockroach
@@ -544,19 +544,19 @@ ORDER BY pk
 query T
 SELECT array_to_string(array_agg(i ORDER BY pk), ' ') FROM intervals
 ----
--2 years -11 months +1 day 04:05:06.123 1 day 04:06:08.123 2 years 11 months -2 days +03:25:45.678
+-2 years -11 mons +1 day 04:05:06.123 1 day 04:06:08.123 2 years 11 mons -2 days +03:25:45.678
 
 query T
 SELECT (array_agg(i ORDER BY pk))::string FROM intervals
 ----
-{"-2 years -11 months +1 day 04:05:06.123","1 day 04:06:08.123","2 years 11 months -2 days +03:25:45.678"}
+{"-2 years -11 mons +1 day 04:05:06.123","1 day 04:06:08.123","2 years 11 mons -2 days +03:25:45.678"}
 
 query T
 SELECT i::string FROM intervals ORDER BY pk
 ----
--2 years -11 months +1 day 04:05:06.123
+-2 years -11 mons +1 day 04:05:06.123
 1 day 04:06:08.123
-2 years 11 months -2 days +03:25:45.678
+2 years 11 mons -2 days +03:25:45.678
 
 # Not supported by Materialize.
 onlyif cockroach
@@ -579,10 +579,10 @@ SELECT row_to_json(intervals) FROM intervals ORDER BY pk
 query TT
 SELECT i, i::INTERVAL FROM interval_parsing ORDER BY pk
 ----
--10␠years␠22␠months␠1␠day␠01:02:03  -8␠years␠-2␠months␠+1␠day␠01:02:03
--10␠years␠-22␠months␠1␠day␠01:02:03  -11␠years␠-10␠months␠+1␠day␠01:02:03
--10␠years␠22␠months␠-1␠day␠01:02:03  -8␠years␠-2␠months␠-1␠days␠+01:02:03
--10␠years␠22␠months␠-1␠day␠-01:02:03  -8␠years␠-2␠months␠-1␠days␠-01:02:03
+-10␠years␠22␠months␠1␠day␠01:02:03  -8␠years␠-2␠mons␠+1␠day␠01:02:03
+-10␠years␠-22␠months␠1␠day␠01:02:03  -11␠years␠-10␠mons␠+1␠day␠01:02:03
+-10␠years␠22␠months␠-1␠day␠01:02:03  -8␠years␠-2␠mons␠-1␠days␠+01:02:03
+-10␠years␠22␠months␠-1␠day␠-01:02:03  -8␠years␠-2␠mons␠-1␠days␠-01:02:03
 
 # Not supported by Materialize.
 onlyif cockroach
@@ -592,31 +592,31 @@ SET intervalstyle = 'iso_8601'
 query T
 SELECT '-2 years 11 months 1 day 01:02:03'::interval
 ----
--1 years -1 months +1 day 01:02:03
+-1 years -1 mons +1 day 01:02:03
 
 query T
 SELECT i FROM intervals ORDER BY pk
 ----
--2 years -11 months +1 day 04:05:06.123
+-2 years -11 mons +1 day 04:05:06.123
 1 day 04:06:08.123
-2 years 11 months -2 days +03:25:45.678
+2 years 11 mons -2 days +03:25:45.678
 
 query T
 SELECT array_to_string(array_agg(i ORDER BY pk), ' ') FROM intervals
 ----
--2 years -11 months +1 day 04:05:06.123 1 day 04:06:08.123 2 years 11 months -2 days +03:25:45.678
+-2 years -11 mons +1 day 04:05:06.123 1 day 04:06:08.123 2 years 11 mons -2 days +03:25:45.678
 
 query T
 SELECT (array_agg(i ORDER BY pk))::string FROM intervals
 ----
-{"-2 years -11 months +1 day 04:05:06.123","1 day 04:06:08.123","2 years 11 months -2 days +03:25:45.678"}
+{"-2 years -11 mons +1 day 04:05:06.123","1 day 04:06:08.123","2 years 11 mons -2 days +03:25:45.678"}
 
 query T
 SELECT i::string FROM intervals ORDER BY pk
 ----
--2 years -11 months +1 day 04:05:06.123
+-2 years -11 mons +1 day 04:05:06.123
 1 day 04:06:08.123
-2 years 11 months -2 days +03:25:45.678
+2 years 11 mons -2 days +03:25:45.678
 
 # Not supported by Materialize.
 onlyif cockroach
@@ -639,10 +639,10 @@ SELECT row_to_json(intervals) FROM intervals ORDER BY pk
 query TT
 SELECT i, i::INTERVAL FROM interval_parsing ORDER BY pk
 ----
--10␠years␠22␠months␠1␠day␠01:02:03  -8␠years␠-2␠months␠+1␠day␠01:02:03
--10␠years␠-22␠months␠1␠day␠01:02:03  -11␠years␠-10␠months␠+1␠day␠01:02:03
--10␠years␠22␠months␠-1␠day␠01:02:03  -8␠years␠-2␠months␠-1␠days␠+01:02:03
--10␠years␠22␠months␠-1␠day␠-01:02:03  -8␠years␠-2␠months␠-1␠days␠-01:02:03
+-10␠years␠22␠months␠1␠day␠01:02:03  -8␠years␠-2␠mons␠+1␠day␠01:02:03
+-10␠years␠-22␠months␠1␠day␠01:02:03  -11␠years␠-10␠mons␠+1␠day␠01:02:03
+-10␠years␠22␠months␠-1␠day␠01:02:03  -8␠years␠-2␠mons␠-1␠days␠+01:02:03
+-10␠years␠22␠months␠-1␠day␠-01:02:03  -8␠years␠-2␠mons␠-1␠days␠-01:02:03
 
 # Not supported by Materialize.
 onlyif cockroach
@@ -652,31 +652,31 @@ SET intervalstyle = 'sql_standard'
 query T
 SELECT '-2 years 11 months 1 day 01:02:03'::interval
 ----
--1 years -1 months +1 day 01:02:03
+-1 years -1 mons +1 day 01:02:03
 
 query T
 SELECT i FROM intervals ORDER BY pk
 ----
--2 years -11 months +1 day 04:05:06.123
+-2 years -11 mons +1 day 04:05:06.123
 1 day 04:06:08.123
-2 years 11 months -2 days +03:25:45.678
+2 years 11 mons -2 days +03:25:45.678
 
 query T
 SELECT array_to_string(array_agg(i ORDER BY pk), ' ') FROM intervals
 ----
--2 years -11 months +1 day 04:05:06.123 1 day 04:06:08.123 2 years 11 months -2 days +03:25:45.678
+-2 years -11 mons +1 day 04:05:06.123 1 day 04:06:08.123 2 years 11 mons -2 days +03:25:45.678
 
 query T
 SELECT (array_agg(i ORDER BY pk))::string FROM intervals
 ----
-{"-2 years -11 months +1 day 04:05:06.123","1 day 04:06:08.123","2 years 11 months -2 days +03:25:45.678"}
+{"-2 years -11 mons +1 day 04:05:06.123","1 day 04:06:08.123","2 years 11 mons -2 days +03:25:45.678"}
 
 query T
 SELECT i::string FROM intervals ORDER BY pk
 ----
--2 years -11 months +1 day 04:05:06.123
+-2 years -11 mons +1 day 04:05:06.123
 1 day 04:06:08.123
-2 years 11 months -2 days +03:25:45.678
+2 years 11 mons -2 days +03:25:45.678
 
 # Not supported by Materialize.
 onlyif cockroach
@@ -699,10 +699,10 @@ SELECT row_to_json(intervals) FROM intervals ORDER BY pk
 query TT
 SELECT i, i::INTERVAL FROM interval_parsing ORDER BY pk
 ----
--10␠years␠22␠months␠1␠day␠01:02:03  -8␠years␠-2␠months␠+1␠day␠01:02:03
--10␠years␠-22␠months␠1␠day␠01:02:03  -11␠years␠-10␠months␠+1␠day␠01:02:03
--10␠years␠22␠months␠-1␠day␠01:02:03  -8␠years␠-2␠months␠-1␠days␠+01:02:03
--10␠years␠22␠months␠-1␠day␠-01:02:03  -8␠years␠-2␠months␠-1␠days␠-01:02:03
+-10␠years␠22␠months␠1␠day␠01:02:03  -8␠years␠-2␠mons␠+1␠day␠01:02:03
+-10␠years␠-22␠months␠1␠day␠01:02:03  -11␠years␠-10␠mons␠+1␠day␠01:02:03
+-10␠years␠22␠months␠-1␠day␠01:02:03  -8␠years␠-2␠mons␠-1␠days␠+01:02:03
+-10␠years␠22␠months␠-1␠day␠-01:02:03  -8␠years␠-2␠mons␠-1␠days␠-01:02:03
 
 # Not supported by Materialize.
 onlyif cockroach

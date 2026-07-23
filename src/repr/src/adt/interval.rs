@@ -732,7 +732,7 @@ impl Interval {
 ///
 /// Example outputs:
 ///
-/// * 1 year 2 months 5 days 03:04:00
+/// * 1 year 2 mons 5 days 03:04:00
 /// * -1 year +5 days +18:59:29.3
 /// * 00:00:00
 impl fmt::Display for Interval {
@@ -772,7 +772,7 @@ impl fmt::Display for Interval {
             if neg_months {
                 f.write_char('-')?;
             }
-            write!(f, "{} month", months)?;
+            write!(f, "{} mon", months)?;
             if months > 1 || neg_months {
                 f.write_char('s')?;
             }
@@ -922,12 +922,12 @@ mod test {
             .to_string()
         }
 
-        assert_eq!(mon(1), "1 month");
+        assert_eq!(mon(1), "1 mon");
         assert_eq!(mon(12), "1 year");
-        assert_eq!(mon(13), "1 year 1 month");
+        assert_eq!(mon(13), "1 year 1 mon");
         assert_eq!(mon(24), "2 years");
-        assert_eq!(mon(25), "2 years 1 month");
-        assert_eq!(mon(26), "2 years 2 months");
+        assert_eq!(mon(25), "2 years 1 mon");
+        assert_eq!(mon(26), "2 years 2 mons");
 
         fn dur(days: i32, micros: i64) -> String {
             Interval::new(0, days, micros).to_string()
@@ -1001,14 +1001,14 @@ mod test {
         fn mon_dur(mon: i32, days: i32, micros: i64) -> String {
             Interval::new(mon, days, micros).to_string()
         }
-        assert_eq!(&mon_dur(1, 2, 6 * 1_000_000), "1 month 2 days 00:00:06");
+        assert_eq!(&mon_dur(1, 2, 6 * 1_000_000), "1 mon 2 days 00:00:06");
         assert_eq!(
             &mon_dur(1, 2, (45 * 60 * 1_000_000) + (6 * 1_000_000)),
-            "1 month 2 days 00:45:06"
+            "1 mon 2 days 00:45:06"
         );
         assert_eq!(
             &mon_dur(1, 2, (3 * 60 * 60 * 1_000_000) + (6 * 1_000_000)),
-            "1 month 2 days 03:00:06"
+            "1 mon 2 days 03:00:06"
         );
         assert_eq!(
             &mon_dur(
@@ -1016,37 +1016,37 @@ mod test {
                 0,
                 (3 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (6 * 1_000_000)
             ),
-            "2 years 2 months 03:45:06"
+            "2 years 2 mons 03:45:06"
         );
         assert_eq!(
             &mon_dur(26, 0, (3 * 60 * 60 * 1_000_000) + (6 * 1_000_000)),
-            "2 years 2 months 03:00:06"
+            "2 years 2 mons 03:00:06"
         );
         assert_eq!(
             &mon_dur(26, 0, 3 * 60 * 60 * 1_000_000),
-            "2 years 2 months 03:00:00"
+            "2 years 2 mons 03:00:00"
         );
         assert_eq!(
             &mon_dur(26, 0, (45 * 60 * 1_000_000) + (6 * 1_000_000)),
-            "2 years 2 months 00:45:06"
+            "2 years 2 mons 00:45:06"
         );
         assert_eq!(
             &mon_dur(26, 0, 45 * 60 * 1_000_000),
-            "2 years 2 months 00:45:00"
+            "2 years 2 mons 00:45:00"
         );
-        assert_eq!(&mon_dur(26, 0, 6 * 1_000_000), "2 years 2 months 00:00:06");
+        assert_eq!(&mon_dur(26, 0, 6 * 1_000_000), "2 years 2 mons 00:00:06");
 
         assert_eq!(
             &mon_dur(26, -2, -6 * 1_000_000),
-            "2 years 2 months -2 days -00:00:06"
+            "2 years 2 mons -2 days -00:00:06"
         );
         assert_eq!(
             &mon_dur(26, -2, (-45 * 60 * 1_000_000) + (-6 * 1_000_000)),
-            "2 years 2 months -2 days -00:45:06"
+            "2 years 2 mons -2 days -00:45:06"
         );
         assert_eq!(
             &mon_dur(26, -2, (-3 * 60 * 60 * 1_000_000) + (-6 * 1_000_000)),
-            "2 years 2 months -2 days -03:00:06"
+            "2 years 2 mons -2 days -03:00:06"
         );
         assert_eq!(
             &mon_dur(
@@ -1054,37 +1054,34 @@ mod test {
                 0,
                 (-3 * 60 * 60 * 1_000_000) + (-45 * 60 * 1_000_000) + (-6 * 1_000_000)
             ),
-            "2 years 2 months -03:45:06"
+            "2 years 2 mons -03:45:06"
         );
         assert_eq!(
             &mon_dur(26, 0, (-3 * 60 * 60 * 1_000_000) + (-6 * 1_000_000)),
-            "2 years 2 months -03:00:06"
+            "2 years 2 mons -03:00:06"
         );
         assert_eq!(
             &mon_dur(26, 0, -3 * 60 * 60 * 1_000_000),
-            "2 years 2 months -03:00:00"
+            "2 years 2 mons -03:00:00"
         );
         assert_eq!(
             &mon_dur(26, 0, (-45 * 60 * 1_000_000) + (-6 * 1_000_000)),
-            "2 years 2 months -00:45:06"
+            "2 years 2 mons -00:45:06"
         );
         assert_eq!(
             &mon_dur(26, 0, -45 * 60 * 1_000_000),
-            "2 years 2 months -00:45:00"
+            "2 years 2 mons -00:45:00"
         );
-        assert_eq!(
-            &mon_dur(26, 0, -6 * 1_000_000),
-            "2 years 2 months -00:00:06"
-        );
+        assert_eq!(&mon_dur(26, 0, -6 * 1_000_000), "2 years 2 mons -00:00:06");
 
-        assert_eq!(&mon_dur(-1, 2, 6 * 1_000_000), "-1 months +2 days 00:00:06");
+        assert_eq!(&mon_dur(-1, 2, 6 * 1_000_000), "-1 mons +2 days 00:00:06");
         assert_eq!(
             &mon_dur(-1, 2, (45 * 60 * 1_000_000) + (6 * 1_000_000)),
-            "-1 months +2 days 00:45:06"
+            "-1 mons +2 days 00:45:06"
         );
         assert_eq!(
             &mon_dur(-1, 2, (3 * 60 * 60 * 1_000_000) + (6 * 1_000_000)),
-            "-1 months +2 days 03:00:06"
+            "-1 mons +2 days 03:00:06"
         );
         assert_eq!(
             &mon_dur(
@@ -1092,40 +1089,40 @@ mod test {
                 0,
                 (3 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (6 * 1_000_000)
             ),
-            "-2 years -2 months +03:45:06"
+            "-2 years -2 mons +03:45:06"
         );
         assert_eq!(
             &mon_dur(-26, 0, (3 * 60 * 60 * 1_000_000) + (6 * 1_000_000)),
-            "-2 years -2 months +03:00:06"
+            "-2 years -2 mons +03:00:06"
         );
         assert_eq!(
             &mon_dur(-26, 0, 3 * 60 * 60 * 1_000_000),
-            "-2 years -2 months +03:00:00"
+            "-2 years -2 mons +03:00:00"
         );
         assert_eq!(
             &mon_dur(-26, 0, (45 * 60 * 1_000_000) + (6 * 1_000_000)),
-            "-2 years -2 months +00:45:06"
+            "-2 years -2 mons +00:45:06"
         );
         assert_eq!(
             &mon_dur(-26, 0, 45 * 60 * 1_000_000),
-            "-2 years -2 months +00:45:00"
+            "-2 years -2 mons +00:45:00"
         );
         assert_eq!(
             &mon_dur(-26, 0, 6 * 1_000_000),
-            "-2 years -2 months +00:00:06"
+            "-2 years -2 mons +00:00:06"
         );
 
         assert_eq!(
             &mon_dur(-26, -2, -6 * 1_000_000),
-            "-2 years -2 months -2 days -00:00:06"
+            "-2 years -2 mons -2 days -00:00:06"
         );
         assert_eq!(
             &mon_dur(-26, -2, (-45 * 60 * 1_000_000) + (-6 * 1_000_000)),
-            "-2 years -2 months -2 days -00:45:06"
+            "-2 years -2 mons -2 days -00:45:06"
         );
         assert_eq!(
             &mon_dur(-26, -2, (-3 * 60 * 60 * 1_000_000) + (-6 * 1_000_000)),
-            "-2 years -2 months -2 days -03:00:06"
+            "-2 years -2 mons -2 days -03:00:06"
         );
         assert_eq!(
             &mon_dur(
@@ -1133,27 +1130,27 @@ mod test {
                 0,
                 (-3 * 60 * 60 * 1_000_000) + (-45 * 60 * 1_000_000) + (-6 * 1_000_000)
             ),
-            "-2 years -2 months -03:45:06"
+            "-2 years -2 mons -03:45:06"
         );
         assert_eq!(
             &mon_dur(-26, 0, (-3 * 60 * 60 * 1_000_000) + (-6 * 1_000_000)),
-            "-2 years -2 months -03:00:06"
+            "-2 years -2 mons -03:00:06"
         );
         assert_eq!(
             &mon_dur(-26, 0, -3 * 60 * 60 * 1_000_000),
-            "-2 years -2 months -03:00:00"
+            "-2 years -2 mons -03:00:00"
         );
         assert_eq!(
             &mon_dur(-26, 0, (-45 * 60 * 1_000_000) + (-6 * 1_000_000)),
-            "-2 years -2 months -00:45:06"
+            "-2 years -2 mons -00:45:06"
         );
         assert_eq!(
             &mon_dur(-26, 0, -45 * 60 * 1_000_000),
-            "-2 years -2 months -00:45:00"
+            "-2 years -2 mons -00:45:00"
         );
         assert_eq!(
             &mon_dur(-26, 0, -6 * 1_000_000),
-            "-2 years -2 months -00:00:06"
+            "-2 years -2 mons -00:00:06"
         );
     }
 
