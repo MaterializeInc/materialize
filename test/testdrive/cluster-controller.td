@@ -333,31 +333,79 @@ scale=1,workers=4
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET unsafe_enable_unstable_dependencies = false
 
-# ----- Foreground wait-shim (background ALTER off) -----
+# ----- A single-replica sink does not block graceful reconfiguration -----
 #
 # With enable_background_alter_cluster off, a config-shape ALTER blocks the session
 # on the wait-shim instead of returning immediately. The shim keeps no timer of its
 # own: it waits for the controller to resolve the durable record, then reports
-# success once the realized config reached the requested shape. An empty cluster
-# hydrates promptly, so the reshape cuts over and the blocking ALTER returns.
+# success once the realized config reached the requested shape. A singleton sink
+# remains on the old replica until cut-over, so readiness must not wait for the
+# sink to hydrate on the target replica.
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM SET enable_background_alter_cluster = false
 ALTER SYSTEM SET cluster_alter_check_ready_interval = '100ms'
 
 > CREATE CLUSTER cc_fg (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
 
+> CREATE TABLE cc_fg_t (id int)
+
+> INSERT INTO cc_fg_t VALUES (1)
+
+> CREATE CONNECTION cc_fg_kafka TO KAFKA (
+    BROKER '${testdrive.kafka-addr}',
+    SECURITY PROTOCOL PLAINTEXT
+  )
+
+> CREATE SINK cc_fg_sink
+  IN CLUSTER cc_fg
+  FROM cc_fg_t
+  INTO KAFKA CONNECTION cc_fg_kafka (TOPIC 'testdrive-cluster-controller-sink-${testdrive.seed}')
+  FORMAT JSON ENVELOPE DEBEZIUM
+
+$ kafka-verify-data format=json sink=materialize.public.cc_fg_sink key=false sort-messages=true
+{"before": null, "after": {"id": 1}}
+
 # Blocks until the controller cuts the realized size over, then returns success.
 > ALTER CLUSTER cc_fg SET (SIZE 'scale=1,workers=2')
 
-> SELECT size FROM mz_clusters WHERE name = 'cc_fg'
+> SELECT r.size
+  FROM mz_cluster_replicas r
+  JOIN mz_clusters c ON c.id = r.cluster_id
+  WHERE c.name = 'cc_fg'
 scale=1,workers=2
 
-> DROP CLUSTER cc_fg
+> SELECT status FROM mz_internal.mz_sink_statuses WHERE name = 'cc_fg_sink'
+running
 
-# Restore background mode after this section.
+> INSERT INTO cc_fg_t VALUES (2)
+
+$ kafka-verify-data format=json sink=materialize.public.cc_fg_sink key=false sort-messages=true
+{"before": null, "after": {"id": 2}}
+
+# Background mode exercises the same readiness check without the wait shim.
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM SET enable_background_alter_cluster = true
 ALTER SYSTEM RESET cluster_alter_check_ready_interval
+
+> ALTER CLUSTER cc_fg SET (SIZE 'scale=1,workers=1')
+
+> SELECT r.size
+  FROM mz_cluster_replicas r
+  JOIN mz_clusters c ON c.id = r.cluster_id
+  WHERE c.name = 'cc_fg'
+scale=1,workers=1
+
+> SELECT status FROM mz_internal.mz_sink_statuses WHERE name = 'cc_fg_sink'
+running
+
+> INSERT INTO cc_fg_t VALUES (3)
+
+$ kafka-verify-data format=json sink=materialize.public.cc_fg_sink key=false sort-messages=true
+{"before": null, "after": {"id": 3}}
+
+> DROP CLUSTER cc_fg CASCADE
+> DROP TABLE cc_fg_t
+> DROP CONNECTION cc_fg_kafka
 
 # ----- A reshape whose transient peak exceeds the replica budget is rejected -----
 #
@@ -849,6 +897,143 @@ no-longer-warranted
 > DROP CLUSTER cc_burst_e2e CASCADE
 
 > DROP TABLE cc_burst_e2e_t
+
+# ----- Hydration burst: a single-replica source runs on the burst -----
+#
+# Keep both replicas unhydrated with a slow compute dataflow, then force a
+# reshape. The burst replica is allocated before the replacement steady
+# replica, so when the old steady replica is retired the singleton source moves
+# to the burst replica, the lowest remaining ReplicaId. Once the slow dataflow
+# is removed, the steady replica must count as hydrated even though the source
+# is scheduled elsewhere. The burst can then retire and the source moves to the
+# remaining steady replica.
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+ALTER USER postgres WITH replication;
+DROP PUBLICATION IF EXISTS cc_burst_source;
+DROP TABLE IF EXISTS public.cc_burst_source_t;
+CREATE TABLE public.cc_burst_source_t (f1 INTEGER PRIMARY KEY);
+ALTER TABLE public.cc_burst_source_t REPLICA IDENTITY FULL;
+INSERT INTO public.cc_burst_source_t VALUES (1), (2), (3);
+CREATE PUBLICATION cc_burst_source FOR TABLE public.cc_burst_source_t;
+
+> CREATE CLUSTER cc_burst_source (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1, AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=2,workers=2', LINGER DURATION = '0s')))
+
+> CREATE TABLE cc_burst_gate_t (id int)
+
+> INSERT INTO cc_burst_gate_t VALUES (1)
+
+> CREATE MATERIALIZED VIEW cc_burst_gate_mv IN CLUSTER cc_burst_source AS
+  SELECT mz_unsafe.mz_sleep(id * 3600) AS s FROM cc_burst_gate_t
+
+# The slow dataflow arms the burst and keeps it alive before the source is
+# created, ensuring the source initially chooses the older steady replica.
+> SELECT r.size, count(*)
+  FROM mz_cluster_replicas r
+  JOIN mz_clusters c ON c.id = r.cluster_id
+  WHERE c.name = 'cc_burst_source'
+  GROUP BY r.size
+  ORDER BY r.size
+scale=1,workers=1 1
+scale=2,workers=2 1
+
+> CREATE SECRET cc_burst_pgpass AS 'postgres'
+
+> CREATE CONNECTION cc_burst_pg TO POSTGRES (
+    HOST postgres,
+    DATABASE postgres,
+    USER postgres,
+    PASSWORD SECRET cc_burst_pgpass
+  )
+
+> CREATE SOURCE cc_burst_pg_source
+  IN CLUSTER cc_burst_source
+  FROM POSTGRES CONNECTION cc_burst_pg (PUBLICATION 'cc_burst_source')
+
+> CREATE TABLE cc_burst_pg_table
+  FROM SOURCE cc_burst_pg_source (REFERENCE cc_burst_source_t)
+
+> SELECT * FROM cc_burst_pg_table
+1
+2
+3
+
+# Force cut-over because the slow dataflow cannot hydrate on the target. The
+# source loses its old steady replica and is deterministically rescheduled onto
+# the older burst replica.
+> ALTER CLUSTER cc_burst_source SET (SIZE 'scale=4,workers=4') WITH (WAIT UNTIL READY (TIMEOUT '1s', ON TIMEOUT 'COMMIT'))
+
+> SELECT r.size, count(*)
+  FROM mz_cluster_replicas r
+  JOIN mz_clusters c ON c.id = r.cluster_id
+  WHERE c.name = 'cc_burst_source'
+  GROUP BY r.size
+  ORDER BY r.size
+scale=2,workers=2 1
+scale=4,workers=4 1
+
+> SELECT r.size
+  FROM mz_internal.mz_source_statistics stats
+  JOIN mz_sources s ON s.id = stats.id
+  JOIN mz_cluster_replicas r ON r.id = stats.replica_id
+  WHERE s.name = 'cc_burst_pg_source'
+scale=2,workers=2
+
+# Dropping a sleeping dataflow does not interrupt mz_sleep, so replace the
+# blocked steady replica once more. The fresh steady replica never installs the
+# dropped MV, while the source stays on the older burst replica.
+> DROP MATERIALIZED VIEW cc_burst_gate_mv
+
+# Ensure the controller has processed the drop before it creates the replacement
+# replica, which must not replay the dropped sleeping dataflow.
+> CREATE CLUSTER cc_burst_drop_barrier (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
+
+> ALTER CLUSTER cc_burst_drop_barrier SET (REPLICATION FACTOR 2)
+
+> SELECT count(*)
+  FROM mz_cluster_replicas r
+  JOIN mz_clusters c ON c.id = r.cluster_id
+  WHERE c.name = 'cc_burst_drop_barrier'
+2
+
+> DROP CLUSTER cc_burst_drop_barrier
+
+> ALTER CLUSTER cc_burst_source SET (SIZE 'scale=1,workers=2') WITH (WAIT UNTIL READY (TIMEOUT '1s', ON TIMEOUT 'COMMIT'))
+
+# The fresh steady replica is hydrated even though the source is running
+# off-target on the burst. The zero-duration linger then retires the burst.
+> SELECT r.size
+  FROM mz_cluster_replicas r
+  JOIN mz_clusters c ON c.id = r.cluster_id
+  WHERE c.name = 'cc_burst_source'
+scale=1,workers=2
+
+# Dropping the burst reschedules the source onto the remaining steady replica.
+> SELECT r.size
+  FROM mz_internal.mz_source_statistics stats
+  JOIN mz_sources s ON s.id = stats.id
+  JOIN mz_cluster_replicas r ON r.id = stats.replica_id
+  WHERE s.name = 'cc_burst_pg_source'
+scale=1,workers=2
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+INSERT INTO public.cc_burst_source_t VALUES (4);
+
+> SELECT * FROM cc_burst_pg_table
+1
+2
+3
+4
+
+> DROP SOURCE cc_burst_pg_source CASCADE
+> DROP CLUSTER cc_burst_source
+> DROP TABLE cc_burst_gate_t
+> DROP CONNECTION cc_burst_pg
+> DROP SECRET cc_burst_pgpass
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+DROP PUBLICATION cc_burst_source;
+DROP TABLE public.cc_burst_source_t;
 
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET unsafe_enable_unstable_dependencies = false
