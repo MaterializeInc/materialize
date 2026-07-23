@@ -87,11 +87,18 @@ function clusterLabel(cluster: CostBreakdownCluster): string {
   return `${cluster.region} / ${label}`;
 }
 
-// TODO(SAS-145): `/api/costs/breakdown/daily` returns dollar amounts only, no
-// usage quantities (Orb's per-price `quantity` is discarded server-side). Until
-// SAS-145 threads it through, the Usage column renders this placeholder rather
-// than a number.
-const USAGE_PLACEHOLDER = "—";
+const usageNumberFormatter = Intl.NumberFormat("default", {
+  maximumFractionDigits: 2,
+});
+
+/**
+ * A cluster's usage with its unit: credits for a compute row (empty
+ * `category`), GB for a storage/egress row (see `clusterLabel`).
+ */
+function formatUsage(cluster: CostBreakdownCluster): string {
+  const unit = cluster.category ? "GB" : "credits";
+  return `${usageNumberFormatter.format(cluster.usage)} ${unit}`;
+}
 
 // Cycled through, in order, to color account layers/legend/table swatches. Kept
 // visually distinct; wraps if an org has more accounts than colors.
@@ -459,7 +466,7 @@ const AccountLedgerGroup = ({
               {clusterLabel(cluster)}
             </LedgerCell>
             <LedgerCell isLastRow={isLastElement} numeric>
-              {USAGE_PLACEHOLDER}
+              {formatUsage(cluster)}
             </LedgerCell>
             <LedgerCell isLastRow={isLastElement} />
             <LedgerCell isLastRow={isLastElement} />
@@ -539,10 +546,9 @@ const UnifiedLedger = ({
  * trend, cost) that opens to its region-qualified per-cluster costs. Sourced
  * from `/api/costs/breakdown/daily` via `useDailyCostsBreakdown`.
  *
- * The per-cluster Usage column is a placeholder (SAS-145) until the endpoint
- * carries usage quantities; the mock's Compute/Storage resource drilldown
- * (replica size) needs per-cluster replica sizes the endpoint does not yet
- * carry either, so that remains a separate follow-up.
+ * The mock's Compute/Storage resource drilldown (replica size) needs
+ * per-cluster replica sizes the endpoint does not yet carry, so that remains
+ * a separate follow-up.
  */
 // Shared pivot of the dense day series into everything the chart and the
 // ledger render: account order (biggest spender first), colors, stacked chart
