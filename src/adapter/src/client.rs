@@ -1661,18 +1661,6 @@ impl SessionClient {
             }
         };
 
-        // The OCC path commits immediately. Explicit transactions must use the
-        // coordinator path, which preserves normal transaction semantics.
-        if !self
-            .session
-            .as_ref()
-            .expect("SessionClient invariant")
-            .transaction()
-            .is_implicit()
-        {
-            return Ok(None);
-        }
-
         if self
             .session
             .as_ref()
@@ -1929,16 +1917,21 @@ impl SessionClient {
             }
         };
 
-        // The transaction mode was checked before portal verification and
-        // planning, so reaching this point cannot fall back after consuming
-        // frontend logging or session state.
-        debug_assert!(
-            self.session
-                .as_ref()
-                .expect("SessionClient invariant")
-                .transaction()
-                .is_implicit()
-        );
+        // The OCC path commits writes immediately and they cannot be rolled
+        // back, so reject explicit transaction blocks. Constant INSERTs are
+        // handled above: they are blind writes that join the session
+        // transaction's write ops and commit at COMMIT, so they compose with
+        // explicit transactions. Redact literals so they don't leak into the
+        // error message, matching the coordinator's handling (INSERT, UPDATE,
+        // and DELETE are all sensitive statement kinds).
+        {
+            let session = self.session.as_ref().expect("SessionClient invariant");
+            if !session.transaction().is_implicit() {
+                return Err(AdapterError::OperationProhibitsTransaction(
+                    stmt.to_ast_string_redacted(),
+                ));
+            }
+        }
 
         let session = self.session.as_mut().expect("SessionClient invariant");
         self.peek_client

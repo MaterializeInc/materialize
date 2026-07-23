@@ -1417,6 +1417,20 @@ metrics:
   visibility: public
   tags:
   - environment
+- name: mz_occ_read_then_write_retry_count_bucket
+  help: Number of OCC retries per read-then-write operation.
+  labels:
+  - le
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_occ_read_then_write_retry_count_count
+  help: Number of OCC retries per read-then-write operation.
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_occ_read_then_write_retry_count_sum
+  help: Number of OCC retries per read-then-write operation.
+  source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_optimization_notices
   help: Number of optimization notices per notice type.
   labels:
