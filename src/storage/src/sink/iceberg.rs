@@ -83,7 +83,7 @@
 //! `mz-frontier` property to track progress.
 
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::future::Future;
 use std::time::Instant;
@@ -92,8 +92,10 @@ use std::{cell::RefCell, rc::Rc, sync::Arc};
 use anyhow::{Context, anyhow};
 use arrow::array::{ArrayRef, Int32Array, Int64Array, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
-use differential_dataflow::lattice::Lattice;
-use differential_dataflow::{AsCollection, Hashable, VecCollection};
+use differential_dataflow::trace::BatchReader;
+use differential_dataflow::trace::implementations::ord_neu::OrdValBatch;
+use differential_dataflow::trace::implementations::{BatchContainer, Layout};
+use differential_dataflow::{Hashable, VecCollection};
 use futures::StreamExt;
 use iceberg::ErrorKind;
 use iceberg::arrow::{arrow_schema_to_schema, schema_to_arrow_schema};
@@ -122,7 +124,7 @@ use iceberg::{Catalog, NamespaceIdent, TableCreation, TableIdent};
 use itertools::Itertools;
 use mz_arrow_util::builder::{ARROW_EXTENSION_NAME_KEY, ArrowBuilder};
 use mz_interchange::avro::DiffPair;
-use mz_interchange::envelopes::for_each_diff_pair;
+use mz_interchange::envelopes::for_each_diff_pair_async;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
@@ -1089,24 +1091,20 @@ fn build_schema_with_append_columns(schema: &ArrowSchema) -> ArrowSchema {
 /// Batches are minted with configurable windows to balance write efficiency with latency.
 /// We maintain a sliding window of future batch descriptions so writers can start
 /// processing data even while earlier batches are still being written.
-fn mint_batch_descriptions<'scope, D>(
+fn mint_batch_descriptions<'scope>(
     name: String,
     sink_id: GlobalId,
-    input: VecCollection<'scope, Timestamp, D, Diff>,
+    input: SinkBatchStream<'scope>,
     sink: &StorageSinkDesc<CollectionMetadata, Timestamp>,
     connection: IcebergSinkConnection,
     storage_configuration: StorageConfiguration,
     initial_schema: SchemaRef,
 ) -> (
-    VecCollection<'scope, Timestamp, D, Diff>,
     StreamVec<'scope, Timestamp, (Antichain<Timestamp>, Antichain<Timestamp>)>,
     StreamVec<'scope, Timestamp, Infallible>,
     StreamVec<'scope, Timestamp, HealthStatusMessage>,
     PressOnDropButton,
-)
-where
-    D: Clone + 'static,
-{
+) {
     let scope = input.scope();
     let name_for_error = name.clone();
     let name_for_logging = name.clone();
@@ -1116,11 +1114,9 @@ where
     let hashed_id = sink_id.hashed();
     let is_active_worker = usize::cast_from(hashed_id) % scope.peers() == scope.index();
     let (_, table_ready_stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
-    let (output, output_stream) = builder.new_output();
     let (batch_desc_output, batch_desc_stream) =
         builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
-    let mut input =
-        builder.new_input_for_many(input.inner, Pipeline, [&output, &batch_desc_output]);
+    let mut input = builder.new_input_for(input, Pipeline, &batch_desc_output);
 
     let as_of = sink.as_of.clone();
     let commit_interval = sink
@@ -1131,21 +1127,10 @@ where
     let (button, errors): (_, StreamVec<'scope, Timestamp, Rc<anyhow::Error>>) =
         builder.build_fallible(move |caps| {
         Box::pin(async move {
-            let [table_ready_capset, data_capset, capset]: &mut [_; 3] = caps.try_into().unwrap();
-            *data_capset = CapabilitySet::new();
+            let [table_ready_capset, capset]: &mut [_; 2] = caps.try_into().unwrap();
 
             if !is_active_worker {
-                *capset = CapabilitySet::new();
-                *data_capset = CapabilitySet::new();
-                *table_ready_capset = CapabilitySet::new();
-                while let Some(event) = input.next().await {
-                    match event {
-                        Event::Data([output_cap, _], mut data) => {
-                            output.give_container(&output_cap, &mut data);
-                        }
-                        Event::Progress(_) => {}
-                    }
-                }
+                // Only the active worker mints batch descriptions.
                 return Ok(());
             }
 
@@ -1217,7 +1202,6 @@ where
 
             let mut initialized = false;
             let mut observed_frontier;
-            let mut max_seen_ts: Option<Timestamp> = None;
             // Track minted batches to maintain a sliding window of open batch descriptions.
             // This is needed to know when to retire old batches and mint new ones.
             // It's "sortedness" is derived from the monotonicity of batch descriptions,
@@ -1245,24 +1229,7 @@ where
             loop {
                 if let Some(event) = input.next().await {
                     match event {
-                        Event::Data([output_cap, _], mut data) => {
-                            if !initialized {
-                                for (_, ts, _) in data.iter() {
-                                    match max_seen_ts.as_mut() {
-                                        Some(max) => {
-                                            if max.less_than(ts) {
-                                                *max = ts.clone();
-                                            }
-                                        }
-                                        None => {
-                                            max_seen_ts = Some(ts.clone());
-                                        }
-                                    }
-                                }
-                            }
-                            output.give_container(&output_cap, &mut data);
-                            continue;
-                        }
+                        Event::Data(_, _) => continue,
                         Event::Progress(frontier) => {
                             observed_frontier = frontier;
                         }
@@ -1275,29 +1242,24 @@ where
                     if observed_frontier.is_empty() {
                         // Bounded inputs can close (frontier becomes empty) before we finish
                         // initialization. For example, a loadgen source configured for a finite
-                        // dataset may emit all rows at time t and then immediately close. If we
-                        // saw any data, synthesize an upper one tick past the maximum timestamp
-                        // so we can mint a catch-up batch and commit it.
-                        if let Some(max_ts) = max_seen_ts.as_ref() {
-                            let synthesized_upper =
-                                Antichain::from_elem(max_ts.step_forward());
-                            debug!(
-                                ?sink_id,
-                                %name_for_logging,
-                                max_seen_ts = %max_ts,
-                                synthesized_upper = %synthesized_upper.pretty(),
-                                "iceberg mint input closed before initialization; using max seen ts"
-                            );
-                            observed_frontier = synthesized_upper;
-                        } else {
-                            debug!(
-                                ?sink_id,
-                                %name_for_logging,
-                                "iceberg mint input closed before initialization with no data"
-                            );
-                            // Input stream closed before initialization completed and no data arrived.
+                        // dataset may emit all rows at time t and then immediately close.
+                        // Mint one final batch with an empty upper. The input is closed, so
+                        // that batch covers all remaining data on every worker, and committing
+                        // it records the sink as complete.
+                        if catchup_start.is_empty() {
+                            // A previous incarnation already committed through the empty
+                            // frontier. Nothing left to do.
                             return Ok(());
                         }
+                        debug!(
+                            ?sink_id,
+                            %name_for_logging,
+                            batch_lower = %catchup_start.pretty(),
+                            "iceberg mint input closed before initialization; minting final batch"
+                        );
+                        let batch = (catchup_start.clone(), Antichain::new());
+                        batch_desc_output.give(&capset[0], batch);
+                        return Ok(());
                     }
 
                     // Don't make empty commits while we wait ^for the first data to be ready.
@@ -1403,7 +1365,6 @@ where
         namespace: StatusNamespace::Iceberg,
     });
     (
-        output_stream.as_collection(),
         batch_desc_stream,
         table_ready_stream,
         statuses,
@@ -1516,9 +1477,12 @@ struct BoundedDataFileSet {
 /// rows are stashed until it does. This allows batches to be minted ahead of data arrival.
 fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
     name: String,
-    input: VecCollection<'scope, Timestamp, (Option<Row>, DiffPair<Row>), Diff>,
+    input: SinkBatchStream<'scope>,
     batch_desc_input: StreamVec<'scope, Timestamp, (Antichain<Timestamp>, Antichain<Timestamp>)>,
     table_ready_stream: StreamVec<'scope, Timestamp, Infallible>,
+    sink_id: GlobalId,
+    from_id: GlobalId,
+    key_is_synthetic: bool,
     as_of: Antichain<Timestamp>,
     connection: IcebergSinkConnection,
     storage_configuration: StorageConfiguration,
@@ -1539,372 +1503,305 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
     let mut table_ready_input = builder.new_disconnected_input(table_ready_stream, Pipeline);
     let mut batch_desc_input =
         builder.new_input_for(batch_desc_input.broadcast(), Pipeline, &output);
-    let mut input = builder.new_disconnected_input(input.inner, Pipeline);
+    let mut input = builder.new_disconnected_input(input, Pipeline);
 
-    let (button, errors) = builder.build_fallible(move |caps| {
-        Box::pin(async move {
-            let [capset]: &mut [_; 1] = caps.try_into().unwrap();
-            let catalog = connection
-                .catalog_connection
-                .connect(&storage_configuration, InTask::Yes)
-                .await
-                .with_context(|| {
-                    format!(
-                        "Failed to connect to Iceberg catalog '{}' for table '{}.{}'",
-                        connection.catalog_connection.uri, connection.namespace, connection.table
-                    )
-                })?;
+    let (button, errors): (_, StreamVec<'scope, Timestamp, Rc<anyhow::Error>>) = builder
+        .build_fallible(move |caps| {
+            Box::pin(async move {
+                let [capset]: &mut [_; 1] = caps.try_into().unwrap();
+                let catalog = connection
+                    .catalog_connection
+                    .connect(&storage_configuration, InTask::Yes)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "Failed to connect to Iceberg catalog '{}' for table '{}.{}'",
+                            connection.catalog_connection.uri,
+                            connection.namespace,
+                            connection.table
+                        )
+                    })?;
 
-            let namespace_ident = NamespaceIdent::new(connection.namespace.clone());
-            let table_ident = TableIdent::new(namespace_ident, connection.table.clone());
-            while let Some(_) = table_ready_input.next().await {
-                // Wait for table to be ready
-            }
-            let table = catalog
-                .load_table(&table_ident)
-                .await
-                .with_context(|| {
+                let namespace_ident = NamespaceIdent::new(connection.namespace.clone());
+                let table_ident = TableIdent::new(namespace_ident, connection.table.clone());
+                while let Some(_) = table_ready_input.next().await {
+                    // Wait for table to be ready
+                }
+                let table = catalog.load_table(&table_ident).await.with_context(|| {
                     format!(
                         "Failed to load Iceberg table '{}.{}' in write_data_files operator",
                         connection.namespace, connection.table
                     )
                 })?;
 
-            let table_metadata = table.metadata().clone();
-            let current_schema = Arc::clone(table_metadata.current_schema());
+                let table_metadata = table.metadata().clone();
+                let current_schema = Arc::clone(table_metadata.current_schema());
 
-            // Merge Materialize extension metadata into the Iceberg schema.
-            // We need extension metadata for ArrowBuilder to work correctly (it uses
-            // extension names to know how to handle different types like records vs arrays).
-            let arrow_schema = Arc::new(
-                merge_materialize_metadata_into_iceberg_schema(
-                    materialize_arrow_schema.as_ref(),
-                    current_schema.as_ref(),
-                )
-                .context("Failed to merge Materialize metadata into Iceberg schema")?,
-            );
+                // Merge Materialize extension metadata into the Iceberg schema.
+                // We need extension metadata for ArrowBuilder to work correctly (it uses
+                // extension names to know how to handle different types like records vs arrays).
+                let arrow_schema = Arc::new(
+                    merge_materialize_metadata_into_iceberg_schema(
+                        materialize_arrow_schema.as_ref(),
+                        current_schema.as_ref(),
+                    )
+                    .context("Failed to merge Materialize metadata into Iceberg schema")?,
+                );
 
-            // WORKAROUND: S3 Tables catalog incorrectly sets location to the metadata file path
-            // instead of the warehouse root. Strip off the /metadata/*.metadata.json suffix.
-            // No clear way to detect this properly right now, so we use heuristics.
-            let location = table_metadata.location();
-            let corrected_location = match location.rsplit_once("/metadata/") {
-                Some((a, b)) if b.ends_with(".metadata.json") => a,
-                _ => location,
-            };
+                // WORKAROUND: S3 Tables catalog incorrectly sets location to the metadata file path
+                // instead of the warehouse root. Strip off the /metadata/*.metadata.json suffix.
+                // No clear way to detect this properly right now, so we use heuristics.
+                let location = table_metadata.location();
+                let corrected_location = match location.rsplit_once("/metadata/") {
+                    Some((a, b)) if b.ends_with(".metadata.json") => a,
+                    _ => location,
+                };
 
-            let data_location = format!("{}/data", corrected_location);
-            let location_generator = DefaultLocationGenerator::with_data_location(data_location);
+                let data_location = format!("{}/data", corrected_location);
+                let location_generator =
+                    DefaultLocationGenerator::with_data_location(data_location);
 
-            // Add a unique suffix to avoid filename collisions across restarts and workers
-            let unique_suffix = format!("-{}", uuid::Uuid::new_v4());
-            let file_name_generator = DefaultFileNameGenerator::new(
-                PARQUET_FILE_PREFIX.to_string(),
-                Some(unique_suffix),
-                iceberg::spec::DataFileFormat::Parquet,
-            );
+                // Add a unique suffix to avoid filename collisions across restarts and workers
+                let unique_suffix = format!("-{}", uuid::Uuid::new_v4());
+                let file_name_generator = DefaultFileNameGenerator::new(
+                    PARQUET_FILE_PREFIX.to_string(),
+                    Some(unique_suffix),
+                    iceberg::spec::DataFileFormat::Parquet,
+                );
 
-            let file_io = table.file_io().clone();
+                let file_io = table.file_io().clone();
 
-            let writer_properties = WriterProperties::new();
+                let writer_properties = WriterProperties::new();
 
-            let ctx = WriterContext {
-                arrow_schema,
-                current_schema: Arc::clone(&current_schema),
-                file_io,
-                location_generator,
-                file_name_generator,
-                writer_properties,
-            };
-            let handler = H::new(ctx, &connection, &materialize_arrow_schema)?;
+                let ctx = WriterContext {
+                    arrow_schema,
+                    current_schema: Arc::clone(&current_schema),
+                    file_io,
+                    location_generator,
+                    file_name_generator,
+                    writer_properties,
+                };
+                let handler = H::new(ctx, &connection, &materialize_arrow_schema)?;
+                let mut pk_warner =
+                    (!key_is_synthetic).then(|| PkViolationWarner::new(sink_id, from_id));
 
-            // Rows can arrive before their batch description due to dataflow parallelism.
-            // Stash them until we know which batch they belong to.
-            let mut stashed_rows: BTreeMap<Timestamp, Vec<(Option<Row>, DiffPair<Row>)>> =
-                BTreeMap::new();
+                // Rows can arrive before their batch description due to dataflow parallelism.
+                // Stash them until we know which batch they belong to.
+                // Keyed by the lower bound (per arrangement batch) of the rows.
+                let mut stashed_rows: VecDeque<Rc<OrdValBatch<_>>> = VecDeque::new();
 
-            // Track batches currently being written. When a row arrives, we check if it belongs
-            // to an in-flight batch. When frontiers advance to a batch's upper, we close the
-            // writer and emit its data files downstream.
-            // Antichains don't implement Ord, so we use a HashMap with tuple keys instead.
-            #[allow(clippy::disallowed_types)]
-            let mut in_flight_batches: std::collections::HashMap<
-                (Antichain<Timestamp>, Antichain<Timestamp>),
-                Box<dyn IcebergWriter>,
-            > = std::collections::HashMap::new();
+                // Track batches currently being written. When a row arrives, we check if it belongs
+                // to an in-flight batch. When frontiers advance to a batch's upper, we close the
+                // writer and emit its data files downstream.
+                let mut in_flight_batches: VecDeque<(
+                    (Antichain<Timestamp>, Antichain<Timestamp>),
+                    Box<dyn IcebergWriter>,
+                )> = VecDeque::new();
 
-            let mut batch_description_frontier = Antichain::from_elem(Timestamp::minimum());
-            let mut processed_batch_description_frontier =
-                Antichain::from_elem(Timestamp::minimum());
-            let mut input_frontier = Antichain::from_elem(Timestamp::minimum());
-            let mut processed_input_frontier = Antichain::from_elem(Timestamp::minimum());
+                // The bounds of the most recently received batch description and input batch.
+                // `with_ready_batches` relies on both inputs arriving in order and
+                // non-overlapping. These track that invariant for the checks below.
+                let mut last_batch_desc: Option<BatchDescription> = None;
+                let mut last_input_bounds: Option<(Antichain<Timestamp>, Antichain<Timestamp>)> =
+                    None;
 
-            // Track the minimum batch lower bound to prune data that's already committed
-            let mut min_batch_lower: Option<Antichain<Timestamp>> = None;
+                let mut batch_description_frontier = Antichain::from_elem(Timestamp::minimum());
+                let mut input_frontier = Antichain::from_elem(Timestamp::minimum());
 
-            while !(batch_description_frontier.is_empty() && input_frontier.is_empty()) {
-                let mut staged_messages_since_flush: u64 = 0;
-                tokio::select! {
-                    _ = batch_desc_input.ready() => {},
-                    _ = input.ready() => {}
-                }
-
-                while let Some(event) = batch_desc_input.next_sync() {
-                    match event {
-                        Event::Data(_cap, data) => {
-                            for batch_desc in data {
-                                let (lower, upper) = &batch_desc;
-
-                                // Track the minimum batch lower bound (first batch received)
-                                if min_batch_lower.is_none() {
-                                    min_batch_lower = Some(lower.clone());
-                                    debug!(
-                                        "{}: set min_batch_lower to {}",
-                                        name_for_logging,
-                                        lower.pretty()
-                                    );
-
-                                    // Prune any stashed rows that arrived before min_batch_lower (already committed)
-                                    let to_remove: Vec<_> = stashed_rows
-                                        .keys()
-                                        .filter(|ts| {
-                                            let ts_antichain = Antichain::from_elem((*ts).clone());
-                                            PartialOrder::less_than(&ts_antichain, lower)
-                                        })
-                                        .cloned()
-                                        .collect();
-
-                                    if !to_remove.is_empty() {
-                                        let mut removed_count = 0;
-                                        for ts in to_remove {
-                                            if let Some(rows) = stashed_rows.remove(&ts) {
-                                                removed_count += rows.len();
-                                                for _ in &rows {
-                                                    metrics.stashed_rows.dec();
-                                                }
-                                            }
-                                        }
-                                        debug!(
-                                            "{}: pruned {} already-committed rows (< min_batch_lower)",
-                                            name_for_logging,
-                                            removed_count
-                                        );
-                                    }
-                                }
-
-                                // Disable seen_rows tracking for snapshot batch to save memory
-                                let is_snapshot = lower == &as_of;
-                                debug!(
-                                    "{}: received batch description [{}, {}), snapshot={}",
-                                    name_for_logging,
-                                    lower.pretty(),
-                                    upper.pretty(),
-                                    is_snapshot
-                                );
-                                let mut batch_writer =
-                                    handler.create_writer(is_snapshot).await?;
-                                // Drain any stashed rows that belong to this batch
-                                let row_ts_keys: Vec<_> = stashed_rows.keys().cloned().collect();
-                                let mut drained_count = 0;
-                                for row_ts in row_ts_keys {
-                                    let ts = Antichain::from_elem(row_ts.clone());
-                                    if PartialOrder::less_equal(lower, &ts)
-                                        && PartialOrder::less_than(&ts, upper)
-                                    {
-                                        if let Some(rows) = stashed_rows.remove(&row_ts) {
-                                            drained_count += rows.len();
-                                            for (_row, diff_pair) in rows {
-                                                metrics.stashed_rows.dec();
-                                                let record_batch = handler.row_to_batch(
-                                                    diff_pair.clone(),
-                                                    row_ts.clone(),
-                                                )
-                                                .context("failed to convert row to recordbatch")?;
-                                                batch_writer.write(record_batch).await?;
-                                                staged_messages_since_flush += 1;
-                                                if staged_messages_since_flush >= 10_000 {
-                                                    statistics.inc_messages_staged_by(
-                                                        staged_messages_since_flush,
-                                                    );
-                                                    staged_messages_since_flush = 0;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                if drained_count > 0 {
-                                    debug!(
-                                        "{}: drained {} stashed rows into batch [{}, {})",
-                                        name_for_logging,
-                                        drained_count,
-                                        lower.pretty(),
-                                        upper.pretty()
-                                    );
-                                }
-                                let prev =
-                                    in_flight_batches.insert(batch_desc.clone(), batch_writer);
-                                if prev.is_some() {
-                                    anyhow::bail!(
-                                        "Duplicate batch description received for description {:?}",
-                                        batch_desc
-                                    );
-                                }
-                            }
-                        }
-                        Event::Progress(frontier) => {
-                            batch_description_frontier = frontier;
-                        }
+                while !(batch_description_frontier.is_empty() && input_frontier.is_empty()) {
+                    tokio::select! {
+                        _ = batch_desc_input.ready() => {},
+                        _ = input.ready() => {}
                     }
-                }
 
-                let ready_events = std::iter::from_fn(|| input.next_sync()).collect_vec();
-                for event in ready_events {
-                    match event {
-                        Event::Data(_cap, data) => {
-                            let mut dropped_per_time = BTreeMap::new();
-                            let mut stashed_per_time = BTreeMap::new();
-                            for ((row, diff_pair), ts, _diff) in data {
-                                let row_ts = ts.clone();
-                                let ts_antichain = Antichain::from_elem(row_ts.clone());
-                                let mut written = false;
-                                // Try writing the row to any in-flight batch it belongs to...
-                                for (batch_desc, batch_writer) in in_flight_batches.iter_mut() {
-                                    let (lower, upper) = batch_desc;
-                                    if PartialOrder::less_equal(lower, &ts_antichain)
-                                        && PartialOrder::less_than(&ts_antichain, upper)
+                    // Operator Recipe Step 1: Read all the input.
+
+                    // Read all the incoming batch descriptions.
+                    while let Some(event) = batch_desc_input.next_sync() {
+                        match event {
+                            Event::Data(_cap, data) => {
+                                for batch_desc in data {
+                                    let (lower, upper) = &batch_desc;
+
+                                    if let Some((prev_lower, prev_upper)) = last_batch_desc.as_ref()
                                     {
-                                        let record_batch = handler.row_to_batch(
-                                            diff_pair.clone(),
-                                            row_ts.clone(),
-                                        )
-                                        .context("failed to convert row to recordbatch")?;
-                                        batch_writer.write(record_batch).await?;
-                                        staged_messages_since_flush += 1;
-                                        if staged_messages_since_flush >= 10_000 {
-                                            statistics.inc_messages_staged_by(
-                                                staged_messages_since_flush,
+                                        if !PartialOrder::less_equal(prev_upper, lower) {
+                                            anyhow::bail!(
+                                                "batch descriptions must arrive in order and \
+                                                non-overlapping: previous [{}, {}), new [{}, {})",
+                                                prev_lower.pretty(),
+                                                prev_upper.pretty(),
+                                                lower.pretty(),
+                                                upper.pretty(),
                                             );
-                                            staged_messages_since_flush = 0;
-                                        }
-                                        written = true;
-                                        break;
-                                    }
-                                }
-                                if !written {
-                                    // Drop data that's before the first batch we received (already committed)
-                                    if let Some(ref min_lower) = min_batch_lower {
-                                        if PartialOrder::less_than(&ts_antichain, min_lower) {
-                                            dropped_per_time
-                                                .entry(ts_antichain.into_option().unwrap())
-                                                .and_modify(|c| *c += 1)
-                                                .or_insert(1);
-                                            continue;
                                         }
                                     }
+                                    last_batch_desc = Some(batch_desc.clone());
 
-                                    stashed_per_time.entry(ts).and_modify(|c| *c += 1).or_insert(1);
-                                    let entry = stashed_rows.entry(row_ts).or_default();
-                                    metrics.stashed_rows.inc();
-                                    entry.push((row, diff_pair));
+                                    // Disable seen_rows tracking for snapshot batch to save memory
+                                    let is_snapshot = lower == &as_of;
+                                    debug!(
+                                        "{}: received batch description [{}, {}), snapshot={}",
+                                        name_for_logging,
+                                        lower.pretty(),
+                                        upper.pretty(),
+                                        is_snapshot
+                                    );
+                                    let batch_writer = handler.create_writer(is_snapshot).await?;
+                                    in_flight_batches.push_back((batch_desc.clone(), batch_writer));
                                 }
                             }
-
-                            for (ts, count) in dropped_per_time {
-                                debug!(
-                                    "{}: dropped {} rows at timestamp {} (< min_batch_lower, already committed)",
-                                    name_for_logging, count, ts
-                                );
+                            Event::Progress(frontier) => {
+                                batch_description_frontier = frontier;
                             }
-
-                            for (ts, count) in stashed_per_time {
-                                debug!(
-                                    "{}: stashed {} rows at timestamp {} (waiting for batch description)",
-                                    name_for_logging, count, ts
-                                );
-                            }
-                        }
-                        Event::Progress(frontier) => {
-                            input_frontier = frontier;
                         }
                     }
-                }
-                if staged_messages_since_flush > 0 {
-                    statistics.inc_messages_staged_by(staged_messages_since_flush);
-                }
 
-                // Check if frontiers have advanced, which may unlock batches ready to close
-                if PartialOrder::less_than(
-                    &processed_batch_description_frontier,
-                    &batch_description_frontier,
-                ) || PartialOrder::less_than(&processed_input_frontier, &input_frontier)
-                {
-                    // Close batches whose upper is now in the past
-                    // Upper bounds are exclusive, so we check if upper is less_equal to the frontier.
-                    // Remember: a frontier at x means all timestamps less than x have been observed.
-                    // Or, in other words we still might yet see timestamps at [x, infinity). X itself will
-                    // be covered by the _next_ batches lower inclusive bound, so we can safely close the batch if its upper is <= x.
-                    let ready_batches: Vec<_> = in_flight_batches
-                        .extract_if(|(lower, upper), _| {
-                            PartialOrder::less_than(lower, &batch_description_frontier)
-                                && PartialOrder::less_equal(upper, &input_frontier)
-                        })
-                        .collect();
+                    // Read all the incoming (arrangement batches of) rows.
+                    let ready_events = std::iter::from_fn(|| input.next_sync()).collect_vec();
+                    for event in ready_events {
+                        match event {
+                            Event::Data(_cap, data) => {
+                                for rows in &data {
+                                    if let Some((prev_lower, prev_upper)) =
+                                        last_input_bounds.as_ref()
+                                    {
+                                        if !PartialOrder::less_equal(prev_upper, rows.lower()) {
+                                            anyhow::bail!(
+                                                "input batches must arrive in order and \
+                                                non-overlapping: previous [{}, {}), new [{}, {})",
+                                                prev_lower.pretty(),
+                                                prev_upper.pretty(),
+                                                rows.lower().pretty(),
+                                                rows.upper().pretty(),
+                                            );
+                                        }
+                                    }
+                                    last_input_bounds =
+                                        Some((rows.lower().clone(), rows.upper().clone()));
 
-                    if !ready_batches.is_empty() {
+                                    stashed_rows.push_back(Rc::clone(rows));
+                                }
+                            }
+                            Event::Progress(frontier) => {
+                                input_frontier = frontier;
+                            }
+                        }
+                    }
+
+                    metrics.stashed_rows.set(u64::cast_from(
+                        stashed_rows.iter().map(|rows| rows.len()).sum::<usize>(),
+                    ));
+
+                    // Operator Recipe Steps 2-4: Consult frontiers. Plan work. Do all the work.
+
+                    // Report staged messages periodically during writes so progress is
+                    // visible while a large batch is still open.
+                    let mut staged_messages_since_flush: u64 = 0;
+
+                    // How to write rows from a(n arrangement) batch into a(n Iceberg) batch.
+                    let write_rows = async |rows: &OrdValBatch<_>,
+                                            (lower, upper): BatchDescription,
+                                            batch_writer: &mut Box<dyn IcebergWriter>|
+                           -> Result<(), anyhow::Error> {
+                        for_each_diff_pair_async(
+                            rows,
+                            Some(lower),
+                            Some(upper),
+                            async |key, time, diff_pair| -> Result<(), anyhow::Error> {
+                                if let Some(warner) = pk_warner.as_mut() {
+                                    warner.observe(key, time);
+                                }
+
+                                let record_batch = handler
+                                    .row_to_batch(diff_pair, time)
+                                    .context("failed to convert row to recordbatch")?;
+                                batch_writer
+                                    .write(record_batch)
+                                    .await
+                                    .context("failed to write recordbatch")?;
+                                staged_messages_since_flush += 1;
+                                if staged_messages_since_flush >= 10_000 {
+                                    statistics.inc_messages_staged_by(staged_messages_since_flush);
+                                    staged_messages_since_flush = 0;
+                                }
+                                Ok(())
+                            },
+                        )
+                        .await?;
+                        // Flush after each batch so the final `(key, time)` group of the walk is
+                        // resolved immediately — a PK violation in the last group is otherwise held
+                        // until more data arrives or the operator shuts down.
+                        if let Some(warner) = pk_warner.as_mut() {
+                            warner.flush();
+                        }
+                        Ok(())
+                    };
+
+                    // How to seal the data files for an Iceberg commit.
+                    let close_batch = async |batch_desc: BatchDescription,
+                                             batch_writer: &mut Box<dyn IcebergWriter>|
+                           -> Result<(), anyhow::Error> {
+                        let close_started_at = Instant::now();
+                        let data_files = batch_writer.close().await;
+                        metrics
+                            .writer_close_duration_seconds
+                            .observe(close_started_at.elapsed().as_secs_f64());
+                        let data_files = data_files.context("Failed to close batch writer")?;
                         debug!(
-                            "{}: closing {} batches (batch_frontier: {}, input_frontier: {})",
+                            "{}: closed batch [{}, {}), wrote {} files",
                             name_for_logging,
-                            ready_batches.len(),
-                            batch_description_frontier.pretty(),
-                            input_frontier.pretty()
+                            batch_desc.0.pretty(),
+                            batch_desc.1.pretty(),
+                            data_files.len()
                         );
-                        let mut max_upper = Antichain::from_elem(Timestamp::minimum());
-                        for (desc, mut batch_writer) in ready_batches {
-                            let close_started_at = Instant::now();
-                            let data_files = batch_writer.close().await;
-                            metrics
-                                .writer_close_duration_seconds
-                                .observe(close_started_at.elapsed().as_secs_f64());
-                            let data_files = data_files.context("Failed to close batch writer")?;
-                            debug!(
-                                "{}: closed batch [{}, {}), wrote {} files",
-                                name_for_logging,
-                                desc.0.pretty(),
-                                desc.1.pretty(),
-                                data_files.len()
-                            );
-                            for data_file in data_files {
-                                match data_file.content_type() {
-                                    iceberg::spec::DataContentType::Data => {
-                                        metrics.data_files_written.inc();
-                                    }
-                                    iceberg::spec::DataContentType::PositionDeletes
-                                    | iceberg::spec::DataContentType::EqualityDeletes => {
-                                        metrics.delete_files_written.inc();
-                                    }
+                        for data_file in data_files {
+                            match data_file.content_type() {
+                                iceberg::spec::DataContentType::Data => {
+                                    metrics.data_files_written.inc();
                                 }
-                                statistics.inc_messages_staged_by(data_file.record_count());
-                                statistics.inc_bytes_staged_by(data_file.file_size_in_bytes());
-                                let file = BoundedDataFile::new(
-                                    data_file,
-                                    current_schema.as_ref().clone(),
-                                    desc.clone(),
-                                );
-                                output.give(&capset[0], file);
+                                iceberg::spec::DataContentType::PositionDeletes
+                                | iceberg::spec::DataContentType::EqualityDeletes => {
+                                    metrics.delete_files_written.inc();
+                                }
                             }
-
-                            max_upper = max_upper.join(&desc.1);
+                            statistics.inc_messages_staged_by(data_file.record_count());
+                            statistics.inc_bytes_staged_by(data_file.file_size_in_bytes());
+                            let file = BoundedDataFile::new(
+                                data_file,
+                                current_schema.as_ref().clone(),
+                                batch_desc.clone(),
+                            );
+                            output.give(&capset[0], file);
                         }
 
-                        capset.downgrade(max_upper);
+                        // Operator Recipe Step 5: Downgrade or drop capabilities.
+
+                        capset.downgrade(batch_desc.1.clone());
+                        Ok(())
+                    };
+
+                    // Write the rows and seal the data files.
+                    with_ready_batches(
+                        input_frontier.clone(),
+                        &mut stashed_rows,
+                        batch_description_frontier.clone(),
+                        &mut in_flight_batches,
+                        write_rows,
+                        close_batch,
+                    )
+                    .await?;
+
+                    if staged_messages_since_flush > 0 {
+                        statistics.inc_messages_staged_by(staged_messages_since_flush);
                     }
-                    processed_batch_description_frontier.clone_from(&batch_description_frontier);
-                    processed_input_frontier.clone_from(&input_frontier);
+                    metrics.stashed_rows.set(u64::cast_from(
+                        stashed_rows.iter().map(|rows| rows.len()).sum::<usize>(),
+                    ));
                 }
-            }
-            Ok(())
-        })
-    });
+                Ok(())
+            })
+        });
 
     let statuses = errors.map(|error| HealthStatusMessage {
         id: None,
@@ -1912,6 +1809,100 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
         namespace: StatusNamespace::Iceberg,
     });
     (output_stream, statuses, button.press_on_drop())
+}
+
+/// The `[lower, upper)` frontier bounds of one Iceberg commit.
+type BatchDescription = (Antichain<Timestamp>, Antichain<Timestamp>);
+
+/// Write out as much of the input as we can.
+///
+/// Drop input batches when:
+/// - their contents have all been written out
+/// - no possible future output batch could need their contents
+///
+/// Close and drop output batches when:
+/// - no possible future input batch could overlap with their time window
+///
+/// Invariant: We assume the batches in each stream (input vs output)
+/// are in order and non-overlapping.
+async fn with_ready_batches<L: Layout, W, Write, Close>(
+    input_frontier: Antichain<Timestamp>,
+    input_batches: &mut VecDeque<Rc<OrdValBatch<L>>>,
+    output_frontier: Antichain<Timestamp>,
+    output_batches: &mut VecDeque<(BatchDescription, W)>,
+    mut write_rows: Write,
+    mut close_batch: Close,
+) -> Result<(), anyhow::Error>
+where
+    L::TimeContainer: BatchContainer<Owned = Timestamp>,
+    Write: AsyncFnMut(&OrdValBatch<L>, BatchDescription, &mut W) -> Result<(), anyhow::Error>,
+    Close: AsyncFnMut(BatchDescription, &mut W) -> Result<(), anyhow::Error>,
+{
+    loop {
+        {
+            // Drop any input batches that fall below the lowest output batch.
+            // No future output batch could need these inputs.
+            let output_lower = output_batches
+                .front()
+                .map_or(&output_frontier, |((lower, _), _)| lower);
+            while input_batches
+                .pop_front_if(|rows| PartialOrder::less_equal(rows.upper(), output_lower))
+                .is_some()
+            {}
+        }
+
+        {
+            // Close and drop any output batches that fall below the lowest input batch.
+            // No future inputs can arrive for these batches.
+            let input_lower = input_batches
+                .front()
+                .map_or(&input_frontier, |rows| rows.lower());
+            while let Some((batch_desc, mut batch_writer)) =
+                output_batches.pop_front_if(|((_, batch_upper), _)| {
+                    PartialOrder::less_equal(batch_upper, input_lower)
+                })
+            {
+                close_batch(batch_desc, &mut batch_writer).await?;
+            }
+        }
+
+        let Some((batch_desc, batch_writer)) = output_batches.front_mut() else {
+            // We're still waiting for descriptions of batches to write to.
+            break;
+        };
+
+        let Some(rows) = input_batches.front() else {
+            // We're still waiting for rows to write.
+            break;
+        };
+
+        // If there were no overlap between the lowest input batch and the lowest output batch,
+        // we'd have dropped the lower one already.
+        // Since we still have both a lowest input batch and a lowest output batch,
+        // there must be overlap.
+
+        // Write (the relevant portion of) the lowest input batch to the lowest output batch.
+        // Drop whichever one's "upper" comes first. If they end simultaneously, drop both.
+        write_rows(rows, batch_desc.clone(), batch_writer).await?;
+        let output_upper = batch_desc.1.clone();
+        let rows_upper = rows.upper();
+        if PartialOrder::less_equal(&output_upper, rows_upper) {
+            // Close and drop the output batch.
+            let (batch_desc, mut batch_writer) =
+                output_batches.pop_front().expect("already checked front");
+            close_batch(batch_desc, &mut batch_writer).await?;
+        }
+        if PartialOrder::less_equal(rows_upper, &output_upper) {
+            // Drop the input batch.
+            input_batches.pop_front();
+        }
+
+        // At least one of the two conditions above must be true,
+        // so every loop iteration shrinks working set (of input/output batches).
+        // Therefore, this loop must terminate.
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2133,6 +2124,229 @@ mod tests {
             entry_fields[1].metadata().get(ARROW_EXTENSION_NAME_KEY),
             Some(&"materialize.v1.string".to_string()),
         );
+    }
+
+    mod with_ready_batches {
+        use differential_dataflow::trace::Batch;
+        use differential_dataflow::trace::implementations::Vector;
+
+        use super::*;
+
+        type TestBatch = OrdValBatch<Vector<((u64, u64), Timestamp, Diff)>>;
+
+        /// A frontier at `t`, or the empty (end-of-time) frontier for `None`.
+        fn frontier(t: Option<u64>) -> Antichain<Timestamp> {
+            t.map_or_else(Antichain::new, |t| Antichain::from_elem(Timestamp::new(t)))
+        }
+
+        /// `[lower, upper)` bounds, with `None` for the empty upper.
+        fn span(lower: u64, upper: Option<u64>) -> BatchDescription {
+            (frontier(Some(lower)), frontier(upper))
+        }
+
+        /// An input batch with the given bounds. The pairing logic under test
+        /// only looks at bounds, so the batch holds no data.
+        fn input(lower: u64, upper: Option<u64>) -> Rc<TestBatch> {
+            let (lower, upper) = span(lower, upper);
+            Rc::new(TestBatch::empty(lower, upper))
+        }
+
+        #[derive(Debug, PartialEq)]
+        enum Call {
+            /// (input batch bounds, output batch description)
+            Write(BatchDescription, BatchDescription),
+            Close(BatchDescription),
+        }
+
+        /// Run `with_ready_batches` with recording callbacks and return the
+        /// sequence of calls it made.
+        async fn run(
+            input_frontier: Antichain<Timestamp>,
+            input_batches: &mut VecDeque<Rc<TestBatch>>,
+            output_frontier: Antichain<Timestamp>,
+            output_batches: &mut VecDeque<(BatchDescription, ())>,
+        ) -> Vec<Call> {
+            let calls = RefCell::new(vec![]);
+            with_ready_batches(
+                input_frontier,
+                input_batches,
+                output_frontier,
+                output_batches,
+                async |rows: &TestBatch, desc, _writer: &mut ()| {
+                    let bounds = (rows.lower().clone(), rows.upper().clone());
+                    calls.borrow_mut().push(Call::Write(bounds, desc));
+                    Ok(())
+                },
+                async |desc, _writer: &mut ()| {
+                    calls.borrow_mut().push(Call::Close(desc));
+                    Ok(())
+                },
+            )
+            .await
+            .expect("test callbacks never fail");
+            calls.into_inner()
+        }
+
+        #[mz_ore::test(tokio::test)]
+        async fn input_batch_spanning_multiple_output_batches() {
+            let mut inputs = VecDeque::from([input(0, Some(30))]);
+            let mut outputs = VecDeque::from([
+                (span(0, Some(10)), ()),
+                (span(10, Some(20)), ()),
+                (span(20, Some(30)), ()),
+            ]);
+
+            let calls = run(
+                frontier(Some(30)),
+                &mut inputs,
+                frontier(Some(30)),
+                &mut outputs,
+            )
+            .await;
+
+            // The input batch is written once per overlapping output batch,
+            // each of which closes as soon as the input covers its upper.
+            assert_eq!(
+                calls,
+                vec![
+                    Call::Write(span(0, Some(30)), span(0, Some(10))),
+                    Call::Close(span(0, Some(10))),
+                    Call::Write(span(0, Some(30)), span(10, Some(20))),
+                    Call::Close(span(10, Some(20))),
+                    Call::Write(span(0, Some(30)), span(20, Some(30))),
+                    Call::Close(span(20, Some(30))),
+                ]
+            );
+            assert!(inputs.is_empty());
+            assert!(outputs.is_empty());
+        }
+
+        #[mz_ore::test(tokio::test)]
+        async fn output_batch_spanning_multiple_input_batches() {
+            let mut inputs =
+                VecDeque::from([input(0, Some(10)), input(10, Some(20)), input(20, Some(30))]);
+            let mut outputs = VecDeque::from([(span(0, Some(30)), ())]);
+
+            let calls = run(
+                frontier(Some(30)),
+                &mut inputs,
+                frontier(Some(30)),
+                &mut outputs,
+            )
+            .await;
+
+            assert_eq!(
+                calls,
+                vec![
+                    Call::Write(span(0, Some(10)), span(0, Some(30))),
+                    Call::Write(span(10, Some(20)), span(0, Some(30))),
+                    Call::Write(span(20, Some(30)), span(0, Some(30))),
+                    Call::Close(span(0, Some(30))),
+                ]
+            );
+            assert!(inputs.is_empty());
+            assert!(outputs.is_empty());
+        }
+
+        #[mz_ore::test(tokio::test)]
+        async fn input_batch_retained_for_future_output_batches() {
+            let mut inputs = VecDeque::from([input(0, Some(30))]);
+            let mut outputs = VecDeque::from([(span(0, Some(10)), ())]);
+
+            let calls = run(
+                frontier(Some(30)),
+                &mut inputs,
+                frontier(Some(10)),
+                &mut outputs,
+            )
+            .await;
+
+            // The input batch extends past the only known output batch, so it
+            // must stay queued for descriptions that haven't arrived yet.
+            assert_eq!(
+                calls,
+                vec![
+                    Call::Write(span(0, Some(30)), span(0, Some(10))),
+                    Call::Close(span(0, Some(10))),
+                ]
+            );
+            assert_eq!(inputs.len(), 1);
+            assert!(outputs.is_empty());
+        }
+
+        #[mz_ore::test(tokio::test)]
+        async fn already_committed_input_batches_dropped_unwritten() {
+            let mut inputs = VecDeque::from([input(0, Some(10)), input(10, Some(20))]);
+            let mut outputs = VecDeque::from([(span(20, Some(30)), ())]);
+
+            let calls = run(
+                frontier(Some(20)),
+                &mut inputs,
+                frontier(Some(30)),
+                &mut outputs,
+            )
+            .await;
+
+            // Both input batches fall below the lowest output batch, so their
+            // contents are already committed and they are dropped unwritten.
+            // The output batch still waits for its own input.
+            assert_eq!(calls, vec![]);
+            assert!(inputs.is_empty());
+            assert_eq!(outputs.len(), 1);
+        }
+
+        #[mz_ore::test(tokio::test)]
+        async fn output_batch_closes_empty_once_input_frontier_passes() {
+            let mut outputs = VecDeque::from([(span(0, Some(10)), ())]);
+
+            // While the input frontier is short of the batch's upper, nothing
+            // may close: rows for it could still arrive.
+            let calls = run(
+                frontier(Some(5)),
+                &mut VecDeque::new(),
+                frontier(Some(10)),
+                &mut outputs,
+            )
+            .await;
+            assert_eq!(calls, vec![]);
+            assert_eq!(outputs.len(), 1);
+
+            // Once the input frontier reaches the upper, the batch closes
+            // empty (an empty commit).
+            let calls = run(
+                frontier(Some(10)),
+                &mut VecDeque::new(),
+                frontier(Some(10)),
+                &mut outputs,
+            )
+            .await;
+            assert_eq!(calls, vec![Call::Close(span(0, Some(10)))]);
+            assert!(outputs.is_empty());
+        }
+
+        #[mz_ore::test(tokio::test)]
+        async fn final_output_batch_with_empty_upper() {
+            let mut inputs = VecDeque::from([input(20, Some(30))]);
+            let mut outputs = VecDeque::from([(span(20, None), ())]);
+
+            // The sealing batch covers everything from 20 to the end of time.
+            // It consumes all remaining input but only closes once the input
+            // frontier is empty, i.e. the input is finished.
+            let calls = run(
+                frontier(Some(30)),
+                &mut inputs,
+                frontier(None),
+                &mut outputs,
+            )
+            .await;
+            assert_eq!(calls, vec![Call::Write(span(20, Some(30)), span(20, None))]);
+            assert!(inputs.is_empty());
+            assert_eq!(outputs.len(), 1);
+
+            let calls = run(frontier(None), &mut inputs, frontier(None), &mut outputs).await;
+            assert_eq!(calls, vec![Call::Close(span(20, None))]);
+            assert!(outputs.is_empty());
+        }
     }
 }
 
@@ -2443,14 +2657,6 @@ impl<'scope> SinkRender<'scope> for IcebergSinkConnection {
     ) {
         let scope = batches.scope();
 
-        let (input, walker_button) = walk_sink_arrangement(
-            format!("{sink_id}-iceberg-walker"),
-            batches,
-            sink_id,
-            sink.from,
-            key_is_synthetic,
-        );
-
         let write_handle = {
             let persist = Arc::clone(&storage_state.persist_clients);
             let shard_meta = sink.to_storage_metadata.clone();
@@ -2521,24 +2727,26 @@ impl<'scope> SinkRender<'scope> for IcebergSinkConnection {
             .clone();
 
         let connection_for_minter = self.clone();
-        let (minted_input, batch_descriptions, table_ready, mint_status, mint_button) =
-            mint_batch_descriptions(
-                format!("{sink_id}-iceberg-mint"),
-                sink_id,
-                input,
-                sink,
-                connection_for_minter,
-                storage_state.storage_configuration.clone(),
-                Arc::clone(&iceberg_schema),
-            );
+        let (batch_descriptions, table_ready, mint_status, mint_button) = mint_batch_descriptions(
+            format!("{sink_id}-iceberg-mint"),
+            sink_id,
+            batches.clone(),
+            sink,
+            connection_for_minter,
+            storage_state.storage_configuration.clone(),
+            Arc::clone(&iceberg_schema),
+        );
 
         let connection_for_writer = self.clone();
         let (datafiles, write_status, write_button) = match sink.envelope {
             SinkEnvelope::Upsert => write_data_files::<UpsertEnvelopeHandler>(
                 format!("{sink_id}-write-data-files"),
-                minted_input,
+                batches,
                 batch_descriptions.clone(),
                 table_ready.clone(),
+                sink_id,
+                sink.from,
+                key_is_synthetic,
                 sink.as_of.clone(),
                 connection_for_writer,
                 storage_state.storage_configuration.clone(),
@@ -2548,9 +2756,12 @@ impl<'scope> SinkRender<'scope> for IcebergSinkConnection {
             ),
             SinkEnvelope::Append => write_data_files::<AppendEnvelopeHandler>(
                 format!("{sink_id}-write-data-files"),
-                minted_input,
+                batches,
                 batch_descriptions.clone(),
                 table_ready.clone(),
+                sink_id,
+                sink.from,
+                key_is_synthetic,
                 sink.as_of.clone(),
                 connection_for_writer,
                 storage_state.storage_configuration.clone(),
@@ -2589,58 +2800,6 @@ impl<'scope> SinkRender<'scope> for IcebergSinkConnection {
         let statuses =
             scope.concatenate([running_status, mint_status, write_status, commit_status]);
 
-        (
-            statuses,
-            vec![walker_button, mint_button, write_button, commit_button],
-        )
+        (statuses, vec![mint_button, write_button, commit_button])
     }
-}
-
-/// Walks each arrangement batch and emits a stream of individual
-/// `(key, DiffPair)` records that feeds the rest of the Iceberg sink pipeline.
-///
-/// Tracks per-`(key, timestamp)` group sizes and rate-limits a warning when a
-/// non-synthetic key has more than one `DiffPair`. When `key_is_synthetic` the
-/// arrangement's hash-based key is stripped before emission.
-fn walk_sink_arrangement<'scope>(
-    name: String,
-    batches: SinkBatchStream<'scope>,
-    sink_id: GlobalId,
-    from_id: GlobalId,
-    key_is_synthetic: bool,
-) -> (
-    VecCollection<'scope, Timestamp, (Option<Row>, DiffPair<Row>), Diff>,
-    PressOnDropButton,
-) {
-    let mut builder = OperatorBuilder::new(name, batches.scope());
-    let (output, stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
-    let mut input = builder.new_input_for(batches, Pipeline, &output);
-
-    let button = builder.build(move |_caps| async move {
-        let mut pk_warner = (!key_is_synthetic).then(|| PkViolationWarner::new(sink_id, from_id));
-
-        while let Some(event) = input.next().await {
-            if let Event::Data(cap, mut batches) = event {
-                for batch in batches.drain(..) {
-                    for_each_diff_pair(&batch, |key, time, diff_pair| {
-                        if let Some(warner) = pk_warner.as_mut() {
-                            warner.observe(key, time);
-                        }
-                        // The arrangement key is only used downstream for grouping and PK checks;
-                        // `write_data_files` discards it on both the stash and drain paths. Emit
-                        // None unconditionally to avoid per-`DiffPair` `Row` clones on this hot path.
-                        output.give(&cap, ((None, diff_pair), time, Diff::ONE));
-                    });
-                    // Flush after each batch so the final `(key, time)` group of the walk is
-                    // resolved immediately — a PK violation in the last group is otherwise held
-                    // until more data arrives or the operator shuts down.
-                    if let Some(warner) = pk_warner.as_mut() {
-                        warner.flush();
-                    }
-                }
-            }
-        }
-    });
-
-    (stream.as_collection(), button.press_on_drop())
 }

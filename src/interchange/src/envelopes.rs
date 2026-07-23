@@ -42,6 +42,35 @@ where
     }
 }
 
+/// Just like `for_each_diff_pair`, but async and fallible.
+///
+/// Thin wrapper around `iter_diff_pairs`.
+pub async fn for_each_diff_pair_async<B, C, F, E>(
+    batch: &B,
+    lower: Option<Antichain<C::Time>>,
+    upper: Option<Antichain<C::Time>>,
+    mut on_diff_pair: F,
+) -> Result<(), E>
+where
+    B: BatchReader<Time = C::Time> + Navigable<Cursor = C>,
+    C: Cursor<Storage = B, Diff = Diff>,
+    C::Time: Copy,
+    C::ValOwn: 'static,
+    F: AsyncFnMut(
+        &<C::KeyContainer as BatchContainer>::Owned,
+        C::Time,
+        DiffPair<C::ValOwn>,
+    ) -> Result<(), E>,
+{
+    for (key, timed_pairs) in iter_diff_pairs(batch, lower, upper) {
+        for (time, pair) in timed_pairs {
+            on_diff_pair(&key, time, pair).await?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Walks `batch` and emits, for each key, the `DiffPair`s at each timestamp.
 ///
 /// Ignores updates outside the specified time range. Inclusive 'lower', exclusive 'upper'.
