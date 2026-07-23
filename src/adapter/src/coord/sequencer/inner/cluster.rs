@@ -398,6 +398,15 @@ impl Coordinator {
                 let scheduled_direct =
                     !matches!(new_managed.schedule, mz_sql::plan::ClusterSchedule::Manual)
                         && !reconfiguration_in_flight;
+                // A `WAIT` option would be silently vacuous on the direct
+                // path: there may be no replica at all (window closed), and
+                // an in-window replica is bounced to the new shape without a
+                // hydrate-overlap to wait on. Reject it rather than return an
+                // instant success that waited for nothing, mirroring the
+                // planner's rejection of a `WAIT` without a shape change.
+                if scheduled_direct && !matches!(strategy, AlterClusterPlanStrategy::None) {
+                    return Err(AdapterError::AlterClusterWaitOnScheduledCluster);
+                }
                 if needs_record && !scheduled_direct {
                     return self
                         .reshape_alter_cluster_managed(
@@ -477,7 +486,16 @@ impl Coordinator {
                     };
                 }
             }
-            (Unmanaged, Managed(_)) => {
+            (Unmanaged, Managed(new_managed)) => {
+                // The conversion path creates no overlap replicas to wait on,
+                // and a scheduled target makes the `WAIT` permanently
+                // meaningless, mirroring the managed-to-managed rejection
+                // above.
+                if !matches!(new_managed.schedule, mz_sql::plan::ClusterSchedule::Manual)
+                    && !matches!(strategy, AlterClusterPlanStrategy::None)
+                {
+                    return Err(AdapterError::AlterClusterWaitOnScheduledCluster);
+                }
                 self.sequence_alter_cluster_unmanaged_to_managed(
                     session,
                     cluster_id,
@@ -1900,6 +1918,19 @@ impl Coordinator {
             .replicas()
             .map(|r| (r.name.clone(), r.replica_id))
             .collect();
+        // The cluster's observed owned replica set, with the same exclusions
+        // as the controller's ownership test: internal and billed-as replicas
+        // are manually managed, pending ones belong to an in-flight
+        // reconfiguration (rejected above, so none exist here).
+        let owned_replica_ids: Vec<ReplicaId> = cluster
+            .replicas()
+            .filter(|r| {
+                !r.config.location.internal()
+                    && r.config.location.billed_as().is_none()
+                    && !r.config.location.pending()
+            })
+            .map(|r| r.replica_id)
+            .collect();
 
         let compute = mz_sql::plan::ComputeReplicaConfig {
             introspection: new_logging
@@ -2001,7 +2032,13 @@ impl Coordinator {
 
         if controller_owns {
             // Defer all replica create/drop to the controller. Only the realized
-            // config update below is applied here.
+            // config update below is applied here. The target must still be
+            // valid: the controller creates replicas from the realized config
+            // without re-validating availability zones, so an invalid pool
+            // written here would produce an unplaceable replica.
+            if config_changed {
+                self.ensure_valid_azs(new_availability_zones.iter())?;
+            }
         } else if config_changed {
             self.ensure_valid_azs(new_availability_zones.iter())?;
             // If we're not doing a zero-downtime reconfig tear down all
@@ -2009,13 +2046,19 @@ impl Coordinator {
             // return early asking for finalization
             match strategy {
                 AlterClusterPlanStrategy::None => {
-                    let replica_ids_and_reasons = (0..replication_factor)
-                        .map(managed_cluster_replica_name)
-                        .filter_map(|name| replica_id_by_name.get(&name).copied())
+                    // Names can drift from the canonical `r1..rN` while the
+                    // controller owns the set (its name generator avoids
+                    // observed names), so a factor-derived name list can miss
+                    // replicas after a break-glass handoff. This branch
+                    // recreates the entire replica set anyway, so dropping the
+                    // observed owned set by id closes that. In the pure
+                    // canonical world the two sets are identical.
+                    let replica_ids_and_reasons = owned_replica_ids
+                        .iter()
                         .map(|replica_id| {
                             catalog::DropObjectInfo::ClusterReplica((
                                 cluster_id,
-                                replica_id,
+                                *replica_id,
                                 reason.clone(),
                             ))
                         })
@@ -2524,13 +2567,16 @@ struct ReconfigurationDimensionsUnchanged {
 /// config write as cancelled, returning the audit intent to declare with the
 /// write.
 ///
-/// The legacy ALTER paths (controller gate off) change the realized config
-/// directly and know nothing about reconfiguration records. Nothing on those
+/// The legacy write paths (controller gate off), the ALTER sequencer and the
+/// legacy scheduler, change the realized config directly and know nothing
+/// about reconfiguration records. Nothing on those
 /// paths ever settles a record, and carrying an in-progress one forward invites
 /// a bogus revival, up to a forced cut-over to an obsolete target, if the gate
 /// is turned back on later. A record can only be in progress here if it was
 /// written while the gate was on.
-fn cancel_carried_reconfiguration(config: &mut ClusterConfig) -> Option<ReconfigurationAudit> {
+pub(crate) fn cancel_carried_reconfiguration(
+    config: &mut ClusterConfig,
+) -> Option<ReconfigurationAudit> {
     let ClusterVariant::Managed(managed) = &mut config.variant else {
         return None;
     };

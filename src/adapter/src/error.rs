@@ -289,6 +289,9 @@ pub enum AdapterError {
     /// Attempt to change a cluster's schedule while a graceful reconfiguration
     /// is in progress.
     AlterClusterScheduleWhileReconfiguring,
+    /// Attempt to use `WAIT` on an `ALTER` of a scheduled (non-`MANUAL`)
+    /// cluster, whose replica set the controller reshapes in the background.
+    AlterClusterWaitOnScheduledCluster,
     AuthenticationError(AuthenticationError),
     /// Schema of a replacement is incompatible with the target.
     ReplacementSchemaMismatch(RelationDescDiff),
@@ -752,6 +755,11 @@ impl AdapterError {
                 configuration, or wait for it to settle, then change the schedule."
                     .to_string(),
             ),
+            AdapterError::AlterClusterWaitOnScheduledCluster => Some(
+                "The scheduler reshapes a scheduled cluster's replicas in the background. \
+                Run the ALTER without a WAIT option, or set SCHEDULE = MANUAL first."
+                    .to_string(),
+            ),
             AdapterError::InvalidClusterReplicaAz { expected, az: _ } => {
                 Some(if expected.is_empty() {
                     "No availability zones configured; do not specify AVAILABILITY ZONE".into()
@@ -996,6 +1004,7 @@ impl AdapterError {
                 SqlState::OBJECT_IN_USE
             }
             AdapterError::AlterClusterScheduleWhileReconfiguring => SqlState::OBJECT_IN_USE,
+            AdapterError::AlterClusterWaitOnScheduledCluster => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::ReplacementSchemaMismatch(_) => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::AuthenticationError(AuthenticationError::InvalidCredentials) => {
                 SqlState::INVALID_PASSWORD
@@ -1463,6 +1472,12 @@ impl fmt::Display for AdapterError {
                 write!(
                     f,
                     "cannot change the cluster schedule while a reconfiguration is in progress"
+                )
+            }
+            AdapterError::AlterClusterWaitOnScheduledCluster => {
+                write!(
+                    f,
+                    "WAIT is not supported when the cluster SCHEDULE is not MANUAL"
                 )
             }
             AdapterError::ReplacementSchemaMismatch(_) => {
