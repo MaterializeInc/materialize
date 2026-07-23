@@ -5,22 +5,20 @@ headless: true
 If RBAC is not enabled, all users have <red>**superuser**</red> privileges.
 {{</ warning >}}
 
-By default, role-based access control (RBAC) checks are not enabled (i.e.,
-enforced) when using [authentication](/security/self-managed/authentication/#configuring-authentication-type). To
-enable RBAC, set the system parameter `enable_rbac_checks` to `'on'` or `True`.
-You can enable the parameter in one of the following ways:
+Whether role-based access control (RBAC) checks are enabled (i.e., enforced)
+is controlled by the `enableRbac` field on the Materialize resource and the
+`enable_rbac_checks` system parameter:
 
-- For [local installations using
-  Kind/Minikube](/self-managed-deployments/installation/#installation-guides), set `spec.enableRbac:
-  true` option when instantiating the Materialize object.
+- For Materialize resources using the `v1` CRD, RBAC is **enabled by
+  default**. To disable RBAC, set `spec.enableRbac: false` when instantiating
+  the Materialize object.
 
-- For [Cloud deployments using Materialize's
-  Terraforms](/self-managed-deployments/installation/#installation-guides), set
-  `enable_rbac_checks` in the environment CR via the `environmentdExtraArgs`
-  flag option.
+- For Materialize resources using the `v1alpha1` CRD, RBAC is **not enabled
+  by default**. To enable RBAC, set `spec.enableRbac: true` when
+  instantiating the Materialize object.
 
-- After the Materialize instance is running, run the following command as
-  `mz_system` user:
+- After the Materialize instance is running, you can enable RBAC by running
+  the following command as the `mz_system` user:
 
   ```mzsql
   ALTER SYSTEM SET enable_rbac_checks = 'on';
