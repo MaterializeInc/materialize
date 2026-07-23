@@ -153,6 +153,37 @@ impl ArrangementSharingRegistry {
         self.notify(id, worker_index);
     }
 
+    /// Returns the existing slot for `(id, worker_index)`, or creates one backed by unbacked
+    /// `Published` placeholders ([`Published::placeholder`]) and returns that instead.
+    ///
+    /// Whichever side touches `(id, worker_index)` first creates the slot; the other observes and
+    /// shares the same `Arc`, so a placeholder a reader already imported is filled in place by a
+    /// later [`PublishArrangement::adopt`] rather than being overwritten by a second, disconnected
+    /// arrangement. Grows the slot vector to `peers` like [`Self::insert_shared`] when `id` is not
+    /// yet present.
+    ///
+    /// Creating a placeholder carries no data, so this does not `notify`: there is nothing yet for
+    /// a waiting reader to act on. The caller that later fills the placeholder via `adopt` is
+    /// responsible for calling `notify` once the fill is installed, the way `insert` does for a
+    /// freshly published slot.
+    pub fn get_or_create_placeholder(
+        &self,
+        id: GlobalId,
+        worker_index: usize,
+        peers: usize,
+    ) -> Arc<SharedIndexArrangement> {
+        let mut map = self.inner.map.lock().expect("registry poisoned");
+        let slots = map
+            .entry(id)
+            .or_insert_with(|| (0..peers).map(|_| None).collect());
+        Arc::clone(slots[worker_index].get_or_insert_with(|| {
+            Arc::new(SharedIndexArrangement {
+                oks: Published::placeholder(peers),
+                errs: Published::placeholder(peers),
+            })
+        }))
+    }
+
     /// Re-registers the arrangement published for `from` under `to`, on worker `worker_index`.
     ///
     /// Used by the `Trace` re-export path, where one index reuses another's arrangement. Shares the
@@ -270,13 +301,20 @@ impl ArrangementSharingRegistry {
 
     /// Marks `id` dirty for worker `worker_index` and fires its coalescing waker.
     ///
+    /// Visible at `pub(crate)` so the maintenance publish path in `render.rs` can call it directly
+    /// once it has adopted a placeholder's publication points: `get_or_create_placeholder` itself
+    /// does not notify (see its doc comment), so the caller that fills the slot must.
+    ///
     /// # Lost-wakeup contract
     ///
-    /// `map` and `wakers` are separate locks, and `insert`/`reexport` write the slot under `map`,
-    /// release it, then call this under `wakers`. On wake the interactive server loop runs
-    /// `take_dirty` (under `wakers`) and only then re-reads the slot via `handles` (under `map`).
-    /// Label the four steps: publisher P1 = slot write, P2 = this mark+activate; worker W1 =
-    /// `take_dirty`, W2 = map re-read. Program order gives P1 -> P2 and W1 -> W2.
+    /// `map` and `wakers` are separate locks. `insert` and `reexport` write the slot under `map`,
+    /// release it, then call this under `wakers`. `get_or_create_placeholder` writes the slot the
+    /// same way, under `map` then released, but its caller calls this separately once it has
+    /// adopted the slot rather than immediately after the write. Either way, the slot write always
+    /// precedes this call, which is all the argument below needs. On wake the interactive server
+    /// loop runs `take_dirty` (under `wakers`) and only then re-reads the slot via `handles` (under
+    /// `map`). Label the four steps: publisher P1 = slot write, P2 = this mark+activate; worker
+    /// W1 = `take_dirty`, W2 = map re-read. Program order gives P1 -> P2 and W1 -> W2.
     ///
     /// The `map` lock totally orders P1 against W2, so the worker's re-read either observes the slot
     /// or does not:
@@ -299,7 +337,7 @@ impl ArrangementSharingRegistry {
     /// its own, so a peek waiting on its seal is re-examined only through this fan-out. The alias
     /// closure is computed under the `aliases` lock, which is released before the `wakers` lock is
     /// taken, so it stays outside the lost-wakeup argument.
-    fn notify(&self, id: GlobalId, worker_index: usize) {
+    pub(crate) fn notify(&self, id: GlobalId, worker_index: usize) {
         let ids = self.notify_closure(id);
         let mut wakers = self.inner.wakers.lock().expect("registry poisoned");
         if let Some(waker) = wakers.get_mut(worker_index).and_then(|w| w.as_mut()) {
@@ -452,6 +490,52 @@ mod tests {
         });
     }
 
+    /// Like `publish_index_into`, but instead of publishing fresh arrangements and `insert`ing
+    /// them, routes through `get_or_create_placeholder` and `PublishArrangement::adopt`, the path
+    /// the maintenance render side uses. Exercises the get-or-create half of the convergence
+    /// contract: whatever slot `get_or_create_placeholder` returns (existing or freshly created) is
+    /// the one that gets filled.
+    fn publish_index_into_adopting(
+        registry: &ArrangementSharingRegistry,
+        id: GlobalId,
+        rows: Vec<(Row, Row)>,
+    ) {
+        let registry_in = registry.clone();
+        timely::execute_directly(move |worker| {
+            worker.dataflow::<Timestamp, _, _>(|scope| {
+                let (mut oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
+                let oks = oks_collection.mz_arrange::<
+                    ColumnationChunker<_>,
+                    RowRowBatcher<_, _>,
+                    RowRowBuilder<_, _>,
+                    RowRowSpine<_, _>,
+                >("test oks");
+
+                let (mut errs_input, errs_collection) =
+                    scope.new_collection::<DataflowErrorSer, Diff>();
+                let errs = KeyCollection::from(errs_collection).mz_arrange::<
+                    ColumnationChunker<_>,
+                    ErrBatcher<_, _>,
+                    ErrBuilder<_, _>,
+                    ErrSpine<_, _>,
+                >("test errs");
+
+                let slot = registry_in.get_or_create_placeholder(id, 0, 1);
+                PublishArrangement::adopt(&oks, &slot.oks);
+                PublishArrangement::adopt(&errs, &slot.errs);
+                registry_in.notify(id, 0);
+
+                for (k, v) in rows {
+                    oks_input.update((k, v), Diff::ONE);
+                }
+                oks_input.advance_to(Timestamp::from(1_u64));
+                oks_input.flush();
+                errs_input.advance_to(Timestamp::from(1_u64));
+                errs_input.flush();
+            });
+        });
+    }
+
     fn test_rows() -> Vec<(Row, Row)> {
         vec![
             (
@@ -463,6 +547,37 @@ mod tests {
                 Row::pack_slice(&[Datum::String("b")]),
             ),
         ]
+    }
+
+    #[mz_ore::test]
+    fn get_or_create_converges_on_one_slot() {
+        // A reader and a publisher both touch the same id. Whichever is first creates the
+        // placeholder; the second must observe the same Arc, not a second slot, and after
+        // adoption the reader sees the published rows.
+        let id = GlobalId::User(1);
+        let registry = ArrangementSharingRegistry::new();
+
+        // Reader creates the placeholder first and mints its handle straight off it.
+        // `SharedIndexArrangement` has no `handles_for_worker`: a slot returned by
+        // `get_or_create_placeholder` is already scoped to one worker, so its handles come
+        // directly off `Published::handle`, the same way `ArrangementSharingRegistry::mint`
+        // builds them once a slot is located.
+        let slot = registry.get_or_create_placeholder(id, 0, 1);
+        let oks = slot.oks.handle();
+
+        // A second get_or_create_placeholder call for the same (id, worker_index) must return
+        // the SAME Arc, not a second, disconnected slot, before we even get to the adopt below.
+        let republished = registry.get_or_create_placeholder(id, 0, 1);
+        assert!(Arc::ptr_eq(&slot, &republished));
+
+        // Publisher adopts the same slot and fills it (reuse publish_index_into, but routed
+        // through get_or_create_placeholder + adopt).
+        publish_index_into_adopting(&registry, id, test_rows());
+
+        assert_eq!(
+            read_rows(&oks, Timestamp::from(0_u64)),
+            expected_rows(&test_rows())
+        );
     }
 
     #[mz_ore::test]
