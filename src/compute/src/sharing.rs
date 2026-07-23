@@ -89,6 +89,13 @@ struct Waker {
 #[derive(Default)]
 struct Inner {
     map: Mutex<BTreeMap<GlobalId, Vec<Option<Arc<SharedIndexArrangement>>>>>,
+    /// Source id to the ids that re-export its arrangement (see [`ArrangementSharingRegistry::reexport`]).
+    ///
+    /// A re-exported id shares another index's arrangement and has no dataflow streams of its own,
+    /// so it installs no seal-signal frontier tap. Its seal signal must ride on the source's tap:
+    /// [`Self::notify`] wakes an id together with everything that re-exports it, transitively.
+    /// Resolved outside the `wakers` lock, so it does not enter the lost-wakeup argument.
+    aliases: Mutex<BTreeMap<GlobalId, BTreeSet<GlobalId>>>,
     /// Indexed by worker ordinal; `None` until that interactive worker registers its waker.
     wakers: Mutex<Vec<Option<Waker>>>,
 }
@@ -172,6 +179,12 @@ impl ArrangementSharingRegistry {
                 .or_insert_with(|| (0..peers).map(|_| None).collect());
             slots[worker_index] = Some(arr);
         }
+        // Record `to` as a re-export of `from` so `from`'s seal signal wakes `to` as well. `to` has
+        // no streams of its own to tap, so this alias is its only source of frontier notifications.
+        {
+            let mut aliases = self.inner.aliases.lock().expect("registry poisoned");
+            aliases.entry(*from).or_default().insert(to);
+        }
         // See `insert_shared`: mark dirty and fire the worker's waker after the slot write.
         self.notify(to, worker_index);
         true
@@ -182,6 +195,19 @@ impl ArrangementSharingRegistry {
         {
             let mut map = self.inner.map.lock().expect("registry poisoned");
             map.remove(id);
+        }
+        {
+            // Prune `id` only as a re-export target: a dropped target no longer needs waking. Do
+            // NOT drop `id`'s own source entry here. A source's dataflow outlives its catalog drop
+            // while a re-export still imports its arrangement (the source keeps sealing, and its tap
+            // keeps firing `note_frontier`), and that trailing seal signal is the re-export's only
+            // way to learn its arrangement advanced. The source entry is cleared when its last
+            // target is pruned below, leaving it empty and inert.
+            let mut aliases = self.inner.aliases.lock().expect("registry poisoned");
+            for targets in aliases.values_mut() {
+                targets.remove(id);
+            }
+            aliases.retain(|_, targets| !targets.is_empty());
         }
         // `remove` is not worker-specific: any interactive worker may have pending work on `id`, so
         // mark it dirty for every registered waker. A waiter re-checks and, finding the slot gone,
@@ -268,11 +294,34 @@ impl ArrangementSharingRegistry {
     ///
     /// A failing `activate()` means the interactive worker has gone away, so there is nothing to
     /// wake and the dirty mark is harmless. It is a backstop, not the primary path.
+    ///
+    /// Marks `id` together with every id that re-exports it, transitively. A re-export has no tap of
+    /// its own, so a peek waiting on its seal is re-examined only through this fan-out. The alias
+    /// closure is computed under the `aliases` lock, which is released before the `wakers` lock is
+    /// taken, so it stays outside the lost-wakeup argument.
     fn notify(&self, id: GlobalId, worker_index: usize) {
+        let ids = self.notify_closure(id);
         let mut wakers = self.inner.wakers.lock().expect("registry poisoned");
         if let Some(waker) = wakers.get_mut(worker_index).and_then(|w| w.as_mut()) {
-            Self::mark(waker, id);
+            for id in ids {
+                Self::mark(waker, id);
+            }
         }
+    }
+
+    /// `id` plus the transitive closure of ids that re-export it.
+    fn notify_closure(&self, id: GlobalId) -> BTreeSet<GlobalId> {
+        let aliases = self.inner.aliases.lock().expect("registry poisoned");
+        let mut closure = BTreeSet::new();
+        let mut frontier = vec![id];
+        while let Some(next) = frontier.pop() {
+            if closure.insert(next) {
+                if let Some(targets) = aliases.get(&next) {
+                    frontier.extend(targets.iter().copied());
+                }
+            }
+        }
+        closure
     }
 
     /// Marks `id` dirty for every registered worker and fires each coalescing waker. Used by
@@ -667,6 +716,43 @@ mod tests {
         // The seal signal marks the id dirty for its worker without requiring publication.
         registry.note_frontier(id, 0);
         assert_eq!(registry.take_dirty(0), BTreeSet::from([id]));
+    }
+
+    #[mz_ore::test]
+    fn note_frontier_fans_out_to_reexports() {
+        let src = GlobalId::User(1);
+        let alias = GlobalId::User(2);
+        let worker = ParkedWorker::new();
+        let registry = ArrangementSharingRegistry::new();
+        registry.register_waker(0, worker.activator());
+
+        // Publish `src` and re-export it under `alias`. The re-export has no tap of its own, so its
+        // only seal signal is `src`'s. Drain the publication marks first.
+        publish_index_into(&registry, src, test_rows());
+        assert!(registry.reexport(&src, alias, 0, 1));
+        let _ = registry.take_dirty(0);
+
+        // A frontier advance on the source wakes both the source and the re-export.
+        registry.note_frontier(src, 0);
+        assert_eq!(registry.take_dirty(0), BTreeSet::from([src, alias]));
+
+        // A frontier advance on the re-export alone does not spuriously wake the source.
+        registry.note_frontier(alias, 0);
+        assert_eq!(registry.take_dirty(0), BTreeSet::from([alias]));
+
+        // Dropping the source's catalog entry does not sever the fan-out: the source's dataflow
+        // outlives the drop while the re-export still imports it, and its tap keeps sealing the
+        // re-export. This is the `DROP INDEX` case where one of two same-key indexes is removed.
+        registry.remove(&src);
+        let _ = registry.take_dirty(0);
+        registry.note_frontier(src, 0);
+        assert_eq!(registry.take_dirty(0), BTreeSet::from([src, alias]));
+
+        // Once the re-export target itself drops, the fan-out stops.
+        registry.remove(&alias);
+        let _ = registry.take_dirty(0);
+        registry.note_frontier(src, 0);
+        assert_eq!(registry.take_dirty(0), BTreeSet::from([src]));
     }
 
     #[mz_ore::test]
