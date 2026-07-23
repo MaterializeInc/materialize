@@ -172,8 +172,8 @@ use crate::render::errors::DataflowErrorSer;
 use crate::server::ComputeRuntimeRole;
 use crate::shared_trace::PublishArrangement;
 use crate::sharing::{
-    ArrangementSharingRegistry, SharedErrsFrontier, SharedErrsHandle, SharedIndexArrangement,
-    SharedOksFrontier, SharedOksHandle,
+    ArrangementSharingRegistry, SharedErrsFrontier, SharedErrsHandle, SharedOksFrontier,
+    SharedOksHandle,
 };
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
 use mz_row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
@@ -956,17 +956,21 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
                         }
                     });
 
-                    let published_oks = PublishArrangement::publish(&oks);
-                    let published_errs = PublishArrangement::publish(&errs);
-                    compute_state.sharing_registry.insert(
+                    // Adopt the registry's placeholder slot for `idx_id` rather than publishing
+                    // fresh and inserting: whichever side (this maintenance render, or an
+                    // interactive import ahead of it) touches `idx_id` first creates the slot, so
+                    // this fills it in place instead of risking an overwrite of a placeholder a
+                    // reader has already imported. `get_or_create_placeholder` does not notify on
+                    // create, so notify explicitly once both halves are adopted, mirroring the
+                    // notification `insert` used to fire for a freshly published slot.
+                    let slot = compute_state.sharing_registry.get_or_create_placeholder(
                         idx_id,
-                        self.scope.index(),
+                        worker_index,
                         self.scope.peers(),
-                        SharedIndexArrangement {
-                            oks: published_oks,
-                            errs: published_errs,
-                        },
                     );
+                    PublishArrangement::adopt(&oks, &slot.oks);
+                    PublishArrangement::adopt(&errs, &slot.errs);
+                    compute_state.sharing_registry.notify(idx_id, worker_index);
                 }
 
                 compute_state.traces.set(
@@ -1124,17 +1128,19 @@ where
                         }
                     });
 
-                    let published_oks = PublishArrangement::publish(&oks);
-                    let published_errs = PublishArrangement::publish(&errs);
-                    compute_state.sharing_registry.insert(
+                    // Adopt the registry's placeholder slot for `idx_id` rather than publishing
+                    // fresh and inserting. See the matching adopt in `export_index` for why: it
+                    // fills a slot in place instead of risking an overwrite of a placeholder a
+                    // reader has already imported, and it must notify explicitly once both halves
+                    // are adopted since `get_or_create_placeholder` does not notify on create.
+                    let slot = compute_state.sharing_registry.get_or_create_placeholder(
                         idx_id,
-                        outer.index(),
+                        worker_index,
                         outer.peers(),
-                        SharedIndexArrangement {
-                            oks: published_oks,
-                            errs: published_errs,
-                        },
                     );
+                    PublishArrangement::adopt(&oks, &slot.oks);
+                    PublishArrangement::adopt(&errs, &slot.errs);
+                    compute_state.sharing_registry.notify(idx_id, worker_index);
                 }
 
                 compute_state.traces.set(
