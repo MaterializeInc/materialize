@@ -1752,3 +1752,53 @@ query T
 SELECT timestamp::timestamp from t ORDER BY t.timestamp;
 ----
 2012-03-05 00:00:00
+
+# Regression tests for SQL-467.
+
+# BC years in extract are numbered with 1 BC as year -1, there is no year 0.
+query RRR
+SELECT extract(year FROM DATE '2020-08-11 BC'),
+       extract(year FROM TIMESTAMP '2020-08-11 12:00:00 BC'),
+       extract(year FROM TIMESTAMPTZ '2020-08-11 12:00:00+00 BC')
+----
+-2020  -2020  -2020
+
+query RR
+SELECT extract(year FROM DATE '0001-08-11 BC'), extract(year FROM DATE '0001-08-11')
+----
+-1  1
+
+# make_timestamp rejects year 0 and treats negative years as BC.
+query error date out of range
+SELECT make_timestamp(0, 7, 15, 12, 30, 15)
+
+query T
+SELECT make_timestamp(-1, 7, 15, 12, 30, 15)
+----
+0001-07-15 12:30:15 BC
+
+query T
+SELECT make_timestamp(-2020, 8, 11, 12, 30, 15)
+----
+2020-08-11 12:30:15 BC
+
+# make_timestamp allows exactly 24:00:00 and 60 seconds, which roll over.
+query T
+SELECT make_timestamp(1999, 12, 31, 24, 0, 0)
+----
+2000-01-01 00:00:00
+
+query T
+SELECT make_timestamp(2013, 7, 15, 12, 30, 60)
+----
+2013-07-15 12:31:00
+
+query error timestamp out of range
+SELECT make_timestamp(1999, 12, 31, 24, 0, 1)
+
+# Invalid fields are errors, not NULL.
+query error date out of range
+SELECT make_timestamp(2020, 13, 1, 0, 0, 0)
+
+query error timestamp out of range
+SELECT make_timestamp(2020, 1, 1, 12, 60, 0)
