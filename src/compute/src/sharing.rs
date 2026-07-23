@@ -997,6 +997,180 @@ mod tests {
         );
     }
 
+    /// Renders a `RowRow` index that ADOPTS an existing `placeholder` publication point, driving the
+    /// input across its distinct times and stepping between them so the trace seals several batches.
+    ///
+    /// Mirrors [`publish_join_input`], but instead of minting a fresh publication and registering it,
+    /// it installs its publisher into the caller-provided `placeholder` via
+    /// [`PublishArrangement::adopt`]. The placeholder may already back live importers (see
+    /// [`join_over_placeholder_adopted_late_matches_direct`]). Adoption fills their queues from the
+    /// same publisher iteration. Only the `oks` arrangement is adopted, since the test joins on `oks`.
+    fn adopt_join_input(
+        placeholder: &Published<RowRowSpine<Timestamp, Diff>>,
+        worker: &mut timely::worker::Worker,
+        updates: &[Update],
+        seal: u64,
+    ) -> impl FnMut(&mut timely::worker::Worker) + use<> {
+        let updates = updates.to_vec();
+
+        let mut oks_input = worker.dataflow::<Timestamp, _, _>(|scope| {
+            let (oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
+            let oks = oks_collection.mz_arrange::<
+                ColumnationChunker<_>,
+                RowRowBatcher<_, _>,
+                RowRowBuilder<_, _>,
+                RowRowSpine<_, _>,
+            >("adopt oks");
+            // Install this arrangement's publisher into the pre-existing placeholder Arc, rather than
+            // minting a fresh publication point. Importers already registered against the placeholder
+            // (built before this call) now begin to fill.
+            PublishArrangement::adopt(&oks, placeholder);
+            oks_input
+        });
+
+        let mut times: Vec<u64> = updates.iter().map(|&(_, _, t, _)| t).collect();
+        times.sort_unstable();
+        times.dedup();
+        for &t in &times {
+            oks_input.advance_to(Timestamp::from(t));
+            for &(k, v, ut, d) in &updates {
+                if ut == t {
+                    oks_input.update((key_row(k), val_row(v)), Diff::from(d));
+                }
+            }
+            oks_input.flush();
+            for _ in 0..16 {
+                worker.step();
+            }
+        }
+        oks_input.advance_to(Timestamp::from(seal));
+        oks_input.flush();
+
+        move |worker: &mut timely::worker::Worker| {
+            let _keep = &oks_input;
+            worker.step();
+        }
+    }
+
+    /// A differential join whose input trace is a PLACEHOLDER at construction fills correctly once
+    /// the placeholder is adopted in place.
+    ///
+    /// This reproduces the command-arrival-order hazard directly. `id_a` is imported and joined
+    /// BEFORE any publisher for it exists: the interactive side mints a placeholder, takes a handle,
+    /// imports it, and builds `join_core` over the EMPTY placeholder, capturing the trace by value at
+    /// construction. `id_b` is published normally as an already-materialized co-input.
+    ///
+    /// The test asserts two things:
+    /// * While `a` is unadopted, the join produces nothing and its frontier stays pinned at the
+    ///   minimum (held by the placeholder import at `upper = [0]`).
+    /// * After the maintenance side renders `a`'s arrangement and ADOPTS the same `Arc` (installing a
+    ///   publisher that fills the already-registered importer queue), the captured output equals the
+    ///   direct join, with correct multiplicities and no doubling.
+    #[mz_ore::test]
+    fn join_over_placeholder_adopted_late_matches_direct() {
+        let id_b = GlobalId::User(2);
+
+        // Same inputs as `join_over_imported_arrangements_matches_direct`: key 1 inserted then
+        // retracted, plus keys 2 and 3, joined against one value per key.
+        let a: Vec<Update> = vec![
+            (1, "a", 0, 1),
+            (2, "b", 0, 1),
+            (3, "c", 1, 1),
+            (1, "a", 2, -1),
+        ];
+        let b: Vec<Update> = vec![(1, "x", 0, 1), (2, "y", 1, 1), (3, "z", 2, 1)];
+        let seal = 3;
+
+        let expected = expected_join(&a, &b);
+
+        let (capture_tx, capture_rx) = mpsc::channel();
+
+        timely::execute_directly(move |worker| {
+            let registry = ArrangementSharingRegistry::new();
+            let peers = worker.peers();
+            let worker_index = worker.index();
+
+            // B: published normally, an already-materialized co-input.
+            let mut keep_b = publish_join_input(&registry, worker, id_b, &b, seal);
+            let (oks_b, _errs_b) = registry.handles(&id_b, worker_index).expect("B published");
+
+            // A: a PLACEHOLDER, created before any publisher exists. Mint its reader handle now.
+            let placeholder_a: Published<RowRowSpine<Timestamp, Diff>> =
+                Published::placeholder(peers);
+            let oks_a = placeholder_a.handle();
+
+            // Interactive side: import both as arrangements and join them. A is imported over the
+            // EMPTY placeholder. `join_core` captures `arr_a.trace` by value here, before A has any
+            // publisher. This is exactly the construction-time capture that late-binding import must
+            // survive.
+            let probe = ProbeHandle::new();
+            worker.dataflow::<Timestamp, _, _>(|scope| {
+                let arr_a = oks_a.import(scope.clone(), "import A (placeholder)");
+                let arr_b = oks_b.import(scope.clone(), "import B");
+                let joined = arr_a.join_core(arr_b, |key, v1, v2| {
+                    let row =
+                        Row::pack(key.into_iter().chain(v1.into_iter()).chain(v2.into_iter()));
+                    Some(row)
+                });
+                joined
+                    .inner
+                    .probe_with(&probe)
+                    .capture_into(capture_tx.clone());
+            });
+
+            // Step with A still unadopted. The placeholder import holds A's frontier at the minimum,
+            // so the join frontier cannot pass 0 and no output is produced.
+            for _ in 0..64 {
+                keep_b(worker);
+                worker.step();
+            }
+            assert!(
+                probe.less_than(&Timestamp::from(1_u64)),
+                "join advanced past time 0 before A was adopted"
+            );
+
+            // Maintenance side: NOW render A's arrangement and ADOPT the same placeholder Arc, feeding
+            // A's updates. The join built above must observe the filled chain through its captured
+            // handle without being rebuilt.
+            let mut keep_a = adopt_join_input(&placeholder_a, worker, &a, seal);
+
+            // Step until the join has sealed through the seal frontier.
+            let seal_ts = Timestamp::from(seal);
+            let mut steps = 0;
+            while probe.less_than(&seal_ts) {
+                keep_a(worker);
+                keep_b(worker);
+                worker.step();
+                steps += 1;
+                assert!(
+                    steps < 10_000,
+                    "join did not seal through {seal_ts:?} after adopt"
+                );
+            }
+        });
+
+        let mut got: Vec<(Row, Timestamp, Diff)> = capture_rx
+            .extract()
+            .into_iter()
+            .flat_map(|(_, data)| data)
+            .collect();
+        got.sort();
+        let mut consolidated: BTreeMap<(Row, Timestamp), Diff> = BTreeMap::new();
+        for (row, time, diff) in got {
+            *consolidated.entry((row, time)).or_insert(Diff::ZERO) += diff;
+        }
+        let got: Vec<(Row, Timestamp, Diff)> = consolidated
+            .into_iter()
+            .filter(|(_, d)| !d.is_zero())
+            .map(|((row, t), d)| (row, t, d))
+            .collect();
+
+        assert_eq!(
+            got, expected,
+            "join over a late-adopted placeholder diverged from the direct join"
+        );
+    }
+
     /// Consolidates a captured `(Row, Timestamp, Diff)` stream per `(row, time)`, dropping entries
     /// whose accumulated diff is zero, and returns them sorted. Shared by the assertions below.
     fn consolidate_capture(

@@ -145,6 +145,34 @@ struct SharedTrace<Tr: TraceReader> {
 
 type SharedTraceRef<Tr> = Arc<SharedTrace<Tr>>;
 
+impl<Tr: TraceReader> SharedTrace<Tr> {
+    /// A fresh publication point: empty chain, `since` and `upper` at the minimum time, no reader
+    /// holds, no publisher attached.
+    ///
+    /// Shared by [`Published::placeholder`], which leaves the point unbacked for a later
+    /// [`PublishArrangement::adopt`], and [`PublishArrangement::publish_named`], for which it is the
+    /// starting state before adopting with no prior reader.
+    fn new_empty(peers: usize) -> Self {
+        SharedTrace {
+            state: Mutex::new(SharedTraceState {
+                chain: Vec::new(),
+                // NOTE: `Antichain::from_elem(minimum)`, never `Antichain::new()`. The empty
+                // frontier reads as "complete through the end of time", making every snapshot wait
+                // vacuously true and returning empty results instead of blocking.
+                since: Antichain::from_elem(batch_min::<Tr>()),
+                upper: Antichain::from_elem(batch_min::<Tr>()),
+                logical_holds: BTreeMap::new(),
+                physical_holds: BTreeMap::new(),
+                queues: BTreeMap::new(),
+                next_id: 0,
+                closed: false,
+            }),
+            upper_changed: Condvar::new(),
+            peers,
+        }
+    }
+}
+
 /// The result of publishing an arrangement. Holding it keeps the publication point registered;
 /// dropping it does not stop the publisher (the publisher lives with its dataflow), but no further
 /// handles can be minted from it.
@@ -162,6 +190,23 @@ where
     /// will not compact past it until the handle (and all its clones) drop.
     pub fn handle(&self) -> SharedTraceHandle<Tr> {
         SharedTraceHandle::register(Arc::clone(&self.shared))
+    }
+
+    /// Creates an unbacked publication point: an empty chain with `since` and `upper` at the minimum
+    /// time and no publisher.
+    ///
+    /// A reader may immediately mint handles ([`Self::handle`]) and build imports over it, but they
+    /// produce nothing (the import frontier stays at the minimum) until a publisher adopts this point
+    /// via [`PublishArrangement::adopt`] and begins refreshing it. Adoption fills the same `Arc`, so
+    /// a handle captured by value at construction (as a differential join captures its input trace)
+    /// observes the filled chain: the handle is a live proxy into the shared state, not a snapshot.
+    ///
+    /// `peers` must equal the total peer count of the scope that later adopts the point, the same
+    /// invariant [`SharedTraceHandle::import`] enforces.
+    pub fn placeholder(peers: usize) -> Self {
+        Published {
+            shared: Arc::new(SharedTrace::new_empty(peers)),
+        }
     }
 }
 
@@ -404,6 +449,22 @@ pub trait PublishArrangement<Tr: TraceReader> {
 
     /// [`PublishArrangement::publish`], with a name for the publisher operator.
     fn publish_named(&self, name: &str) -> Published<Tr>;
+
+    /// Installs this arrangement's publisher into an existing `placeholder` publication point,
+    /// created by [`Published::placeholder`], rather than minting a fresh one.
+    ///
+    /// This is the late-binding path: a reader may create the placeholder and build handles and
+    /// imports over it before this arrangement is rendered. Those imports produce nothing (their
+    /// frontier stays at the minimum) until adoption begins the refresh loop, at which point the
+    /// already-registered importer queues fill from the same publisher iteration that serves any
+    /// later-registered reader.
+    ///
+    /// Requires the adopting scope's total peer count to equal the placeholder's, panicking
+    /// otherwise.
+    fn adopt(&self, placeholder: &Published<Tr>);
+
+    /// [`PublishArrangement::adopt`], with a name for the publisher operator.
+    fn adopt_named(&self, placeholder: &Published<Tr>, name: &str);
 }
 
 impl<'scope, Tr> PublishArrangement<Tr> for Arranged<'scope, TraceAgent<Tr>>
@@ -420,34 +481,36 @@ where
     }
 
     fn publish_named(&self, name: &str) -> Published<Tr> {
+        // Publishing is adopting a fresh publication point with no prior reader.
+        let peers = self.stream.scope().peers();
+        let published = Published {
+            shared: Arc::new(SharedTrace::new_empty(peers)),
+        };
+        self.adopt_named(&published, name);
+        published
+    }
+
+    fn adopt(&self, placeholder: &Published<Tr>) {
+        // Call the trait method explicitly, for the same reason as `publish` above.
+        PublishArrangement::adopt_named(self, placeholder, "PublishShared");
+    }
+
+    fn adopt_named(&self, placeholder: &Published<Tr>, name: &str) {
+        assert_eq!(
+            self.stream.scope().peers(),
+            placeholder.shared.peers,
+            "adopt requires equal total peers (workers_per_process * num_processes)"
+        );
+
         // The publisher owns a `TraceAgent` clone: its read capability is the aggregate lease for
         // all readers, so the trace cannot compact or drop out from under them.
         let mut agent = self.trace.clone();
 
-        let initial_since = agent.get_logical_compaction().to_owned();
-        let shared: SharedTraceRef<Tr> = Arc::new(SharedTrace {
-            state: Mutex::new(SharedTraceState {
-                chain: Vec::new(),
-                since: initial_since,
-                // NOTE: `Antichain::from_elem(minimum)`, never `Antichain::new()`. The empty
-                // frontier reads as "complete through the end of time", making every snapshot wait
-                // vacuously true and returning empty results instead of blocking.
-                upper: Antichain::from_elem(batch_min::<Tr>()),
-                logical_holds: BTreeMap::new(),
-                physical_holds: BTreeMap::new(),
-                queues: BTreeMap::new(),
-                next_id: 0,
-                closed: false,
-            }),
-            upper_changed: Condvar::new(),
-            peers: self.stream.scope().peers(),
-        });
-
         let publisher = Publisher {
-            shared: Arc::clone(&shared),
+            shared: Arc::clone(&placeholder.shared),
         };
 
-        let sink_shared = Arc::clone(&shared);
+        let sink_shared = Arc::clone(&placeholder.shared);
         self.stream.clone().sink(
             timely::dataflow::channels::pact::Pipeline,
             name,
@@ -588,8 +651,6 @@ where
                 agent.set_physical_compaction(physical_target.borrow());
             },
         );
-
-        Published { shared }
     }
 }
 
