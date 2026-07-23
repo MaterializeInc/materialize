@@ -135,6 +135,7 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
     let location = PersistLocation {
         blob_uri: args.blob_uri.clone(),
         consensus_uri: args.consensus_uri.clone(),
+        fast_tier_blob_uri: None,
     };
     let persist = PersistClientCache::new(
         PersistConfig::new_default_configs(&mz_persist_client::BUILD_INFO, SYSTEM_TIME.clone()),
