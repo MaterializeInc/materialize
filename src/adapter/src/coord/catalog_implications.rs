@@ -1607,6 +1607,7 @@ impl Coordinator {
                     CatalogItem::Log(_)
                     | CatalogItem::View(_)
                     | CatalogItem::MaterializedView(_)
+                    | CatalogItem::MetricSink(_)
                     | CatalogItem::Index(_)
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)
@@ -1827,6 +1828,10 @@ impl CatalogImplication {
                 CatalogItem::Log(_) => {}
                 CatalogItem::Type(_) => {}
                 CatalogItem::Func(_) => {}
+                // Metric sinks have no controller-side effect yet. The compute render arm for
+                // `ComputeSinkConnection::MetricSink` exists, but nothing builds a dataflow for a
+                // builtin metric sink, so there is nothing to absorb here.
+                CatalogItem::MetricSink(_) => {}
             },
             ParsedStateUpdateKind::TemporaryItem {
                 durable_item: _,
@@ -1866,6 +1871,10 @@ impl CatalogImplication {
                 CatalogItem::Log(_) => {}
                 CatalogItem::Type(_) => {}
                 CatalogItem::Func(_) => {}
+                // Metric sinks have no controller-side effect yet. The compute render arm for
+                // `ComputeSinkConnection::MetricSink` exists, but nothing builds a dataflow for a
+                // builtin metric sink, so there is nothing to absorb here.
+                CatalogItem::MetricSink(_) => {}
             },
             ParsedStateUpdateKind::Cluster {
                 durable_cluster: _,

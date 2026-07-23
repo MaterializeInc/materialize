@@ -706,7 +706,9 @@ impl Migration {
                     Table(table) => **table != *MZ_STORAGE_USAGE_BY_SHARD,
                     MaterializedView(..) => true,
                     Source(source) => **source != *MZ_CATALOG_RAW,
-                    Log(..) | View(..) | Type(..) | Func(..) | Index(..) | Connection(..) => false,
+                    // Metric sinks have no persist shard to evolve or replace.
+                    Log(..) | View(..) | Type(..) | Func(..) | Index(..) | Connection(..)
+                    | MetricSink(..) => false,
                 }
             })
             .map(|(object, _)| object.clone())

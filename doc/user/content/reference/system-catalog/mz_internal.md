@@ -1542,6 +1542,8 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_console_cluster_utilization_overview_24h -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_object_arrangement_sizes -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_object_arrangement_size_history -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_metric_sinks -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_metric_sinks_raw -->
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.pg_attrdef_all_databases -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.pg_attribute_all_databases -->

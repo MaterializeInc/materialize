@@ -1208,6 +1208,7 @@ impl Coordinator {
                             new_secrets += 1;
                         }
                         CatalogItem::Log(_)
+                        | CatalogItem::MetricSink(_)
                         | CatalogItem::View(_)
                         | CatalogItem::Index(_)
                         | CatalogItem::Type(_)
@@ -1287,6 +1288,7 @@ impl Coordinator {
                                         new_secrets -= 1;
                                     }
                                     CatalogItem::Log(_)
+                                    | CatalogItem::MetricSink(_)
                                     | CatalogItem::View(_)
                                     | CatalogItem::Index(_)
                                     | CatalogItem::Type(_)
@@ -1314,6 +1316,7 @@ impl Coordinator {
                     CatalogItem::Connection(_)
                     | CatalogItem::Table(_)
                     | CatalogItem::Sink(_)
+                    | CatalogItem::MetricSink(_)
                     | CatalogItem::MaterializedView(_)
                     | CatalogItem::Secret(_)
                     | CatalogItem::Log(_)

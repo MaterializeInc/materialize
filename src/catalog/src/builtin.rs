@@ -46,7 +46,8 @@ use mz_ore::collections::HashMap;
 use mz_pgrepr::oid;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::namespaces::{
-    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_UNSAFE_SCHEMA, PG_CATALOG_SCHEMA,
+    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_INTROSPECTION_SCHEMA,
+    MZ_UNSAFE_SCHEMA, PG_CATALOG_SCHEMA,
 };
 use mz_repr::role_id::RoleId;
 use mz_repr::{RelationDesc, SemanticType, SqlRelationType};
@@ -96,6 +97,7 @@ pub enum Builtin<T: 'static + TypeReference> {
     Source(&'static BuiltinSource),
     Index(&'static BuiltinIndex),
     Connection(&'static BuiltinConnection),
+    MetricSink(&'static BuiltinMetricSink),
 }
 
 impl<T: TypeReference> Builtin<T> {
@@ -110,6 +112,7 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::Source(coll) => coll.name,
             Builtin::Index(index) => index.name,
             Builtin::Connection(connection) => connection.name,
+            Builtin::MetricSink(sink) => sink.name,
         }
     }
 
@@ -124,6 +127,7 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::Source(coll) => coll.schema,
             Builtin::Index(index) => index.schema,
             Builtin::Connection(connection) => connection.schema,
+            Builtin::MetricSink(sink) => sink.schema,
         }
     }
 
@@ -138,6 +142,7 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::Func(_) => CatalogItemType::Func,
             Builtin::Index(_) => CatalogItemType::Index,
             Builtin::Connection(_) => CatalogItemType::Connection,
+            Builtin::MetricSink(_) => CatalogItemType::MetricSink,
         }
     }
 
@@ -622,6 +627,162 @@ impl BuiltinMaterializedView {
     }
 }
 
+/// A Prometheus metric kind. The two kinds the `MetricSink` operator folds: free-moving `Gauge`s
+/// and monotonic `Counter`s.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Serialize)]
+pub enum MetricSinkKind {
+    Gauge,
+    Counter,
+}
+
+impl MetricSinkKind {
+    /// The `metric_type` string the canonical `MetricSink` row shape carries for this kind.
+    pub fn as_metric_type(&self) -> &'static str {
+        match self {
+            MetricSinkKind::Gauge => "gauge",
+            MetricSinkKind::Counter => "counter",
+        }
+    }
+}
+
+/// One Prometheus metric family emitted by a [`BuiltinMetricSink`], sourced from a single
+/// numeric column of the sink's query.
+#[derive(Clone, Debug, Hash, Serialize)]
+pub struct BuiltinMetricSinkValue {
+    /// Source column of the sink's query carrying the numeric value.
+    pub column: &'static str,
+    /// Prometheus metric family name (an `mz_*` identifier).
+    pub metric: &'static str,
+    pub kind: MetricSinkKind,
+    /// Prometheus `# HELP` text for the family.
+    pub help: &'static str,
+}
+
+/// A curated builtin metric sink: a static pairing of introspection SQL with a typed Prometheus
+/// label/value schema.
+///
+/// This is an authoring convenience, not a new operator. Each sink materializes two catalog
+/// objects at boot: a companion [`BuiltinView`] holding the query lowered into the canonical
+/// `MetricSink` row shape (see [`builtin_metric_sink_view_sql`]), and a thin
+/// `CatalogItem::MetricSink` pointing at that view. No dataflow is installed here.
+///
+/// Only introspection-sourced labels belong in [`Self::labels`]. Per-replica attribution
+/// (`cluster_id`/`replica_id`) is injected as literal label entries at install time, so the
+/// companion view stays cluster/replica-agnostic.
+#[derive(Debug)]
+pub struct BuiltinMetricSink {
+    pub name: &'static str,
+    pub schema: &'static str,
+    pub oid: u32,
+    /// Name of the companion view holding the lowered canonical-shape query. Conventionally
+    /// `<name>_shaped`.
+    pub view_name: &'static str,
+    /// OID of the companion view.
+    pub view_oid: u32,
+    /// SELECT over introspection sources producing the declared label and value columns.
+    pub sql: &'static str,
+    /// Label column names, assembled into the canonical `labels` map.
+    pub labels: &'static [&'static str],
+    /// One Prometheus metric family per value column.
+    pub values: &'static [BuiltinMetricSinkValue],
+    /// ACL items to apply to the object.
+    pub access: Vec<MzAclItem>,
+}
+
+impl BuiltinMetricSink {
+    /// The companion [`BuiltinView`] this sink lowers to. The view carries the canonical
+    /// `MetricSink` row shape and gives us planning, `resolved_ids`, and a `RelationDesc` for free.
+    pub fn companion_view(&self) -> BuiltinView {
+        BuiltinView {
+            name: self.view_name,
+            schema: self.schema,
+            oid: self.view_oid,
+            desc: metric_sink_canonical_desc(),
+            column_comments: BTreeMap::new(),
+            sql: Box::leak(builtin_metric_sink_view_sql(self).into_boxed_str()),
+            access: self.access.clone(),
+            ontology: None,
+        }
+    }
+}
+
+/// The canonical row shape every metric-sink source projects to: the 5 columns the `MetricSink`
+/// operator consumes, before it appends its `metric_kind`/`name_valid` contract columns at
+/// dataflow-build time.
+pub fn metric_sink_canonical_desc() -> RelationDesc {
+    use mz_repr::SqlScalarType;
+    // Nullability matches what `builtin_metric_sink_view_sql` actually projects, which
+    // `verify_builtin_descs` checks against the optimized plan. `metric_name`, `metric_type`, and
+    // `help` are string literals, `labels` is a non-null MAP constructor, and `value` casts a
+    // non-null source column, so every column is non-nullable.
+    RelationDesc::builder()
+        .with_column("metric_name", SqlScalarType::String.nullable(false))
+        .with_column("metric_type", SqlScalarType::String.nullable(false))
+        .with_column(
+            "labels",
+            SqlScalarType::Map {
+                value_type: Box::new(SqlScalarType::String),
+                custom_id: None,
+            }
+            .nullable(false),
+        )
+        .with_column("value", SqlScalarType::Float64.nullable(false))
+        .with_column("help", SqlScalarType::String.nullable(false))
+        .finish()
+}
+
+/// Lowers a [`BuiltinMetricSink`] to the SQL of its companion view: a projection of the sink's
+/// query into the canonical `MetricSink` row shape (`metric_name`, `metric_type`, `labels`,
+/// `value`, `help`), `UNION ALL`-ed across the value columns so each source row yields one row per
+/// metric family.
+///
+/// The `metric_kind`/`name_valid` contract columns the operator reads are appended at
+/// dataflow-build time (see `mz_adapter::optimize::metric_sink`), not here, so the view stays the
+/// clean 5-column canonical shape.
+///
+/// NOTE: this lives in the catalog crate rather than alongside the MIR shaping in
+/// `mz_adapter::optimize::metric_sink` because the builtin enumeration synthesizes companion views
+/// from it, and the adapter crate depends on catalog, not the reverse.
+pub fn builtin_metric_sink_view_sql(sink: &BuiltinMetricSink) -> String {
+    // A single-quoted SQL string literal with embedded quotes doubled.
+    fn lit(s: &str) -> String {
+        format!("'{}'", s.replace('\'', "''"))
+    }
+
+    let labels_map = if sink.labels.is_empty() {
+        "'{}'::map[text=>text]".to_string()
+    } else {
+        let entries = sink
+            .labels
+            .iter()
+            .map(|label| format!("{} => {label}::text", lit(label)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("MAP[{entries}]")
+    };
+
+    sink.values
+        .iter()
+        .map(|value| {
+            format!(
+                "SELECT
+    {metric_name} AS metric_name,
+    {metric_type} AS metric_type,
+    {labels_map} AS labels,
+    ({column})::double precision AS value,
+    {help} AS help
+FROM ({sql}) AS s",
+                metric_name = lit(value.metric),
+                metric_type = lit(value.kind.as_metric_type()),
+                column = value.column,
+                help = lit(value.help),
+                sql = sink.sql,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\nUNION ALL\n")
+}
+
 #[derive(Debug)]
 pub struct BuiltinType<T: TypeReference> {
     pub name: &'static str,
@@ -721,6 +882,7 @@ impl<T: TypeReference> Fingerprint for &Builtin<T> {
             Builtin::Source(coll) => coll.fingerprint(),
             Builtin::Index(index) => index.fingerprint(),
             Builtin::Connection(connection) => connection.fingerprint(),
+            Builtin::MetricSink(sink) => sink.fingerprint(),
         }
     }
 }
@@ -777,6 +939,32 @@ impl Fingerprint for &BuiltinIndex {
 impl Fingerprint for &BuiltinConnection {
     fn fingerprint(&self) -> String {
         self.sql.to_string()
+    }
+}
+
+impl Fingerprint for &BuiltinMetricSink {
+    /// Hashes the lowered companion-view SQL plus the full label/value schema, so any change to the
+    /// sink (its query, labels, or metric families) bumps the builtin migration.
+    fn fingerprint(&self) -> String {
+        let labels = self.labels.join(",");
+        let values = self
+            .values
+            .iter()
+            .map(|v| {
+                format!(
+                    "{}:{}:{}:{}",
+                    v.column,
+                    v.metric,
+                    v.kind.as_metric_type(),
+                    v.help
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(";");
+        format!(
+            "{}\nlabels=[{labels}]\nvalues=[{values}]",
+            builtin_metric_sink_view_sql(self)
+        )
     }
 }
 
@@ -983,6 +1171,30 @@ pub const MZ_ANALYTICS_CLUSTER: BuiltinCluster = BuiltinCluster {
 };
 
 /// List of all builtin objects sorted topologically by dependency.
+/// Sink #3 of the v1 metric library (see the Prometheus sinks design doc, §6.2): the number of
+/// errors per dataflow object, sourced from introspection alone so the companion view is
+/// cluster/replica-agnostic.
+pub static MZ_METRIC_DATAFLOW_ERRORS: LazyLock<BuiltinMetricSink> =
+    LazyLock::new(|| BuiltinMetricSink {
+        name: "mz_metric_dataflow_errors",
+        // Reads the introspection source `mz_compute_error_counts`, so it must live in
+        // `mz_introspection`: any builtin depending on introspection sources belongs there.
+        schema: MZ_INTROSPECTION_SCHEMA,
+        oid: oid::METRIC_SINK_MZ_METRIC_DATAFLOW_ERRORS_OID,
+        view_name: "mz_metric_dataflow_errors_shaped",
+        view_oid: oid::VIEW_MZ_METRIC_DATAFLOW_ERRORS_SHAPED_OID,
+        sql: "SELECT export_id AS object_id, count AS error_count \
+              FROM mz_introspection.mz_compute_error_counts",
+        labels: &["object_id"],
+        values: &[BuiltinMetricSinkValue {
+            column: "error_count",
+            metric: "mz_dataflow_error_count",
+            kind: MetricSinkKind::Gauge,
+            help: "The number of errors in a dataflow, by dataflow object.",
+        }],
+        access: vec![PUBLIC_SELECT],
+    });
+
 pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::new(|| {
     let mut builtin_types = vec![
         Builtin::Type(&TYPE_ANY),
@@ -1204,6 +1416,9 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_REPLACEMENTS),
         Builtin::View(&MZ_RELATIONS),
         Builtin::View(&MZ_OBJECT_OID_ALIAS),
+        // Must precede `MZ_OBJECTS`: `mz_objects` unions this table (as `type = 'metric-sink'`),
+        // and a builtin view can only depend on lower-id (earlier-registered) builtins.
+        Builtin::Table(&MZ_METRIC_SINKS_RAW),
         Builtin::View(&MZ_OBJECTS),
         Builtin::View(&MZ_OBJECT_FULLY_QUALIFIED_NAMES),
         Builtin::View(&MZ_OBJECTS_ID_NAMESPACE_TYPES),
@@ -1486,9 +1701,45 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_INDEX_ADVICE),
         Builtin::View(&MZ_MCP_DATA_PRODUCTS),
         Builtin::View(&MZ_MCP_DATA_PRODUCT_DETAILS),
+        // NOTE: the backing table `MZ_METRIC_SINKS_RAW` is registered earlier, before `MZ_OBJECTS`,
+        // which unions it. See the comment there.
+        Builtin::MetricSink(&MZ_METRIC_DATAFLOW_ERRORS),
     ];
 
     builtin_items.extend(notice::builtins());
+
+    // Synthesize a companion `BuiltinView` for each metric sink, holding the sink's query lowered
+    // into the canonical `MetricSink` row shape. Insert each companion view immediately before its
+    // sink so the view's `GlobalId` is assigned first: the sink's `from` points at it.
+    {
+        let sinks: Vec<&'static BuiltinMetricSink> = builtin_items
+            .iter()
+            .filter_map(|b| match b {
+                Builtin::MetricSink(sink) => Some(*sink),
+                _ => None,
+            })
+            .collect();
+        for sink in sinks {
+            let view: &'static BuiltinView = Box::leak(Box::new(sink.companion_view()));
+            let pos = builtin_items
+                .iter()
+                .position(|b| matches!(b, Builtin::MetricSink(s) if s.name == sink.name))
+                .expect("sink present in builtin_items");
+            builtin_items.insert(pos, Builtin::View(view));
+        }
+    }
+
+    // Generate the `mz_metric_sinks` visibility view from the registered sinks, listing each
+    // sink's per-value metric schema joined to its runtime id in `mz_metric_sinks_raw`.
+    {
+        let sink_iter = builtin_items.iter().filter_map(|b| match b {
+            Builtin::MetricSink(x) => Some(*x),
+            _ => None,
+        });
+        let mz_metric_sinks = builtin::make_mz_metric_sinks(sink_iter);
+        let mz_metric_sinks_ref: &'static BuiltinView = Box::leak(Box::new(mz_metric_sinks));
+        builtin_items.push(Builtin::View(mz_metric_sinks_ref));
+    }
 
     // Generate mz_sources with builtin source/log entries inlined as VALUES so
     // that its SQL fingerprint changes whenever a builtin source is added or
@@ -1621,6 +1872,13 @@ pub mod BUILTINS {
         })
     }
 
+    pub fn metric_sinks() -> impl Iterator<Item = &'static BuiltinMetricSink> {
+        BUILTINS_STATIC.iter().filter_map(|b| match b {
+            Builtin::MetricSink(sink) => Some(*sink),
+            _ => None,
+        })
+    }
+
     pub fn iter() -> impl Iterator<Item = &'static Builtin<NameReference>> {
         BUILTINS_STATIC.iter()
     }
@@ -1628,6 +1886,12 @@ pub mod BUILTINS {
 
 pub static BUILTIN_LOG_LOOKUP: LazyLock<HashMap<&'static str, &'static BuiltinLog>> =
     LazyLock::new(|| BUILTINS::logs().map(|log| (log.name, log)).collect());
+pub static BUILTIN_METRIC_SINK_LOOKUP: LazyLock<HashMap<&'static str, &'static BuiltinMetricSink>> =
+    LazyLock::new(|| {
+        BUILTINS::metric_sinks()
+            .map(|sink| (sink.name, sink))
+            .collect()
+    });
 /// Keys are builtin object description, values are the builtin index when sorted by dependency and
 /// the builtin itself.
 pub static BUILTIN_LOOKUP: LazyLock<

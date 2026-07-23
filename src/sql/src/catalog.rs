@@ -948,6 +948,8 @@ pub enum CatalogItemType {
     Source,
     /// A sink.
     Sink,
+    /// A metric sink (a compute object folding rows into the local Prometheus registry).
+    MetricSink,
     /// A view.
     View,
     /// A materialized view.
@@ -992,6 +994,7 @@ impl CatalogItemType {
             CatalogItemType::Index => true,
             CatalogItemType::Type => true,
             CatalogItemType::Sink => false,
+            CatalogItemType::MetricSink => false,
             CatalogItemType::Func => false,
             CatalogItemType::Secret => false,
             CatalogItemType::Connection => false,
@@ -1005,6 +1008,7 @@ impl fmt::Display for CatalogItemType {
             CatalogItemType::Table => f.write_str("table"),
             CatalogItemType::Source => f.write_str("source"),
             CatalogItemType::Sink => f.write_str("sink"),
+            CatalogItemType::MetricSink => f.write_str("metric-sink"),
             CatalogItemType::View => f.write_str("view"),
             CatalogItemType::MaterializedView => f.write_str("materialized view"),
             CatalogItemType::Index => f.write_str("index"),
@@ -1022,6 +1026,10 @@ impl From<CatalogItemType> for ObjectType {
             CatalogItemType::Table => ObjectType::Table,
             CatalogItemType::Source => ObjectType::Source,
             CatalogItemType::Sink => ObjectType::Sink,
+            // Metric sinks are builtin-only compute objects with no DDL surface. They have no
+            // dedicated `ObjectType`, so they map to `Sink` for the coarser object-kind uses
+            // (privileges, comments).
+            CatalogItemType::MetricSink => ObjectType::Sink,
             CatalogItemType::View => ObjectType::View,
             CatalogItemType::MaterializedView => ObjectType::MaterializedView,
             CatalogItemType::Index => ObjectType::Index,
@@ -1043,6 +1051,7 @@ impl From<CatalogItemType> for mz_audit_log::ObjectType {
             CatalogItemType::Index => mz_audit_log::ObjectType::Index,
             CatalogItemType::Type => mz_audit_log::ObjectType::Type,
             CatalogItemType::Sink => mz_audit_log::ObjectType::Sink,
+            CatalogItemType::MetricSink => mz_audit_log::ObjectType::Sink,
             CatalogItemType::Func => mz_audit_log::ObjectType::Func,
             CatalogItemType::Secret => mz_audit_log::ObjectType::Secret,
             CatalogItemType::Connection => mz_audit_log::ObjectType::Connection,

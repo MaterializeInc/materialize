@@ -2858,7 +2858,8 @@ mod tests {
                     | Builtin::Type(_)
                     | Builtin::Func(_)
                     | Builtin::Index(_)
-                    | Builtin::Connection(_) => continue,
+                    | Builtin::Connection(_)
+                    | Builtin::MetricSink(_) => continue,
                 };
                 let item = conn_catalog
                     .resolve_item(&PartialItemName {

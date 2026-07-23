@@ -25,8 +25,8 @@ use mz_sql::rbac;
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 
 use crate::builtin::{
-    Builtin, BuiltinLog, BuiltinMaterializedView, BuiltinSource, BuiltinView, Cardinality,
-    LinkProperties, Ontology, OntologyLink, PUBLIC_SELECT,
+    Builtin, BuiltinLog, BuiltinMaterializedView, BuiltinMetricSink, BuiltinSource, BuiltinView,
+    Cardinality, LinkProperties, Ontology, OntologyLink, PUBLIC_SELECT,
 };
 
 /// Generate builtin views reporting the given builtins.
@@ -164,6 +164,106 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, cluster_name, definition, pr
             .with_key(vec![6])
             .finish(),
         column_comments: Default::default(),
+        sql: Box::leak(sql.into_boxed_str()),
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    }
+}
+
+/// Generate the `mz_internal.mz_metric_sinks` builtin view, joining the runtime
+/// `mz_metric_sinks_raw` table (for each sink's id) to the static per-value label/metric schema
+/// inlined as a VALUES clause. One row per `(sink, value)` metric family.
+///
+/// Inlining the value schema means the view's SQL fingerprint changes whenever a sink's metrics
+/// change, so stale schema is never silently served.
+pub(super) fn make_mz_metric_sinks(
+    sink_iter: impl Iterator<Item = &'static BuiltinMetricSink>,
+) -> BuiltinView {
+    let values = sink_iter
+        .flat_map(|sink| {
+            // Cast to `text[]` so the array is typed even when the sink has no labels. A bare
+            // `ARRAY[]` is untyped and won't plan ("cannot determine type of empty array"), and
+            // because this view is planned at boot that would take down environment startup.
+            let labels = format!(
+                "ARRAY[{}]::text[]",
+                sink.labels
+                    .iter()
+                    .map(|l| escaped_string_literal(l))
+                    .join(",")
+            );
+            sink.values
+                .iter()
+                .map(|v| {
+                    format!(
+                        "({}, {}, {}, {}, {}, {})",
+                        escaped_string_literal(sink.name),
+                        escaped_string_literal(v.metric),
+                        escaped_string_literal(v.kind.as_metric_type()),
+                        escaped_string_literal(v.help),
+                        labels,
+                        escaped_string_literal(sink.view_name),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .join(",");
+    // The join key is the sink name: the static VALUES clause cannot know runtime ids, so name is
+    // the only stable handle. This relies on metric-sink names being globally unique, which
+    // `BUILTIN_METRIC_SINK_LOOKUP` (keyed by name) already enforces.
+    let sql = format!(
+        "
+SELECT s.name, s.id AS sink_id, v.metric_name, v.metric_type, v.help, v.labels, v.source
+FROM mz_internal.mz_metric_sinks_raw s
+JOIN (VALUES {values}) AS v(sink_name, metric_name, metric_type, help, labels, source)
+    ON s.name = v.sink_name"
+    );
+
+    BuiltinView {
+        name: "mz_metric_sinks",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_METRIC_SINKS_OID,
+        desc: RelationDesc::builder()
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("sink_id", SqlScalarType::String.nullable(false))
+            .with_column("metric_name", SqlScalarType::String.nullable(false))
+            .with_column("metric_type", SqlScalarType::String.nullable(false))
+            .with_column("help", SqlScalarType::String.nullable(false))
+            .with_column(
+                "labels",
+                SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false),
+            )
+            .with_column("source", SqlScalarType::String.nullable(false))
+            // The optimizer infers `sink_id` as a unique key because every registered sink
+            // currently contributes exactly one row (a single value column). The declared key has
+            // to match what the optimizer computes, which `verify_builtin_descs` checks.
+            //
+            // NOTE: a sink with multiple value columns produces several rows per `sink_id`, and the
+            // optimizer then infers no unique key at all (not `(sink_id, metric_name)`). At that
+            // point `verify_builtin_descs` fails until this becomes `with_key(vec![])`, so a stale
+            // key can't silently ship. It gets caught at build time.
+            .with_key(vec![1])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("name", "The name of the metric sink."),
+            ("sink_id", "Materialize's unique ID for the metric sink."),
+            ("metric_name", "The Prometheus metric family name."),
+            (
+                "metric_type",
+                "The Prometheus metric kind: `gauge` or `counter`.",
+            ),
+            (
+                "help",
+                "The Prometheus `# HELP` text for the metric family.",
+            ),
+            (
+                "labels",
+                "The Prometheus label names carried by the metric family.",
+            ),
+            (
+                "source",
+                "The name of the companion view the metric sink reads.",
+            ),
+        ]),
         sql: Box::leak(sql.into_boxed_str()),
         access: vec![PUBLIC_SELECT],
         ontology: None,

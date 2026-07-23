@@ -3150,7 +3150,9 @@ UNION ALL
 UNION ALL
     SELECT id, oid, schema_id, name, 'function', owner_id, NULL::text, NULL::mz_catalog.mz_aclitem[] FROM mz_catalog.mz_functions
 UNION ALL
-    SELECT id, oid, schema_id, name, 'secret', owner_id, NULL::text, privileges FROM mz_catalog.mz_secrets",
+    SELECT id, oid, schema_id, name, 'secret', owner_id, NULL::text, privileges FROM mz_catalog.mz_secrets
+UNION ALL
+    SELECT id, oid, schema_id, name, 'metric-sink', owner_id, NULL::text, privileges FROM mz_internal.mz_metric_sinks_raw",
         access: vec![PUBLIC_SELECT],
         ontology: Some(Ontology {
             entity_name: "object",

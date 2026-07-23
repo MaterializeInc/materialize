@@ -2752,7 +2752,8 @@ impl Coordinator {
                     }
                 }
                 // Nothing to do for these cases
-                CatalogItem::Log(_)
+                CatalogItem::MetricSink(_)
+                | CatalogItem::Log(_)
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_) => {}
@@ -3334,7 +3335,9 @@ impl Coordinator {
                     };
                     collections.push((sink.global_id, collection_desc));
                 }
-                CatalogItem::Log(_)
+                // Metric sinks are compute objects with no storage collection.
+                CatalogItem::MetricSink(_)
+                | CatalogItem::Log(_)
                 | CatalogItem::View(_)
                 | CatalogItem::Index(_)
                 | CatalogItem::Type(_)
@@ -3747,6 +3750,7 @@ impl Coordinator {
                 | CatalogItem::Log(_)
                 | CatalogItem::View(_)
                 | CatalogItem::Sink(_)
+                | CatalogItem::MetricSink(_)
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_)
@@ -3779,6 +3783,7 @@ impl Coordinator {
                 | CatalogItem::Log(_)
                 | CatalogItem::View(_)
                 | CatalogItem::Sink(_)
+                | CatalogItem::MetricSink(_)
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_)

@@ -368,6 +368,7 @@ floor
 format
 format_type
 form_of_use
+from_id
 from_index
 from_operator_address
 from_operator_id
@@ -900,6 +901,10 @@ mz_message_counts_sent_raw_s3_primary_idx
 mz_message_counts_sent_raw_s4_primary_idx
 mz_message_counts_sent_raw_s5_primary_idx
 mz_message_counts_sent_raw_u1_primary_idx
+mz_metric_dataflow_errors
+mz_metric_dataflow_errors_shaped
+mz_metric_sinks
+mz_metric_sinks_raw
 mz_minimal_name_qualification
 mz_mysql_source_tables
 mz_name_rank

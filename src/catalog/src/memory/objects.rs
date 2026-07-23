@@ -74,7 +74,7 @@ use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 use tracing::debug;
 
-use crate::builtin::{MZ_CATALOG_SERVER_CLUSTER, MZ_SYSTEM_CLUSTER};
+use crate::builtin::{MZ_CATALOG_SERVER_CLUSTER, MZ_SYSTEM_CLUSTER, MetricSinkKind};
 use crate::durable;
 use crate::durable::objects::item_type;
 
@@ -850,6 +850,7 @@ pub enum CatalogItem {
     View(View),
     MaterializedView(MaterializedView),
     Sink(Sink),
+    MetricSink(MetricSink),
     Index(Index),
     Type(Type),
     Func(Func),
@@ -1378,6 +1379,49 @@ impl Sink {
     }
 }
 
+/// One Prometheus metric family emitted by a [`MetricSink`], carried for the `mz_metric_sinks`
+/// visibility view.
+#[derive(Debug, Clone, Serialize)]
+pub struct MetricSinkValue {
+    /// Source column of the sink's query carrying the numeric value.
+    pub column: String,
+    /// Prometheus metric family name.
+    pub metric: String,
+    pub kind: MetricSinkKind,
+    /// Prometheus `# HELP` text for the family.
+    pub help: String,
+}
+
+/// A builtin metric sink: a compute object that folds its source view's rows into the local
+/// Prometheus registry.
+///
+/// Unlike [`Sink`] (a storage sink with a connection, envelope, and cluster), a metric sink is a
+/// thin pointer at a companion view (`from`) plus the typed label/value schema. It carries no
+/// storage metadata and is not cluster-bound at the catalog level. Builtins are constructed
+/// directly at boot with `create_sql: None`.
+#[derive(Debug, Clone, Serialize)]
+pub struct MetricSink {
+    /// Parse-able SQL that defines this sink. `None` for builtins, which are constructed directly.
+    pub create_sql: Option<String>,
+    /// [`GlobalId`] used to reference this sink from outside the catalog.
+    pub global_id: GlobalId,
+    /// The companion view holding the canonical-shaped source query.
+    pub from: GlobalId,
+    /// Label column names assembled into the canonical `labels` map.
+    pub labels: Vec<String>,
+    /// One Prometheus metric family per value column.
+    pub values: Vec<MetricSinkValue>,
+    /// Other catalog objects this sink references (the companion view, transitively).
+    pub resolved_ids: ResolvedIds,
+}
+
+impl MetricSink {
+    /// The single [`GlobalId`] that refers to this metric sink.
+    pub fn global_id(&self) -> GlobalId {
+        self.global_id
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct View {
     /// Parse-able SQL that defines this view.
@@ -1729,6 +1773,7 @@ impl CatalogItem {
             CatalogItem::Source(_) => CatalogItemType::Source,
             CatalogItem::Log(_) => CatalogItemType::Source,
             CatalogItem::Sink(_) => CatalogItemType::Sink,
+            CatalogItem::MetricSink(_) => CatalogItemType::MetricSink,
             CatalogItem::View(_) => CatalogItemType::View,
             CatalogItem::MaterializedView(_) => CatalogItemType::MaterializedView,
             CatalogItem::Index(_) => CatalogItemType::Index,
@@ -1745,6 +1790,7 @@ impl CatalogItem {
             CatalogItem::Source(source) => source.global_id,
             CatalogItem::Log(log) => log.global_id,
             CatalogItem::Sink(sink) => sink.global_id,
+            CatalogItem::MetricSink(sink) => sink.global_id,
             CatalogItem::View(view) => view.global_id,
             CatalogItem::MaterializedView(mv) => {
                 return itertools::Either::Left(mv.collections.values().copied());
@@ -1769,6 +1815,7 @@ impl CatalogItem {
             CatalogItem::Source(source) => source.global_id,
             CatalogItem::Log(log) => log.global_id,
             CatalogItem::Sink(sink) => sink.global_id,
+            CatalogItem::MetricSink(sink) => sink.global_id,
             CatalogItem::View(view) => view.global_id,
             CatalogItem::MaterializedView(mv) => mv.global_id_writes(),
             CatalogItem::Index(index) => index.global_id,
@@ -1841,6 +1888,7 @@ impl CatalogItem {
             | CatalogItem::MaterializedView(_)
             | CatalogItem::Sink(_) => true,
             CatalogItem::Log(_)
+            | CatalogItem::MetricSink(_)
             | CatalogItem::View(_)
             | CatalogItem::Index(_)
             | CatalogItem::Type(_)
@@ -1870,6 +1918,7 @@ impl CatalogItem {
             CatalogItem::Func(_)
             | CatalogItem::Index(_)
             | CatalogItem::Sink(_)
+            | CatalogItem::MetricSink(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
             | CatalogItem::Type(_) => None,
@@ -1931,6 +1980,7 @@ impl CatalogItem {
             CatalogItem::Func(_) => &*EMPTY,
             CatalogItem::Index(idx) => &idx.resolved_ids,
             CatalogItem::Sink(sink) => &sink.resolved_ids,
+            CatalogItem::MetricSink(sink) => &sink.resolved_ids,
             CatalogItem::Source(source) => &source.resolved_ids,
             CatalogItem::Log(_) => &*EMPTY,
             CatalogItem::Table(table) => &table.resolved_ids,
@@ -1955,6 +2005,7 @@ impl CatalogItem {
             CatalogItem::Func(_) => {}
             CatalogItem::Index(_) => {}
             CatalogItem::Sink(_) => {}
+            CatalogItem::MetricSink(_) => {}
             CatalogItem::Source(_) => {}
             CatalogItem::Log(_) => {}
             CatalogItem::Table(_) => {}
@@ -1979,6 +2030,7 @@ impl CatalogItem {
             CatalogItem::Log(_)
             | CatalogItem::Source(_)
             | CatalogItem::Sink(_)
+            | CatalogItem::MetricSink(_)
             | CatalogItem::MaterializedView(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Type(_)
@@ -1997,6 +2049,7 @@ impl CatalogItem {
             CatalogItem::Log(_)
             | CatalogItem::Source(_)
             | CatalogItem::Sink(_)
+            | CatalogItem::MetricSink(_)
             | CatalogItem::MaterializedView(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Type(_)
@@ -2021,6 +2074,7 @@ impl CatalogItem {
             CatalogItem::Log(_)
             | CatalogItem::Source(_)
             | CatalogItem::Sink(_)
+            | CatalogItem::MetricSink(_)
             | CatalogItem::MaterializedView(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Type(_)
@@ -2107,6 +2161,8 @@ impl CatalogItem {
                 Ok(CatalogItem::Type(i))
             }
             CatalogItem::Func(i) => Ok(CatalogItem::Func(i.clone())),
+            // Metric sinks are builtin-only and never round-trip through SQL rename.
+            CatalogItem::MetricSink(i) => Ok(CatalogItem::MetricSink(i.clone())),
         }
     }
 
@@ -2169,7 +2225,7 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Secret(i))
             }
-            CatalogItem::Func(_) | CatalogItem::Type(_) => {
+            CatalogItem::Func(_) | CatalogItem::Type(_) | CatalogItem::MetricSink(_) => {
                 unreachable!("{}s cannot be renamed", self.typ())
             }
             CatalogItem::Connection(i) => {
@@ -2231,7 +2287,7 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql);
                 CatalogItem::Secret(i)
             }
-            CatalogItem::Func(_) | CatalogItem::Type(_) => {
+            CatalogItem::Func(_) | CatalogItem::Type(_) | CatalogItem::MetricSink(_) => {
                 unreachable!("references of {}s cannot be replaced", self.typ())
             }
             CatalogItem::Connection(i) => {
@@ -2410,6 +2466,7 @@ impl CatalogItem {
         let create_sql = match self {
             CatalogItem::Table(Table { create_sql, .. })
             | CatalogItem::Type(Type { create_sql, .. })
+            | CatalogItem::MetricSink(MetricSink { create_sql, .. })
             | CatalogItem::Source(Source { create_sql, .. }) => create_sql.as_mut(),
             CatalogItem::Sink(Sink { create_sql, .. })
             | CatalogItem::View(View { create_sql, .. })
@@ -2448,6 +2505,7 @@ impl CatalogItem {
             | CatalogItem::View(_)
             | CatalogItem::MaterializedView(_)
             | CatalogItem::Sink(_)
+            | CatalogItem::MetricSink(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
@@ -2468,6 +2526,7 @@ impl CatalogItem {
             ),
             CatalogItem::Table(_)
             | CatalogItem::Log(_)
+            | CatalogItem::MetricSink(_)
             | CatalogItem::View(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
@@ -2493,7 +2552,8 @@ impl CatalogItem {
                 | DataSourceDesc::Catalog => None,
             },
             CatalogItem::Sink(sink) => Some(sink.cluster_id),
-            CatalogItem::Table(_)
+            CatalogItem::MetricSink(_)
+            | CatalogItem::Table(_)
             | CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::Type(_)
@@ -2514,6 +2574,7 @@ impl CatalogItem {
             CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::Sink(_)
+            | CatalogItem::MetricSink(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
@@ -2535,6 +2596,7 @@ impl CatalogItem {
             CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::Sink(_)
+            | CatalogItem::MetricSink(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
@@ -2559,6 +2621,7 @@ impl CatalogItem {
             CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::Sink(_)
+            | CatalogItem::MetricSink(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
@@ -2579,6 +2642,7 @@ impl CatalogItem {
             | CatalogItem::View(_)
             | CatalogItem::MaterializedView(_)
             | CatalogItem::Sink(_)
+            | CatalogItem::MetricSink(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
@@ -2600,6 +2664,9 @@ impl CatalogItem {
                 (create_sql, global_id, collections)
             }
             CatalogItem::Log(_) => unreachable!("builtin logs cannot be serialized"),
+            CatalogItem::MetricSink(_) => {
+                unreachable!("builtin metric sinks cannot be serialized")
+            }
             CatalogItem::Source(source) => {
                 assert!(
                     !matches!(source.data_source, DataSourceDesc::Introspection(_)),
@@ -2655,6 +2722,9 @@ impl CatalogItem {
                 (create_sql, global_id, table.collections)
             }
             CatalogItem::Log(_) => unreachable!("builtin logs cannot be serialized"),
+            CatalogItem::MetricSink(_) => {
+                unreachable!("builtin metric sinks cannot be serialized")
+            }
             CatalogItem::Source(source) => {
                 assert!(
                     !matches!(source.data_source, DataSourceDesc::Introspection(_)),
@@ -2697,6 +2767,7 @@ impl CatalogItem {
             CatalogItem::Log(log) => return Some(log.global_id),
             CatalogItem::View(view) => return Some(view.global_id),
             CatalogItem::Sink(sink) => return Some(sink.global_id),
+            CatalogItem::MetricSink(sink) => return Some(sink.global_id),
             CatalogItem::Index(index) => return Some(index.global_id),
             CatalogItem::Type(ty) => return Some(ty.global_id),
             CatalogItem::Func(func) => return Some(func.global_id),
@@ -2768,6 +2839,14 @@ impl CatalogEntry {
     pub fn sink(&self) -> Option<&Sink> {
         match self.item() {
             CatalogItem::Sink(sink) => Some(sink),
+            _ => None,
+        }
+    }
+
+    /// Returns the inner [`MetricSink`] if this entry is a metric sink, else `None`.
+    pub fn metric_sink(&self) -> Option<&MetricSink> {
+        match self.item() {
+            CatalogItem::MetricSink(sink) => Some(sink),
             _ => None,
         }
     }
@@ -2902,6 +2981,7 @@ impl CatalogEntry {
             | CatalogItem::View(_)
             | CatalogItem::MaterializedView(_)
             | CatalogItem::Sink(_)
+            | CatalogItem::MetricSink(_)
             | CatalogItem::Index(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
@@ -3027,7 +3107,8 @@ impl CatalogEntry {
         match self.item_type() {
             Table => CommentObjectId::Table(self.id),
             Source => CommentObjectId::Source(self.id),
-            Sink => CommentObjectId::Sink(self.id),
+            // Metric sinks reuse the sink comment object id (no dedicated variant).
+            Sink | MetricSink => CommentObjectId::Sink(self.id),
             View => CommentObjectId::View(self.id),
             MaterializedView => CommentObjectId::MaterializedView(self.id),
             Index => CommentObjectId::Index(self.id),
@@ -4015,6 +4096,9 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
                 create_sql.as_deref().unwrap_or("<builtin>")
             }
             CatalogItem::Sink(Sink { create_sql, .. }) => create_sql,
+            CatalogItem::MetricSink(MetricSink { create_sql, .. }) => {
+                create_sql.as_deref().unwrap_or("<builtin>")
+            }
             CatalogItem::View(View { create_sql, .. }) => create_sql,
             CatalogItem::MaterializedView(MaterializedView { create_sql, .. }) => create_sql,
             CatalogItem::Index(Index { create_sql, .. }) => create_sql,

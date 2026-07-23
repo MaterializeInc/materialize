@@ -4,7 +4,7 @@
 
 Materialize's compute-side metrics reach Prometheus through either (1) SQL queries or (2) prometheus endpoints. The problem with the SQL queries is that they go dark exactly when we need them (during upgrade as the environment does not serve SQL, when envd unhealthy, or workers are wedged). The problem with the prometheus endpoints is that we lose attribution of where the metrics are coming from.
 
-To address this, we propose a set of **built-in metric sinks**. A metric sink is a compute-side sink whose input is a normal SQL view and whose output is a continually-updated set of series in the local `MetricsRegistry`, scraped by Prometheus directly from clusterd. We define a curated set of `BuiltinPrometheusSink` statics, installed on every replica at create time.
+To address this, we propose a set of **built-in metric sinks**. A metric sink is a compute-side sink whose input is a normal SQL view and whose output is a continually-updated set of series in the local `MetricsRegistry`, scraped by Prometheus directly from clusterd. We define a curated set of `BuiltinMetricSink` statics, installed on every replica at create time.
 
 ## 2. Context
 
@@ -33,7 +33,7 @@ The requirements narrow the solution space to something that stores precomputed 
 
 The proposal is for compute to run each metric's SQL view *continually* as a normal compute dataflow, and attach the `MetricSink` terminal operator that writes the view's output rows into a local Prometheus registry. Attribution is resolved on the replica, kept off the sink's emission frontier so it does not couple to envd (§6.8). Scrape reads these pre-computed values from local memory with no envd involvement. The dataflow's own frontier serves as a per-metric freshness signal for free.
 
-To do this we define a `BuiltinPrometheusSink` static that pairs a SQL query with a Prometheus label/value schema. The adapter lowers each `BuiltinPrometheusSink` into a view that projects to the `MetricSink` operator's canonical row shape, then plans it into a normal `DataflowDescription`, the same shape produced for a builtin materialized view. It issues one `CreateDataflow` per sink per replica, using the same path as any other compute dataflow. Compute renders the dataflow with a terminal `MetricSink` operator that writes into clusterd's local `MetricsRegistry`. Prometheus then scrapes clusterd's existing `/metrics` endpoint.
+To do this we define a `BuiltinMetricSink` static that pairs a SQL query with a Prometheus label/value schema. The adapter lowers each `BuiltinMetricSink` into a view that projects to the `MetricSink` operator's canonical row shape, then plans it into a normal `DataflowDescription`, the same shape produced for a builtin materialized view. It issues one `CreateDataflow` per sink per replica, using the same path as any other compute dataflow. Compute renders the dataflow with a terminal `MetricSink` operator that writes into clusterd's local `MetricsRegistry`. Prometheus then scrapes clusterd's existing `/metrics` endpoint.
 
 This resolves the requirements because:
 
@@ -43,13 +43,13 @@ This resolves the requirements because:
 
 ## 6. Proposed Design
 
-### 6.1 The `BuiltinPrometheusSink` type
+### 6.1 The `BuiltinMetricSink` type
 
 Proposed declaration of the metric using a metric sink:
 
 ```rust
-pub static MZ_PROM_ARRANGEMENT_SIZES: BuiltinPrometheusSink = BuiltinPrometheusSink {
-    name: "mz_prom_arrangement_sizes",
+pub static MZ_METRIC_ARRANGEMENT_SIZES: BuiltinMetricSink = BuiltinMetricSink {
+    name: "mz_metric_arrangement_sizes",
     schema: MZ_INTROSPECTION_SCHEMA,
     sql: "SELECT o.id AS object_id, o.name AS object_name,
                  c.id AS cluster_id, c.name AS cluster_name,
@@ -61,7 +61,7 @@ pub static MZ_PROM_ARRANGEMENT_SIZES: BuiltinPrometheusSink = BuiltinPrometheusS
               "cluster_id", "cluster_name",
               "replica_id", "replica_name"],
     values: &[
-        PromValue {
+        BuiltinMetricSinkValue {
             column: "size_bytes",
             metric: "mz_arrangement_size_bytes",
             kind: Gauge,
@@ -71,7 +71,7 @@ pub static MZ_PROM_ARRANGEMENT_SIZES: BuiltinPrometheusSink = BuiltinPrometheusS
 };
 ```
 
-**Lowering to the general mechanism.** `BuiltinPrometheusSink` is an authoring convenience, not a new operator. The typed `labels` / `values` schema exists so builtin authors declare metrics in Rust rather than hand-write the wide row shape the `MetricSink` operator consumes. The adapter can compile the static state into a view that projects to that canonical shape (`metric_name text`, `metric_type text`, `labels map[text=>text]`, `value double`, `help text`), with `metric_name` / `metric_type` / `help` filled from the `PromValue` and `labels` assembled from the declared label columns.
+**Lowering to the general mechanism.** `BuiltinMetricSink` is an authoring convenience, not a new operator. The typed `labels` / `values` schema exists so builtin authors declare metrics in Rust rather than hand-write the wide row shape the `MetricSink` operator consumes. The adapter can compile the static state into a view that projects to that canonical shape (`metric_name text`, `metric_type text`, `labels map[text=>text]`, `value double`, `help text`), with `metric_name` / `metric_type` / `help` filled from the `BuiltinMetricSinkValue` and `labels` assembled from the declared label columns.
 
 The example's inline `JOIN mz_objects` stands in for name attribution. It is not a literal join on the emission path. §6.8 covers why name resolution must stay off the sink's frontier and how the name-carrying labels are populated instead.
 
@@ -85,7 +85,11 @@ Install flow:
 4. **Render per-replica:** compute renders each sink dataflow like any other, alongside the logging dataflows it depends on.
 5. **Tear down cleanly:** replica drop propagates cancellation to sink dataflows through the same mechanism as user dataflows.
 
-**Adding a new sink.** Because sinks are catalog objects, adding or removing a `BuiltinPrometheusSink` counts as a catalog change and requires the standard builtin-migration version bump. Same treatment as adding a new builtin view.
+**Adding a new sink.** Because sinks are catalog objects, adding or removing a `BuiltinMetricSink` counts as a catalog change and requires the standard builtin-migration version bump. Same treatment as adding a new builtin view.
+
+**Schema placement.** A sink lives in the schema of the data it reads. Every sink reads a per-replica introspection source (`mz_compute_error_counts`, `mz_dataflow_arrangement_sizes`, and so on), so the sink and its lowered companion view live in `mz_introspection`, not `mz_internal`. Introspection sources only mean something relative to a specific replica, so any builtin that reads them is per-replica and belongs in the per-replica schema.
+
+Note: The metric *values* don't live in the catalog. The catalog holds only the sink's *definition*: the lowered companion view and a thin `CatalogItem::MetricSink` carrying the label and value schema. It's the same split as a materialized view, whose `CREATE` statement is a catalog object while its data lives in a dataflow rather than a catalog row. The SQL-visible surface (`mz_internal.mz_metric_sinks`, membership in `mz_objects`) is there for discoverability, so operators can see which sinks exist and what each one emits. The sink emits metrics whether or not the catalog value is queryable. The discovery view stays in `mz_internal` even though the introspection-sourced sinks themselves live in `mz_introspection`.
 
 ### 6.2 The v1 metric library
 
@@ -93,9 +97,9 @@ Three sinks, distilled from `COMPUTE_METRIC_QUERIES` in `src/environmentd/src/ht
 
 | # | Sink name | Metric family | Labels | Source view | Value col | Why |
 |---|---|---|---|---|---|---|
-| 1 | `mz_prom_arrangement_sizes` | `mz_arrangement_size_bytes`, `mz_arrangement_records`, `mz_arrangement_batches` | object_id + name, cluster_id + name, replica_id + name | `mz_dataflow_arrangement_sizes` | 3 gauges | Detect arrangement-size regressions per object, and diagnose memory pressure on a replica by attribution to specific objects. |
-| 2 | `mz_prom_dataflow_elapsed` | `mz_dataflow_elapsed_seconds_total` | object_id + name, cluster_id + name, replica_id + name | `mz_scheduling_elapsed_per_worker` | 1 counter | Diagnose which dataflow is consuming worker time on a hot replica. |
-| 3 | `mz_prom_dataflow_errors` | `mz_dataflow_error_count` | object_id + name, cluster_id + name, replica_id + name | `mz_compute_error_counts` | 1 gauge | Alert on dataflow errors per object without going through envd. |
+| 1 | `mz_metric_arrangement_sizes` | `mz_arrangement_size_bytes`, `mz_arrangement_records`, `mz_arrangement_batches` | object_id + name, cluster_id + name, replica_id + name | `mz_dataflow_arrangement_sizes` | 3 gauges | Detect arrangement-size regressions per object, and diagnose memory pressure on a replica by attribution to specific objects. |
+| 2 | `mz_metric_dataflow_elapsed` | `mz_dataflow_elapsed_seconds_total` | object_id + name, cluster_id + name, replica_id + name | `mz_scheduling_elapsed_per_worker` | 1 counter | Diagnose which dataflow is consuming worker time on a hot replica. |
+| 3 | `mz_metric_dataflow_errors` | `mz_dataflow_error_count` | object_id + name, cluster_id + name, replica_id + name | `mz_compute_error_counts` | 1 gauge | Alert on dataflow errors per object without going through envd. |
 
 Sink #2's `mz_dataflow_elapsed_seconds_total` is monotonic within a replica lifetime and resets only on replica restart (reconciliation after an envd restart being the sole other mid-flight mutation). Consumers should wrap it in `rate()`, which handles the reset.
 
@@ -108,11 +112,11 @@ Materialize has three compute sinks today: `Subscribe`, `MaterializedView`, and 
 1. **No downstream reader.** `Subscribe` pushes to a session, `MaterializedView` writes into persist, `CopyToS3Oneshot` uploads to a bucket. The metric sink writes into an in-process `MetricsRegistry` that Prometheus pulls from over HTTP later. The sink's "output" is memory state, not an outgoing stream.
 2. **No `as_of` / snapshot semantics.** `MaterializedView` and `CopyToS3Oneshot` care about a specific snapshot; `Subscribe` cares about what to backfill. A metric sink just wants "the current state" continually.
 3. **Dropped only with the replica.** From compute's perspective the sink has an ordinary dataflow lifecycle: created, run, and torn down like any other dataflow (§6.1). The adapter never issues such a drop for a metric sink, so it lives for the lifetime of the replica and is cancelled only when the replica is dropped.
-4. **Not created by a user SQL statement.** `MaterializedView` and `Subscribe` are created by user DDL; `CopyToS3Oneshot` by `COPY TO`. Metric sinks are materialized from `BuiltinPrometheusSink` statics installed at replica create. The sink's `sink_id` is a system-generated `GlobalId`, and its `ComputeSinkDesc` is built by the adapter's bootstrap path rather than by a user-facing planner call.
+4. **Not created by a user SQL statement.** `MaterializedView` and `Subscribe` are created by user DDL; `CopyToS3Oneshot` by `COPY TO`. Metric sinks are materialized from `BuiltinMetricSink` statics installed at replica create. The sink's `sink_id` is a system-generated `GlobalId`, and its `ComputeSinkDesc` is built by the adapter's bootstrap path rather than by a user-facing planner call.
 
 ### 6.4 Data flow into the sink
 
-Each replica already runs a set of *logging dataflows* that turn low-level timely/differential events (arrangement changes, scheduling ticks, error emissions) into rows visible under `mz_internal.*`. Those rows live in memory as `LogCollection` arrangements; a `BuiltinPrometheusSink` can read from them.
+Each replica already runs a set of *logging dataflows* that turn low-level timely/differential events (arrangement changes, scheduling ticks, error emissions) into rows visible under `mz_internal.*`. Those rows live in memory as `LogCollection` arrangements; a `BuiltinMetricSink` can read from them.
 
 A sink's SQL compiles to a normal compute dataflow whose input tree reads from those logging arrangements. The `MetricSink` operator sits at the end as a terminal consumer of the output.
 
@@ -128,7 +132,7 @@ Two properties fall out for free:
 Because the sink SQL is written by us as part of the database itself, we can constrain cardinality and query cost in our own code.
 
 - **Cardinality** is bounded by the joins we chose. A sink renders only its own replica's rows (§6.7), so the per-replica bound is the number of objects on that replica, not a `|objects| × |clusters| × |replicas|` cross product.
-- **Query cost** is a property of the SQL we write in `BuiltinPrometheusSink` statics.
+- **Query cost** is a property of the SQL we write in `BuiltinMetricSink` statics.
 
 Two failure modes need separate signals, because the sink can only observe one of them from inside its own dataflow.
 
@@ -177,6 +181,6 @@ With envd healthy, ids and names are both current. With envd down, values keep e
 
 [PR 37560](https://github.com/MaterializeInc/materialize/pull/37560) prototypes a `CREATE METRIC SINK ... FROM <view>` statement backed by a `MetricSink` compute operator that folds a source collection's rows into the process-local registry, gauge and counter only, with per-sink health gauges and frontier-as-freshness. That is the same compute-side behavior this design needs. The two should converge on one operator rather than fork a parallel implementation. The differences are all in the authoring and lifecycle layer:
 
-- **Authoring.** Built-ins are `BuiltinPrometheusSink` statics with curated SQL, reviewed by us, not user DDL over an arbitrary view.
+- **Authoring.** Built-ins are `BuiltinMetricSink` statics with curated SQL, reviewed by us, not user DDL over an arbitrary view.
 - **Schema.** Built-in authors declare a typed `labels` / `values` schema (§6.1) that the adapter lowers to the operator's canonical row shape (`metric_name`, `metric_type`, `labels`, `value`, `help`), rather than requiring the view to expose those columns directly.
 - **Lifecycle.** Built-ins install on every replica at create time and are dropped only with the replica, rather than targeting one cluster and being dropped by `DROP METRIC SINK`.

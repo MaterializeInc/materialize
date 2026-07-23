@@ -869,6 +869,13 @@ impl CatalogRuntime {
                 None,
                 None,
             ),
+            Builtin::MetricSink(sink) => (
+                CatalogItemType::MetricSink,
+                format!("CREATE SINK {}.{}", sink.schema, sink.name),
+                None,
+                None,
+                None,
+            ),
         };
 
         let item_id = CatalogItemId::System(self.ids.allocate_item());
@@ -883,6 +890,7 @@ impl CatalogRuntime {
             Builtin::Source(source) => source.oid,
             Builtin::Index(index) => index.oid,
             Builtin::Connection(connection) => connection.oid,
+            Builtin::MetricSink(sink) => sink.oid,
         };
 
         let item = LocalItem {
