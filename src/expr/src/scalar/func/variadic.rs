@@ -267,6 +267,11 @@ fn array_fill<'a>(
         return Err(EvalError::MustNotBeNull(NULL_ARR_ERR.into()));
     };
 
+    // The dimensions array must be one-dimensional.
+    if arr.dims().ndims() > 1 {
+        return Err(EvalError::ArrayFillWrongArraySubscripts);
+    }
+
     let dimensions = arr
         .elements()
         .iter()
@@ -281,6 +286,11 @@ fn array_fill<'a>(
             let Some(arr) = d else {
                 return Err(EvalError::MustNotBeNull(NULL_ARR_ERR.into()));
             };
+
+            // The lower bounds array must be one-dimensional.
+            if arr.dims().ndims() > 1 {
+                return Err(EvalError::ArrayFillWrongArraySubscripts);
+            }
 
             arr.elements()
                 .iter()
