@@ -54,6 +54,15 @@ from materialize.mzcompose import (
     get_default_system_parameters,
 )
 
+# Self-managed tooling such as mz-debug discovers a Materialize instance's
+# Kubernetes resources through the operator-provisioned labels below. cloudtest
+# deploys environmentd directly rather than through the operator, so it stamps
+# the same labels on the environmentd Service and StatefulSet to keep that
+# discovery working.
+MZ_INSTANCE_NAME = "12345678-1234-1234-1234-123456789012"
+MZ_ORGANIZATION_NAME_LABEL = "materialize.cloud/organization-name"
+MZ_RESOURCE_ID_LABEL = "materialize.cloud/mz-resource-id"
+
 
 class EnvironmentdSecret(K8sSecret):
     def __init__(self, namespace: str = DEFAULT_K8S_NAMESPACE) -> None:
@@ -87,11 +96,18 @@ class EnvironmentdService(K8sService):
         service_port = V1ServicePort(name="sql", port=6875)
         http_port = V1ServicePort(name="http", port=6876)
         internal_port = V1ServicePort(name="internal", port=6877)
-        internal_http_port = V1ServicePort(name="internalhttp", port=6878)
+        internal_http_port = V1ServicePort(name="internal-http", port=6878)
         self.service = V1Service(
             api_version="v1",
             kind="Service",
-            metadata=V1ObjectMeta(name="environmentd", labels={"app": "environmentd"}),
+            metadata=V1ObjectMeta(
+                name="environmentd",
+                labels={
+                    "app": "environmentd",
+                    MZ_ORGANIZATION_NAME_LABEL: MZ_INSTANCE_NAME,
+                    MZ_RESOURCE_ID_LABEL: "environmentd",
+                },
+            ),
             spec=V1ServiceSpec(
                 type="NodePort",
                 ports=[service_port, internal_port, http_port, internal_http_port],
@@ -142,7 +158,13 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         super().__init__(namespace)
 
     def generate_stateful_set(self) -> V1StatefulSet:
-        metadata = V1ObjectMeta(name="environmentd", labels={"app": "environmentd"})
+        metadata = V1ObjectMeta(
+            name="environmentd",
+            labels={
+                "app": "environmentd",
+                MZ_ORGANIZATION_NAME_LABEL: MZ_INSTANCE_NAME,
+            },
+        )
         label_selector = V1LabelSelector(match_labels={"app": "environmentd"})
 
         ports = [V1ContainerPort(container_port=5432, name="sql")]
