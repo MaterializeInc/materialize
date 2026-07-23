@@ -1152,18 +1152,11 @@ FROM (
         ('{{{a}},{{a}}}'),
         ('{{{a}},{{null}}}'),
         ('{}'),
-        ('{{},{}}'),
-        ('{{{}},{{}}}'),
-        ('{{{null}},{{null}}}'),
-        -- Can exceed max dims with empty array which consolidates down
-        ('{{{{{{{},{}}}}}}}')
+        ('{{{null}},{{null}}}')
     ) AS x (a)
 ) AS x (v);
 ----
 end
-{}	end
-{}	end
-{}	end
 {}	end
 {""}	1		end
 {'}	1	'	end
@@ -1296,7 +1289,7 @@ SELECT '{{a}'::int[];
 query error invalid input syntax for type array: Junk after closing right brace\.: "\{a\}\}"
 SELECT '{a}}'::int[];
 
-query error invalid input syntax for type array: Unexpected end of input\.: "\{\{\}"
+query error invalid input syntax for type array: Unexpected "\}" character\.: "\{\{\}"
 SELECT '{{}'::int[];
 
 query error invalid input syntax for type array: Junk after closing right brace\.: "\{\}\}"
@@ -1308,7 +1301,7 @@ SELECT '{  {a}'::int[];
 query error invalid input syntax for type array: Junk after closing right brace\.: "\{  a\}\}"
 SELECT '{  a}}'::int[];
 
-query error invalid input syntax for type array: Unexpected end of input\.: "\{\{  \}"
+query error invalid input syntax for type array: Unexpected "\}" character\.: "\{\{  \}"
 SELECT '{{  }'::int[];
 
 query error invalid input syntax for type array: Junk after closing right brace\.: "\{\}  \}"
@@ -1325,7 +1318,7 @@ SELECT '{{1}{1}}'::text[];
 query error invalid input syntax for type array: Junk after closing right brace\.: "\{\}\{\}"
 SELECT '{}{}'::text[];
 
-query error invalid input syntax for type array: Unexpected "\{" character\.: "\{\{\}\{\}\}"
+query error invalid input syntax for type array: Unexpected "\}" character\.: "\{\{\}\{\}\}"
 SELECT '{{}{}}'::text[];
 
 #
@@ -1347,16 +1340,16 @@ SELECT '{{1},{{2}}}'::text[];
 query error invalid input syntax for type array: Unexpected array element\.: "\{\{\{1\}\},\{2\}\}"
 SELECT '{{{1}},{2}}'::text[];
 
-query error invalid input syntax for type array: Multidimensional arrays must have sub\-arrays with matching dimensions\.: "\{\{\},\{\{\}\}\}"
+query error invalid input syntax for type array: Unexpected "\}" character\.: "\{\{\},\{\{\}\}\}"
 SELECT '{{},{{}}}'::text[];
 
-query error invalid input syntax for type array: Multidimensional arrays must have sub\-arrays with matching dimensions\.: "\{\{\{\}\},\{\}\}"
+query error invalid input syntax for type array: Unexpected "\}" character\.: "\{\{\{\}\},\{\}\}"
 SELECT '{{{}},{}}'::text[];
 
-query error invalid input syntax for type array: Multidimensional arrays must have sub\-arrays with matching dimensions\.: "\{\{1\},\{\}\}"
+query error invalid input syntax for type array: Unexpected "\}" character\.: "\{\{1\},\{\}\}"
 SELECT '{{1},{}}'::text[];
 
-query error invalid input syntax for type array: Multidimensional arrays must have sub\-arrays with matching dimensions\.: "\{\{\},\{1\}\}"
+query error invalid input syntax for type array: Unexpected "\}" character\.: "\{\{\},\{1\}\}"
 SELECT '{{},{1}}'::text[];
 
 query error invalid input syntax for type array: Multidimensional arrays must have sub\-arrays with matching dimensions\.: "\{\{1,2\},\{1\}\}"
@@ -1370,8 +1363,16 @@ SELECT '{null, {1}}'::text[];
 query error invalid input syntax for type array: Unexpected array element\.: "\{\{1\}, null\}"
 SELECT '{{1}, null}'::text[];
 
-query error invalid input syntax for type array: Multidimensional arrays must have sub\-arrays with matching dimensions\.: "\{\{\{null\}\},\{\{\}\}\}"
+query error invalid input syntax for type array: Unexpected "\}" character\.: "\{\{\{null\}\},\{\{\}\}\}"
 SELECT '{{{null}},{{}}}'::text[];
+
+#
+# Empty dimensions are only allowed in one-dimensional arrays
+query error invalid input syntax for type array: Unexpected "\}" character\.: "\{\{\}\}"
+SELECT '{{}}'::text[];
+
+query error invalid input syntax for type array: Unexpected "\}" character\.: "\{\{\},\{\}\}"
+SELECT '{{},{}}'::text[];
 
 # Exceeded dimensions
 query error number of array dimensions \(7\) exceeds the maximum allowed \(6\)
@@ -1418,7 +1419,7 @@ statement ok
 CREATE TABLE t5 (row_index int, multi_dim_text_array_empty TEXT[][], multi_dim_text_array_two_elem TEXT[][]);
 
 statement ok
-INSERT INTO t5 SELECT 0, '{{}}'::TEXT[][], '{{a, b}, {a, A}}'::TEXT[][];
+INSERT INTO t5 SELECT 0, '{}'::TEXT[][], '{{a, b}, {a, A}}'::TEXT[][];
 
 query T
 SELECT ((multi_dim_text_array_empty) @> (multi_dim_text_array_two_elem)) FROM t5;
