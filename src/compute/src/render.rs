@@ -614,6 +614,14 @@ fn import_shared_index<'outer>(
     // Pairwise import reads publisher worker `i` from importer worker `i`, so worker indices must
     // line up. The primitive's import additionally asserts equal total peer counts.
     let worker_index = outer.index();
+    // NOTE: `handles` mints only `SharedTraceHandle`s, wrapping the inner `Arc<SharedTrace>`. It
+    // does not hand back the slot `Arc<SharedIndexArrangement>` itself, so this import does not
+    // count toward that Arc's strong count. `ArrangementSharingRegistry::evict_unadopted` detects
+    // the last reader by that strong count, so it currently cannot see readers minted here. This is
+    // harmless today because `evict_unadopted` has no caller, but once it is wired into a
+    // cancellation path, this import must also retain the slot `Arc<SharedIndexArrangement>` (for
+    // example alongside `oks_hold`/`errs_hold`) for as long as the import is alive, or eviction can
+    // remove a slot a live reader still depends on.
     let (oks_handle, errs_handle) = registry.handles(&idx_id, worker_index)?;
 
     // Cloning a `SharedTraceHandle` registers an independent hold. Advance these holds to `as_of` so
