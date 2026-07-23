@@ -52,7 +52,7 @@ use uuid::Uuid;
 
 use crate::adt::array::ArrayDimension;
 use crate::adt::date::Date;
-use crate::adt::datetime::{self, DateTimeField, ParsedDateTime};
+use crate::adt::datetime::{self, DateOrder, DateTimeField, ParsedDateTime};
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::mz_acl_item::{AclItem, MzAclItem};
@@ -222,6 +222,18 @@ where
 pub fn parse_mz_timestamp(s: &str) -> Result<crate::Timestamp, ParseError> {
     s.trim()
         .parse()
+        .map_err(|e| ParseError::invalid_input_syntax("mz_timestamp", s).with_details(e))
+}
+
+/// Parses an `mz_timestamp` from `s` with the frozen legacy date parsing in
+/// its timestamp fallback.
+///
+/// NOTE: This exists solely to keep the storage source cast
+/// `CastStringToMzTimestamp` evaluation-stable across releases (see the
+/// stability contract in `mz_storage_types::sources::casts`). Use
+/// [`parse_mz_timestamp`] everywhere else.
+pub fn parse_mz_timestamp_legacy(s: &str) -> Result<crate::Timestamp, ParseError> {
+    crate::Timestamp::from_str_legacy(s.trim())
         .map_err(|e| ParseError::invalid_input_syntax("mz_timestamp", s).with_details(e))
 }
 
@@ -399,7 +411,10 @@ where
 /// <time zone interval> ::=
 ///     <sign> <hours value> <colon> <minutes value>
 /// ```
-fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, Timezone), String> {
+fn parse_timestamp_string(
+    s: &str,
+    order: DateOrder,
+) -> Result<(NaiveDate, NaiveTime, Timezone), String> {
     if s.is_empty() {
         return Err("timestamp string is empty".into());
     }
@@ -418,7 +433,7 @@ fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, Timezone), S
 
     let (ts_string, tz_string, era) = datetime::split_timestamp_string(s);
 
-    let pdt = ParsedDateTime::build_parsed_datetime_timestamp(ts_string, era)?;
+    let pdt = ParsedDateTime::build_parsed_datetime_timestamp(ts_string, era, order)?;
     let d: NaiveDate = pdt.compute_date()?;
     let t: NaiveTime = pdt.compute_time()?;
 
@@ -433,7 +448,21 @@ fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, Timezone), S
 
 /// Parses a [`Date`] from `s`.
 pub fn parse_date(s: &str) -> Result<Date, ParseError> {
-    match parse_timestamp_string(s) {
+    parse_date_inner(s, DateOrder::Mdy)
+}
+
+/// Parses a [`Date`] from `s` with the frozen legacy year-month-day
+/// interpretation of ambiguous dates.
+///
+/// NOTE: This exists solely to keep the storage source cast `CastStringToDate`
+/// evaluation-stable across releases (see the stability contract in
+/// `mz_storage_types::sources::casts`). Use [`parse_date`] everywhere else.
+pub fn parse_date_legacy(s: &str) -> Result<Date, ParseError> {
+    parse_date_inner(s, DateOrder::LegacyYmd)
+}
+
+fn parse_date_inner(s: &str, order: DateOrder) -> Result<Date, ParseError> {
+    match parse_timestamp_string(s, order) {
         Ok((date, _, _)) => Date::try_from(date).map_err(|_| ParseError::out_of_range("date", s)),
         Err(e) => Err(ParseError::invalid_input_syntax("date", s).with_details(e)),
     }
@@ -478,7 +507,25 @@ where
 
 /// Parses a `NaiveDateTime` from `s`.
 pub fn parse_timestamp(s: &str) -> Result<CheckedTimestamp<NaiveDateTime>, ParseError> {
-    match parse_timestamp_string(s) {
+    parse_timestamp_inner(s, DateOrder::Mdy)
+}
+
+/// Parses a `NaiveDateTime` from `s` with the frozen legacy year-month-day
+/// interpretation of ambiguous dates.
+///
+/// NOTE: This exists solely to keep the storage source cast
+/// `CastStringToTimestamp` evaluation-stable across releases (see the
+/// stability contract in `mz_storage_types::sources::casts`). Use
+/// [`parse_timestamp`] everywhere else.
+pub fn parse_timestamp_legacy(s: &str) -> Result<CheckedTimestamp<NaiveDateTime>, ParseError> {
+    parse_timestamp_inner(s, DateOrder::LegacyYmd)
+}
+
+fn parse_timestamp_inner(
+    s: &str,
+    order: DateOrder,
+) -> Result<CheckedTimestamp<NaiveDateTime>, ParseError> {
+    match parse_timestamp_string(s, order) {
         Ok((date, time, _)) => CheckedTimestamp::from_timestamplike(date.and_time(time))
             .map_err(|_| ParseError::out_of_range("timestamp", s)),
         Err(e) => Err(ParseError::invalid_input_syntax("timestamp", s).with_details(e)),
@@ -502,7 +549,25 @@ where
 
 /// Parses a `DateTime<Utc>` from `s`. See `mz_expr::scalar::func::timezone_timestamp` for timezone anomaly considerations.
 pub fn parse_timestamptz(s: &str) -> Result<CheckedTimestamp<DateTime<Utc>>, ParseError> {
-    parse_timestamp_string(s)
+    parse_timestamptz_inner(s, DateOrder::Mdy)
+}
+
+/// Parses a `DateTime<Utc>` from `s` with the frozen legacy year-month-day
+/// interpretation of ambiguous dates.
+///
+/// NOTE: This exists solely to keep the storage source cast
+/// `CastStringToTimestampTz` evaluation-stable across releases (see the
+/// stability contract in `mz_storage_types::sources::casts`). Use
+/// [`parse_timestamptz`] everywhere else.
+pub fn parse_timestamptz_legacy(s: &str) -> Result<CheckedTimestamp<DateTime<Utc>>, ParseError> {
+    parse_timestamptz_inner(s, DateOrder::LegacyYmd)
+}
+
+fn parse_timestamptz_inner(
+    s: &str,
+    order: DateOrder,
+) -> Result<CheckedTimestamp<DateTime<Utc>>, ParseError> {
+    parse_timestamp_string(s, order)
         .and_then(|(date, time, timezone)| {
             use Timezone::*;
             let mut dt = date.and_time(time);
@@ -2266,5 +2331,62 @@ mod tests {
         assert!(parse_oid_legacy("2147483648").is_err());
         assert!(parse_oid_legacy("4294967295").is_err());
         assert!(parse_oid_legacy("nope").is_err());
+    }
+
+    fn date(y: i32, m: u32, d: u32) -> Date {
+        Date::try_from(NaiveDate::from_ymd_opt(y, m, d).unwrap()).unwrap()
+    }
+
+    #[mz_ore::test]
+    fn test_parse_date_mdy() {
+        // Pinned `DateStyle = ISO, MDY`: a one- or two-digit leading field
+        // starts a month-day-year date, and a two-digit year is windowed
+        // into 1970..=2069.
+        assert_eq!(parse_date("01/02/03").unwrap(), date(2003, 1, 2));
+        assert_eq!(parse_date("1-2-3").unwrap(), date(2003, 1, 2));
+        assert_eq!(parse_date("01/02/69").unwrap(), date(2069, 1, 2));
+        assert_eq!(parse_date("01/02/70").unwrap(), date(1970, 1, 2));
+        assert_eq!(parse_date("01/02/1999").unwrap(), date(1999, 1, 2));
+        // A leading field of three or more digits is a year, with no
+        // windowing.
+        assert_eq!(parse_date("0099-01-08").unwrap(), date(99, 1, 8));
+        assert_eq!(parse_date("2003-01-02").unwrap(), date(2003, 1, 2));
+        // BC years are never windowed. Year 3 BC is year -2 in chrono.
+        assert_eq!(parse_date("01/02/03 BC").unwrap(), date(-2, 1, 2));
+        // A two-digit leading field is a month, so these are out of range.
+        assert!(parse_date("99-01-08").is_err());
+        assert!(parse_date("13/01/08").is_err());
+
+        assert_eq!(
+            parse_timestamp("01/02/03 04:05:06").unwrap().to_string(),
+            "2003-01-02 04:05:06"
+        );
+        assert_eq!(
+            parse_mz_timestamp("01/02/03").unwrap(),
+            parse_mz_timestamp("2003-01-02").unwrap()
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_parse_date_legacy() {
+        // The frozen behavior keeps year-month-day for ambiguous dates, with
+        // no windowing. This divergence from `parse_date` must not change
+        // (storage stability).
+        assert_eq!(parse_date_legacy("01/02/03").unwrap(), date(1, 2, 3));
+        assert_eq!(parse_date_legacy("99-01-08").unwrap(), date(99, 1, 8));
+        assert!(parse_date_legacy("01/02/1999").is_err());
+        assert_eq!(
+            parse_timestamp_legacy("01/02/03 04:05:06")
+                .unwrap()
+                .to_string(),
+            "0001-02-03 04:05:06"
+        );
+        // The mz_timestamp fallback keeps the frozen interpretation, under
+        // which 0001-02-03 is out of range.
+        assert!(parse_mz_timestamp_legacy("01/02/03").is_err());
+        assert_eq!(
+            parse_mz_timestamp_legacy("2003-01-02").unwrap(),
+            parse_mz_timestamp("2003-01-02").unwrap()
+        );
     }
 }
