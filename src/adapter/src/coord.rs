@@ -2197,6 +2197,10 @@ pub struct Coordinator {
     /// catalog transaction, so a burst of session connects and disconnects
     /// costs a small number of catalog commits instead of one per session.
     pending_session_ops: Vec<command_handler::PendingSessionOp>,
+    /// When the last batched session commit started, used to enforce
+    /// [`SESSION_OP_FLUSH_INTERVAL`](mz_adapter_types::dyncfgs::SESSION_OP_FLUSH_INTERVAL)
+    /// between commits. `None` until the first commit.
+    last_session_op_flush: Option<Instant>,
 
     license_key: ValidatedLicenseKey,
 
@@ -5142,6 +5146,7 @@ pub fn serve(
                     read_only_controllers,
                     buffered_builtin_table_updates: Some(Vec::new()),
                     pending_session_ops: Vec::new(),
+                    last_session_op_flush: None,
                     license_key,
                     user_id_pool: IdPool::empty(),
                     persist_client,

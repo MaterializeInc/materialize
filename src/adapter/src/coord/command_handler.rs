@@ -12,7 +12,7 @@
 
 use base64::prelude::*;
 use differential_dataflow::lattice::Lattice;
-use mz_adapter_types::dyncfgs::ALLOW_USER_SESSIONS;
+use mz_adapter_types::dyncfgs::{ALLOW_USER_SESSIONS, SESSION_OP_FLUSH_INTERVAL};
 use mz_auth::AuthenticatorKind;
 use mz_auth::password::Password;
 use mz_sql::catalog::AutoProvisionSource;
@@ -20,6 +20,7 @@ use mz_sql::session::metadata::SessionMetadata;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use futures::FutureExt;
 use futures::future::LocalBoxFuture;
@@ -979,11 +980,30 @@ impl Coordinator {
     /// Ops that arrive while a flush is already scheduled are picked up by
     /// that flush. This is what batches a burst of session connects and
     /// disconnects into a small number of catalog commits.
+    ///
+    /// A flush scheduled within `session_op_flush_interval` of the previous
+    /// one is delayed until the interval has passed, bounding the catalog
+    /// commit rate from connection churn. The first op after an idle period
+    /// still flushes immediately.
     pub(crate) fn enqueue_session_op(&mut self, op: Op, completion: SessionOpCompletion) {
         if self.pending_session_ops.is_empty() {
-            // Failures to send the message can only happen during shutdown,
-            // in which case the client connections are going away anyway.
-            let _ = self.internal_cmd_tx.send(Message::FlushSessionOps);
+            let interval = SESSION_OP_FLUSH_INTERVAL.get(self.catalog().system_config().dyncfgs());
+            let remaining = self
+                .last_session_op_flush
+                .map(|last| interval.saturating_sub(last.elapsed()))
+                .unwrap_or(Duration::ZERO);
+            if remaining.is_zero() {
+                // Failures to send the message can only happen during
+                // shutdown, in which case the client connections are going
+                // away anyway.
+                let _ = self.internal_cmd_tx.send(Message::FlushSessionOps);
+            } else {
+                let internal_cmd_tx = self.internal_cmd_tx.clone();
+                task::spawn(|| "session_op_flush_interval", async move {
+                    tokio::time::sleep(remaining).await;
+                    let _ = internal_cmd_tx.send(Message::FlushSessionOps);
+                });
+            }
         }
         self.pending_session_ops
             .push(PendingSessionOp { op, completion });
@@ -996,6 +1016,7 @@ impl Coordinator {
         if pending.is_empty() {
             return;
         }
+        self.last_session_op_flush = Some(Instant::now());
         let count = pending.len();
         let (ops, completions): (Vec<_>, Vec<_>) = pending
             .into_iter()
