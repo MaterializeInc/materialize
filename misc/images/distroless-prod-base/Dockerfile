@@ -10,11 +10,11 @@
 # This is a separate mzimage so that we don't have to re-install the apt things
 # every time we get a CI builder with a cold cache.
 
-# Extract libeatmydata from a Debian image for CI use. eatmydata disables
-# fsync for faster test execution. Activated via LD_PRELOAD=libeatmydata.so
-# set as a container environment variable (must be set before process start).
-FROM debian:13-slim AS eatmydata
-RUN apt-get update && apt-get install -y --no-install-recommends eatmydata \
+# Debian packages for the distroless final image, which has no package manager.
+# Installing them explicitly pulls current security-patched builds.
+# The digest pin is bumped by dependabot, which also busts the layer cache.
+FROM debian:13-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd AS apt-deps
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates eatmydata liblzma5 \
     && rm -rf /var/lib/apt/lists/*
 
 # Statically-linked `tini`, the PID 1 init for all distroless prod images.
@@ -26,7 +26,7 @@ MZFROM tini-static AS tini
 # The `materialize` user (uid/gid 999), built here because the distroless final
 # image has no shell to run `useradd`. uid 999 matches the orchestrator's
 # hardcoded runAsUser/fsGroup, so no UID gate is needed.
-FROM debian:13-slim AS useradd
+FROM debian:13-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd AS useradd
 RUN groupadd --system --gid=999 materialize \
     && useradd --system --gid=999 --uid=999 --create-home materialize \
     && mkdir /mzdata /scratch \
@@ -44,16 +44,18 @@ ENV RUST_BACKTRACE=1
 # (database-issues#9159).
 ENV RUST_LIB_BACKTRACE=0
 
-# Copy libeatmydata for CI performance optimization (no-op unless
-# LD_PRELOAD=libeatmydata.so is set as a container env var).
-COPY --from=eatmydata /usr/lib/*/libeatmydata.so /usr/lib/
+# libeatmydata disables fsync for faster CI runs. No-op unless
+# LD_PRELOAD=libeatmydata.so is set before process start.
+COPY --from=apt-deps /usr/lib/*/libeatmydata.so /usr/lib/
 COPY --from=tini /output/tini /usr/bin/tini
 
 # liblzma (xz), dynamically linked by environmentd and clusterd. The distroless
-# base does not ship it, so without this both binaries fail at startup with
-# "error while loading shared libraries: liblzma.so.5". Debian images get it
-# from apt packages, but distroless does not.
-COPY --from=eatmydata /usr/lib/*/liblzma.so.5* /usr/lib/
+# base does not ship it.
+COPY --from=apt-deps /usr/lib/*/liblzma.so.5* /usr/lib/
+
+# The distroless base ships a CA bundle frozen at its build time. Copy a
+# current one from the apt stage instead.
+COPY --from=apt-deps /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
 # FoundationDB client library, dynamically linked by environmentd and clusterd.
 # NOTE: this tag is coupled to two other pins and all three must move
