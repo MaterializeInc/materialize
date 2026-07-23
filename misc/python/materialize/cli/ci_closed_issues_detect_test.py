@@ -46,7 +46,7 @@ def _mock_response(state_type: str, state_name: str) -> mock.Mock:
         # Genuinely closed states.
         ("completed", "Done", True),
         ("canceled", "Canceled", True),
-        ("canceled", "Duplicate", True),
+        ("duplicate", "Duplicate", True),
         # Open states.
         ("backlog", "Backlog", False),
         ("started", "In Progress", False),
