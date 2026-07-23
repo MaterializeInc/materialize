@@ -184,7 +184,7 @@ downtime.
 
 If the new replicas do not hydrate within the reconfiguration timeout (24 hours
 by default), Materialize rolls back the resize and the cluster keeps its current
-size. To customize the timeout behavior, use the `WAIT UNTIL READY` or `WAIT FOR` options. 
+size. To customize the timeout behavior, use the `WAIT UNTIL READY` or `WAIT FOR` options.
 The resize still proceeds in the background.
 
 {{< private-preview >}}
