@@ -12,6 +12,7 @@ use std::io;
 
 use bytes::BytesMut;
 use itertools::Itertools;
+use mz_pgrepr::TextEncodeSettings;
 use mz_repr::{
     Datum, RelationDesc, Row, RowArena, RowRef, SharedRow, SqlColumnType, SqlRelationType,
     SqlScalarType,
@@ -71,6 +72,7 @@ fn encode_copy_row_text(
     row: &RowRef,
     typ: &SqlRelationType,
     out: &mut Vec<u8>,
+    settings: TextEncodeSettings,
 ) -> Result<(), io::Error> {
     let null = null.as_bytes();
     let mut buf = BytesMut::new();
@@ -82,7 +84,7 @@ fn encode_copy_row_text(
             None => out.extend(null),
             Some(field) => {
                 buf.clear();
-                field.encode_text(&mut buf);
+                field.encode_text(&mut buf, settings);
                 for b in &buf {
                     match b {
                         b'\\' => out.extend(b"\\\\"),
@@ -110,6 +112,7 @@ fn encode_copy_row_csv(
     row: &RowRef,
     typ: &SqlRelationType,
     out: &mut Vec<u8>,
+    settings: TextEncodeSettings,
 ) -> Result<(), io::Error> {
     let null = null.as_bytes();
     let is_special = |c: &u8| *c == *delim || *c == *quote || *c == b'\r' || *c == b'\n';
@@ -122,7 +125,7 @@ fn encode_copy_row_csv(
             None => out.extend(null),
             Some(field) => {
                 buf.clear();
-                field.encode_text(&mut buf);
+                field.encode_text(&mut buf, settings);
                 // A field needs quoting if:
                 //   * It is the only field and the value is exactly the end
                 //     of copy marker.
@@ -476,15 +479,20 @@ pub fn decode_copy_format<'a>(
 }
 
 /// Encodes the given `Row` into bytes based on the given `CopyFormatParams`.
+///
+/// `settings` affects only the text and CSV formats. Callers that do not encode
+/// on behalf of a session, such as `COPY TO <external destination>`, which is
+/// executed in the dataflow layer, must pass [`TextEncodeSettings::STABLE`].
 pub fn encode_copy_format<'a>(
     params: &CopyFormatParams<'a>,
     row: &RowRef,
     typ: &SqlRelationType,
     out: &mut Vec<u8>,
+    settings: TextEncodeSettings,
 ) -> Result<(), io::Error> {
     match params {
-        CopyFormatParams::Text(params) => encode_copy_row_text(params, row, typ, out),
-        CopyFormatParams::Csv(params) => encode_copy_row_csv(params, row, typ, out),
+        CopyFormatParams::Text(params) => encode_copy_row_text(params, row, typ, out, settings),
+        CopyFormatParams::Csv(params) => encode_copy_row_csv(params, row, typ, out, settings),
         CopyFormatParams::Binary => encode_copy_row_binary(row, typ, out),
         CopyFormatParams::Parquet => {
             // TODO(cf2): Support Parquet over STDIN.
@@ -513,7 +521,7 @@ pub fn encode_copy_format_header<'a>(
                 };
                 desc.arity()
             ]);
-            encode_copy_row_csv(params, &header_row, &typ, out)
+            encode_copy_row_csv(params, &header_row, &typ, out, TextEncodeSettings::STABLE)
         }
         CopyFormatParams::Parquet => {
             // TODO(cf2): Support Parquet over STDIN.
@@ -1126,7 +1134,7 @@ mod tests {
         for TestCase { params, expected } in tests {
             out.clear();
             let params = CopyFormatParams::Csv(params);
-            let _ = encode_copy_format(&params, &row, &typ, &mut out);
+            let _ = encode_copy_format(&params, &row, &typ, &mut out, TextEncodeSettings::STABLE);
             let output = std::str::from_utf8(&out);
             assert_eq!(output, std::str::from_utf8(expected));
         }
@@ -1296,7 +1304,7 @@ mod tests {
                 let params = CopyFormatParams::Csv(csv_params);
 
                 // Roundtrip the Row through our CSV format.
-                encode_copy_format(&params, &row, &typ, &mut buf)?;
+                encode_copy_format(&params, &row, &typ, &mut buf, TextEncodeSettings::STABLE)?;
                 let column_types = typ
                     .column_types
                     .iter()
@@ -1336,7 +1344,7 @@ mod tests {
                     // TODO: The decoder cannot differentiate between empty string and null.
                     if let Some(value) = mz_pgrepr::Value::from_datum(datum, scalar_type) {
                         let mut buf = bytes::BytesMut::new();
-                        value.encode_text(&mut buf);
+                        value.encode_text(&mut buf, TextEncodeSettings::STABLE);
 
                         if let Ok(datum_str) = std::str::from_utf8(&buf[..]) {
                             if datum_str == copy_csv_params.null {

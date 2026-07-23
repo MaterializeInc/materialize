@@ -2504,6 +2504,7 @@ where
                 .map(|ty| mz_pgrepr::Type::from(&ty.scalar_type))
                 .zip_eq(result_formats)
                 .collect(),
+            self.adapter_client.session().vars().text_encode_settings(),
         );
 
         let mut total_sent_rows = 0;
@@ -2769,8 +2770,12 @@ where
             }
         }
 
+        // Unlike `COPY TO <external destination>`, which is encoded in the
+        // dataflow layer, `COPY TO STDOUT` runs in the session and so honors
+        // the session's encoding settings, matching PostgreSQL.
+        let text_settings = self.adapter_client.session().vars().text_encode_settings();
         let encode_fn = |row: &RowRef, typ: &SqlRelationType, out: &mut Vec<u8>| {
-            mz_pgcopy::encode_copy_format(&row_format, row, typ, out)
+            mz_pgcopy::encode_copy_format(&row_format, row, typ, out, text_settings)
         };
 
         let typ = row_desc.typ();

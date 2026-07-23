@@ -34,7 +34,7 @@ impl Encode for TextEncoder {
         let mut buf = BytesMut::new();
         for ((_, typ), val) in self.columns.iter().zip_eq(row.iter()) {
             if let Some(pgrepr_value) = mz_pgrepr::Value::from_datum(val, &typ.scalar_type) {
-                pgrepr_value.encode_text(&mut buf);
+                pgrepr_value.encode_text(&mut buf, mz_pgrepr::TextEncodeSettings::STABLE);
             }
         }
 
