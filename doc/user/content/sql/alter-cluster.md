@@ -160,14 +160,81 @@ The values in the `mz_cluster_replica_sizes` table may change at any
 time. You should not rely on them for any kind of capacity planning.
 {{< /warning >}}
 
-#### Downtime
+#### Downtime considerations for v26.34 or after
+Starting in v26.34, ALTER CLUSTER <name> SET (SIZE = ...) by default resizes
+the cluster gracefully and without downtime. For example:
 
-Resizing operation can incur downtime unless used with WAIT UNTIL READY option.
-See [zero-downtime cluster resizing](#zero-downtime-cluster-resizing) for
-details.
+```mzsql
+ALTER CLUSTER c1 SET (SIZE = '100cc');
+```
 
-#### Zero-downtime cluster resizing
+##### Resizing process
+The resize proceeds in the background, allowing the command to return
+immediately.
 
+During a graceful resize, Materialize:
+1. Provisions new replicas at the target size, alongside the current replicas.
+2. Waits for the new replicas to
+   [hydrate](/concepts/clusters/#consider-hydration-requirements).
+3. Retires the old replicas.
+
+Throughout, the cluster keeps serving queries, first from the old replicas,
+then from both sets as the new replicas come up, so the resize incurs no
+downtime.
+
+If the new replicas do not hydrate within the reconfiguration timeout (24 hours
+by default), Materialize rolls back the resize and the cluster keeps its current
+size. To customize the timeout behavior, use the `WAIT UNTIL READY` or `WAIT FOR` options.
+The resize still proceeds in the background.
+
+{{< private-preview >}}
+Customizing the resize timeout with `WAIT UNTIL READY` or `WAIT FOR`
+{{< /private-preview >}}
+
+- `WAIT UNTIL READY (TIMEOUT = ..., ON TIMEOUT = ...)` sets the timeout for the
+  resize. On timeout, `ON TIMEOUT` selects whether to `COMMIT` (retire the old
+  replicas and proceed with the not-yet-hydrated new ones, which can cause
+  downtime) or `ROLLBACK` (keep the current size). Default: `ROLLBACK`.
+
+  ```mzsql
+  ALTER CLUSTER c1
+  SET (SIZE = '100cc') WITH (WAIT UNTIL READY (TIMEOUT = '10m'));
+  ```
+
+- `WAIT FOR '<duration>'` sets the timeout and commits when it expires,
+  regardless of hydration status, which can cause downtime. Prefer
+  `WAIT UNTIL READY`.
+
+See [Monitoring a resize](#monitoring-a-resize) to track progress and
+[cancel](#monitoring-a-resize) an in-flight resize.
+
+##### Monitoring a resize
+You can monitor a resize through the following:
+
+- The `activity` column of [`SHOW CLUSTERS`](/sql/show-clusters/), which
+  summarizes any in-flight reconfiguration or hydration burst, and is `NULL`
+  when the cluster is steady.
+
+- [`mz_internal.mz_cluster_reconfigurations`](/reference/system-catalog/mz_internal/#mz_cluster_reconfigurations),
+  which shows the target shape, deadline, timeout action, and lifecycle status
+  of the latest reconfiguration.
+
+- [`mz_internal.mz_cluster_auto_scaling_strategies`](/reference/system-catalog/mz_internal/#mz_cluster_auto_scaling_strategies),
+  which shows any in-flight hydration burst.
+
+- [`mz_internal.mz_hydration_statuses`](/reference/system-catalog/mz_internal/#mz_hydration_statuses),
+  which shows per-object hydration status.
+
+- The audit log
+  ([`mz_catalog.mz_audit_events`](/reference/system-catalog/mz_catalog/#mz_audit_events)),
+  which records each reconfiguration transition.
+
+##### Cancel a resize
+To **cancel** an in-flight resize, reissue `ALTER CLUSTER` with the cluster's
+current size. Materialize drops the pending replicas and keeps the current
+configuration.
+
+#### Downtime considerations for v26.33 or before
 {{< private-preview />}}
 
 You can use the `WAIT UNTIL READY` option to perform a zero-downtime resizing,
@@ -188,6 +255,18 @@ fail. Additionally, any connection interruption or statement cancelation will
 cause a rollback — no size change will take effect in that case.
 
 {{% include-headless "/headless/alter-cluster-wait-until-ready-note" %}}
+
+### Speed up hydration by autoscaling to a larger size
+
+Beyond a one-off resize, you can configure a standing **autoscaling strategy**
+so the cluster provisions a burst replica at a larger size on its own whenever
+it has un-hydrated objects. You can set the strategy when you first create the cluster
+with `CREATE CLUSTER ... (AUTO SCALING STRATEGY = ...)`, or add it to an
+existing cluster with `ALTER CLUSTER ... SET (AUTO SCALING STRATEGY = ...)`. The
+example below uses `CREATE CLUSTER`; see [Configure
+autoscaling](#configure-autoscaling) for the `ALTER CLUSTER` form.
+
+{{% include-headless "/headless/cluster-hydration-burst" %}}
 
 ### Replication factor
 
@@ -270,27 +349,71 @@ tolerance](#replication-factor-and-fault-tolerance), not its work capacity.
 
 ### Resizing
 
-You can alter the cluster size with **no downtime** (i.e., [zero-downtime
-cluster resizing](#zero-downtime-cluster-resizing)) by running the `ALTER
-CLUSTER` command with the `WAIT UNTIL READY` [option](#syntax):
+By default, altering the cluster size is graceful and incurs **no downtime**.
+The command returns immediately and the resize proceeds in the background. See
+[Resizing process](#resizing-process) and
+[Monitoring a resize](#monitoring-a-resize).
+
+```mzsql
+ALTER CLUSTER c1 SET (SIZE = '100cc');
+```
+
+To customize the timeout and what happens when it expires, use the `WAIT UNTIL
+READY` [option](#syntax):
 
 ```mzsql
 ALTER CLUSTER c1
-SET (SIZE '100cc') WITH (WAIT UNTIL READY (TIMEOUT = '10m', ON TIMEOUT = 'COMMIT'));
+SET (SIZE = '100cc') WITH (WAIT UNTIL READY (TIMEOUT = '10m', ON TIMEOUT = 'ROLLBACK'));
 ```
 
-{{% include-headless "/headless/alter-cluster-wait-until-ready-note" %}}
+### Configure autoscaling
 
-Alternatively, you can alter the cluster size immediately, without waiting, by
-running the `ALTER CLUSTER` command:
+To [speed up hydration](#speed-up-hydration-by-autoscaling-to-a-larger-size),
+configure an autoscaling strategy that provisions a burst replica at a larger
+size while the cluster has un-hydrated objects:
 
 ```mzsql
-ALTER CLUSTER c1 SET (SIZE '100cc');
+ALTER CLUSTER c1 SET (
+    AUTO SCALING STRATEGY = (
+        ON HYDRATION (HYDRATION SIZE = '800cc', LINGER DURATION = '15s')
+    )
+);
 ```
 
-This will incur downtime when the cluster contains objects that need
-re-hydration before they are ready. This includes indexes, materialized views,
-and some types of sources.
+To remove the strategy:
+
+```mzsql
+ALTER CLUSTER c1 RESET (AUTO SCALING STRATEGY);
+```
+
+To inspect the configured strategy and any in-flight burst, query
+[`mz_internal.mz_cluster_auto_scaling_strategies`](/reference/system-catalog/mz_internal/#mz_cluster_auto_scaling_strategies).
+The `strategy` column holds the configured policy, and the `state` column holds
+the in-flight burst details, or `NULL` when no burst is running:
+
+```mzsql
+SELECT
+    c.name AS cluster,
+    s.strategy->'on_hydration'->>'hydration_size' AS hydration_size,
+    (s.strategy->'on_hydration'->'linger_duration'->>'secs')::int AS linger_seconds,
+    s.state->'burst'->>'burst_size' AS inflight_burst_size
+FROM mz_internal.mz_cluster_auto_scaling_strategies AS s
+JOIN mz_clusters AS c ON c.id = s.cluster_id;
+```
+
+```nofmt
+ cluster | hydration_size | linger_seconds | inflight_burst_size
+---------+----------------+----------------+---------------------
+ c1      | 800cc          |             15 |
+```
+
+Here, `c1` is configured to provision an `800cc` burst replica that lingers 15
+seconds, and no burst is currently running (`inflight_burst_size` is `NULL`).
+While a burst is in flight, `inflight_burst_size` reports the burst replica's
+size.
+
+[`SHOW CLUSTERS`](/sql/show-clusters/) also summarizes any in-flight hydration
+burst in its `activity` column.
 
 ### Converting unmanaged to managed clusters
 
@@ -322,5 +445,5 @@ compute-specific settings. If needed, these can be set explicitly.
 ## See also
 
 - [`CREATE CLUSTER`](/sql/create-cluster/)
-- [`CREATE SINK`](/sql/create-sink/)
-- [`SHOW SINKS`](/sql/show-sinks)
+- [`SHOW CLUSTERS`](/sql/show-clusters/)
+- [`DROP CLUSTER`](/sql/drop-cluster/)
