@@ -246,6 +246,59 @@ impl ArrangementSharingRegistry {
         self.notify_all(*id);
     }
 
+    /// Evicts a never-adopted placeholder slot for `(id, worker_index)` once its last reader leaves.
+    ///
+    /// A placeholder created by [`Self::get_or_create_placeholder`] whose index creation is cancelled
+    /// is never adopted, so no publisher drop cleans it up. This removes the slot when it is both
+    /// unadopted and unreferenced, so the registry does not leak it. An ADOPTED slot is left alone: it
+    /// is cleaned up by the maintenance publisher's drop through [`Self::remove`].
+    ///
+    /// Call this from a reader's teardown after it has dropped its `Arc<SharedIndexArrangement>`. It is
+    /// a no-op unless the map is the sole owner of the slot Arc, so calling it while another reader (or
+    /// an in-flight adopter) still holds a clone does nothing.
+    ///
+    /// # Reader-liveness contract
+    ///
+    /// The strong count of the slot Arc counts the map plus every holder of a clone returned by
+    /// [`Self::get_or_create_placeholder`]. A [`SharedTraceHandle`] holds an `Arc<SharedTrace>` one
+    /// level down and does NOT contribute, so a reader MUST keep its `Arc<SharedIndexArrangement>`
+    /// alive for as long as it imports. Then strong count 1 (the map alone) means no live reader.
+    /// NOTE: the reader import in `crate::render::import_shared_index` does not yet do this, see the
+    /// NOTE at its `handles` call.
+    ///
+    /// # Why this cannot race adoption
+    ///
+    /// The whole check-and-remove runs under the map lock, and both the adoption flag and the slot's
+    /// strong count are read inside one critical section of the oks point's state mutex (via
+    /// [`Published::adopted_and`]). An adopter clones the slot Arc under the map lock and holds that
+    /// clone across its `adopt` call, which sets the flag under the same state mutex. So the state-lock
+    /// read here either follows the adopt (sees adopted, spares the slot) or fully precedes it, in
+    /// which case the adopter's clone has not yet dropped and the strong count read in the same section
+    /// is at least 2 (spares the slot). Removal therefore happens only for a slot no reader and no
+    /// in-flight adopter holds. A later adopter, blocked on the map lock, then creates a fresh slot.
+    pub fn evict_unadopted(&self, id: &GlobalId, worker_index: usize) {
+        let mut map = self.inner.map.lock().expect("registry poisoned");
+        let Some(slots) = map.get_mut(id) else {
+            return;
+        };
+        let should_evict = match slots.get(worker_index).and_then(|slot| slot.as_ref()) {
+            Some(slot) => {
+                let (adopted, strong_count) = slot.oks.adopted_and(|| Arc::strong_count(slot));
+                !adopted && strong_count == 1
+            }
+            None => false,
+        };
+        if !should_evict {
+            return;
+        }
+        slots[worker_index] = None;
+        // Drop the id entry entirely once no worker slot remains, so an evicted placeholder leaves no
+        // empty vector behind.
+        if slots.iter().all(Option::is_none) {
+            map.remove(id);
+        }
+    }
+
     /// Mints reader handles for `id` on `worker_index`, if published.
     pub fn handles(
         &self,
@@ -577,6 +630,113 @@ mod tests {
         assert_eq!(
             read_rows(&oks, Timestamp::from(0_u64)),
             expected_rows(&test_rows())
+        );
+    }
+
+    #[mz_ore::test]
+    fn placeholder_close_terminates_importers() {
+        // An import over a never-adopted placeholder pins its frontier at the minimum. Closing the
+        // placeholder pushes a terminal empty frontier, so the importer completes rather than wedging.
+        let (capture_tx, capture_rx) = mpsc::channel();
+
+        timely::execute_directly(move |worker| {
+            let peers = worker.peers();
+            let placeholder: Published<RowRowSpine<Timestamp, Diff>> =
+                Published::placeholder(peers);
+            let oks = placeholder.handle();
+
+            let probe = ProbeHandle::new();
+            worker.dataflow::<Timestamp, _, _>(|scope| {
+                let arr = oks.import(scope.clone(), "import placeholder");
+                arr.as_collection(|_k, _v| ())
+                    .inner
+                    .probe_with(&probe)
+                    .capture_into(capture_tx.clone());
+            });
+
+            // Before close: the import holds its frontier at the minimum [0] and emits nothing.
+            for _ in 0..32 {
+                worker.step();
+            }
+            assert!(
+                probe.less_equal(&Timestamp::from(0_u64)),
+                "placeholder import frontier should be pinned at 0 before close"
+            );
+            assert!(
+                !probe.done(),
+                "placeholder import frontier should be non-empty before close"
+            );
+
+            // Close the never-adopted placeholder. The importer drains the terminal empty frontier,
+            // drops its capability, and completes.
+            placeholder.close();
+            let mut steps = 0;
+            while !probe.done() {
+                worker.step();
+                steps += 1;
+                assert!(
+                    steps < 10_000,
+                    "importer did not terminate after placeholder close"
+                );
+            }
+        });
+
+        // The placeholder never carried a batch, so the importer produced no data.
+        let data: Vec<((), Timestamp, Diff)> = capture_rx
+            .extract()
+            .into_iter()
+            .flat_map(|(_, d)| d)
+            .collect();
+        assert!(data.is_empty(), "a closed placeholder must produce no data");
+    }
+
+    #[mz_ore::test]
+    fn last_reader_evicts_unadopted_placeholder() {
+        let id = GlobalId::User(1);
+        let registry = ArrangementSharingRegistry::new();
+        let slot = registry.get_or_create_placeholder(id, 0, 1);
+        assert!(registry.handles(&id, 0).is_some());
+        // Dropping the sole reader leaves the map as the only owner of the slot Arc.
+        drop(slot);
+        registry.evict_unadopted(&id, 0);
+        assert!(registry.handles(&id, 0).is_none());
+    }
+
+    #[mz_ore::test]
+    fn evict_spares_placeholder_with_live_reader() {
+        let id = GlobalId::User(1);
+        let registry = ArrangementSharingRegistry::new();
+        let reader1 = registry.get_or_create_placeholder(id, 0, 1);
+        let reader2 = registry.get_or_create_placeholder(id, 0, 1);
+        // One of two readers leaving must not evict: the other still holds a clone of the slot Arc.
+        drop(reader1);
+        registry.evict_unadopted(&id, 0);
+        assert!(
+            registry.handles(&id, 0).is_some(),
+            "a placeholder with a live reader must not be evicted"
+        );
+        // The last reader leaving does evict.
+        drop(reader2);
+        registry.evict_unadopted(&id, 0);
+        assert!(registry.handles(&id, 0).is_none());
+    }
+
+    #[mz_ore::test]
+    fn evict_spares_adopted_slot() {
+        let id = GlobalId::User(1);
+        let registry = ArrangementSharingRegistry::new();
+        // A reader creates the placeholder, then leaves. Adoption fills the same slot via the
+        // maintenance path, which drops its own slot clone when its build closure returns, so the map
+        // becomes the sole owner of the slot Arc, exactly the strong-count-1 shape eviction keys on.
+        let slot = registry.get_or_create_placeholder(id, 0, 1);
+        drop(slot);
+        publish_index_into_adopting(&registry, id, test_rows());
+        // The adopted flag, not the strong count, is what spares it: an adopted slot is fed by its
+        // publisher and cleaned up by `remove`, never by eviction.
+        registry.evict_unadopted(&id, 0);
+        assert!(
+            registry.handles(&id, 0).is_some(),
+            "an adopted slot must not be evicted"
         );
     }
 

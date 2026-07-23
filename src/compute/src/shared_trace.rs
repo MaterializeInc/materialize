@@ -101,6 +101,12 @@ struct SharedTraceState<Tr: TraceReader> {
     /// Set when the publisher drops. A terminal empty frontier is enqueued to each importer, so
     /// readers close only after draining what was already published.
     closed: bool,
+    /// Set true by [`PublishArrangement::adopt`] when a publisher takes over this point. A point
+    /// created by [`Published::placeholder`] and never adopted stays false, which the registry uses
+    /// to decide it may evict the never-adopted slot when its last reader leaves. Read under this
+    /// same mutex so an eviction check that also reads the slot's Arc strong count observes a
+    /// consistent (adopted, count) pair. See [`crate::sharing::ArrangementSharingRegistry::evict_unadopted`].
+    adopted: bool,
 }
 
 impl<Tr: TraceReader> SharedTraceState<Tr>
@@ -166,6 +172,7 @@ impl<Tr: TraceReader> SharedTrace<Tr> {
                 queues: BTreeMap::new(),
                 next_id: 0,
                 closed: false,
+                adopted: false,
             }),
             upper_changed: Condvar::new(),
             peers,
@@ -207,6 +214,45 @@ where
         Published {
             shared: Arc::new(SharedTrace::new_empty(peers)),
         }
+    }
+
+    /// Closes this publication point without a publisher attached, terminating every importer.
+    ///
+    /// Marks the point closed and pushes a terminal empty frontier ([`Antichain::new`]) to each
+    /// importer queue, waking them so they drain and drop their capability. This is the never-adopted
+    /// counterpart to `Publisher::drop`, which performs the same close for an adopted point. Use it
+    /// for a placeholder whose index creation was cancelled before it published: without it the
+    /// placeholder's importers would hold their frontier at the minimum forever.
+    ///
+    /// Idempotent. Closing an already-closed point re-enqueues the terminal frontier, which a drained
+    /// importer ignores. Do NOT call this on a point that will still be adopted: the terminal frontier
+    /// would tear down importers that a later publisher is meant to feed.
+    pub fn close(&self) {
+        if let Ok(mut state) = self.shared.state.lock() {
+            state.closed = true;
+            // Empty frontier = sealed through the end of time, the same terminal signal `Publisher::drop`
+            // sends. Never `from_elem(minimum)`, which would read as "no progress" and wedge instead.
+            let empty = Antichain::new();
+            for queue in state.queues.values_mut() {
+                queue
+                    .instructions
+                    .push_back(TraceReplayInstruction::Frontier(empty.clone()));
+                let _ = queue.activator.activate();
+            }
+        }
+        self.shared.upper_changed.notify_all();
+    }
+
+    /// Reads this point's adoption flag and runs `f` while holding the state lock, returning both.
+    ///
+    /// The registry pairs the flag with the slot's Arc strong count under one lock acquisition so an
+    /// adopter in flight is always observed as either adopted or still-referenced. `f` MUST NOT lock
+    /// this point's state again (it would deadlock) nor acquire the registry map lock (it would invert
+    /// the map-then-state lock order the eviction path relies on).
+    pub(crate) fn adopted_and<R>(&self, f: impl FnOnce() -> R) -> (bool, R) {
+        let state = self.shared.state.lock().expect("shared trace poisoned");
+        let adopted = state.adopted;
+        (adopted, f())
     }
 }
 
@@ -501,6 +547,20 @@ where
             placeholder.shared.peers,
             "adopt requires equal total peers (workers_per_process * num_processes)"
         );
+
+        // Mark the point adopted before installing the publisher. The registry reads this flag (under
+        // the same state mutex) to distinguish a live, published slot from a never-adopted placeholder
+        // it may evict. Setting it before the caller can drop its `Arc<SharedIndexArrangement>` clone
+        // (the borrow of `placeholder` keeps that clone alive across this call) is what makes the
+        // eviction race sound. See `crate::sharing::ArrangementSharingRegistry::evict_unadopted`.
+        {
+            let mut state = placeholder
+                .shared
+                .state
+                .lock()
+                .expect("shared trace poisoned");
+            state.adopted = true;
+        }
 
         // The publisher owns a `TraceAgent` clone: its read capability is the aggregate lease for
         // all readers, so the trace cannot compact or drop out from under them.
