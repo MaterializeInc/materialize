@@ -331,7 +331,7 @@ CREATE SOURCE mz_source
 
 {{% include-headless "/headless/schema-changes-in-progress" %}}
 
-To handle upstream [schema changes](#schema-changes) or errored subsources, use
+To handle upstream [schema changes](#schema-changes-legacy-source-syntax) or errored subsources, use
 the [`DROP SOURCE`](/sql/alter-source/#context) syntax to drop the affected
 subsource, and then [`ALTER SOURCE...ADD SUBSOURCE`](/sql/alter-source/) to add
 the subsource back to the source.
