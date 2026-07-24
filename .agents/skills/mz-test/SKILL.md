@@ -84,18 +84,16 @@ bin/mzcompose --find testdrive run default -- FILENAME.td
 
 `FILENAME.td` is a file in `test/testdrive/`, relative to that directory (not the repo root).
 
-`connection=mz_system` is NOT a built-in testdrive connection. A `.td` that uses
-`$ postgres-execute connection=mz_system` (e.g. for `ALTER SYSTEM SET`) must
-first register it:
+`mz_system` and `materialize` are built-in testdrive connections, so
+`$ postgres-execute connection=mz_system` (e.g. for `ALTER SYSTEM SET`) works
+without a prior registration. Any other connection name must first be
+registered:
 
 ```
-$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+$ postgres-connect name=conn1 url=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
 ```
 
-Omitting the line fails in CI with `connection 'mz_system' not found`. When
-verifying a `.td` locally, run it as written (bare `mz_system` name), not a copy
-with the full URL hand-substituted into `connection=...`, since the URL form
-passes locally while the committed bare-name form fails CI.
+Using an unregistered name fails with `connection 'conn1' not found`.
 
 Some compositions (e.g. platform-checks, upgrade, pg-cdc multi-version) run the
 same `.td` file against multiple Materialize versions. When a change alters

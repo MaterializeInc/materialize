@@ -131,7 +131,6 @@ CREATE TABLE another_schema.another_table (f1 TEXT);
 INSERT INTO another_schema.another_table VALUES ('123');
 
 # Sneak in a test for mysql_source_snapshot_max_execution_time
-$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET mysql_source_snapshot_max_execution_time = 10000
 
@@ -152,7 +151,6 @@ $ postgres-execute connection=mz_system
 ALTER SYSTEM SET mysql_source_snapshot_max_execution_time = 0
 
 # Validate mysql_source_snapshot_lock_wait_timeout
-$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET mysql_source_snapshot_lock_wait_timeout = 1
 

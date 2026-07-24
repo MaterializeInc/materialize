@@ -18,8 +18,6 @@ $ set-arg-default default-replica-size=scale=1,workers=1
 
 # Shorten the snapshot cadence so the first snapshot arrives within
 # this test's timeout rather than at the 1h production default.
-$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET arrangement_size_history_collection_interval = '2s';
 
