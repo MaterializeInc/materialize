@@ -228,6 +228,14 @@ where
     /// Idempotent. Closing an already-closed point re-enqueues the terminal frontier, which a drained
     /// importer ignores. Do NOT call this on a point that will still be adopted: the terminal frontier
     /// would tear down importers that a later publisher is meant to feed.
+    ///
+    /// Has no production caller today. Under a correct protocol a placeholder is not left both
+    /// unadopted and imported by a live reader: the controller does not drop or cancel an index while
+    /// a reader depends on it (its read-hold discipline, see
+    /// `mz_compute_client::controller::instance::Instance::finish_peek`), and a reader whose own
+    /// dataflow is dropped tears its importer down directly. So the wedge this method resolves arises
+    /// only from an incorrect protocol instantiation. It is retained for a future explicit cancellation
+    /// or hygiene path and exercised by tests.
     pub fn close(&self) {
         if let Ok(mut state) = self.shared.state.lock() {
             state.closed = true;
