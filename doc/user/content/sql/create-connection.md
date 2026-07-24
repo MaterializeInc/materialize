@@ -621,7 +621,7 @@ CREATE CONNECTION csr_ssh TO CONFLUENT SCHEMA REGISTRY (
 
 ### AWS Glue Schema Registry
 
-{{< private-preview />}}
+{{< public-preview />}}
 
 An AWS Glue Schema Registry connection establishes a link to an [AWS Glue Schema
 Registry]. You can use AWS Glue Schema Registry connections in the `FORMAT`
