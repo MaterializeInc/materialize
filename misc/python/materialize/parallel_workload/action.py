@@ -2866,13 +2866,17 @@ class ReconnectAction(Action):
                 conn = psycopg.connect(
                     host=host, port=pg_port(), user=user, dbname="materialize"
                 )
-                conn.autocommit = exe.autocommit
                 cur = conn.cursor()
                 exe.cur = cur
-                exe.set_isolation("SERIALIZABLE")
                 # Reapply the session settings from Worker.run, they don't
-                # survive the reconnect.
+                # survive the reconnect. They must be applied in autocommit
+                # mode: a value set inside a transaction is only staged, and
+                # Materialize discards staged values when that transaction
+                # rolls back, which the poisoned-cluster recovery below does.
+                conn.autocommit = True
+                exe.set_isolation("SERIALIZABLE")
                 cur.execute("SET auto_route_catalog_queries TO false")
+                conn.autocommit = exe.autocommit
                 try:
                     cur.execute("SELECT pg_backend_pid()")
                 except Exception as e:
