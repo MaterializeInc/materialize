@@ -20,7 +20,9 @@ use futures::{Future, StreamExt, future};
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
-use mz_adapter_types::dyncfgs::{ENABLE_PASSWORD_AUTH, READ_THEN_WRITE_MAX_DEPENDENCIES};
+use mz_adapter_types::dyncfgs::{
+    ENABLE_PASSWORD_AUTH, FRONTEND_READ_THEN_WRITE, READ_THEN_WRITE_MAX_DEPENDENCIES,
+};
 use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{
     CatalogItem, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
@@ -75,7 +77,7 @@ use mz_sql::plan::{
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::UserKind;
 use mz_sql::session::vars::{
-    self, IsolationLevel, NETWORK_POLICY, OwnedVarInput, SCHEMA_ALIAS,
+    self, IsolationLevel, MAX_CONCURRENT_OCC_WRITES, NETWORK_POLICY, OwnedVarInput, SCHEMA_ALIAS,
     TRANSACTION_ISOLATION_VAR_NAME, Var, VarError, VarInput,
 };
 use mz_sql::{plan, rbac};
@@ -209,9 +211,12 @@ impl Coordinator {
                 if cancel_enabled {
                     // Channel to await cancellation. Insert a new channel, but check if the previous one
                     // was already canceled.
-                    if let Some((_prev_tx, prev_rx)) = self
+                    if let Some((_prev_operation_id, _prev_tx, prev_rx)) = self
                         .connection_cancel_watches
-                        .insert(session.conn_id().clone(), watch::channel(false))
+                        .insert(session.conn_id().clone(), {
+                            let (tx, rx) = watch::channel(false);
+                            (None, tx, rx)
+                        })
                     {
                         let was_canceled = *prev_rx.borrow();
                         if was_canceled {
@@ -268,7 +273,7 @@ impl Coordinator {
         T: Send + 'static,
         F: FnOnce(C, T) + Send + 'static,
     {
-        let rx: BoxFuture<()> = if let Some((_tx, rx)) = ctx
+        let rx: BoxFuture<()> = if let Some((_operation_id, _tx, rx)) = ctx
             .session()
             .and_then(|session| self.connection_cancel_watches.get(session.conn_id()))
         {
@@ -2712,6 +2717,17 @@ impl Coordinator {
             return;
         }
 
+        // The lock-based and OCC paths do not synchronize with each other, so
+        // reaching this path while frontend sequencing is enabled is a routing
+        // bug that could corrupt data.
+        if self.frontend_read_then_write_enabled {
+            ctx.retire(Err(AdapterError::Internal(
+                "coordinator read-then-write reached while frontend OCC sequencing is enabled"
+                    .into(),
+            )));
+            return;
+        }
+
         let mut source_ids: BTreeSet<_> = plan
             .selection
             .depends_on()
@@ -4180,6 +4196,7 @@ impl Coordinator {
         plan::AlterSystemSetPlan { name, value }: plan::AlterSystemSetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session, Some(&name))?;
+        Self::reject_if_startup_only(&name)?;
         // We want to ensure that the network policy we're switching too actually exists.
         if NETWORK_POLICY.name.to_string().to_lowercase() == name.clone().to_lowercase() {
             self.validate_alter_system_network_policy(session, &value)?;
@@ -4210,6 +4227,7 @@ impl Coordinator {
         plan::AlterSystemResetPlan { name }: plan::AlterSystemResetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session, Some(&name))?;
+        Self::reject_if_startup_only(&name)?;
         let op = catalog::Op::ResetSystemConfiguration { name: name.clone() };
         self.catalog_transact(Some(session), vec![op]).await?;
         session.add_notice(AdapterNotice::VarDefaultUpdated {
@@ -4226,6 +4244,7 @@ impl Coordinator {
         _: plan::AlterSystemResetAllPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session, None)?;
+        self.reject_reset_all_if_startup_only_nondefault()?;
         let op = catalog::Op::ResetAllSystemConfiguration;
         self.catalog_transact(Some(session), vec![op]).await?;
         session.add_notice(AdapterNotice::VarDefaultUpdated {
@@ -4233,6 +4252,63 @@ impl Coordinator {
             var_name: None,
         });
         Ok(ExecuteResponse::AlteredSystemConfiguration)
+    }
+
+    /// Rejects `ALTER SYSTEM SET` / `RESET` for system parameters whose value
+    /// is sampled once at `environmentd` startup and cannot be changed
+    /// dynamically.
+    ///
+    /// Mutating these at runtime would update the catalog without affecting
+    /// the running process, leaving operators (and us, in tests like
+    /// `parallel-workload`) with the false impression that the change took
+    /// effect. For switches that gate fundamentally different code paths —
+    /// e.g. `enable_adapter_frontend_occ_read_then_write`, where the
+    /// lock-based and OCC paths cannot safely run concurrently within one
+    /// process — that confusion is dangerous, so we refuse the operation
+    /// outright. `max_concurrent_occ_writes` is startup-only for the same
+    /// reason (it sizes the OCC semaphore at boot); there the risk is only a
+    /// silent no-op rather than data corruption, but we reject it too for
+    /// consistency.
+    ///
+    /// NOTE: this only guards the SQL `ALTER SYSTEM` path. LaunchDarkly /
+    /// `system_parameter_default` sync writes the catalog value directly (via
+    /// `Command::SetSystemVars`) and is expected to be paired with an
+    /// `environmentd` restart for the new value to take effect.
+    fn reject_if_startup_only(name: &str) -> Result<(), AdapterError> {
+        let startup_only: &[&str] = &[
+            FRONTEND_READ_THEN_WRITE.name(),
+            MAX_CONCURRENT_OCC_WRITES.name(),
+        ];
+        if startup_only.iter().any(|n| n.eq_ignore_ascii_case(name)) {
+            return Err(AdapterError::Unstructured(anyhow!(
+                "{name} is read once at environmentd startup and cannot be \
+                 changed at runtime; set it via system_parameter_default and \
+                 restart environmentd to change it"
+            )));
+        }
+        Ok(())
+    }
+
+    fn reject_reset_all_if_startup_only_nondefault(&self) -> Result<(), AdapterError> {
+        let config = self.catalog().system_config();
+        let defaults = config.defaults();
+        for name in [
+            FRONTEND_READ_THEN_WRITE.name(),
+            MAX_CONCURRENT_OCC_WRITES.name(),
+        ] {
+            let current = config.get(name)?.value();
+            if defaults
+                .get(name)
+                .is_some_and(|default| default != &current)
+            {
+                return Err(AdapterError::Unstructured(anyhow!(
+                    "ALTER SYSTEM RESET ALL would reset {name}, which is read once at \
+                     environmentd startup. Reset it via system_parameter_default and restart \
+                     environmentd"
+                )));
+            }
+        }
+        Ok(())
     }
 
     // TODO(jkosh44) Move this into rbac.rs once RBAC is always on.

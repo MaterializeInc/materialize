@@ -90,9 +90,8 @@ use crate::TimestampContext;
 /// A type for a [`DataflowDescription`] backed by `Mir~` plans. Used internally
 /// by the optimizer implementations.
 type MirDataflowDescription = DataflowDescription<OptimizedMirRelationExpr>;
-/// A type for a [`DataflowDescription`] backed by `Lir~` plans. Used internally
-/// by the optimizer implementations.
-type LirDataflowDescription = DataflowDescription<LirRelationExpr>;
+/// A type for a [`DataflowDescription`] backed by `Lir~` plans.
+pub type LirDataflowDescription = DataflowDescription<LirRelationExpr>;
 
 // Core API
 // --------
