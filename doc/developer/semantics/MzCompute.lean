@@ -15,3 +15,4 @@ import MzCompute.Event
 import MzCompute.State
 import MzCompute.Run
 import MzCompute.Staging
+import MzCompute.Legality
