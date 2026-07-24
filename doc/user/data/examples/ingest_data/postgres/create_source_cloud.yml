@@ -73,7 +73,7 @@
 - name: "schema-changes"
   description: |
     After source creation, refer to [schema changes
-    considerations](#schema-changes) for information on handling upstream schema
+    considerations](#schema-changes-legacy-source-syntax) for information on handling upstream schema
     changes.
 
 - name: "ingest-data-step"
