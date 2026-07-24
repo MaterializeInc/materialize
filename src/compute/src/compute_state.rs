@@ -633,6 +633,25 @@ impl<'a> ActiveComputeState<'a> {
         &mut self,
         dataflow: DataflowDescription<RenderPlan, CollectionMetadata>,
     ) {
+        // Tripwire for a Multiplexer routing bug. The Multiplexer's `to_interactive` predicate
+        // already guarantees that only bounded-read dataflows reach the interactive runtime, so
+        // this runtime assumes a correct protocol and does not re-check it outside of debug
+        // builds. A violation here means the predicate upstream is out of sync with this one.
+        debug_assert!(
+            self.compute_state.role() != ComputeRuntimeRole::Interactive
+                || (dataflow.is_transient()
+                    && !dataflow.until.is_empty()
+                    && dataflow.subscribe_ids().next().is_none()
+                    && dataflow.copy_to_ids().next().is_none()),
+            "interactive runtime received a non-bounded-read dataflow: \
+             export_ids={:?} transient={} until_empty={} has_subscribes={} has_copy_tos={}",
+            dataflow.export_ids().collect::<Vec<_>>(),
+            dataflow.is_transient(),
+            dataflow.until.is_empty(),
+            dataflow.subscribe_ids().next().is_some(),
+            dataflow.copy_to_ids().next().is_some(),
+        );
+
         // Every dataflow builds immediately, in command arrival order. Timely allocates per-worker
         // channel ids in construction order, so deferring a build until its dependencies publish
         // would diverge that order across workers, latently unsound under a multi-worker interactive
@@ -3132,7 +3151,10 @@ mod index_peek_tests {
         let index_id = GlobalId::User(1);
         let on_id = GlobalId::User(2);
         let reduce_id = GlobalId::User(3);
-        let out_index_id = GlobalId::User(4);
+        // Transient with a non-empty `until`, matching the bounded-read contract the Multiplexer
+        // enforces for anything it routes to the interactive runtime (see the debug_assert in
+        // `handle_create_dataflow`).
+        let out_index_id = GlobalId::Transient(4);
         let (_rt, persist_clients) = test_persist_clients();
 
         timely::execute_directly(move |worker| {
@@ -3142,8 +3164,10 @@ mod index_peek_tests {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             let mut response_tx = ResponseSender::for_test(tx);
 
-            let dataflow =
-                reduce_count_dataflow(index_id, on_id, reduce_id, out_index_id, Timestamp::new(0));
+            let as_of = Timestamp::new(0);
+            let mut dataflow =
+                reduce_count_dataflow(index_id, on_id, reduce_id, out_index_id, as_of);
+            dataflow.until = Antichain::from_elem(as_of.step_forward());
 
             // The build is NOT deferred, even though the imported index is unpublished: the import
             // binds through a placeholder that a maintenance publisher adopts later.
@@ -3195,7 +3219,7 @@ mod index_peek_tests {
                     compute_state: &mut compute_state,
                     response_tx: &mut response_tx,
                 };
-                active.handle_peek(make_count_peek(out_index_id, Timestamp::new(0)));
+                active.handle_peek(make_count_peek(out_index_id, as_of));
                 assert_eq!(
                     active.compute_state.pending_work.len(),
                     1,
