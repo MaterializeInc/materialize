@@ -25,8 +25,8 @@
 //!
 //! ## Pieces
 //!
-//! * [`PublishArrangement::publish`] attaches a publisher to an arrangement on the owning worker and
-//!   returns a [`Published`] whose [`Published::handle`] hands out `Clone + Send`
+//! * [`PublishArrangement::adopt`] attaches a publisher to an arrangement on the owning worker,
+//!   filling a [`Published`] whose [`Published::handle`] hands out `Clone + Send`
 //!   [`SharedTraceHandle`]s.
 //! * [`SharedTraceHandle`] implements [`TraceReader`], so it drives compaction and cursors like any
 //!   trace handle. [`SharedTraceHandle::snapshot_at`] serves a point or full-scan read from any
@@ -156,9 +156,8 @@ impl<Tr: TraceReader> SharedTrace<Tr> {
     /// A fresh publication point: empty chain, `since` and `upper` at the minimum time, no reader
     /// holds, no publisher attached.
     ///
-    /// Shared by [`Published::placeholder`], which leaves the point unbacked for a later
-    /// [`PublishArrangement::adopt`], and [`PublishArrangement::publish_named`], for which it is the
-    /// starting state before adopting with no prior reader.
+    /// Used by [`Published::placeholder`], which leaves the point unbacked for a later
+    /// [`PublishArrangement::adopt`].
     fn new_empty(peers: usize) -> Self {
         SharedTrace {
             state: Mutex::new(SharedTraceState {
@@ -493,20 +492,12 @@ impl<Tr: TraceReader> TraceSnapshot<Tr> {
 /// inherent methods to the foreign `Arranged` type, so it exposes them as this extension trait
 /// instead. Bring it into scope at a call site to use `arranged.publish()`.
 pub trait PublishArrangement<Tr: TraceReader> {
-    /// Publishes this arrangement through a publication point on the owning worker.
+    /// Installs this arrangement's publisher into an existing `placeholder` publication point,
+    /// created by [`Published::placeholder`], rather than minting a fresh one.
     ///
     /// Attaches a publisher operator to the arrangement stream. On each activation the publisher
     /// refreshes the published chain, `since`, and `upper` from the trace, appends newly arrived
     /// batches to importer queues, and forwards the meet of reader holds to the trace's compaction.
-    /// The returned [`Published`] mints [`SharedTraceHandle`]s that read the arrangement from any
-    /// thread.
-    fn publish(&self) -> Published<Tr>;
-
-    /// [`PublishArrangement::publish`], with a name for the publisher operator.
-    fn publish_named(&self, name: &str) -> Published<Tr>;
-
-    /// Installs this arrangement's publisher into an existing `placeholder` publication point,
-    /// created by [`Published::placeholder`], rather than minting a fresh one.
     ///
     /// This is the late-binding path: a reader may create the placeholder and build handles and
     /// imports over it before this arrangement is rendered. Those imports produce nothing (their
@@ -528,25 +519,10 @@ where
     Tr::Batch: Send + Sync,
     Tr::Time: Lattice + Clone + Send + Sync,
 {
-    fn publish(&self) -> Published<Tr> {
-        // Call the trait method explicitly. While the differential fork is still `[patch]`-active,
-        // `Arranged` also has the fork's inherent `publish_named`, and an inherent method would win
-        // over this trait method, returning the fork's `Published` instead of ours.
-        PublishArrangement::publish_named(self, "PublishShared")
-    }
-
-    fn publish_named(&self, name: &str) -> Published<Tr> {
-        // Publishing is adopting a fresh publication point with no prior reader.
-        let peers = self.stream.scope().peers();
-        let published = Published {
-            shared: Arc::new(SharedTrace::new_empty(peers)),
-        };
-        self.adopt_named(&published, name);
-        published
-    }
-
     fn adopt(&self, placeholder: &Published<Tr>) {
-        // Call the trait method explicitly, for the same reason as `publish` above.
+        // Call the trait method explicitly. While the differential fork is still `[patch]`-active,
+        // `Arranged` also has the fork's inherent `adopt_named`, and an inherent method would win
+        // over this trait method, adopting into the fork's `Published` instead of ours.
         PublishArrangement::adopt_named(self, placeholder, "PublishShared");
     }
 
@@ -928,6 +904,21 @@ mod tests {
 
     use super::*;
 
+    /// Adopts a freshly rendered arrangement into a new placeholder, the standalone-primitive
+    /// counterpart to the maintenance placeholder+adopt path. Creates a [`Published::placeholder`]
+    /// sized to the arrangement's own scope, installs `arranged`'s publisher into it via
+    /// [`PublishArrangement::adopt`], and returns the now-backed point.
+    fn adopt_fresh<Tr>(arranged: &Arranged<'_, TraceAgent<Tr>>) -> Published<Tr>
+    where
+        Tr: differential_dataflow::trace::Trace + 'static,
+        Tr::Batch: Send + Sync,
+        Tr::Time: Lattice + Clone + Send + Sync,
+    {
+        let published = Published::placeholder(arranged.stream.scope().peers());
+        PublishArrangement::adopt(arranged, &published);
+        published
+    }
+
     /// Smoke test: arrange two rows into a `RowRow` spine, publish it through the extension trait,
     /// mint a `Send` handle, and read the sealed contents back via `snapshot_at`.
     ///
@@ -963,9 +954,9 @@ mod tests {
                     RowRowBuilder<_, _>,
                     RowRowSpine<_, _>,
                 >("smoke oks");
-                // The extension trait under test: resolve `publish` explicitly so it cannot bind to
-                // the fork's inherent method while the fork remains patched.
-                let published = PublishArrangement::publish(&arranged);
+                // The extension trait under test: `adopt_fresh` resolves `adopt` explicitly so it
+                // cannot bind to the fork's inherent method while the fork remains patched.
+                let published = adopt_fresh(&arranged);
                 (published, input)
             });
 
@@ -1029,7 +1020,7 @@ mod tests {
                     RowRowBuilder<_, _>,
                     RowRowSpine<_, _>,
                 >("quiet oks");
-                let published = PublishArrangement::publish(&arranged);
+                let published = adopt_fresh(&arranged);
                 (published, input)
             });
 
@@ -1117,7 +1108,7 @@ mod tests {
                     RowRowBuilder<_, _>,
                     RowRowSpine<_, _>,
                 >("cross-thread oks");
-                let published = PublishArrangement::publish(&arranged);
+                let published = adopt_fresh(&arranged);
                 (published, input)
             });
             handle_tx.send(published.handle()).unwrap();
@@ -1197,7 +1188,7 @@ mod tests {
                     RowRowSpine<_, _>,
                 >("no-readers oks");
                 let writer = arranged.trace.clone();
-                let published = PublishArrangement::publish(&arranged);
+                let published = adopt_fresh(&arranged);
                 (writer, published, input)
             });
 
@@ -1256,7 +1247,8 @@ mod tests {
         let handle_tx = Mutex::new(handle_tx);
 
         // Publisher runtime: two worker threads, so the publishing scope's `peers()` is 2. The
-        // publisher's `peers` is captured at `publish` time from `self.stream.scope().peers()`, so
+        // publisher's `peers` is captured when `adopt_fresh` creates the placeholder, from the
+        // scope's `peers()`, so
         // sending the handle before the dataflow ever steps is enough; only worker 0 sends, the
         // others publish redundantly (mirroring real SPMD dataflows) but nobody reads their handles.
         timely::execute(timely::Config::process(2), move |worker| {
@@ -1268,7 +1260,7 @@ mod tests {
                     RowRowBuilder<_, _>,
                     RowRowSpine<_, _>,
                 >("peers oks");
-                let published = PublishArrangement::publish(&arranged);
+                let published = adopt_fresh(&arranged);
                 (published, input)
             });
             if worker.index() == 0 {
@@ -1400,7 +1392,7 @@ mod tests {
                     RowRowBuilder<_, _>,
                     RowRowSpine<_, _>,
                 >("hazard oks");
-                let published = PublishArrangement::publish(&arranged);
+                let published = adopt_fresh(&arranged);
                 (published, input)
             });
             input.update(
@@ -1495,7 +1487,7 @@ mod tests {
                 RowRowBuilder<_, _>,
                 RowRowSpine<_, _>,
             >(name);
-            let published = PublishArrangement::publish(&arranged);
+            let published = adopt_fresh(&arranged);
             (published, input)
         });
 
@@ -1646,7 +1638,7 @@ mod tests {
                     RowRowBuilder<_, _>,
                     RowRowSpine<_, _>,
                 >("empty-seal oks");
-                let published = PublishArrangement::publish(&arranged);
+                let published = adopt_fresh(&arranged);
                 (published, input)
             });
 
