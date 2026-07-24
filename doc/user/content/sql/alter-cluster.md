@@ -20,10 +20,8 @@ general, you will not need to manually perform this operation.
 
 `ALTER CLUSTER` has the following syntax variations:
 
-{{< tabs >}}
+{{< tabs level=3 >}}
 {{< tab "Set a configuration" >}}
-
-### Set a configuration
 
 To set a cluster configuration:
 
@@ -32,16 +30,12 @@ To set a cluster configuration:
 {{< /tab >}}
 {{< tab "Reset to default" >}}
 
-### Reset to default
-
 To reset a cluster configuration back to its default value:
 
 {{% include-syntax file="examples/alter_cluster" example="syntax-reset-to-default" %}}
 
 {{< /tab >}}
 {{< tab "Rename" >}}
-
-### Rename
 
 To rename a cluster:
 
@@ -54,16 +48,12 @@ You cannot rename system clusters, such as `mz_system` and `mz_catalog_server`.
 {{< /tab >}}
 {{< tab "Change owner" >}}
 
-### Change owner
-
 To change the owner of a cluster:
 
 {{% include-syntax file="examples/alter_cluster" example="syntax-change-owner" %}}
 
 {{< /tab >}}
 {{< tab "Swap with" >}}
-
-### Swap with
 
 {{< important >}}
 

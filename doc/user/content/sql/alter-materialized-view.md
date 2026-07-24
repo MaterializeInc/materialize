@@ -16,10 +16,8 @@ Use `ALTER MATERIALIZED VIEW` to:
 
 ## Syntax
 
-{{< tabs >}}
+{{< tabs level=3 >}}
 {{< tab "Rename" >}}
-
-### Rename
 
 To rename a materialized view:
 
@@ -28,16 +26,12 @@ To rename a materialized view:
 {{< /tab >}}
 {{< tab "Change owner" >}}
 
-### Change owner
-
 To change the owner of a materialized view:
 
 {{% include-syntax file="examples/alter_materialized_view" example="syntax-change-owner" %}}
 
 {{< /tab >}}
 {{< tab "(Re)Set retain history config" >}}
-
-### (Re)Set retain history config
 
 To set the retention history for a materialized view:
 
@@ -49,8 +43,6 @@ To reset the retention history to the default for a materialized view:
 
 {{< /tab >}}
 {{< tab "Replace materialized view" >}}
-
-### Replace materialized view
 
 {{% include-headless "/headless/replacement-views/public-preview-annotation" %}}
 

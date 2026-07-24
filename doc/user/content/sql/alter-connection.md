@@ -16,10 +16,8 @@ Use `ALTER CONNECTION` to:
 
 ## Syntax
 
-{{< tabs >}}
+{{< tabs level=3 >}}
 {{< tab "SET/DROP/RESET options" >}}
-
-### SET/DROP/RESET options
 
 To modify connection parameters:
 
@@ -27,8 +25,6 @@ To modify connection parameters:
 
 {{< /tab >}}
 {{< tab "ROTATE KEYS" >}}
-
-### ROTATE KEYS
 
 To rotate SSH tunnel connection key pairs:
 
@@ -39,16 +35,12 @@ To rotate SSH tunnel connection key pairs:
 
 {{< tab "Rename" >}}
 
-### Rename
-
 To rename a connection
 
 {{% include-syntax file="examples/alter_connection" example="syntax-rename" %}}
 
 {{< /tab >}}
 {{< tab "Change owner" >}}
-
-### Change owner
 
 To change the owner of a connection:
 

@@ -17,11 +17,9 @@ the system.
 
 ## Syntax
 
-{{< tabs >}}
+{{< tabs level=3 >}}
 
 {{< tab "Cloud" >}}
-
-### Cloud
 
 {{% include-syntax file="examples/rbac-cloud/create_roles"
 example="create-role-syntax" %}}
@@ -30,7 +28,6 @@ example="create-role-syntax" %}}
 {{% include-example file="examples/rbac-cloud/create_roles" example="create-role-details" %}}
 {{< /tab >}}
 {{< tab "Self-Managed" >}}
-### Self-Managed
 
 {{% include-syntax file="examples/rbac-sm/create_roles" example="create-role-syntax" %}}
 
