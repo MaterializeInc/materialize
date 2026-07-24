@@ -93,11 +93,13 @@ def step (s : ProtocolState) : Event → Option ProtocolState
       guard (!s.stage.isCreation && s.created id)
         { s with dropped := fun id' => s.dropped id' || (id' == id && isEmpty) }
   -- command.rs:219-224: an index-target Peek requires a prior
-  -- CreateDataflow for the target. Persist-target peeks do not.
+  -- CreateDataflow for the target and is treated as illegal once the
+  -- target has been dropped, matching Schedule/AllowWrites. Persist-target
+  -- peeks require neither.
   -- command.rs:223-224: the peek's uuid must be unique.
   | .cmd (.peek uuid target) =>
       guard (!s.stage.isCreation && (s.peeks uuid).isNotSeen
-             && (match target with | .index id => s.created id | .persist _ => true))
+             && (match target with | .index id => s.created id && !s.dropped id | .persist _ => true))
         { s with peeks := fun u => if u == uuid then .pending else s.peeks u }
   -- command.rs:248-250: CancelPeek requires a prior matching Peek.
   | .cmd (.cancelPeek uuid) =>
@@ -154,6 +156,9 @@ example : step { stage := .computation, createInstanceSeen := true, helloSeen :=
 -- CreateDataflow rejects a duplicate id within the same export list.
 example : step { stage := .computation, createInstanceSeen := true, helloSeen := true }
     (.cmd (.createDataflow [7, 7])) = none := by decide
+-- An index-target Peek is illegal once its target id has been dropped.
+example : step { stage := .computation, createInstanceSeen := true, helloSeen := true, created := fun id => id == 7, dropped := fun id => id == 7 }
+    (.cmd (.peek 0 (.index 7))) = none := by decide
 -- A second PeekResponse for an already-answered uuid is illegal.
 example : step { stage := .computation, createInstanceSeen := true, helloSeen := true, peeks := fun u => if u == 0 then .answered else .notSeen }
     (.resp (.peekResponse 0)) = none := by decide
