@@ -102,7 +102,7 @@ class K8sService(K8sResource):
             return cursor.fetchall()
 
     def http_get(self, path: str) -> Any:
-        url = f"http://localhost:{self.node_port('internalhttp')}/{path.lstrip('/')}"
+        url = f"http://localhost:{self.node_port('internal-http')}/{path.lstrip('/')}"
         response = requests.get(url)
         response.raise_for_status()
         return response.text
