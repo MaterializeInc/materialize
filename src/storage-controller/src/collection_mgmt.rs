@@ -1737,6 +1737,12 @@ where
         .collect()
 }
 
+/// Number of updates to add to a persist batch between yields in
+/// [`monotonic_append`]. Encoding one update takes single-digit
+/// microseconds, so this bounds the poll time of the append future to a
+/// few milliseconds.
+const MONOTONIC_APPEND_YIELD_INTERVAL: usize = 1024;
+
 async fn monotonic_append(
     write_handle: &mut WriteHandle<SourceData, (), Timestamp, StorageDiff>,
     updates: Vec<TimestamplessUpdate>,
@@ -1757,23 +1763,60 @@ async fn monotonic_append(
 
         let lower = std::cmp::max(upper, at_least);
         let new_upper = lower.step_forward();
-        let updates = updates
-            .iter()
-            .map(|TimestamplessUpdate { row, diff }| {
-                ((SourceData(Ok(row.clone())), ()), lower, diff.into_inner())
-            })
-            .collect::<Vec<_>>();
+
+        // Build the batch incrementally, yielding regularly. Encoding an
+        // update is pure CPU and `BatchBuilder::add` has no await points
+        // until a part reaches `blob_target_size`. Statement logging can
+        // produce batches of hundreds of thousands of updates here, and
+        // encoding all of them in a single poll blocks this tokio worker
+        // for hundreds of milliseconds, starving tasks that are pinned to
+        // it (for example a task sitting in the worker's LIFO slot, which
+        // other workers cannot steal).
+        //
+        // TODO: The hazard is general to `WriteHandle::batch`, which encodes
+        // whole batches in one poll for every `compare_and_append` caller.
+        // If persist ever yields periodically while building batches, this
+        // can go back to a plain `compare_and_append` call.
+        // The batch description must span exactly [expected upper, new
+        // upper), like `compare_and_append` would use. The updates
+        // themselves are timestamped with `lower`, which lies within that
+        // span.
+        let mut builder = write_handle.builder(Antichain::from_elem(upper));
+        for (i, TimestamplessUpdate { row, diff }) in updates.iter().enumerate() {
+            if i > 0 && i % MONOTONIC_APPEND_YIELD_INTERVAL == 0 {
+                tokio::task::yield_now().await;
+            }
+            builder
+                .add(
+                    &SourceData(Ok(row.clone())),
+                    &(),
+                    &lower,
+                    &diff.into_inner(),
+                )
+                .await
+                .expect("valid usage");
+        }
+        let mut batch = builder
+            .finish(Antichain::from_elem(new_upper))
+            .await
+            .expect("valid usage");
+
         let res = write_handle
-            .compare_and_append(
-                updates,
+            .compare_and_append_batch(
+                &mut [&mut batch],
                 Antichain::from_elem(upper),
                 Antichain::from_elem(new_upper),
+                true,
             )
             .await
             .expect("valid usage");
         match res {
             Ok(()) => return,
             Err(err) => {
+                // The batch's updates are timestamped with `lower`, which
+                // is now wrong. Delete the batch and rebuild it with
+                // timestamps based on the actual upper.
+                batch.delete().await;
                 expected_upper = err.current;
                 continue;
             }
@@ -2069,5 +2112,146 @@ mod tests {
             ns_datum.1.unwrap_map().iter().next().unwrap(),
             ("thing", Datum::String("error"))
         );
+    }
+
+    /// Exercises `monotonic_append` against real persist state: a batch large
+    /// enough to take the periodic-yield path, and a deterministic upper
+    /// mismatch that forces the delete-and-rebuild retry. Verifies that every
+    /// update lands exactly once and that retried updates are re-timestamped
+    /// to the actual upper.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn test_monotonic_append_yield_and_upper_mismatch_retry() {
+        use mz_ore::metrics::MetricsRegistry;
+        use mz_persist::location::{Blob, Consensus};
+        use mz_persist::mem::{MemBlob, MemBlobConfig, MemConsensus};
+        use mz_persist_client::async_runtime::IsolatedRuntime;
+        use mz_persist_client::cache::StateCache;
+        use mz_persist_client::cfg::PersistConfig;
+        use mz_persist_client::metrics::Metrics as PersistMetrics;
+        use mz_persist_client::rpc::PubSubClientConnection;
+        use mz_persist_client::{Diagnostics, PersistClient, ShardId};
+        use mz_persist_types::codec_impls::UnitSchema;
+        use mz_repr::{RelationDesc, SqlScalarType};
+
+        let cfg = PersistConfig::new_for_tests();
+        let blob: Arc<dyn Blob> = Arc::new(MemBlob::open(MemBlobConfig::default()));
+        let consensus: Arc<dyn Consensus> = Arc::new(MemConsensus::default());
+        let metrics = Arc::new(PersistMetrics::new(&cfg, &MetricsRegistry::new()));
+        // Two clients over the same backing storage with separate state
+        // caches, so that appends through one client are not reflected in the
+        // other's cached upper.
+        let new_client = || {
+            let pubsub_sender = PubSubClientConnection::noop().sender;
+            PersistClient::new(
+                cfg.clone(),
+                Arc::clone(&blob),
+                Arc::clone(&consensus),
+                Arc::clone(&metrics),
+                Arc::new(IsolatedRuntime::new_for_tests()),
+                Arc::new(StateCache::new(
+                    &cfg,
+                    Arc::clone(&metrics),
+                    Arc::clone(&pubsub_sender),
+                )),
+                pubsub_sender,
+            )
+            .expect("valid client")
+        };
+
+        let shard = ShardId::new();
+        let relation_desc = RelationDesc::builder()
+            .with_column("a", SqlScalarType::UInt64.nullable(false))
+            .finish();
+        let updates = |range: std::ops::Range<u64>| {
+            range
+                .map(|i| TimestamplessUpdate {
+                    row: Row::pack_slice(&[Datum::UInt64(i)]),
+                    diff: Diff::ONE,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let client1 = new_client();
+        let mut write1 = client1
+            .open_writer::<SourceData, (), Timestamp, StorageDiff>(
+                shard,
+                Arc::new(relation_desc.clone()),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("valid usage");
+
+        // More rows than MONOTONIC_APPEND_YIELD_INTERVAL, so the append
+        // yields several times while building the batch. The shard's initial
+        // upper is 0, so the rows land at max(0, 1) = 1 and the upper becomes
+        // 2.
+        monotonic_append(&mut write1, updates(0..3000), Timestamp::from(1)).await;
+
+        // Advance the upper through a second client. Its writer is opened at
+        // the current upper 2, so this appends at max(2, 10) = 10 and moves
+        // the upper to 11.
+        let client2 = new_client();
+        let mut write2 = client2
+            .open_writer::<SourceData, (), Timestamp, StorageDiff>(
+                shard,
+                Arc::new(relation_desc.clone()),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("valid usage");
+        monotonic_append(&mut write2, updates(3000..3005), Timestamp::from(10)).await;
+
+        // `write1` still caches upper 2 while the shard's actual upper is 11,
+        // so this append's first compare_and_append attempt (at
+        // lower = max(2, 5) = 5) is guaranteed to hit an upper mismatch and
+        // take the delete-and-rebuild retry, re-timestamping the updates to
+        // the actual upper 11.
+        assert_eq!(
+            write1.shared_upper(),
+            Antichain::from_elem(Timestamp::from(2)),
+            "write1's cached upper must be stale for this test to exercise the retry",
+        );
+        assert_eq!(
+            write2.shared_upper(),
+            Antichain::from_elem(Timestamp::from(11)),
+        );
+        monotonic_append(&mut write1, updates(3005..3010), Timestamp::from(5)).await;
+
+        let mut read = client1
+            .open_leased_reader::<SourceData, (), Timestamp, StorageDiff>(
+                shard,
+                Arc::new(relation_desc),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+                true,
+            )
+            .await
+            .expect("valid usage");
+
+        // A snapshot advances all timestamps to its `as_of`, so per-update
+        // timestamps are verified by which updates are visible at which
+        // `as_of`. Every update must appear exactly once, with diff 1.
+        for (as_of, expected_rows) in [(1, 3000), (10, 3005), (11, 3010)] {
+            let contents = read
+                .snapshot_and_fetch(Antichain::from_elem(Timestamp::from(as_of)))
+                .await
+                .expect("as_of available");
+            let mut seen = BTreeSet::new();
+            for ((key, _val), _ts, diff) in contents {
+                let SourceData(data) = key;
+                let row = data.expect("valid data");
+                let a = row.iter().next().unwrap().unwrap_uint64();
+                assert_eq!(diff, 1, "row {a} duplicated or retracted");
+                assert!(seen.insert(a), "row {a} appeared twice");
+            }
+            assert_eq!(
+                seen,
+                (0..expected_rows).collect(),
+                "unexpected contents at time {as_of}"
+            );
+        }
     }
 }
