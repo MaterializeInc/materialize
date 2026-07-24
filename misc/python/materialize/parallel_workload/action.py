@@ -1920,6 +1920,9 @@ class FlipFlagsAction(Action):
             "'30s'",
             "'60s'",
         ]
+        self.flags_with_values["mysql_source_snapshot_parallelism"] = (
+            BOOLEAN_FLAG_VALUES
+        )
 
         # If you are adding a new config flag in Materialize, consider using it
         # here instead of just marking it as uninteresting to silence the
@@ -2074,7 +2077,6 @@ class FlipFlagsAction(Action):
             "kafka_buffered_event_resize_threshold_elements",
             "kafka_low_watermark_check",
             "mysql_replication_heartbeat_interval",
-            "mysql_source_snapshot_parallelism",
             "postgres_fetch_slot_resume_lsn_interval",
             "pg_schema_validation_interval",
             "storage_enforce_external_addresses",
@@ -3775,9 +3777,8 @@ ddl_action_list = ActionList(
         (DropIcebergSinkAction, 4),
         (CreateKafkaSourceAction, 4),
         (DropKafkaSourceAction, 4),
-        # TODO: Reenable when https://linear.app/materializeinc/issue/SS-307 is fixed
-        # (CreateMySqlSourceAction, 4),
-        # (DropMySqlSourceAction, 4),
+        (CreateMySqlSourceAction, 4),
+        (DropMySqlSourceAction, 4),
         (CreatePostgresSourceAction, 4),
         (DropPostgresSourceAction, 4),
         # TODO: Reenable when https://linear.app/materializeinc/issue/SS-290 is fixed
