@@ -1600,10 +1600,12 @@ fn test_frontend_read_then_write_rejected_in_multi_statement_batch() {
     let err = client
         .batch_execute("INSERT INTO t SELECT * FROM t; SELECT 1")
         .unwrap_err();
+    let db_err = err.as_db_error().expect("expected db error");
     assert!(
-        err.to_string()
+        db_err
+            .message()
             .contains("cannot be run inside a transaction block"),
-        "unexpected error: {err}"
+        "unexpected error: {err:?}"
     );
 
     // Constant INSERTs join the implicit transaction's write ops, so a later
@@ -1611,7 +1613,11 @@ fn test_frontend_read_then_write_rejected_in_multi_statement_batch() {
     let err = client
         .batch_execute("INSERT INTO t VALUES (2); SELECT 1/0")
         .unwrap_err();
-    assert!(err.to_string().contains("division by zero"));
+    let db_err = err.as_db_error().expect("expected db error");
+    assert!(
+        db_err.message().contains("division by zero"),
+        "unexpected error: {err:?}"
+    );
 
     let count = client
         .query_one("SELECT count(*)::int4 FROM t", &[])
@@ -1649,7 +1655,7 @@ fn test_frontend_read_then_write_constant_insert_respects_max_result_size() {
         db_err
             .message()
             .contains("result exceeds max size of 1.0 MiB"),
-        "unexpected error: {err}"
+        "unexpected error: {err:?}"
     );
 }
 
@@ -1678,7 +1684,7 @@ fn test_frontend_read_then_write_constant_insert_mz_now_uses_legacy_error() {
         db_err
             .message()
             .contains("calls to mz_now in write statements"),
-        "unexpected error: {err}"
+        "unexpected error: {err:?}"
     );
 }
 
