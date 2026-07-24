@@ -372,6 +372,10 @@ struct PoolInner {
     extent_residents: AtomicU64,
     /// Single-flight claim for budget enforcement.
     enforcing: Mutex<()>,
+    /// Set by an insert turned away from `enforcing`. The holder re-runs its
+    /// pass while it is set, so a caller turned away after the holder's final
+    /// counter read still has its bytes enforced rather than dropped.
+    enforce_pending: std::sync::atomic::AtomicBool,
     counters: Counters,
     spill: Spill,
 }
@@ -519,6 +523,25 @@ pub struct ChunkHandle {
     meta: Arc<ChunkMeta>,
 }
 
+// Test seam fired inside `PoolInner::enforce_budget`, between a pass's final
+// counter read and the release of the `enforcing` guard. A test arms it on the
+// thread whose pass it wants to freeze, to interleave a concurrent over-budget
+// insert. One-shot: the hook is taken before it runs, so a re-enforcing pass
+// does not re-arm.
+#[cfg(test)]
+thread_local! {
+    static ENFORCE_BUDGET_SEAM: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn run_enforce_budget_seam() {
+    let hook = ENFORCE_BUDGET_SEAM.with(|cell| cell.borrow_mut().take());
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
 impl Pool {
     /// Creates a pool, reserving one virtual region per size class. The
     /// pool starts with an unlimited budget — nothing is evicted until
@@ -545,6 +568,7 @@ impl Pool {
             live_chunks: AtomicU64::new(0),
             extent_residents: AtomicU64::new(0),
             enforcing: Mutex::new(()),
+            enforce_pending: std::sync::atomic::AtomicBool::new(false),
             counters: Counters::default(),
             spill: Spill::default(),
         })))
@@ -975,19 +999,41 @@ impl PoolInner {
     }
 
     fn enforce_budget(&self) {
+        use std::sync::atomic::Ordering;
         // Single-flight: enforcement runs synchronously on whichever thread
         // trips it (every insert), and concurrent passes would
         // convoy on the queue mutex doing redundant scans of the same
         // candidates. One pass at a time reaches the budget just as well;
-        // skipped callers rely on the in-progress pass. A poisoned claim
-        // means a prior pass panicked; recover and keep enforcing rather
-        // than silently disabling the budget for the process's lifetime.
+        // skipped callers hand their bytes to the in-progress pass through
+        // `enforce_pending`. A poisoned claim means a prior pass panicked.
+        // Recover and keep enforcing rather than silently disabling the
+        // budget for the process's lifetime.
         let guard = match self.enforcing.try_lock() {
             Ok(guard) => guard,
-            Err(std::sync::TryLockError::WouldBlock) => return,
+            Err(std::sync::TryLockError::WouldBlock) => {
+                // Release pairs with the holder's Acquire: the `resident_bytes`
+                // bump this caller just made must be visible to the re-read.
+                self.enforce_pending.store(true, Ordering::Release);
+                return;
+            }
             Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
         };
-        self.enforce_budget_inner();
+        loop {
+            self.enforce_pending.store(false, Ordering::Relaxed);
+            self.enforce_budget_inner();
+            #[cfg(test)]
+            run_enforce_budget_seam();
+            // A caller turned away since this pass's counter reads may have
+            // left bytes unenforced. Re-run rather than drop them. The Acquire
+            // pairs with the turned-away Release so the re-read sees the bump.
+            //
+            // NOTE: a caller turned away between this swap and `drop(guard)`
+            // sets the flag but finds no re-reader. That residual window is a
+            // few instructions wide, versus the whole pass before.
+            if !self.enforce_pending.swap(false, Ordering::Acquire) {
+                break;
+            }
+        }
         drop(guard);
         // Inline evictions above may have grown the compressed tier.
         self.enforce_or_defer_compressed_cap();
@@ -3147,6 +3193,55 @@ mod tests {
             })
             .count();
         assert_eq!(resident, 2, "budget holds exactly two small chunks");
+    }
+
+    /// Budget enforcement is single-flight: an insert that trips it while a
+    /// pass holds the `enforcing` guard bails on `WouldBlock`, trusting that
+    /// pass. If the holder is already past its final `resident_bytes` read, the
+    /// bailed insert's bytes are neither read by the holder nor enforced by the
+    /// bailer, and no later insert re-trips enforcement, so the pool stays over
+    /// budget. The fix re-runs the pass while any caller was turned away.
+    ///
+    /// The seam freezes the holder's pass in that window to make the race
+    /// deterministic: the holder parks having found the budget satisfied, the
+    /// main thread inserts over budget and is turned away, then the holder
+    /// resumes. The `gate` is used for both rendezvous.
+    #[mz_ore::test]
+    fn racing_insert_is_not_dropped_by_budget_single_flight() {
+        // Budget for exactly one small chunk.
+        let budget = 64 << 10;
+        let pool = test_pool(budget);
+        let gate = std::sync::Arc::new(std::sync::Barrier::new(2));
+
+        let holder = {
+            let pool = pool.clone();
+            let gate = std::sync::Arc::clone(&gate);
+            std::thread::spawn(move || -> ChunkHandle {
+                ENFORCE_BUDGET_SEAM.with(|cell| {
+                    *cell.borrow_mut() = Some(Box::new(move || {
+                        gate.wait(); // parked, holding the guard
+                        gate.wait(); // resume once the race is done
+                    }));
+                });
+                // At budget: the pass finds it satisfied and parks at the seam.
+                insert(&pool, &mut payload(SMALL, 1))
+            })
+        };
+
+        gate.wait(); // holder is parked in enforcement, holding the guard
+        // Push over budget; this insert is turned away by the held guard.
+        let _over = insert(&pool, &mut payload(SMALL, 2));
+        gate.wait(); // let the holder resume and release the guard
+        // Kept alive past the assert: freeing it would drop its bytes and mask
+        // the overshoot.
+        let _held = holder.join().expect("holder panicked");
+
+        // Nothing re-trips enforcement, so the pool must not be left over budget.
+        let resident = pool.stats().resident_bytes;
+        assert!(
+            resident <= u64::cast_from(budget),
+            "resident {resident} exceeds budget {budget}: racing insert escaped enforcement",
+        );
     }
 
     #[mz_ore::test]
