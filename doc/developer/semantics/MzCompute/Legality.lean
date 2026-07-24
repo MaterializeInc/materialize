@@ -15,14 +15,6 @@ import MzCompute.Run
 
 namespace MzCompute
 
-/-- A successful `guard` returns its payload unchanged. -/
-private theorem guard_eq_some {α : Type _} {cond : Bool} {x y : α}
-    (h : guard cond x = some y) : x = y := by
-  unfold guard at h
-  cases cond with
-  | true => simpa using h
-  | false => simp at h
-
 /-- Theorem 3, part 1. Encodes command.rs:152-153. -/
 theorem schedule_fails_when_dropped (s : ProtocolState) (id : GlobalId) (h : s.dropped id = true) :
     step s (.cmd (.schedule id)) = none := by
@@ -70,13 +62,13 @@ no later `Schedule`, `AllowWrites`, or index-target `Peek` for `id`
 can succeed. -/
 theorem no_reference_after_drop (pre mid : List Event) (e : Event) (id uuid : Uuid)
     (s s' s'' : ProtocolState)
-    (hpre : run initState pre = some s)
+    (_hpre : run initState pre = some s)
     (hdrop : s.dropped id = true)
     (hmid : run s mid = some s')
     (he : e = .cmd (.schedule id) ∨ e = .cmd (.allowWrites id) ∨ e = .cmd (.peek uuid (.index id)))
     (hstep : step s' e = some s'') : False := by
   have hdrop' : s'.dropped id = true := by
-    clear hpre he hstep
+    clear _hpre he hstep
     induction mid generalizing s with
     | nil => simp [run] at hmid; subst hmid; exact hdrop
     | cons e0 rest ih =>

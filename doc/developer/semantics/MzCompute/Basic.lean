@@ -86,6 +86,22 @@ recovery behavior the protocol does not specify. -/
 def guard (cond : Bool) (s : α) : Option α :=
   if cond then some s else none
 
+/-- A successful `guard` returns its payload unchanged. -/
+theorem guard_eq_some {α : Type _} {cond : Bool} {x y : α}
+    (h : guard cond x = some y) : x = y := by
+  unfold guard at h
+  cases cond with
+  | true => simpa using h
+  | false => simp at h
+
+/-- A successful `guard` witnesses its condition held. -/
+theorem guard_cond {α : Type _} {cond : Bool} {x y : α}
+    (h : guard cond x = some y) : cond = true := by
+  unfold guard at h
+  cases cond with
+  | true => rfl
+  | false => simp at h
+
 /-- Whether an optional new frontier report (`none` = this kind was
 not reported this time) is compatible with the previously reported
 value. `none` is always compatible: an absent field means "unchanged",

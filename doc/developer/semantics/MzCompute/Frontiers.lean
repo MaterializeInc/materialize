@@ -77,15 +77,6 @@ theorem frontiers_advance (s s' : ProtocolState) (id : GlobalId) (w i o : Option
     | output => simpa using (checkAdvance_advances o (s.reportedFrontiers id .output) ho)
   · contradiction
 
-/-- A successful `guard` returns its payload unchanged. Local copy of
-the helper `Legality.lean` uses. -/
-private theorem guard_eq_some {α : Type _} {cond : Bool} {x y : α}
-    (h : guard cond x = some y) : x = y := by
-  unfold guard at h
-  cases cond with
-  | true => simpa using h
-  | false => simp at h
-
 /-- Theorem 5, lifted across a whole execution. -/
 theorem reportedFrontiers_monotone (s0 s : ProtocolState) (es : List Event)
     (h : run s0 es = some s) (id : GlobalId) (k : FrontierKind) :

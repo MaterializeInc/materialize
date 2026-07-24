@@ -15,23 +15,6 @@ import MzCompute.Run
 
 namespace MzCompute
 
-/-- A successful `guard` returns its payload unchanged. Local copy of
-the helper `Staging.lean`/`Frontiers.lean` use. -/
-private theorem guard_eq_some {α : Type _} {cond : Bool} {x y : α}
-    (h : guard cond x = some y) : x = y := by
-  unfold guard at h
-  cases cond with
-  | true => simpa using h
-  | false => simp at h
-
-/-- A successful `guard` witnesses its condition held. -/
-private theorem guard_cond {α : Type _} {cond : Bool} {x y : α}
-    (h : guard cond x = some y) : cond = true := by
-  unfold guard at h
-  cases cond with
-  | true => rfl
-  | false => simp at h
-
 theorem peekResponse_requires_pending (s s' : ProtocolState) (uuid : Uuid)
     (h : step s (.resp (.peekResponse uuid)) = some s') :
     s.peeks uuid = .pending ∧ s'.peeks uuid = .answered := by
@@ -208,7 +191,7 @@ later in a well-formed execution, is impossible". See the design
 doc's "Target theorems" section for why this form captures
 uniqueness. -/
 theorem peek_response_unique (pre mid : List Event) (uuid : Uuid) (s1 s2 s3 s4 : ProtocolState)
-    (hpre : run initState pre = some s1)
+    (_hpre : run initState pre = some s1)
     (hstep1 : step s1 (.resp (.peekResponse uuid)) = some s2)
     (hmid : run s2 mid = some s3)
     (hstep2 : step s3 (.resp (.peekResponse uuid)) = some s4) : False := by

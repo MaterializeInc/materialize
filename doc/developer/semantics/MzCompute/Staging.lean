@@ -49,22 +49,6 @@ theorem create_instance_second (e1 e2 : Event) (rest : List Event) (s : Protocol
       | _ => simp [Event.isHello] at he1
   | resp _ => simp [Event.isHello] at he1
 
-/-- A successful `guard` returns its payload unchanged. -/
-private theorem guard_eq_some {α : Type _} {cond : Bool} {x y : α}
-    (h : guard cond x = some y) : x = y := by
-  unfold guard at h
-  cases cond with
-  | true => simpa using h
-  | false => simp at h
-
-/-- A successful `guard` witnesses its condition held. -/
-private theorem guard_cond {α : Type _} {cond : Bool} {x y : α}
-    (h : guard cond x = some y) : cond = true := by
-  unfold guard at h
-  cases cond with
-  | true => rfl
-  | false => simp at h
-
 /-- A single step either preserves `created` or, for a `CreateDataflow`
 event, adds exactly its export list. -/
 theorem created_of_step (s s' : ProtocolState) (e : Event) (h : step s e = some s') (id : GlobalId) :
