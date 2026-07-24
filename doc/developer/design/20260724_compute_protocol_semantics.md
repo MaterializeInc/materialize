@@ -1,6 +1,6 @@
 # Compute protocol semantics (Lean 4 model), Phase 1: staging and command/response legality
 
-- Associated: MaterializeInc/materialize#36614 (Lean 4 mechanization precedent, error-handling semantics)
+- Associated: MaterializeInc/materialize#36614 (Lean 4 mechanization precedent, error-handling semantics. Unmerged, referenced as prior art only, not a dependency)
 
 ## The problem
 
@@ -31,18 +31,20 @@ the model.
 This is Phase 1 of a three-phase layered plan. Phase 2 (read-hold lifecycle
 against `AllowCompaction`) and Phase 3 (command sharing and response
 reconciliation across replicas and workers) extend Phase 1's state machine
-rather than starting fresh; they are not covered by this doc.
+rather than starting fresh. They are not covered by this doc.
 
 ## Success criteria
 
-- A Lean 4 project (a new `lean_lib` in the existing `doc/developer/semantics/`
-  package) defines `ProtocolState`, `Event` (mirroring `ComputeCommand` /
-  `ComputeResponse`), and a `step : ProtocolState → Event → Option
-  ProtocolState` relation whose preconditions match the "invalid to" / "must"
-  statements in `command.rs`, `response.rs`, and `protocol.rs`.
-- At least the five theorems listed under Solution Proposal are stated and
+- A Lean 4 project (a new `lean_lib` in a `doc/developer/semantics/` package,
+  see Project Structure) defines `ProtocolState`, `Event` (mirroring
+  `ComputeCommand` / `ComputeResponse`), and a `step : ProtocolState → Event →
+  Option ProtocolState` relation whose preconditions match the "invalid to" /
+  "must" statements in `command.rs`, `response.rs`, and `protocol.rs`.
+- At least the seven theorems listed under Solution Proposal are stated and
   proved with no `sorry`, each traceable to an explicit doc-comment contract.
-- The model builds in CI via the existing `ci/test/lean-semantics.sh` harness.
+- The model builds in CI via a `ci/test/lean-semantics.sh` harness, bootstrapped
+  as part of this phase (see Project Structure). This does not depend on
+  #36614 landing first.
 - A reader can go from a doc-comment sentence in `command.rs` / `response.rs`
   to the Lean lemma that encodes it, and back.
 
@@ -80,6 +82,10 @@ preserves the invariant, induct over the execution.
 on:
 
 - `created : Set GlobalId`, ids exported by a `CreateDataflow` seen so far.
+  `CreateDataflow`'s command payload keeps its export id set (`Finset
+  GlobalId`) concrete even though the rest of `DataflowDescription` is
+  opaque, since export-id freshness is itself a Phase 1 legality theorem
+  (see Target theorems).
 - `scheduled`, `allowedWrites : Set GlobalId`.
 - `since : GlobalId → Option (Antichain Timestamp)`, most recent
   `AllowCompaction` frontier per id.
@@ -97,16 +103,32 @@ and similar) are represented by an opaque placeholder type rather than
 reconstructed field for field. Fields legality does depend on (`GlobalId`,
 `Uuid`, `Antichain Timestamp`, the `PeekTarget`'s id) are kept concrete.
 
+Opaquing a field erases whatever structural facts it carries, not only its
+data content. For example `Peek::literal_constraints`'s documented "the
+vector is never empty" becomes unstatable once that field is opaque. This is
+an accepted Phase 1 cut, not an oversight: only the seven theorems below are
+committed deliverables, and structural payload facts unrelated to them are
+left for a later phase to pick up if they turn out to matter.
+
 ### Step relation
 
 `step : ProtocolState → Event → Option ProtocolState`. Each command or
 response variant gets one equation. Example shapes, illustrative rather than
 final Lean syntax:
 
-- `step s (Cmd (Schedule id)) = if id ∈ s.created then some {s with scheduled := s.scheduled.insert id} else none`
+- `step s (Cmd (CreateDataflow exports _)) = if exports ∩ s.created = ∅ ∧ exports.Nodup then some {s with created := s.created ∪ exports} else none`
+- `step s (Cmd (Schedule id)) = if id ∈ s.created ∧ s.since id ≠ some ∅ then some {s with scheduled := s.scheduled.insert id} else none`
+- `step s (Cmd (AllowWrites id)) = if id ∈ s.created ∧ s.since id ≠ some ∅ then some {s with allowedWrites := s.allowedWrites.insert id} else none`
 - `step s (Resp (Frontiers id fr)) = if id ∈ s.created ∧ frontierAdvances s id fr then some (s.withReportedFrontiers id fr) else none`
 - `step s (Cmd (Peek p)) = if p.uuid ∉ s.peeks.keys then some {s with peeks := s.peeks.insert p.uuid Pending} else none`
 - `step s (Resp (PeekResponse uuid _ _)) = if s.peeks.find? uuid = some Pending then some {s with peeks := s.peeks.insert uuid Answered} else none`
+
+`Schedule` and `AllowWrites` both check `s.since id ≠ some ∅`: `command.rs`
+states it is invalid to send either once the collection has been allowed to
+compact to the empty frontier (the canonical drop). `CreateDataflow` checks
+its export ids are pairwise distinct (`exports.Nodup`) and disjoint from
+everything already created, mirroring `command.rs`'s "dataflow exports have
+unique IDs... do not repeat (within a single protocol iteration)".
 
 A `none` result models the "may cause undefined behavior" clause: the model
 has nothing further to say about what happens next, matching the doc's
@@ -122,16 +144,27 @@ empty state never produces `none`.
    event is `Cmd (Hello _)` and the second is `Cmd (CreateInstance _)`.
 2. `create_before_reference`: any event that names `id` other than the
    `CreateDataflow` that creates it (Schedule, AllowWrites, AllowCompaction,
-   Peek on an index target, Frontiers, SubscribeResponse, CopyToResponse,
-   Status) occurs strictly after `id`'s `CreateDataflow` in the execution.
-3. `frontiers_monotone_and_terminal`: for each id and frontier kind, the
+   Peek on an index target, Frontiers, SubscribeResponse, CopyToResponse)
+   occurs strictly after `id`'s `CreateDataflow` in the execution. `Status`
+   is excluded: `ComputeResponse::Status` carries no `GlobalId` in the
+   current protocol (`StatusResponse` is an unimplemented placeholder), so
+   the doc's per-collection `Status` obligation isn't statable against the
+   real enum yet. Revisit if `Status` grows collection-scoped variants.
+3. `no_reference_after_drop`: `Schedule`, `AllowWrites`, and `Peek` (index
+   target) on `id` are only legal while `since id` has not yet reached the
+   empty frontier. Once an `AllowCompaction` with the empty frontier for
+   `id` has taken effect, no later event may `Schedule`, `AllowWrites`, or
+   `Peek` against it.
+4. `create_dataflow_ids_fresh`: a `CreateDataflow`'s export ids are pairwise
+   distinct and disjoint from every id created earlier in the execution.
+5. `frontiers_monotone_and_terminal`: for each id and frontier kind, the
    sequence of reported frontiers in a well-formed execution is
    non-decreasing, and once a kind reports the empty frontier for an id, no
    later event reports a non-empty value for that (id, kind).
-4. `peek_response_unique`: for each `Uuid`, a well-formed execution contains
+6. `peek_response_unique`: for each `Uuid`, a well-formed execution contains
    at most one `PeekResponse` for it, and if present, it is preceded by
    exactly one `Peek` command with the same uuid.
-5. `cancel_requires_peek`: `CancelPeek uuid` is only legal after a `Peek`
+7. `cancel_requires_peek`: `CancelPeek uuid` is only legal after a `Peek`
    with matching uuid.
 
 Each theorem's statement should be traceable to the specific doc-comment
@@ -140,18 +173,23 @@ the proof.
 
 ### Project structure
 
-Add a `MzCompute` `lean_lib` target to the existing
-`doc/developer/semantics/lakefile.toml`, alongside the current `Mz` target.
-This reuses the Docker image, pinned Mathlib version, and
-`ci/test/lean-semantics.sh` harness, which are expensive to duplicate, and
-later phases may want `Finset` / `BTreeMap`-style reasoning for the
-multi-replica layer. It is kept as a separate library and namespace rather
-than folded into `Mz`, since `Mz`'s existing docstring scopes it to scalar
-evaluation and collection semantics, a different subsystem (data plane, not
-control plane). New `MzCompute/` module directory, own root import file, own
-`compute-protocol.md` reading-order doc parallel to the existing `model.md`
-and `transforms.md`, with `README.md` updated to list both subsystems and
-their relationship.
+`doc/developer/semantics/` (Docker image, pinned Mathlib version,
+`lakefile.toml`, `ci/test/lean-semantics.sh` harness) does not exist on this
+branch: it was built on #36614's still-unmerged fork branch. Phase 1
+bootstraps this scaffolding itself, following #36614's shape as prior art
+(same Lean/Mathlib pin approach, same Docker-image-plus-CI-script structure)
+without depending on that PR landing. Concretely: a `doc/developer/semantics/`
+package with a `lakefile.toml` declaring an `MzCompute` `lean_lib` target, a
+`Dockerfile` and `ci/test/lean-semantics.sh` harness for CI, and a
+`MzCompute/` module directory with its own root import file. If #36614 lands
+first, the two efforts reconcile by merging into a single `lakefile.toml`
+with two `lean_lib` targets (`Mz` and `MzCompute`) sharing one Docker image.
+Until then `MzCompute` stands alone. It is designed as a separate library and
+namespace from the start rather than planned as a merge into `Mz`, since
+`Mz`'s docstring (on the #36614 branch) scopes it to scalar evaluation and
+collection semantics, a different subsystem (data plane, not control plane).
+Own `compute-protocol.md` reading-order doc, matching the naming #36614 uses
+for `model.md` / `transforms.md`, to keep the two efforts easy to merge later.
 
 ## Minimal viable prototype
 
@@ -182,12 +220,15 @@ possible without Phase 1 paying Phase 3's cost.
 **Trace well-formedness predicate instead of a state machine.** An
 alternative shape defines well-formedness directly as a predicate over
 `List Event` (for example, "id's `CreateDataflow` appears before any other
-event naming id") rather than through a `step` relation. Rejected because it
-does not compose across phases the same way: Phase 2's read-hold invariants
-need a running `since` per id to state "since never exceeds a live hold's
-frontier", which needs state that accumulates across the fold, not a
-predicate over the whole list. The `step`-relation shape generalizes to that
-need; the trace-predicate shape would need to be rebuilt for Phase 2 anyway.
+event naming id") rather than through a `step` relation. The two shapes are
+formally interchangeable: any such predicate can be written as a fold that
+threads state through the list, which is exactly what `step` does under a
+different name. The reason to prefer `step` isn't expressiveness, it's
+reuse: `step` names and exposes the intermediate state (`ProtocolState`) as
+a first-class definition that Phase 2 can literally extend with a few more
+fields and Phase 3 can literally lift to a product over replicas, whereas a
+predicate's internal fold state is private to its own proof and would need
+to be re-extracted and renamed for each later phase to build on.
 
 **New standalone Lean project instead of a second `lean_lib` in the existing
 package.** Rejected for now: it duplicates the Docker image, Mathlib pin,
@@ -203,7 +244,7 @@ iteration.
   `Hello` nonce uniqueness) mean one CTP connection's lifetime, or does the
   model need to handle reconnection (a second `Hello` after a connection
   drop) within Phase 1? The current proposal assumes a single connection per
-  execution and defers reconnection modeling to a later phase; confirm this
+  execution and defers reconnection modeling to a later phase. Confirm this
   does not undercut the Phase 1 theorems' relevance to the real,
   reconnecting system.
 - `UpdateConfiguration` and `Hello` are broadcast to all workers rather than
