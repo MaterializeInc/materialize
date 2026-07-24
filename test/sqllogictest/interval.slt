@@ -116,16 +116,17 @@ SELECT INTERVAL '1-2 3 4:5:6.7' SECOND;
 ----
 1 year 2 months 3 days 04:05:06.7
 
-# Treat trailing DateTimeFields as range of components to process.
+# Range qualifiers discard fields less significant than the range's low end,
+# but keep more significant fields, matching PostgreSQL.
 query T
 SELECT INTERVAL '1-2 3 4:5:6.7' MONTH TO MINUTE;
 ----
-2 months 3 days 04:05:00
+1 year 2 months 3 days 04:05:00
 
 query T
 SELECT INTERVAL '1-2 3 4:5:6.7' DAY TO HOUR;
 ----
-3 days 04:00:00
+1 year 2 months 3 days 04:00:00
 
 query T
 SELECT INTERVAL '12:34';
@@ -195,7 +196,7 @@ SELECT INTERVAL '12:34:56' HOUR TO SECOND;
 query T
 SELECT INTERVAL '12:34:56' MINUTE TO SECOND;
 ----
-00:34:56
+12:34:56
 
 query T
 SELECT INTERVAL '12:34' DAY TO SECOND;
@@ -206,6 +207,18 @@ query T
 SELECT INTERVAL '12:34' MONTH TO SECOND;
 ----
 12:34:00
+
+# Regression tests for SQL-474: fields above the range qualifier are kept, and
+# MINUTE TO SECOND reads ambiguous a:b values as minutes:seconds.
+query T
+SELECT INTERVAL '1 2:03' HOUR TO MINUTE;
+----
+1 day 02:03:00
+
+query T
+SELECT INTERVAL '1 2:03' MINUTE TO SECOND;
+----
+1 day 00:02:03
 
 # Disallow ranges where trailing element is greater than lead.
 statement error
@@ -522,7 +535,7 @@ SELECT INTERVAL '1.5555 month 2 3:4:5.6' HOUR;
 query T
 SELECT INTERVAL '1.5555 month 2 3:4:5.6' DAY TO HOUR;
 ----
-18 days 19:00:00
+1 month 18 days 19:00:00
 
 # Only allow disambiguation if ambiguous element
 # is final element of interval string.
@@ -602,7 +615,7 @@ SELECT INTERVAL '-1.555555555 years 2.555555555 months -3.555555555 days 4.55555
 query T
 SELECT INTERVAL '1:2:31.23456789' MINUTE TO SECOND(2);
 ----
-00:02:31.23
+01:02:31.23
 
 # Do not allow more than 9 places of precision
 query T

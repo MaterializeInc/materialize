@@ -735,7 +735,10 @@ impl ParsedDateTime {
             if fmt.is_none() {
                 fmt = match value_parts.pop_front() {
                     Some(next_part) => {
-                        match determine_format_w_datetimefield(next_part.clone(), None)? {
+                        match determine_format_w_datetimefield(
+                            next_part.clone(),
+                            leading_time_precision,
+                        )? {
                             Some(TimePartFormat::SqlStandard(f)) => {
                                 match f {
                                     // Do not capture this token because expression
