@@ -9,3 +9,5 @@
 --
 -- Root import file for the `MzCompute` library. Each module below is
 -- added by the plan task that introduces it.
+
+import MzCompute.Basic
