@@ -295,6 +295,9 @@ def get_variable_system_parameters(
             ["true", "false"] if force_source_table_syntax else ["false"],
         ),
         VariableSystemParameter(
+            "mysql_source_snapshot_parallelism", "true", ["true", "false"]
+        ),
+        VariableSystemParameter(
             "persist_batch_columnar_format",
             "structured" if version > MzVersion.parse_mz("v0.135.0-dev") else "both_v2",
             ["row", "both_v2", "both", "structured"],
@@ -571,6 +574,9 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "column_paged_batcher_budget_fraction",
     "column_paged_batcher_lz4",
     "column_paged_batcher_swap_pageout",
+    "column_paged_batcher_spill_worker_count",
+    "column_paged_batcher_eager_backing",
+    "column_paged_batcher_pool_rss_target_fraction",
     "enable_upsert_paged_spill",
     "enable_lgalloc_eager_reclamation",
     "lgalloc_background_interval",

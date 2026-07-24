@@ -63,6 +63,7 @@ import {
   fetchClusterReplicasWithUtilization,
 } from "~/api/materialize/cluster/replicasWithUtilization";
 import {
+  attachOfflineEvents,
   BinnedSubscribeRow,
   bucketRowsToBucketsByReplicaId,
   parseBinnedSubscribeRow,
@@ -73,6 +74,7 @@ import {
 import {
   buildConsoleClusterUtilizationOverview24hSubscribe,
   buildConsoleClusterUtilizationUnbinned3hSubscribe,
+  fetchReplicaOfflineEvents,
   fetchReplicaUtilizationHistory,
   ReplicaUtilizationHistoryParameters,
 } from "~/api/materialize/cluster/replicaUtilizationHistory";
@@ -158,6 +160,14 @@ export const clusterQueryKeys = {
     [
       ...clusterQueryKeys.all(),
       buildQueryKeyPart("replicaUtilizationHistory", params),
+    ] as const,
+  replicaOfflineEvents: (params: {
+    clusterIdsKey: string;
+    timePeriodMinutes: number;
+  }) =>
+    [
+      ...clusterQueryKeys.all(),
+      buildQueryKeyPart("replicaOfflineEvents", params),
     ] as const,
   clusterFreshness: (params: ClusterFreshnessParams) =>
     [
@@ -498,6 +508,33 @@ function useReplicaUtilizationHistorySubscribe(
     }),
   });
 
+  // Offline events aren't in the un-binned view, so poll them separately and
+  // merge into the client-binned buckets. Without this the <=3h windows would
+  // hide replica crashes and OOMs that every other tier surfaces.
+  const { data: offlineEvents } = useQuery({
+    queryKey: clusterQueryKeys.replicaOfflineEvents({
+      clusterIdsKey,
+      timePeriodMinutes,
+    }),
+    refetchInterval: 20_000,
+    enabled: enabled && clusterIdsKey.length > 0,
+    queryFn: async ({ queryKey, signal }) => {
+      const [, queryKeyParams] = queryKey;
+      const clusterIds = queryKeyParams.clusterIdsKey
+        ? queryKeyParams.clusterIdsKey.split(",")
+        : [];
+      const startDate = subMinutes(
+        new Date(),
+        queryKeyParams.timePeriodMinutes,
+      ).toISOString();
+      return fetchReplicaOfflineEvents({
+        params: { clusterIds, startDate, resolveLineage: true },
+        queryKey,
+        requestOptions: { signal },
+      });
+    },
+  });
+
   const result = useMemo(() => {
     const endDate = new Date();
     const startDate = subMinutes(endDate, timePeriodMinutes);
@@ -505,17 +542,17 @@ function useReplicaUtilizationHistorySubscribe(
     const samples = replicaId
       ? data.filter((sample) => sample.replicaId === replicaId)
       : data;
-    const rows = rebucketUtilizationSamples(
-      samples,
+    const rows = attachOfflineEvents(
+      rebucketUtilizationSamples(samples, bucketSizeMs, startDate.getTime()),
+      offlineEvents ?? [],
       bucketSizeMs,
-      startDate.getTime(),
     );
     return toReplicaUtilizationGraphData(
       bucketRowsToBucketsByReplicaId(rows),
       startDate,
       endDate,
     );
-  }, [data, replicaId, timePeriodMinutes, bucketSizeMs]);
+  }, [data, replicaId, timePeriodMinutes, bucketSizeMs, offlineEvents]);
 
   return {
     data: result,

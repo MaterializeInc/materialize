@@ -2017,6 +2017,15 @@ class MySqlInitialLoad(MySqlCdc):
 
     FIXED_SCALE = True  # TODO: Remove when database-issues#7556 is fixed
 
+    # The parallel snapshot path has a wider memory envelope during the initial
+    # load, so allow a bit more headroom than the base default before flagging a
+    # regression.
+    RELATIVE_THRESHOLD: dict[MeasurementType, float] = {
+        MeasurementType.WALLCLOCK: 0.10,
+        MeasurementType.MEMORY_MZ: 0.30,
+        MeasurementType.MEMORY_CLUSTERD: 0.50,
+    }
+
     def shared(self) -> Action:
         return TdAction(f"""
 $ mysql-connect name=mysql url=mysql://root@mysql password=${{arg.mysql-root-password}}
