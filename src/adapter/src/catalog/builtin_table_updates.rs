@@ -20,9 +20,9 @@ use mz_catalog::builtin::{
     MZ_CLUSTER_REPLICA_SIZES, MZ_COLUMNS, MZ_EGRESS_IPS, MZ_FUNCTIONS,
     MZ_HISTORY_RETENTION_STRATEGIES, MZ_ICEBERG_SINKS, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS,
     MZ_KAFKA_SINKS, MZ_KAFKA_SOURCE_TABLES, MZ_LICENSE_KEYS, MZ_LIST_TYPES, MZ_MAP_TYPES,
-    MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_MYSQL_SOURCE_TABLES, MZ_OBJECT_DEPENDENCIES,
-    MZ_OBJECT_GLOBAL_IDS, MZ_OPERATORS, MZ_POSTGRES_SOURCE_TABLES, MZ_PSEUDO_TYPES,
-    MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_SESSIONS, MZ_SINKS, MZ_SOURCE_REFERENCES,
+    MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_METRIC_SINKS_RAW, MZ_MYSQL_SOURCE_TABLES,
+    MZ_OBJECT_DEPENDENCIES, MZ_OBJECT_GLOBAL_IDS, MZ_OPERATORS, MZ_POSTGRES_SOURCE_TABLES,
+    MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_SESSIONS, MZ_SINKS, MZ_SOURCE_REFERENCES,
     MZ_SQL_SERVER_SOURCE_TABLES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD,
     MZ_SUBSCRIPTIONS, MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
 };
@@ -30,8 +30,8 @@ use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::durable::SourceReferences;
 use mz_catalog::memory::error::Error;
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, Connection, DataSourceDesc, Func, Index, MaterializedView, Sink,
-    Table, TableDataSource, Type, View,
+    CatalogEntry, CatalogItem, Connection, DataSourceDesc, Func, Index, MaterializedView,
+    MetricSink, Sink, Table, TableDataSource, Type, View,
 };
 use mz_expr::MirScalarExpr;
 use mz_license_keys::ValidatedLicenseKey;
@@ -358,6 +358,9 @@ impl CatalogState {
             CatalogItem::Sink(sink) => {
                 self.pack_sink_update(id, oid, schema_id, name, owner_id, sink, diff)
             }
+            CatalogItem::MetricSink(sink) => self.pack_metric_sink_update(
+                id, oid, schema_id, name, owner_id, privileges, sink, diff,
+            ),
             CatalogItem::Type(ty) => {
                 self.pack_type_update(id, oid, schema_id, name, owner_id, privileges, ty, diff)
             }
@@ -1015,6 +1018,37 @@ impl CatalogState {
         ));
 
         updates
+    }
+
+    // TODO: A builtin metric sink is fully static except for its runtime `CatalogItemId`, so this
+    // hand-packed row largely duplicates generic object metadata. Once `mz_objects` (and the
+    // internal tables generally) derive from the catalog rather than packed backing tables, drop
+    // this pack and `MZ_METRIC_SINKS_RAW` and make `mz_metric_sinks` a pure derived view.
+    fn pack_metric_sink_update(
+        &self,
+        id: CatalogItemId,
+        oid: u32,
+        schema_id: &SchemaSpecifier,
+        name: &str,
+        owner_id: &RoleId,
+        privileges: Datum,
+        sink: &MetricSink,
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+        let from_item_id = self.get_entry_by_global_id(&sink.from).id();
+        vec![BuiltinTableUpdate::row(
+            &*MZ_METRIC_SINKS_RAW,
+            Row::pack_slice(&[
+                Datum::String(&id.to_string()),
+                Datum::UInt32(oid),
+                Datum::String(&schema_id.to_string()),
+                Datum::String(name),
+                Datum::String(&from_item_id.to_string()),
+                Datum::String(&owner_id.to_string()),
+                privileges,
+            ]),
+            diff,
+        )]
     }
 
     fn pack_index_update(

@@ -916,6 +916,7 @@ impl Catalog {
                     | CatalogItem::Source(_)
                     | CatalogItem::Log(_)
                     | CatalogItem::Sink(_)
+                    | CatalogItem::MetricSink(_)
                     | CatalogItem::Index(_)
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)
@@ -1726,7 +1727,9 @@ impl Catalog {
                     CatalogItem::Sink(sink) => {
                         storage_collections_to_create.insert(sink.global_id());
                     }
-                    CatalogItem::Log(_)
+                    // Metric sinks are compute objects with no storage collection.
+                    CatalogItem::MetricSink(_)
+                    | CatalogItem::Log(_)
                     | CatalogItem::View(_)
                     | CatalogItem::Index(_)
                     | CatalogItem::Type(_)
@@ -1913,6 +1916,7 @@ impl Catalog {
                         CatalogItem::Table(_)
                         | CatalogItem::Log(_)
                         | CatalogItem::View(_)
+                        | CatalogItem::MetricSink(_)
                         | CatalogItem::Type(_)
                         | CatalogItem::Func(_)
                         | CatalogItem::Secret(_)

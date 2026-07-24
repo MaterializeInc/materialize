@@ -315,6 +315,7 @@ mz_message_counts
 mz_message_counts_per_worker
 mz_message_counts_received_raw
 mz_message_counts_sent_raw
+mz_metric_dataflow_errors_shaped
 mz_peek_durations_histogram
 mz_peek_durations_histogram_per_worker
 mz_peek_durations_histogram_raw

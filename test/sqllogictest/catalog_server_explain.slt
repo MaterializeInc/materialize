@@ -277,10 +277,14 @@ mz_catalog.mz_objects:
         Map: "secret", null
           →Arranged mz_catalog.mz_secrets
             Key: (#3{name})
+      →Read mz_internal.mz_metric_sinks_raw
 
 Source mz_catalog.mz_functions
   project=(#0..=#3, #9, #8, #10, #11)
   map=("function", null, null)
+Source mz_internal.mz_metric_sinks_raw
+  project=(#0..=#3, #7, #5, #8, #6)
+  map=("metric-sink", null)
 
 Used Indexes:
   - mz_catalog.mz_indexes_ind (*** full scan ***)
@@ -9498,6 +9502,21 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
+EXPLAIN SELECT * FROM "mz_internal"."mz_metric_sinks";
+----
+Explained Query:
+  →Read mz_internal.mz_metric_sinks_raw
+
+Source mz_internal.mz_metric_sinks_raw
+  project=(#3, #0, #7..=#11)
+  filter=((#3{name} = "mz_metric_dataflow_errors"))
+  map=("mz_dataflow_error_count", "gauge", "The number of errors in a dataflow, by dataflow object.", {"object_id"}, "mz_metric_dataflow_errors_shaped")
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_notices";
 ----
 Explained Query (fast path):
@@ -15037,6 +15056,98 @@ Used Indexes:
   - mz_introspection.mz_message_batch_counts_received_raw_s2_primary_idx (*** full scan ***)
 
 Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM "mz_introspection"."mz_metric_dataflow_errors_shaped";
+----
+Explained Query:
+  →With
+    cte l0 =
+      →Differential Join %1:mz_compute_exports_per_worker[#0{export_id}] » %0:mz_compute_dependencies[#0{object_id}]
+        →Arrange (#0{object_id})
+          →Fused with Parent Map/Filter/Project
+            Project: #1, #0
+            →Arranged mz_internal.mz_compute_dependencies
+        →Arrange (#0{export_id})
+          →Fused with Child Map/Filter/Project
+            Project: #0, #2
+            Filter: (#1{worker_id} = 0)
+              →Arranged mz_introspection.mz_compute_exports_per_worker
+                Key: (#0, #1)
+    cte l1 =
+      →Distinct GroupAggregate
+        →Fused with Child Map/Filter/Project
+          Project: #2
+            →Read l0
+  →Return
+    →With Mutually Recursive
+      cte l2 =
+        →Unarranged Raw Stream
+          →Distinct GroupAggregate
+            →Union
+              →Unarranged Raw Stream
+                →Arranged mz_introspection.mz_compute_error_counts_raw
+              →Delta Join [%0:l2[#0{export_id}] » %1:l0[#1{index_id}] » %2[#0]] [%1:l0[#1{index_id}] » %0:l2[#0{export_id}] » %2[#0]] [%2[#0] » %1:l0[#2] » %0:l2[#0{export_id}]]
+                →Arrange (#0{export_id})
+                  →Stream l2
+                →Arrange (#1{index_id}) (#2)
+                  →Stream l0
+                →Arrange (#0)
+                  →Consolidating Union
+                    →Negate Diffs
+                      →Differential Join %0:l1[#0] » %1[#0]
+                        →Arranged l1
+                        →Distinct GroupAggregate
+                          Key:
+                            Project: #1
+                            Map: list_index(#0{address}, 1)
+                          →Differential Join %0:mz_dataflow_addresses_per_worker[#0{id}] » %1:mz_dataflow_operators_per_worker[#0{id}]
+                            →Arrange (#0{id})
+                              →Fused with Child Map/Filter/Project
+                                Project: #0, #2
+                                Filter: (#1{worker_id} = 0) AND (1 = list_length(#2{address})) AND (list_index(#2{address}, 1)) IS NOT NULL
+                                  →Arranged mz_introspection.mz_dataflow_addresses_per_worker
+                                    Key: (#0, #1)
+                            →Arrange (#0{id})
+                              →Fused with Child Map/Filter/Project
+                                Project: #0
+                                Filter: (#1{worker_id} = 0)
+                                  →Arranged mz_introspection.mz_dataflow_operators_per_worker
+                                    Key: (#0, #1)
+                    →Unarranged Raw Stream
+                      →Arranged l1
+    →Return
+      →Map/Filter/Project
+        Project: #4, #5, #2, #3, #6
+        Map: map_build("object_id", #0{object_id}), numeric_to_double(#1{error_count}), "mz_dataflow_error_count", "gauge", "The number of errors in a dataflow, by dataflow object."
+          →Fused with Child Map/Filter/Project
+            Filter: (#1 != 0)
+              →Accumulable GroupAggregate
+                Simple aggregates: sum(#1{count})
+                Key:
+                  Project: #0
+                →Fused with Child Map/Filter/Project
+                  Project: #0, #2
+                    →Read l2
+
+Used Indexes:
+  - mz_internal.mz_compute_dependencies_ind (*** full scan ***)
+  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (*** full scan ***)
+  - mz_introspection.mz_dataflow_addresses_per_worker_s2_primary_idx (*** full scan ***)
+  - mz_introspection.mz_compute_exports_per_worker_s2_primary_idx (*** full scan ***)
+  - mz_introspection.mz_compute_error_counts_raw_s2_primary_idx (*** full scan ***)
+
+Target cluster: mz_catalog_server
+
+Notices:
+  - Notice: Index mz_introspection.mz_compute_exports_per_worker_s2_primary_idx on mz_compute_exports_per_worker(export_id, worker_id) is too wide to use for literal equalities `worker_id = 0`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (worker_id).
+  - Notice: Index mz_introspection.mz_dataflow_addresses_per_worker_s2_primary_idx on mz_dataflow_addresses_per_worker(id, worker_id) is too wide to use for literal equalities `worker_id = 0`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (worker_id, list_length(address)).
+  - Notice: Index mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx on mz_dataflow_operators_per_worker(id, worker_id) is too wide to use for literal equalities `worker_id = 0`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (worker_id).
 
 EOF
 

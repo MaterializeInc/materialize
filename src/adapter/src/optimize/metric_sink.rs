@@ -41,8 +41,9 @@ const METRIC_NAME_PATTERN: &str = "^[a-zA-Z_:][a-zA-Z0-9_:]*$";
 ///
 /// * `metric_kind` (`Int32`, nullable): `0` for `gauge`, `1` for `counter`, `NULL` for any other
 ///   `metric_type`.
-/// * `name_valid` (`Bool`, nullable): whether `metric_name` matches the Prometheus metric-name
-///   grammar (see `METRIC_NAME_PATTERN`). The operator treats a `NULL` the same as `false`.
+/// * `name_valid` (`Bool`): whether `metric_name` matches the Prometheus metric-name grammar (see
+///   `METRIC_NAME_PATTERN`). Always concrete `true`/`false`, never `NULL`: a null `metric_name`
+///   folds to `false` (`is_null().not()` is `false`, and `false AND anything` is `false`).
 ///
 /// No row is dropped or filtered here: the operator still needs every row, including the ones
 /// this marks invalid, to count `skipped`/`null_values`. Only the pure per-row shaping moves to
@@ -149,6 +150,9 @@ fn shape_metric_sink_source(
         ("value", value_ct.clone()),
         ("help", help_shaped_ct),
         ("metric_kind", SqlScalarType::Int32.nullable(true)),
+        // `name_valid` is provably never NULL (see the module doc), but it's declared nullable for
+        // now. Tighten it to `nullable(false)` once the operator lands and a `verify`-style check
+        // pins this desc against the optimizer's plan (which should also narrow the `AND`).
         ("name_valid", SqlScalarType::Bool.nullable(true)),
     ]);
 
@@ -157,10 +161,97 @@ fn shape_metric_sink_source(
 
 #[cfg(test)]
 mod tests {
+    use mz_catalog::builtin::{
+        BuiltinMetricSink, BuiltinMetricSinkValue, MetricSinkKind, builtin_metric_sink_view_sql,
+    };
     use mz_expr::Eval;
+    use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
     use mz_repr::{RowArena, SqlColumnType};
 
     use super::*;
+
+    /// A two-value sink over a two-label source, exercising the label map and the `UNION ALL`
+    /// fan-out. `help` carries a single quote so escaping is covered.
+    fn sample_sink() -> BuiltinMetricSink {
+        BuiltinMetricSink {
+            name: "mz_metric_test",
+            schema: MZ_INTERNAL_SCHEMA,
+            oid: 0,
+            view_name: "mz_metric_test_shaped",
+            view_oid: 0,
+            sql: "SELECT a, b, g, c FROM src",
+            labels: &["a", "b"],
+            values: &[
+                BuiltinMetricSinkValue {
+                    column: "g",
+                    metric: "mz_test_gauge",
+                    kind: MetricSinkKind::Gauge,
+                    help: "a gauge's help",
+                },
+                BuiltinMetricSinkValue {
+                    column: "c",
+                    metric: "mz_test_counter",
+                    kind: MetricSinkKind::Counter,
+                    help: "a counter",
+                },
+            ],
+            access: vec![],
+        }
+    }
+
+    #[mz_ore::test]
+    fn lowered_view_sql_has_canonical_shape() {
+        let sql = builtin_metric_sink_view_sql(&sample_sink());
+
+        // The five canonical columns, in order, once per value branch.
+        for col in [
+            "AS metric_name",
+            "AS metric_type",
+            "AS labels",
+            "AS value",
+            "AS help",
+        ] {
+            assert_eq!(
+                sql.matches(col).count(),
+                2,
+                "expected `{col}` once per value branch in:\n{sql}"
+            );
+        }
+
+        // One `UNION ALL` between the two value branches.
+        assert_eq!(sql.matches("UNION ALL").count(), 1, "sql:\n{sql}");
+
+        // Each metric family and kind appears as a literal.
+        assert!(sql.contains("'mz_test_gauge'"));
+        assert!(sql.contains("'gauge'"));
+        assert!(sql.contains("'mz_test_counter'"));
+        assert!(sql.contains("'counter'"));
+
+        // The value columns are cast to double precision.
+        assert!(sql.contains("(g)::double precision"));
+        assert!(sql.contains("(c)::double precision"));
+
+        // Every declared label appears in the map, cast to text.
+        assert!(sql.contains("'a' => a::text"));
+        assert!(sql.contains("'b' => b::text"));
+
+        // The single quote in `help` is doubled.
+        assert!(sql.contains("'a gauge''s help'"), "sql:\n{sql}");
+
+        // The source query is wrapped, not inlined bare.
+        assert!(sql.contains("FROM (SELECT a, b, g, c FROM src) AS s"));
+    }
+
+    #[mz_ore::test]
+    fn lowered_view_sql_handles_no_labels() {
+        let mut sink = sample_sink();
+        sink.labels = &[];
+        let sql = builtin_metric_sink_view_sql(&sink);
+        assert!(
+            sql.contains("'{}'::map[text=>text] AS labels"),
+            "sql:\n{sql}"
+        );
+    }
 
     /// The canonical metric-sink source shape, with `labels`/`help` nullable so the shaping's
     /// coalesce is observable and an extra trailing column so column resolution is exercised by

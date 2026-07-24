@@ -362,6 +362,7 @@ table
 source
 view
 materialized-view
+metric-sink
 sink
 index
 connection
@@ -609,6 +610,7 @@ mz_history_retention_strategies          ""
 mz_kafka_source_tables                   ""
 mz_license_keys                          ""
 mz_materialized_view_refresh_strategies  ""
+mz_metric_sinks_raw                      ""
 mz_mysql_source_tables                   ""
 mz_object_arrangement_size_history       ""
 mz_object_dependencies                   ""
@@ -648,6 +650,7 @@ mz_materialization_dependencies          ""
 mz_materialization_lag                   ""
 mz_mcp_data_product_details              ""
 mz_mcp_data_products                     ""
+mz_metric_sinks                          ""
 mz_notices                               ""
 mz_notices_redacted                      ""
 mz_object_fully_qualified_names          ""
@@ -806,6 +809,7 @@ mz_lir_mapping ""
 mz_mappable_objects ""
 mz_message_counts ""
 mz_message_counts_per_worker ""
+mz_metric_dataflow_errors_shaped ""
 mz_peek_durations_histogram ""
 mz_peek_durations_histogram_per_worker ""
 mz_records_per_dataflow ""
@@ -830,7 +834,7 @@ test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-42
+43
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

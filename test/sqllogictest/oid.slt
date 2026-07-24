@@ -1240,3 +1240,7 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17104  mz_cluster_auto_scaling_strategies_ind
 17105  parse_postgres_source_details
 17106  parse_kafka_source_details
+17107  mz_metric_dataflow_errors
+17108  mz_metric_dataflow_errors_shaped
+17109  mz_metric_sinks
+17110  mz_metric_sinks_raw

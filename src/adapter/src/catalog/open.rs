@@ -884,7 +884,8 @@ fn add_new_remove_old_builtin_items_migration(
             | Builtin::Type(_)
             | Builtin::Func(_)
             | Builtin::Index(_)
-            | Builtin::Connection(_) => continue,
+            | Builtin::Connection(_)
+            | Builtin::MetricSink(_) => continue,
         };
         // Drop comments under every relation-style `CommentObjectId` variant
         // for this id, not just the current one. When a builtin's type changes
@@ -928,6 +929,7 @@ fn add_new_remove_old_builtin_items_migration(
             CatalogItemType::View => CommentObjectId::View(id),
             CatalogItemType::MaterializedView => CommentObjectId::MaterializedView(id),
             CatalogItemType::Sink
+            | CatalogItemType::MetricSink
             | CatalogItemType::Index
             | CatalogItemType::Type
             | CatalogItemType::Func

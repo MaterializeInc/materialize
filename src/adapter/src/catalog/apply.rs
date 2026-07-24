@@ -31,9 +31,9 @@ use mz_catalog::durable::objects::{
 use mz_catalog::durable::{CatalogError, SystemObjectMapping};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, Cluster, ClusterReplica, Database, Func, Index, Log, NetworkPolicy,
-    Role, RoleAuth, Schema, Source, StateDiff, StateUpdate, StateUpdateKind, Table,
-    TableDataSource, TemporaryItem, Type, UpdateFrom,
+    CatalogEntry, CatalogItem, Cluster, ClusterReplica, Database, Func, Index, Log, MetricSink,
+    MetricSinkValue, NetworkPolicy, Role, RoleAuth, Schema, Source, StateDiff, StateUpdate,
+    StateUpdateKind, Table, TableDataSource, TemporaryItem, Type, UpdateFrom,
 };
 use mz_compute_types::config::ComputeReplicaConfig;
 use mz_compute_types::dataflows::DataflowDescription;
@@ -1143,6 +1143,44 @@ impl CatalogState {
                     name.clone(),
                     item,
                     connection.owner_id.clone(),
+                    PrivilegeMap::from_mz_acl_items(acl_items),
+                );
+            }
+            Builtin::MetricSink(sink) => {
+                // The companion view is inserted immediately before the sink in `BUILTINS`, so it
+                // has already been applied and can be resolved by name. The metric sink is
+                // constructed directly (no `create_sql`), like a `Builtin::View`/`Log`.
+                let view_item_id = self.ambient_schemas_by_id[schema_id].items[sink.view_name];
+                let view_global_id = self.get_entry(&view_item_id).item().latest_global_id();
+
+                let mut acl_items = vec![rbac::owner_privilege(
+                    mz_sql::catalog::ObjectType::Sink,
+                    MZ_SYSTEM_ROLE_ID,
+                )];
+                acl_items.extend_from_slice(&sink.access);
+
+                self.insert_item(
+                    item_id,
+                    sink.oid,
+                    name.clone(),
+                    CatalogItem::MetricSink(MetricSink {
+                        create_sql: None,
+                        global_id,
+                        from: view_global_id,
+                        labels: sink.labels.iter().map(|l| l.to_string()).collect(),
+                        values: sink
+                            .values
+                            .iter()
+                            .map(|v| MetricSinkValue {
+                                column: v.column.to_string(),
+                                metric: v.metric.to_string(),
+                                kind: v.kind,
+                                help: v.help.to_string(),
+                            })
+                            .collect(),
+                        resolved_ids: [(view_item_id, view_global_id)].into_iter().collect(),
+                    }),
+                    MZ_SYSTEM_ROLE_ID,
                     PrivilegeMap::from_mz_acl_items(acl_items),
                 );
             }
@@ -2444,7 +2482,8 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
                 CatalogItemType::View
                 | CatalogItemType::MaterializedView
                 | CatalogItemType::Index => derived_items.push(update),
-                CatalogItemType::Sink => sinks.push(update),
+                // Metric sinks sort with sinks (after their companion view in `derived_items`).
+                CatalogItemType::Sink | CatalogItemType::MetricSink => sinks.push(update),
             }
         }
 
@@ -2509,7 +2548,8 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
                 CatalogItemType::View
                 | CatalogItemType::MaterializedView
                 | CatalogItemType::Index => derived_items.push(update),
-                CatalogItemType::Sink => sinks.push(update),
+                // Metric sinks sort with sinks (after their companion view in `derived_items`).
+                CatalogItemType::Sink | CatalogItemType::MetricSink => sinks.push(update),
             }
         }
 

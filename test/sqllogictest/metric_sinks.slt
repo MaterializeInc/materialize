@@ -1,0 +1,56 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Structure of the builtin metric sink `mz_metric_dataflow_errors`. The sink is catalog-only for
+# now (no dataflow is installed), so these queries assert on catalog metadata, not emitted metrics.
+
+mode cockroach
+
+# The sink is a first-class catalog object, discoverable in mz_objects as a metric sink.
+query TT
+SELECT name, type FROM mz_objects WHERE name = 'mz_metric_dataflow_errors'
+----
+mz_metric_dataflow_errors  metric-sink
+
+# It reads an introspection source, so it lives in mz_introspection.
+query T
+SELECT sc.name
+FROM mz_objects o
+JOIN mz_schemas sc ON sc.id = o.schema_id
+WHERE o.name = 'mz_metric_dataflow_errors' AND o.type = 'metric-sink'
+----
+mz_introspection
+
+# Its per-metric schema: one gauge family fed from the companion view.
+query TTTT
+SELECT metric_name, metric_type, help, source
+FROM mz_internal.mz_metric_sinks
+WHERE name = 'mz_metric_dataflow_errors'
+----
+mz_dataflow_error_count  gauge  The␠number␠of␠errors␠in␠a␠dataflow,␠by␠dataflow␠object.  mz_metric_dataflow_errors_shaped
+
+# Its label set.
+query T
+SELECT labels FROM mz_internal.mz_metric_sinks WHERE name = 'mz_metric_dataflow_errors'
+----
+{object_id}
+
+# The companion view exists and carries the canonical MetricSink row shape.
+query T
+SELECT c.name
+FROM mz_columns c
+JOIN mz_objects o ON o.id = c.id
+WHERE o.name = 'mz_metric_dataflow_errors_shaped'
+ORDER BY c.position
+----
+metric_name
+metric_type
+labels
+value
+help

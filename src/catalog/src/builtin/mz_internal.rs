@@ -8603,6 +8603,57 @@ ON mz_internal.mz_comments (id)",
     is_retained_metrics_object: true,
 };
 
+/// Backing table for metric sinks. The catalog populates one row per builtin metric sink from the
+/// registered `BuiltinMetricSink` statics (see `builtin_table_updates`). It feeds both
+/// `mz_catalog.mz_objects` (as `type = 'metric-sink'`) and the `mz_metric_sinks` visibility view.
+///
+/// NOTE: this table is registered before `mz_objects` in the builtin list (see `BUILTINS_STATIC`),
+/// because `mz_objects` unions it and a builtin view can only depend on lower-id builtins.
+///
+/// TODO: This backing table exists only because `mz_objects` is still packed. Once the internal
+/// tables derive from the catalog, drop it (and `pack_metric_sink_update`) and make
+/// `mz_metric_sinks` a pure derived view keyed off the companion view.
+pub static MZ_METRIC_SINKS_RAW: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_metric_sinks_raw",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_METRIC_SINKS_RAW_OID,
+    desc: RelationDesc::builder()
+        .with_column("id", SqlScalarType::String.nullable(false))
+        .with_column("oid", SqlScalarType::Oid.nullable(false))
+        .with_column("schema_id", SqlScalarType::String.nullable(false))
+        .with_column("name", SqlScalarType::String.nullable(false))
+        .with_column("from_id", SqlScalarType::String.nullable(false))
+        .with_column("owner_id", SqlScalarType::String.nullable(false))
+        .with_column(
+            "privileges",
+            SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
+        )
+        .with_key(vec![0])
+        .with_key(vec![1])
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        ("id", "Materialize's unique ID for the metric sink."),
+        ("oid", "A PostgreSQL-compatible OID for the metric sink."),
+        (
+            "schema_id",
+            "The ID of the schema to which the metric sink belongs. Corresponds to `mz_schemas.id`.",
+        ),
+        ("name", "The name of the metric sink."),
+        (
+            "from_id",
+            "The ID of the companion view the metric sink reads. Corresponds to `mz_views.id`.",
+        ),
+        (
+            "owner_id",
+            "The role ID of the owner of the metric sink. Corresponds to `mz_roles.id`.",
+        ),
+        ("privileges", "The privileges belonging to the metric sink."),
+    ]),
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+    ontology: None,
+});
+
 pub static MZ_ANALYTICS: BuiltinConnection = BuiltinConnection {
     name: "mz_analytics",
     schema: MZ_INTERNAL_SCHEMA,

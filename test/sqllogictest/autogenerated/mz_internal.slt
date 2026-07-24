@@ -819,6 +819,8 @@ mz_materialized_view_refresh_strategies
 mz_materialized_view_refreshes
 mz_mcp_data_product_details
 mz_mcp_data_products
+mz_metric_sinks
+mz_metric_sinks_raw
 mz_mysql_source_tables
 mz_network_policies
 mz_network_policy_rules
