@@ -2199,6 +2199,16 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_metric_sink,
+        desc: "CREATE METRIC SINK",
+        default: false,
+        // Metric sink catalog items are durably persisted like any other item (their type is
+        // re-derived by re-parsing `create_sql` on boot, see `item_type` in durable/objects.rs),
+        // so force the flag on for item parsing. Otherwise boot would fail to re-parse a metric
+        // sink created while the flag was enabled.
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_unlimited_retain_history,
         desc: "Disable limits on RETAIN HISTORY (below 1s default, and 0 disables compaction).",
         default: false,

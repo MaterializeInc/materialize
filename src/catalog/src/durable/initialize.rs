@@ -386,6 +386,9 @@ pub(crate) async fn initialize(
             ObjectType::MaterializedView => mz_audit_log::ObjectType::MaterializedView,
             ObjectType::Source => mz_audit_log::ObjectType::Source,
             ObjectType::Sink => mz_audit_log::ObjectType::Sink,
+            // Metric sinks are audited as sinks (see the `From<CatalogItemType>` impl in
+            // mz_sql::catalog) to avoid a durable audit-log proto bump.
+            ObjectType::MetricSink => mz_audit_log::ObjectType::Sink,
             ObjectType::Index => mz_audit_log::ObjectType::Index,
             ObjectType::Type => mz_audit_log::ObjectType::Type,
             ObjectType::Role => mz_audit_log::ObjectType::Role,

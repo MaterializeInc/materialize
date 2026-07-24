@@ -719,6 +719,31 @@ fn generate_rbac_requirements(
                 ..Default::default()
             }
         }
+        Plan::CreateMetricSink(plan::CreateMetricSinkPlan {
+            name,
+            metric_sink,
+            if_not_exists: _,
+            in_cluster,
+        }) => {
+            let from_item = catalog.resolve_item_id(&metric_sink.from);
+            RbacRequirements {
+                ownership: vec![ObjectId::Item(from_item)],
+                privileges: vec![
+                    (
+                        SystemObjectId::Object(name.qualifiers.clone().into()),
+                        AclMode::CREATE,
+                        role_id,
+                    ),
+                    (
+                        SystemObjectId::Object((*in_cluster).into()),
+                        AclMode::CREATE,
+                        role_id,
+                    ),
+                ],
+                item_usage: &CREATE_ITEM_USAGE,
+                ..Default::default()
+            }
+        }
         Plan::CreateType(plan::CreateTypePlan { name, typ: _ }) => RbacRequirements {
             privileges: vec![(
                 SystemObjectId::Object(name.qualifiers.clone().into()),
@@ -1772,7 +1797,10 @@ fn generate_read_privileges_inner(
                 CatalogItemType::Type | CatalogItemType::Secret | CatalogItemType::Connection => {
                     privileges.push((SystemObjectId::Object(id.into()), AclMode::USAGE, role_id));
                 }
-                CatalogItemType::Sink | CatalogItemType::Index | CatalogItemType::Func => {}
+                CatalogItemType::Sink
+                | CatalogItemType::MetricSink
+                | CatalogItemType::Index
+                | CatalogItemType::Func => {}
             }
         }
     }
@@ -1886,6 +1914,7 @@ pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
         SystemObjectType::Object(ObjectType::MaterializedView) => AclMode::SELECT,
         SystemObjectType::Object(ObjectType::Source) => AclMode::SELECT,
         SystemObjectType::Object(ObjectType::Sink) => EMPTY_ACL_MODE,
+        SystemObjectType::Object(ObjectType::MetricSink) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::Index) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::Type) => AclMode::USAGE,
         SystemObjectType::Object(ObjectType::Role) => EMPTY_ACL_MODE,
@@ -1917,6 +1946,7 @@ const fn default_builtin_object_acl_mode(object_type: ObjectType) -> AclMode {
         | ObjectType::Source => AclMode::SELECT,
         ObjectType::Type | ObjectType::Schema => AclMode::USAGE,
         ObjectType::Sink
+        | ObjectType::MetricSink
         | ObjectType::Index
         | ObjectType::Role
         | ObjectType::Cluster
