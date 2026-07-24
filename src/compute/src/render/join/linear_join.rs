@@ -41,6 +41,7 @@ use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::join::mz_join_core::mz_join_core;
+use crate::sharing::SharedOksEnter;
 use crate::typedefs::{RowRowAgent, RowRowEnter};
 use mz_row_spine::{RowRowBuilder, RowRowColPagedBuilder, RowRowSpine};
 
@@ -195,6 +196,8 @@ enum JoinedFlavor<'scope, T: RenderTimestamp> {
     Local(Arranged<'scope, RowRowAgent<T, Diff>>),
     /// An imported arrangement.
     Trace(Arranged<'scope, RowRowEnter<mz_repr::Timestamp, Diff, T>>),
+    /// A shared-trace arrangement imported into the interactive runtime.
+    SharedTrace(Arranged<'scope, SharedOksEnter<T>>),
 }
 
 impl<'scope, T> Context<'scope, T>
@@ -237,6 +240,10 @@ where
             (Some(ArrangementFlavor::Trace(_gid, oks, errs)), None) => {
                 errors.push(errs.as_collection(|k, _v| k.clone()).enter_region(inner));
                 JoinedFlavor::Trace(oks.enter_region(inner))
+            }
+            (Some(ArrangementFlavor::SharedTrace(_gid, oks, errs)), None) => {
+                errors.push(errs.as_collection(|k, _v| k.clone()).enter_region(inner));
+                JoinedFlavor::SharedTrace(oks.enter_region(inner))
             }
             (_, initial_closure) => {
                 // TODO: extract closure from the first stage in the join plan, should it exist.
@@ -415,52 +422,57 @@ where
             .arrangement(&lookup_key[..])
             .expect("Arrangement absent despite explicit construction");
 
+        // The nine `(stream flavor) x (lookup flavor)` combinations differ only in the two trace
+        // types handed to the generic `differential_join_inner` and the two arrangement values
+        // consumed. This local macro spells one combination. The `SharedTrace` rows exist so an
+        // interactive-runtime join over imported indexes type-checks. At runtime a dataflow's
+        // arrangements are all one runtime's flavor, so the mixed rows never fire, but exhaustive
+        // matching requires them.
+        macro_rules! join {
+            ($stream:expr, $stream_tr:ty, $lookup:expr, $lookup_tr:ty, $errs1:expr) => {{
+                let (oks, errs2) = self
+                    .differential_join_inner::<$stream_tr, $lookup_tr>($stream, $lookup, closure);
+                errors.push($errs1.as_collection(|k, _v| k.clone()));
+                errors.extend(errs2);
+                oks
+            }};
+        }
+
         match joined {
             JoinedFlavor::Collection(_) => {
                 unreachable!("JoinedFlavor::VecCollection variant avoided at top of method");
             }
             JoinedFlavor::Local(local) => match arrangement {
                 ArrangementFlavor::Local(oks, errs1) => {
-                    let (oks, errs2) = self
-                        .differential_join_inner::<RowRowAgent<_, _>, RowRowAgent<_, _>>(
-                            local, oks, closure,
-                        );
-
-                    errors.push(errs1.as_collection(|k, _v| k.clone()));
-                    errors.extend(errs2);
-                    oks
+                    join!(local, RowRowAgent<_, _>, oks, RowRowAgent<_, _>, errs1)
                 }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
-                    let (oks, errs2) = self
-                        .differential_join_inner::<RowRowAgent<_, _>, RowRowEnter<_, _, _>>(
-                            local, oks, closure,
-                        );
-
-                    errors.push(errs1.as_collection(|k, _v| k.clone()));
-                    errors.extend(errs2);
-                    oks
+                    join!(local, RowRowAgent<_, _>, oks, RowRowEnter<_, _, _>, errs1)
+                }
+                ArrangementFlavor::SharedTrace(_gid, oks, errs1) => {
+                    join!(local, RowRowAgent<_, _>, oks, SharedOksEnter<_>, errs1)
                 }
             },
             JoinedFlavor::Trace(trace) => match arrangement {
                 ArrangementFlavor::Local(oks, errs1) => {
-                    let (oks, errs2) = self
-                        .differential_join_inner::<RowRowEnter<_, _, _>, RowRowAgent<_, _>>(
-                            trace, oks, closure,
-                        );
-
-                    errors.push(errs1.as_collection(|k, _v| k.clone()));
-                    errors.extend(errs2);
-                    oks
+                    join!(trace, RowRowEnter<_, _, _>, oks, RowRowAgent<_, _>, errs1)
                 }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
-                    let (oks, errs2) = self
-                        .differential_join_inner::<RowRowEnter<_, _, _>, RowRowEnter<_, _, _>>(
-                            trace, oks, closure,
-                        );
-
-                    errors.push(errs1.as_collection(|k, _v| k.clone()));
-                    errors.extend(errs2);
-                    oks
+                    join!(trace, RowRowEnter<_, _, _>, oks, RowRowEnter<_, _, _>, errs1)
+                }
+                ArrangementFlavor::SharedTrace(_gid, oks, errs1) => {
+                    join!(trace, RowRowEnter<_, _, _>, oks, SharedOksEnter<_>, errs1)
+                }
+            },
+            JoinedFlavor::SharedTrace(trace) => match arrangement {
+                ArrangementFlavor::Local(oks, errs1) => {
+                    join!(trace, SharedOksEnter<_>, oks, RowRowAgent<_, _>, errs1)
+                }
+                ArrangementFlavor::Trace(_gid, oks, errs1) => {
+                    join!(trace, SharedOksEnter<_>, oks, RowRowEnter<_, _, _>, errs1)
+                }
+                ArrangementFlavor::SharedTrace(_gid, oks, errs1) => {
+                    join!(trace, SharedOksEnter<_>, oks, SharedOksEnter<_>, errs1)
                 }
             },
         }

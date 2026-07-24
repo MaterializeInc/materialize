@@ -30,9 +30,13 @@
 //!
 //! Shards are referenced by a string alias; the first command naming an alias
 //! allocates a fresh [`ShardId`] for it. Object ids are raw `u64`s mapped to
-//! [`GlobalId::User`].
+//! [`GlobalId::User`], except an index export declared `transient` (see
+//! [`ExportSpec::Index::transient`]), which maps to [`GlobalId::Transient`] instead
+//! so it routes to a two-runtime `clusterd`'s interactive runtime. Any later command
+//! referencing an id by number resolves it back to the right variant via
+//! `ScriptState::resolve_id`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::Duration;
 
@@ -143,6 +147,17 @@ pub enum ExportSpec {
         on_id: u64,
         /// Columns to arrange by.
         key: Vec<usize>,
+        /// Export `index_id` as [`GlobalId::Transient`] rather than [`GlobalId::User`].
+        ///
+        /// The multiplexer fronting a two-runtime `clusterd` (see
+        /// `mz_compute_client::multiplex`) routes a `CreateDataflow` to the interactive
+        /// runtime only when every export id is transient and the dataflow has no
+        /// subscribe sink; a `User` export always stays on maintenance. Setting this
+        /// is how a script drives a dataflow onto the interactive runtime, e.g. to
+        /// exercise a query dataflow that imports a maintenance index and is itself
+        /// served by the interactive slow path.
+        #[serde(default)]
+        transient: bool,
     },
     /// A persist sink writing the collection to a shard (a materialized view),
     /// verified by reading the shard back with a persist `peek` of the sink id.
@@ -578,6 +593,10 @@ pub struct ScriptState {
     /// Materialized-view sink outputs, by sink global id: the target shard's
     /// metadata, so a `peek` of the sink id reads its shard via a persist peek.
     mv_outputs: BTreeMap<u64, CollectionMetadata>,
+    /// Numeric ids exported as [`GlobalId::Transient`] (via `export ... transient`),
+    /// so [`Self::resolve_id`] can reconstruct the right [`GlobalId`] variant for a
+    /// later command (`schedule`, `peek`, ...) that references the id by number.
+    transient_ids: BTreeSet<u64>,
     /// Next ephemeral id for the count sugar's dataflows.
     next_internal: u64,
 }
@@ -595,6 +614,7 @@ impl ScriptState {
             shards: BTreeMap::new(),
             indexes: BTreeMap::new(),
             mv_outputs: BTreeMap::new(),
+            transient_ids: BTreeSet::new(),
             next_internal: INTERNAL_ID_BASE,
         })
     }
@@ -614,6 +634,20 @@ impl ScriptState {
         GlobalId::User(id)
     }
 
+    /// Resolve a script-level numeric id to the [`GlobalId`] variant it was actually
+    /// exported as: [`GlobalId::Transient`] if `id` was declared with `export ...
+    /// transient`, [`GlobalId::User`] otherwise. Every command that references an id
+    /// by number (`schedule`, `peek`, `allow-compaction`, ...) must resolve it this
+    /// way rather than assuming `GlobalId::User`, so a reference to a transient
+    /// export reaches the runtime that actually owns it.
+    fn resolve_id(&self, id: u64) -> GlobalId {
+        if self.transient_ids.contains(&id) {
+            GlobalId::Transient(id)
+        } else {
+            GlobalId::User(id)
+        }
+    }
+
     /// Count the rows of a registered index at `ts` by running a `count(*)`
     /// `Reduce` over it: build an ephemeral dataflow that index-imports `index_id`,
     /// schedule and hydrate it, then peek its single-row output. An empty result
@@ -629,7 +663,7 @@ impl ScriptState {
         let reduce_id = self.alloc_internal();
         let out_index_id = self.alloc_internal();
         let df = count_over_index(
-            GlobalId::User(index_id),
+            self.resolve_id(index_id),
             GlobalId::User(on_id),
             on_type,
             key,
@@ -810,19 +844,19 @@ impl ScriptState {
                 Ok("ok".to_string())
             }
             Command::Schedule { id } => {
-                self.driver.schedule(GlobalId::User(id))?;
+                self.driver.schedule(self.resolve_id(id))?;
                 Ok("ok".to_string())
             }
             Command::AllowCompaction { id, frontier } => {
                 self.driver.send(ComputeCommand::AllowCompaction {
-                    id: GlobalId::User(id),
+                    id: self.resolve_id(id),
                     frontier: Antichain::from_elem(Timestamp::from(frontier)),
                 })?;
                 Ok("ok".to_string())
             }
             Command::AllowWrites { id } => {
                 self.driver
-                    .send(ComputeCommand::AllowWrites(GlobalId::User(id)))?;
+                    .send(ComputeCommand::AllowWrites(self.resolve_id(id)))?;
                 Ok("ok".to_string())
             }
             Command::AwaitFrontier {
@@ -834,7 +868,7 @@ impl ScriptState {
                 let timeout = Duration::from_secs(timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS));
                 let result = self
                     .driver
-                    .expect_frontier(GlobalId::User(id), Timestamp::from(ts), timeout)
+                    .expect_frontier(self.resolve_id(id), Timestamp::from(ts), timeout)
                     .await;
                 if allow_timeout {
                     // The outcome is intentionally unobserved: emit a fixed token so
@@ -913,7 +947,7 @@ impl ScriptState {
                                 SqlRelationType::from_repr(&on_type),
                             )?;
                             builder.import_index(
-                                GlobalId::User(index_id),
+                                self.resolve_id(index_id),
                                 on_id,
                                 key,
                                 on_type,
@@ -952,14 +986,16 @@ impl ScriptState {
                             index_id,
                             on_id,
                             key,
+                            transient,
                         } => {
+                            let export_id = if transient {
+                                GlobalId::Transient(index_id)
+                            } else {
+                                GlobalId::User(index_id)
+                            };
                             let on_type = builder.get(GlobalId::User(on_id))?.typ();
-                            builder.export_index(
-                                GlobalId::User(index_id),
-                                GlobalId::User(on_id),
-                                key.clone(),
-                            );
-                            new_indexes.push((index_id, on_id, key, on_type));
+                            builder.export_index(export_id, GlobalId::User(on_id), key.clone());
+                            new_indexes.push((index_id, on_id, key, on_type, transient));
                         }
                         ExportSpec::MaterializedView {
                             sink_id,
@@ -1016,7 +1052,7 @@ impl ScriptState {
                 self.driver.submit_dataflow(df)?;
                 // Register only after a successful submit, so a rejected dataflow
                 // leaves no dangling index entry or subscribe buffer.
-                for (index_id, on_id, key, on_type) in new_indexes {
+                for (index_id, on_id, key, on_type, transient) in new_indexes {
                     self.indexes.insert(
                         index_id,
                         IndexEntry {
@@ -1025,6 +1061,9 @@ impl ScriptState {
                             on_type,
                         },
                     );
+                    if transient {
+                        self.transient_ids.insert(index_id);
+                    }
                 }
                 for sink_id in new_subscribes {
                     self.driver.register_subscribe(GlobalId::User(sink_id));
@@ -1046,7 +1085,7 @@ impl ScriptState {
                         metadata: metadata.clone(),
                     },
                     None => PeekTarget::Index {
-                        id: GlobalId::User(id),
+                        id: self.resolve_id(id),
                     },
                 };
                 let rows = self.driver.peek(target, desc, Timestamp::from(ts)).await?;

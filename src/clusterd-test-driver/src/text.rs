@@ -299,7 +299,9 @@ fn parse_usize_list(s: &str) -> anyhow::Result<Vec<usize>> {
 
 /// Parse an `export` sub-command into an [`ExportSpec`]. The `kind=` argument
 /// selects the variant (defaulting to `index`); each kind takes its own arguments.
-fn parse_export(args: &BTreeMap<String, String>) -> anyhow::Result<ExportSpec> {
+/// `flags` carries the sub-command's bare (non-`key=value`) tokens, e.g. `transient`
+/// on an `index` export.
+fn parse_export(args: &BTreeMap<String, String>, flags: &[String]) -> anyhow::Result<ExportSpec> {
     let on_id = req_u64(args, "on")?;
     Ok(
         match args.get("kind").map(String::as_str).unwrap_or("index") {
@@ -307,6 +309,7 @@ fn parse_export(args: &BTreeMap<String, String>) -> anyhow::Result<ExportSpec> {
                 index_id: req_u64(args, "index")?,
                 on_id,
                 key: parse_usize_list(req(args, "key")?)?,
+                transient: flags.iter().any(|f| f == "transient"),
             },
             "materialized-view" => ExportSpec::MaterializedView {
                 sink_id: req_u64(args, "sink")?,
@@ -384,7 +387,7 @@ fn parse_create_dataflow(
     let mut builds = Vec::new();
     let mut exports = Vec::new();
     for (header, sub_body) in group(body)? {
-        let (verb, args, _flags) = parse_header(&header.text)?;
+        let (verb, args, flags) = parse_header(&header.text)?;
         match verb.as_str() {
             "import" => {
                 if let Some(index_id) = args.get("index") {
@@ -409,7 +412,7 @@ fn parse_create_dataflow(
                     expr: body_text(sub_body),
                 });
             }
-            "export" => exports.push(parse_export(&args)?),
+            "export" => exports.push(parse_export(&args, &flags)?),
             other => bail!("unknown `create-dataflow` sub-command `{other}`"),
         }
     }
@@ -637,7 +640,8 @@ mod tests {
                 exports: vec![ExportSpec::Index {
                     index_id: 2001,
                     on_id: 2000,
-                    key: vec![0]
+                    key: vec![0],
+                    transient: false,
                 }],
                 as_of: 0,
                 optimize: false,
@@ -653,6 +657,26 @@ mod tests {
             optimized,
             Command::CreateDataflow { optimize: true, .. }
         ));
+    }
+
+    /// The bare `transient` flag on an `export kind=index` sub-command sets
+    /// [`ExportSpec::Index::transient`], the knob that routes a `create-dataflow` onto
+    /// the interactive runtime in a two-runtime `clusterd`.
+    #[mz_ore::test]
+    fn parses_transient_index_export() {
+        let input = "create-dataflow name=q as-of=0\n  import index=1001\n  build id=2000\n    Reduce aggregates=[count(*)]\n      Get u1000\n  export index=2001 on=2000 key=[0] transient";
+        let Command::CreateDataflow { exports, .. } = parse_command(input).unwrap() else {
+            panic!("expected a CreateDataflow command");
+        };
+        assert_eq!(
+            exports,
+            vec![ExportSpec::Index {
+                index_id: 2001,
+                on_id: 2000,
+                key: vec![0],
+                transient: true,
+            }]
+        );
     }
 
     /// `create-dataflow` parses the sink export kinds: a materialized-view sink with

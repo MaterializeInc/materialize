@@ -41,8 +41,75 @@ use tracing::{info, trace, warn};
 use uuid::Uuid;
 
 use crate::command_channel;
-use crate::compute_state::{ActiveComputeState, ComputeState, ReportedFrontier};
+use crate::compute_state::{ActiveComputeState, ComputeState, PendingPeek, ReportedFrontier};
 use crate::metrics::{ComputeMetrics, WorkerMetrics};
+use crate::sharing::ArrangementSharingRegistry;
+
+/// Which compute runtime a `serve` call drives.
+///
+/// A clusterd process runs a single `Solo` runtime by default. When an interactive runtime is
+/// configured, the process instead runs a `Maintenance` and an `Interactive` runtime side by side.
+/// The three roles share per-process resources (persist cache, arrangement sharing registry,
+/// metrics registry). The role distinguishes them so that only the globals-owning runtime runs the
+/// non-idempotent process-global initializers, and so metric series and log spans do not collide.
+///
+/// `Solo` exists so the single-runtime default stays behaviorally identical to a deployment without
+/// a second runtime: no `role` metric label, and publication into the sharing registry gated on the
+/// dyncfg alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ComputeRuntimeRole {
+    /// The sole runtime of a single-runtime process. Owns index maintenance and the process-global
+    /// initializers.
+    Solo,
+    /// The maintenance runtime of a two-runtime process. Owns index maintenance and the
+    /// process-global initializers.
+    Maintenance,
+    /// The interactive runtime of a two-runtime process. Shares the process globals owned by
+    /// maintenance and serves reads from the sharing registry.
+    Interactive,
+}
+
+impl ComputeRuntimeRole {
+    /// The `role` metric/log label for this role, or `None` for `Solo`.
+    ///
+    /// `Solo` omits the label so a single-runtime deployment registers exactly as it did before a
+    /// second runtime existed, keeping exact-match dashboards and alerts unchanged.
+    pub fn label(self) -> Option<&'static str> {
+        match self {
+            ComputeRuntimeRole::Solo => None,
+            ComputeRuntimeRole::Maintenance => Some("maintenance"),
+            ComputeRuntimeRole::Interactive => Some("interactive"),
+        }
+    }
+
+    /// Whether this role runs the non-idempotent, process-global initializers.
+    ///
+    /// `Solo` and `Maintenance` run them. The interactive runtime shares the same process and
+    /// inherits the globals maintenance installs, so re-running them would either double-apply a
+    /// non-idempotent effect or race maintenance.
+    pub fn owns_process_globals(self) -> bool {
+        matches!(
+            self,
+            ComputeRuntimeRole::Solo | ComputeRuntimeRole::Maintenance
+        )
+    }
+
+    /// Whether this role publishes its rendered indexes into the sharing registry regardless of the
+    /// `enable_index_arrangement_sharing` dyncfg.
+    ///
+    /// `Maintenance` publishes its maintained indexes, which its interactive peer reads exclusively
+    /// from the registry. `Interactive` publishes its transient query outputs, which the result
+    /// peeks over them likewise read from the registry and rely on for seal (`note_frontier`)
+    /// notifications. In both cases coupling publication to the runtime rather than the dyncfg keeps
+    /// a disabled dyncfg from stranding an interactive read (a peek that would otherwise block until
+    /// it times out). `Solo` has no registry peer, so it keeps the original dyncfg-only gate.
+    pub fn publishes_unconditionally(self) -> bool {
+        matches!(
+            self,
+            ComputeRuntimeRole::Maintenance | ComputeRuntimeRole::Interactive
+        )
+    }
+}
 
 /// Caller-provided configuration for compute.
 #[derive(Clone, Debug)]
@@ -63,8 +130,12 @@ pub(crate) type StorageTimelyLogReader =
 /// Configures the server with compute-specific metrics.
 #[derive(Clone)]
 struct Config {
+    /// Which of the process's compute runtimes this is.
+    pub role: ComputeRuntimeRole,
     /// `persist` client cache.
     pub persist_clients: Arc<PersistClientCache>,
+    /// A per-process registry of published index arrangements, shared across all workers.
+    pub sharing_registry: ArrangementSharingRegistry,
     /// Context necessary for rendering txn-wal operators.
     pub txns_ctx: TxnsContext,
     /// A process-global handle to tracing configuration.
@@ -84,8 +155,10 @@ struct Config {
 /// Initiates a timely dataflow computation, processing compute commands.
 pub async fn serve(
     timely_config: TimelyConfig,
+    role: ComputeRuntimeRole,
     metrics_registry: &MetricsRegistry,
     persist_clients: Arc<PersistClientCache>,
+    sharing_registry: ArrangementSharingRegistry,
     txns_ctx: TxnsContext,
     tracing_handle: Arc<TracingHandle>,
     context: ComputeInstanceContext,
@@ -108,10 +181,12 @@ pub async fn serve(
     mz_timely_util::pool_config::metrics::register(metrics_registry);
 
     let config = Config {
+        role,
         persist_clients,
+        sharing_registry,
         txns_ctx,
         tracing_handle,
-        metrics: ComputeMetrics::register_with(metrics_registry),
+        metrics: ComputeMetrics::register_with(metrics_registry, role),
         context,
         metrics_registry: metrics_registry.clone(),
         workers_per_process,
@@ -212,6 +287,17 @@ impl ResponseSender {
         self.nonce = Some(nonce);
     }
 
+    /// Builds a `ResponseSender` with the nonce pre-initialized, for tests that drive an
+    /// `ActiveComputeState` outside the full `serve` protocol.
+    #[cfg(test)]
+    pub(crate) fn for_test(inner: mpsc::UnboundedSender<(ComputeResponse, Uuid)>) -> Self {
+        Self {
+            inner,
+            worker_id: 0,
+            nonce: Some(Uuid::nil()),
+        }
+    }
+
     /// Send a compute response.
     pub fn send(&self, response: ComputeResponse) -> Result<(), SendError<ComputeResponse>> {
         let nonce = self.nonce.expect("nonce must be initialized");
@@ -228,6 +314,8 @@ impl ResponseSender {
 /// Much of this state can be viewed as local variables for the worker thread,
 /// holding state that persists across function calls.
 struct Worker<'w> {
+    /// Which of the process's compute runtimes this worker belongs to.
+    role: ComputeRuntimeRole,
     /// The underlying Timely worker.
     timely_worker: &'w mut TimelyWorker,
     /// The channel over which commands are received.
@@ -240,6 +328,8 @@ struct Worker<'w> {
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers
     persist_clients: Arc<PersistClientCache>,
+    /// A per-process registry of published index arrangements, shared across all workers.
+    sharing_registry: ArrangementSharingRegistry,
     /// Context necessary for rendering txn-wal operators.
     txns_ctx: TxnsContext,
     /// A process-global handle to tracing configuration.
@@ -258,6 +348,18 @@ impl ClusterSpec for Config {
     type Response = ComputeResponse;
 
     const NAME: &str = "compute";
+
+    fn cluster_name(&self) -> std::borrow::Cow<'static, str> {
+        match self.role {
+            // The solo and maintenance runtimes keep the bare "compute" span name so single-runtime
+            // logs are unchanged. The interactive runtime gets a distinct name so the two runtimes
+            // of a two-runtime process are separable.
+            ComputeRuntimeRole::Solo | ComputeRuntimeRole::Maintenance => {
+                std::borrow::Cow::Borrowed(Self::NAME)
+            }
+            ComputeRuntimeRole::Interactive => std::borrow::Cow::Borrowed("compute-interactive"),
+        }
+    }
 
     fn run_worker(
         &self,
@@ -290,12 +392,14 @@ impl ClusterSpec for Config {
         spawn_channel_adapter(client_rx, cmd_tx, resp_rx, worker_id);
 
         Worker {
+            role: self.role,
             timely_worker,
             command_rx: CommandReceiver::new(cmd_rx, worker_id),
             response_tx: ResponseSender::new(resp_tx, worker_id),
             metrics,
             context: self.context.clone(),
             persist_clients: Arc::clone(&self.persist_clients),
+            sharing_registry: self.sharing_registry.clone(),
             txns_ctx: self.txns_ctx.clone(),
             compute_state: None,
             tracing_handle: Arc::clone(&self.tracing_handle),
@@ -414,7 +518,31 @@ impl<'w> Worker<'w> {
 
             self.handle_pending_commands()?;
 
+            let role = self.role;
+            let worker_index = self.timely_worker.index();
             if let Some(mut compute_state) = self.activate_compute() {
+                if role == ComputeRuntimeRole::Interactive {
+                    // Notification-driven shared-index resolution: re-examine only the pending work
+                    // whose dependency was marked dirty (publication or seal) since the last drain.
+                    // An empty dirty set means the worker woke for a command or its maintenance
+                    // tick, and no pending shared-index work is touched. This replaces the
+                    // every-step scan for index peeks, which the interactive runtime serves from
+                    // the sharing registry via `pending_work`, not `pending_peeks`.
+                    let dirty = compute_state
+                        .compute_state
+                        .sharing_registry
+                        .take_dirty(worker_index);
+                    if !dirty.is_empty() {
+                        compute_state.resolve_dirty(dirty);
+                    }
+                }
+                // Retire ready peeks from `pending_peeks`. Fast-path persist peeks
+                // (`PendingPeek::Persist`) land here on every runtime, including the interactive
+                // one, and their persist-read task wakes the worker through its activator. That
+                // wake has no dirty signal in the sharing registry, so the interactive runtime must
+                // still scan `pending_peeks` here or the peek is enqueued once and never retired.
+                // The scan is cheap: on the interactive runtime `pending_peeks` holds only
+                // in-flight persist peeks, since index peeks route through `resolve_dirty` above.
                 compute_state.process_peeks();
                 compute_state.process_subscribes();
                 compute_state.process_copy_tos();
@@ -432,7 +560,9 @@ impl<'w> Worker<'w> {
     fn handle_command(&mut self, cmd: ComputeCommand) {
         if matches!(&cmd, ComputeCommand::CreateInstance(_)) {
             self.compute_state = Some(ComputeState::new(
+                self.role,
                 Arc::clone(&self.persist_clients),
+                self.sharing_registry.clone(),
                 self.txns_ctx.clone(),
                 self.metrics.clone(),
                 Arc::clone(&self.tracing_handle),
@@ -441,6 +571,17 @@ impl<'w> Worker<'w> {
                 self.workers_per_process,
                 self.storage_log_reader.take(),
             ));
+
+            // The interactive runtime resolves deferred peeks on notification from the sharing
+            // registry. Register this worker's cross-thread waker so a publication or seal in the
+            // registry can push it back to re-examine pending work. The empty operator address
+            // targets the worker's scheduler, matching the persist-peek wake path. Only the
+            // interactive runtime defers work this way; the maintenance runtime keeps its poll.
+            if self.role == ComputeRuntimeRole::Interactive {
+                let activator = self.timely_worker.sync_activator_for([].into());
+                self.sharing_registry
+                    .register_waker(self.timely_worker.index(), activator);
+            }
         }
         self.activate_compute().unwrap().handle_compute_command(cmd);
     }
@@ -690,6 +831,16 @@ impl<'w> Worker<'w> {
                 }
             }
 
+            // Remove all interactive deferred work, which belongs to the reconciled-away client
+            // connection. Its peeks live here, not in `pending_peeks`.
+            compute_state.dep_index.clear();
+            for (_, peek) in std::mem::take(&mut compute_state.pending_work) {
+                // Log dropping the peek request, reusing `PendingPeek`'s log event.
+                if let Some(logger) = compute_state.compute_logger.as_mut() {
+                    logger.log(&PendingPeek::IndexShared(peek).as_log_event(false));
+                }
+            }
+
             for (&id, collection) in compute_state.collections.iter_mut() {
                 // Adjust reported frontiers:
                 //  * For dataflows we continue to use, reset to ensure we report something not
@@ -851,4 +1002,103 @@ fn spawn_channel_adapter(
             }
         },
     );
+}
+
+#[cfg(test)]
+mod two_runtime_tests {
+    use std::sync::Arc;
+
+    use mz_cluster_client::client::TimelyConfig;
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_ore::tracing::TracingHandle;
+    use mz_persist_client::cache::PersistClientCache;
+    use mz_secrets::{InMemorySecretsController, SecretsController};
+    use mz_storage_types::connections::ConnectionContext;
+    use mz_txn_wal::operator::TxnsContext;
+
+    use super::{ComputeInstanceContext, ComputeRuntimeRole, serve};
+    use crate::sharing::ArrangementSharingRegistry;
+
+    /// A single-worker, single-process Timely cluster. `create_sockets` binds an ephemeral listener
+    /// (port 0) but, with one peer, never connects out, so two such runtimes boot in one process
+    /// without a port collision.
+    fn single_process_config() -> TimelyConfig {
+        TimelyConfig {
+            workers: 1,
+            process: 0,
+            addresses: vec!["127.0.0.1:0".to_string()],
+            arrangement_exert_proportionality: 0,
+            enable_zero_copy: false,
+            enable_zero_copy_lgalloc: false,
+            zero_copy_limit: None,
+        }
+    }
+
+    fn test_context() -> ComputeInstanceContext {
+        ComputeInstanceContext {
+            scratch_directory: None,
+            worker_core_affinity: false,
+            connection_context: ConnectionContext::for_tests(
+                InMemorySecretsController::new().reader(),
+            ),
+        }
+    }
+
+    /// Boots the maintenance and interactive compute runtimes in one process via the real `serve`
+    /// path, sharing one metrics registry and one arrangement-sharing registry. Proves the second
+    /// `serve` does not panic on duplicate metric registration (the role label keeps the series
+    /// distinct) and that both runtimes yield working client builders.
+    ///
+    /// The end-to-end "read a maintenance-rendered index from the interactive runtime through the
+    /// shared registry" is proven by the bare-Timely harness in `crate::sharing` (task 2c0) and,
+    /// later, the 2e peek test. Driving two full `serve` stacks to a rendered `CreateInstance` here
+    /// would require replaying the whole controller protocol, so this test proves boot and metric
+    /// non-collision instead.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+    async fn two_runtimes_boot_sharing_one_registry() {
+        let metrics_registry = MetricsRegistry::new();
+        let sharing_registry = ArrangementSharingRegistry::new();
+        let persist_clients = Arc::new(PersistClientCache::new_no_metrics());
+        let txns_ctx = TxnsContext::default();
+        let tracing_handle = Arc::new(TracingHandle::disabled());
+
+        let maintenance = serve(
+            single_process_config(),
+            ComputeRuntimeRole::Maintenance,
+            &metrics_registry,
+            Arc::clone(&persist_clients),
+            sharing_registry.clone(),
+            txns_ctx.clone(),
+            Arc::clone(&tracing_handle),
+            test_context(),
+            Vec::new(),
+        )
+        .await
+        .expect("maintenance runtime boots");
+
+        let interactive = serve(
+            single_process_config(),
+            ComputeRuntimeRole::Interactive,
+            &metrics_registry,
+            Arc::clone(&persist_clients),
+            sharing_registry.clone(),
+            txns_ctx,
+            Arc::clone(&tracing_handle),
+            test_context(),
+            Vec::new(),
+        )
+        .await
+        .expect("interactive runtime boots on the same registry");
+
+        // Building a client from each builder proves both runtimes wired up their worker channels.
+        let maintenance_client = maintenance();
+        let interactive_client = interactive();
+
+        // The worker threads created by `serve` loop forever, so dropping the containers would join
+        // and hang. Leak the builders and clients: the test process reclaims them on exit.
+        std::mem::forget(maintenance);
+        std::mem::forget(interactive);
+        std::mem::forget(maintenance_client);
+        std::mem::forget(interactive_client);
+    }
 }
