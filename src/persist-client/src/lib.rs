@@ -673,6 +673,7 @@ impl PersistClient {
             batches,
             should_fetch_part,
             memory_budget_bytes,
+            Arc::clone(&self.isolated_runtime),
         )
     }
 
