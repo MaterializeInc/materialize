@@ -1402,6 +1402,103 @@ scale=1,workers=1
 > DROP CLUSTER cc_handoff3
 > DROP TABLE cc_handoff3_t
 
+# ----- Break-glass cleanup of a stranded graceful reconfiguration -----
+#
+# Disabling the controller mid-flight strands a graceful reconfiguration: the
+# controller is the only component that drives a reconfiguration record to a
+# terminal status, so once it is off the in-progress record and the overlap
+# replica it provisioned are left in place with nothing to retire them. The
+# cleanup lever is a config-shape ALTER to a new size. With the controller off
+# it takes the legacy path, which drops the entire observed owned replica set by
+# id (baseline plus stranded overlap), recreates a dense r1..rN at the new size,
+# and cancels the carried record in the same transaction. An ALTER back to the
+# realized shape is not a lever here: it is byte-identical to the realized
+# config, so the sequencer short-circuits it as a no-op and the record survives.
+#
+# A sleeping materialized view pins hydration on every replica of the cluster,
+# baseline and overlap alike (the same mz_sleep pattern used above), so the
+# target set never hydrates and the reconfiguration cannot cut over. The
+# in-flight state then holds still while we disable the controller and observe
+# the stranding, no matter the tick cadence.
+
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM SET enable_cluster_controller = true
+ALTER SYSTEM SET unsafe_enable_unstable_dependencies = true
+
+> CREATE CLUSTER cc_strand (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
+
+> CREATE TABLE cc_strand_t (id int)
+> INSERT INTO cc_strand_t VALUES (1)
+
+> CREATE MATERIALIZED VIEW cc_strand_slow IN CLUSTER cc_strand AS
+  SELECT mz_unsafe.mz_sleep(id * 3600) AS s FROM cc_strand_t
+
+# Start a graceful reconfiguration to a new size. The controller writes the
+# in-progress record and brings up an overlap replica at the target shape
+# alongside the baseline replica, but the sleeping view keeps it from hydrating,
+# so no cut-over can happen. Wait until both shapes are up: baseline (workers=1)
+# and the target-shape overlap (workers=2) run at once while the realized size
+# stays at workers=1.
+> ALTER CLUSTER cc_strand SET (SIZE 'scale=1,workers=2')
+
+> SELECT r.size, count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_strand' GROUP BY r.size
+scale=1,workers=1 1
+scale=1,workers=2 1
+
+> SELECT recon.status FROM mz_internal.mz_cluster_reconfigurations recon JOIN mz_clusters ON mz_clusters.id = recon.cluster_id WHERE mz_clusters.name = 'cc_strand'
+in-progress
+
+# Break-glass: disable the controller mid-flight. Nothing now drives the record.
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM SET enable_cluster_controller = false
+
+# The stranding holds (the controller is frozen): still two replicas across the
+# two shapes, the realized size still at workers=1, and the record still
+# in-progress with nothing on its way to retire either.
+> SELECT r.size, count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_strand' GROUP BY r.size
+scale=1,workers=1 1
+scale=1,workers=2 1
+> SELECT size FROM mz_clusters WHERE name = 'cc_strand'
+scale=1,workers=1
+> SELECT recon.status FROM mz_internal.mz_cluster_reconfigurations recon JOIN mz_clusters ON mz_clusters.id = recon.cluster_id WHERE mz_clusters.name = 'cc_strand'
+in-progress
+
+# Not the lever: an ALTER back to the realized shape is byte-identical, so with
+# the controller off the sequencer short-circuits it as a no-op. The record
+# stays in-progress and the overlap replica is not retired.
+> ALTER CLUSTER cc_strand SET (SIZE 'scale=1,workers=1')
+> SELECT recon.status FROM mz_internal.mz_cluster_reconfigurations recon JOIN mz_clusters ON mz_clusters.id = recon.cluster_id WHERE mz_clusters.name = 'cc_strand'
+in-progress
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_strand'
+2
+
+# The lever: a config-shape ALTER to a genuinely new size. The legacy path drops
+# the whole owned replica set (baseline plus stranded overlap) and recreates a
+# dense r1..rN at the new size, cancelling the carried record in the same
+# transaction.
+> ALTER CLUSTER cc_strand SET (SIZE 'scale=1,workers=4')
+
+# Desired end state: realized size is the new one, exactly one replica named r1
+# at that size (no orphan left behind), and the stranded record is terminal.
+> SELECT size FROM mz_clusters WHERE name = 'cc_strand'
+scale=1,workers=4
+> SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'cc_strand'
+cc_strand r1 scale=1,workers=4
+> SELECT recon.status FROM mz_internal.mz_cluster_reconfigurations recon JOIN mz_clusters ON mz_clusters.id = recon.cluster_id WHERE mz_clusters.name = 'cc_strand'
+cancelled
+
+# The lifecycle is audited: the record was started, then cancelled by the
+# break-glass resize. No finalize or timeout ever ran.
+> SELECT row_number() OVER (ORDER BY id), details->>'transition' FROM mz_catalog.mz_audit_events WHERE event_type = 'alter' AND object_type = 'cluster' AND details->>'cluster_name' = 'cc_strand' AND details->>'transition' IS NOT NULL
+1 started
+2 cancelled
+
+> DROP CLUSTER cc_strand CASCADE
+> DROP TABLE cc_strand_t
+
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM SET unsafe_enable_unstable_dependencies = false
+
 # Restore pristine server state (including the tick-interval override).
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM RESET enable_cluster_controller
