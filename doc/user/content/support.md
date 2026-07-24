@@ -5,6 +5,8 @@ menu:
   main:
     parent: 'about'
     weight: 10
+aliases:
+  - /self-managed/v25.2/support/
 ---
 
 Whether you're building, scaling, or debugging, we're here to help.

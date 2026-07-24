@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 use tracing::{debug, warn};
 
 use crate::AdapterError;
+use crate::coord::sequencer::cancel_carried_reconfiguration;
 use crate::coord::{Coordinator, Message};
 
 const POLICIES: &[&str] = &[REFRESH_POLICY_NAME];
@@ -110,7 +111,17 @@ impl SchedulingDecision {
 impl Coordinator {
     #[mz_ore::instrument(level = "debug")]
     /// Call each scheduling policy.
+    ///
+    /// No-ops when the cluster controller owns the replica set
+    /// ([`ENABLE_CLUSTER_CONTROLLER`]): the controller's `OnRefreshStrategy` is
+    /// then the sole authority over scheduled clusters, so the legacy policy must
+    /// not also toggle their replication factor (two writers of the replica set is
+    /// not allowed). The legacy path remains in place to drive scheduling while the
+    /// gate is off.
     pub(crate) async fn check_scheduling_policies(&self) {
+        if ENABLE_CLUSTER_CONTROLLER.get(self.catalog().system_config().dyncfgs()) {
+            return;
+        }
         // (So far, we have only this one policy.)
         self.check_refresh_policy();
     }
@@ -283,6 +294,14 @@ impl Coordinator {
         &mut self,
         decisions: Vec<(&'static str, Vec<(ClusterId, SchedulingDecision)>)>,
     ) {
+        // When the cluster controller owns the replica set it is the sole writer
+        // for scheduled clusters. Drop any legacy decisions still in flight from a
+        // background task spawned before the gate flipped on, so the two never
+        // contend. (`check_scheduling_policies` already stops spawning new ones.)
+        if ENABLE_CLUSTER_CONTROLLER.get(self.catalog().system_config().dyncfgs()) {
+            return;
+        }
+
         let start_time = Instant::now();
 
         // 1. Add the received decisions to `cluster_scheduling_decisions`.
@@ -338,56 +357,68 @@ impl Coordinator {
             // before we turn off a cluster, to avoid spuriously turning off a cluster and possibly
             // losing a hydrated state.
             if POLICIES.iter().all(|policy| decisions.contains_key(policy)) {
-                // A reconfiguration in flight owns the replication-factor
-                // transition, and this path bypasses the sequencer's guard
-                // against racing it, so it defers itself: the decision
-                // reapplies once the record settles. Only while the controller
-                // owns the cluster, though. With the gate off nothing settles
-                // the record, and the legacy write below retains it as
-                // cancelled instead of deferring forever behind an orphan.
-                let controller_owns = ENABLE_CLUSTER_CONTROLLER
-                    .get(self.catalog().system_config().dyncfgs())
-                    && cluster_id.is_user();
-                let reconfiguration_in_flight = self
-                    .get_managed_cluster_config(cluster_id)
-                    .is_some_and(|managed| {
-                        managed
-                            .reconfiguration
-                            .as_ref()
-                            .is_some_and(|record| record.is_in_progress())
-                    });
-                if controller_owns && reconfiguration_in_flight {
-                    debug!(
-                        "handle_scheduling_decisions: deferring cluster {}, \
-                        a graceful reconfiguration is in flight",
-                        cluster_id
-                    );
-                    continue;
-                }
                 // Check whether the cluster's state matches the needed state.
                 // If any policy says On, then we need a replica.
                 let needs_replica = decisions
                     .values()
                     .map(|decision| decision.cluster_on())
                     .contains(&true);
-                let cluster_config = self.catalog().get_cluster(cluster_id).config.clone();
+                let cluster = self.catalog().get_cluster(cluster_id);
+                let cluster_name = cluster.name().to_string();
+                let cluster_config = cluster.config.clone();
+                // NOTE: the durable replication factor is not a reliable
+                // on/off signal here. The cluster controller runs a scheduled
+                // cluster's replica while holding the factor at 0, so after a
+                // controller gate-off the factor can disagree with the replica
+                // set that actually exists. Decide from the physical replicas,
+                // with the same exclusions as the controller's ownership test
+                // (`ObservedReplica::owned_shape`): internal and billed-as
+                // replicas are manually managed, pending ones belong to an
+                // in-flight reconfiguration. In a pure legacy world the factor
+                // and the replica set always agree, so both signals give the
+                // same answer there.
+                let owned_replicas: Vec<_> = cluster
+                    .replicas()
+                    .filter(|r| {
+                        !r.config.location.internal()
+                            && r.config.location.billed_as().is_none()
+                            && !r.config.location.pending()
+                    })
+                    .map(|r| r.replica_id)
+                    .collect();
+                let has_pending_replica = cluster.replicas().any(|r| r.config.location.pending());
                 let mut new_config = cluster_config.clone();
                 let ClusterVariant::Managed(managed_config) = &mut new_config.variant else {
                     panic!("cleaned up unmanaged clusters above");
                 };
-                let has_replica = managed_config.replication_factor > 0; // Is it On?
-                if needs_replica != has_replica {
-                    // Turn the cluster On or Off.
+                let replication_factor = managed_config.replication_factor;
+                let has_replica = !owned_replicas.is_empty(); // Is it On?
+                let reason = crate::catalog::ReplicaCreateDropReason::ClusterScheduling(
+                    decisions.values().cloned().collect(),
+                );
+                if has_pending_replica {
+                    // A graceful reconfiguration owns the replica set until it
+                    // finalizes. The turn-on alter below would reject this
+                    // case itself, the direct drop and adopt paths must not
+                    // race the finalization either. This covers only legacy
+                    // `-pending` replicas: controller-created overlap replicas
+                    // are not pending and are handled by the adopt and
+                    // turn-off branches instead.
+                    debug!(
+                        "handle_scheduling_decisions skipped cluster {} because it is \
+                        undergoing a graceful reconfiguration",
+                        cluster_id
+                    );
+                } else if needs_replica && !has_replica {
+                    // Turn the cluster On.
                     altered_a_cluster = true;
-                    managed_config.replication_factor = if needs_replica { 1 } else { 0 };
+                    managed_config.replication_factor = 1;
                     if let Err(e) = self
                         .sequence_alter_cluster_managed_to_managed(
                             None,
                             cluster_id,
                             new_config.clone(),
-                            crate::catalog::ReplicaCreateDropReason::ClusterScheduling(
-                                decisions.values().cloned().collect(),
-                            ),
+                            reason,
                             AlterClusterPlanStrategy::None,
                         )
                         .await
@@ -408,6 +439,103 @@ impl Coordinator {
                                 e
                             );
                         }
+                    }
+                } else if !needs_replica && has_replica {
+                    // Turn the cluster Off. Drop the replicas by id rather
+                    // than altering the factor down: a replica handed over by
+                    // the controller exists while the factor is already 0 (an
+                    // alter to 0 would be a no-op there), and it may not sit
+                    // at the canonical `r<N>` name a factor-derived drop
+                    // would look for.
+                    altered_a_cluster = true;
+                    let drops = owned_replicas
+                        .into_iter()
+                        .map(|replica_id| {
+                            crate::catalog::DropObjectInfo::ClusterReplica((
+                                cluster_id,
+                                replica_id,
+                                reason.clone(),
+                            ))
+                        })
+                        .collect();
+                    managed_config.replication_factor = 0;
+                    let reconfiguration_audit = cancel_carried_reconfiguration(&mut new_config);
+                    let mut ops = vec![crate::catalog::Op::DropObjects(drops)];
+                    // After a controller handoff the factor is already 0 and
+                    // there is usually no record to retire, so the config
+                    // write would be a no-op. Push it only when something
+                    // actually changed.
+                    if new_config != cluster_config || reconfiguration_audit.is_some() {
+                        ops.push(crate::catalog::Op::UpdateClusterConfig {
+                            id: cluster_id,
+                            name: cluster_name,
+                            config: new_config.clone(),
+                            reconfiguration_audit,
+                            burst_audit: None,
+                        });
+                    }
+                    if let Err(e) = self.catalog_transact(None, ops).await {
+                        soft_panic_or_log!(
+                            "handle_scheduling_decisions couldn't turn off cluster {}. \
+                             Old config: {:?}, \
+                             New config: {:?}, \
+                             Error: {}",
+                            cluster_id,
+                            cluster_config,
+                            new_config,
+                            e
+                        );
+                    }
+                } else if needs_replica && replication_factor == 0 {
+                    // The controller left in-window replicas behind on
+                    // gate-off (`has_replica` is true here). Adopt exactly
+                    // one: the scheduled-cluster invariant caps the factor at
+                    // 1 (the planner refuses higher, and `unplan` asserts it),
+                    // so the lowest-id replica is kept, the factor is aligned
+                    // with it so later decisions and user `ALTER`s see a
+                    // consistent on-state, and any surplus is retired in the
+                    // same transaction. Surplus replicas are possible when a
+                    // pre-schedule reconfiguration's overlap replica was live
+                    // at gate-off, those are not marked pending. Nothing is
+                    // created.
+                    altered_a_cluster = true;
+                    let mut owned_replicas = owned_replicas;
+                    owned_replicas.sort_unstable();
+                    let surplus = owned_replicas.split_off(1);
+                    managed_config.replication_factor = 1;
+                    let reconfiguration_audit = cancel_carried_reconfiguration(&mut new_config);
+                    let mut ops = Vec::new();
+                    if !surplus.is_empty() {
+                        let drops = surplus
+                            .into_iter()
+                            .map(|replica_id| {
+                                crate::catalog::DropObjectInfo::ClusterReplica((
+                                    cluster_id,
+                                    replica_id,
+                                    reason.clone(),
+                                ))
+                            })
+                            .collect();
+                        ops.push(crate::catalog::Op::DropObjects(drops));
+                    }
+                    ops.push(crate::catalog::Op::UpdateClusterConfig {
+                        id: cluster_id,
+                        name: cluster_name,
+                        config: new_config.clone(),
+                        reconfiguration_audit,
+                        burst_audit: None,
+                    });
+                    if let Err(e) = self.catalog_transact(None, ops).await {
+                        soft_panic_or_log!(
+                            "handle_scheduling_decisions couldn't adopt replicas of cluster {}. \
+                             Old config: {:?}, \
+                             New config: {:?}, \
+                             Error: {}",
+                            cluster_id,
+                            cluster_config,
+                            new_config,
+                            e
+                        );
                     }
                 }
             } else {

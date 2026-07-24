@@ -16,7 +16,7 @@ export type OfflineEvent = {
   replicaId: string;
   occurredAt: string;
   status: string;
-  reason: string;
+  reason: string | null;
 };
 
 export type Bucket = {
@@ -193,6 +193,36 @@ export function rebucketUtilizationSamples(
 
   rows.sort((a, b) => a.bucketStart.getTime() - b.bucketStart.getTime());
   return rows;
+}
+
+/**
+ * Attach offline events to their (replica, bucket) rows. The un-binned 3h base
+ * carries no status columns, so the <=3h tier fetches events separately and
+ * merges them here. Events with no matching bucket are dropped, like the
+ * binned views' LEFT JOIN from the metrics-derived buckets.
+ */
+export function attachOfflineEvents(
+  rows: UtilizationBucketRow[],
+  events: OfflineEvent[],
+  bucketSizeMs: number,
+): UtilizationBucketRow[] {
+  if (events.length === 0) return rows;
+  const eventsByBucket = new Map<string, OfflineEvent[]>();
+  for (const event of events) {
+    const bucketStartMs =
+      Math.floor(new Date(event.occurredAt).getTime() / bucketSizeMs) *
+      bucketSizeMs;
+    const key = `${event.replicaId} ${bucketStartMs}`;
+    const bucketEvents = eventsByBucket.get(key) ?? [];
+    bucketEvents.push(event);
+    eventsByBucket.set(key, bucketEvents);
+  }
+  return rows.map((row) => {
+    const bucketEvents = eventsByBucket.get(
+      `${row.replicaId} ${row.bucketStart.getTime()}`,
+    );
+    return bucketEvents ? { ...row, offlineEvents: bucketEvents } : row;
+  });
 }
 
 /**

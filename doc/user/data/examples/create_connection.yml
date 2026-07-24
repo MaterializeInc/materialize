@@ -381,8 +381,10 @@
       description: |
         *Value:* `text`. Required.
 
-        The name of the AWS Glue Schema Registry to read schemas from (for
-        example, `default-registry`). Must not be empty.
+        The name of the AWS Glue Schema Registry to use (for example,
+        `default-registry`). Sources read schemas from the registry, and sinks
+        register schemas in it. The registry must already exist. Must not be
+        empty.
     - name: "`WITH (<with_options>)`"
       description: |
         The following `<with_options>` are supported:

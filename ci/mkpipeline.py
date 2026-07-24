@@ -56,6 +56,24 @@ from .deploy.deploy_util import rust_version
 # err on the side of including too much rather than too little.
 CI_GLUE_GLOBS = ["bin", "ci", "misc/python/materialize/cli/ci_annotate_errors.py"]
 
+
+def ci_glue_globs(current_pipeline: str) -> list[str]:
+    """The glue globs relevant to `current_pipeline`, i.e. CI_GLUE_GLOBS with
+    the `pipeline.template.yml` of every *other* pipeline excluded.
+
+    A pipeline template only affects its own pipeline, so a change to, say, the
+    Nightly template must not count as glue for the test pipeline and force it
+    to run every step untrimmed. The current pipeline's own template stays in
+    scope: a template edit can change a step's command in ways the input-based
+    trimming cannot detect."""
+    ci_dir = Path(__file__).parent
+    return CI_GLUE_GLOBS + [
+        f":(exclude)ci/{template.parent.name}/pipeline.template.yml"
+        for template in sorted(ci_dir.glob("*/pipeline.template.yml"))
+        if template.parent.name != current_pipeline
+    ]
+
+
 DEFAULT_AGENT = "hetzner-aarch64-4cpu-8gb"
 
 
@@ -208,6 +226,7 @@ so it is executed.""",
     lto = (
         pipeline.get("env", {}).get("CI_LTO", 0) == 1
         or bool(os.environ["BUILDKITE_TAG"])
+        or args.pipeline == "spec-sheet"
         or (
             not ui.env_is_truthy("BUILDKITE_PULL_REQUEST")
             and args.pipeline in ("nightly", "release-qualification")
@@ -317,7 +336,7 @@ so it is executed.""",
             print("Coverage/Sanitizer build, not trimming pipeline")
         elif os.environ["BUILDKITE_BRANCH"] == "main" or os.environ["BUILDKITE_TAG"]:
             print("On main branch or tag, so not trimming pipeline")
-        elif have_paths_changed(CI_GLUE_GLOBS):
+        elif have_paths_changed(ci_glue_globs(args.pipeline)):
             # We still execute pipeline trimming on a copy of the pipeline to
             # protect against bugs in the pipeline trimming itself.
             print("[DRY RUN] Trimming unchanged steps from pipeline")

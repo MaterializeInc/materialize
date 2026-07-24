@@ -26,12 +26,11 @@ pub const ENABLE_HALF_JOIN2: Config<bool> = Config::new(
 /// Use the column-paged merge batcher code path at arrange sites. When
 /// `true`, arrange operators use `Col2ValPagedBatcher` (in
 /// `mz_timely_util::columnar`) and `RowRowColPagedBuilder` (in
-/// `mz_row_spine`) — the columnar-native batcher that the pager can
-/// spill (gated by [`ENABLE_COLUMN_PAGED_BATCHER_SPILL`]). When `false`
-/// (the default), the same arrange sites use the legacy
-/// `Col2ValBatcher` / `RowRowBuilder` (columnation-merger) path that
-/// shipped before #36627. Read at operator construction time; flips
-/// take effect on dataflows created after the change.
+/// `mz_row_spine`), the columnar-native batcher that the pager can spill
+/// (gated by [`ENABLE_COLUMN_PAGED_BATCHER_SPILL`]). When `false` (the
+/// default), the same arrange sites use the legacy `Col2ValBatcher` /
+/// `RowRowBuilder` (columnation-merger) path. Read at operator construction
+/// time. Flips take effect on dataflows created after the change.
 ///
 /// Disabled by default while the new path is stabilizing.
 /// `DifferentialJoinHydration*` feature-benchmark scenarios opt in
@@ -44,14 +43,20 @@ pub const ENABLE_COLUMN_PAGED_BATCHER: Config<bool> = Config::new(
 )
 .scoped(ParameterScope::Replica);
 
-/// Allow the column-paged batcher's pager to actually evict chunks
-/// under memory pressure. Only meaningful when
-/// [`ENABLE_COLUMN_PAGED_BATCHER`] is `true`; with the spill flag off
-/// the pager keeps every chunk resident regardless of budget.
+/// Allow the column-paged batcher's pager to evict chunks under memory
+/// pressure. Only meaningful when [`ENABLE_COLUMN_PAGED_BATCHER`] is `true`.
+/// With the spill flag off the pager keeps every chunk resident regardless of
+/// budget.
+///
+/// This flag (or the storage-side `enable_upsert_paged_spill`) also gates
+/// installation of the process buffer pool (`mz_ore::pool`): the first
+/// configuration tick with either gate on reserves the pool's virtual
+/// address space and spawns its spill threads. Turning the gates back off
+/// stops retuning but does not tear the installed pool down.
 ///
 /// Off by default, even when the batcher path itself is on, so the
-/// no-pressure case stays a pure resident operation. Tune the budget /
-/// backend via [`COLUMN_PAGED_BATCHER_BUDGET_FRACTION`].
+/// no-pressure case stays a pure resident operation. Tune the budget via
+/// [`COLUMN_PAGED_BATCHER_BUDGET_FRACTION`].
 pub const ENABLE_COLUMN_PAGED_BATCHER_SPILL: Config<bool> = Config::new(
     "enable_column_paged_batcher_spill",
     false,
@@ -60,12 +65,12 @@ pub const ENABLE_COLUMN_PAGED_BATCHER_SPILL: Config<bool> = Config::new(
 )
 .scoped(ParameterScope::Replica);
 
-/// Total resident-byte budget the column-paged batcher's tiered policy
-/// (`mz_timely_util::column_pager::policy::TieredPolicy`) is allowed to
-/// hold across all workers in this process, expressed as a fraction of
-/// the replica's announced memory limit. A single
-/// process-wide pool tracks all resident chunks; allocations beyond the
-/// pool spill to the configured backend.
+/// Resident-bytes budget fraction for chunk spilling. Two consumers read
+/// it: the column pager's tiered policy multiplies it against the
+/// announced memory limit, and the buffer pool (`mz_ore::pool`)
+/// multiplies it against physical RAM, since a resident budget must
+/// derive from memory that can be resident and the announced limit
+/// includes swap on swap-provisioned nodes.
 ///
 /// `0.05` (5%) is a reasonable starting point: large enough that the
 /// per-call ColumnBuilder ship-threshold (~2 MiB) fits multiple chunks
@@ -77,9 +82,25 @@ pub const ENABLE_COLUMN_PAGED_BATCHER_SPILL: Config<bool> = Config::new(
 pub const COLUMN_PAGED_BATCHER_BUDGET_FRACTION: Config<f64> = Config::new(
     "column_paged_batcher_budget_fraction",
     0.05,
-    "Fraction of replica memory the column-paged batcher's tiered policy may hold resident \
-     before spilling to the backend. Total budget = max(mem_limit * fraction, 128 MiB).",
-);
+    "Budget fraction for chunk spilling: the buffer pool multiplies it against physical \
+     RAM and the column pager's tiered policy against the announced memory limit. \
+     Total pool budget = max(ram * fraction, 128 MiB).",
+)
+.scoped(ParameterScope::Replica);
+
+/// Number of buffer-pool spill threads performing eviction I/O (lz4
+/// compression plus the synchronous-reclaim `MADV_PAGEOUT`) off the threads
+/// that trip the budget. Zero evicts inline on the calling thread, which
+/// measurably convoys workers behind eviction I/O at hydration eviction
+/// rates. Thread spawning is once per process: raising the value later has
+/// no effect beyond re-enabling, and lowering it to zero falls back to
+/// inline eviction while spawned threads idle.
+pub const COLUMN_PAGED_BATCHER_SPILL_WORKER_COUNT: Config<usize> = Config::new(
+    "column_paged_batcher_spill_worker_count",
+    2,
+    "Buffer-pool spill threads for off-worker eviction I/O; 0 evicts inline on the caller.",
+)
+.scoped(ParameterScope::Replica);
 
 /// Compress chunks the column-paged batcher spills, using lz4. Only
 /// meaningful when [`ENABLE_COLUMN_PAGED_BATCHER_SPILL`] is `true`; the codec
@@ -116,7 +137,44 @@ pub const COLUMN_PAGED_BATCHER_SWAP_PAGEOUT: Config<bool> = Config::new(
     "Eagerly evict the column-paged batcher's lz4-compressed swap-backend spill chunks from RSS \
      via `MADV_PAGEOUT` (they otherwise receive no madvise and are reclaimed only lazily). Only \
      meaningful when `column_paged_batcher_lz4 = true` and the swap backend is active.",
-);
+)
+.scoped(ParameterScope::Replica);
+
+/// Eagerly compress unbacked buffer-pool chunks to `BackedResident` on idle
+/// spill threads (write-behind). The chunk stays readable in its slot while
+/// a compressed extent accumulates on the swap device, so budget-driven
+/// eviction becomes a pure page release instead of a compression. Trades
+/// background CPU (compression of chunks that may die before pressure
+/// reaches them) for near-free pressure response.
+pub const COLUMN_PAGED_BATCHER_EAGER_BACKING: Config<bool> = Config::new(
+    "column_paged_batcher_eager_backing",
+    false,
+    "Eagerly compress buffer-pool chunks to compressed-but-resident on idle spill threads, so \
+     budget-driven eviction is a pure page release. Only meaningful with spill workers.",
+)
+.scoped(ParameterScope::Replica);
+
+/// Ceiling on the buffer pool's total RSS, as a fraction of *physical RAM*
+/// (never the announced limit, which includes swap on swap-provisioned
+/// nodes). The compressed-but-resident extent tier is the headroom above the
+/// slot budget and warm cap: chunks evicted from the budget stay in RAM
+/// compressed (~5.6x denser; reads decompress without faulting) until this
+/// ceiling forces the oldest extents out to the swap device via
+/// `MADV_PAGEOUT`. Zero collapses the tier: extents page out as soon as
+/// they are written.
+///
+/// The default pairs with the 0.05 budget default to leave ~20% of RAM for
+/// the compressed tier — the same share zswap's default compressed pool
+/// takes, and roughly RAM-sized logical coverage at the measured ~5.6x
+/// ratio — while keeping three quarters of RAM for everything else in the
+/// process.
+pub const COLUMN_PAGED_BATCHER_POOL_RSS_TARGET_FRACTION: Config<f64> = Config::new(
+    "column_paged_batcher_pool_rss_target_fraction",
+    0.25,
+    "Ceiling on the buffer pool's total RSS as a fraction of physical RAM; the headroom above \
+     the slot budget holds compressed-but-resident extents. Zero pages extents out immediately.",
+)
+.scoped(ParameterScope::Replica);
 
 /// Whether rendering should use `mz_join_core` rather than DD's `JoinCore::join_core`.
 pub const ENABLE_MZ_JOIN_CORE: Config<bool> = Config::new(
@@ -540,4 +598,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COLUMN_PAGED_BATCHER_BUDGET_FRACTION)
         .add(&COLUMN_PAGED_BATCHER_LZ4)
         .add(&COLUMN_PAGED_BATCHER_SWAP_PAGEOUT)
+        .add(&COLUMN_PAGED_BATCHER_SPILL_WORKER_COUNT)
+        .add(&COLUMN_PAGED_BATCHER_EAGER_BACKING)
+        .add(&COLUMN_PAGED_BATCHER_POOL_RSS_TARGET_FRACTION)
 }

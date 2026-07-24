@@ -63,6 +63,7 @@ import {
   fetchClusterReplicasWithUtilization,
 } from "~/api/materialize/cluster/replicasWithUtilization";
 import {
+  attachOfflineEvents,
   BinnedSubscribeRow,
   bucketRowsToBucketsByReplicaId,
   parseBinnedSubscribeRow,
@@ -73,6 +74,7 @@ import {
 import {
   buildConsoleClusterUtilizationOverview24hSubscribe,
   buildConsoleClusterUtilizationUnbinned3hSubscribe,
+  fetchReplicaOfflineEvents,
   fetchReplicaUtilizationHistory,
   ReplicaUtilizationHistoryParameters,
 } from "~/api/materialize/cluster/replicaUtilizationHistory";
@@ -158,6 +160,14 @@ export const clusterQueryKeys = {
     [
       ...clusterQueryKeys.all(),
       buildQueryKeyPart("replicaUtilizationHistory", params),
+    ] as const,
+  replicaOfflineEvents: (params: {
+    clusterIdsKey: string;
+    timePeriodMinutes: number;
+  }) =>
+    [
+      ...clusterQueryKeys.all(),
+      buildQueryKeyPart("replicaOfflineEvents", params),
     ] as const,
   clusterFreshness: (params: ClusterFreshnessParams) =>
     [
@@ -489,13 +499,40 @@ function useReplicaUtilizationHistorySubscribe(
     );
   }, [enabled, clusterIdsKey, timePeriodMinutes]);
 
-  const { data, isError, snapshotComplete } = useSubscribe({
+  const { data, isError, snapshotComplete, resubscribing } = useSubscribe({
     subscribe,
     upsertKey: (row) => `${row.data.replicaId} ${row.data.occurredAt}`,
     select: (row) => ({
       ...row.data,
       occurredAt: new Date(row.data.occurredAt),
     }),
+  });
+
+  // Offline events aren't in the un-binned view, so poll them separately and
+  // merge into the client-binned buckets. Without this the <=3h windows would
+  // hide replica crashes and OOMs that every other tier surfaces.
+  const { data: offlineEvents } = useQuery({
+    queryKey: clusterQueryKeys.replicaOfflineEvents({
+      clusterIdsKey,
+      timePeriodMinutes,
+    }),
+    refetchInterval: 20_000,
+    enabled: enabled && clusterIdsKey.length > 0,
+    queryFn: async ({ queryKey, signal }) => {
+      const [, queryKeyParams] = queryKey;
+      const clusterIds = queryKeyParams.clusterIdsKey
+        ? queryKeyParams.clusterIdsKey.split(",")
+        : [];
+      const startDate = subMinutes(
+        new Date(),
+        queryKeyParams.timePeriodMinutes,
+      ).toISOString();
+      return fetchReplicaOfflineEvents({
+        params: { clusterIds, startDate, resolveLineage: true },
+        queryKey,
+        requestOptions: { signal },
+      });
+    },
   });
 
   const result = useMemo(() => {
@@ -505,21 +542,22 @@ function useReplicaUtilizationHistorySubscribe(
     const samples = replicaId
       ? data.filter((sample) => sample.replicaId === replicaId)
       : data;
-    const rows = rebucketUtilizationSamples(
-      samples,
+    const rows = attachOfflineEvents(
+      rebucketUtilizationSamples(samples, bucketSizeMs, startDate.getTime()),
+      offlineEvents ?? [],
       bucketSizeMs,
-      startDate.getTime(),
     );
     return toReplicaUtilizationGraphData(
       bucketRowsToBucketsByReplicaId(rows),
       startDate,
       endDate,
     );
-  }, [data, replicaId, timePeriodMinutes, bucketSizeMs]);
+  }, [data, replicaId, timePeriodMinutes, bucketSizeMs, offlineEvents]);
 
   return {
     data: result,
     isLoading: enabled && !snapshotComplete,
+    isRefreshing: enabled && resubscribing,
     isError,
   };
 }
@@ -549,7 +587,7 @@ function useReplicaUtilizationHistoryBinnedSubscribe(
     );
   }, [enabled, clusterIdsKey, timePeriodMinutes]);
 
-  const { data, isError, snapshotComplete } = useSubscribe({
+  const { data, isError, snapshotComplete, resubscribing } = useSubscribe({
     subscribe,
     upsertKey: (row) => `${row.data.replicaId} ${row.data.bucketStart}`,
     select: (row) => parseBinnedSubscribeRow(row.data),
@@ -559,9 +597,13 @@ function useReplicaUtilizationHistoryBinnedSubscribe(
     const endDate = new Date();
     const startDate = subMinutes(endDate, timePeriodMinutes);
 
-    const rows = replicaId
-      ? data.filter((row) => row.replicaId === replicaId)
-      : [...data];
+    // Clip to the window like the SQL does. Held rows from a previous wider
+    // window would otherwise stretch the chart domain past the selected range.
+    const rows = data.filter(
+      (row) =>
+        row.bucketStart.getTime() >= startDate.getTime() &&
+        (!replicaId || row.replicaId === replicaId),
+    );
     // ENVELOPE UPSERT yields an unordered keyed set; the chart needs time order.
     rows.sort((a, b) => a.bucketStart.getTime() - b.bucketStart.getTime());
 
@@ -575,6 +617,7 @@ function useReplicaUtilizationHistoryBinnedSubscribe(
   return {
     data: result,
     isLoading: enabled && !snapshotComplete,
+    isRefreshing: enabled && resubscribing,
     isError,
   };
 }
@@ -647,6 +690,11 @@ export function useReplicaUtilizationHistory(
     data: active.data,
     isLoading: active.isLoading,
     isError: active.isError,
+    isRefreshing: useUnbinnedSubscribe
+      ? unbinnedResult.isRefreshing
+      : useBinnedSubscribe
+        ? binnedResult.isRefreshing
+        : false,
   };
 }
 

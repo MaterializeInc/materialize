@@ -57,6 +57,7 @@ pub fn skip_consistency_checks(
         .args
         .string("reason")
         .context("must provide reason for skipping")?;
+    cmd.args.done()?;
     tracing::info!(reason, "Skipping consistency checks as requested.");
 
     state.consistency_checks_adhoc_skip = true;
@@ -110,6 +111,7 @@ pub async fn run_check_shard_tombstone(
     state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
     let shard_id = cmd.args.string("shard-id")?;
+    cmd.args.done()?;
     check_shard_tombstone(state, &shard_id).await?;
     Ok(ControlFlow::Continue)
 }
@@ -296,7 +298,7 @@ ALTER SYSTEM SET enable_rbac_checks = false
   WHERE
     (finished_at IS NULL OR finished_status IS NULL)
     AND sql NOT LIKE '%__FILTER-OUT-THIS-QUERY__%'
-    AND finished_status != 'aborted';
+    AND finished_status IS DISTINCT FROM 'aborted';
 0
 
 $ postgres-execute connection=postgres://mz_system:materialize@{0}

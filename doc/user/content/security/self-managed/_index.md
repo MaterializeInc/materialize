@@ -8,6 +8,14 @@ menu:
     parent: "security"
     identifier: "security-sm"
     weight: 20
+aliases:
+  - /self-managed/v25.2/manage/access-control/
+  - /self-managed/v25.2/manage/access-control/manage-roles/
+  - /self-managed/v25.2/manage/access-control/appendix-privileges/
+  - /self-managed/v25.2/manage/access-control/appendix-command-privileges/
+  - /self-managed/v25.2/manage/access-control/appendix-built-in-roles/
+  - /self-managed/v25.2/manage/access-control/rbac-terraform-tutorial/
+  - /self-managed/v25.2/manage/appendix-alternative-cluster-architectures/
 ---
 
 This section covers security for Self-Managed Materialize.

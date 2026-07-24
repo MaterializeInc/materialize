@@ -48,6 +48,10 @@ INSERT INTO t1 SELECT * FROM t1;
 > SELECT pg_typeof(f1) FROM t1 LIMIT 1;
 interval
 
-> SELECT * FROM t1;
+>[version>=2603500] SELECT * FROM t1;
+"1 year 2 mons 3 days 04:05:06.789123"
+"1 year 2 mons 3 days 04:05:06.789123"
+
+>[version<2603500] SELECT * FROM t1;
 "1 year 2 months 3 days 04:05:06.789123"
 "1 year 2 months 3 days 04:05:06.789123"

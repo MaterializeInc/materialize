@@ -8,6 +8,7 @@ menu:
     identifier: 'concepts-clusters'
 aliases:
   - /get-started/key-concepts/#clusters
+  - /self-managed/v25.2/concepts/clusters/
 ---
 
 ## Overview
@@ -77,6 +78,12 @@ resources available and can therefore process data faster and handle larger data
 volumes.
 
 As your workload changes, you can [resize a cluster](/sql/alter-cluster/).
+
+To handle the temporary compute increases during hydration, you can
+configure an [autoscaling
+strategy](/sql/alter-cluster/#speed-up-hydration-by-autoscaling-to-a-larger-size)
+that provisions an extra burst replica at a larger size while the cluster has
+un-hydrated objects.
 
 {{< tip >}}
 

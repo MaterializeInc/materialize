@@ -56,6 +56,7 @@ pub mod copy_to;
 pub mod dataflows;
 pub mod index;
 pub mod materialized_view;
+mod metric_sink;
 pub mod peek;
 pub mod subscribe;
 pub mod view;
@@ -350,6 +351,9 @@ impl From<&OptimizerConfig> for mz_sql::plan::HirToMirConfig {
             enable_fixed_correlated_cte_lowering: config
                 .features
                 .enable_fixed_correlated_cte_lowering,
+            enable_simplify_from_less_existence: config
+                .features
+                .enable_simplify_from_less_existence,
         }
     }
 }

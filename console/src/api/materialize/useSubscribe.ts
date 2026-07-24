@@ -44,6 +44,8 @@ export type UseSubscribeReturn<T> = {
   data: T[];
   isError: boolean;
   snapshotComplete: boolean;
+  /** True while a re-subscribe holds the previous data. */
+  resubscribing: boolean;
   error: SubscribeError | undefined;
 };
 
@@ -84,10 +86,8 @@ export function useSubscribe<T extends object, R = SubscribeRow<T>>(
     request,
   });
 
-  const { data, error, snapshotComplete } = React.useSyncExternalStore(
-    subscribe.onChange,
-    subscribe.getSnapshot,
-  );
+  const { data, error, snapshotComplete, resubscribing } =
+    React.useSyncExternalStore(subscribe.onChange, subscribe.getSnapshot);
 
   return {
     data,
@@ -96,6 +96,7 @@ export function useSubscribe<T extends object, R = SubscribeRow<T>>(
     error,
     isError: Boolean(error),
     snapshotComplete,
+    resubscribing: Boolean(resubscribing),
   };
 }
 
@@ -195,10 +196,11 @@ export function useSubscribeManager<T extends object, R = SubscribeRow<T>>({
     }),
   });
 
-  const { data, error, snapshotComplete } = React.useSyncExternalStore(
-    subscribeInstance.onChange,
-    subscribeInstance.getSnapshot,
-  );
+  const { data, error, snapshotComplete, resubscribing } =
+    React.useSyncExternalStore(
+      subscribeInstance.onChange,
+      subscribeInstance.getSnapshot,
+    );
 
   return {
     data,
@@ -207,6 +209,7 @@ export function useSubscribeManager<T extends object, R = SubscribeRow<T>>({
     error,
     isError: Boolean(error),
     snapshotComplete,
+    resubscribing: Boolean(resubscribing),
   };
 }
 

@@ -27,6 +27,7 @@ from psycopg.errors import OperationalError
 
 import materialize.parallel_workload.column
 from materialize.data_ingest.data_type import (
+    DATA_TYPES,
     NUMBER_TYPES,
     Boolean,
     Text,
@@ -43,7 +44,6 @@ from materialize.mzcompose.services.materialized import (
 )
 from materialize.mzcompose.services.minio import minio_blob_uri
 from materialize.parallel_workload.database import (
-    DATA_TYPES,
     DB,
     MAX_CLUSTER_REPLICAS,
     MAX_CLUSTERS,
@@ -200,6 +200,7 @@ class Action:
             # a path that wrongly accepts it instead panics the coordinator on
             # catalog apply, which surfaces as an unexpected failure.
             "non-temporary items cannot depend on temporary item",
+            "is not of expected type SqlColumnType",  # TODO: Remove when SQL-566 is fixed
         ]
         if exe.db.complexity in (Complexity.DDL, Complexity.DDLOnly):
             result.extend(
@@ -309,24 +310,27 @@ class Action:
 
         join = obj_name != obj2_name and obj not in exe.db.views and columns
 
-        if join:
-            all_columns = list(obj.columns) + list(obj2.columns)
-        else:
-            all_columns = obj.columns
+        all_columns = list(obj.columns) + list(obj2.columns) if join else obj.columns
 
+        column_types = []
         if self.rng.random() < 0.9:
+            column_types = [
+                self.rng.choice(list(DATA_TYPES))
+                for i in range(self.rng.randint(1, 10))
+            ]
             expressions = ", ".join(
                 [
                     expression(
-                        self.rng.choice(list(DATA_TYPES)),
+                        column_type,
                         all_columns,
                         self.rng,
                         expr_kind,
                     )
-                    for i in range(self.rng.randint(1, 10))
+                    for column_type in column_types
                 ]
             )
             if self.rng.choice([True, False]):
+                column_types = []
                 column1 = self.rng.choice(all_columns)
                 column2 = self.rng.choice(all_columns)
                 column3 = self.rng.choice(all_columns)
@@ -369,17 +373,42 @@ class Action:
         if self.rng.choice([True, False]):
             query += f" WHERE {expression(Boolean, all_columns, self.rng, expr_kind)}"
 
-        if self.rng.choice([True, False]):
-            query += f" UNION ALL SELECT {expressions} FROM {obj_name}"
+        if bool(column_types) and self.rng.choice([True, False]):
+            obj3 = self.rng.choice(exe.db.db_objects())
+            obj3_name = str(obj3)
+            column3 = self.rng.choice(obj3.columns)
+            obj4 = self.rng.choice(exe.db.db_objects())
+            obj4_name = str(obj4)
+            columns_union = [
+                c
+                for c in obj4.columns
+                if c.data_type == column3.data_type and c.data_type != TextTextMap
+            ]
+            join_union = (
+                obj3_name != obj4_name and obj3 not in exe.db.views and columns_union
+            )
+            all_columns_union = (
+                list(obj3.columns) + list(obj4.columns) if join_union else obj3.columns
+            )
+            expressions3 = ", ".join(
+                [
+                    expression(
+                        column_type,
+                        all_columns_union,
+                        self.rng,
+                        expr_kind,
+                    )
+                    for column_type in column_types
+                ]
+            )
+            query += f" UNION ALL SELECT {expressions3} FROM {obj3_name}"
 
-            if join:
-                column2 = self.rng.choice(columns)
-                query += f" JOIN {obj2_name} ON {column} = {column2}"
+            if join_union:
+                column4 = self.rng.choice(columns_union)
+                query += f" JOIN {obj4_name} ON {column3} = {column4}"
 
             if self.rng.choice([True, False]):
-                query += (
-                    f" WHERE {expression(Boolean, all_columns, self.rng, expr_kind)}"
-                )
+                query += f" WHERE {expression(Boolean, all_columns_union, self.rng, expr_kind)}"
 
         query += f" LIMIT {self.rng.randint(0, 100)}"
         return query
@@ -1796,6 +1825,11 @@ class FlipFlagsAction(Action):
         self.flags_with_values["persist_validate_part_bounds_on_write"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values["group_commit_max_attempts"] = [
+            "1",
+            "100",
+            "1000",
+        ]
         self.flags_with_values["user_id_pool_batch_size"] = [
             "1",
             "5",
@@ -1861,6 +1895,19 @@ class FlipFlagsAction(Action):
         self.flags_with_values["column_paged_batcher_swap_pageout"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values["column_paged_batcher_spill_worker_count"] = [
+            "0",
+            "2",
+            "4",
+        ]
+        self.flags_with_values["column_paged_batcher_eager_backing"] = (
+            BOOLEAN_FLAG_VALUES
+        )
+        self.flags_with_values["column_paged_batcher_pool_rss_target_fraction"] = [
+            "0.0",
+            "0.25",
+            "0.5",
+        ]
         self.flags_with_values["enable_upsert_paged_spill"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["webhook_max_request_size_bytes"] = [
             # 1 MiB, 5 MiB (default), 10 MiB
@@ -2027,6 +2074,7 @@ class FlipFlagsAction(Action):
             "kafka_buffered_event_resize_threshold_elements",
             "kafka_low_watermark_check",
             "mysql_replication_heartbeat_interval",
+            "mysql_source_snapshot_parallelism",
             "postgres_fetch_slot_resume_lsn_interval",
             "pg_schema_validation_interval",
             "storage_enforce_external_addresses",
@@ -2109,32 +2157,65 @@ class FlipFlagsAction(Action):
             "default_hydration_burst_linger",
         ]
 
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            # `EXPERIMENTAL ARRANGEMENT COMPRESSION` is managed-only. The
+            # tracked `managed` flag can lag reality (e.g. an in-flight CREATE
+            # lost to a kill), so the option can land on a cluster that is
+            # unmanaged by the time the ALTER runs.
+            "EXPERIMENTAL ARRANGEMENT COMPRESSION not supported for unmanaged clusters",
+        ] + super().errors_to_ignore(exe)
+
     def run(self, exe: Executor) -> bool:
-        flag_name = self.rng.choice(list(self.flags_with_values.keys()))
+        # A tenth of the time set a random cluster's arrangement dictionary
+        # compression instead of flipping a global flag. The per-cluster option
+        # and the global `enable_arrangement_dictionary_compression_alpha` flag
+        # interact: the flag only gates whether a replica honors the configured
+        # value at creation time, so exercising both concurrently is what makes
+        # this interesting.
+        cluster: Cluster | None = None
+        flag_name = ""
+        flag_value = ""
 
-        # TODO: Remove when https://linear.app/materializeinc/issue/DB-138 is fixed
-        if exe.db.scenario == Scenario.ZeroDowntimeDeploy and flag_name.startswith(
-            "persist_use_critical_since_"
-        ):
-            return False
+        if self.rng.random() < 0.1:
+            with exe.db.lock:
+                # Skip the first cluster: it hosts sources and sinks, and a
+                # compression change reprovisions the cluster's replicas.
+                # EXPERIMENTAL ARRANGEMENT COMPRESSION is only valid on managed
+                # clusters.
+                managed = [c for c in exe.db.clusters[1:] if c.managed]
+            if not managed:
+                return False
+            cluster = self.rng.choice(managed)
+        else:
+            flag_name = self.rng.choice(list(self.flags_with_values.keys()))
 
-        # `persist_pg_consensus_read_committed` requires a Postgres consensus
-        # backend. The external scenarios run against CockroachDB, where it
-        # panics persist, so never flip it on there.
-        if (
-            flag_name == "persist_pg_consensus_read_committed"
-            and exe.db.scenario in COCKROACH_SCENARIOS
-        ):
-            return False
+            # TODO: Remove when https://linear.app/materializeinc/issue/DB-138 is fixed
+            if exe.db.scenario == Scenario.ZeroDowntimeDeploy and flag_name.startswith(
+                "persist_use_critical_since_"
+            ):
+                return False
 
-        flag_value = self.rng.choice(self.flags_with_values[flag_name])
+            # `persist_pg_consensus_read_committed` requires a Postgres consensus
+            # backend. The external scenarios run against CockroachDB, where it
+            # panics persist, so never flip it on there.
+            if (
+                flag_name == "persist_pg_consensus_read_committed"
+                and exe.db.scenario in COCKROACH_SCENARIOS
+            ):
+                return False
+
+            flag_value = self.rng.choice(self.flags_with_values[flag_name])
 
         conn = None
 
         try:
             conn = self.create_system_connection(exe)
-            self.flip_flag(conn, flag_name, flag_value)
-            exe.db.flags[flag_name] = flag_value
+            if cluster is not None:
+                self.set_cluster_compression(conn, cluster)
+            else:
+                self.flip_flag(conn, flag_name, flag_value)
+                exe.db.flags[flag_name] = flag_value
             return True
         except OperationalError:
             # ignore it
@@ -2150,6 +2231,18 @@ class FlipFlagsAction(Action):
             cur.execute(
                 f"ALTER SYSTEM SET {flag_name} = {flag_value};".encode(),
             )
+
+    def set_cluster_compression(self, conn: Connection, cluster: Cluster) -> None:
+        # Randomly set an explicit value or reset to the default. On a managed
+        # cluster this reprovisions the controller-owned replicas, so it
+        # exercises the per-cluster and per-replica configuration path.
+        if self.rng.choice([True, False]):
+            value = self.rng.choice(["TRUE", "FALSE"])
+            option = f"SET (EXPERIMENTAL ARRANGEMENT COMPRESSION = {value})"
+        else:
+            option = "RESET (EXPERIMENTAL ARRANGEMENT COMPRESSION)"
+        with conn.cursor() as cur:
+            cur.execute(f"ALTER CLUSTER {cluster} {option};".encode())
 
 
 class CreateViewAction(Action):

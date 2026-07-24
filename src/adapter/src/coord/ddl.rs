@@ -467,7 +467,7 @@ impl Coordinator {
         // always going up, and believe we will always be close to the system
         // clock because it is well configured (chrony) and so may only rarely
         // regress or pause for 10s.
-        let oracle_write_ts = self.get_local_write_ts().await.timestamp;
+        let oracle_write_ts = self.get_catalog_write_ts().await;
 
         let Coordinator {
             catalog,
@@ -517,10 +517,7 @@ impl Coordinator {
 
         // Append our builtin table updates, then return the notify so we can run other tasks in
         // parallel.
-        let (builtin_update_notify, _) = self
-            .builtin_table_update()
-            .execute(builtin_table_updates)
-            .await;
+        let builtin_update_notify = self.builtin_table_update().execute(builtin_table_updates);
 
         // No error returns are allowed after this point. Enforce this at compile time
         // by using this odd structure so we don't accidentally add a stray `?`.
@@ -625,16 +622,27 @@ impl Coordinator {
     }
 
     /// A convenience method for dropping tables.
-    pub(crate) fn drop_tables(&mut self, tables: Vec<(CatalogItemId, GlobalId)>, ts: Timestamp) {
+    pub(crate) async fn drop_tables(&mut self, tables: Vec<(CatalogItemId, GlobalId)>) {
         for (item_id, _gid) in &tables {
             self.active_webhooks.remove(item_id);
         }
 
+        let table_gids: Vec<_> = tables.into_iter().map(|(_id, gid)| gid).collect();
+
+        // FIFO ordering places the forget after every staged append.
+        let forget_ids = self
+            .controller
+            .storage
+            .txns_table_ids(table_gids.clone())
+            .unwrap_or_terminate("cannot fail to look up txns-registered tables");
+        if !forget_ids.is_empty() {
+            self.forget_tables_via_committer(forget_ids).await;
+        }
+
         let storage_metadata = self.catalog.state().storage_metadata();
-        let table_gids = tables.into_iter().map(|(_id, gid)| gid).collect();
         self.controller
             .storage
-            .drop_tables(storage_metadata, table_gids, ts)
+            .drop_tables(storage_metadata, table_gids)
             .unwrap_or_terminate("cannot fail to drop tables");
     }
 
@@ -730,8 +738,8 @@ impl Coordinator {
         // Retire off the coordinator loop. We wait for each `mz_subscriptions` retraction
         // before telling the subscribing client that the sink is gone. The returned notify
         // lets statements that caused the retirement also wait before sending their response.
-        // The wait must not happen on the loop, since that would block every other session
-        // on the group-commit oracle round trip.
+        // The wait must not happen on the coordinator loop, since that would block every
+        // other session on the group-commit oracle round trip.
         let (done_tx, done_rx) = tokio::sync::oneshot::channel();
         task::spawn(|| "retire_compute_sinks", async move {
             for (sink, write_notify, reason) in to_retire {

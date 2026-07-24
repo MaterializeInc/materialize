@@ -19,18 +19,14 @@ use mz_ore::cast::CastFrom;
 use mz_repr::{
     CatalogItemId, ColumnName, Datum, Diff, Row, RowPacker, SqlColumnType, SqlScalarType,
 };
+use timely::progress::Antichain;
 
 use crate::avro::DiffPair;
 
 /// Walks `batch` and invokes `on_diff_pair` for each `DiffPair` at each
 /// `(key, timestamp)`.
 ///
-/// Within a key, diffs are partitioned by sign into retractions (befores) and
-/// insertions (afters), sorted by timestamp, and zipped into `DiffPair`s via a
-/// merge-join. Pairs are emitted in ascending timestamp order for a given key;
-/// no ordering is guaranteed across keys. Callers are responsible for tracking
-/// `(key, timestamp)` boundaries themselves if they need to detect groups
-/// with more than one pair (e.g., for primary-key violation checks).
+/// Thin wrapper around `iter_diff_pairs`.
 pub fn for_each_diff_pair<B, C, F>(batch: &B, mut on_diff_pair: F)
 where
     B: BatchReader<Time = C::Time> + Navigable<Cursor = C>,
@@ -39,60 +35,114 @@ where
     C::ValOwn: 'static,
     F: FnMut(&<C::KeyContainer as BatchContainer>::Owned, C::Time, DiffPair<C::ValOwn>),
 {
-    let mut befores: Vec<(C::Time, C::ValOwn, usize)> = vec![];
-    let mut afters: Vec<(C::Time, C::ValOwn, usize)> = vec![];
-
-    let mut cursor = batch.cursor();
-    while cursor.key_valid(batch) {
-        let k = cursor.key(batch);
-
-        // Partition updates at this key into retractions (befores) and
-        // insertions (afters).
-        while cursor.val_valid(batch) {
-            let v = cursor.val(batch);
-            cursor.map_times(batch, |t, diff| {
-                let diff = C::owned_diff(diff);
-                let update = (
-                    C::owned_time(t),
-                    C::owned_val(v),
-                    usize::cast_from(diff.unsigned_abs()),
-                );
-                if diff < Diff::ZERO {
-                    befores.push(update);
-                } else {
-                    afters.push(update);
-                }
-            });
-            cursor.step_val(batch);
+    for (key, timed_pairs) in iter_diff_pairs(batch, None, None) {
+        for (time, pair) in timed_pairs {
+            on_diff_pair(&key, time, pair);
         }
-
-        befores.sort_by_key(|(t, _v, _diff)| *t);
-        afters.sort_by_key(|(t, _v, _diff)| *t);
-
-        // The use of `repeat_n()` here is a bit subtle, but load bearing.
-        // In the common case, cnt = 1, and we want to avoid cloning the value if possible. In the naive
-        // implementation, we might use `iter::repeat((t, v)).take(cnt)`, but that would clone `v` `cnt` times even
-        // when `cnt = 1`. By contrast, `repeat_n((t, v), cnt)` will return the original `(t, v)` when `cnt = 1`,
-        // and only clone when `cnt > 1`.
-        let fan_out = |(t, v, cnt): (C::Time, C::ValOwn, usize)| iter::repeat_n((t, v), cnt);
-        let befores_iter = befores.drain(..).flat_map(fan_out);
-        let afters_iter = afters.drain(..).flat_map(fan_out);
-
-        let key_owned = <C::KeyContainer as BatchContainer>::into_owned(k);
-
-        for pair in
-            itertools::merge_join_by(befores_iter, afters_iter, |(t1, _v1), (t2, _v2)| t1.cmp(t2))
-        {
-            let (t, before, after) = match pair {
-                EitherOrBoth::Both((t, before), (_t, after)) => (t, Some(before), Some(after)),
-                EitherOrBoth::Left((t, before)) => (t, Some(before), None),
-                EitherOrBoth::Right((t, after)) => (t, None, Some(after)),
-            };
-            on_diff_pair(&key_owned, t, DiffPair { before, after });
-        }
-
-        cursor.step_key(batch);
     }
+}
+
+/// Walks `batch` and emits, for each key, an iterator of the `DiffPair`s at
+/// each timestamp.
+///
+/// Ignores updates outside the specified time range. Inclusive 'lower', exclusive 'upper'.
+///
+/// Within a key, diffs are partitioned by sign into retractions (befores) and
+/// insertions (afters), sorted by timestamp, and zipped into `DiffPair`s via a
+/// merge-join. Pairs are emitted in ascending timestamp order for a given key;
+/// no ordering is guaranteed across keys. Callers are responsible for tracking
+/// `(key, timestamp)` boundaries themselves if they need to detect groups
+/// with more than one pair (e.g., for primary-key violation checks).
+///
+/// The per-key iterator owns its data, so it can be held or consumed after the
+/// outer iterator has advanced. An update with multiplicity `n` fans out into
+/// `n` pairs lazily, cloning the value as pairs are consumed. Memory held per
+/// key is proportional to the number of distinct updates, not the fan-out.
+pub fn iter_diff_pairs<B, C>(
+    batch: &B,
+    lower: Option<Antichain<C::Time>>,
+    upper: Option<Antichain<C::Time>>,
+) -> impl Iterator<
+    Item = (
+        <C::KeyContainer as BatchContainer>::Owned,
+        impl Iterator<Item = (C::Time, DiffPair<C::ValOwn>)>,
+    ),
+>
+where
+    B: BatchReader<Time = C::Time> + Navigable<Cursor = C>,
+    C: Cursor<Storage = B, Diff = Diff>,
+    C::Time: Copy,
+    C::ValOwn: 'static,
+{
+    let mut cursor = batch.cursor();
+    iter::from_fn(move || {
+        while cursor.key_valid(batch) {
+            let k = cursor.key(batch);
+
+            // Partition updates at this key into retractions (befores) and
+            // insertions (afters). The buffers move into the yielded iterator,
+            // so they are per key rather than reused across keys.
+            let mut befores: Vec<(C::Time, C::ValOwn, usize)> = vec![];
+            let mut afters: Vec<(C::Time, C::ValOwn, usize)> = vec![];
+            while cursor.val_valid(batch) {
+                let v = cursor.val(batch);
+                cursor.map_times(batch, |t, diff| {
+                    let t = C::owned_time(t);
+                    if lower.as_ref().is_some_and(|lower| !lower.less_equal(&t))
+                        || upper.as_ref().is_some_and(|upper| upper.less_equal(&t))
+                    {
+                        // This record is outside the specified time interval. Ignore it.
+                        return;
+                    }
+                    let diff = C::owned_diff(diff);
+                    let update = (t, C::owned_val(v), usize::cast_from(diff.unsigned_abs()));
+                    if diff < Diff::ZERO {
+                        befores.push(update);
+                    } else {
+                        afters.push(update);
+                    }
+                });
+                cursor.step_val(batch);
+            }
+
+            if befores.is_empty() && afters.is_empty() {
+                // No records at this key. Try the next one.
+                cursor.step_key(batch);
+                continue;
+            }
+
+            befores.sort_by_key(|(t, _v, _diff)| *t);
+            afters.sort_by_key(|(t, _v, _diff)| *t);
+
+            // The use of `repeat_n()` here is intentional.
+            // Typically, cnt = 1, and `repeat_n((t, v), cnt)` will return the original `(t, v)`.
+            // `iter::repeat((t, v)).take(cnt)` would clone `v` `cnt` times even when `cnt = 1`.
+            let fan_out = |(t, v, cnt): (C::Time, C::ValOwn, usize)| iter::repeat_n((t, v), cnt);
+            let befores_iter = befores.into_iter().flat_map(fan_out);
+            let afters_iter = afters.into_iter().flat_map(fan_out);
+
+            let key_owned = <C::KeyContainer as BatchContainer>::into_owned(k);
+
+            let pairs =
+                itertools::merge_join_by(befores_iter, afters_iter, |(t1, _v1), (t2, _v2)| {
+                    t1.cmp(t2)
+                })
+                .map(|pair| {
+                    let (t, before, after) = match pair {
+                        EitherOrBoth::Both((t, before), (_t, after)) => {
+                            (t, Some(before), Some(after))
+                        }
+                        EitherOrBoth::Left((t, before)) => (t, Some(before), None),
+                        EitherOrBoth::Right((t, after)) => (t, None, Some(after)),
+                    };
+                    (t, DiffPair { before, after })
+                });
+
+            cursor.step_key(batch);
+            return Some((key_owned, pairs));
+        }
+        None
+    })
 }
 
 // NOTE(benesch): statically allocating transient IDs for the
@@ -140,6 +190,8 @@ pub fn dbz_format(rp: &mut RowPacker, dp: DiffPair<Row>) {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use differential_dataflow::trace::implementations::chunker::ContainerChunker;
     use differential_dataflow::trace::implementations::{ValBatcher, ValBuilder};
     use differential_dataflow::trace::{Batcher, Builder};
@@ -150,14 +202,14 @@ mod tests {
 
     /// Seals a single batch from an unordered list of `((key, val), time, diff)`
     /// tuples upper-bounded at `upper`.
-    fn batch_from_tuples(
-        mut tuples: Vec<((String, String), u64, Diff)>,
+    fn batch_from_tuples_with<V: Ord + Clone + 'static>(
+        mut tuples: Vec<((String, V), u64, Diff)>,
         upper: u64,
-    ) -> <ValBuilder<String, String, u64, Diff> as Builder>::Output {
+    ) -> <ValBuilder<String, V, u64, Diff> as Builder>::Output {
         // The batcher consumes already-chunked input via `PushInto`; chunking
         // is the caller's responsibility.
-        let mut batcher = ValBatcher::<String, String, u64, Diff>::new(None, 0);
-        let mut chunker = ContainerChunker::<Vec<((String, String), u64, Diff)>>::default();
+        let mut batcher = ValBatcher::<String, V, u64, Diff>::new(None, 0);
+        let mut chunker = ContainerChunker::<Vec<((String, V), u64, Diff)>>::default();
         chunker.push_into(&mut tuples);
         while let Some(chunk) = chunker.extract() {
             batcher.push_into(std::mem::take(chunk));
@@ -166,7 +218,16 @@ mod tests {
             batcher.push_into(std::mem::take(chunk));
         }
         let (mut chain, description) = batcher.seal(Antichain::from_elem(upper));
-        ValBuilder::<String, String, u64, Diff>::seal(&mut chain, description)
+        ValBuilder::<String, V, u64, Diff>::seal(&mut chain, description)
+    }
+
+    /// `batch_from_tuples_with` pinned to `String` values, so call sites can
+    /// build values with `.into()`.
+    fn batch_from_tuples(
+        tuples: Vec<((String, String), u64, Diff)>,
+        upper: u64,
+    ) -> <ValBuilder<String, String, u64, Diff> as Builder>::Output {
+        batch_from_tuples_with(tuples, upper)
     }
 
     /// Collects `for_each_diff_pair` invocations into a flat, deterministically
@@ -188,6 +249,36 @@ mod tests {
                 dp.after.map(Into::into),
             ));
         });
+        out.sort();
+        out
+    }
+
+    /// Collects `iter_diff_pairs` output into a per-key list, sorted by key
+    /// for deterministic assertion. Pair order within a key is preserved.
+    fn collect_bounded_diff_pairs<B, C>(
+        batch: &B,
+        lower: Option<u64>,
+        upper: Option<u64>,
+    ) -> Vec<(String, Vec<(u64, Option<String>, Option<String>)>)>
+    where
+        B: BatchReader<Time = u64> + Navigable<Cursor = C>,
+        C: Cursor<Storage = B, Diff = Diff, Time = u64>,
+        C::ValOwn: 'static + Into<String>,
+        <C::KeyContainer as BatchContainer>::Owned: Into<String>,
+    {
+        let mut out: Vec<_> = iter_diff_pairs(
+            batch,
+            lower.map(Antichain::from_elem),
+            upper.map(Antichain::from_elem),
+        )
+        .map(|(k, pairs)| {
+            let pairs = pairs
+                .into_iter()
+                .map(|(t, dp)| (t, dp.before.map(Into::into), dp.after.map(Into::into)))
+                .collect();
+            (k.into(), pairs)
+        })
+        .collect();
         out.sort();
         out
     }
@@ -297,6 +388,194 @@ mod tests {
                 ("k1".into(), 5, Some("v1".into()), None),
                 ("k1".into(), 10, None, Some("v2".into())),
             ]
+        );
+    }
+
+    #[mz_ore::test]
+    fn pairs_are_grouped_by_key() {
+        // One item per key, pairs within a key in ascending timestamp order.
+        let batch = batch_from_tuples(
+            vec![
+                (("k1".into(), "v1".into()), 5, Diff::ONE),
+                (("k1".into(), "v1".into()), 10, -Diff::ONE),
+                (("k1".into(), "v2".into()), 10, Diff::ONE),
+                (("k2".into(), "v3".into()), 7, Diff::ONE),
+            ],
+            11,
+        );
+        let items = collect_bounded_diff_pairs(&batch, None, None);
+        assert_eq!(
+            items,
+            vec![
+                (
+                    "k1".into(),
+                    vec![
+                        (5, None, Some("v1".into())),
+                        (10, Some("v1".into()), Some("v2".into())),
+                    ]
+                ),
+                ("k2".into(), vec![(7, None, Some("v3".into()))]),
+            ]
+        );
+    }
+
+    #[mz_ore::test]
+    fn lower_bound_is_inclusive() {
+        let batch = batch_from_tuples(
+            vec![
+                (("k1".into(), "v1".into()), 4, Diff::ONE),
+                (("k1".into(), "v2".into()), 5, Diff::ONE),
+            ],
+            6,
+        );
+        let items = collect_bounded_diff_pairs(&batch, Some(5), None);
+        assert_eq!(
+            items,
+            vec![("k1".into(), vec![(5, None, Some("v2".into()))])]
+        );
+    }
+
+    #[mz_ore::test]
+    fn upper_bound_is_exclusive() {
+        let batch = batch_from_tuples(
+            vec![
+                (("k1".into(), "v1".into()), 5, Diff::ONE),
+                (("k1".into(), "v2".into()), 6, Diff::ONE),
+            ],
+            7,
+        );
+        let items = collect_bounded_diff_pairs(&batch, None, Some(6));
+        assert_eq!(
+            items,
+            vec![("k1".into(), vec![(5, None, Some("v1".into()))])]
+        );
+    }
+
+    #[mz_ore::test]
+    fn bounds_filter_within_a_key() {
+        // The window [6, 11) drops the t=5 insertion but keeps the t=10
+        // retraction/insertion, which still pair with each other.
+        let batch = batch_from_tuples(
+            vec![
+                (("k1".into(), "v1".into()), 5, Diff::ONE),
+                (("k1".into(), "v1".into()), 10, -Diff::ONE),
+                (("k1".into(), "v2".into()), 10, Diff::ONE),
+            ],
+            11,
+        );
+        let items = collect_bounded_diff_pairs(&batch, Some(6), Some(11));
+        assert_eq!(
+            items,
+            vec![(
+                "k1".into(),
+                vec![(10, Some("v1".into()), Some("v2".into()))]
+            )]
+        );
+    }
+
+    #[mz_ore::test]
+    fn fully_filtered_key_emits_no_item() {
+        // All of k1's updates fall outside the bounds, so k1 must not appear
+        // at all, not even as a key with an empty pair list.
+        let batch = batch_from_tuples(
+            vec![
+                (("k1".into(), "v1".into()), 3, Diff::ONE),
+                (("k2".into(), "v2".into()), 5, Diff::ONE),
+            ],
+            6,
+        );
+        let items = collect_bounded_diff_pairs(&batch, Some(5), None);
+        assert_eq!(
+            items,
+            vec![("k2".into(), vec![(5, None, Some("v2".into()))])]
+        );
+    }
+
+    #[mz_ore::test]
+    fn bounds_filter_everything() {
+        let batch = batch_from_tuples(vec![(("k1".into(), "v1".into()), 5, Diff::ONE)], 6);
+        let items = collect_bounded_diff_pairs(&batch, Some(6), None);
+        assert_eq!(items, vec![]);
+    }
+
+    thread_local! {
+        static TRACKED_LIVE: Cell<usize> = const { Cell::new(0) };
+        static TRACKED_PEAK: Cell<usize> = const { Cell::new(0) };
+    }
+
+    /// Value type that records the peak number of simultaneously live
+    /// instances on this thread, to observe cloning behavior.
+    #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+    struct Tracked(String);
+
+    impl Tracked {
+        fn new(s: &str) -> Self {
+            Self::record_live();
+            Tracked(s.into())
+        }
+
+        fn record_live() {
+            let live = TRACKED_LIVE.with(|l| {
+                l.set(l.get() + 1);
+                l.get()
+            });
+            TRACKED_PEAK.with(|p| p.set(p.get().max(live)));
+        }
+
+        /// Resets the peak to the current live count and returns that count.
+        fn reset_peak() -> usize {
+            let live = TRACKED_LIVE.with(Cell::get);
+            TRACKED_PEAK.with(|p| p.set(live));
+            live
+        }
+
+        fn peak() -> usize {
+            TRACKED_PEAK.with(Cell::get)
+        }
+    }
+
+    impl Clone for Tracked {
+        fn clone(&self) -> Self {
+            Self::record_live();
+            Tracked(self.0.clone())
+        }
+    }
+
+    impl Drop for Tracked {
+        fn drop(&mut self) {
+            TRACKED_LIVE.with(|l| l.set(l.get() - 1));
+        }
+    }
+
+    #[mz_ore::test]
+    fn fan_out_clones_lazily() {
+        // A hot key: one consolidated update whose diff fans out into many
+        // pairs. Consuming the pairs one at a time must not materialize the
+        // fan-out; only the buffered update and the pair in flight may hold a
+        // clone of the value. An implementation that collects the fan-out
+        // (e.g. into a per-key Vec) peaks at FAN_OUT live clones instead and
+        // regresses sink memory in proportion to the hottest key.
+        const FAN_OUT: i64 = 1000;
+        let batch = batch_from_tuples_with(
+            vec![(("k1".into(), Tracked::new("v1")), 5, Diff::from(FAN_OUT))],
+            6,
+        );
+
+        let baseline = Tracked::reset_peak();
+        let mut pair_count = 0i64;
+        for (_key, pairs) in iter_diff_pairs(&batch, None, None) {
+            for (_time, pair) in pairs {
+                pair_count += 1;
+                drop(pair);
+            }
+        }
+        assert_eq!(pair_count, FAN_OUT);
+
+        let peak_extra = Tracked::peak() - baseline;
+        assert!(
+            peak_extra <= 3,
+            "walking the fan-out held {peak_extra} extra live values at peak, \
+             expected O(1) rather than O(FAN_OUT)"
         );
     }
 }

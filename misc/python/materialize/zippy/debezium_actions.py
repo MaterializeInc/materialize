@@ -35,20 +35,6 @@ class DebeziumStart(Action):
         c.up("debezium")
 
 
-class DebeziumStop(Action):
-    """Stop the Debezium instance."""
-
-    @classmethod
-    def requires(cls) -> set[type[Capability]]:
-        return {DebeziumRunning}
-
-    def withholds(self) -> set[type[Capability]]:
-        return {DebeziumRunning}
-
-    def run(self, c: Composition, state: State) -> None:
-        c.kill("debezium")
-
-
 class CreateDebeziumSource(Action):
     """Creates a Debezium source in Materialized."""
 
@@ -63,39 +49,47 @@ class CreateDebeziumSource(Action):
         }
 
     def __init__(self, capabilities: Capabilities) -> None:
-        # To avoid conflicts, we make sure the postgres table and the debezium source have matching names
-        postgres_table = random.choice(capabilities.get(PostgresTableExists))
-        cluster_name = random.choice(source_capable_clusters(capabilities))
-        debezium_source_name = f"debezium_source_{postgres_table.name}"
-        this_debezium_source = DebeziumSourceExists(name=debezium_source_name)
+        # ENVELOPE DEBEZIUM requires a key, so only Postgres tables with a
+        # primary key can back a Debezium source.
+        pk_tables = [t for t in capabilities.get(PostgresTableExists) if t.has_pk]
 
-        existing_debezium_sources = [
-            s
-            for s in capabilities.get(DebeziumSourceExists)
-            if s.name == this_debezium_source.name
-        ]
+        self.new_debezium_source = False
+        self.debezium_source: DebeziumSourceExists | None = None
 
-        if len(existing_debezium_sources) == 0:
-            self.new_debezium_source = True
+        if pk_tables:
+            # To avoid conflicts, we make sure the postgres table and the debezium source have matching names
+            postgres_table = random.choice(pk_tables)
+            cluster_name = random.choice(source_capable_clusters(capabilities))
+            debezium_source_name = f"debezium_source_{postgres_table.name}"
+            this_debezium_source = DebeziumSourceExists(name=debezium_source_name)
 
-            self.debezium_source = this_debezium_source
-            self.postgres_table = postgres_table
-            self.debezium_source.postgres_table = self.postgres_table
-            self.cluster_name = cluster_name
-        elif len(existing_debezium_sources) == 1:
-            self.new_debezium_source = False
+            existing_debezium_sources = [
+                s
+                for s in capabilities.get(DebeziumSourceExists)
+                if s.name == this_debezium_source.name
+            ]
 
-            self.debezium_source = existing_debezium_sources[0]
-            assert self.debezium_source.postgres_table is not None
-            self.postgres_table = self.debezium_source.postgres_table
-        else:
-            raise RuntimeError("More than one Debezium source exists")
+            if len(existing_debezium_sources) == 0:
+                self.new_debezium_source = True
+
+                self.debezium_source = this_debezium_source
+                self.postgres_table = postgres_table
+                self.debezium_source.postgres_table = self.postgres_table
+                self.cluster_name = cluster_name
+            elif len(existing_debezium_sources) == 1:
+                self.debezium_source = existing_debezium_sources[0]
+                assert self.debezium_source.postgres_table is not None
+                self.postgres_table = self.debezium_source.postgres_table
+            else:
+                raise RuntimeError("More than one Debezium source exists")
 
         super().__init__(capabilities)
 
     def run(self, c: Composition, state: State) -> None:
         if self.new_debezium_source:
-            c.testdrive(dedent(f"""
+            assert self.debezium_source is not None
+            c.testdrive(
+                dedent(f"""
                     $ http-request method=POST url=http://debezium:8083/connectors content-type=application/json
                     {{
                       "name": "{self.debezium_source.name}",
@@ -113,7 +107,7 @@ class CreateDebeziumSource(Action):
                         "publication.name": "dbz_publication_{self.debezium_source.name}",
                         "publication.autocreate.mode": "filtered",
                         "slot.name" : "slot_{self.postgres_table.name}",
-                        "database.history.kafka.bootstrap.servers": "kafka:9092",
+                        "database.history.kafka.bootstrap.servers": "redpanda:9092",
                         "database.history.kafka.topic": "schema-changes.history",
                         "truncate.handling.mode": "include",
                         "decimal.handling.mode": "precise",
@@ -134,7 +128,12 @@ class CreateDebeziumSource(Action):
                     > CREATE TABLE {self.debezium_source.get_name_for_query()} FROM SOURCE {self.debezium_source.name} (REFERENCE "postgres.public.{self.postgres_table.name}")
                       FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                       ENVELOPE DEBEZIUM
-                    """))
+                    """),
+                mz_service=state.mz_service,
+            )
 
     def provides(self) -> list[Capability]:
-        return [self.debezium_source] if self.new_debezium_source else []
+        if self.new_debezium_source:
+            assert self.debezium_source is not None
+            return [self.debezium_source]
+        return []

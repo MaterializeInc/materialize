@@ -572,12 +572,23 @@ impl Coordinator {
         });
     }
 
-    /// Set the `execution_timestamp` for a statement, once it's known
+    /// Sets the execution timestamp if the statement is still active.
+    ///
+    /// A duplicate end can race the asynchronous group-commit update, so an ended statement is
+    /// skipped rather than treated as corruption.
     pub(crate) fn set_statement_execution_timestamp(
         &mut self,
         id: StatementLoggingId,
         timestamp: Timestamp,
     ) {
+        let StatementLoggingId(uuid) = id;
+        if !self.statement_logging.executions_begun.contains_key(&uuid) {
+            tracing::warn!(
+                statement_uuid = %uuid,
+                "execution already ended, skipping execution timestamp update",
+            );
+            return;
+        }
         self.mutate_record(id, |record| {
             record.execution_timestamp = Some(u64::from(timestamp));
         });

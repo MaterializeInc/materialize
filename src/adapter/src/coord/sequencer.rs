@@ -94,6 +94,7 @@ use crate::util::ClientTransmitter;
 //   big refactoring after the old peek sequencing is removed.
 
 mod inner;
+pub(crate) use inner::cancel_carried_reconfiguration;
 
 impl Coordinator {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 34KB. This would

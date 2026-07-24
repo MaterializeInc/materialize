@@ -184,6 +184,14 @@ pub trait DateLike: chrono::Datelike {
         naive_date.and_utc().timestamp()
     }
 
+    /// The year in SQL's numbering, where 1 BC is year -1 and there is no
+    /// year 0. Chrono's `year` uses astronomical numbering, where 1 BC is
+    /// year 0.
+    fn extract_year(&self) -> i32 {
+        let year = self.year();
+        if year <= 0 { year - 1 } else { year }
+    }
+
     fn millennium(&self) -> i32 {
         (self.year() + if self.year() > 0 { 999 } else { -1_000 }) / 1_000
     }

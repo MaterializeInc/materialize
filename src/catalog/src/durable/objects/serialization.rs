@@ -75,6 +75,7 @@ impl RustType<proto::ClusterVariant> for ClusterVariant {
                 size,
                 availability_zones,
                 logging,
+                arrangement_compression,
                 replication_factor,
                 optimizer_feature_overrides,
                 schedule,
@@ -85,6 +86,7 @@ impl RustType<proto::ClusterVariant> for ClusterVariant {
                 size: size.to_string(),
                 availability_zones: availability_zones.clone(),
                 logging: logging.into_proto(),
+                arrangement_compression: *arrangement_compression,
                 replication_factor: *replication_factor,
                 optimizer_feature_overrides: optimizer_feature_overrides.into_proto(),
                 schedule: schedule.into_proto(),
@@ -103,6 +105,7 @@ impl RustType<proto::ClusterVariant> for ClusterVariant {
                 size: managed.size,
                 availability_zones: managed.availability_zones,
                 logging: managed.logging.into_rust()?,
+                arrangement_compression: managed.arrangement_compression,
                 replication_factor: managed.replication_factor,
                 optimizer_feature_overrides: managed.optimizer_feature_overrides.into_rust()?,
                 schedule: managed.schedule.into_rust()?,
@@ -167,6 +170,7 @@ impl RustType<proto::ReconfigurationTarget> for ReconfigurationTarget {
             replication_factor: self.replication_factor,
             availability_zones: self.availability_zones.clone(),
             logging: self.logging.into_proto(),
+            arrangement_compression: self.arrangement_compression,
         }
     }
 
@@ -176,6 +180,7 @@ impl RustType<proto::ReconfigurationTarget> for ReconfigurationTarget {
             replication_factor: proto.replication_factor,
             availability_zones: proto.availability_zones,
             logging: proto.logging.into_rust()?,
+            arrangement_compression: proto.arrangement_compression,
         })
     }
 }
@@ -203,6 +208,7 @@ impl RustType<proto::ReplicaConfig> for ReplicaConfig {
         proto::ReplicaConfig {
             logging: self.logging.into_proto(),
             location: self.location.into_proto(),
+            arrangement_compression: self.arrangement_compression,
         }
     }
 
@@ -210,6 +216,7 @@ impl RustType<proto::ReplicaConfig> for ReplicaConfig {
         Ok(ReplicaConfig {
             location: proto.location.into_rust()?,
             logging: proto.logging.into_rust()?,
+            arrangement_compression: proto.arrangement_compression,
         })
     }
 }

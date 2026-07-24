@@ -24,6 +24,18 @@ If either tool is missing or unauthenticated, **stop immediately** and tell the 
 
 Both `gh` and `bk` make network requests that are blocked by the default sandbox. All Bash commands in this workflow must use `dangerouslyDisableSandbox: true`.
 
+## Search existing failures by pattern
+
+Search for already recorded failures in CI with a short, stable error substring:
+
+```bash
+bin/ci-failures 'foobar'
+```
+
+Use `--search` for the global search. Narrow results with `--branch main`,
+`--version`, `--issue`, `--test`, `--build`, `--start-date`, or `--end-date`.
+The command explains how to create a token when needed.
+
 ## Step 1: Extract PR number
 
 Parse `$ARGUMENTS` to get the PR number. Handle both formats:

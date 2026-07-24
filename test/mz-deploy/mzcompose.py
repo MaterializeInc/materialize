@@ -49,6 +49,7 @@ SERVICES = [
     Materialized(
         additional_system_parameter_defaults={
             "enable_create_table_from_source": "true",
+            "enable_auto_scaling_strategy": "true",
         },
     ),
     # Kafka broker for the sinks workflow. Only started by workflows that
@@ -1553,6 +1554,84 @@ def workflow_promote_resume(c: Composition, parser: WorkflowArgumentParser) -> N
         assert orders_exists(), "no data loss across crash + resume"
 
 
+def workflow_metadata_rollback(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """`stage --no-rollback` must not clean up after a metadata-recording failure.
+
+    `record_stage_metadata` writes deployment rows before any staging resources
+    exist. DEX-40 made a failure there roll those rows back so a re-stage under
+    the same name is unblocked, but that rollback must still honor `--no-rollback`
+    (the operator's documented "leave resources in place for debugging"). Skipping
+    it preserves the partial records and, critically, avoids the suffix-matching
+    `DROP ... CASCADE` in `rollback_staging_resources`, which can drop a production
+    schema whose name ends in `_<deploy_id>`.
+
+    The failure is injected by revoking the deployer's INSERT on
+    `_mz_deploy.tables.objects`: the schema rows get written, then appending the
+    object rows is denied.
+    """
+    setup_base(c)
+    assert run_mz_deploy(c, "basic/v1", "apply").returncode == 0
+
+    def deployment_rows(deploy_id: str) -> int:
+        return c.sql_query(
+            "SELECT count(*) FROM _mz_deploy.tables.deployments "
+            f"WHERE deploy_id = '{deploy_id}'",
+            user="mz_system",
+            port=6877,
+        )[0][0]
+
+    def stage_fails(deploy_id: str, *flags: str) -> None:
+        r = run_mz_deploy(
+            c,
+            "basic/v1",
+            "stage",
+            "--deploy-id",
+            deploy_id,
+            "--redeploy-all",
+            "--allow-dirty",
+            *flags,
+            check=False,
+        )
+        assert (
+            r.returncode != 0
+        ), f"stage should fail when metadata recording is denied\nstdout={r.stdout}\nstderr={r.stderr}"
+
+    # deploy_user inherits INSERT through the role, so revoke it from the role.
+    c.sql(
+        "REVOKE INSERT ON TABLE _mz_deploy.tables.objects FROM materialize_deployer",
+        user="mz_system",
+        port=6877,
+    )
+
+    with c.test_case("no-rollback-preserves-state"):
+        # A production schema colliding with the `_prod` suffix, owned by
+        # deploy_user so the (buggy) rollback running as the deployer can drop it.
+        c.sql(
+            "CREATE SCHEMA app.keep_prod; CREATE TABLE app.keep_prod.t (id int)",
+            user="deploy_user",
+            database="app",
+        )
+        stage_fails("prod", "--no-rollback")
+        assert (
+            deployment_rows("prod") >= 1
+        ), "--no-rollback must not roll back the partial deployment records"
+        assert c.sql_query(
+            "SELECT 1 FROM mz_schemas s JOIN mz_databases d ON s.database_id = d.id "
+            "WHERE s.name = 'keep_prod' AND d.name = 'app'",
+            user="mz_system",
+            port=6877,
+        ), "--no-rollback must not CASCADE-drop the colliding production schema"
+
+    with c.test_case("default-rolls-back"):
+        # Control: without --no-rollback the same failure still cleans up (DEX-40).
+        # Also proves the injection reaches the rollback path, so the case above is
+        # a real RED/GREEN signal rather than a stage that quietly succeeded.
+        stage_fails("stg")
+        assert (
+            deployment_rows("stg") == 0
+        ), "the default path must roll back the orphaned deployment records"
+
+
 def workflow_redeploy_flags(c: Composition, parser: WorkflowArgumentParser) -> None:
     """`stage --redeploy-schema` / `--redeploy-all` force a redeploy.
 
@@ -2320,3 +2399,133 @@ def workflow_concurrent_deploys(c: Composition, parser: WorkflowArgumentParser) 
             "SELECT name FROM mz_clusters WHERE name LIKE '%\\_ca' OR name LIKE '%\\_cb'"
         )
         assert len(rows) == 0, f"Expected no staging clusters, got {rows}"
+
+
+def workflow_autoscaling(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """AUTO SCALING STRATEGY lifecycle over the ``autoscaling/*`` projects.
+
+    Covers the three mz-deploy touchpoints for cluster autoscaling policies:
+    creation from a cluster definition file, reconciliation of policy drift
+    (alter and reset) by ``apply``, and policy inheritance when ``stage``
+    clones a production cluster."""
+    setup_base(c)
+
+    def live_strategy(cluster: str) -> tuple[str, int] | None:
+        """The (hydration_size, linger secs) of a cluster's configured
+        policy, or None when no policy is configured."""
+        rows = c.sql_query(
+            "SELECT s.strategy->'on_hydration'->>'hydration_size', "
+            "(s.strategy->'on_hydration'->'linger_duration'->>'secs')::int "
+            "FROM mz_internal.mz_cluster_auto_scaling_strategies s "
+            "JOIN mz_clusters cl ON cl.id = s.cluster_id "
+            f"WHERE cl.name = '{cluster}' AND s.strategy != 'null'::jsonb"
+        )
+        if len(rows) == 0:
+            return None
+        assert len(rows) == 1, f"expected at most one policy row, got {rows}"
+        return (rows[0][0], int(rows[0][1]))
+
+    with c.test_case("autoscaling-create"):
+        # Creating the cluster from the definition file carries the policy.
+        result = run_mz_deploy(c, "autoscaling/v1", "apply")
+        assert result.returncode == 0, f"apply v1 failed: {result.stderr}"
+        assert live_strategy("scaled") == ("scale=1,workers=2", 60)
+
+    with c.test_case("autoscaling-idempotent"):
+        # An unchanged definition reconciles to up-to-date, not altered.
+        result = run_mz_deploy(
+            c, "autoscaling/v1", "apply", "--dry-run", "--output", "json"
+        )
+        dry_run = parse_dry_run_json(result)
+        clusters_phase = find_phase(dry_run["phases"], "clusters")
+        assert (
+            len(phase_actions(clusters_phase, "altered")) == 0
+        ), f"expected no altered clusters on re-apply, got {clusters_phase}"
+        assert (
+            len(phase_actions(clusters_phase, "up_to_date")) == 1
+        ), f"expected the cluster to be up-to-date, got {clusters_phase}"
+
+    with c.test_case("autoscaling-stage-copy"):
+        # Staging clones the LIVE production cluster config, including the
+        # policy, so staged hydration bursts like production would.
+        result = run_mz_deploy(
+            c, "autoscaling/v2", "stage", "--deploy-id", "as1", "--allow-dirty"
+        )
+        assert result.returncode == 0, f"stage as1 failed: {result.stderr}"
+        # Pin the concrete policy rather than comparing the two clusters, which
+        # would pass vacuously if neither had a policy.
+        production = live_strategy("scaled")
+        assert production == (
+            "scale=1,workers=2",
+            60,
+        ), f"expected the production policy to be set, got {production}"
+        assert (
+            live_strategy("scaled_as1") == production
+        ), "staging cluster must inherit the production autoscaling policy"
+        result = run_mz_deploy(c, "autoscaling/v2", "abort", "as1")
+        assert result.returncode == 0, f"abort as1 failed: {result.stderr}"
+
+    with c.test_case("autoscaling-alter"):
+        # A policy edit in the definition file is drift and reconciles.
+        result = run_mz_deploy(
+            c, "autoscaling/v2", "apply", "--dry-run", "--output", "json"
+        )
+        dry_run = parse_dry_run_json(result)
+        clusters_phase = find_phase(dry_run["phases"], "clusters")
+        altered = phase_actions(clusters_phase, "altered")
+        assert len(altered) == 1, f"expected 1 altered cluster, got {clusters_phase}"
+        statements = " ".join(altered[0].get("statements", []))
+        assert (
+            "AUTO SCALING STRATEGY" in statements
+        ), f"expected an AUTO SCALING STRATEGY alter, got {statements}"
+
+        result = run_mz_deploy(c, "autoscaling/v2", "apply")
+        assert result.returncode == 0, f"apply v2 failed: {result.stderr}"
+        assert live_strategy("scaled") == ("scale=1,workers=4", 120)
+
+    with c.test_case("autoscaling-reset"):
+        # Removing the option from the file resets the live policy
+        # (reconciliation is declarative).
+        result = run_mz_deploy(
+            c, "autoscaling/v3", "apply", "--dry-run", "--output", "json"
+        )
+        dry_run = parse_dry_run_json(result)
+        clusters_phase = find_phase(dry_run["phases"], "clusters")
+        altered = phase_actions(clusters_phase, "altered")
+        assert len(altered) == 1, f"expected 1 altered cluster, got {clusters_phase}"
+        statements = " ".join(altered[0].get("statements", []))
+        assert (
+            "RESET (AUTO SCALING STRATEGY)" in statements
+        ), f"expected an AUTO SCALING STRATEGY reset, got {statements}"
+
+        result = run_mz_deploy(c, "autoscaling/v3", "apply")
+        assert result.returncode == 0, f"apply v3 failed: {result.stderr}"
+        assert live_strategy("scaled") is None, "expected the policy to be reset"
+
+
+def workflow_apply_all_role_ordering(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """`apply` (apply-all) must create project roles before clusters, because a
+    cluster file may grant a privilege to a project-defined role.
+
+    Before the ordering fix the clusters phase ran first and its
+    `GRANT USAGE ON CLUSTER reporting TO reader` failed with "unknown role
+    'reader'", and the failure was sticky across re-runs.
+    """
+    setup_base(c)
+
+    # The roles phase creates `reader`; grant the deploy role permission to do
+    # so. This isolates the phase-ordering bug from privilege setup.
+    c.sql("GRANT CREATEROLE ON SYSTEM TO deploy_user", user="mz_system", port=6877)
+
+    result = run_mz_deploy(c, "cluster-grant-role/v1", "apply", "--profile", "default")
+    assert result.returncode == 0, (
+        "apply-all must create roles before clusters so a cluster grant can "
+        f"reference a project role:\n{result.stdout}\n{result.stderr}"
+    )
+
+    rows = c.sql_query("SELECT name FROM mz_roles WHERE name = 'reader'")
+    assert len(rows) == 1, f"expected role 'reader' to exist, got {rows}"
+    rows = c.sql_query("SELECT name FROM mz_clusters WHERE name = 'reporting'")
+    assert len(rows) == 1, f"expected cluster 'reporting' to exist, got {rows}"

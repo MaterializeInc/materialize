@@ -45,7 +45,16 @@ pub async unsafe fn prof_time(
         let thread_name;
         // No other known way to convert `*mut c_void` to `usize`.
         #[allow(clippy::as_conversions)]
-        let mut addrs: Vec<_> = f.frames.iter().map(|f| f.ip() as usize).collect();
+        let mut addrs: Vec<_> = f
+            .frames
+            .iter()
+            .map(|f| f.ip() as usize)
+            // Drop null instruction pointers. The sampler can emit `ip() == 0`
+            // for empty/unresolvable frames; downstream pprof conversion computes
+            // `addr - 1`, which underflows on 0 (panics in debug builds with
+            // overflow checks enabled, wraps to a bogus address in release).
+            .filter(|ip| *ip != 0)
+            .collect();
         addrs.reverse();
         // No other known way to convert `isize` to `f64`.
         #[allow(clippy::as_conversions)]

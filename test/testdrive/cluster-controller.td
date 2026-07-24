@@ -196,6 +196,11 @@ scale=1,workers=1
 ! ALTER CLUSTER cc_nonshape SET (REPLICATION FACTOR 2)
 contains:cannot change replication factor while a reconfiguration is in progress
 
+# The schedule is refused the same way: it decides which strategy owns the
+# replica set, so it cannot flip under an in-flight record.
+! ALTER CLUSTER cc_nonshape SET (SCHEDULE = ON REFRESH)
+contains:cannot change the cluster schedule while a reconfiguration is in progress
+
 # WORKLOAD CLASS (system-role-only) applies immediately, whether or not the
 # reconfiguration is still in flight.
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
@@ -330,34 +335,149 @@ scale=1,workers=4
 
 > DROP CLUSTER cc_forced CASCADE
 
+# A second ALTER to the same target can force an in-flight reconfiguration to
+# cut over without replacing the target replica.
+> CREATE CLUSTER cc_force_existing (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
+
+> CREATE TABLE cc_force_existing_t (id int)
+
+> INSERT INTO cc_force_existing_t VALUES (1)
+
+> CREATE MATERIALIZED VIEW cc_force_existing_slow IN CLUSTER cc_force_existing AS
+  SELECT mz_unsafe.mz_sleep(id * 3600) AS s FROM cc_force_existing_t
+
+> ALTER CLUSTER cc_force_existing SET (SIZE 'scale=1,workers=4') WITH (WAIT UNTIL READY (TIMEOUT '600s', ON TIMEOUT 'ROLLBACK'))
+
+# The long deadline leaves both the realized and un-hydrated target replicas
+# online while the reconfiguration remains in progress.
+> SELECT r.size, bool_and(status.status = 'online')
+  FROM mz_cluster_replicas r
+  JOIN mz_clusters c ON c.id = r.cluster_id
+  JOIN mz_internal.mz_cluster_replica_statuses status ON status.replica_id = r.id
+  WHERE c.name = 'cc_force_existing'
+  GROUP BY r.size
+scale=1,workers=1 true
+scale=1,workers=4 true
+
+> SELECT recon.status
+  FROM mz_internal.mz_cluster_reconfigurations recon
+  JOIN mz_clusters c ON c.id = recon.cluster_id
+  WHERE c.name = 'cc_force_existing'
+in-progress
+
+$ set-from-sql var=cc_force_existing_target_id
+SELECT r.id::text
+FROM mz_cluster_replicas r
+JOIN mz_clusters c ON c.id = r.cluster_id
+WHERE c.name = 'cc_force_existing' AND r.size = 'scale=1,workers=4'
+
+# Replace only the deadline and timeout action. The existing target shape and
+# replica are reused, and the elapsed deadline forces cut-over on the next tick.
+> ALTER CLUSTER cc_force_existing SET (SIZE 'scale=1,workers=4') WITH (WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT 'COMMIT'))
+
+> SELECT r.id::text = '${cc_force_existing_target_id}', r.size
+  FROM mz_cluster_replicas r
+  JOIN mz_clusters c ON c.id = r.cluster_id
+  WHERE c.name = 'cc_force_existing'
+true scale=1,workers=4
+
+> SELECT row_number() OVER (ORDER BY id), details->>'transition', details->>'forced'
+  FROM mz_catalog.mz_audit_events
+  WHERE event_type = 'alter'
+    AND object_type = 'cluster'
+    AND details->>'cluster_name' = 'cc_force_existing'
+    AND details->>'transition' IS NOT NULL
+1 started <null>
+2 started <null>
+3 finalized true
+
+# Only the first ALTER created a target replica.
+> SELECT count(*)
+  FROM mz_catalog.mz_audit_events
+  WHERE event_type = 'create'
+    AND object_type = 'cluster-replica'
+    AND details->>'cluster_name' = 'cc_force_existing'
+    AND details->>'reason' = 'reconfiguration'
+1
+
+> DROP CLUSTER cc_force_existing CASCADE
+
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET unsafe_enable_unstable_dependencies = false
 
-# ----- Foreground wait-shim (background ALTER off) -----
+# ----- A single-replica sink does not block graceful reconfiguration -----
 #
 # With enable_background_alter_cluster off, a config-shape ALTER blocks the session
 # on the wait-shim instead of returning immediately. The shim keeps no timer of its
 # own: it waits for the controller to resolve the durable record, then reports
-# success once the realized config reached the requested shape. An empty cluster
-# hydrates promptly, so the reshape cuts over and the blocking ALTER returns.
+# success once the realized config reached the requested shape. A singleton sink
+# remains on the old replica until cut-over, so readiness must not wait for the
+# sink to hydrate on the target replica.
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM SET enable_background_alter_cluster = false
 ALTER SYSTEM SET cluster_alter_check_ready_interval = '100ms'
 
 > CREATE CLUSTER cc_fg (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
 
+> CREATE TABLE cc_fg_t (id int)
+
+> INSERT INTO cc_fg_t VALUES (1)
+
+> CREATE CONNECTION cc_fg_kafka TO KAFKA (
+    BROKER '${testdrive.kafka-addr}',
+    SECURITY PROTOCOL PLAINTEXT
+  )
+
+> CREATE SINK cc_fg_sink
+  IN CLUSTER cc_fg
+  FROM cc_fg_t
+  INTO KAFKA CONNECTION cc_fg_kafka (TOPIC 'testdrive-cluster-controller-sink-${testdrive.seed}')
+  FORMAT JSON ENVELOPE DEBEZIUM
+
+$ kafka-verify-data format=json sink=materialize.public.cc_fg_sink key=false sort-messages=true
+{"before": null, "after": {"id": 1}}
+
 # Blocks until the controller cuts the realized size over, then returns success.
 > ALTER CLUSTER cc_fg SET (SIZE 'scale=1,workers=2')
 
-> SELECT size FROM mz_clusters WHERE name = 'cc_fg'
+> SELECT r.size
+  FROM mz_cluster_replicas r
+  JOIN mz_clusters c ON c.id = r.cluster_id
+  WHERE c.name = 'cc_fg'
 scale=1,workers=2
 
-> DROP CLUSTER cc_fg
+> SELECT status FROM mz_internal.mz_sink_statuses WHERE name = 'cc_fg_sink'
+running
 
-# Restore background mode after this section.
+> INSERT INTO cc_fg_t VALUES (2)
+
+$ kafka-verify-data format=json sink=materialize.public.cc_fg_sink key=false sort-messages=true
+{"before": null, "after": {"id": 2}}
+
+# Background mode exercises the same readiness check without the wait shim.
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM SET enable_background_alter_cluster = true
 ALTER SYSTEM RESET cluster_alter_check_ready_interval
+
+> ALTER CLUSTER cc_fg SET (SIZE 'scale=1,workers=1')
+
+> SELECT r.size
+  FROM mz_cluster_replicas r
+  JOIN mz_clusters c ON c.id = r.cluster_id
+  WHERE c.name = 'cc_fg'
+scale=1,workers=1
+
+> SELECT status FROM mz_internal.mz_sink_statuses WHERE name = 'cc_fg_sink'
+running
+
+> INSERT INTO cc_fg_t VALUES (3)
+
+$ kafka-verify-data format=json sink=materialize.public.cc_fg_sink key=false sort-messages=true
+{"before": null, "after": {"id": 3}}
+
+> DROP CLUSTER cc_fg CASCADE
+> DROP TABLE cc_fg_t
+> DROP CONNECTION cc_fg_kafka
 
 # ----- A reshape whose transient peak exceeds the replica budget is rejected -----
 #
@@ -628,6 +748,135 @@ ALTER SYSTEM SET unsafe_enable_unstable_dependencies = false
 4 finalized true
 5 started true
 
+# ----- ON REFRESH scheduling driven by the controller -----
+#
+# With the gate on, the on-refresh strategy (not the legacy scheduling tick) owns
+# a scheduled cluster's replica set: it normalizes the realized replication factor
+# to 0 and brings up a single replica while the cluster is inside a refresh window.
+
+# A scheduled cluster with no bound REFRESH MV is outside any refresh window, so it
+# has no replica and its replication factor reads 0. The large HYDRATION TIME
+# ESTIMATE makes the window deterministically open once a fast-refreshing MV is
+# bound (the cluster must stay on to keep that far ahead of the next refresh).
+> CREATE CLUSTER cc_sched (SIZE 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '60 seconds'))
+
+> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_sched'
+0
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_sched'
+0
+
+# Bind a REFRESH EVERY materialized view: the cluster is now inside a refresh window
+# (it must rehydrate ahead of each refresh), so the controller brings up exactly one
+# replica at the cluster size. The replication factor still reads 0 (it is the
+# controller's domain for a scheduled cluster), and mz_cluster_replicas is
+# authoritative for what is actually running.
+> CREATE TABLE sched_t (x int)
+> CREATE MATERIALIZED VIEW cc_sched_mv IN CLUSTER cc_sched WITH (REFRESH = EVERY '1 second') AS SELECT count(*) FROM sched_t
+
+> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_sched'
+0
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_sched'
+1
+
+# The replica runs at the cluster size, and the MV computes a result on it.
+> SELECT r.size FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_sched'
+scale=1,workers=1
+> SELECT count FROM cc_sched_mv
+0
+
+> DROP MATERIALIZED VIEW cc_sched_mv
+
+# With the MV gone the refresh window closes and the controller retires the replica.
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_sched'
+0
+
+# The window-open create is audited `schedule` and carries the window decision as
+# the `scheduling_policies` detail, like the legacy scheduler's creates did: the
+# decision is `on`, the hydration-time estimate rides along, and the open window
+# names the REFRESH MV behind it.
+> SELECT event_type, details->>'reason', details->'scheduling_policies'->'on_refresh'->>'decision', details->'scheduling_policies'->'on_refresh'->>'hydration_time_estimate', jsonb_array_length(details->'scheduling_policies'->'on_refresh'->'objects_needing_refresh') > 0 FROM mz_catalog.mz_audit_events WHERE object_type = 'cluster-replica' AND details->>'cluster_name' = 'cc_sched' AND event_type = 'create'
+create schedule on 00:01:00 true
+
+# The window-close drop is `retired` with no decision detail. A drop happens
+# exactly when no strategy desires the replica, so there is no decision to record.
+> SELECT event_type, details->>'reason', details->'scheduling_policies' IS NULL FROM mz_catalog.mz_audit_events WHERE object_type = 'cluster-replica' AND details->>'cluster_name' = 'cc_sched' AND event_type = 'drop'
+drop retired true
+
+> DROP TABLE sched_t
+> DROP CLUSTER cc_sched
+
+# A config-shape ALTER on a scheduled cluster takes the direct path: no
+# reconfiguration record is written (so no lifecycle transition is audited),
+# the realized size advances immediately, and the controller reconciles the
+# in-window replica to the new shape on its next tick.
+> CREATE CLUSTER cc_sched_resize (SIZE 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '60 seconds'))
+> CREATE TABLE sched_resize_t (x int)
+> CREATE MATERIALIZED VIEW cc_sched_resize_mv IN CLUSTER cc_sched_resize WITH (REFRESH = EVERY '1 second') AS SELECT count(*) FROM sched_resize_t
+
+> SELECT r.size FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_sched_resize'
+scale=1,workers=1
+
+> ALTER CLUSTER cc_sched_resize SET (SIZE 'scale=1,workers=2')
+
+> SELECT size, replication_factor FROM mz_clusters WHERE name = 'cc_sched_resize'
+scale=1,workers=2 0
+
+> SELECT r.size FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_sched_resize'
+scale=1,workers=2
+
+# No reconfiguration lifecycle event was recorded: the ALTER never wrote a
+# record.
+> SELECT count(*) FROM mz_catalog.mz_audit_events WHERE event_type = 'alter' AND object_type = 'cluster' AND details->>'cluster_name' = 'cc_sched_resize' AND details->>'transition' IS NOT NULL
+0
+
+> DROP MATERIALIZED VIEW cc_sched_resize_mv
+> DROP TABLE sched_resize_t
+> DROP CLUSTER cc_sched_resize
+
+# Round-tripping a scheduled cluster through unmanaged and back works while its
+# in-window replica is running. The MANAGED = true conversion adopts the
+# existing replica (the replication factor derives from the replica count, it
+# is not normalized to 0 at planning), and the controller then takes ownership
+# again: the factor normalizes to 0 on the next tick and the replica stays for
+# the open window.
+> CREATE CLUSTER cc_sched_convert (SIZE 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '60 seconds'))
+> CREATE TABLE sched_convert_t (x int)
+> CREATE MATERIALIZED VIEW cc_sched_convert_mv IN CLUSTER cc_sched_convert WITH (REFRESH = EVERY '1 second') AS SELECT count(*) FROM sched_convert_t
+
+# The window is open, so a replica is up.
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_sched_convert'
+1
+
+> ALTER CLUSTER cc_sched_convert SET (MANAGED = false, SCHEDULE = MANUAL)
+> ALTER CLUSTER cc_sched_convert SET (MANAGED = true, SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '60 seconds'))
+
+> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_sched_convert'
+0
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_sched_convert'
+1
+> SELECT count FROM cc_sched_convert_mv
+0
+
+> DROP MATERIALIZED VIEW cc_sched_convert_mv
+> DROP TABLE sched_convert_t
+> DROP CLUSTER cc_sched_convert
+
+# A MANUAL cluster is untouched by the on-refresh strategy: its replica set is the
+# user's replication factor, owned by the implicit baseline.
+> CREATE CLUSTER cc_manual (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
+> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_manual'
+1
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_manual'
+1
+
+# Handing the cluster to the scheduler normalizes the replication factor to 0
+# at planning time, exactly like CREATE CLUSTER with a non-MANUAL schedule.
+> ALTER CLUSTER cc_manual SET (SCHEDULE = ON REFRESH)
+> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_manual'
+0
+
+> DROP CLUSTER cc_manual
+
 # ----- Hydration burst: AUTO SCALING STRATEGY SQL surface -----
 
 # SQL acceptance is gated by the enable_auto_scaling_strategy feature flag. The
@@ -850,8 +1099,308 @@ no-longer-warranted
 
 > DROP TABLE cc_burst_e2e_t
 
+# ----- Hydration burst: a single-replica source runs on the burst -----
+#
+# Keep both replicas unhydrated with a slow compute dataflow, then force a
+# reshape. The burst replica is allocated before the replacement steady
+# replica, so when the old steady replica is retired the singleton source moves
+# to the burst replica, the lowest remaining ReplicaId. Once the slow dataflow
+# is removed, the steady replica must count as hydrated even though the source
+# is scheduled elsewhere. The burst can then retire and the source moves to the
+# remaining steady replica.
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+ALTER USER postgres WITH replication;
+DROP PUBLICATION IF EXISTS cc_burst_source;
+DROP TABLE IF EXISTS public.cc_burst_source_t;
+CREATE TABLE public.cc_burst_source_t (f1 INTEGER PRIMARY KEY);
+ALTER TABLE public.cc_burst_source_t REPLICA IDENTITY FULL;
+INSERT INTO public.cc_burst_source_t VALUES (1), (2), (3);
+CREATE PUBLICATION cc_burst_source FOR TABLE public.cc_burst_source_t;
+
+> CREATE CLUSTER cc_burst_source (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1, AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=2,workers=2', LINGER DURATION = '0s')))
+
+> CREATE TABLE cc_burst_gate_t (id int)
+
+> INSERT INTO cc_burst_gate_t VALUES (1)
+
+> CREATE MATERIALIZED VIEW cc_burst_gate_mv IN CLUSTER cc_burst_source AS
+  SELECT mz_unsafe.mz_sleep(id * 3600) AS s FROM cc_burst_gate_t
+
+# The slow dataflow arms the burst and keeps it alive before the source is
+# created, ensuring the source initially chooses the older steady replica.
+> SELECT r.size, count(*)
+  FROM mz_cluster_replicas r
+  JOIN mz_clusters c ON c.id = r.cluster_id
+  WHERE c.name = 'cc_burst_source'
+  GROUP BY r.size
+  ORDER BY r.size
+scale=1,workers=1 1
+scale=2,workers=2 1
+
+> CREATE SECRET cc_burst_pgpass AS 'postgres'
+
+> CREATE CONNECTION cc_burst_pg TO POSTGRES (
+    HOST postgres,
+    DATABASE postgres,
+    USER postgres,
+    PASSWORD SECRET cc_burst_pgpass
+  )
+
+> CREATE SOURCE cc_burst_pg_source
+  IN CLUSTER cc_burst_source
+  FROM POSTGRES CONNECTION cc_burst_pg (PUBLICATION 'cc_burst_source')
+
+> CREATE TABLE cc_burst_pg_table
+  FROM SOURCE cc_burst_pg_source (REFERENCE cc_burst_source_t)
+
+> SELECT * FROM cc_burst_pg_table
+1
+2
+3
+
+# Force cut-over because the slow dataflow cannot hydrate on the target. The
+# source loses its old steady replica and is deterministically rescheduled onto
+# the older burst replica.
+> ALTER CLUSTER cc_burst_source SET (SIZE 'scale=4,workers=4') WITH (WAIT UNTIL READY (TIMEOUT '1s', ON TIMEOUT 'COMMIT'))
+
+> SELECT r.size, count(*)
+  FROM mz_cluster_replicas r
+  JOIN mz_clusters c ON c.id = r.cluster_id
+  WHERE c.name = 'cc_burst_source'
+  GROUP BY r.size
+  ORDER BY r.size
+scale=2,workers=2 1
+scale=4,workers=4 1
+
+> SELECT r.size
+  FROM mz_internal.mz_source_statistics stats
+  JOIN mz_sources s ON s.id = stats.id
+  JOIN mz_cluster_replicas r ON r.id = stats.replica_id
+  WHERE s.name = 'cc_burst_pg_source'
+scale=2,workers=2
+
+# Dropping a sleeping dataflow does not interrupt mz_sleep, so replace the
+# blocked steady replica once more. The fresh steady replica never installs the
+# dropped MV, while the source stays on the older burst replica.
+> DROP MATERIALIZED VIEW cc_burst_gate_mv
+
+# Ensure the controller has processed the drop before it creates the replacement
+# replica, which must not replay the dropped sleeping dataflow.
+> CREATE CLUSTER cc_burst_drop_barrier (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
+
+> ALTER CLUSTER cc_burst_drop_barrier SET (REPLICATION FACTOR 2)
+
+> SELECT count(*)
+  FROM mz_cluster_replicas r
+  JOIN mz_clusters c ON c.id = r.cluster_id
+  WHERE c.name = 'cc_burst_drop_barrier'
+2
+
+> DROP CLUSTER cc_burst_drop_barrier
+
+> ALTER CLUSTER cc_burst_source SET (SIZE 'scale=1,workers=2') WITH (WAIT UNTIL READY (TIMEOUT '1s', ON TIMEOUT 'COMMIT'))
+
+# The fresh steady replica is hydrated even though the source is running
+# off-target on the burst. The zero-duration linger then retires the burst.
+> SELECT r.size
+  FROM mz_cluster_replicas r
+  JOIN mz_clusters c ON c.id = r.cluster_id
+  WHERE c.name = 'cc_burst_source'
+scale=1,workers=2
+
+# Dropping the burst reschedules the source onto the remaining steady replica.
+> SELECT r.size
+  FROM mz_internal.mz_source_statistics stats
+  JOIN mz_sources s ON s.id = stats.id
+  JOIN mz_cluster_replicas r ON r.id = stats.replica_id
+  WHERE s.name = 'cc_burst_pg_source'
+scale=1,workers=2
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+INSERT INTO public.cc_burst_source_t VALUES (4);
+
+> SELECT * FROM cc_burst_pg_table
+1
+2
+3
+4
+
+> DROP SOURCE cc_burst_pg_source CASCADE
+> DROP CLUSTER cc_burst_source
+> DROP TABLE cc_burst_gate_t
+> DROP CONNECTION cc_burst_pg
+> DROP SECRET cc_burst_pgpass
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+DROP PUBLICATION cc_burst_source;
+DROP TABLE public.cc_burst_source_t;
+
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET unsafe_enable_unstable_dependencies = false
+
+# ----- Direct-path invariants on scheduled clusters -----
+
+# Converting a nonempty unmanaged cluster to ON REFRESH adopts its replica
+# rather than failing replication-factor validation, and the controller then
+# normalizes the factor to 0.
+> CREATE CLUSTER cc_conv (REPLICAS (r1 (SIZE 'scale=1,workers=1')))
+> ALTER CLUSTER cc_conv SET (MANAGED = true, SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '60 seconds'))
+> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_conv'
+0
+> DROP CLUSTER cc_conv
+
+# An availability-zone change on a scheduled cluster is validated like on every
+# other path, not written unchecked into the realized config.
+> CREATE CLUSTER cc_az_sched (SIZE 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '60 seconds'))
+! ALTER CLUSTER cc_az_sched SET (AVAILABILITY ZONES = ('cc-does-not-exist'))
+contains:unknown cluster replica availability zone
+> DROP CLUSTER cc_az_sched
+
+# A WAIT option on a scheduled cluster's ALTER is rejected: there may be no
+# replica at all, and an in-window replica is bounced to the new shape without
+# a hydrate-overlap to wait on, so an instant success would have waited for
+# nothing.
+> CREATE CLUSTER cc_wait_sched (SIZE 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '60 seconds'))
+! ALTER CLUSTER cc_wait_sched SET (SIZE 'scale=1,workers=2') WITH (WAIT UNTIL READY (TIMEOUT '15s', ON TIMEOUT 'ROLLBACK'))
+contains:WAIT is not supported when the cluster SCHEDULE is not MANUAL
+! ALTER CLUSTER cc_wait_sched SET (SIZE 'scale=1,workers=2') WITH (WAIT FOR '1s')
+contains:WAIT is not supported when the cluster SCHEDULE is not MANUAL
+> DROP CLUSTER cc_wait_sched
+
+# The rejection keys on the target schedule, so a WAIT on a currently-MANUAL
+# cluster whose ALTER sets a non-MANUAL schedule is rejected the same way.
+> CREATE CLUSTER cc_wait_to_sched (SIZE 'scale=1,workers=1')
+! ALTER CLUSTER cc_wait_to_sched SET (SIZE 'scale=1,workers=2', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '60 seconds')) WITH (WAIT FOR '1s')
+contains:WAIT is not supported when the cluster SCHEDULE is not MANUAL
+> DROP CLUSTER cc_wait_to_sched
+
+# The unmanaged-to-managed conversion falls into the same trap: it creates no
+# overlap replicas to wait on, and the scheduled target makes the WAIT
+# permanently meaningless.
+> CREATE CLUSTER cc_wait_conv (REPLICAS (r1 (SIZE 'scale=1,workers=1')))
+! ALTER CLUSTER cc_wait_conv SET (MANAGED = true, SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '60 seconds')) WITH (WAIT FOR '1s')
+contains:WAIT is not supported when the cluster SCHEDULE is not MANUAL
+> DROP CLUSTER cc_wait_conv
+
+# Boundary: an ALTER that sets SCHEDULE = MANUAL in the same statement leaves
+# a MANUAL cluster behind, so the WAIT takes the ordinary reshape path and is
+# accepted. The scheduled cluster held its replication factor at 0 and no
+# REPLICATION FACTOR can ride along (the planner rejects it while the current
+# schedule is non-MANUAL), so the reshape targets a zero-replica set, which
+# converges promptly.
+> CREATE CLUSTER cc_wait_manual (SIZE 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '60 seconds'))
+> ALTER CLUSTER cc_wait_manual SET (SIZE 'scale=1,workers=2', SCHEDULE = MANUAL) WITH (WAIT UNTIL READY (TIMEOUT '60s', ON TIMEOUT 'ROLLBACK'))
+> SELECT s.type FROM mz_internal.mz_cluster_schedules s JOIN mz_clusters c ON s.cluster_id = c.id WHERE c.name = 'cc_wait_manual'
+manual
+> SELECT size, replication_factor FROM mz_clusters WHERE name = 'cc_wait_manual'
+scale=1,workers=2 0
+> DROP CLUSTER cc_wait_manual
+
+# ----- Break-glass handoff to the legacy scheduler -----
+#
+# Disabling the controller hands scheduled clusters back to the legacy
+# scheduler. The controller runs a scheduled cluster's replica while holding
+# the durable replication factor at 0, so the legacy scheduler must decide
+# on/off from the physical replica set, not the factor. Otherwise a
+# controller-created replica would leak across the handoff.
+
+# Gate-off with the window still open: the legacy scheduler adopts the running
+# replica by aligning the replication factor with it, and retires it once the
+# window closes.
+> CREATE CLUSTER cc_handoff (SIZE 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '60 seconds'))
+> CREATE TABLE cc_handoff_t (x int)
+> CREATE MATERIALIZED VIEW cc_handoff_mv IN CLUSTER cc_handoff WITH (REFRESH = EVERY '1 second') AS SELECT count(*) FROM cc_handoff_t
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_handoff'
+1
+> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_handoff'
+0
+
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM SET enable_cluster_controller = false
+
+> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_handoff'
+1
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_handoff'
+1
+
+> DROP MATERIALIZED VIEW cc_handoff_mv
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_handoff'
+0
+> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_handoff'
+0
+> DROP CLUSTER cc_handoff
+> DROP TABLE cc_handoff_t
+
+# Gate-off and MV-drop together: the legacy scheduler sees a closed window and
+# a replica the factor does not reflect, and still retires it.
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM SET enable_cluster_controller = true
+
+> CREATE CLUSTER cc_handoff2 (SIZE 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '60 seconds'))
+> CREATE TABLE cc_handoff2_t (x int)
+> CREATE MATERIALIZED VIEW cc_handoff2_mv IN CLUSTER cc_handoff2 WITH (REFRESH = EVERY '1 second') AS SELECT count(*) FROM cc_handoff2_t
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_handoff2'
+1
+
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM SET enable_cluster_controller = false
+DROP MATERIALIZED VIEW materialize.public.cc_handoff2_mv
+
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_handoff2'
+0
+> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_handoff2'
+0
+> DROP CLUSTER cc_handoff2
+> DROP TABLE cc_handoff2_t
+
+# Regression: a mid-window shape bounce lands the surviving replica on a
+# non-canonical name (r1 -> r2), and the break-glass adopt aligns only the
+# replication factor. A legacy config-shape ALTER must still replace that
+# replica: it drops the cluster's observed replica set by id, not the
+# factor-derived canonical names, so the resize cannot miss the survivor and
+# leave a duplicate behind.
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM SET enable_cluster_controller = true
+
+> CREATE CLUSTER cc_handoff3 (SIZE 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '60 seconds'))
+> CREATE TABLE cc_handoff3_t (x int)
+> CREATE MATERIALIZED VIEW cc_handoff3_mv IN CLUSTER cc_handoff3 WITH (REFRESH = EVERY '1 second') AS SELECT count(*) FROM cc_handoff3_t
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_handoff3'
+1
+
+# The direct-path resize makes the controller bounce the in-window replica,
+# which comes back under a fresh, non-canonical name.
+> ALTER CLUSTER cc_handoff3 SET (SIZE 'scale=1,workers=2')
+> SELECT r.size FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_handoff3'
+scale=1,workers=2
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_handoff3'
+1
+
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM SET enable_cluster_controller = false
+
+# The legacy scheduler adopts the surviving replica.
+> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_handoff3'
+1
+
+# A legacy resize replaces the adopted replica: still exactly one, at the new
+# size.
+> ALTER CLUSTER cc_handoff3 SET (SIZE 'scale=1,workers=1')
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_handoff3'
+1
+> SELECT r.size FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_handoff3'
+scale=1,workers=1
+
+# Once the window closes the legacy scheduler retires the replica and the
+# factor follows.
+> DROP MATERIALIZED VIEW cc_handoff3_mv
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_handoff3'
+0
+> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_handoff3'
+0
+> DROP CLUSTER cc_handoff3
+> DROP TABLE cc_handoff3_t
 
 # Restore pristine server state (including the tick-interval override).
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize

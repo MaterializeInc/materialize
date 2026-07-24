@@ -767,7 +767,10 @@ impl CatalogState {
                 };
                 let config = ReplicaConfig {
                     location,
-                    compute: ComputeReplicaConfig { logging },
+                    compute: ComputeReplicaConfig {
+                        logging,
+                        arrangement_compression: cluster_replica.config.arrangement_compression,
+                    },
                 };
                 let mem_cluster_replica = ClusterReplica {
                     name: cluster_replica.name.clone(),

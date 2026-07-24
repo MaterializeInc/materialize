@@ -6,6 +6,8 @@ aliases:
   - /guides/dbt/
   - /third-party/dbt/
   - /integrations/dbt/
+  - /self-managed/v25.2/manage/dbt/get-started/
+  - /self-managed/v25.2/manage/dbt/
 menu:
   main:
     parent: manage

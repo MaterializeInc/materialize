@@ -7,16 +7,20 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeSet;
 use std::fmt::Debug;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{cmp, str};
 
 use anyhow::{Context, anyhow, bail, ensure};
+use mz_kafka_util::client::get_partitions;
+use mz_ore::task;
 use mz_postgres_util::{Sql, query_one, sql};
-use rdkafka::consumer::{Consumer, StreamConsumer};
+use rdkafka::consumer::{BaseConsumer, CommitMode, Consumer, StreamConsumer};
 use rdkafka::error::KafkaError;
 use rdkafka::message::{Headers, Message};
 use rdkafka::types::RDKafkaErrorCode;
+use rdkafka::{Offset, TopicPartitionList};
 use regex::Regex;
 use tokio::pin;
 use tokio_stream::StreamExt;
@@ -101,7 +105,7 @@ async fn get_topic(sink: &str, topic_field: &str, state: &State) -> Result<Strin
 
 pub async fn run_verify_data(
     mut cmd: BuiltinCommand,
-    state: &State,
+    state: &mut State,
 ) -> Result<ControlFlow, anyhow::Error> {
     let mut format = if let Some(format_str) = cmd.args.opt_string("format") {
         // If just a single format is provided, the user should specify `key=true` if they expect a
@@ -146,6 +150,11 @@ pub async fn run_verify_data(
         bail!("kafka-verify-data requires a non-empty list of expected messages");
     }
     let partial_search = cmd.args.opt_parse("partial-search")?;
+    // When false, the topic is exempt from the end-of-file exhaustion check.
+    // Set it on topics that legitimately keep records this command does not
+    // verify: topics fed by more than one sink, topics that double as a sink's
+    // progress topic, or topics whose later records are checked by other means.
+    let exhaustive = cmd.args.opt_bool("exhaustive")?.unwrap_or(true);
     let debug_print_only = cmd.args.opt_bool("debug-print-only")?.unwrap_or(false);
     // When set, decode Avro from AWS Glue framing (18-byte header) and resolve the
     // writer schema from Glue rather than Confluent Schema Registry.
@@ -160,6 +169,7 @@ pub async fn run_verify_data(
     println!("Verifying results in Kafka topic {}", topic);
 
     let mut config = state.kafka_config.clone();
+    config.set("enable.auto.commit", "false");
     config.set("enable.auto.offset.store", "false");
 
     let consumer: StreamConsumer = config.create().context("creating kafka consumer")?;
@@ -167,6 +177,11 @@ pub async fn run_verify_data(
         .subscribe(&[&topic])
         .context("subscribing to kafka topic")?;
 
+    // NOTE: Consumption stops after exactly as many messages as expected. The
+    // consumer group's committed offsets make consecutive kafka-verify-data
+    // commands resume where the previous one stopped, so tests can verify a
+    // topic in chunks. The end-of-file check below verifies that no records
+    // remain after the final non-partial verification.
     let (mut stream_messages_remaining, stream_timeout) = match partial_search {
         Some(size) => (size, state.timeout),
         None => (expected_messages.len(), Duration::from_secs(15)),
@@ -252,15 +267,23 @@ pub async fn run_verify_data(
         resolve_glue_schemas(state, &actual_bytes, &mut format).await?
     } else {
         let key_schema = if let Format::Avro = format.key {
-            let schema = state
+            // A missing key subject means the topic is unkeyed. Any other error
+            // must propagate: swallowing it would silently disable key
+            // verification.
+            let schema = match state
                 .ccsr_client
                 .get_schema_by_subject(&format!("{}-key", topic))
                 .await
-                .ok()
-                .map(|key_schema| {
-                    avro::parse_schema(&key_schema.raw, &[]).context("parsing avro schema")
-                })
-                .transpose()?;
+            {
+                Ok(key_schema) => {
+                    Some(avro::parse_schema(&key_schema.raw, &[]).context("parsing avro schema")?)
+                }
+                Err(
+                    mz_ccsr::GetBySubjectError::SubjectNotFound
+                    | mz_ccsr::GetBySubjectError::VersionNotFound(_),
+                ) => None,
+                Err(e) => return Err(anyhow::Error::from(e).context("fetching key schema")),
+            };
             // for avro, we can determine if a key is required based on the presence of the key schema
             // rather than requiring the user to specify the key=true flag
             if schema.is_some() {
@@ -337,7 +360,127 @@ pub async fn run_verify_data(
         partial_search.is_some(),
     )?;
 
+    consumer
+        .commit_consumer_state(CommitMode::Sync)
+        .context("committing verified message offsets")?;
+
+    if partial_search.is_some() || !exhaustive {
+        state.kafka_verify_topics.remove(&topic);
+    } else {
+        state.kafka_verify_topics.insert(topic);
+    }
+
     Ok(ControlFlow::Continue)
+}
+
+/// Verifies that no records remain after each topic's final exact verification.
+pub async fn verify_topics_exhausted(state: &State) -> Result<(), anyhow::Error> {
+    for topic in &state.kafka_verify_topics {
+        let mut config = state.kafka_config.clone();
+        config.set("enable.auto.commit", "false");
+        config.set("enable.auto.offset.store", "false");
+        config.set("enable.partition.eof", "true");
+
+        let topic = topic.clone();
+        let timeout = state.timeout;
+        task::spawn_blocking(
+            {
+                let topic = topic.clone();
+                move || format!("kafka_verify_topic_exhausted:{topic}")
+            },
+            move || verify_topic_exhausted(config, &topic, timeout),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+fn verify_topic_exhausted(
+    config: rdkafka::ClientConfig,
+    topic: &str,
+    timeout: Duration,
+) -> Result<(), anyhow::Error> {
+    let consumer: BaseConsumer = config.create().context("creating kafka consumer")?;
+    let deadline = Instant::now() + timeout;
+    let partitions = get_partitions(consumer.client(), topic, remaining(deadline)?)?;
+
+    let mut requested_offsets = TopicPartitionList::with_capacity(partitions.len());
+    for partition in &partitions {
+        requested_offsets.add_partition(topic, *partition);
+    }
+    let committed_offsets = consumer
+        .committed_offsets(requested_offsets, remaining(deadline)?)
+        .context("fetching committed message offsets")?;
+
+    // Resume from each partition's committed offset, where the last
+    // kafka-verify-data on this topic stopped, and confirm that only the
+    // end-of-partition marker remains. `pending` tracks the partitions we have
+    // not yet drained.
+    let mut assignment = TopicPartitionList::with_capacity(partitions.len());
+    let mut pending: BTreeSet<i32> = BTreeSet::new();
+    for partition in partitions {
+        let committed = committed_offsets
+            .find_partition(topic, partition)
+            .context("missing committed offset for topic partition")?
+            .offset();
+        let (low, high) = consumer
+            .fetch_watermarks(topic, partition, remaining(deadline)?)
+            .with_context(|| {
+                format!("fetching watermarks for Kafka topic {topic} partition {partition}")
+            })?;
+        let start = verification_start_offset(committed, low, high)?;
+        assignment.add_partition_offset(topic, partition, Offset::Offset(start))?;
+        pending.insert(partition);
+    }
+
+    consumer
+        .assign(&assignment)
+        .context("assigning Kafka topic partitions")?;
+
+    // `enable.partition.eof` makes librdkafka emit a `PartitionEOF` once a
+    // partition is drained to its end. Wait for that marker on every partition
+    // rather than comparing consumer positions to high watermarks: a position
+    // never advances on a partition that begins already drained (so empty
+    // partitions would hang forever), and with `read_committed` the high
+    // watermark stays ahead of the last readable record whenever transaction
+    // control markers trail the data.
+    while !pending.is_empty() {
+        match consumer.poll(remaining(deadline)?) {
+            Some(Ok(message)) => {
+                bail!(
+                    "extra record after final kafka-verify-data for topic {topic}, partition {}, offset {}",
+                    message.partition(),
+                    message.offset(),
+                );
+            }
+            Some(Err(KafkaError::PartitionEOF(partition))) => {
+                pending.remove(&partition);
+            }
+            Some(Err(e)) => {
+                return Err(e).context("reading final Kafka topic offsets");
+            }
+            None => {
+                bail!("timed out verifying the end of Kafka topic {topic}");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn verification_start_offset(committed: Offset, low: i64, high: i64) -> Result<i64, anyhow::Error> {
+    match committed {
+        Offset::Offset(offset) if (low..=high).contains(&offset) => Ok(offset),
+        Offset::Offset(_) | Offset::Invalid => Ok(low),
+        offset => bail!("unexpected committed Kafka offset {offset:?}"),
+    }
+}
+
+fn remaining(deadline: Instant) -> Result<Duration, anyhow::Error> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .context("timed out verifying final Kafka topic offsets")
 }
 
 /// Resolve the writer schema for each record side from AWS Glue.
@@ -538,7 +681,15 @@ fn parse_expected_messages(
                 Format::Bytes => {
                     unimplemented!("bytes format not yet supported in tests")
                 }
-                Format::Text => Some(DecodedValue::Text(value.to_string())),
+                // Take JSON strings verbatim, like the key path above. The
+                // actual message is decoded as raw text, so keeping the JSON
+                // quotes would make string values never match.
+                Format::Text => Some(DecodedValue::Text(
+                    value
+                        .as_str()
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| value.to_string()),
+                )),
             },
         };
 
@@ -634,5 +785,31 @@ where
         bail!("extra records:\n{}", actual.join("\n"))
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn verification_start_offset_uses_committed_offset() {
+        assert_eq!(
+            verification_start_offset(Offset::Offset(5), 2, 8).unwrap(),
+            5
+        );
+    }
+
+    #[mz_ore::test]
+    fn verification_start_offset_resets_out_of_range_offsets() {
+        assert_eq!(
+            verification_start_offset(Offset::Offset(1), 2, 8).unwrap(),
+            2
+        );
+        assert_eq!(
+            verification_start_offset(Offset::Offset(9), 2, 8).unwrap(),
+            2
+        );
+        assert_eq!(verification_start_offset(Offset::Invalid, 2, 8).unwrap(), 2);
     }
 }

@@ -199,6 +199,7 @@ impl Coordinator {
                     size,
                     availability_zones: Default::default(),
                     logging,
+                    arrangement_compression: false,
                     replication_factor: 1,
                     optimizer_feature_overrides: Default::default(),
                     schedule: Default::default(),
@@ -214,6 +215,7 @@ impl Coordinator {
                 size,
                 availability_zones,
                 logging,
+                arrangement_compression,
                 replication_factor,
                 optimizer_feature_overrides: _,
                 schedule,
@@ -239,6 +241,11 @@ impl Coordinator {
                 match &options.introspection_interval {
                     Set(ii) => logging.interval = ii.0,
                     Reset => logging.interval = Some(DEFAULT_REPLICA_LOGGING_INTERVAL),
+                    Unchanged => {}
+                }
+                match &options.arrangement_compression {
+                    Set(ac) => *arrangement_compression = *ac,
+                    Reset => *arrangement_compression = false,
                     Unchanged => {}
                 }
                 match &options.replication_factor {
@@ -281,6 +288,11 @@ impl Coordinator {
                 if !matches!(options.introspection_interval, Unchanged) {
                     coord_bail!("Cannot change INTROSPECTION INTERVAL of unmanaged clusters");
                 }
+                if !matches!(options.arrangement_compression, Unchanged) {
+                    coord_bail!(
+                        "Cannot change EXPERIMENTAL ARRANGEMENT COMPRESSION of unmanaged clusters"
+                    );
+                }
                 if !matches!(options.replication_factor, Unchanged) {
                     coord_bail!("Cannot change REPLICATION FACTOR of unmanaged clusters");
                 }
@@ -312,6 +324,18 @@ impl Coordinator {
                 .as_ref()
                 .is_some_and(|record| record.is_in_progress())
         );
+
+        // The schedule decides which strategy owns the cluster's replica set
+        // (the baseline for MANUAL, on-refresh otherwise), and the sequencer
+        // never writes a reconfiguration record for a scheduled cluster (see
+        // the routing below). Refuse flipping the schedule under an in-flight
+        // record rather than let the two ownership regimes overlap mid-flight.
+        if cluster_controller_owns
+            && reconfiguration_in_flight
+            && !matches!(options.schedule, Unchanged)
+        {
+            return Err(AdapterError::AlterClusterScheduleWhileReconfiguring);
+        }
 
         // Replication factor is one of the four dimensions the cut-over sets
         // atomically from the record's target (`fold_reconfiguration_target`),
@@ -358,7 +382,32 @@ impl Coordinator {
                 } else {
                     new_managed.replica_config_shape() != old_managed.replica_config_shape()
                 };
-                if needs_record {
+                // A scheduled (non-MANUAL) cluster holds its replication factor
+                // at 0 and the on-refresh strategy owns its replica set, so a
+                // graceful hydrate-overlap has nothing meaningful to wait for.
+                // A config-shape `ALTER` on such a cluster takes the direct
+                // path below instead of writing a record: with the controller
+                // owning the cluster the direct path only updates the realized
+                // config, and the controller reconciles any in-window replica
+                // to the new shape on its next tick. The schedule guard above
+                // keeps a schedule change from reaching here mid-record, so a
+                // record on a scheduled cluster can only pre-date the schedule
+                // (written on an older version). For that case the reshape
+                // path stays reachable, so the record can still be retargeted
+                // or cancelled until it settles.
+                let scheduled_direct =
+                    !matches!(new_managed.schedule, mz_sql::plan::ClusterSchedule::Manual)
+                        && !reconfiguration_in_flight;
+                // A `WAIT` option would be silently vacuous on the direct
+                // path: there may be no replica at all (window closed), and
+                // an in-window replica is bounced to the new shape without a
+                // hydrate-overlap to wait on. Reject it rather than return an
+                // instant success that waited for nothing, mirroring the
+                // planner's rejection of a `WAIT` without a shape change.
+                if scheduled_direct && !matches!(strategy, AlterClusterPlanStrategy::None) {
+                    return Err(AdapterError::AlterClusterWaitOnScheduledCluster);
+                }
+                if needs_record && !scheduled_direct {
                     return self
                         .reshape_alter_cluster_managed(
                             session,
@@ -437,7 +486,16 @@ impl Coordinator {
                     };
                 }
             }
-            (Unmanaged, Managed(_)) => {
+            (Unmanaged, Managed(new_managed)) => {
+                // The conversion path creates no overlap replicas to wait on,
+                // and a scheduled target makes the `WAIT` permanently
+                // meaningless, mirroring the managed-to-managed rejection
+                // above.
+                if !matches!(new_managed.schedule, mz_sql::plan::ClusterSchedule::Manual)
+                    && !matches!(strategy, AlterClusterPlanStrategy::None)
+                {
+                    return Err(AdapterError::AlterClusterWaitOnScheduledCluster);
+                }
                 self.sequence_alter_cluster_unmanaged_to_managed(
                     session,
                     cluster_id,
@@ -632,6 +690,7 @@ impl Coordinator {
             replication_factor: new_managed.replication_factor,
             availability_zones: new_managed.availability_zones.clone(),
             logging: new_managed.logging.clone(),
+            arrangement_compression: new_managed.arrangement_compression,
         };
         let unchanged = ReconfigurationDimensionsUnchanged {
             size: matches!(options.size, Unchanged),
@@ -641,6 +700,7 @@ impl Coordinator {
             // `ALTER` cannot revert an in-flight interval change (or vice versa).
             log_logging: matches!(options.introspection_debugging, Unchanged),
             interval: matches!(options.introspection_interval, Unchanged),
+            arrangement_compression: matches!(options.arrangement_compression, Unchanged),
         };
         let target = fold_reconfiguration_target(
             in_flight.as_ref().map(|r| &r.target),
@@ -1154,6 +1214,7 @@ impl Coordinator {
                     size: plan.size.clone(),
                     availability_zones: plan.availability_zones.clone(),
                     logging,
+                    arrangement_compression: plan.compute.arrangement_compression,
                     replication_factor: plan.replication_factor,
                     optimizer_feature_overrides: plan.optimizer_feature_overrides.clone(),
                     schedule: plan.schedule.clone(),
@@ -1363,7 +1424,10 @@ impl Coordinator {
                 azs,
                 false,
             )?,
-            compute: ComputeReplicaConfig { logging },
+            compute: ComputeReplicaConfig {
+                logging,
+                arrangement_compression: compute.arrangement_compression,
+            },
         };
 
         // The caller pre-allocates `replica_id` out-of-band via the durable
@@ -1525,7 +1589,10 @@ impl Coordinator {
                     None,
                     false,
                 )?,
-                compute: ComputeReplicaConfig { logging },
+                compute: ComputeReplicaConfig {
+                    logging,
+                    arrangement_compression: compute.arrangement_compression,
+                },
             };
 
             // Only orchestrated (managed-location) replicas have a size and size
@@ -1643,7 +1710,10 @@ impl Coordinator {
                 None,
                 false,
             )?,
-            compute: ComputeReplicaConfig { logging },
+            compute: ComputeReplicaConfig {
+                logging,
+                arrangement_compression: compute.arrangement_compression,
+            },
         };
 
         let cluster = self.catalog().get_cluster(cluster_id);
@@ -1763,6 +1833,7 @@ impl Coordinator {
             size,
             availability_zones,
             logging,
+            arrangement_compression,
             replication_factor,
             optimizer_feature_overrides: _,
             schedule: _,
@@ -1779,6 +1850,7 @@ impl Coordinator {
         let size = size.clone();
         let availability_zones = availability_zones.clone();
         let logging = logging.clone();
+        let arrangement_compression = *arrangement_compression;
         let replication_factor = *replication_factor;
         let ClusterVariant::Managed(new_managed) = &new_config.variant else {
             panic!("expected new managed cluster config");
@@ -1788,6 +1860,7 @@ impl Coordinator {
             replication_factor: new_replication_factor,
             availability_zones: new_availability_zones,
             logging: new_logging,
+            arrangement_compression: new_arrangement_compression,
             optimizer_feature_overrides: _,
             schedule: _,
             auto_scaling_strategy: new_auto_scaling_strategy,
@@ -1845,6 +1918,19 @@ impl Coordinator {
             .replicas()
             .map(|r| (r.name.clone(), r.replica_id))
             .collect();
+        // The cluster's observed owned replica set, with the same exclusions
+        // as the controller's ownership test: internal and billed-as replicas
+        // are manually managed, pending ones belong to an in-flight
+        // reconfiguration (rejected above, so none exist here).
+        let owned_replica_ids: Vec<ReplicaId> = cluster
+            .replicas()
+            .filter(|r| {
+                !r.config.location.internal()
+                    && r.config.location.billed_as().is_none()
+                    && !r.config.location.pending()
+            })
+            .map(|r| r.replica_id)
+            .collect();
 
         let compute = mz_sql::plan::ComputeReplicaConfig {
             introspection: new_logging
@@ -1853,6 +1939,7 @@ impl Coordinator {
                     debugging: new_logging.log_logging,
                     interval,
                 }),
+            arrangement_compression: *new_arrangement_compression,
         };
 
         // Eagerly validate the `max_replicas_per_cluster` limit.
@@ -1894,7 +1981,12 @@ impl Coordinator {
         // there burns those ids durably and throws them away. The controller
         // allocates its own when it materializes the change.
         let config_changed = new_managed.replica_config_shape()
-            != ManagedReplicaConfigShape::new(&size, &availability_zones, &logging);
+            != ManagedReplicaConfigShape::new(
+                &size,
+                &availability_zones,
+                &logging,
+                arrangement_compression,
+            );
         let needed_replica_ids = if controller_owns {
             0
         } else if config_changed {
@@ -1915,10 +2007,11 @@ impl Coordinator {
         // round-trip just to allocate nothing.
         let mut new_replica_ids = if needed_replica_ids > 0 {
             let id_ts = self.get_catalog_write_ts().await;
-            self.catalog()
+            let ids = self
+                .catalog()
                 .allocate_replica_ids(cluster_id, u64::from(needed_replica_ids), id_ts)
-                .await?
-                .into_iter()
+                .await?;
+            ids.into_iter()
         } else {
             Vec::<ReplicaId>::new().into_iter()
         };
@@ -1939,7 +2032,13 @@ impl Coordinator {
 
         if controller_owns {
             // Defer all replica create/drop to the controller. Only the realized
-            // config update below is applied here.
+            // config update below is applied here. The target must still be
+            // valid: the controller creates replicas from the realized config
+            // without re-validating availability zones, so an invalid pool
+            // written here would produce an unplaceable replica.
+            if config_changed {
+                self.ensure_valid_azs(new_availability_zones.iter())?;
+            }
         } else if config_changed {
             self.ensure_valid_azs(new_availability_zones.iter())?;
             // If we're not doing a zero-downtime reconfig tear down all
@@ -1947,13 +2046,19 @@ impl Coordinator {
             // return early asking for finalization
             match strategy {
                 AlterClusterPlanStrategy::None => {
-                    let replica_ids_and_reasons = (0..replication_factor)
-                        .map(managed_cluster_replica_name)
-                        .filter_map(|name| replica_id_by_name.get(&name).copied())
+                    // Names can drift from the canonical `r1..rN` while the
+                    // controller owns the set (its name generator avoids
+                    // observed names), so a factor-derived name list can miss
+                    // replicas after a break-glass handoff. This branch
+                    // recreates the entire replica set anyway, so dropping the
+                    // observed owned set by id closes that. In the pure
+                    // canonical world the two sets are identical.
+                    let replica_ids_and_reasons = owned_replica_ids
+                        .iter()
                         .map(|replica_id| {
                             catalog::DropObjectInfo::ClusterReplica((
                                 cluster_id,
-                                replica_id,
+                                *replica_id,
                                 reason.clone(),
                             ))
                         })
@@ -2095,8 +2200,10 @@ impl Coordinator {
         // rather than risk a bogus revival if the gate comes back on.
         //
         // NOTE: `handle_scheduling_decisions` also calls this function and
-        // bypasses the sequencer's replication-factor guard. It defers its
-        // flips itself while a reconfiguration is in progress.
+        // bypasses the sequencer's guards. It runs only while the controller
+        // gate is off, where the cancel-carried write below retires any
+        // in-progress record instead of leaving it behind for a controller
+        // that is not running.
         match finalization_needed {
             NeedsFinalization::No => {
                 let mut new_config = new_config;
@@ -2148,6 +2255,7 @@ impl Coordinator {
             replication_factor: new_replication_factor,
             availability_zones: new_availability_zones,
             logging: _,
+            arrangement_compression: _,
             optimizer_feature_overrides: _,
             schedule: _,
             auto_scaling_strategy: _,
@@ -2452,19 +2560,23 @@ struct ReconfigurationDimensionsUnchanged {
     availability_zones: bool,
     log_logging: bool,
     interval: bool,
+    arrangement_compression: bool,
 }
 
 /// Retains a stale in-progress reconfiguration record carried by a legacy-path
 /// config write as cancelled, returning the audit intent to declare with the
 /// write.
 ///
-/// The legacy ALTER paths (controller gate off) change the realized config
-/// directly and know nothing about reconfiguration records. Nothing on those
+/// The legacy write paths (controller gate off), the ALTER sequencer and the
+/// legacy scheduler, change the realized config directly and know nothing
+/// about reconfiguration records. Nothing on those
 /// paths ever settles a record, and carrying an in-progress one forward invites
 /// a bogus revival, up to a forced cut-over to an obsolete target, if the gate
 /// is turned back on later. A record can only be in progress here if it was
 /// written while the gate was on.
-fn cancel_carried_reconfiguration(config: &mut ClusterConfig) -> Option<ReconfigurationAudit> {
+pub(crate) fn cancel_carried_reconfiguration(
+    config: &mut ClusterConfig,
+) -> Option<ReconfigurationAudit> {
     let ClusterVariant::Managed(managed) = &mut config.variant else {
         return None;
     };
@@ -2491,6 +2603,7 @@ fn alter_changes_replica_shape(options: &PlanClusterOption) -> bool {
         availability_zones,
         introspection_debugging,
         introspection_interval,
+        arrangement_compression,
         managed: _,
         replicas: _,
         replication_factor: _,
@@ -2503,6 +2616,7 @@ fn alter_changes_replica_shape(options: &PlanClusterOption) -> bool {
         || !matches!(availability_zones, Unchanged)
         || !matches!(introspection_debugging, Unchanged)
         || !matches!(introspection_interval, Unchanged)
+        || !matches!(arrangement_compression, Unchanged)
 }
 
 /// Fold a new `ALTER` onto an in-flight reconfiguration target.
@@ -2558,6 +2672,11 @@ fn fold_reconfiguration_target(
                 new_target.logging.interval
             },
         },
+        arrangement_compression: if unchanged.arrangement_compression {
+            prev.arrangement_compression
+        } else {
+            new_target.arrangement_compression
+        },
     }
 }
 
@@ -2586,6 +2705,7 @@ mod tests {
                 log_logging,
                 interval: Some(DEFAULT_REPLICA_LOGGING_INTERVAL),
             },
+            arrangement_compression: false,
         }
     }
 
@@ -2596,6 +2716,7 @@ mod tests {
             availability_zones: false,
             log_logging: false,
             interval: false,
+            arrangement_compression: false,
         }
     }
 
@@ -2606,6 +2727,7 @@ mod tests {
             availability_zones: true,
             log_logging: true,
             interval: true,
+            arrangement_compression: true,
         }
     }
 
@@ -2632,6 +2754,7 @@ mod tests {
             availability_zones: true,
             log_logging: true,
             interval: true,
+            arrangement_compression: true,
         };
         let folded = fold_reconfiguration_target(Some(&in_flight), new, unchanged);
         // The in-flight size/AZ/logging survive. Only rf is re-targeted.
@@ -2675,6 +2798,7 @@ mod tests {
             availability_zones: true,
             log_logging: false,
             interval: true,
+            arrangement_compression: true,
         };
         let folded = fold_reconfiguration_target(Some(&in_flight), new, unchanged);
         assert_eq!(

@@ -249,24 +249,24 @@ bigint
 query T
 SELECT '1-2 3 4:5:6.7'::interval
 ----
-1 year 2 months 3 days 04:05:06.7
+1 year 2 mons 3 days 04:05:06.7
 
 query T
 SELECT '1-2 3 4:5:6.7'::pg_catalog.interval
 ----
-1 year 2 months 3 days 04:05:06.7
+1 year 2 mons 3 days 04:05:06.7
 
 # 🔬🔬🔬 interval prefix
 
 query T
 SELECT interval '1-2 3 4:5:6.7'
 ----
-1 year 2 months 3 days 04:05:06.7
+1 year 2 mons 3 days 04:05:06.7
 
 query T
 SELECT pg_catalog.interval '1-2 3 4:5:6.7'
 ----
-1 year 2 months 3 days 04:05:06.7
+1 year 2 mons 3 days 04:05:06.7
 
 # Special interval literal syntax doesn't apply to qualified interval
 query error Expected end of statement, found DAY

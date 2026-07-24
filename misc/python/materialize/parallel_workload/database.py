@@ -16,8 +16,8 @@ from enum import Enum
 from pg8000.native import identifier, literal
 
 from materialize.data_ingest.data_type import (
-    DATA_TYPES,
     DATA_TYPES_FOR_AVRO,
+    DATA_TYPES_FOR_COLUMNS,
     DATA_TYPES_FOR_KEY,
     DATA_TYPES_FOR_MYSQL,
     DATA_TYPES_FOR_SQL_SERVER,
@@ -58,24 +58,24 @@ from materialize.parallel_workload.executor import Executor
 from materialize.parallel_workload.expression import ExprKind, expression
 from materialize.parallel_workload.settings import Complexity, Scenario
 
-MAX_COLUMNS = 5
+MAX_COLUMNS = 50
 MAX_INCLUDE_HEADERS = 5
-MAX_ROWS = 50
+MAX_ROWS = 500
 MAX_CLUSTERS = 4
 MAX_CLUSTER_REPLICAS = 2
-MAX_DBS = 5
-MAX_SCHEMAS = 5
-MAX_TABLES = 5
-MAX_VIEWS = 15
-MAX_INDEXES = 15
-MAX_ROLES = 15
-MAX_WEBHOOK_SOURCES = 5
-MAX_KAFKA_SOURCES = 5
-MAX_MYSQL_SOURCES = 5
-MAX_SQL_SERVER_SOURCES = 5
-MAX_POSTGRES_SOURCES = 5
-MAX_KAFKA_SINKS = 5
-MAX_ICEBERG_SINKS = 5
+MAX_DBS = 50
+MAX_SCHEMAS = 50
+MAX_TABLES = 50
+MAX_VIEWS = 150
+MAX_INDEXES = 150
+MAX_ROLES = 150
+MAX_WEBHOOK_SOURCES = 50
+MAX_KAFKA_SOURCES = 50
+MAX_MYSQL_SOURCES = 50
+MAX_SQL_SERVER_SOURCES = 50
+MAX_POSTGRES_SOURCES = 50
+MAX_KAFKA_SINKS = 50
+MAX_ICEBERG_SINKS = 50
 
 MAX_INITIAL_DBS = 1
 MAX_INITIAL_SCHEMAS = 1
@@ -190,7 +190,7 @@ class Table(DBObject):
         self.table_id = table_id
         self.schema = schema
         self.columns = [
-            Column(rng, i, rng.choice(DATA_TYPES), self)
+            Column(rng, i, rng.choice(DATA_TYPES_FOR_COLUMNS), self)
             for i in range(rng.randint(2, MAX_COLUMNS))
         ]
         self.num_rows = 0
@@ -265,7 +265,8 @@ class View(DBObject):
             list(base_object2.columns) if base_object2 else []
         )
         self.data_types = [
-            rng.choice(list(DATA_TYPES)) for i in range(rng.randint(1, MAX_COLUMNS))
+            rng.choice(list(DATA_TYPES_FOR_COLUMNS))
+            for i in range(rng.randint(1, MAX_COLUMNS))
         ]
         self.expressions = [
             expression(data_type, all_columns, rng, kind=ExprKind.MATERIALIZABLE)

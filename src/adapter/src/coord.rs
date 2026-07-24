@@ -354,6 +354,17 @@ pub enum Message {
     },
     /// Initiates a group commit.
     GroupCommitInitiate(Span, Option<GroupCommitPermit>),
+    /// Finalizes an applied group commit.
+    ///
+    /// Statement timestamps precede response retirement because retirement ends statement logging.
+    GroupCommitApplied {
+        /// Responses to retire after recording statement timestamps.
+        responses: Vec<crate::util::CompletedClientTransmitter>,
+        /// Statement executions associated with this commit.
+        statement_logging_ids: Vec<StatementLoggingId>,
+        /// The applied write timestamp.
+        write_ts: Timestamp,
+    },
     DeferredStatementReady,
     AdvanceTimelines,
     ClusterEvent(ClusterEvent),
@@ -513,6 +524,7 @@ impl Message {
             Message::CreateConnectionValidationReady(_) => "create_connection_validation_ready",
             Message::TryDeferred { .. } => "try_deferred",
             Message::GroupCommitInitiate(..) => "group_commit_initiate",
+            Message::GroupCommitApplied { .. } => "group_commit_applied",
             Message::AdvanceTimelines => "advance_timelines",
             Message::ClusterEvent(_) => "cluster_event",
             Message::CancelPendingPeeks { .. } => "cancel_pending_peeks",
@@ -1613,32 +1625,44 @@ impl Drop for ExecuteContextGuard {
     }
 }
 
-/// Bundle of state related to statement execution.
+/// Carries the session and statement state needed to retire an execution.
 ///
-/// This struct collects a bundle of state that needs to be threaded
-/// through various functions as part of statement execution.
-/// It is used to finalize execution, by calling `retire`. Finalizing execution
-/// involves sending the session back to the pgwire layer so that it
-/// may be used to process further commands. It also involves
-/// performing some work on the main coordinator thread
-/// (e.g., recording the time at which the statement finished
-/// executing). The state necessary to perform this work is bundled in
-/// the `ExecuteContextGuard` object.
+/// Dropping an unretired context fails the client synchronously. Shutdown can drop contexts from
+/// task queues, where spawning response-barrier work is no longer safe.
 #[derive(Debug)]
 pub struct ExecuteContext {
-    inner: Box<ExecuteContextInner>,
+    // `None` only after `retire`/`into_parts` consumed the context.
+    inner: Option<Box<ExecuteContextInner>>,
 }
 
 impl std::ops::Deref for ExecuteContext {
     type Target = ExecuteContextInner;
     fn deref(&self) -> &Self::Target {
-        &*self.inner
+        self.inner.as_ref().expect("only consumed by value")
     }
 }
 
 impl std::ops::DerefMut for ExecuteContext {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut *self.inner
+        self.inner.as_mut().expect("only consumed by value")
+    }
+}
+
+impl Drop for ExecuteContext {
+    fn drop(&mut self) {
+        let Some(inner) = self.inner.take() else {
+            return;
+        };
+        // Destructors cannot spawn response-barrier tasks during runtime shutdown. Send the error
+        // synchronously and let the statement guard report retirement.
+        tracing::warn!("execute context dropped without retirement, failing the client");
+        let ExecuteContextInner { tx, session, .. } = *inner;
+        tx.send(
+            Err(AdapterError::Internal(
+                "statement execution abandoned, outcome unknown (server shutting down)".into(),
+            )),
+            session,
+        );
     }
 }
 
@@ -1687,14 +1711,16 @@ impl ExecuteContext {
         response_barriers: Vec<BuiltinTableAppendNotify>,
     ) -> Self {
         Self {
-            inner: ExecuteContextInner {
-                tx,
-                session,
-                extra,
-                response_barriers,
-                internal_cmd_tx,
-            }
-            .into(),
+            inner: Some(
+                ExecuteContextInner {
+                    tx,
+                    session,
+                    extra,
+                    response_barriers,
+                    internal_cmd_tx,
+                }
+                .into(),
+            ),
         }
     }
 
@@ -1708,7 +1734,7 @@ impl ExecuteContext {
     /// eventual retirement. The returned response barriers must stay attached
     /// to the user-visible response path.
     pub fn into_parts(
-        self,
+        mut self,
     ) -> (
         ClientTransmitter<ExecuteResponse>,
         mpsc::UnboundedSender<Message>,
@@ -1722,20 +1748,20 @@ impl ExecuteContext {
             session,
             extra,
             response_barriers,
-        } = *self.inner;
+        } = *self.inner.take().expect("only consumed by value");
         (tx, internal_cmd_tx, session, extra, response_barriers)
     }
 
     /// Retire the execution, by sending a message to the coordinator.
     #[instrument(level = "debug")]
-    pub fn retire(self, result: Result<ExecuteResponse, AdapterError>) {
+    pub fn retire(mut self, result: Result<ExecuteResponse, AdapterError>) {
         let ExecuteContextInner {
             tx,
             internal_cmd_tx,
             session,
             extra,
             response_barriers,
-        } = *self.inner;
+        } = *self.inner.take().expect("only consumed by value");
         if response_barriers.is_empty() {
             retire_execution_context(tx, internal_cmd_tx, session, extra, result);
         } else {
@@ -1985,6 +2011,7 @@ pub struct Coordinator {
     /// waiting out its tick interval. Notified after catalog transactions that
     /// change durable cluster state.
     reconcile_now: Arc<Notify>,
+    group_committer_tx: mpsc::UnboundedSender<appends::TableWriteCmd>,
 
     /// Channel for strict serializable reads ready to commit.
     strict_serializable_reads_tx: mpsc::UnboundedSender<(ConnectionId, PendingReadTxn)>,
@@ -3102,14 +3129,10 @@ impl Coordinator {
             .unwrap_or_terminate("cannot fail to append");
 
         info!("coordinator init: sending builtin table updates");
-        let (_builtin_updates_fut, write_ts) = self
-            .builtin_table_update()
-            .execute(builtin_table_updates)
-            .await;
-        info!(?write_ts, "our write ts");
-        if let Some(write_ts) = write_ts {
-            self.apply_local_write(write_ts).await;
-        }
+        let builtin_updates_fut = self.builtin_table_update().execute(builtin_table_updates);
+        // Wait for the committer to apply the write, so the builtin tables are readable before
+        // we start serving. The committer allocates the timestamp and advances the oracle.
+        builtin_updates_fut.await;
     }
 
     /// Initializes all storage collections required by catalog objects in the storage controller.
@@ -3378,6 +3401,8 @@ impl Coordinator {
             })
             .collect();
 
+        let mut created_gids = Vec::new();
+
         while !pending.is_empty() {
             // Drain collections whose dependencies have all been registered already
             // (i.e., are not in `pending`).
@@ -3423,6 +3448,8 @@ impl Coordinator {
                 ready = mem::take(&mut pending).into_iter().collect();
             }
 
+            created_gids.extend(ready.iter().map(|(gid, _collection)| *gid));
+
             self.controller
                 .storage
                 .create_collections_for_bootstrap(
@@ -3434,6 +3461,13 @@ impl Coordinator {
                 .await
                 .unwrap_or_terminate("cannot fail to create collections");
         }
+
+        // Register txn-wal tables before the later system-table snapshot.
+        self.controller
+            .storage
+            .register_table_collections(register_ts, created_gids)
+            .await
+            .unwrap_or_terminate("cannot fail to register tables");
 
         if !self.controller.read_only() {
             self.apply_local_write(register_ts).await;
@@ -3981,17 +4015,13 @@ impl Coordinator {
                     // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                     // Receive a single command.
                     _ = self.advance_timelines_interval.tick() => {
-                        let span = info_span!(parent: None, "coord::advance_timelines_interval");
-                        span.follows_from(Span::current());
-
-                        // Group commit sends an `AdvanceTimelines` message when
-                        // done, which is what downgrades read holds. In
-                        // read-only mode we send this message directly because
-                        // we're not doing group commits.
+                        // Writable keepalives use the committer to advance tables and read holds.
+                        // Its permit coalesces ticks behind a slow oracle. Read-only mode advances
+                        // timelines directly.
                         if self.controller.read_only() {
                             messages.push(Message::AdvanceTimelines);
                         } else {
-                            messages.push(Message::GroupCommitInitiate(span, None));
+                            self.group_commit_tx.notify();
                         }
                     },
                     // Re-check pending strict serializable reads. Deliberately
@@ -5047,12 +5077,14 @@ pub fn serve(
                 let catalog = Arc::new(catalog);
 
                 let caching_secrets_reader = CachingSecretsReader::new(secrets_controller.reader());
+                let (group_committer_tx, group_committer_rx) = mpsc::unbounded_channel();
                 let mut coord = Coordinator {
                     controller,
                     catalog,
                     internal_cmd_tx,
                     group_commit_tx,
                     reconcile_now: Arc::new(Notify::new()),
+                    group_committer_tx,
                     strict_serializable_reads_tx,
                     linearize_reads_notify: Arc::new(Notify::new()),
                     global_timelines: timestamp_oracles,
@@ -5099,6 +5131,21 @@ pub fn serve(
                     user_id_pool: IdPool::empty(),
                     persist_client,
                 };
+
+                // Read-only promotion restarts the process and creates a fresh committer.
+                handle.block_on(async {
+                    appends::spawn_group_committer(
+                        group_committer_rx,
+                        coord.get_local_timestamp_oracle(),
+                        coord.controller.storage.table_write_handle(),
+                        coord.catalog().upper_handle(),
+                        coord.internal_cmd_tx.clone(),
+                        coord.catalog().config().now.clone(),
+                        coord.metrics.clone(),
+                        coord.catalog().system_config().dyncfgs(),
+                    );
+                });
+
                 let bootstrap = handle.block_on(async {
                     coord
                         .bootstrap(

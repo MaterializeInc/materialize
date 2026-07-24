@@ -4825,6 +4825,7 @@ generate_extracted_config!(
     (AutoScalingStrategy, ClusterAutoScalingStrategyOptionValue),
     (AvailabilityZones, Vec<String>),
     (Disk, bool),
+    (ExperimentalArrangementCompression, bool),
     (IntrospectionDebugging, bool),
     (IntrospectionInterval, OptionalDuration),
     (Managed, bool),
@@ -4921,6 +4922,7 @@ pub fn plan_create_cluster_inner(
     let ClusterOptionExtracted {
         auto_scaling_strategy,
         availability_zones,
+        experimental_arrangement_compression,
         introspection_debugging,
         introspection_interval,
         managed,
@@ -4972,6 +4974,7 @@ pub fn plan_create_cluster_inner(
         let compute = plan_compute_replica_config(
             introspection_interval,
             introspection_debugging.unwrap_or(false),
+            experimental_arrangement_compression.unwrap_or(false),
         )?;
 
         let replication_factor = if matches!(schedule, ClusterScheduleOptionValue::Manual) {
@@ -5070,6 +5073,9 @@ pub fn plan_create_cluster_inner(
         if introspection_interval.is_some() {
             sql_bail!("INTROSPECTION INTERVAL not supported for unmanaged clusters");
         }
+        if experimental_arrangement_compression.is_some() {
+            sql_bail!("EXPERIMENTAL ARRANGEMENT COMPRESSION not supported for unmanaged clusters");
+        }
         if size.is_some() {
             sql_bail!("SIZE not supported for unmanaged clusters");
         }
@@ -5141,6 +5147,7 @@ pub fn unplan_create_cluster(
                 enable_cast_elimination: _,
                 enable_case_literal_transform: _,
                 enable_simplify_quantified_comparisons: _,
+                enable_simplify_from_less_existence: _,
                 enable_coalesce_case_transform: _,
                 enable_will_distinct_propagation: _,
                 enable_fixed_correlated_cte_lowering: _,
@@ -5163,7 +5170,7 @@ pub fn unplan_create_cluster(
             } else {
                 Some(availability_zones)
             };
-            let (introspection_interval, introspection_debugging) =
+            let (introspection_interval, introspection_debugging, arrangement_compression) =
                 unplan_compute_replica_config(compute);
             // Replication factor cannot be explicitly specified with a refresh schedule, it's
             // always 1 or less.
@@ -5190,6 +5197,7 @@ pub fn unplan_create_cluster(
                 auto_scaling_strategy,
                 availability_zones,
                 disk: None,
+                experimental_arrangement_compression: Some(arrangement_compression),
                 introspection_debugging: Some(introspection_debugging),
                 introspection_interval,
                 managed: Some(true),
@@ -5220,6 +5228,7 @@ generate_extracted_config!(
     (ComputeAddresses, Vec<String>),
     (ComputectlAddresses, Vec<String>),
     (Disk, bool),
+    (ExperimentalArrangementCompression, bool, Default(false)),
     (Internal, bool, Default(false)),
     (IntrospectionDebugging, bool, Default(false)),
     (IntrospectionInterval, OptionalDuration),
@@ -5238,6 +5247,7 @@ fn plan_replica_config(
         billed_as,
         computectl_addresses,
         disk,
+        experimental_arrangement_compression,
         internal,
         introspection_debugging,
         introspection_interval,
@@ -5246,7 +5256,11 @@ fn plan_replica_config(
         ..
     }: ReplicaOptionExtracted = options.try_into()?;
 
-    let compute = plan_compute_replica_config(introspection_interval, introspection_debugging)?;
+    let compute = plan_compute_replica_config(
+        introspection_interval,
+        introspection_debugging,
+        experimental_arrangement_compression,
+    )?;
 
     match (
         size,
@@ -5328,6 +5342,7 @@ fn plan_replica_config(
 fn plan_compute_replica_config(
     introspection_interval: Option<OptionalDuration>,
     introspection_debugging: bool,
+    arrangement_compression: bool,
 ) -> Result<ComputeReplicaConfig, PlanError> {
     let introspection_interval = introspection_interval
         .map(|OptionalDuration(i)| i)
@@ -5342,22 +5357,34 @@ fn plan_compute_replica_config(
         }
         None => None,
     };
-    let compute = ComputeReplicaConfig { introspection };
+    let compute = ComputeReplicaConfig {
+        introspection,
+        arrangement_compression,
+    };
     Ok(compute)
 }
 
-/// Convert a [`ComputeReplicaConfig`] into an [`Option<OptionalDuration>`] and [`bool`].
+/// Convert a [`ComputeReplicaConfig`] into its introspection interval, introspection debugging,
+/// and arrangement compression option values.
 ///
 /// The reverse of [`plan_compute_replica_config`].
 fn unplan_compute_replica_config(
     compute_replica_config: ComputeReplicaConfig,
-) -> (Option<OptionalDuration>, bool) {
-    match compute_replica_config.introspection {
+) -> (Option<OptionalDuration>, bool, bool) {
+    let ComputeReplicaConfig {
+        introspection,
+        arrangement_compression,
+    } = compute_replica_config;
+    match introspection {
         Some(ComputeReplicaIntrospectionConfig {
             debugging,
             interval,
-        }) => (Some(OptionalDuration(Some(interval))), debugging),
-        None => (Some(OptionalDuration(None)), false),
+        }) => (
+            Some(OptionalDuration(Some(interval))),
+            debugging,
+            arrangement_compression,
+        ),
+        None => (Some(OptionalDuration(None)), false, arrangement_compression),
     }
 }
 
@@ -6459,6 +6486,7 @@ pub fn plan_alter_cluster(
             let ClusterOptionExtracted {
                 auto_scaling_strategy,
                 availability_zones,
+                experimental_arrangement_compression,
                 introspection_debugging,
                 introspection_interval,
                 managed,
@@ -6599,6 +6627,11 @@ pub fn plan_alter_cluster(
                     if introspection_interval.is_some() {
                         sql_bail!("INTROSPECTION INTERVAL not supported for unmanaged clusters");
                     }
+                    if experimental_arrangement_compression.is_some() {
+                        sql_bail!(
+                            "EXPERIMENTAL ARRANGEMENT COMPRESSION not supported for unmanaged clusters"
+                        );
+                    }
                     if size.is_some() {
                         sql_bail!("SIZE not supported for unmanaged clusters");
                     }
@@ -6638,6 +6671,24 @@ pub fn plan_alter_cluster(
             }
             if let Some(replication_factor) = replication_factor {
                 options.replication_factor = AlterOptionParameter::Set(replication_factor);
+            } else if schedule
+                .as_ref()
+                .is_some_and(|s| !matches!(s, ClusterScheduleOptionValue::Manual))
+                && managed != Some(true)
+            {
+                // Setting a non-MANUAL schedule hands the replica set to the
+                // scheduler, so normalize the replication factor to 0 exactly
+                // as CREATE CLUSTER does for a scheduled cluster. Giving
+                // REPLICATION FACTOR together with a non-MANUAL SCHEDULE was
+                // rejected above, so `replication_factor` is `None` here.
+                //
+                // Not when the same statement converts an unmanaged cluster to
+                // managed: that conversion adopts the existing replicas, so the
+                // sequencer requires a replication factor matching their count
+                // and derives it when none is given. Forcing 0 would reject the
+                // conversion whenever a replica exists. The controller
+                // normalizes the adopted factor to 0 on its next tick.
+                options.replication_factor = AlterOptionParameter::Set(0);
             }
             if let Some(size) = &size {
                 options.size = AlterOptionParameter::Set(size.clone());
@@ -6651,6 +6702,11 @@ pub fn plan_alter_cluster(
             }
             if let Some(introspection_interval) = introspection_interval {
                 options.introspection_interval = AlterOptionParameter::Set(introspection_interval);
+            }
+            if let Some(experimental_arrangement_compression) = experimental_arrangement_compression
+            {
+                options.arrangement_compression =
+                    AlterOptionParameter::Set(experimental_arrangement_compression);
             }
             if disk.is_some() {
                 // The `DISK` option is a no-op for legacy cluster sizes and was never allowed for
@@ -6705,6 +6761,7 @@ pub fn plan_alter_cluster(
                         .add_notice(PlanNotice::ReplicaDiskOptionDeprecated),
                     IntrospectionInterval => options.introspection_interval = Reset,
                     IntrospectionDebugging => options.introspection_debugging = Reset,
+                    ExperimentalArrangementCompression => options.arrangement_compression = Reset,
                     Managed => options.managed = Reset,
                     Replicas => options.replicas = Reset,
                     ReplicationFactor => options.replication_factor = Reset,

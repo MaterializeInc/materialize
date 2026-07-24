@@ -44,13 +44,13 @@ use mz_dyncfg::ConfigSet;
 use mz_ore::soft_panic_or_log;
 
 use crate::ctx::{
-    ApplyOutcome, ClusterControllerCtx, ClusterState, Decision, ObservedReplica,
+    ApplyOutcome, ClusterControllerCtx, ClusterState, CreateReason, Decision, ObservedReplica,
     ReconfigurationAudit, ReconfigurationRecord, ReconfigurationStatus, ReconfigurationWrite,
     ReplicaShape, StateWrite,
 };
 use crate::strategy::{
     BaselineStrategy, ConfigSignals, DesiredReplica, GracefulReconfigurationStrategy,
-    HydrationBurstStrategy, LiveSignals, SignalRequest, Strategy,
+    HydrationBurstStrategy, LiveSignals, OnRefreshStrategy, SignalRequest, Strategy,
 };
 
 /// The cluster controller. Holds the (stateless) set of strategies and drives a
@@ -70,6 +70,7 @@ impl ClusterController {
             strategies: vec![
                 Box::new(BaselineStrategy),
                 Box::new(GracefulReconfigurationStrategy),
+                Box::new(OnRefreshStrategy),
                 Box::new(HydrationBurstStrategy),
             ],
             dyncfgs,
@@ -238,15 +239,20 @@ impl ClusterController {
     /// several is that value.
     ///
     /// Two strategies setting one field to *different* values is a conflict.
-    /// Every field is owned by exactly one strategy, so by design it cannot
-    /// happen and the merge is really a disjoint union. We treat a conflict as
-    /// an invariant violation rather than a condition to resolve: there is no
-    /// safety-meaningful winner to pick for a contended `size` or record, so we
-    /// trip [`soft_panic_or_log!`] (a panic under test/CI soft assertions, a
-    /// logged error in production) and leave the field unchanged, the only
-    /// outcome that cannot make things worse. A persistent conflict then freezes
-    /// that field and keeps tripping the alarm, which is the point: surface the
-    /// design bug loudly instead of silently picking an arbitrary value.
+    /// The strategies keep every field single-writer at any given moment:
+    /// most fields are owned by exactly one strategy outright, and
+    /// `new_replication_factor`, which both the graceful cut-over and the
+    /// on-refresh normalization write, is time-shared (on-refresh skips its
+    /// normalization while a reconfiguration record is in progress). So by
+    /// design a conflict cannot happen and the merge is really a disjoint
+    /// union. We treat a conflict as an invariant violation rather than a
+    /// condition to resolve: there is no safety-meaningful winner to pick for
+    /// a contended `size` or record, so we trip [`soft_panic_or_log!`] (a
+    /// panic under test/CI soft assertions, a logged error in production) and
+    /// leave the field unchanged, the only outcome that cannot make things
+    /// worse. A persistent conflict then freezes that field and keeps tripping
+    /// the alarm, which is the point: surface the design bug loudly instead of
+    /// silently picking an arbitrary value.
     fn merge_state_writes(
         &self,
         state: &ClusterState,
@@ -283,6 +289,11 @@ impl ClusterController {
             new_logging: join(
                 "logging",
                 writes.iter().map(|w| w.new_logging.clone()),
+                &mut conflicts,
+            ),
+            new_arrangement_compression: join(
+                "arrangement_compression",
+                writes.iter().map(|w| w.new_arrangement_compression),
                 &mut conflicts,
             ),
             reconfiguration: join(
@@ -348,6 +359,9 @@ impl ClusterController {
                         ctx.hydrated_replicas(state.cluster_id, &replica_ids).await;
                 }
             }
+            if request.refresh_window {
+                live.refresh_window = ctx.refresh_window_inputs(state.cluster_id).await;
+            }
             signals.insert(state.cluster_id, live);
         }
         signals
@@ -362,17 +376,10 @@ impl ClusterController {
         config: &ConfigSignals,
         now: mz_repr::Timestamp,
     ) -> Vec<Decision> {
-        // Each strategy's contribution, tagged with the strategy name for
-        // attribution.
-        let contributions: Vec<(&'static str, Vec<DesiredReplica>)> = self
+        let contributions: Vec<Vec<DesiredReplica>> = self
             .strategies
             .iter()
-            .map(|strategy| {
-                (
-                    strategy.name(),
-                    strategy.desired_replicas(state, signals, config, now),
-                )
-            })
+            .map(|strategy| strategy.desired_replicas(state, signals, config, now))
             .collect();
 
         reconcile_replicas(state, &contributions)
@@ -417,37 +424,47 @@ fn join<T: PartialEq>(
 /// - For each shape, if actual count < desired count we create the difference;
 ///   if actual count > desired count we drop the difference, picking specific
 ///   excess replicas. A replica of a shape no strategy desires is dropped.
-/// - Creates carry the names of the strategies that desired the shape. Drops
-///   carry no attribution, because a drop happens exactly when no strategy
-///   desires the replica.
+/// - Creates carry the winning [`CreateReason`] among the slots that
+///   desired the shape (see [`CreateReason::outranks`]). Drops carry no
+///   attribution. A drop happens exactly when no strategy desires the replica.
 fn reconcile_replicas(
     state: &ClusterState,
-    contributions: &[(&'static str, Vec<DesiredReplica>)],
+    contributions: &[Vec<DesiredReplica>],
 ) -> Vec<Decision> {
     // Desired count per shape = max over strategies of how many that strategy
-    // wants of the shape, and the union of which strategies want it.
+    // wants of the shape, carrying the highest-ranking reason among the
+    // slots.
     let mut desired: Vec<DesiredShape> = Vec::new();
-    for (name, slots) in contributions {
-        // How many of each shape this strategy wants.
-        let mut per_shape: Vec<(ReplicaShape, usize)> = Vec::new();
+    for slots in contributions {
+        // How many of each shape this strategy wants, and the winning reason
+        // among the shape's slots.
+        let mut per_shape: Vec<(ReplicaShape, usize, CreateReason)> = Vec::new();
         for slot in slots {
-            match per_shape.iter_mut().find(|(s, _)| s.matches(&slot.shape)) {
-                Some((_, count)) => *count += 1,
-                None => per_shape.push((slot.shape.clone(), 1)),
+            match per_shape
+                .iter_mut()
+                .find(|(s, _, _)| s.matches(&slot.shape))
+            {
+                Some((_, count, reason)) => {
+                    *count += 1;
+                    if slot.reason.outranks(reason) {
+                        *reason = slot.reason.clone();
+                    }
+                }
+                None => per_shape.push((slot.shape.clone(), 1, slot.reason.clone())),
             }
         }
-        for (shape, count) in per_shape {
+        for (shape, count, reason) in per_shape {
             match desired.iter_mut().find(|d| d.shape.matches(&shape)) {
                 Some(existing) => {
                     existing.count = existing.count.max(count);
-                    if !existing.reasons.contains(name) {
-                        existing.reasons.push(*name);
+                    if reason.outranks(&existing.reason) {
+                        existing.reason = reason;
                     }
                 }
                 None => desired.push(DesiredShape {
                     shape,
                     count,
-                    reasons: vec![*name],
+                    reason,
                 }),
             }
         }
@@ -493,7 +510,9 @@ fn reconcile_replicas(
                 cluster_id: state.cluster_id,
                 name: name_gen.next_name(),
                 shape: d.shape.clone(),
-                reasons: d.reasons.clone(),
+                // Multiple creates of one shape in a tick share the merged
+                // reason.
+                reason: d.reason.clone(),
                 expected: expected.clone(),
             });
         }
@@ -519,11 +538,12 @@ fn reconcile_replicas(
     decisions
 }
 
-/// A shape the union desires, how many, and which strategies wanted it.
+/// A shape the union desires, how many, and the highest-ranking reason of
+/// the strategies that wanted it.
 struct DesiredShape {
     shape: ReplicaShape,
     count: usize,
-    reasons: Vec<&'static str>,
+    reason: CreateReason,
 }
 
 /// Generates deterministic fresh replica names that avoid a set of in-use names.

@@ -160,14 +160,23 @@ See also:
 #### Cluster resizing
 
 You can change the size of a cluster to respond to changes in your workload
-using [`ALTER CLUSTER`](/sql/alter-cluster). Depending on the type of objects
-the cluster is hosting, this operation **might incur downtime**.
+using [`ALTER CLUSTER`](/sql/alter-cluster).
+
+As of **v26.34**, resizing is graceful and incurs **no downtime**: Materialize
+provisions new replicas at the target size, waits for them to hydrate, then
+retires the old ones. See [Monitoring a
+resize](/sql/alter-cluster/#monitoring-a-resize).
+
+In versions before v26.34, resizing could incur downtime, and zero-downtime
+resizing required the `WAIT UNTIL READY` option.
 
 See the reference documentation for [`ALTER
-CLUSTER`](/sql/alter-cluster#zero-downtime-cluster-resizing) for more details
+CLUSTER`](/sql/alter-cluster/#resizing) for more details
 on cluster resizing.
 
+### Autoscaling
 
+{{% include-headless "/headless/cluster-hydration-burst" %}}
 
 ### Replication factor
 

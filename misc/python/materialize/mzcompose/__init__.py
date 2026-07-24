@@ -97,10 +97,11 @@ def get_minimal_system_parameters(
         "enable_refresh_every_mvs": "true",
         "enable_replacement_materialized_views": "true",
         "enable_cluster_schedule_refresh": "true",
-        # The cluster controller and background ALTER CLUSTER land dark in
-        # production (the dyncfg defaults stay false); force them on for the test
-        # harness so CI exercises the controller owning the managed-cluster
-        # replica set. The real production default flip is a separate rollout.
+        # The cluster controller and background ALTER CLUSTER dyncfgs default on
+        # in current versions. Pin them explicitly so runs against older versions
+        # (which predate the flags or defaulted them off) exercise the legacy
+        # paths while current versions exercise the controller owning the
+        # managed-cluster replica set.
         "enable_cluster_controller": (
             "true" if version >= MzVersion.parse_mz("v26.29.0-dev") else "false"
         ),
@@ -275,6 +276,11 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
+            "enable_simplify_from_less_existence",
+            "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
             "enable_upsert_v2",
             "false",
             ["true", "false"],
@@ -288,6 +294,9 @@ def get_variable_system_parameters(
             "force_source_table_syntax",
             "true" if force_source_table_syntax else "false",
             ["true", "false"] if force_source_table_syntax else ["false"],
+        ),
+        VariableSystemParameter(
+            "mysql_source_snapshot_parallelism", "true", ["true", "false"]
         ),
         VariableSystemParameter(
             "persist_batch_columnar_format",
@@ -566,6 +575,9 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "column_paged_batcher_budget_fraction",
     "column_paged_batcher_lz4",
     "column_paged_batcher_swap_pageout",
+    "column_paged_batcher_spill_worker_count",
+    "column_paged_batcher_eager_backing",
+    "column_paged_batcher_pool_rss_target_fraction",
     "enable_upsert_paged_spill",
     "enable_lgalloc_eager_reclamation",
     "lgalloc_background_interval",
@@ -702,6 +714,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "sql_server_cdc_cleanup_change_table",
     "sql_server_cdc_cleanup_change_table_max_deletes",
     "allow_user_sessions",
+    "group_commit_max_attempts",
     "with_0dt_deployment_ddl_check_interval",
     "enable_0dt_caught_up_check",
     "with_0dt_caught_up_check_allowed_lag",

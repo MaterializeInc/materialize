@@ -9,6 +9,7 @@ menu:
     identifier: transform-overview
 aliases:
   - /self-managed/v25.1/transform-data/troubleshooting/
+  - /self-managed/v25.2/transform-data/
 ---
 
 With Materialize, you use SQL to transform your fast-changing data into **live

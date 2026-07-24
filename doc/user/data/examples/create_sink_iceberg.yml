@@ -47,7 +47,7 @@
         Indicates that the sink uses upsert semantics based on the `KEY`.
     - name: "**COMMIT INTERVAL** `'<interval>'`"
       description: |
-        How frequently to commit snapshots to Iceberg (e.g., `'60s'`, `'5m'`). See [Commit interval tradeoffs](#commit-interval-tradeoffs).
+        How frequently to commit snapshots to Iceberg (e.g., `'1m'`, `'5m'`). Must be at least `'1s'`. See [Commit interval tradeoffs](#commit-interval-tradeoffs).
 
 - name: "syntax-append"
   code: |
@@ -96,7 +96,7 @@
         [Append mode](#append-mode).
     - name: "**COMMIT INTERVAL** `'<interval>'`"
       description: |
-        How frequently to commit snapshots to Iceberg (e.g., `'60s'`, `'5m'`). See [Commit interval tradeoffs](#commit-interval-tradeoffs).
+        How frequently to commit snapshots to Iceberg (e.g., `'1m'`, `'5m'`). Must be at least `'1s'`. See [Commit interval tradeoffs](#commit-interval-tradeoffs).
 
 - name: "example-create-iceberg-sink"
   description: |
@@ -143,7 +143,7 @@
     - `<my_iceberg_table>` with the name of your Iceberg table. If the Iceberg table
       does not exist, Materialize creates the table. For details, see [`CREATE SINK`
       reference page](/sql/create-sink/iceberg/#iceberg-table-creation).
-    - `<commit_interval>` with your commit interval (e.g., `60s`). The commit
+    - `<commit_interval>` with your commit interval (e.g., `1m`). The commit
       interval specifies how frequently Materialize commits snapshots to Iceberg.
       The minimum commit interval is `1s`. See [Commit interval
       tradeoffs](#commit-interval-tradeoffs) below.

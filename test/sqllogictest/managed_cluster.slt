@@ -413,5 +413,38 @@ DROP CLUSTER wc_test
 ----
 COMPLETE 0
 
+# EXPERIMENTAL ARRANGEMENT COMPRESSION is a per-cluster option. It is accepted
+# and stored regardless of the gating feature flag, which only decides whether a
+# replica honors the value at creation time.
+statement ok
+CREATE CLUSTER ac_test (SIZE 'scale=1,workers=1', EXPERIMENTAL ARRANGEMENT COMPRESSION = true)
+
+query TT
+SHOW CREATE CLUSTER ac_test
+----
+ac_test  CREATE␠CLUSTER␠"ac_test"␠(EXPERIMENTAL␠ARRANGEMENT␠COMPRESSION␠=␠true,␠INTROSPECTION␠DEBUGGING␠=␠false,␠INTROSPECTION␠INTERVAL␠=␠INTERVAL␠'00:00:01',␠MANAGED␠=␠true,␠REPLICATION␠FACTOR␠=␠1,␠SIZE␠=␠'scale=1,workers=1',␠SCHEDULE␠=␠MANUAL)
+
+statement ok
+ALTER CLUSTER ac_test RESET (EXPERIMENTAL ARRANGEMENT COMPRESSION)
+
+query TT
+SHOW CREATE CLUSTER ac_test
+----
+ac_test  CREATE␠CLUSTER␠"ac_test"␠(EXPERIMENTAL␠ARRANGEMENT␠COMPRESSION␠=␠false,␠INTROSPECTION␠DEBUGGING␠=␠false,␠INTROSPECTION␠INTERVAL␠=␠INTERVAL␠'00:00:01',␠MANAGED␠=␠true,␠REPLICATION␠FACTOR␠=␠1,␠SIZE␠=␠'scale=1,workers=1',␠SCHEDULE␠=␠MANUAL)
+
+statement ok
+ALTER CLUSTER ac_test SET (EXPERIMENTAL ARRANGEMENT COMPRESSION = true)
+
+query TT
+SHOW CREATE CLUSTER ac_test
+----
+ac_test  CREATE␠CLUSTER␠"ac_test"␠(EXPERIMENTAL␠ARRANGEMENT␠COMPRESSION␠=␠true,␠INTROSPECTION␠DEBUGGING␠=␠false,␠INTROSPECTION␠INTERVAL␠=␠INTERVAL␠'00:00:01',␠MANAGED␠=␠true,␠REPLICATION␠FACTOR␠=␠1,␠SIZE␠=␠'scale=1,workers=1',␠SCHEDULE␠=␠MANUAL)
+
+statement ok
+DROP CLUSTER ac_test
+
+statement error EXPERIMENTAL ARRANGEMENT COMPRESSION not supported for unmanaged clusters
+CREATE CLUSTER ac_unmanaged REPLICAS (), EXPERIMENTAL ARRANGEMENT COMPRESSION = true
+
 # Restore pristine server state
 reset-server

@@ -267,6 +267,11 @@ fn array_fill<'a>(
         return Err(EvalError::MustNotBeNull(NULL_ARR_ERR.into()));
     };
 
+    // The dimensions array must be one-dimensional.
+    if arr.dims().ndims() > 1 {
+        return Err(EvalError::ArrayFillWrongArraySubscripts);
+    }
+
     let dimensions = arr
         .elements()
         .iter()
@@ -281,6 +286,11 @@ fn array_fill<'a>(
             let Some(arr) = d else {
                 return Err(EvalError::MustNotBeNull(NULL_ARR_ERR.into()));
             };
+
+            // The lower bounds array must be one-dimensional.
+            if arr.dims().ndims() > 1 {
+                return Err(EvalError::ArrayFillWrongArraySubscripts);
+            }
 
             arr.elements()
                 .iter()
@@ -1046,7 +1056,6 @@ fn make_mz_acl_item(
 }
 
 #[sqlfunc(sqlname = "makets")]
-// TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
 fn make_timestamp(
     year: i64,
@@ -1056,36 +1065,37 @@ fn make_timestamp(
     minute: i64,
     second_float: f64,
 ) -> Result<Option<CheckedTimestamp<NaiveDateTime>>, EvalError> {
-    let year: i32 = match year.try_into() {
-        Ok(year) => year,
-        Err(_) => return Ok(None),
-    };
-    let month: u32 = match month.try_into() {
-        Ok(month) => month,
-        Err(_) => return Ok(None),
-    };
-    let day: u32 = match day.try_into() {
-        Ok(day) => day,
-        Err(_) => return Ok(None),
-    };
-    let hour: u32 = match hour.try_into() {
-        Ok(hour) => hour,
-        Err(_) => return Ok(None),
-    };
-    let minute: u32 = match minute.try_into() {
-        Ok(minute) => minute,
-        Err(_) => return Ok(None),
-    };
-    let second = second_float as u32;
-    let micros = ((second_float - second as f64) * 1_000_000.0) as u32;
-    let date = match NaiveDate::from_ymd_opt(year, month, day) {
-        Some(date) => date,
-        None => return Ok(None),
-    };
-    let timestamp = match date.and_hms_micro_opt(hour, minute, second, micros) {
-        Some(timestamp) => timestamp,
-        None => return Ok(None),
-    };
+    // NOTE: This function never returns `Ok(None)`. The `Option` stays so
+    // that the derived `introduces_nulls` (and with it the nullability of
+    // existing objects planned with this function) does not change.
+
+    // Negative years are BC and there is no year 0. Chrono's astronomical
+    // numbering has 1 BC as year 0, so BC years shift by one.
+    if year == 0 {
+        return Err(EvalError::DateOutOfRange);
+    }
+    let year = if year < 0 { year + 1 } else { year };
+    let year: i32 = year.try_into().map_err(|_| EvalError::DateOutOfRange)?;
+    let month: u32 = month.try_into().map_err(|_| EvalError::DateOutOfRange)?;
+    let day: u32 = day.try_into().map_err(|_| EvalError::DateOutOfRange)?;
+    let date = NaiveDate::from_ymd_opt(year, month, day).ok_or(EvalError::DateOutOfRange)?;
+    // Allow exactly 24:00:00 (rolls over to midnight of the next day) and
+    // 60 seconds (rolls over into the next minute).
+    if !(0..=24).contains(&hour)
+        || !(0..=59).contains(&minute)
+        || !(0.0..=60.0).contains(&second_float)
+        || (hour == 24 && (minute > 0 || second_float > 0.0))
+    {
+        return Err(EvalError::TimestampOutOfRange);
+    }
+    // The cast is exact: second_float is in [0, 60].
+    let micros = (second_float * 1_000_000.0).round() as i64;
+    let time = chrono::Duration::microseconds((hour * 60 + minute) * 60 * 1_000_000 + micros);
+    let timestamp = date
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .checked_add_signed(time)
+        .ok_or(EvalError::TimestampOutOfRange)?;
     Ok(Some(timestamp.try_into()?))
 }
 

@@ -67,8 +67,11 @@ class CreateCluster(Check):
                 >[version<15500] SHOW CREATE CLUSTER create_cluster2;
                 create_cluster2 "CREATE CLUSTER \\"create_cluster2\\" (DISK = true, INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 1, SIZE = 'scale=2,workers=2', SCHEDULE = MANUAL)"
 
-                >[version>=15500] SHOW CREATE CLUSTER create_cluster2;
+                >[15500<=version<2603500] SHOW CREATE CLUSTER create_cluster2;
                 create_cluster2 "CREATE CLUSTER \\"create_cluster2\\" (INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 1, SIZE = 'scale=2,workers=2', SCHEDULE = MANUAL)"
+
+                >[version>=2603500] SHOW CREATE CLUSTER create_cluster2;
+                create_cluster2 "CREATE CLUSTER \\"create_cluster2\\" (EXPERIMENTAL ARRANGEMENT COMPRESSION = false, INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 1, SIZE = 'scale=2,workers=2', SCHEDULE = MANUAL)"
 
                 > DROP TABLE create_cluster1_table CASCADE;
                 > DROP TABLE create_cluster2_table CASCADE;
@@ -117,8 +120,11 @@ class AlterCluster(Check):
                 >[version<15500] SHOW CREATE CLUSTER alter_cluster1;
                 alter_cluster1 "CREATE CLUSTER \\"alter_cluster1\\" (DISK = true, INTROSPECTION DEBUGGING = true, INTROSPECTION INTERVAL = INTERVAL '00:00:45', MANAGED = true, REPLICATION FACTOR = 1, SIZE = 'scale=2,workers=2', SCHEDULE = MANUAL)"
 
-                >[version>=15500] SHOW CREATE CLUSTER alter_cluster1;
+                >[15500<=version<2603500] SHOW CREATE CLUSTER alter_cluster1;
                 alter_cluster1 "CREATE CLUSTER \\"alter_cluster1\\" (INTROSPECTION DEBUGGING = true, INTROSPECTION INTERVAL = INTERVAL '00:00:45', MANAGED = true, REPLICATION FACTOR = 1, SIZE = 'scale=2,workers=2', SCHEDULE = MANUAL)"
+
+                >[version>=2603500] SHOW CREATE CLUSTER alter_cluster1;
+                alter_cluster1 "CREATE CLUSTER \\"alter_cluster1\\" (EXPERIMENTAL ARRANGEMENT COMPRESSION = false, INTROSPECTION DEBUGGING = true, INTROSPECTION INTERVAL = INTERVAL '00:00:45', MANAGED = true, REPLICATION FACTOR = 1, SIZE = 'scale=2,workers=2', SCHEDULE = MANUAL)"
 
                 > SELECT name, introspection_debugging, introspection_interval FROM mz_catalog.mz_clusters WHERE name = 'alter_cluster1';
                 alter_cluster1 true "00:00:45"
@@ -205,12 +211,18 @@ class CreateClusterRF0(Check):
                 >[version<15500] SHOW CREATE CLUSTER create_cluster_rf0_1;
                 create_cluster_rf0_1 "CREATE CLUSTER \\"create_cluster_rf0_1\\" (DISK = true, INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 0, SIZE = 'scale=2,workers=2', SCHEDULE = MANUAL)"
 
-                >[version>=15500] SHOW CREATE CLUSTER create_cluster_rf0_1;
+                >[15500<=version<2603500] SHOW CREATE CLUSTER create_cluster_rf0_1;
                 create_cluster_rf0_1 "CREATE CLUSTER \\"create_cluster_rf0_1\\" (INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 0, SIZE = 'scale=2,workers=2', SCHEDULE = MANUAL)"
+
+                >[version>=2603500] SHOW CREATE CLUSTER create_cluster_rf0_1;
+                create_cluster_rf0_1 "CREATE CLUSTER \\"create_cluster_rf0_1\\" (EXPERIMENTAL ARRANGEMENT COMPRESSION = false, INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 0, SIZE = 'scale=2,workers=2', SCHEDULE = MANUAL)"
 
                 >[version<15500] SHOW CREATE CLUSTER create_cluster_rf0_2;
                 create_cluster_rf0_2 "CREATE CLUSTER \\"create_cluster_rf0_2\\" (DISK = true, INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 0, SIZE = 'scale=2,workers=2', SCHEDULE = MANUAL)"
 
-                >[version>=15500] SHOW CREATE CLUSTER create_cluster_rf0_2;
+                >[15500<=version<2603500] SHOW CREATE CLUSTER create_cluster_rf0_2;
                 create_cluster_rf0_2 "CREATE CLUSTER \\"create_cluster_rf0_2\\" (INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 0, SIZE = 'scale=2,workers=2', SCHEDULE = MANUAL)"
+
+                >[version>=2603500] SHOW CREATE CLUSTER create_cluster_rf0_2;
+                create_cluster_rf0_2 "CREATE CLUSTER \\"create_cluster_rf0_2\\" (EXPERIMENTAL ARRANGEMENT COMPRESSION = false, INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 0, SIZE = 'scale=2,workers=2', SCHEDULE = MANUAL)"
            """))

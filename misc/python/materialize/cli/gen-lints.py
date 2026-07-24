@@ -225,7 +225,7 @@ MESSAGE_LINT_INHERIT = "The lint section in {} does not inherit from the workspa
 
 EXCLUDE_CRATES: list[str] = []
 
-CHECK_CFGS = "stamped, coverage, nightly_doc_features, release, tokio_unstable"
+CHECK_CFGS = "stamped, coverage, nightly_doc_features, release, tokio_unstable, kani"
 
 
 def main() -> None:

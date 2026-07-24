@@ -49,6 +49,7 @@ prometheus = { workspace = true, optional = true }
 proptest = { workspace = true, optional = true }
 proptest-derive = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
+scopeguard = { workspace = true, optional = true }
 smallvec = { workspace = true, optional = true }
 stacker = { workspace = true, optional = true }
 sentry = { workspace = true, optional = true }
@@ -86,9 +87,15 @@ sentry-tracing = { workspace = true, optional = true }
 turmoil = { workspace = true, optional = true }
 yansi = { workspace = true, optional = true }
 
+# `memory::host_memory_bytes` reads `hw.memsize` via sysctl on macOS, in every
+# feature configuration, so the dependency cannot be optional there.
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = { workspace = true }
+
 [dev-dependencies]
 anyhow.workspace = true
 criterion.workspace = true
+lz4_flex.workspace = true
 mz-ore = { path = "../ore", features = ["id_gen", "chrono", "test"] }
 proptest.workspace = true
 scopeguard.workspace = true
@@ -139,7 +146,7 @@ tokio-console = ["console-subscriber", "tokio", "tokio/tracing", "network"]
 cli = ["clap"]
 stack = ["stacker"]
 test = ["anyhow", "ctor", "tracing-subscriber", "assert"]
-metrics = ["prometheus", "assert"]
+metrics = ["prometheus", "scopeguard", "assert"]
 id_gen = ["hibitset", "rand", "uuid"]
 capture = ["tracing-capture"]
 assert-no-tracing = ["ctor"]
@@ -147,6 +154,7 @@ assert = ["assert-no-tracing", "ctor", "tracing"]
 proptest = ["dep:proptest", "proptest-derive"]
 overflowing = ["assert"]
 pager = ["dep:bytemuck", "libc", "rand", "dep:tracing"]
+pool = ["dep:bytemuck", "libc", "dep:tracing"]
 
 [[test]]
 name = "future"

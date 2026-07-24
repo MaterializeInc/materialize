@@ -8,6 +8,7 @@ menu:
     identifier: 'concepts-sources'
 aliases:
   - /get-started/key-concepts/#sources
+  - /self-managed/v25.2/concepts/sources/
 ---
 
 ## Overview

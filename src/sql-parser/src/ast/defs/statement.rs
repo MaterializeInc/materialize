@@ -2253,6 +2253,8 @@ pub enum ClusterOptionName {
     AvailabilityZones,
     /// The `DISK` option.
     Disk,
+    /// The `EXPERIMENTAL ARRANGEMENT COMPRESSION [[=] <enabled>]` option.
+    ExperimentalArrangementCompression,
     /// The `INTROSPECTION INTERVAL [[=] <interval>]` option.
     IntrospectionInterval,
     /// The `INTROSPECTION DEBUGGING [[=] <enabled>]` option.
@@ -2277,6 +2279,9 @@ impl AstDisplay for ClusterOptionName {
             ClusterOptionName::AutoScalingStrategy => f.write_str("AUTO SCALING STRATEGY"),
             ClusterOptionName::AvailabilityZones => f.write_str("AVAILABILITY ZONES"),
             ClusterOptionName::Disk => f.write_str("DISK"),
+            ClusterOptionName::ExperimentalArrangementCompression => {
+                f.write_str("EXPERIMENTAL ARRANGEMENT COMPRESSION")
+            }
             ClusterOptionName::IntrospectionDebugging => f.write_str("INTROSPECTION DEBUGGING"),
             ClusterOptionName::IntrospectionInterval => f.write_str("INTROSPECTION INTERVAL"),
             ClusterOptionName::Managed => f.write_str("MANAGED"),
@@ -2300,6 +2305,7 @@ impl WithOptionName for ClusterOptionName {
             ClusterOptionName::AutoScalingStrategy
             | ClusterOptionName::AvailabilityZones
             | ClusterOptionName::Disk
+            | ClusterOptionName::ExperimentalArrangementCompression
             | ClusterOptionName::IntrospectionDebugging
             | ClusterOptionName::IntrospectionInterval
             | ClusterOptionName::Managed
@@ -2601,6 +2607,8 @@ pub enum ReplicaOptionName {
     IntrospectionDebugging,
     /// The `DISK [[=] <enabled>]` option.
     Disk,
+    /// The `EXPERIMENTAL ARRANGEMENT COMPRESSION [[=] <enabled>]` option.
+    ExperimentalArrangementCompression,
 }
 
 impl AstDisplay for ReplicaOptionName {
@@ -2618,6 +2626,9 @@ impl AstDisplay for ReplicaOptionName {
             ReplicaOptionName::IntrospectionInterval => f.write_str("INTROSPECTION INTERVAL"),
             ReplicaOptionName::IntrospectionDebugging => f.write_str("INTROSPECTION DEBUGGING"),
             ReplicaOptionName::Disk => f.write_str("DISK"),
+            ReplicaOptionName::ExperimentalArrangementCompression => {
+                f.write_str("EXPERIMENTAL ARRANGEMENT COMPRESSION")
+            }
         }
     }
 }
@@ -2641,7 +2652,8 @@ impl WithOptionName for ReplicaOptionName {
             | ReplicaOptionName::Internal
             | ReplicaOptionName::IntrospectionInterval
             | ReplicaOptionName::IntrospectionDebugging
-            | ReplicaOptionName::Disk => false,
+            | ReplicaOptionName::Disk
+            | ReplicaOptionName::ExperimentalArrangementCompression => false,
         }
     }
 }
