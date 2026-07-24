@@ -617,7 +617,7 @@ pub fn build_compute_dataflow(
 /// accumulation at `as_of` bounded by `until`. Its output capability drops once the trace seals past
 /// `until`, so a single-time interactive read completes. The returned `stream` and `trace` stay
 /// consistent (the trace never runs ahead of the stream), which a differential join over the import
-/// requires. See [`SharedTraceHandle::import_snapshot_at`].
+/// requires. See [`crate::shared_trace::SharedTraceHandle::import_snapshot_at`].
 fn import_shared_index<'outer>(
     outer: Scope<'outer, mz_repr::Timestamp>,
     registry: &ArrangementSharingRegistry,
