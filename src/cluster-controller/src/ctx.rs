@@ -11,8 +11,10 @@
 //!
 //! [`ClusterControllerCtx`] is the single, strategy-agnostic boundary through which
 //! the controller pulls the signals a tick examines and applies the catalog
-//! mutations it derives. It carries primitive signals in and primitive catalog
-//! mutations out; it has no per-strategy state or vocabulary. The controller
+//! mutations it derives. The signals in are primitive and carry no per-strategy
+//! state; the decisions out are primitive catalog mutations plus per-tick audit
+//! attribution. A create carries the [`CreateReason`] of the winning strategy
+//! behind it, which the environment turns into the audit event. The controller
 //! crate knows nothing about the Coordinator. The Coordinator implements this
 //! trait, which is what makes the controller testable against a fake
 //! implementation and extractable later without touching controller code.
@@ -23,11 +25,14 @@
 //! deployment can bound its round-trips to the Coordinator.
 
 use std::collections::BTreeSet;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use mz_compute_types::config::ComputeReplicaLogging;
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_repr::Timestamp;
+use mz_repr::refresh_schedule::RefreshSchedule;
+use mz_repr::{GlobalId, Timestamp};
+use timely::progress::Antichain;
 
 // The compare-and-append witness types, and the replica shape they pair with,
 // live in `mz-adapter-types` so the catalog transaction that applies a
@@ -35,7 +40,7 @@ use mz_repr::Timestamp;
 // ctx vocabulary, so re-export them here.
 pub use mz_adapter_types::cluster_state::{
     AutoScalingPolicy, AvailabilityZones, BurstAudit, BurstFinishCause, BurstRecord,
-    ExpectedClusterState, OnHydrationPolicy, OnTimeout, ReconfigurationAudit,
+    ClusterSchedule, ExpectedClusterState, OnHydrationPolicy, OnTimeout, ReconfigurationAudit,
     ReconfigurationRecord, ReconfigurationStatus, ReconfigurationTarget, ReplicaShape,
 };
 
@@ -75,6 +80,120 @@ impl ObservedReplica {
     }
 }
 
+/// One REFRESH materialized view bound to a scheduled cluster, as the on-refresh
+/// strategy needs to see it.
+///
+/// `write_frontier` is the MV's storage write frontier, carried with full
+/// fidelity as the `Antichain` the storage controller reports. The strategy
+/// compares it against the read timestamp (`less_than`) to decide whether the MV
+/// still needs a refresh. For the compaction window it reads the frontier's lone
+/// element via `as_option` to find the previous refresh time, falling back to the
+/// schedule's last refresh on the empty/sealed frontier `[]`, mirroring the
+/// legacy refresh policy. The frontier of a single-input total-order MV holds at
+/// most one element.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RefreshMvInfo {
+    /// The MV's writes-`GlobalId`: the identity the window decision records in
+    /// [`RefreshWindowDecision`] so the audit log can say which MVs kept the
+    /// cluster on.
+    pub id: GlobalId,
+    pub write_frontier: Antichain<Timestamp>,
+    pub refresh_schedule: RefreshSchedule,
+}
+
+/// Why a strategy desires a replica slot: the audit attribution a create
+/// decision carries. When several strategies desire the same shape the
+/// winning reason is decided by [`CreateReason::outranks`], since the audit
+/// event carries exactly one reason.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CreateReason {
+    /// The implicit baseline: the user's own cluster config calls for the
+    /// replica. The environment audits it as a manual create.
+    Baseline,
+    /// The graceful-reconfiguration strategy converging an in-flight
+    /// background `ALTER CLUSTER`.
+    GracefulReconfiguration,
+    /// The hydration-burst strategy accelerating hydration.
+    HydrationBurst,
+    /// The on-refresh strategy holding a scheduled cluster on inside a
+    /// refresh window. Embeds the window decision behind the create, which
+    /// the environment renders into the audit event's detail. Embedding it
+    /// makes "the decision detail appears iff the create audits the schedule
+    /// reason" structural: when another reason wins the precedence, the
+    /// decision is discarded with it.
+    OnRefresh(RefreshWindowDecision),
+}
+
+impl CreateReason {
+    /// Whether this reason wins over `other` when several strategies desire
+    /// the same shape, so the create audits this reason.
+    ///
+    /// A pairwise check rather than `Ord`: an `Ord` ranking by variant would
+    /// have to call two `OnRefresh` reasons with different window decisions
+    /// equal while `Eq` says they differ, violating the `Ord` contract.
+    pub fn outranks(&self, other: &CreateReason) -> bool {
+        self.rank() > other.rank()
+    }
+
+    fn rank(&self) -> u8 {
+        match self {
+            // Graceful wins over burst when both desire a shape (their shapes
+            // differ in practice, so this is a stable tie-break), both win
+            // over on-refresh, and the baseline loses to everything: any
+            // strategy's reason beats the implicit "the config calls for it".
+            CreateReason::Baseline => 0,
+            CreateReason::OnRefresh(_) => 1,
+            CreateReason::HydrationBurst => 2,
+            CreateReason::GracefulReconfiguration => 3,
+        }
+    }
+}
+
+/// The on-refresh strategy's per-tick window decision: which bound REFRESH MVs
+/// keep a scheduled cluster on, and why. The window is open iff either list is
+/// non-empty, so an open window always has an explanation.
+///
+/// Carried inside [`CreateReason::OnRefresh`] on the create decisions the open
+/// window produces. The environment converts it to the audit log's
+/// `scheduling_policies` detail. Plain ids and durations so the controller crate
+/// stays free of audit-log vocabulary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RefreshWindowDecision {
+    /// MVs whose write frontier has not yet passed the (hydration-adjusted) read
+    /// timestamp: a refresh is due or imminent.
+    pub objects_needing_refresh: Vec<GlobalId>,
+    /// MVs estimated to still need Persist compaction after their last refresh.
+    pub objects_needing_compaction: Vec<GlobalId>,
+    /// The cluster's `HYDRATION TIME ESTIMATE` the refresh window was widened by.
+    pub hydration_time_estimate: Duration,
+}
+
+impl RefreshWindowDecision {
+    /// Whether the refresh window is open: some MV still needs a refresh or
+    /// compaction time.
+    pub fn window_open(&self) -> bool {
+        !self.objects_needing_refresh.is_empty() || !self.objects_needing_compaction.is_empty()
+    }
+}
+
+/// The live signals the on-refresh strategy reads to decide whether a scheduled
+/// cluster is inside a refresh window: the current read timestamp, the
+/// Persist-compaction time estimate, and the bound REFRESH MVs' frontiers and
+/// schedules.
+///
+/// Pulled on demand only for scheduled clusters. A MANUAL cluster carries `None`
+/// and is never probed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RefreshWindowInputs {
+    /// The local oracle read timestamp the window decision is taken against.
+    pub read_ts: Timestamp,
+    /// How long after a refresh an MV is estimated to still need Persist
+    /// compaction, which also keeps the cluster on.
+    pub compaction_estimate: Duration,
+    /// The REFRESH MVs bound to the cluster.
+    pub refresh_mvs: Vec<RefreshMvInfo>,
+}
+
 /// The durable state of a single managed cluster plus its observed replicas, as
 /// pulled through the ctx for one reconcile tick.
 ///
@@ -92,6 +211,9 @@ pub struct ClusterState {
     pub availability_zones: Vec<String>,
     pub logging: ComputeReplicaLogging,
     pub arrangement_compression: bool,
+    /// The cluster's scheduling policy. Drives whether the implicit baseline owns
+    /// the replica set (MANUAL) or the on-refresh strategy does (REFRESH).
+    pub schedule: ClusterSchedule,
     pub auto_scaling_policy: Option<AutoScalingPolicy>,
     /// Latest graceful reconfiguration record, if one has been written.
     pub reconfiguration: Option<ReconfigurationRecord>,
@@ -121,6 +243,7 @@ impl ClusterState {
             availability_zones: AvailabilityZones(self.availability_zones.clone()),
             logging: self.logging.clone(),
             arrangement_compression: self.arrangement_compression,
+            schedule: self.schedule,
             auto_scaling_policy: self.auto_scaling_policy.clone(),
             reconfiguration: self.reconfiguration.clone(),
             burst: self.burst.clone(),
@@ -210,12 +333,13 @@ impl StateWrite {
 #[derive(Clone, Debug)]
 pub enum Decision {
     /// Create a replica of the given shape under a deterministic fresh name.
-    /// `reasons` records which strategies desired it (for audit attribution).
+    /// `reason` is the audit attribution: the winning [`CreateReason`] among
+    /// the strategies that desired the shape (see [`CreateReason::outranks`]).
     CreateReplica {
         cluster_id: ClusterId,
         name: String,
         shape: ReplicaShape,
-        reasons: Vec<&'static str>,
+        reason: CreateReason,
         expected: ExpectedClusterState,
     },
     /// Drop a specific existing replica. A drop happens exactly when no
@@ -292,6 +416,22 @@ pub trait ClusterControllerCtx: Send {
     /// self-healing: a replica with nothing to hydrate reads hydrated, and the
     /// burst winds down via its linger.
     async fn has_hydratable_objects(&mut self, cluster_id: ClusterId) -> bool;
+
+    /// The refresh-window live signals for one scheduled cluster: the read
+    /// timestamp, the compaction estimate, and the bound REFRESH MVs' write
+    /// frontiers and schedules. Returns `None` when the cluster is missing,
+    /// unmanaged, or no longer scheduled `ON REFRESH` at pull time. The
+    /// controller only asks about clusters it observed as scheduled, so `None`
+    /// means a concurrent DDL moved the cluster mid-tick, and the schedule's
+    /// membership in the compare-and-append witness rejects any decision
+    /// derived from the stale observation.
+    ///
+    /// Pulled on demand the same way as [`Self::hydrated_replicas`]: the
+    /// controller probes a cluster only when the on-refresh strategy needs the
+    /// signal (i.e. the cluster is scheduled), so a steady MANUAL cluster never
+    /// pays for it.
+    async fn refresh_window_inputs(&mut self, cluster_id: ClusterId)
+    -> Option<RefreshWindowInputs>;
 
     /// Apply a tick's batch of decisions under their compare-and-append guards.
     /// Each decision carries the [`ExpectedClusterState`] it was derived from;

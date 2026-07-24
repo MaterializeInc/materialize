@@ -16,8 +16,9 @@
 //! and wherever it is checked keeps the compared fields from drifting apart.
 
 use mz_adapter_types::cluster_state::{
-    AutoScalingPolicy, AvailabilityZones, BurstRecord, ExpectedClusterState, OnHydrationPolicy,
-    OnTimeout, ReconfigurationRecord, ReconfigurationStatus, ReconfigurationTarget,
+    AutoScalingPolicy, AvailabilityZones, BurstRecord, ClusterSchedule, ExpectedClusterState,
+    OnHydrationPolicy, OnTimeout, ReconfigurationRecord, ReconfigurationStatus,
+    ReconfigurationTarget,
 };
 use mz_catalog::memory::objects::{
     BurstState, ClusterVariant, ClusterVariantManaged, ReconfigurationState,
@@ -39,7 +40,7 @@ pub(crate) fn project_expected(managed: &ClusterVariantManaged) -> ExpectedClust
         arrangement_compression,
         replication_factor,
         optimizer_feature_overrides: _,
-        schedule: _,
+        schedule,
         auto_scaling_strategy,
         reconfiguration,
         burst,
@@ -50,6 +51,7 @@ pub(crate) fn project_expected(managed: &ClusterVariantManaged) -> ExpectedClust
         availability_zones: AvailabilityZones(availability_zones.clone()),
         logging: logging.clone(),
         arrangement_compression: *arrangement_compression,
+        schedule: cluster_schedule(schedule),
         auto_scaling_policy: auto_scaling_strategy.as_ref().map(auto_scaling_policy),
         reconfiguration: reconfiguration.as_ref().map(reconfiguration_record),
         burst: burst.as_ref().map(burst_record),
@@ -131,6 +133,17 @@ fn on_timeout(action: OnTimeoutAction) -> OnTimeout {
     match action {
         OnTimeoutAction::Commit => OnTimeout::Commit,
         OnTimeoutAction::Rollback => OnTimeout::Rollback,
+    }
+}
+
+fn cluster_schedule(schedule: &mz_sql::plan::ClusterSchedule) -> ClusterSchedule {
+    match schedule {
+        mz_sql::plan::ClusterSchedule::Manual => ClusterSchedule::Manual,
+        mz_sql::plan::ClusterSchedule::Refresh {
+            hydration_time_estimate,
+        } => ClusterSchedule::Refresh {
+            hydration_time_estimate: *hydration_time_estimate,
+        },
     }
 }
 
