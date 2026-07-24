@@ -2133,8 +2133,12 @@ class FlipFlagsAction(Action):
             # `EXPERIMENTAL ARRANGEMENT COMPRESSION` is managed-only. The
             # tracked `managed` flag can lag reality (e.g. an in-flight CREATE
             # lost to a kill), so the option can land on a cluster that is
-            # unmanaged by the time the ALTER runs.
+            # unmanaged by the time the ALTER runs. Two code paths reject it:
+            # the planner and the sequencer's defense-in-depth check, each with
+            # its own message, and which one fires depends on the timing of the
+            # desync.
             "EXPERIMENTAL ARRANGEMENT COMPRESSION not supported for unmanaged clusters",
+            "Cannot change EXPERIMENTAL ARRANGEMENT COMPRESSION of unmanaged clusters",
         ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> bool:
@@ -2743,7 +2747,16 @@ class ReconnectAction(Action):
                 # Reapply the session settings from Worker.run, they don't
                 # survive the reconnect.
                 cur.execute("SET auto_route_catalog_queries TO false")
-                cur.execute("SELECT pg_backend_pid()")
+                try:
+                    cur.execute("SELECT pg_backend_pid()")
+                except Exception as e:
+                    # FlipFlags may have poisoned the global default cluster to
+                    # `dont_exist`. Reconnecting can't fix a missing default, so
+                    # pin the session to a live cluster instead of wedging.
+                    if "unknown cluster 'dont_exist'" not in str(e):
+                        raise
+                    self._pin_default_cluster(exe, conn, cur)
+                    cur.execute("SELECT pg_backend_pid()")
                 if not exe.use_ws:
                     exe.pg_pid = cur.fetchall()[0][0]
             except Exception as e:
@@ -2766,6 +2779,27 @@ class ReconnectAction(Action):
             else:
                 break
         return True
+
+    def _pin_default_cluster(
+        self, exe: Executor, conn: Connection, cur: psycopg.Cursor
+    ) -> None:
+        """Pin the reconnected session onto `quickstart` (recreated at setup,
+        never dropped) after the global default was poisoned to `dont_exist`.
+        The WS session inherits the same poisoned default and must be pinned
+        too. `SET cluster` is rejected inside a transaction, so clear the
+        aborted probe transaction and run it in autocommit mode."""
+        conn.rollback()
+        prev_autocommit = conn.autocommit
+        conn.autocommit = True
+        cur.execute("SET cluster = quickstart")
+        conn.autocommit = prev_autocommit
+        if exe.use_ws:
+            # Best effort: on failure the worker just fails WS queries until
+            # FlipFlags resets the default, still better than wedging.
+            try:
+                exe.ws_query("SET cluster = quickstart;")
+            except QueryError:
+                pass
 
 
 class CancelAction(Action):
