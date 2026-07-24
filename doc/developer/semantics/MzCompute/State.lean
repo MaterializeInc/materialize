@@ -132,9 +132,12 @@ def step (s : ProtocolState) : Event → Option ProtocolState
   | .resp (.copyToResponse id) =>
       guard (!s.stage.isCreation && s.created id) s
   -- response.rs:130-131: Status has no effect on collection
-  -- lifecycles and carries no GlobalId in the current protocol.
+  -- lifecycles and carries no GlobalId in the current protocol. Like
+  -- every other response, it is only legal once the connection is
+  -- established, i.e. past the Creation stage. A response arriving
+  -- before Hello/CreateInstance is undefined behavior.
   | .resp .status =>
-      some s
+      guard (!s.stage.isCreation) s
 
 end MzCompute
 
