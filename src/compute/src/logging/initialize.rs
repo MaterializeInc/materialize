@@ -374,8 +374,7 @@ impl ExtractTimestamp for (Timestamp, Subtime) {
 ///
 /// Gated strictly on the `Maintenance` role. Interactive must not publish: it reads maintenance's
 /// slot, and its own (empty) copy would clobber it. Solo has no registry peer. The gate is
-/// deliberately NOT `should_publish_index`, whose dyncfg/`publishes_unconditionally` path also
-/// admits Interactive.
+/// deliberately stricter than `ComputeRuntimeRole::publishes`, which also admits Interactive.
 ///
 /// The arrangements are re-imported from their trace handles into `scope`. The original arrange
 /// streams are consumed inside the per-log construction regions, so only the trace handles survive

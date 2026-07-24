@@ -94,16 +94,13 @@ impl ComputeRuntimeRole {
         )
     }
 
-    /// Whether this role publishes its rendered indexes into the sharing registry regardless of the
-    /// `enable_index_arrangement_sharing` dyncfg.
+    /// Whether this role publishes its rendered indexes into the sharing registry.
     ///
     /// `Maintenance` publishes its maintained indexes, which its interactive peer reads exclusively
     /// from the registry. `Interactive` publishes its transient query outputs, which the result
     /// peeks over them likewise read from the registry and rely on for seal (`note_frontier`)
-    /// notifications. In both cases coupling publication to the runtime rather than the dyncfg keeps
-    /// a disabled dyncfg from stranding an interactive read (a peek that would otherwise block until
-    /// it times out). `Solo` has no registry peer, so it keeps the original dyncfg-only gate.
-    pub fn publishes_unconditionally(self) -> bool {
+    /// notifications. `Solo` has no registry peer, so it does not publish.
+    pub fn publishes(self) -> bool {
         matches!(
             self,
             ComputeRuntimeRole::Maintenance | ComputeRuntimeRole::Interactive

@@ -293,11 +293,6 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
-            "enable_index_arrangement_sharing",
-            "false",
-            ["true", "false"],
-        ),
-        VariableSystemParameter(
             "enable_simplify_from_less_existence",
             "true",
             ["true", "false"],
