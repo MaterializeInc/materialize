@@ -572,6 +572,13 @@ CREATE TABLE postgres_execute (f1 INTEGER);
 
 If any of the statements fail, the entire test will fail. Any result sets returned from the server are ignored and not checked for correctness.
 
+Two connection names are built in and can be used without a prior `$ postgres-connect` registration: `mz_system` connects as the `mz_system` user via the internal SQL address (e.g. for `ALTER SYSTEM SET`), and `materialize` connects as the `materialize` user via the external SQL address. The connection is established on first use and is then cached like a named connection created by `$ postgres-connect`, so repeated uses share a session. An explicit `$ postgres-connect` with the same name takes precedence.
+
+```
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_tables = 1000;
+```
+
 With `background=true` (only valid for URL connections), the statements execute in the background while the test continues. The task is joined at the end of the file, and a failure or a task that does not complete within the default timeout fails the test.
 
 #### `$ postgres-connect name=.... url=...`
