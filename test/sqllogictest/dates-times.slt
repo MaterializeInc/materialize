@@ -1361,6 +1361,12 @@ select '9::59.999999999'::time
 statement error invalid input syntax for type time: NANOSECOND
 select '9::60.1'::time
 
+# Regression test for SQL-473. 24:00:00 is rejected. The binary Bind parameter
+# path rejects it too instead of silently wrapping to 00:00:00, see
+# test/pgtest-mz/time-binary-out-of-range.pt.
+statement error invalid input syntax for type time: HOUR must be \[0, 23\], got 24: "24:00:00"
+select '24:00:00'::time
+
 # BC years are properly formatted
 # Using INTERVAL to work around the parser not supporting BC identifiers yet
 query T

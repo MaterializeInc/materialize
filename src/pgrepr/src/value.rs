@@ -916,7 +916,25 @@ impl Value {
             Type::Text => decode_binary_string(ty, raw).map(Value::Text),
             Type::BpChar { .. } => decode_binary_string(ty, raw).map(Value::BpChar),
             Type::VarChar { .. } => decode_binary_string(ty, raw).map(Value::VarChar),
-            Type::Time { .. } => NaiveTime::from_sql(ty.inner(), raw).map(Value::Time),
+            Type::Time { .. } => {
+                // The wire value is microseconds since midnight. Do not use
+                // `NaiveTime::from_sql`. Its duration arithmetic silently
+                // wraps around midnight, turning out-of-range values like
+                // 24:00:00 into 00:00:00. Reject them instead, including
+                // 24:00:00 itself, which `NaiveTime` cannot represent and
+                // the text path rejects too.
+                const USECS_PER_DAY: i64 = 24 * 60 * 60 * 1_000_000;
+                let usecs = i64::from_sql(ty.inner(), raw)?;
+                if !(0..USECS_PER_DAY).contains(&usecs) {
+                    return Err("time out of range".into());
+                }
+                let secs = u32::try_from(usecs / 1_000_000).expect("less than 86,400");
+                let nanos = u32::try_from(usecs % 1_000_000).expect("less than 1,000,000") * 1_000;
+                Ok(Value::Time(
+                    NaiveTime::from_num_seconds_from_midnight_opt(secs, nanos)
+                        .expect("validated against USECS_PER_DAY"),
+                ))
+            }
             Type::TimeTz { .. } => Err("input of timetz types is not implemented".into()),
             Type::Timestamp { .. } => {
                 let ts = NaiveDateTime::from_sql(ty.inner(), raw)?;
@@ -1104,6 +1122,33 @@ mod tests {
             panic!("decode_text of a numeric must yield Value::Numeric");
         };
         assert_eq!(text, expected, "text decode did not rescale to scale 2");
+    }
+
+    /// Binary time values are microseconds since midnight. Out-of-range
+    /// values, including 24:00:00, must error rather than silently wrap
+    /// around midnight (SQL-473).
+    #[mz_ore::test]
+    fn decode_binary_time_rejects_out_of_range() {
+        const USECS_PER_DAY: i64 = 24 * 60 * 60 * 1_000_000;
+        let ty = Type::Time { precision: None };
+
+        for usecs in [USECS_PER_DAY, USECS_PER_DAY + 1, -1, i64::MIN, i64::MAX] {
+            let res = Value::decode_binary(&ty, &usecs.to_be_bytes());
+            assert_eq!(
+                res.map(|_| ()).map_err(|e| e.to_string()).unwrap_err(),
+                "time out of range",
+                "{usecs} microseconds must be rejected",
+            );
+        }
+
+        let Value::Time(t) = Value::decode_binary(&ty, &(USECS_PER_DAY - 1).to_be_bytes()).unwrap()
+        else {
+            panic!("decoding a time value must yield Value::Time");
+        };
+        assert_eq!(
+            t,
+            NaiveTime::from_hms_micro_opt(23, 59, 59, 999_999).unwrap()
+        );
     }
 
     /// Text values must never contain NUL characters, in either wire format.
