@@ -1,6 +1,10 @@
 <!-- Adapted from https://discourse.gohugo.io/t/code-tabs-widget/975/7 -->
 {{ $level := .Get "level" }}
 <div class="code-tabs" {{ if $level }}data-heading-level="{{ $level }}"{{ end }}>
-  <ul class="nav-tabs"></ul>
+  <div class="nav-tabs-bar">
+    <div class="nav-tabs-scroll">
+      <ul class="nav-tabs"></ul>
+    </div>
+  </div>
   <div class="tab-content">{{ .Inner }}</div>
 </div>

@@ -1,0 +1,68 @@
+/* Copyright Materialize, Inc. and contributors. All rights reserved.
+ *
+ * Use of this software is governed by the Business Source License
+ * included in the LICENSE file at the root of this repository.
+ *
+ * As of the Change Date specified in that file, in accordance with
+ * the Business Source License, use of this software will be governed
+ * by the Apache License, Version 2.0. */
+
+/* Inter is licensed under the SIL Open Font License 1.1. FAIRE Sprig Sans and
+ * FAIRE Sprig Sans Mono are Materialize brand fonts commercially licensed to
+ * Materialize, Inc. */
+
+@font-face {
+    font-family: "Inter Variable";
+    src: url("./inter/Inter-roman.var.woff2") format("woff2");
+    font-weight: 100 900;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "Inter";
+    src: url("./inter/Inter-Regular.woff2") format("woff2");
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "Inter";
+    src: url("./inter/Inter-SemiBold.woff2") format("woff2");
+    font-weight: 600;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "FAIRE Sprig Sans";
+    src: url("./faire-sprig-sans/FAIRE-SprigSans-Regular.woff2") format("woff2");
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "FAIRE Sprig Sans";
+    src: url("./faire-sprig-sans/FAIRE-SprigSans-Medium.woff2") format("woff2");
+    font-weight: 500;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "FAIRE Sprig Sans Mono";
+    src: url("./faire-sprig-sans-mono/FAIRE-SprigSansMono-Regular.woff2") format("woff2");
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "FAIRE Sprig Sans Mono";
+    src: url("./faire-sprig-sans-mono/FAIRE-SprigSansMono-Medium.woff2") format("woff2");
+    font-weight: 500;
+    font-style: normal;
+    font-display: swap;
+}

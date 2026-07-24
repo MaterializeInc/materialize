@@ -1,0 +1,43 @@
+{{- $parentPath := partial "relative-link.html" . -}}
+{{- $selfManagedEditions := .Site.Data.self_managed.self_managed_editions_table -}}
+<div class="table-container">
+<table>
+  <thead>
+    <tr>
+      <th>Offering</th>
+      <th>Description</th>
+      <th>Get started</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Materialize Cloud</td>
+      <td>Materialize Cloud is a fully-managed service for Materialize.</td>
+      <td>
+        Sign up for a <a href="https://materialize.com/register/?utm_campaign=General&amp;utm_source=documentation">free trial account</a> on Materialize Cloud and try out the <a href="{{ $parentPath }}{{ "/get-started/quickstart/" | relURL }}">Quickstart</a>.
+      </td>
+    </tr>
+    <tr>
+      <td>Materialize Self-Managed</td>
+      <td>
+        Deploy and operate Materialize in your Kubernetes environment. Whereas Materialize Cloud gives you a fully managed service, Materialize Self-Managed allows you to deploy Materialize in your own infrastructure.
+        <p>Available in two editions:</p>
+        {{ partial "yaml-tables/generic-table.html" (dict
+          "columns" $selfManagedEditions.columns
+          "rows" $selfManagedEditions.rows
+        ) }}
+      </td>
+      <td>
+        <a href="{{ $parentPath }}{{ "/get-started/install/" | relURL }}">Install self-managed</a> and try out the <a href="{{ $parentPath }}{{ "/get-started/quickstart/" | relURL }}">Quickstart</a>, or see the <a href="{{ $parentPath }}{{ "/self-managed-deployments/" | relURL }}">deployment guide</a> to compare editions.
+      </td>
+    </tr>
+    <tr>
+      <td>Materialize Emulator</td>
+      <td>Materialize Emulator is an all-in-one Docker image that provides the fastest way to get hands-on experience with Materialize for local development.</td>
+      <td>
+        <a href="{{ $parentPath }}{{ "/get-started/install-materialize-emulator/" | relURL }}">Download and run Materialize Emulator</a> and try out the <a href="{{ $parentPath }}{{ "/get-started/quickstart/" | relURL }}">Quickstart</a>.
+      </td>
+    </tr>
+  </tbody>
+</table>
+</div>

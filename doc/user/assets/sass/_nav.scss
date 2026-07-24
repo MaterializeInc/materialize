@@ -14,11 +14,18 @@
         @media(max-width: 850px) {
             display: none !important;
         }
+
+        // Right-side actions group (theme switcher, Sign In, Get Started)
+        // needs a tighter gap than the primary menu links.
+        &.nav-actions {
+            gap: var(--milli);
+        }
     }
 
     .mobile {
         display: none;
         padding: var(--micro) 0;
+        background: var(--bg);
 
         a:not(.btn) {
             padding: var(--nano) 0;
@@ -30,15 +37,23 @@
         }
 
         .active {
-            font-weight: bold;
+            font-weight: 500;
+        }
+
+        .nav-theme-switcher {
+            margin-right: 0;
+            margin-top: var(--milli);
         }
 
         @media(max-width: 850px) {
             height: calc(100vh - var(--nav-height));
+            box-sizing: border-box;
 
             .row {
                 display: flex;
                 flex-direction: column;
+                height: 100%;
+                padding-bottom: env(safe-area-inset-bottom, 0);
             }
         }
     }
@@ -52,22 +67,34 @@
     }
 
     a:not([class*="btn"]) {
+        color: var(--important);
+        font-family: var(--font-body);
+        font-weight: var(--weight-body);
         text-decoration: none;
-        border-bottom: 1px solid transparent;
+        border-bottom: none;
 
         &:hover,
         &:focus,
         &.active {
             text-decoration: none;
-            color: var(--important);
-            border-color: var(--important);
+            color: var(--highlight);
         }
+    }
+
+    .btn {
+        font-family: var(--font-body);
+        font-weight: var(--weight-body);
+    }
+
+    .nav-theme-switcher {
+        margin-right: var(--nano);
     }
 
     &-logo {
         display: flex;
         align-items: center;
-        font-weight: 600;
+        font-family: var(--font-heading);
+        font-weight: 500;
         font-size: rem(1.8);
         color: var(--important);
 
@@ -151,7 +178,7 @@ button.show-topics {
     display: none;
     margin: 0 0 var(--small) !important;
     text-align: left;
-    font-weight: 300;
+    font-weight: var(--weight-body);
     font-size: var(--base);
     color: var(--sub);
 
@@ -181,6 +208,7 @@ button.close-topics {
     border-radius: 100%;
     box-shadow: var(--shadow-default);
     transition: all .2s ease-out;
+    z-index: 2;
 
     svg {
         height: 30px;
@@ -193,6 +221,10 @@ button.close-topics {
 
     @media(max-width: 850px) {
         display: flex;
+        // Straddle the panel edge so the search field can use the full width.
+        top: rem(1.2);
+        right: 0;
+        transform: translateX(calc(75% + 4px));
     }
 }
 

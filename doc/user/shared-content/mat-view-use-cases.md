@@ -4,8 +4,7 @@ For example:
 {{< tabs >}}
 {{< tab "3-tier architecture" >}}
 
-![Image of the 3-tier-architecture
-architecture](/images/3-tier-architecture.svg)
+{{< architecture-diagram tier="three" >}}
 
 In a [3-tier
 architecture](/manage/operational-guidelines/#three-tier-architecture)
@@ -24,7 +23,7 @@ from memory.
 
 {{< tab "2-tier architecture" >}}
 
-![Image of the 2-tier-architecture](/images/2-tier-architecture.svg)
+{{< architecture-diagram tier="two" >}}
 
 In a [2-tier
 architecture](/manage/appendix-alternative-cluster-architectures/#two-tier-architecture)
@@ -41,7 +40,7 @@ results from memory.
 {{</ tab >}}
 {{< tab "1-tier architecture" >}}
 
-![Image of the 1-tier-architecture](/images/1-tier-architecture.svg)
+{{< architecture-diagram tier="one" >}}
 
 In a [1-tier
 architecture](/manage/appendix-alternative-cluster-architectures/#one-tier-architecture)

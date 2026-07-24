@@ -30,9 +30,54 @@ Apache License, Version 2.0. */}}
       } else {
         document.body.classList.add("light");
       }
+
+      document.documentElement.dataset.theme = document.body.classList.contains("dark")
+        ? "dark"
+        : "light";
     </script>
 
-    {{ partial "header.html" . }} {{ block "body" .}}
+    {{ partial "header.html" . }}
+    <script>
+      (() => {
+        const darkMediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+
+        const syncToggles = (theme) => {
+          const isDark = theme === "dark";
+          document.querySelectorAll("button.theme-switcher").forEach((toggle) => {
+            toggle.setAttribute("aria-checked", String(isDark));
+            toggle.setAttribute(
+              "aria-label",
+              isDark ? "Switch to light theme" : "Switch to dark theme"
+            );
+          });
+          document.documentElement.dataset.theme = theme;
+        };
+
+        const applyTheme = (nextTheme, persist = true) => {
+          document.body.classList.remove("light", "dark");
+          document.body.classList.add(nextTheme);
+          if (persist) {
+            localStorage.setItem("theme", nextTheme);
+          }
+          syncToggles(nextTheme);
+        };
+
+        syncToggles(document.body.classList.contains("dark") ? "dark" : "light");
+
+        document.addEventListener("click", (event) => {
+          const toggle = event.target.closest("button.theme-switcher");
+          if (!toggle) return;
+          applyTheme(document.body.classList.contains("dark") ? "light" : "dark");
+        });
+
+        darkMediaQuery.addEventListener("change", () => {
+          if (localStorage.getItem("theme") === "system") {
+            applyTheme(darkMediaQuery.matches ? "dark" : "light", false);
+          }
+        });
+      })();
+    </script>
+    {{ block "body" .}}
     <div class="content-wrapper">
       {{ partial "sidebar.html" . }}
 
@@ -77,7 +122,7 @@ Apache License, Version 2.0. */}}
     <script>
       /* Add anchor links to headings */
       anchors.add(
-        ".content h2, .content h3, .content h4, .content h5, .content h6, .heading"
+        ".content h2, .content h3, .content h4, .content h5, .content h6, .heading, .fn-term"
       );
 
       /* Copy anchor links to clipboard on click */
@@ -116,7 +161,11 @@ Apache License, Version 2.0. */}}
       /* Add "Click to Copy" button to code blocks */
       $(document).ready(function () {
         $(".highlight").append(
-          '<button class="default_button copy_button" title="Copy code to clipboard">Copy</button>'
+          '<button class="default_button copy_button" title="Copy code to clipboard">' +
+            '<svg class="copy_button__icon copy_button__icon--copy" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>' +
+            '<svg class="copy_button__icon copy_button__icon--check" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>' +
+            '<span class="copy_button__label">Copy</span>' +
+          '</button>'
         );
 
         $("pre.chroma + button.copy_button").click(function (e) {
@@ -127,9 +176,11 @@ Apache License, Version 2.0. */}}
           copyHex.select();
           document.execCommand("copy");
           document.body.removeChild(copyHex);
-          _this.addClass("success").text("Copied");
+          _this.addClass("success");
+          _this.find(".copy_button__label").text("Copied");
           setTimeout(function () {
-            _this.removeClass("success").text("Copy");
+            _this.removeClass("success");
+            _this.find(".copy_button__label").text("Copy");
           }, 1000);
           window.analytics && window.analytics.track('Button Clicked');
         });
@@ -271,56 +322,6 @@ Apache License, Version 2.0. */}}
           toggleBodyOverflow(true);
           backdrop.style.display = "none";
         }
-      });
-
-      const systemButton = document.querySelector("button.system");
-      const lightButton = document.querySelector("button.light");
-      const darkButton = document.querySelector("button.dark");
-
-      const highlightButton = (theme) => {
-        [systemButton, lightButton, darkButton].forEach((button) => {
-          if ([...button.classList].includes(theme)) {
-            button.classList.add("active");
-          } else {
-            button.classList.remove("active");
-          }
-        });
-      };
-
-      highlightButton(theme);
-
-      darkMediaQuery.addEventListener("change", () => {
-        const storedTheme = localStorage.getItem("theme");
-        if (storedTheme === "system") {
-          highlightButton(storedTheme);
-          if (darkMediaQuery.matches) {
-            document.body.classList.replace("light", "dark");
-          } else {
-            document.body.classList.replace("dark", "light");
-          }
-        }
-      });
-
-      systemButton.addEventListener("click", () => {
-        if (darkMediaQuery.matches) {
-          document.body.classList.replace("light", "dark");
-        } else {
-          document.body.classList.replace("dark", "light");
-        }
-        localStorage.setItem("theme", "system");
-        highlightButton("system");
-      });
-
-      lightButton.addEventListener("click", () => {
-        document.body.classList.replace("dark", "light");
-        localStorage.setItem("theme", "light");
-        highlightButton("light");
-      });
-
-      darkButton.addEventListener("click", () => {
-        document.body.classList.replace("light", "dark");
-        localStorage.setItem("theme", "dark");
-        highlightButton("dark");
       });
 
       const allLinks = document.querySelectorAll("a");

@@ -1,5 +1,5 @@
 {{ $fields := slice }}
-<table>
+<table{{ with .class }} class="{{ . }}"{{ end }}>
 <thead>
 <tr>
 {{ range .columns }}

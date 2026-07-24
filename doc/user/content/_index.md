@@ -13,7 +13,7 @@ aliases:
 
 {{% include-headless "/headless/materialize-intro/intro" %}}
 
-{{< callout >}}
+{{< callout class="whats-new-callout" >}}
 ## What's new!
 
 - **MCP servers and Agent skills**:

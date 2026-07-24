@@ -11,14 +11,35 @@ $rem-scale: 0.585;
 :root {
     --nav-height: #{rem(6.5)}; // Changes to height requires changes to partials/toc.html since custom scroll logic implementation
 
-    --h1: #{rem(4.0)};
+    // Brand typefaces (style guide): FAIRE Sprig Sans → headlines; Inter → body/UI; FAIRE Sprig Sans Mono → code
+    --font-body: "Inter Variable", "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-heading: "FAIRE Sprig Sans", "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-mono: "FAIRE Sprig Sans Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+
+    // Style guide rhythm
+    --leading-headline: 1.4;
+    --leading-code: 1.55;
+    --tracking-eyebrow: 0.05em;
+    --tracking-code: 0.05em;
+    --weight-body: 350;
+    --weight-body-emphasis: 500;
+    --weight-body-strong: 600;
+    --weight-heading: 500;
+
+    // Typography reference (docs content)
+    --h1: #{rem(3.9)};
     --h2: #{rem(2.8)};
     --h3: #{rem(2.1)};
     --h4: #{rem(1.7)};
     --h5: #{rem(1.6)};
-    --base: #{rem(1.6)};
+    --base: #{rem(1.5)};
     --sm: #{rem(1.4)};
     --xsm: #{rem(1.2)};
+    --leading-h1: 1.3;
+    --leading-h2: 1.4;
+    --leading-body: 1.625;
+    --tracking-h1: -0.02em;
+    --tracking-h2: -0.015em;
 
     @media(max-width: 850px) {
         --h1: #{rem(3.4)};
@@ -38,60 +59,149 @@ $rem-scale: 0.585;
     --medium: #{rem(5)};
     --large: #{rem(6)};
 
-    --orchid: #e537c0;
+    --orchid: var(--color-pink-500);
     --orange: #ee8660;
-    --lavender: #ad37e5;
-    --brand: #7f4eff;
-    --purple-dark: #472f85;
+    --lavender: var(--color-purple-300);
+    --brand: var(--color-purple-500);
+    --purple-dark: var(--color-purple-800);
 
-    --white: #fff;
+    --white: var(--color-white);
     --white-light: #fefefe;
     --code-block-light: #f9f7fd;
 
-    --nav-light: #fff;
-    --nav-dark: #111111d9;
+    --nav-light: var(--color-white);
+    --nav-dark: oklch(0.14 0.012 291 / 88%);
 
-    --black: #111111;
-    --black-mid: #141414;
-    --black-light: #181818;
-    --black-lighter: #222222;
-    --black-lightest: #343434;
+    --bg-black: oklch(0.14 0.012 291);
+
+    --black: var(--color-black);
+    --black-mid: oklch(0.18 0.014 291);
+    --black-light: oklch(0.21 0.016 291);
+    --black-lighter: oklch(0.25 0.018 292);
+    --black-lightest: oklch(0.30 0.020 292);
 
     --gray-dark: #555555;
     --gray-mid: #888888;
-    --gray: #bbb;
+    --gray: #bbbbbb;
     --gray-light: #dddddd;
-    --gray-lighter: #dddd;
+    --gray-lighter: rgba(221, 221, 221, 0.87);
     --gray-lightest: #eeeeee;
 
     --shadow-default: 0 #{rem(0.625)} #{rem(1.5)} #{rem(0)} rgba(0, 0, 0, 0.08);
+
+    --table-surface: #111115;
+    --table-surface-raised: #15151a;
+    --table-surface-header: #19191f;
+    --table-border: #2a2b32;
+    --table-grid: #24252b;
+    --table-text: #d9d9de;
+    --table-body: #a3a3ad;
+    --table-green: #3ff47a;
+    --table-blue: #8b97ff;
+    --table-orange: #ff9a3d;
+    --table-yellow: #fbbf24;
+    --table-radius: 14px;
+    --table-shadow: 0 18px 50px rgba(0, 0, 0, 0.35), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+
+    --surface-inset:  rgba(0, 0, 0, 0.25);
+    --border-subtle:  rgba(255, 255, 255, 0.06);
+
+    // Page background mesh rhythm (theme sets colors only)
+    --docs-mesh-dot-size: 1px;
+    --docs-mesh-dot-step: #{rem(3)};
+    --docs-mesh-dot-step-sm: #{rem(2.75)};
+    --docs-mesh-grid-minor-step: #{rem(2)};
+    --docs-mesh-grid-minor-step-sm: #{rem(1.75)};
+    --docs-mesh-grid-major-step: #{rem(8)};
+    --docs-mesh-grid-major-step-sm: #{rem(7)};
+
+    // Style guide palette (0326-083)
+    --sg-midnight: #100C21;
+    --sg-violet: #7F4EFF;
+    --sg-lavender-1: #F2EDFF;
+    --sg-lavender-2: #C0B2E4;
+    --sg-lavender-3: #8F76CF;
+    --sg-lavender-4: #472F85;
+    --sg-lavender-6: #2C1D52;
+    --sg-gray-1: #DED9EE;
+    --sg-gray-2: #9B97A3;
+    --sg-gray-3: #736F81;
+    --sg-gray-4: #403D4D;
+    --sg-gray-5: #201D2C;
+    --sg-heading: #F0EEFF;
+    // Body copy needs to support sustained reading in dark mode, so it sits
+    // well above the muted caption grey (--sg-gray-2) in brightness while
+    // staying below headings and lifted inline text.
+    --sg-body: #CFCBDD;
+    --sg-inline-lifted: #E2E0F0;
+    --sg-link: #8F76CF;
+    --sg-link-hover: #B09EE0;
+    --sg-divider: #2A2745;
+    --sg-teal-3: #00C2AA;
+    --sg-teal-5: #007567;
 }
 
 body.dark {
-    --bg: #100b21;
+    --bg: var(--bg-black);
     --bg-nav: var(--nav-dark);
     --bg-sub: var(--black-light);
     --card: var(--black-mid);
     --card-light: var(--black-light);
     --color-scheme: dark;
-    --divider: var(--black-lighter);
-    --divider-light: var(--black-lightest);
+    --divider: var(--sg-divider);
+    --divider-light: var(--sg-divider);
 
-    --link: var(--highlight);
+    --link: var(--sg-link);
+    --link-hover: var(--sg-link-hover);
 
     --code-block: var(--card-light);
     --code-simple: #c2c2c2;
     --code-simple-bg: #292929;
-    --code-red: #fc6e6c;
-    --code-pink: #f97fe6;
-    --code-blue: #4b73f8;
-    --code-green: #819A7B;
-    --code-highlight: var(--code-blue);
+    --code-foreground: #e2e8f0;
+    --code-keyword: #c4b5fd;
+    --code-builtin: #7dcfff;
+    --code-type: #ffcb8b;
+    --code-function: #2bddc2;
+    --code-string: #9ece6a;
+    --code-number: #ff9e64;
+    --code-comment: #6b7394;
+    --code-operator: #89ddff;
+    --code-punctuation: color-mix(in srgb, var(--code-foreground) 48%, var(--code-comment));
+    --code-attribute: #ffcb8b;
+    --code-variable: #e2e8f0;
+    --code-red: #ff6e7a;
+    --code-pink: var(--code-keyword);
+    --code-blue: var(--code-builtin);
+    --code-green: var(--code-string);
+    --code-highlight: var(--code-function);
+    --code-lineno: var(--caption);
+    --code-preproc: color-mix(in srgb, var(--code-builtin) 82%, var(--caption));
 
-    --important: var(--gray-lightest);
-    --sub: var(--gray-light);
-    --body: var(--gray);
-    --highlight: #e0a5fb;
+    --heading: var(--sg-heading);
+    --body: var(--sg-body);
+    --inline-lifted: var(--sg-inline-lifted);
+    --sub: var(--sg-lavender-2);
+    --caption: var(--sg-gray-2);
+    --important: var(--heading);
+    --highlight: var(--color-teal-500);
+    --font-h4: var(--heading);
+
+    // Shared homepage promo surfaces (callout + offerings table)
+    --docs-card-surface: color-mix(in srgb, var(--card-light) 72%, var(--bg));
+    --docs-card-border: color-mix(in srgb, var(--divider-light) 88%, transparent);
+    --docs-card-divider: color-mix(in srgb, var(--divider-light) 55%, transparent);
+    --docs-card-divider-strong: color-mix(in srgb, var(--divider-light) 72%, transparent);
+    --docs-card-glow: color-mix(in srgb, var(--sg-lavender-6) 14%, transparent);
+    --docs-card-inset: color-mix(in srgb, var(--bg) 55%, transparent);
+    --docs-card-shadow:
+        0 1px 0 color-mix(in srgb, var(--heading) 4%, transparent) inset,
+        0 16px 40px color-mix(in srgb, var(--bg) 35%, transparent);
+
+    // Style guide background mesh (dark): grid + purple accent on the right
+    --docs-mesh-dot: color-mix(in srgb, #1e293b 25%, transparent);
+    --docs-mesh-grid-minor: rgba(255, 255, 255, 0.033);
+    --docs-mesh-grid-major: rgba(255, 255, 255, 0.055);
+    --docs-mesh-accent: color-mix(in srgb, var(--sg-lavender-6) 13%, transparent);
 
     --shadow-default: 0 #{rem(0.625)} #{rem(1.5)} 0 rgba(0, 0, 0, 0.4);
     --note: #fffad411;
@@ -120,35 +230,84 @@ body.dark {
 
     --tab-bg: var(--gray-lightest);
     --tab-selected-bg: var(--tip-after);
-    --font-h4: var(--gray-lightest);
 }
 
 body.light {
-    --bg: var(--white-light);
-    --bg-nav: var(--nav-light);
-    --bg-sub: var(--gray-lighter);
-    --card: var(--gray-lightest);
+    --bg: #F7F6FA;
+    --bg-nav: color-mix(in srgb, var(--bg) 88%, transparent);
+    --bg-sub: color-mix(in srgb, var(--sg-lavender-1) 45%, var(--white));
+    --card: color-mix(in srgb, var(--sg-lavender-1) 30%, var(--white));
     --card-light: var(--white);
     --color-scheme: light;
-    --divider: var(--gray);
-    --divider-light: var(--gray-lighter);
+    --divider: color-mix(in srgb, var(--sg-gray-1) 75%, var(--gray));
+    --divider-light: color-mix(in srgb, var(--sg-lavender-1) 55%, var(--gray-lighter));
 
-    --link: var(--brand);
+    --link: var(--sg-violet);
+    --link-hover: var(--sg-lavender-4);
 
     --code-block: var(--code-block-light);
     --code-simple: #505050;
     --code-simple-bg: var(--code-block-light);
-    --code-red: #c41a16;
-    --code-pink: #a90d91;
-    --code-blue: #1c01ce;
-    --code-green: #177500;
+    --code-foreground: var(--heading);
+    --code-keyword: #6d28d9;
+    --code-builtin: #0969da;
+    --code-type: #9a6700;
+    --code-function: #00857a;
+    --code-string: #067d62;
+    --code-number: #bc4c00;
+    --code-comment: #656d76;
+    --code-operator: #0550ae;
+    --code-punctuation: color-mix(in srgb, var(--code-comment) 82%, var(--heading));
+    --code-attribute: #953800;
+    --code-variable: var(--heading);
+    --code-red: #cf222e;
+    --code-pink: var(--code-keyword);
+    --code-blue: var(--code-builtin);
+    --code-green: var(--code-string);
+    --code-lineno: var(--sg-gray-2);
+    --code-preproc: color-mix(in srgb, var(--code-builtin) 78%, var(--sg-gray-3));
 
+    --heading: var(--sg-midnight);
+    --body: var(--sg-gray-4);
+    --inline-lifted: var(--sg-gray-5);
+    --sub: var(--sg-gray-3);
+    --caption: var(--sg-gray-2);
+    --important: var(--heading);
+    --code-highlight: var(--code-function);
+    --highlight: var(--sg-teal-5);
+    --font-h4: var(--heading);
 
-    --important: var(--black);
-    --code-highlight: var(--important);
-    --sub: var(--black-lighter);
-    --body: var(--black-light);
-    --highlight: var(--purple-dark);
+    --table-text: var(--inline-lifted);
+    --table-body: var(--body);
+
+    --table-green: var(--color-teal-700);
+    --table-orange: #C65D17;
+
+    --docs-card-surface: linear-gradient(
+        165deg,
+        color-mix(in srgb, var(--white) 88%, var(--sg-lavender-1)) 0%,
+        var(--white) 42%,
+        color-mix(in srgb, var(--white) 94%, var(--sg-lavender-1)) 100%
+    );
+    --docs-card-border: color-mix(in srgb, var(--sg-lavender-2) 28%, var(--gray-light));
+    --docs-card-divider: color-mix(in srgb, var(--sg-lavender-2) 24%, var(--gray-lighter));
+    --docs-card-divider-strong: color-mix(in srgb, var(--sg-lavender-2) 38%, var(--gray-light));
+    --docs-card-glow: color-mix(in srgb, var(--sg-violet) 7%, transparent);
+    --docs-card-glow-foot: color-mix(in srgb, var(--sg-lavender-1) 55%, transparent);
+    --docs-card-inset: color-mix(in srgb, var(--sg-lavender-1) 38%, var(--white));
+    --docs-card-shadow:
+        0 1px 2px rgba(16, 12, 33, 0.04),
+        0 10px 32px rgba(16, 12, 33, 0.06);
+
+    --callout-accent-soft-mix: 7%;
+    --callout-accent-border-mix: 28%;
+    --docs-card-top-accent-mix: 30%;
+    --docs-card-top-accent-center-mix: 65%;
+
+    // Style guide background mesh (light): grid
+    --docs-mesh-dot: rgba(64, 61, 77, 0.085);
+    --docs-mesh-grid-minor: rgba(64, 61, 77, 0.020);
+    --docs-mesh-grid-major: rgba(64, 61, 77, 0.035);
 
     --note: #fffad411;
     --note-border: #b9a61545;
@@ -175,7 +334,9 @@ body.light {
 
     --tab-bg: var(--gray-lighter);
     --tab-selected-bg: var(--tip);
-    --font-h4: var(--gray-dark);
+
+    --surface-inset:  rgba(0, 0, 0, 0.04);
+    --border-subtle:  rgba(0, 0, 0, 0.10);
 }
 
 *,
@@ -187,15 +348,16 @@ body.light {
 }
 
 body {
-    font-family: "Inter", sans-serif;
-    color: var(--important);
+    font-family: var(--font-body);
+    color: var(--body);
     color-scheme: var(--color-scheme);
     background: var(--bg);
     font-size: var(--base);
-    line-height: 1.7;
-    font-weight: 300;
+    line-height: var(--leading-body);
+    font-weight: var(--weight-body);
     max-width: 100vw;
     overflow-x: hidden;
+    position: relative;
 
     @media(max-width: 500px) {
         font-size: rem(1.5);
@@ -230,8 +392,7 @@ input[type="submit"] {
     5. Links inside notes
     6. Links inside notes with <code/>
 **/
-.btn,
-.btn-ghost {
+.btn {
     color: var(--white);
     text-decoration: none;
 
@@ -242,87 +403,170 @@ input[type="submit"] {
     }
 }
 
-nav {
+.nav,
+.sidebar,
+.toc,
+.toc-wrapper,
+.footer {
+    a:not([class*="btn"]) {
+        color: var(--important);
+
+        &:hover,
+        &:focus {
+            text-decoration: none;
+        }
+    }
+
     .link-with-code {
-        color: var(--sub);
+        color: var(--important);
 
         &:hover,
         &:focus {
             text-decoration: underline;
-            color: var(--link);
+            color: var(--important);
+        }
+    }
+
+    .btn-ghost {
+        color: var(--important);
+
+        &:hover,
+        &:focus {
+            color: var(--important);
+            text-decoration: none;
         }
     }
 }
 
+.content a:not([class]),
 p > a,
 .note > a,
 .tip > a,
 .annotation > a,
-.link-with-code {
+.content .link-with-code {
     color: var(--link);
+    font-family: var(--font-body);
+    font-weight: var(--weight-body);
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, var(--link) 30%, transparent);
+    text-underline-offset: 3px;
+    transition: color 0.15s ease, text-decoration-color 0.15s ease;
 
     &:hover,
     &:focus {
+        color: var(--link-hover);
         text-decoration: underline;
-        color: var(--sub);
+        text-decoration-color: var(--link-hover);
     }
 }
 
-.annotation-title {
-    font-weight: 600;
-    padding-bottom: rem(1.2);
-}
-
-a {
-    &:hover,
-    &:focus {
-        text-decoration: underline;
-        color: var(--link);
-    }
-
-    color: var(--sub);
-    text-decoration: none;
-}
-
-/*-------- Finish links color--------*/
-
-[class*="btn"] {
-    display: inline-flex;
-    justify-content: center;
-    align-items: center;
-    font-size: 12px;
-    text-transform: uppercase;
-    white-space: nowrap;
-    font-weight: 600;
-    letter-spacing: 0.1em;
-    background: var(--brand);
-    color: var(--white);
-    padding: rem(0.6) rem(1.2);
-    border-radius: 8px;
-
-    svg {
-        margin-right: rem(.6);
-        width: 18px;
-        height: 18px;
-    }
-
-    &:hover,
-    &:focus {
-        color: var(--white);
-        text-decoration: none;
-        box-shadow: rgba(128,78,255,.3) 0px 0px 0px 8px
-    }
-}
-
-.btn-ghost {
-    position: relative;
-    background: var(--bg);
-    border: 1px solid var(--brand);
+.content .btn-ghost {
     color: var(--important);
 
     &:hover,
     &:focus {
         color: var(--important);
+        text-decoration: none;
+    }
+}
+
+.annotation-title {
+    font-family: var(--font-heading);
+    font-weight: 500;
+    line-height: var(--leading-headline);
+    padding-bottom: rem(1.2);
+}
+
+a {
+    color: inherit;
+    text-decoration: none;
+
+    &:hover,
+    &:focus {
+        text-decoration: underline;
+    }
+}
+
+/*-------- Finish links color--------*/
+
+[class*="btn"] {
+    background: var(--brand);
+    border: 1px solid color-mix(in srgb, var(--brand) 70%, transparent);
+    border-radius: rem(0.8);
+    box-shadow: var(--docs-card-shadow);
+    color: var(--white);
+    display: inline-flex;
+    align-items: center;
+    font-family: var(--font-body);
+    font-size: rem(1.2);
+    font-weight: var(--weight-body-emphasis);
+    justify-content: center;
+    letter-spacing: var(--tracking-eyebrow);
+    padding: rem(0.6) rem(1.2);
+    text-transform: uppercase;
+    transition:
+        background-color 0.15s ease,
+        border-color 0.15s ease,
+        box-shadow 0.15s ease,
+        opacity 0.15s ease;
+    white-space: nowrap;
+
+    svg {
+        height: 18px;
+        margin-right: rem(0.6);
+        width: 18px;
+    }
+
+    &:hover,
+    &:focus {
+        box-shadow:
+            var(--docs-card-shadow),
+            0 0 0 rem(0.35) color-mix(in srgb, var(--brand) 25%, transparent);
+        color: var(--white);
+        text-decoration: none;
+    }
+}
+
+.btn-ghost {
+    background: var(--docs-card-inset);
+    border: 1px solid var(--docs-card-divider);
+    border-radius: rem(0.75);
+    box-shadow: none;
+    color: var(--important);
+    display: inline-flex;
+    align-items: center;
+    font-family: var(--font-body);
+    font-size: var(--sm);
+    font-weight: var(--weight-body);
+    gap: rem(0.75);
+    letter-spacing: 0;
+    line-height: 1;
+    padding: rem(0.55) rem(0.85);
+    position: relative;
+    text-decoration: none;
+    text-transform: none;
+    transition:
+        background-color 0.15s ease,
+        border-color 0.15s ease,
+        color 0.15s ease,
+        box-shadow 0.15s ease;
+
+    svg {
+        flex: 0 0 auto;
+    }
+
+    &:hover,
+    &:focus {
+        background: color-mix(in srgb, var(--highlight) 8%, var(--docs-card-inset));
+        border-color: color-mix(in srgb, var(--highlight) 35%, var(--docs-card-divider));
+        box-shadow: var(--docs-card-shadow);
+        color: var(--heading);
+        text-decoration: none;
+    }
+
+    &:focus-visible {
+        outline: 2px solid var(--highlight);
+        outline-offset: 2px;
     }
 }
 
@@ -333,25 +577,37 @@ a {
 }
 
 select.version-dropdown {
+    -moz-appearance: none;
+    -webkit-appearance: none;
     appearance: none;
-	-moz-appearance: none;
-	-webkit-appearance: none;
-	background-image: url('https://res.cloudinary.com/mzimgcdn/image/upload/v1737129759/dropdown.svg');
-	background-position: right 0.5rem top 50%, 0 0;
-	background-repeat: no-repeat, repeat;
-	background-size: 1.3rem auto, 100%;
-	outline: 1px solid transparent;
-    border: 1px solid var(--divider);
+    background-color: var(--docs-card-inset);
+    background-image: url('https://res.cloudinary.com/mzimgcdn/image/upload/v1737129759/dropdown.svg');
+    background-position: right 0.5rem top 50%, 0 0;
+    background-repeat: no-repeat, repeat;
+    background-size: 1.3rem auto, 100%;
+    border: 1px solid var(--docs-card-divider);
+    border-radius: rem(0.6);
+    color: var(--body);
+    outline: 1px solid transparent;
     padding: var(--pico) var(--nano);
-    border-radius: 4px;
-    background-color: var(--bg);
 
-	&:focus,
-	&:active {
-		outline: none;
-	}
+    &:focus,
+    &:active {
+        border-color: color-mix(in srgb, var(--highlight) 40%, var(--docs-card-divider));
+        outline: none;
+    }
 }
 
+// Semantic prose markers used in the idiomatic-SQL pages: <red> flags
+// anti-pattern warnings, <blue> labels the recommended pattern. Softened
+// toward the text palette so full sentences stay readable, with a weight
+// bump so they read as labels rather than tinted body copy.
+red {
+    color: color-mix(in srgb, var(--code-red) 72%, var(--body));
+    font-weight: var(--weight-body-emphasis);
+}
 
-red { color: var(--code-red); }
-blue { color: #2300ce; }
+blue {
+    color: color-mix(in srgb, var(--code-blue) 72%, var(--heading));
+    font-weight: var(--weight-body-emphasis);
+}
