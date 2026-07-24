@@ -296,7 +296,7 @@ export const AccountSpendPlanDetails = ({
               last30.accounts.map((account) => (
                 <PlanSectionItem
                   key={account.id}
-                  title={shortAccountId(account.id)}
+                  title={account.name || shortAccountId(account.id)}
                   value={formatCurrency(account.total)}
                 />
               ))}

@@ -300,7 +300,7 @@ describe("UsagePage", () => {
           days: oneDay([
             {
               external_customer_id: "parent-org",
-              name: "",
+              name: "Built-Prod",
               clusters: [
                 {
                   environment_id: "environment-parent-0",
@@ -353,6 +353,10 @@ describe("UsagePage", () => {
     // biggest spender first, under the window total.
     expect(await planDetails.findByText(formatCurrency(14))).toBeVisible();
     expect(await planDetails.findByText(formatCurrency(5))).toBeVisible();
+    // The parent has a display name (SAS-167) and renders it in place of the
+    // UUID; the child has none, so its row falls back to the short UUID.
+    expect(await planDetails.findByText("Built-Prod")).toBeVisible();
+    expect(await planDetails.findByText("child-or…")).toBeVisible();
   });
 
   it("renders storage and egress as distinct region-qualified rows, each with its own usage unit (SAS-159)", async () => {
