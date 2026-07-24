@@ -119,53 +119,17 @@ impl ArrangementSharingRegistry {
         Self::default()
     }
 
-    /// Publishes worker `worker_index`'s (of `peers` total) arrangement for `id`.
-    ///
-    /// Overwrites any prior arrangement in the slot.
-    pub fn insert(
-        &self,
-        id: GlobalId,
-        worker_index: usize,
-        peers: usize,
-        arr: SharedIndexArrangement,
-    ) {
-        self.insert_shared(id, worker_index, peers, Arc::new(arr));
-    }
-
-    /// Registers `arr` in slot `worker_index` of `id`, growing the slot vector to `peers` if `id`
-    /// is not yet present.
-    fn insert_shared(
-        &self,
-        id: GlobalId,
-        worker_index: usize,
-        peers: usize,
-        arr: Arc<SharedIndexArrangement>,
-    ) {
-        {
-            let mut map = self.inner.map.lock().expect("registry poisoned");
-            let slots = map
-                .entry(id)
-                .or_insert_with(|| (0..peers).map(|_| None).collect());
-            slots[worker_index] = Some(arr);
-        }
-        // Mark the slot dirty for its worker and fire its waker. The map lock is released first; the
-        // lost-wakeup argument for this ordering is on `notify`.
-        self.notify(id, worker_index);
-    }
-
     /// Returns the existing slot for `(id, worker_index)`, or creates one backed by unbacked
     /// `Published` placeholders ([`Published::placeholder`]) and returns that instead.
     ///
     /// Whichever side touches `(id, worker_index)` first creates the slot; the other observes and
     /// shares the same `Arc`, so a placeholder a reader already imported is filled in place by a
     /// later [`crate::shared_trace::PublishArrangement::adopt`] rather than being overwritten by a second, disconnected
-    /// arrangement. Grows the slot vector to `peers` like `insert_shared` when `id` is not
-    /// yet present.
+    /// arrangement. Grows the slot vector to `peers` when `id` is not yet present.
     ///
     /// Creating a placeholder carries no data, so this does not `notify`: there is nothing yet for
     /// a waiting reader to act on. The caller that later fills the placeholder via `adopt` is
-    /// responsible for calling `notify` once the fill is installed, the way `insert` does for a
-    /// freshly published slot.
+    /// responsible for calling `notify` once the fill is installed.
     pub fn get_or_create_placeholder(
         &self,
         id: GlobalId,
@@ -216,7 +180,8 @@ impl ArrangementSharingRegistry {
             let mut aliases = self.inner.aliases.lock().expect("registry poisoned");
             aliases.entry(*from).or_default().insert(to);
         }
-        // See `insert_shared`: mark dirty and fire the worker's waker after the slot write.
+        // Mark dirty and fire the worker's waker after the slot write. The map lock is released
+        // first, and the lost-wakeup argument for this ordering is on `notify`.
         self.notify(to, worker_index);
         true
     }
@@ -357,8 +322,8 @@ impl ArrangementSharingRegistry {
     /// Marks `id` dirty for interactive worker `worker_index` and fires its waker.
     ///
     /// The seal signal: maintenance calls this from an export's frontier probe when the shared
-    /// trace's `upper` advances, so a fast-path peek waiting on the seal is re-examined. Same body
-    /// as the notification half of `insert`.
+    /// trace's `upper` advances, so a fast-path peek waiting on the seal is re-examined. Delegates
+    /// to `notify`.
     pub fn note_frontier(&self, id: GlobalId, worker_index: usize) {
         self.notify(id, worker_index);
     }
@@ -371,10 +336,10 @@ impl ArrangementSharingRegistry {
     ///
     /// # Lost-wakeup contract
     ///
-    /// `map` and `wakers` are separate locks. `insert` and `reexport` write the slot under `map`,
-    /// release it, then call this under `wakers`. `get_or_create_placeholder` writes the slot the
-    /// same way, under `map` then released, but its caller calls this separately once it has
-    /// adopted the slot rather than immediately after the write. Either way, the slot write always
+    /// `map` and `wakers` are separate locks. `reexport` writes the slot under `map`, releases it,
+    /// then calls this under `wakers`. `get_or_create_placeholder` writes the slot the same way,
+    /// under `map` then released, but its caller calls this separately once it has adopted the slot
+    /// rather than immediately after the write. Either way, the slot write always
     /// precedes this call, which is all the argument below needs. On wake the interactive server
     /// loop runs `take_dirty` (under `wakers`) and only then re-reads the slot via `handles` (under
     /// `map`). Label the four steps: publisher P1 = slot write, P2 = this mark+activate; worker
@@ -506,60 +471,12 @@ mod tests {
 
     /// Like `publish_index`, but publishes into the given `registry` instead of a fresh one, so a
     /// caller can hand the same registry to a concurrent reader before publication happens.
+    ///
+    /// Routes through `get_or_create_placeholder` and `PublishArrangement::adopt`, the path the
+    /// maintenance render side uses. Exercises the get-or-create half of the convergence contract:
+    /// whatever slot `get_or_create_placeholder` returns (existing or freshly created) is the one
+    /// that gets filled.
     fn publish_index_into(
-        registry: &ArrangementSharingRegistry,
-        id: GlobalId,
-        rows: Vec<(Row, Row)>,
-    ) {
-        let registry_in = registry.clone();
-        timely::execute_directly(move |worker| {
-            worker.dataflow::<Timestamp, _, _>(|scope| {
-                let (mut oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
-                let oks = oks_collection.mz_arrange::<
-                    ColumnationChunker<_>,
-                    RowRowBatcher<_, _>,
-                    RowRowBuilder<_, _>,
-                    RowRowSpine<_, _>,
-                >("test oks");
-                let published_oks = PublishArrangement::publish(&oks);
-
-                let (mut errs_input, errs_collection) =
-                    scope.new_collection::<DataflowErrorSer, Diff>();
-                let errs = KeyCollection::from(errs_collection).mz_arrange::<
-                    ColumnationChunker<_>,
-                    ErrBatcher<_, _>,
-                    ErrBuilder<_, _>,
-                    ErrSpine<_, _>,
-                >("test errs");
-                let published_errs = PublishArrangement::publish(&errs);
-
-                registry_in.insert(
-                    id,
-                    0,
-                    1,
-                    SharedIndexArrangement {
-                        oks: published_oks,
-                        errs: published_errs,
-                    },
-                );
-
-                for (k, v) in rows {
-                    oks_input.update((k, v), Diff::ONE);
-                }
-                oks_input.advance_to(Timestamp::from(1_u64));
-                oks_input.flush();
-                errs_input.advance_to(Timestamp::from(1_u64));
-                errs_input.flush();
-            });
-        });
-    }
-
-    /// Like `publish_index_into`, but instead of publishing fresh arrangements and `insert`ing
-    /// them, routes through `get_or_create_placeholder` and `PublishArrangement::adopt`, the path
-    /// the maintenance render side uses. Exercises the get-or-create half of the convergence
-    /// contract: whatever slot `get_or_create_placeholder` returns (existing or freshly created) is
-    /// the one that gets filled.
-    fn publish_index_into_adopting(
         registry: &ArrangementSharingRegistry,
         id: GlobalId,
         rows: Vec<(Row, Row)>,
@@ -634,9 +551,8 @@ mod tests {
         let republished = registry.get_or_create_placeholder(id, 0, 1);
         assert!(Arc::ptr_eq(&slot, &republished));
 
-        // Publisher adopts the same slot and fills it (reuse publish_index_into, but routed
-        // through get_or_create_placeholder + adopt).
-        publish_index_into_adopting(&registry, id, test_rows());
+        // Publisher adopts the same slot and fills it.
+        publish_index_into(&registry, id, test_rows());
 
         assert_eq!(
             read_rows(&oks, Timestamp::from(0_u64)),
@@ -744,7 +660,7 @@ mod tests {
         // becomes the sole owner of the slot Arc, exactly the strong-count-1 shape eviction keys on.
         let slot = registry.get_or_create_placeholder(id, 0, 1);
         drop(slot);
-        publish_index_into_adopting(&registry, id, test_rows());
+        publish_index_into(&registry, id, test_rows());
         // The adopted flag, not the strong count, is what spares it: an adopted slot is fed by its
         // publisher and cleaned up by `remove`, never by eviction.
         registry.evict_unadopted(&id, 0);
@@ -1134,7 +1050,6 @@ mod tests {
                 RowRowBuilder<_, _>,
                 RowRowSpine<_, _>,
             >("input oks");
-            let published_oks = PublishArrangement::publish(&oks);
 
             let (errs_input, errs_collection) = scope.new_collection::<DataflowErrorSer, Diff>();
             let errs = KeyCollection::from(errs_collection).mz_arrange::<
@@ -1143,17 +1058,11 @@ mod tests {
                 ErrBuilder<_, _>,
                 ErrSpine<_, _>,
             >("input errs");
-            let published_errs = PublishArrangement::publish(&errs);
 
-            registry_in.insert(
-                id,
-                worker_index,
-                peers,
-                SharedIndexArrangement {
-                    oks: published_oks,
-                    errs: published_errs,
-                },
-            );
+            let slot = registry_in.get_or_create_placeholder(id, worker_index, peers);
+            PublishArrangement::adopt(&oks, &slot.oks);
+            PublishArrangement::adopt(&errs, &slot.errs);
+            registry_in.notify(id, worker_index);
             (oks_input, errs_input)
         });
 
@@ -1727,7 +1636,6 @@ mod tests {
                             RowRowBuilder<_, _>,
                             RowRowSpine<_, _>,
                         >("spike oks");
-                    let published_oks = PublishArrangement::publish(&oks);
 
                     let (errs_input, errs_collection) =
                         scope.new_collection::<DataflowErrorSer, Diff>();
@@ -1737,17 +1645,12 @@ mod tests {
                             ErrBuilder<_, _>,
                             ErrSpine<_, _>,
                         >("spike errs");
-                    let published_errs = PublishArrangement::publish(&errs);
 
-                    publisher_registry.insert(
-                        id,
-                        worker_index,
-                        peers,
-                        SharedIndexArrangement {
-                            oks: published_oks,
-                            errs: published_errs,
-                        },
-                    );
+                    let slot =
+                        publisher_registry.get_or_create_placeholder(id, worker_index, peers);
+                    PublishArrangement::adopt(&oks, &slot.oks);
+                    PublishArrangement::adopt(&errs, &slot.errs);
+                    publisher_registry.notify(id, worker_index);
                     (oks_input, errs_input)
                 });
 

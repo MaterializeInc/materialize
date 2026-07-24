@@ -2405,7 +2405,7 @@ mod interactive_import_tests {
 
     use crate::extensions::arrange::{KeyCollection, MzArrange};
     use crate::shared_trace::PublishArrangement;
-    use crate::sharing::{ArrangementSharingRegistry, SharedIndexArrangement, SharedOksFrontier};
+    use crate::sharing::{ArrangementSharingRegistry, SharedOksFrontier};
     use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, RowRowAgent, RowRowSpine};
 
     use super::{import_shared_index, should_publish_index};
@@ -2442,7 +2442,6 @@ mod interactive_import_tests {
             RowRowBuilder<_, _>,
             RowRowSpine<_, _>,
         >("test oks");
-        let published_oks = PublishArrangement::publish(&oks);
 
         let (mut errs_input, errs_collection) =
             scope.new_collection::<crate::render::errors::DataflowErrorSer, Diff>();
@@ -2452,17 +2451,11 @@ mod interactive_import_tests {
             ErrBuilder<_, _>,
             ErrSpine<_, _>,
         >("test errs");
-        let published_errs = PublishArrangement::publish(&errs);
 
-        registry.insert(
-            id,
-            0,
-            1,
-            SharedIndexArrangement {
-                oks: published_oks,
-                errs: published_errs,
-            },
-        );
+        let slot = registry.get_or_create_placeholder(id, 0, 1);
+        PublishArrangement::adopt(&oks, &slot.oks);
+        PublishArrangement::adopt(&errs, &slot.errs);
+        registry.notify(id, 0);
 
         for (k, v) in rows {
             oks_input.update((k, v), Diff::ONE);
@@ -2570,7 +2563,6 @@ mod interactive_import_tests {
             RowRowSpine<_, _>,
         >("test oks");
         let oks_writer = oks.trace.clone();
-        let published_oks = PublishArrangement::publish(&oks);
 
         let (mut errs_input, errs_collection) =
             scope.new_collection::<crate::render::errors::DataflowErrorSer, Diff>();
@@ -2580,17 +2572,11 @@ mod interactive_import_tests {
             ErrBuilder<_, _>,
             ErrSpine<_, _>,
         >("test errs");
-        let published_errs = PublishArrangement::publish(&errs);
 
-        registry.insert(
-            id,
-            0,
-            1,
-            SharedIndexArrangement {
-                oks: published_oks,
-                errs: published_errs,
-            },
-        );
+        let slot = registry.get_or_create_placeholder(id, 0, 1);
+        PublishArrangement::adopt(&oks, &slot.oks);
+        PublishArrangement::adopt(&errs, &slot.errs);
+        registry.notify(id, 0);
 
         for (k, v) in rows {
             oks_input.update((k, v), Diff::ONE);
