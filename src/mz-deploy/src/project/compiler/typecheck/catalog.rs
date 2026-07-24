@@ -885,6 +885,29 @@ impl CatalogRuntime {
             Builtin::Connection(connection) => connection.oid,
         };
 
+        // An element type reaches its array type through its own `array_id`,
+        // which is what name resolution follows to resolve `text[]`. The
+        // builtin definitions leave `array_id` unset, so each array type has
+        // to point its element type back at itself as it is registered.
+        // `BUILTINS::iter()` yields element types before the array types that
+        // reference them, the same ordering `resolve_builtin_type_references`
+        // already relies on.
+        if let Some(CatalogTypeDetails {
+            typ: CatalogType::Array { element_reference },
+            ..
+        }) = &type_details
+        {
+            let element = self
+                .items_by_id
+                .get_mut(element_reference)
+                .expect("element type registered before its array type");
+            Arc::make_mut(element)
+                .type_details
+                .as_mut()
+                .expect("array element reference points at a type")
+                .array_id = Some(item_id);
+        }
+
         let item = LocalItem {
             name: name.clone(),
             id: item_id,
@@ -2524,6 +2547,90 @@ mod tests {
         assert!(
             result.is_ok(),
             "stub table with date column failed: {:?}",
+            result.err()
+        );
+    }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    #[mz_ore::test]
+    fn test_resolve_array_types() {
+        let catalog = CatalogRuntime::new().expect("catalog creation should succeed");
+        for element_name in [
+            "text",
+            "int4",
+            "int8",
+            "bool",
+            "date",
+            "timestamptz",
+            "uuid",
+        ] {
+            let partial = PartialItemName {
+                database: None,
+                schema: None,
+                item: format!("_{element_name}"),
+            };
+            let array_type = catalog
+                .resolve_type(&partial)
+                .unwrap_or_else(|e| panic!("resolve_type(_{element_name}) failed: {e:?}"));
+            let element_type = catalog
+                .resolve_type(&PartialItemName {
+                    database: None,
+                    schema: None,
+                    item: element_name.to_string(),
+                })
+                .unwrap_or_else(|e| panic!("resolve_type({element_name}) failed: {e:?}"));
+            assert_eq!(
+                element_type
+                    .type_details()
+                    .expect("element is a type")
+                    .array_id,
+                Some(array_type.id()),
+                "{element_name} does not point at its array type"
+            );
+        }
+    }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    #[mz_ore::test]
+    fn test_stub_table_with_array_column() {
+        let mut runtime = CatalogRuntime::new().expect("catalog creation should succeed");
+        runtime.ensure_user_schema("test_db", "test_schema");
+        let object_id = ObjectId::new("test_db".into(), "test_schema".into(), "test_table".into());
+        let mut columns = BTreeMap::new();
+        columns.insert(
+            "operations".to_string(),
+            ColumnType {
+                r#type: "text[]".into(),
+                nullable: false,
+                position: 0,
+                comment: None,
+            },
+        );
+        columns.insert(
+            "counts".to_string(),
+            ColumnType {
+                r#type: "int4[]".into(),
+                nullable: true,
+                position: 1,
+                comment: None,
+            },
+        );
+        let result = runtime.create_stub_table(&object_id, &columns);
+        assert!(
+            result.is_ok(),
+            "stub table with array column failed: {:?}",
+            result.err()
+        );
+
+        let view_id = ObjectId::new("test_db".into(), "test_schema".into(), "test_view".into());
+        let sql = r#"CREATE VIEW "test_db"."test_schema"."test_view" AS
+            SELECT array_length("operations", 1) AS len, unnest("operations") AS op
+            FROM "test_db"."test_schema"."test_table"
+            WHERE 'launch' = ANY("operations")"#;
+        let result = runtime.create_item(&view_id, sql);
+        assert!(
+            result.is_ok(),
+            "view using array operations failed: {:?}",
             result.err()
         );
     }
