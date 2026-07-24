@@ -68,6 +68,7 @@ use crate::optimize::{self, Optimize, OptimizerError};
 use crate::peek_client::StatementLoggingGuard;
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, SessionConfig, StateRevision, TransactionId,
+    TransactionStatus,
 };
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::telemetry::{self, EventDetails, SegmentClientExt, StatementFailureType};
@@ -859,7 +860,28 @@ impl SessionClient {
                 &mut outer_ctx_extra,
                 cancel_future.clone(),
             )
-            .await?;
+            .await;
+        let rtw_result = match rtw_result {
+            Ok(result) => result,
+            Err(err) => {
+                // If we still hold EXECUTE-level logging (it is only consumed
+                // once the frontend commits to handling the write), retire it
+                // as errored. Letting the guard drop would misrecord the
+                // statement as aborted.
+                if let Some(id) = outer_ctx_extra
+                    .take()
+                    .and_then(|guard| guard.defuse().retire())
+                {
+                    self.peek_client.log_ended_execution(
+                        id,
+                        StatementEndedExecutionReason::Errored {
+                            error: err.to_string(),
+                        },
+                    );
+                }
+                return Err(err);
+            }
+        };
         if let Some(resp) = rtw_result {
             debug!("frontend read-then-write succeeded");
             return Ok((resp, execute_started));
@@ -1623,8 +1645,9 @@ impl SessionClient {
         attempt_state: Arc<FrontendWriteAttemptState>,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         use mz_expr::RowSetFinishing;
+        use mz_sql::ast::ConstantVisitor;
         use mz_sql::plan::{MutationKind, Plan, ReadThenWritePlan};
-        use mz_sql_parser::ast::Statement;
+        use mz_sql_parser::ast::{InsertStatement, Statement};
 
         // Check if frontend read-then-write is enabled (determined once at process startup
         // to avoid a mixed-mode window where both the old lock-based path and the new OCC
@@ -1660,6 +1683,35 @@ impl SessionClient {
                 return Ok(None);
             }
         };
+
+        // Mirror the coordinator's transaction-state gate in `handle_execute`:
+        // in a multi-statement transaction (an implicit batch or an explicit
+        // block), the only DML allowed is an AST-constant INSERT without
+        // RETURNING, which joins the transaction's write ops and commits at
+        // transaction end. All other DML is prohibited because writes on this
+        // path commit immediately and cannot be rolled back at transaction
+        // end. `Failed` transactions pass through, pgwire only admits
+        // COMMIT/ROLLBACK in that state.
+        {
+            let session = self.session.as_ref().expect("SessionClient invariant");
+            match session.transaction() {
+                TransactionStatus::Default
+                | TransactionStatus::Started(_)
+                | TransactionStatus::Failed(_) => {}
+                TransactionStatus::InTransactionImplicit(_)
+                | TransactionStatus::InTransaction(_) => {
+                    let constant_insert = matches!(
+                        &*stmt,
+                        Statement::Insert(InsertStatement {
+                            source, returning, ..
+                        }) if returning.is_empty() && ConstantVisitor::insert_source(source)
+                    );
+                    if !constant_insert {
+                        return Err(prohibited_in_transaction(&stmt));
+                    }
+                }
+            }
+        }
 
         if self
             .session
@@ -1917,19 +1969,28 @@ impl SessionClient {
             }
         };
 
-        // The OCC path commits writes immediately and they cannot be rolled
-        // back, so reject explicit transaction blocks. Constant INSERTs are
-        // handled above: they are blind writes that join the session
-        // transaction's write ops and commit at COMMIT, so they compose with
-        // explicit transactions. Redact literals so they don't leak into the
-        // error message, matching the coordinator's handling (INSERT, UPDATE,
-        // and DELETE are all sensitive statement kinds).
+        // Only single-statement (`Started`) transactions may enter the OCC
+        // loop, its writes commit immediately and cannot be rolled back at
+        // transaction end. Multi-statement transactions reach this point only
+        // for AST-constant INSERTs whose planned expression turned out
+        // non-constant. Match the coordinator's error precedence: `mz_now()`
+        // gets its dedicated error, everything else is prohibited in a
+        // transaction block. The coordinator's lock-based path additionally
+        // supports INSERTs of volatile constants (for example `random()`) in
+        // transaction blocks by buffering the diffs until commit, which the
+        // OCC path cannot do.
         {
             let session = self.session.as_ref().expect("SessionClient invariant");
-            if !session.transaction().is_implicit() {
-                return Err(AdapterError::OperationProhibitsTransaction(
-                    stmt.to_ast_string_redacted(),
-                ));
+            if !matches!(session.transaction(), TransactionStatus::Started(_)) {
+                let contains_temporal = rtw_plan.selection.contains_temporal()
+                    || rtw_plan.assignments.values().any(|e| e.contains_temporal())
+                    || rtw_plan.returning.iter().any(|e| e.contains_temporal());
+                if contains_temporal {
+                    return Err(AdapterError::Unsupported(
+                        "calls to mz_now in write statements",
+                    ));
+                }
+                return Err(prohibited_in_transaction(&stmt));
             }
         }
 
@@ -1949,6 +2010,20 @@ impl SessionClient {
             .await
             .map(Some)
     }
+}
+
+/// Builds the error for DML that cannot run in a transaction block, mirroring
+/// the coordinator's redaction in `handle_execute`: statements that can carry
+/// sensitive literals are redacted because the error message is persisted in
+/// `mz_statement_execution_history`.
+fn prohibited_in_transaction(stmt: &Statement<Raw>) -> AdapterError {
+    use mz_sql_parser::ast::StatementKind;
+    let op = if StatementKind::from(stmt).is_sensitive() {
+        stmt.to_ast_string_redacted()
+    } else {
+        stmt.to_string()
+    };
+    AdapterError::OperationProhibitsTransaction(op)
 }
 
 impl Drop for SessionClient {

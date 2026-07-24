@@ -74,20 +74,35 @@ use crate::coord::{Coordinator, ExecuteContextGuard, TargetCluster};
 use crate::error::AdapterError;
 use crate::optimize::Optimize;
 use crate::optimize::dataflows::{ComputeInstanceSnapshot, EvalTime, ExprPrep, ExprPrepOneShot};
-use crate::session::{LifecycleTimestamps, Session, TransactionOps};
+use crate::session::{LifecycleTimestamps, Session, TransactionOps, TransactionStatus};
 use crate::statement_logging::{
     PreparedStatementLoggingInfo, StatementLifecycleEvent, StatementLoggingId,
 };
 use crate::{PeekClient, PeekResponseUnary, TimelineContext, optimize};
 
+/// Reason a frontend write attempt is being torn down early.
 #[derive(Clone, Copy)]
 pub(crate) enum FrontendWriteCancellation {
     Canceled,
     StatementTimeout,
 }
 
+const CANCELLATION_NONE: u8 = 0;
+const CANCELLATION_CANCELED: u8 = 1;
+const CANCELLATION_STATEMENT_TIMEOUT: u8 = 2;
+
+/// State shared between an in-flight frontend write attempt and its
+/// cancellation wrapper,
+/// `SessionClient::try_frontend_read_then_write_with_cancel`.
+///
+/// The contract: `write_submitted` is true from just before the
+/// `AttemptWrite` command is sent until the attempt resolves as definitively
+/// not committed. While it is true, cancellation and statement timeout must
+/// not synthesize an error but await the definitive write result instead,
+/// because the write may already be durable.
 pub(crate) struct FrontendWriteAttemptState {
     write_submitted: AtomicBool,
+    /// One of the `CANCELLATION_*` codes, set at most once.
     cancellation: AtomicU8,
 }
 
@@ -95,7 +110,7 @@ impl FrontendWriteAttemptState {
     pub(crate) fn new() -> Self {
         Self {
             write_submitted: AtomicBool::new(false),
-            cancellation: AtomicU8::new(0),
+            cancellation: AtomicU8::new(CANCELLATION_NONE),
         }
     }
 
@@ -103,6 +118,12 @@ impl FrontendWriteAttemptState {
         self.write_submitted.store(true, Ordering::Release);
     }
 
+    /// Marks the submitted write as definitively not committed.
+    ///
+    /// NOTE: This must only be called for outcomes where the write is known
+    /// to not have landed (`TimestampPassed`). Terminal outcomes leave
+    /// `write_submitted` set so a concurrent cancellation path can never
+    /// fabricate an error for a write that may have committed.
     fn mark_write_resolved(&self) {
         self.write_submitted.store(false, Ordering::Release);
     }
@@ -113,18 +134,21 @@ impl FrontendWriteAttemptState {
 
     pub(crate) fn request(&self, cancellation: FrontendWriteCancellation) {
         let code = match cancellation {
-            FrontendWriteCancellation::Canceled => 1,
-            FrontendWriteCancellation::StatementTimeout => 2,
+            FrontendWriteCancellation::Canceled => CANCELLATION_CANCELED,
+            FrontendWriteCancellation::StatementTimeout => CANCELLATION_STATEMENT_TIMEOUT,
         };
-        let _ = self
-            .cancellation
-            .compare_exchange(0, code, Ordering::AcqRel, Ordering::Acquire);
+        let _ = self.cancellation.compare_exchange(
+            CANCELLATION_NONE,
+            code,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
     }
 
     fn requested_error(&self) -> Option<AdapterError> {
         match self.cancellation.load(Ordering::Acquire) {
-            1 => Some(AdapterError::Canceled),
-            2 => Some(AdapterError::StatementTimeout),
+            CANCELLATION_CANCELED => Some(AdapterError::Canceled),
+            CANCELLATION_STATEMENT_TIMEOUT => Some(AdapterError::StatementTimeout),
             _ => None,
         }
     }
@@ -237,17 +261,17 @@ impl PeekClient {
             self.log_set_cluster(logging_id, cluster_id, cluster_name);
         }
 
-        // Read-then-write is rejected in explicit transaction blocks (checked
-        // in SessionClient::try_frontend_read_then_write), so we're always in
-        // an implicit (autocommit) transaction here. The actual data is written
-        // via the coordinator's group commit path, bypassing session transaction
-        // ops. The empty Writes(vec![]) just marks this as a write transaction
-        // in the session state machine so auto-commit handles it correctly.
-        // This is safe because there's no ROLLBACK opportunity in an implicit
-        // transaction.
+        // Multi-statement transactions are rejected in
+        // `SessionClient::try_frontend_read_then_write`, so we're always in a
+        // single-statement (autocommit) transaction here. The actual data is
+        // written via the coordinator's group commit path, bypassing session
+        // transaction ops. The empty Writes(vec![]) just marks this as a write
+        // transaction in the session state machine so auto-commit handles it
+        // correctly. This is safe because a single-statement transaction has
+        // no ROLLBACK opportunity.
         debug_assert!(
-            session.transaction().is_implicit(),
-            "read-then-write should be rejected in explicit transactions"
+            matches!(session.transaction(), TransactionStatus::Started(_)),
+            "read-then-write requires a single-statement transaction"
         );
         session.add_transaction_ops(TransactionOps::Writes(vec![]))?;
 
@@ -787,7 +811,8 @@ impl PeekClient {
                             tx,
                         })
                         .await;
-                    attempt_state.mark_write_resolved();
+                    // All arms below terminate the attempt, so `write_submitted`
+                    // stays set per its contract.
                     match result {
                         WriteResult::Success { timestamp } => {
                             if let Some(id) = statement_logging_id {
@@ -910,7 +935,6 @@ impl PeekClient {
                             tx,
                         })
                         .await;
-                    attempt_state.mark_write_resolved();
 
                     match result {
                         WriteResult::Success { timestamp } => {
@@ -925,6 +949,12 @@ impl PeekClient {
                             next_eligible_timestamp,
                             ..
                         } => {
+                            // The write definitively did not land, so the
+                            // attempt is resolved. Clearing `write_submitted`
+                            // lets a cancel or statement timeout that fires
+                            // during the upcoming subscribe wait resolve
+                            // promptly instead of awaiting a write result.
+                            attempt_state.mark_write_resolved();
                             // Do not advance `state.current_upper` (and
                             // therefore `write_ts`) from `next_eligible_timestamp`.
                             // The diffs in `all_diffs` are only known to be
