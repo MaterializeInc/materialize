@@ -920,7 +920,8 @@ impl Catalog {
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)
                     | CatalogItem::Secret(_)
-                    | CatalogItem::Connection(_) => {}
+                    | CatalogItem::Connection(_)
+                    | CatalogItem::MetricSink(_) => {}
                 }
             }
         }
@@ -1732,7 +1733,10 @@ impl Catalog {
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)
                     | CatalogItem::Secret(_)
-                    | CatalogItem::Connection(_) => (),
+                    | CatalogItem::Connection(_)
+                    // A metric sink writes to the in-process metrics registry, not persist, so it
+                    // has no storage collection to create.
+                    | CatalogItem::MetricSink(_) => (),
                 }
 
                 let system_user = session.map_or(false, |s| s.user().is_system_user());
@@ -1916,7 +1920,11 @@ impl Catalog {
                         | CatalogItem::Type(_)
                         | CatalogItem::Func(_)
                         | CatalogItem::Secret(_)
-                        | CatalogItem::Connection(_) => EventDetails::IdFullNameV1(IdFullNameV1 {
+                        | CatalogItem::Connection(_)
+                        // Metric sinks reuse the generic detail and the `Sink` audit object type
+                        // (see the `From<CatalogItemType>` impl in mz_sql::catalog), so no
+                        // dedicated audit-log variant or proto bump is needed.
+                        | CatalogItem::MetricSink(_) => EventDetails::IdFullNameV1(IdFullNameV1 {
                             id: id.to_string(),
                             name,
                         }),

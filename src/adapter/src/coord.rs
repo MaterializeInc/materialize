@@ -408,6 +408,11 @@ pub enum Message {
         span: Span,
         stage: CreateIndexStage,
     },
+    CreateMetricSinkStageReady {
+        ctx: ExecuteContext,
+        span: Span,
+        stage: CreateMetricSinkStage,
+    },
     CreateViewStageReady {
         ctx: ExecuteContext,
         span: Span,
@@ -545,6 +550,7 @@ impl Message {
             Message::PeekStageReady { .. } => "peek_stage_ready",
             Message::ExplainTimestampStageReady { .. } => "explain_timestamp_stage_ready",
             Message::CreateIndexStageReady { .. } => "create_index_stage_ready",
+            Message::CreateMetricSinkStageReady { .. } => "create_metric_sink_stage_ready",
             Message::CreateViewStageReady { .. } => "create_view_stage_ready",
             Message::CreateMaterializedViewStageReady { .. } => {
                 "create_materialized_view_stage_ready"
@@ -789,6 +795,30 @@ pub struct CreateIndexExplain {
     plan: plan::CreateIndexPlan,
     df_meta: DataflowMetainfo,
     explain_ctx: ExplainPlanContext,
+}
+
+#[derive(Debug)]
+pub enum CreateMetricSinkStage {
+    Optimize(CreateMetricSinkOptimize),
+    Finish(CreateMetricSinkFinish),
+}
+
+#[derive(Debug)]
+pub struct CreateMetricSinkOptimize {
+    validity: PlanValidity,
+    plan: plan::CreateMetricSinkPlan,
+    resolved_ids: ResolvedIds,
+}
+
+#[derive(Debug)]
+pub struct CreateMetricSinkFinish {
+    validity: PlanValidity,
+    item_id: CatalogItemId,
+    global_id: GlobalId,
+    plan: plan::CreateMetricSinkPlan,
+    resolved_ids: ResolvedIds,
+    global_mir_plan: optimize::metric_sink::GlobalMirPlan,
+    global_lir_plan: optimize::metric_sink::GlobalLirPlan,
 }
 
 #[derive(Debug)]
@@ -2756,6 +2786,9 @@ impl Coordinator {
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_) => {}
+                // Metric sinks are durable catalog items, but re-optimizing and shipping their
+                // dataflow on boot is deferred to bootstrap rehydration; skip for now.
+                CatalogItem::MetricSink(_) => {}
             }
         }
 
@@ -3341,6 +3374,9 @@ impl Coordinator {
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_)
                 | CatalogItem::Connection(_) => (),
+                // A metric sink writes to the in-process metrics registry, not to persist, so it
+                // has no storage collection to bootstrap. Same treatment as `Index`.
+                CatalogItem::MetricSink(_) => (),
             }
         }
 
@@ -3751,6 +3787,9 @@ impl Coordinator {
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_)
                 | CatalogItem::Connection(_) => (),
+                // No physical plan is built for a metric sink on boot; re-optimizing and shipping
+                // its dataflow is deferred to bootstrap rehydration.
+                CatalogItem::MetricSink(_) => (),
             }
         }
 
@@ -3783,6 +3822,9 @@ impl Coordinator {
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_)
                 | CatalogItem::Connection(_) => continue,
+                // A metric sink has no persist dependency and no physical plan on boot (see
+                // `bootstrap_dataflow_plans`), so there is no as-of to select for it yet.
+                CatalogItem::MetricSink(_) => continue,
             };
             if let Some(plan) = self.catalog.try_get_physical_plan(&gid) {
                 catalog_ids.push(gid);

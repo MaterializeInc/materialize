@@ -293,6 +293,10 @@ impl Coordinator {
                 Plan::CreateIndex(plan) => {
                     self.sequence_create_index(ctx, plan, resolved_ids).await;
                 }
+                Plan::CreateMetricSink(plan) => {
+                    self.sequence_create_metric_sink(ctx, plan, resolved_ids)
+                        .await;
+                }
                 Plan::CreateType(plan) => {
                     let result = self
                         .sequence_create_type(ctx.session(), plan, resolved_ids)

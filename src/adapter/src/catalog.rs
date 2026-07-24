@@ -1579,6 +1579,8 @@ pub(crate) fn comment_id_to_audit_object_type(id: CommentObjectId) -> ObjectType
         CommentObjectId::MaterializedView(_) => ObjectType::MaterializedView,
         CommentObjectId::Source(_) => ObjectType::Source,
         CommentObjectId::Sink(_) => ObjectType::Sink,
+        // No dedicated audit `ObjectType` for metric sinks; treat them as sinks.
+        CommentObjectId::MetricSink(_) => ObjectType::Sink,
         CommentObjectId::Index(_) => ObjectType::Index,
         CommentObjectId::Func(_) => ObjectType::Func,
         CommentObjectId::Connection(_) => ObjectType::Connection,
@@ -1609,6 +1611,8 @@ pub(crate) fn system_object_type_to_audit_object_type(
             mz_sql::catalog::ObjectType::MaterializedView => ObjectType::MaterializedView,
             mz_sql::catalog::ObjectType::Source => ObjectType::Source,
             mz_sql::catalog::ObjectType::Sink => ObjectType::Sink,
+            // No dedicated audit `ObjectType` for metric sinks; treat them as sinks.
+            mz_sql::catalog::ObjectType::MetricSink => ObjectType::Sink,
             mz_sql::catalog::ObjectType::Index => ObjectType::Index,
             mz_sql::catalog::ObjectType::Type => ObjectType::Type,
             mz_sql::catalog::ObjectType::Role => ObjectType::Role,

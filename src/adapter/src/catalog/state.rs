@@ -458,6 +458,12 @@ impl CatalogState {
                         queue.push_back(from_item_id);
                     }
                 }
+                CatalogItem::MetricSink(metric_sink) => {
+                    let from_item_id = self.get_entry_by_global_id(&metric_sink.from).id();
+                    if seen.insert(from_item_id) {
+                        queue.push_back(from_item_id);
+                    }
+                }
                 CatalogItem::Index(idx) => {
                     let on_item_id = self.get_entry_by_global_id(&idx.on).id();
                     if seen.insert(on_item_id) {
@@ -1918,6 +1924,7 @@ impl CatalogState {
             CatalogItemType::Table
             | CatalogItemType::Source
             | CatalogItemType::Sink
+            | CatalogItemType::MetricSink
             | CatalogItemType::View
             | CatalogItemType::MaterializedView
             | CatalogItemType::Index
@@ -2740,6 +2747,7 @@ impl CatalogState {
             | CommentObjectId::MaterializedView(id)
             | CommentObjectId::Source(id)
             | CommentObjectId::Sink(id)
+            | CommentObjectId::MetricSink(id)
             | CommentObjectId::Index(id)
             | CommentObjectId::Func(id)
             | CommentObjectId::Connection(id)
@@ -2769,6 +2777,7 @@ impl CatalogState {
             | CommentObjectId::MaterializedView(id)
             | CommentObjectId::Source(id)
             | CommentObjectId::Sink(id)
+            | CommentObjectId::MetricSink(id)
             | CommentObjectId::Index(id)
             | CommentObjectId::Func(id)
             | CommentObjectId::Connection(id)

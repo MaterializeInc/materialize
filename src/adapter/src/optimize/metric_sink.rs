@@ -18,22 +18,249 @@
 //! family-conflict counting) stays in the operator, because it needs the frontier-gated fold that
 //! a per-row `Map` in MIR can't express.
 
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use mz_compute_types::plan::LirRelationExpr;
+use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, MetricSinkConnection};
 use mz_expr::func::variadic::Coalesce;
 use mz_expr::{MirRelationExpr, MirScalarExpr, func};
+use mz_repr::explain::trace_plan;
 use mz_repr::{
     ColumnName, Datum, GlobalId, RelationDesc, ReprRelationType, ReprScalarType, Row, SqlScalarType,
+};
+use mz_sql::names::QualifiedItemName;
+use mz_sql::optimizer_metrics::OptimizerMetrics;
+use mz_transform::TransformCtx;
+use mz_transform::dataflow::DataflowMetainfo;
+use mz_transform::normalize_lets::normalize_lets;
+use mz_transform::typecheck::{SharedTypecheckingContext, empty_typechecking_context};
+use timely::progress::Antichain;
+
+use crate::optimize::dataflows::{
+    ComputeInstanceSnapshot, DataflowBuilder, ExprPrep, ExprPrepMaintained,
+};
+use crate::optimize::{
+    LirDataflowDescription, MirDataflowDescription, Optimize, OptimizerCatalog, OptimizerConfig,
+    OptimizerError, optimize_mir_local,
 };
 
 /// Matches Prometheus's metric name grammar: `[a-zA-Z_:][a-zA-Z0-9_:]*`.
 ///
 /// Expressed in MIR (see `shape_metric_sink_source`) rather than parsed from a `&str` on the
 /// operator's hot path.
-// NOTE: `shape_metric_sink_source` (and this pattern) have no caller yet, hence the
-// `#[allow(dead_code)]`, but adding them alongside the compute operator
-// (`mz_compute::sink::metric_sink`) that reads the `metric_kind`/`name_valid`
-// column contract, so they live together.
-#[allow(dead_code)]
 const METRIC_NAME_PATTERN: &str = "^[a-zA-Z_:][a-zA-Z0-9_:]*$";
+
+/// Optimizer for `CREATE METRIC SINK`.
+///
+/// Like `CREATE INDEX`, the pipeline starts directly from the `GlobalId` of the collection to
+/// export rather than lowering a new relational expression from HIR. Unlike a materialized view
+/// sink, there is no persist shard, so there is no storage-metadata stage.
+pub struct Optimizer {
+    /// A representation typechecking context to use throughout the optimizer pipeline.
+    typecheck_ctx: SharedTypecheckingContext,
+    /// A snapshot of the catalog state.
+    catalog: Arc<dyn OptimizerCatalog>,
+    /// A snapshot of the cluster that will run the dataflow.
+    compute_instance: ComputeInstanceSnapshot,
+    /// A transient GlobalId for the shaped view built over the sink's source relation (see
+    /// `shape_metric_sink_source`).
+    view_id: GlobalId,
+    /// A durable GlobalId to be used with the exported metric sink.
+    sink_id: GlobalId,
+    /// Optimizer config.
+    config: OptimizerConfig,
+    /// Optimizer metrics.
+    metrics: OptimizerMetrics,
+    /// The time spent performing optimization so far.
+    duration: Duration,
+}
+
+impl Optimizer {
+    pub fn new(
+        catalog: Arc<dyn OptimizerCatalog>,
+        compute_instance: ComputeInstanceSnapshot,
+        view_id: GlobalId,
+        sink_id: GlobalId,
+        config: OptimizerConfig,
+        metrics: OptimizerMetrics,
+    ) -> Self {
+        Self {
+            typecheck_ctx: empty_typechecking_context(),
+            catalog,
+            compute_instance,
+            view_id,
+            sink_id,
+            config,
+            metrics,
+            duration: Default::default(),
+        }
+    }
+}
+
+/// A wrapper of metric sink parts needed to start the optimization process.
+pub struct MetricSink {
+    name: QualifiedItemName,
+    from: GlobalId,
+}
+
+impl MetricSink {
+    /// Construct a new [`MetricSink`]. Arguments are recorded as-is.
+    pub fn new(name: QualifiedItemName, from: GlobalId) -> Self {
+        Self { name, from }
+    }
+}
+
+/// The (sealed intermediate) result after embedding a [`MetricSink`] into a
+/// [`MirDataflowDescription`], inlining referenced views, and jointly optimizing the `MIR` plans.
+#[derive(Clone, Debug)]
+pub struct GlobalMirPlan {
+    df_desc: MirDataflowDescription,
+    df_meta: DataflowMetainfo,
+}
+
+impl GlobalMirPlan {
+    pub fn df_desc(&self) -> &MirDataflowDescription {
+        &self.df_desc
+    }
+}
+
+/// The (final) result after MIR ⇒ LIR lowering and optimizing the resulting
+/// `DataflowDescription` with `LIR` plans.
+#[derive(Clone, Debug)]
+pub struct GlobalLirPlan {
+    df_desc: LirDataflowDescription,
+    df_meta: DataflowMetainfo,
+}
+
+impl GlobalLirPlan {
+    pub fn df_desc(&self) -> &LirDataflowDescription {
+        &self.df_desc
+    }
+}
+
+impl Optimize<MetricSink> for Optimizer {
+    type To = GlobalMirPlan;
+
+    fn optimize(&mut self, metric_sink: MetricSink) -> Result<Self::To, OptimizerError> {
+        let time = Instant::now();
+
+        let from_entry = self.catalog.get_entry(&metric_sink.from);
+        let full_name = self
+            .catalog
+            .resolve_full_name(&metric_sink.name, from_entry.conn_id());
+        let from_desc = from_entry
+            .relation_desc()
+            .expect("can only create a metric sink on items with a valid description")
+            .into_owned();
+
+        let mut df_builder = {
+            let compute = self.compute_instance.clone();
+            DataflowBuilder::new(&*self.catalog, compute).with_config(&self.config)
+        };
+        let mut df_desc = MirDataflowDescription::new(full_name.to_string());
+        let mut df_meta = DataflowMetainfo::default();
+
+        df_builder.import_into_dataflow(&metric_sink.from, &mut df_desc, &self.config.features)?;
+        df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
+
+        // Push the pure row-wise shaping (coalesce identity elements, classify the metric kind,
+        // validate the metric name) into MIR, so the operator only does the cross-row logic
+        // (dedup/collision/family-conflict) that needs the fold. See `shape_metric_sink_source`.
+        let (shaped_expr, shaped_desc) = shape_metric_sink_source(metric_sink.from, &from_desc);
+        let mut local_ctx = TransformCtx::local(
+            &self.config.features,
+            &self.typecheck_ctx,
+            &mut df_meta,
+            Some(&mut self.metrics),
+            Some(self.view_id),
+        );
+        let shaped_expr = optimize_mir_local(shaped_expr, &mut local_ctx)?;
+
+        df_builder.import_view_into_dataflow(
+            &self.view_id,
+            &shaped_expr,
+            &mut df_desc,
+            &self.config.features,
+        )?;
+        df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
+
+        let sink_description = ComputeSinkDesc {
+            from: self.view_id,
+            from_desc: shaped_desc,
+            connection: ComputeSinkConnection::MetricSink(MetricSinkConnection {}),
+            with_snapshot: true,
+            up_to: Antichain::new(),
+            non_null_assertions: Vec::new(),
+            refresh_schedule: None,
+        };
+        df_desc.export_sink(self.sink_id, sink_description);
+
+        // Prepare expressions in the assembled dataflow.
+        let style = ExprPrepMaintained;
+        df_desc.visit_children(
+            |r| style.prep_relation_expr(r),
+            |s| style.prep_scalar_expr(s),
+        )?;
+
+        // Construct TransformCtx for global optimization.
+        let mut transform_ctx = TransformCtx::global(
+            &df_builder,
+            &mz_transform::EmptyStatisticsOracle,
+            &self.config.features,
+            &self.typecheck_ctx,
+            &mut df_meta,
+            Some(&mut self.metrics),
+        );
+        // Run global optimization.
+        mz_transform::optimize_dataflow(&mut df_desc, &mut transform_ctx, false)?;
+
+        self.duration += time.elapsed();
+
+        Ok(GlobalMirPlan { df_desc, df_meta })
+    }
+}
+
+impl Optimize<GlobalMirPlan> for Optimizer {
+    type To = GlobalLirPlan;
+
+    fn optimize(&mut self, plan: GlobalMirPlan) -> Result<Self::To, OptimizerError> {
+        let time = Instant::now();
+
+        let GlobalMirPlan {
+            mut df_desc,
+            df_meta,
+        } = plan;
+
+        // Ensure all expressions are normalized before finalizing.
+        for build in df_desc.objects_to_build.iter_mut() {
+            normalize_lets(&mut build.plan.0, &self.config.features)?
+        }
+
+        // Finalize the dataflow: MIR ⇒ LIR lowering and LIR ⇒ LIR transforms.
+        let df_desc = LirRelationExpr::finalize_dataflow(
+            df_desc,
+            &self.config.features,
+            Some(self.metrics.lowering()),
+        )?;
+
+        // Trace the pipeline output under `optimize`.
+        trace_plan(&df_desc);
+
+        self.duration += time.elapsed();
+        self.metrics
+            .observe_e2e_optimization_time("metric_sink", self.duration);
+
+        Ok(GlobalLirPlan { df_desc, df_meta })
+    }
+}
+
+impl GlobalLirPlan {
+    /// Unwraps the parts of the final result of the optimization pipeline.
+    pub fn unapply(self) -> (LirDataflowDescription, DataflowMetainfo) {
+        (self.df_desc, self.df_meta)
+    }
+}
 
 /// Extends the metric sink's imported relation with the row-wise shaping the operator otherwise
 /// has to do in Rust: coalesces `labels`/`help` to their identity element, and adds two columns
@@ -53,7 +280,6 @@ const METRIC_NAME_PATTERN: &str = "^[a-zA-Z_:][a-zA-Z0-9_:]*$";
 /// via `Reduce` + `FirstValue`), collapsing the operator to a plain fold over the live set. That
 /// full move is deferred: the tiebreak fidelity that logic needs is easier to keep correct
 /// hand-written and unit-tested for now.
-#[allow(dead_code)]
 fn shape_metric_sink_source(
     from_id: GlobalId,
     from_desc: &RelationDesc,

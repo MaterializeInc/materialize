@@ -778,7 +778,9 @@ impl ComputeController {
 
     /// Creates the described dataflow and initializes state for its output.
     ///
-    /// Only materialized views and subscribes are allowed to have a `target_replica`.
+    /// Only materialized views, subscribes, and metric sinks are allowed to have a
+    /// `target_replica`. A metric sink is a sink export, not an index export, so it passes the
+    /// index-export assertion below.
     ///
     /// Panics if called with a dataflow description that has index exports
     /// when `target_replica` is set.
