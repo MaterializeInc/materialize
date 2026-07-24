@@ -579,7 +579,7 @@ class VarChar(DataType):
             return "varchar(1024)"
 
 
-class Bytea(Text):
+class Bytea(DataType):
     @staticmethod
     def name(backend: Backend = Backend.MATERIALIZE) -> str:
         if backend == Backend.AVRO:
@@ -588,6 +588,44 @@ class Bytea(Text):
             return "string"
         else:
             return "bytea"
+
+    @staticmethod
+    def random_value(
+        rng: random.Random,
+        record_size: RecordSize = RecordSize.LARGE,
+        in_query: bool = False,
+    ) -> Any:
+        if rng.randrange(10) == 0:
+            result = rng.choice(
+                [
+                    "NULL",
+                    "0.0",
+                    "True",
+                    # "",
+                    "表ポあA鷗ŒéＢ逍Üßªąñ丂㐀𠀀",
+                    rng.randint(-100, 100),
+                ]
+            )
+        # Fails: unterminated dollar-quoted string
+        # chars = string.printable
+        chars = string.ascii_letters + string.digits
+        if record_size == RecordSize.TINY:
+            result = rng.choice(("foo", "bar", "baz"))
+        elif record_size == RecordSize.SMALL:
+            result = "".join(rng.choice(chars) for _ in range(3))
+        elif record_size == RecordSize.MEDIUM:
+            result = "".join(rng.choice(chars) for _ in range(10))
+        elif record_size == RecordSize.LARGE:
+            result = "".join(rng.choice(chars) for _ in range(100))
+        else:
+            raise ValueError(f"Unexpected record size {record_size}")
+
+        return f"{literal(str(result))}::bytea" if in_query else str(result)
+
+    @staticmethod
+    def numeric_value(num: int, in_query: bool = False) -> Any:
+        result = f"key{num}"
+        return f"'{result}'::bytea" if in_query else str(result)
 
 
 class UUID(DataType):
@@ -768,6 +806,66 @@ class IntList(DataType):
         values = [str(num) for i in range(0, num)]
         values_str = f"{{{', '.join(values)}}}"
         return f"'{values_str}'::int list" if in_query else values_str
+
+
+class RecordList(DataType):
+    @staticmethod
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
+        if backend == Backend.AVRO:
+            raise ValueError("Unsupported")
+        elif backend == Backend.JSON:
+            raise ValueError("Unsupported")
+        else:
+            return "record list"
+
+    @staticmethod
+    def random_value(
+        rng: random.Random,
+        record_size: RecordSize = RecordSize.LARGE,
+        in_query: bool = False,
+    ) -> Any:
+        if record_size == RecordSize.TINY:
+            key_range = 1
+        elif record_size == RecordSize.SMALL:
+            key_range = 5
+        elif record_size == RecordSize.MEDIUM:
+            key_range = 10
+        elif record_size == RecordSize.LARGE:
+            key_range = 20
+        else:
+            raise ValueError(f"Unexpected record size {record_size}")
+        values = [f"row({rng.randint(-100, 100)})" for i in range(0, key_range)]
+        return f"list[{', '.join(values)}]"
+
+    @staticmethod
+    def numeric_value(num: int, in_query: bool = False) -> Any:
+        values = [f"row({i})" for i in range(0, num)]
+        return f"list[{', '.join(values)}]"
+
+
+class Record(DataType):
+    @staticmethod
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
+        if backend == Backend.AVRO:
+            raise ValueError("Unsupported")
+        elif backend == Backend.JSON:
+            raise ValueError("Unsupported")
+        else:
+            return "record"
+
+    @staticmethod
+    def random_value(
+        rng: random.Random,
+        record_size: RecordSize = RecordSize.LARGE,
+        in_query: bool = False,
+    ) -> Any:
+        value = str(rng.choice(["null::integer", "1"]))
+        return f"row({value})"
+
+    @staticmethod
+    def numeric_value(num: int, in_query: bool = False) -> Any:
+        value = str(num)
+        return f"row({value})"
 
 
 class Timestamp(DataType):
@@ -1190,6 +1288,10 @@ RANGE_TYPES = [Int4Range, Int8Range, NumRange, DateRange, TsRange, TsTzRange]
 
 # Sort to keep determinism for reproducible runs with specific seed
 DATA_TYPES = sorted(list(all_subclasses(DataType)), key=repr)
+
+# Record and RecordList are only used nested within expressions, not as
+# top-level table columns.
+DATA_TYPES_FOR_COLUMNS = sorted(list(set(DATA_TYPES) - {Record, RecordList}), key=repr)
 
 # Explicit allowlists so that the actually exercised types are visible at a
 # glance. A type belongs in one of these lists only if it maps to a native
