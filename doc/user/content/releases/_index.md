@@ -23,23 +23,110 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-07-21* <br>
 *Released to Materialize Self-Managed: 2026-07-21* <br>
 
-### Graceful Cluster Reconfiguration {#v26.34-background-cluster-reconfiguration}
-`ALTER CLUSTER` for configuration changes (such as resizing) now returns immediately and converges in the background, rather than blocking until the new replica set is ready. `CREATE CLUSTER` and `ALTER CLUSTER` also accept the new `AUTO SCALING STRATEGY` option for configuring hydration-burst autoscaling behavior.
-
 ### Autoscaling to speed up hydration {#v26.34-autoscaling-hydration}
-Managed clusters can now temporarily scale up while hydrating and scale back down once caught up, reducing hydration time without permanently provisioning a larger cluster. Configure this behavior with the new `AUTO SCALING STRATEGY` option on [`CREATE CLUSTER`](/sql/create-cluster/) and `ALTER CLUSTER`.
+
+{{< public-preview />}}
+
+Managed clusters can now temporarily scale up to accelerate hydration.
+
+Using the `AUTO SCALING STRATEGY (ON HYDRATION)` strategy, Materialize runs an extra burst replica at the
+larger `HYDRATION SIZE` while the cluster's objects are un-hydrated. Once a steady-size replica hydrates, the burst replica is retired. An optional `LINGER DURATION` keeps the burst replica running for a grace period after the steady-size replicas hydrate.
+
+```mzsql
+-- Create a cluster that spins up a 1600cc burst replica while hydrating
+CREATE CLUSTER my_cluster (
+    SIZE = '400cc',
+    AUTO SCALING STRATEGY = (
+        ON HYDRATION (HYDRATION SIZE = '1600cc', LINGER DURATION = '600s')
+    )
+);
+```
+
+You can add, change, or remove the strategy on an existing cluster with
+`ALTER CLUSTER`:
+
+```mzsql
+ALTER CLUSTER my_cluster SET (
+    AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = '1600cc'))
+);
+```
+
+For more information, see the `AUTO SCALING STRATEGY` option on
+[`CREATE CLUSTER`](/sql/create-cluster/#autoscaling) and
+[`ALTER CLUSTER`](/sql/alter-cluster/#speed-up-hydration-by-autoscaling-to-a-larger-size).
+
+### Graceful Cluster Reconfiguration {#v26.34-background-cluster-reconfiguration}
+`ALTER CLUSTER` for configuration changes (such as resizing) now returns immediately and runs in the background, rather than blocking until the new replica set is ready.
+
+Because the command is now asynchronous, you can monitor the
+progress of an in-flight reconfiguration using `SHOW CLUSTERS`.
+
+```mzsql
+SHOW CLUSTERS;
+```
+```nofmt
+    name    | replicas   |           activity           | comment
+------------+------------+------------------------------+---------
+ my_cluster | r1 (400cc) | reconfiguring size to 1600cc |
+```
+
+For detailed status, query
+[`mz_internal.mz_cluster_reconfigurations`](/reference/system-catalog/mz_internal/#mz_cluster_reconfigurations),
+which reports the target shape, the deadline, and the reconfiguration's
+lifecycle `status` (`in-progress`, then a terminal `finalized`, `timed-out`,
+`cancelled`, or `resource-exhausted`):
+
+```mzsql
+SELECT cluster_id, status, deadline, on_timeout, target, changes
+FROM mz_internal.mz_cluster_reconfigurations;
+```
+
+For more information, see [`ALTER CLUSTER`: Monitoring a resize](/sql/alter-cluster/#monitoring-a-resize).
 
 ### AWS Glue Schema Registry Support for Sinks {#v26.34-aws-glue-schema-registry-support-sinks}
 
+{{< public-preview />}}
+
 <red>*Materialize Cloud only*</red>
 
-Kafka sinks can now use [AWS Glue Schema Registry](/sql/create-connection/#aws-glue-schema-registry) for Avro schema management via the new `FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY` syntax on `CREATE SINK`, as an alternative to the Confluent Schema Registry.
+Kafka sinks can now use [AWS Glue Schema
+Registry](/sql/create-connection/#aws-glue-schema-registry) for Avro schema
+management, via the new `FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY` syntax on
+[`CREATE SINK`](/sql/create-sink/kafka/).
+
+```mzsql
+-- Authenticate to AWS Glue through an AWS connection.
+CREATE CONNECTION aws_connection TO AWS (
+    ASSUME ROLE ARN = 'arn:aws:iam::123456789000:role/MaterializeGlue'
+);
+
+CREATE CONNECTION glue_connection TO AWS GLUE SCHEMA REGISTRY (
+    AWS CONNECTION = aws_connection,
+    REGISTRY = 'default-registry'
+);
+
+-- Write Avro-encoded output, registering schemas with AWS Glue.
+CREATE SINK avro_sink
+  IN CLUSTER my_io_cluster
+  FROM my_materialized_view
+  INTO KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
+  KEY (key)
+  FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_connection (
+    KEY SCHEMA NAME = 'test_topic-key',
+    VALUE SCHEMA NAME = 'test_topic-value'
+  )
+  ENVELOPE UPSERT;
+```
+
+For more information, see [`CREATE SINK`: Using AWS Glue Schema Registry](/sql/create-sink/kafka/#using-aws-glue-schema-registry).
 
 ### Role Mapping via SCIM {#v26.34-role-mapping-scim}
 
+{{< private-preview />}}
+
 <red>*Materialize Cloud only*</red>
 
-You can now map identity provider groups to Materialize roles via SCIM, automatically syncing group membership from your identity provider to role assignments in Materialize. For details, see [Sync IdP groups](/security/cloud/users-service-accounts/sync-idp-groups/).
+You can now map identity provider groups to Materialize roles via SCIM, automatically syncing group membership from your identity provider to role assignments in Materialize. This keeps access in Materialize aligned with your identity provider as team membership changes, without manual role management. For details, see [Sync IdP groups](/security/cloud/users-service-accounts/sync-idp-groups/).
 
 ### Improvements {#v26.34-improvements}
 - **Azure SQL source support**: Materialize can now ingest data from Azure SQL databases using the [SQL Server source connector](/ingest-data/sql-server/).
@@ -48,6 +135,8 @@ You can now map identity provider groups to Materialize roles via SCIM, automati
 - **Smaller container images**: The `environmentd` and `clusterd` container images now use a distroless base, reducing image size and attack surface for Self-Managed deployments.
 
 ### Agent Skills {#v26.34-agent-skills}
+To start using our skills, install them with `npx skills add MaterializeInc/agent-skills`. To update your installed skills, run `npx skills update`. For more information, see [Coding agent skills](/integrations/coding-agent-skills/).
+
 - **Materialize Terraform Provider**: New agent skill covering Terraform provider configuration for Cloud and self-managed deployments, resource conventions, cross-resource patterns, import workflows, and known gotchas.
 - **Materialize Terraform Self-Managed**: New agent skill covering the Terraform modules for deploying self-managed Materialize on AWS, Azure, and GCP, including IAM-based storage auth, upgrade procedures, and project integration patterns.
 
