@@ -118,6 +118,17 @@ Two files control license policy, **keep in sync**: `deny.toml` (`[licenses].all
   technical pattern instead, for example "a wide unfiltered LEFT JOIN driving a
   freshness incident" rather than who hit it. Names are fine in ephemeral chat,
   not on disk.
+* Never use `std::collections::HashMap`/`HashSet` directly, `clippy.toml`'s
+  `disallowed-types` blocks it. Use `BTreeMap`/`BTreeSet` when iteration order
+  matters, or `mz_ore::collections::HashMap` for keyed-only access with no
+  iteration. Hash-order iteration is a real nondeterminism source, for example
+  an unstable order reaching plan output or persisted state, not a style nit.
+* A new feature flag should default off in production but default ON in the
+  test/CI configuration, so the new code path is exercised by sqllogictest,
+  testdrive, and optimizer goldens before it earns trust. Production safety and
+  test coverage are separate settings. Find how other recently added flags get
+  forced on in CI, for example a default-features-for-testing list or a system
+  variable test override, and follow that pattern.
 
 ## Code comments
 

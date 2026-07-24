@@ -54,3 +54,11 @@ Never regenerate the entire Cargo.lock — bare `cargo update` bumps every semve
 * Push branches to your fork.
 * Pull requests target `main` on `MaterializeInc/materialize`.
 * Each PR should contain one semantic change.
+
+## Splitting large branches
+
+The repo is squash-merge-only: every PR lands as exactly one commit on `main`, however many commits it had internally. Keep each commit/PR under ~500 changed lines, split by concern, not by the chronology of how the code was written.
+
+* Land a large in-flight branch sequentially, one PR at a time, not as a GitHub-stacked-PR chain. Squash-only makes stacking expensive: merging an earlier PR replaces its commits with one new commit, forcing a rebase of every later branch in the stack. Sequential landing, cut a PR from the front, merge, `git fetch upstream && git rebase upstream/main` the remaining tail, repeat, costs one clean rebase per merge instead of a cascade.
+* Land foundational or low-conflict commits (design docs, scaffolding, new deps) first. The longer a tail branch lives, the more likely a concurrent unrelated PR touches the same files and turns a clean rebase into a real conflict.
+* To split one large diff into smaller commits, or squash a long messy history into fewer reviewable units, without interactive rebase (disallowed in this harness): `git reset --soft <base>` stages the full diff, then stage per group with `git add <files>` for a file-level split, or use `git checkout <sha> -- .` to reproduce an exact historical checkpoint's tree for a chronological squash. `git checkout <sha> -- .` only adds or updates paths present in `<sha>`, it never removes files that shouldn't exist yet at that checkpoint: compute the removal set first with `comm -23 <(git ls-files|sort) <(git ls-tree -r --name-only <sha>|sort)` and `git rm -f` those, or the checkpoint commit silently carries files from later history. Verify every checkpoint with `git diff HEAD <sha>` (must be empty) before moving to the next. Reattach already-clean commits on top with `git rebase --onto <new-branch> <old-base>` (also non-interactive).
