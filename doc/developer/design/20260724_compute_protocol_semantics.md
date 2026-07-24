@@ -99,14 +99,16 @@ on:
 `Event := Cmd ComputeCommand | Resp ComputeResponse`, an inductive mirror of
 the two real Rust enums. Fields with no bearing on protocol-level legality
 (`RelationDesc`, `Row`, `DataflowDescription`'s internals, `RowSetFinishing`,
-and similar) are represented by an opaque placeholder type rather than
-reconstructed field for field. Fields legality does depend on (`GlobalId`,
-`Uuid`, `Antichain Timestamp`, the `PeekTarget`'s id) are kept concrete.
+and similar) are left out of the mirror types entirely rather than
+reconstructed field for field or carried as an opaque placeholder: nothing in
+this phase's theorems needs them, so there is nothing to represent. Fields
+legality does depend on (`GlobalId`, `Uuid`, `Antichain Timestamp`, the
+`PeekTarget`'s id) are kept concrete.
 
-Opaquing a field erases whatever structural facts it carries, not only its
+Leaving a field out erases whatever structural facts it carried, not only its
 data content. For example `Peek::literal_constraints`'s documented "the
-vector is never empty" becomes unstatable once that field is opaque. This is
-an accepted Phase 1 cut, not an oversight: only the seven theorems below are
+vector is never empty" becomes unstatable once that field is gone. This is an
+accepted Phase 1 cut, not an oversight: only the seven theorems below are
 committed deliverables, and structural payload facts unrelated to them are
 left for a later phase to pick up if they turn out to matter.
 
