@@ -84,10 +84,29 @@ operator:
             # -- ARN for CREATE CONNECTION feature
             connection: ""
 
-      # -- GCP Configuration (placeholder for future use)
+      # -- GCP Configuration
       gcp:
         enabled: false
-        # TODO: Add any other additions for GCP-specific configurations
+        # Trigger rollouts of Materialize instances when GKE upgrades the
+        # node pools underneath them, moving their pods onto the replacement
+        # nodes gracefully instead of letting GKE evict them. Requires
+        # `operator.args.installV1CRD`, and the watched node pools should be
+        # configured to use the blue-green upgrade strategy.
+        nodeUpgradeRolloutTrigger:
+          enabled: false
+          # -- The Pub/Sub subscription receiving GKE cluster notifications
+          # for this cluster, in
+          # `projects/{project}/subscriptions/{subscription}` form. The
+          # cluster must be configured to publish upgrade notifications to
+          # the corresponding topic, and the operator's service account must
+          # be able to subscribe to it and to read the cluster's node pools.
+          notificationSubscription: ""
+          # -- The name of the GKE cluster.
+          clusterName: ""
+          # -- The location (region or zone) of the GKE cluster.
+          clusterLocation: ""
+          # -- The node pools to watch. An empty list watches all node pools.
+          watchedNodePools: []
 
   clusters:
     # -- Configure sizes such that the pod QoS class is not Guaranteed,
@@ -365,6 +384,10 @@ serviceAccount:
   create: true
   # -- The name of the service account to be created
   name: "orchestratord"
+  # -- Annotations to add to the service account, e.g.
+  # `iam.gke.io/gcp-service-account` to link it to a GCP service account
+  # via workload identity.
+  annotations: {}
 
 # Observability settings (disabled in this case)
 observability:

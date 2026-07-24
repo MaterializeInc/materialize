@@ -10,6 +10,7 @@
 use std::fmt::Display;
 
 pub mod controller;
+pub mod gcp_node_upgrade;
 pub mod k8s;
 pub mod metrics;
 pub mod tls;
