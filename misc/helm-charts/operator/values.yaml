@@ -17,6 +17,21 @@ operator:
     # -- Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images
     pullPolicy: IfNotPresent
 
+  # -- Number of operator replicas. The operator uses leader election so that
+  # only one replica reconciles at a time. Running more than one replica
+  # avoids downtime of the CRD conversion webhook during rollouts and node
+  # drains.
+  replicas: 2
+
+  podDisruptionBudget:
+    # -- Whether to create a PodDisruptionBudget for the operator. Only
+    # created when `replicas` is greater than 1, since with a single replica
+    # it would block node drains.
+    enabled: true
+    # -- Minimum number of operator pods that must remain available during
+    # voluntary disruptions.
+    minAvailable: 1
+
 
   args:
     # -- Log filtering settings for startup logs

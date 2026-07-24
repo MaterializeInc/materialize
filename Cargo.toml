@@ -644,6 +644,14 @@ debug-assertions = true
 # merged), after which point it becomes impossible to build that historical
 # version of Materialize.
 [patch.crates-io]
+# TEMPORARY: local development of k8s-controller leader election. Do not
+# merge; switch back to a released version once published. The path is a
+# vendored copy inside the repo (so ci-builder can see it); sync it after
+# editing the library with:
+#   rsync -a --exclude target --exclude target-ra --exclude .git \
+#     ~/git1/k8s-controller/ k8s-controller-local/
+k8s-controller = { path = "k8s-controller-local" }
+
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }

@@ -30,6 +30,13 @@ rules:
   - get
   - list
   - watch
+- apiGroups: ["coordination.k8s.io"]
+  resources:
+  - leases
+  verbs:
+  - get
+  - create
+  - update
 - apiGroups: ["networking.k8s.io"]
   resources:
   - networkpolicies
