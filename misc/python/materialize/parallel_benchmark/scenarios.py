@@ -1364,7 +1364,7 @@ class TwoRuntimeReadIsolation(Scenario):
                                 mz,
                                 strict_serializable=False,
                             ),
-                            dist=Periodic(per_second=200),
+                            dist=Periodic(per_second=100),
                             report_regressions=False,
                         ),
                         # Measured: slow-path range scan + reduce peek (more
@@ -1375,7 +1375,7 @@ class TwoRuntimeReadIsolation(Scenario):
                                 mz,
                                 strict_serializable=False,
                             ),
-                            dist=Periodic(per_second=50),
+                            dist=Periodic(per_second=25),
                             report_regressions=False,
                         ),
                     ]
