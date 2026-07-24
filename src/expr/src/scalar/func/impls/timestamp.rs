@@ -417,7 +417,7 @@ where
         DateTimeUnits::Millennium => Ok(D::from(ts.millennium())),
         DateTimeUnits::Century => Ok(D::from(ts.century())),
         DateTimeUnits::Decade => Ok(D::from(ts.decade())),
-        DateTimeUnits::Year => Ok(D::from(ts.year())),
+        DateTimeUnits::Year => Ok(D::from(ts.extract_year())),
         DateTimeUnits::Quarter => Ok(D::from(ts.quarter())),
         DateTimeUnits::Week => Ok(D::from(ts.iso_week_number())),
         DateTimeUnits::Month => Ok(D::from(ts.month())),

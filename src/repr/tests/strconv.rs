@@ -523,7 +523,7 @@ fn miri_test_format_list() {
     .unwrap();
     assert_eq!(
         out,
-        r#"{a,"a\"b","",NULL,"NULL",nUlL,"  spaces ","a,b","\\","a\\b\"c\\d\""}"#
+        r#"{a,"a\"b","",NULL,"NULL","nUlL","  spaces ","a,b","\\","a\\b\"c\\d\""}"#
     );
 }
 

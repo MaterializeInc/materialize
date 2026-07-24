@@ -751,6 +751,92 @@ $ mysql-execute name=mysql
 DROP TABLE pk_uint_test;
 
 #
+# BIT primary key. A BIT column maps to a Materialize uint64, but carries the
+# MySqlColumnMeta::Bit marker. The PK-range sampler renders a boundary from the
+# Materialize scalar type alone (uint64 takes the integer path, CAST(id AS CHAR)),
+# discarding that marker. For a BIT column CAST(.. AS CHAR) returns the value's
+# raw bytes, not a decimal literal, and that text is spliced verbatim into the
+# worker range predicates. The BIT(64) value X'30204F5220313D31' is the eight
+# ASCII bytes "0 OR 1=1", so the sampled boundary turns the two worker reads into
+#   WHERE id <  0 OR 1=1
+#   WHERE id >= 0 OR 1=1
+# both of which match every row. Every key must still be emitted exactly once.
+#
+
+$ mysql-execute name=mysql
+DROP TABLE IF EXISTS pk_bit_test;
+CREATE TABLE pk_bit_test (id BIT(64) PRIMARY KEY, val BIGINT);
+INSERT INTO pk_bit_test VALUES (1, 100), (0x30204F5220313D31, 200);
+
+> CREATE CLUSTER pk_bit_cluster SIZE 'scale=1,workers=4'
+
+> CREATE SOURCE pk_bit_source
+  IN CLUSTER pk_bit_cluster
+  FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE pk_bit_table FROM SOURCE pk_bit_source (REFERENCE public.pk_bit_test);
+
+# Exact count and no duplicate keys. Under the bug both workers read the whole
+# table, so COUNT(*) is 4 while COUNT(DISTINCT id) stays 2.
+> SELECT COUNT(*), COUNT(DISTINCT id) FROM pk_bit_table;
+2 2
+
+# Both keys, each exactly once. X'30204F5220313D31' decodes big-endian to
+# 3467858927221292337.
+> SELECT id, val FROM pk_bit_table ORDER BY id;
+1 100
+3467858927221292337 200
+
+> DROP SOURCE pk_bit_source CASCADE;
+> DROP CLUSTER pk_bit_cluster CASCADE;
+
+$ mysql-execute name=mysql
+DROP TABLE pk_bit_test;
+
+#
+# PK-range splitting disabled via the mysql_source_snapshot_parallelism dyncfg.
+# The same shape as the pk_range_test above, but every table must fall back to a
+# single-worker whole-table read and still produce a complete, duplicate-free
+# snapshot.
+#
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET mysql_source_snapshot_parallelism = false
+
+$ mysql-execute name=mysql
+DROP TABLE IF EXISTS pk_serial_test;
+CREATE TABLE pk_serial_test (id BIGINT PRIMARY KEY, val BIGINT);
+SET @i := 0;
+INSERT INTO pk_serial_test SELECT @i := @i + 1, @i * 7 FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 1000;
+
+> CREATE CLUSTER pk_serial_cluster SIZE 'scale=1,workers=4'
+
+> CREATE SOURCE pk_serial_source
+  IN CLUSTER pk_serial_cluster
+  FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE pk_serial_table FROM SOURCE pk_serial_source (REFERENCE public.pk_serial_test);
+
+# Exact row count and no duplicates
+> SELECT COUNT(*), COUNT(DISTINCT id) FROM pk_serial_table;
+1000 1000
+
+# Full key range present (ids 1..1000)
+> SELECT MIN(id), MAX(id) FROM pk_serial_table;
+1 1000
+
+# Checksum: val = id * 7, so SUM(val) = 7 * SUM(1..1000) = 7 * 500500
+> SELECT SUM(val) FROM pk_serial_table;
+3503500
+
+> DROP SOURCE pk_serial_source CASCADE;
+> DROP CLUSTER pk_serial_cluster CASCADE;
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET mysql_source_snapshot_parallelism
+
+$ mysql-execute name=mysql
+DROP TABLE pk_serial_test;
+
+#
 # Multibyte utf8mb4 PK with a binary collation. Keys mix 2-, 3-, and 4-byte code
 # points (accented Latin, Greek, CJK, and emoji), assembled from their utf8 bytes
 # so the test file stays ASCII.

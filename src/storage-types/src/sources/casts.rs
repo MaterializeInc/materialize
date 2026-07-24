@@ -220,9 +220,9 @@ impl CastFunc {
             CastFunc::CastStringToUint64 => {
                 Ok(Datum::UInt64(strconv::parse_uint64(a).map_err(parse_err)?))
             }
-            CastFunc::CastStringToDate => {
-                Ok(Datum::Date(strconv::parse_date(a).map_err(parse_err)?))
-            }
+            CastFunc::CastStringToDate => Ok(Datum::Date(
+                strconv::parse_date_legacy(a).map_err(parse_err)?,
+            )),
             CastFunc::CastStringToTime => {
                 Ok(Datum::Time(strconv::parse_time(a).map_err(parse_err)?))
             }
@@ -239,7 +239,7 @@ impl CastFunc {
                 Ok(arena.push_unary_row(jsonb.into_row()))
             }
             CastFunc::CastStringToMzTimestamp => Ok(Datum::MzTimestamp(
-                strconv::parse_mz_timestamp(a).map_err(parse_err)?,
+                strconv::parse_mz_timestamp_legacy(a).map_err(parse_err)?,
             )),
 
             // Parameterized eager casts.
@@ -253,12 +253,12 @@ impl CastFunc {
                 Ok(Datum::from(d.into_inner()))
             }
             CastFunc::CastStringToTimestamp(precision) => {
-                let out = strconv::parse_timestamp(a)?;
+                let out = strconv::parse_timestamp_legacy(a)?;
                 let updated = out.round_to_precision(*precision)?;
                 Ok(Datum::Timestamp(updated))
             }
             CastFunc::CastStringToTimestampTz(precision) => {
-                let out = strconv::parse_timestamptz(a)?;
+                let out = strconv::parse_timestamptz_legacy(a)?;
                 let updated = out.round_to_precision(*precision)?;
                 Ok(Datum::TimestampTz(updated))
             }
@@ -496,6 +496,25 @@ mod tests {
         // Parsing should succeed; just verify it's a Date datum.
         let result = expr.eval(&[Datum::String("2024-01-15")], &arena).unwrap();
         assert!(matches!(result, Datum::Date(_)));
+    }
+
+    #[mz_ore::test]
+    fn test_cast_string_to_date_frozen_ambiguous() {
+        // Ambiguous dates keep the frozen year-month-day interpretation with
+        // no two-digit-year windowing, diverging from the SQL layer's
+        // `DateStyle = ISO, MDY` semantics. This must not change (see the
+        // stability contract above).
+        let arena = RowArena::new();
+        let expr = cast_col0(CastFunc::CastStringToDate);
+        for (input, expected) in [("01/02/03", "0001-02-03"), ("99-01-08", "0099-01-08")] {
+            let result = expr.eval(&[Datum::String(input)], &arena).unwrap();
+            let Datum::Date(d) = result else {
+                panic!("expected Date, got {:?}", result);
+            };
+            let mut buf = String::new();
+            strconv::format_date(&mut buf, d);
+            assert_eq!(buf, expected, "for input {input:?}");
+        }
     }
 
     #[mz_ore::test]

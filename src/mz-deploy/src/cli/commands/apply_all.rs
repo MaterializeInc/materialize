@@ -9,7 +9,7 @@
 
 //! Apply-all orchestrator — runs all infrastructure apply steps in dependency order.
 //!
-//! Dependency order: clusters → roles → network policies → secrets → connections → sources → tables.
+//! Dependency order: roles → clusters → network policies → secrets → connections → sources → tables.
 //!
 //! **Key Insight:** The ordering ensures referential integrity — clusters must
 //! exist before MVs can reference them, connections must exist before sources
@@ -28,7 +28,7 @@ use crate::config::Settings;
 /// Run all infrastructure apply steps in dependency order.
 ///
 /// Plans all phases first with a shared client, then executes if not dry-run.
-/// Applies: clusters → roles → network policies → secrets (unless skipped) → connections → sources → tables.
+/// Applies: roles → clusters → network policies → secrets (unless skipped) → connections → sources → tables.
 pub async fn run(
     settings: &Settings,
     skip_secrets: bool,
@@ -40,8 +40,8 @@ pub async fn run(
     let executor = DeploymentExecutor::new_dry_run(&client);
 
     // Infrastructure phases (no schemas needed)
-    plan.add_phase(super::clusters::plan(settings, &client, &executor).await?);
     plan.add_phase(super::roles::plan(settings, &client, &executor).await?);
+    plan.add_phase(super::clusters::plan(settings, &client, &executor).await?);
     plan.add_phase(super::apply_network_policies::plan(settings, &client, &executor).await?);
 
     // Database object phases (schemas deduplicated via plan)

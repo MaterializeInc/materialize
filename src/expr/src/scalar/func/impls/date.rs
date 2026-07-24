@@ -139,7 +139,7 @@ pub fn extract_date_inner(units: DateTimeUnits, date: NaiveDate) -> Result<Numer
         DateTimeUnits::Millennium => Ok(Numeric::from(date.millennium())),
         DateTimeUnits::Century => Ok(Numeric::from(date.century())),
         DateTimeUnits::Decade => Ok(Numeric::from(date.decade())),
-        DateTimeUnits::Year => Ok(Numeric::from(date.year())),
+        DateTimeUnits::Year => Ok(Numeric::from(date.extract_year())),
         DateTimeUnits::Quarter => Ok(Numeric::from(date.quarter())),
         DateTimeUnits::Week => Ok(Numeric::from(date.iso_week_number())),
         DateTimeUnits::Month => Ok(Numeric::from(date.month())),

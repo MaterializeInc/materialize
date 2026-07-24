@@ -27,7 +27,9 @@ pub fn plan_interval(iv: &IntervalValue) -> Result<Interval, PlanError> {
         },
         parser_datetimefield_to_adt(iv.precision_low),
     )?;
-    i.truncate_high_fields(parser_datetimefield_to_adt(iv.precision_high));
+    // Like PostgreSQL, the range qualifier only disambiguates parsing and
+    // discards fields below precision_low. Fields above precision_high are
+    // kept as written.
     i.truncate_low_fields(
         parser_datetimefield_to_adt(iv.precision_low),
         iv.fsec_max_precision,

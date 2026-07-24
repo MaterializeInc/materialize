@@ -401,12 +401,12 @@ EXPLAIN OPTIMIZED PLAN WITH(filter pushdown, humanized expressions) AS VERBOSE T
 ----
 materialize.public.mv10:
   Project (#0{id}, #1{ship_time})
-    Filter (mz_now() <= timestamp_to_mz_timestamp(date_trunc_month_ts((#1{ship_time} - (1 month * numeric_to_double((case when (#2 < 6) then (extract_month_ts(#1{ship_time}) + 6) else 0 end + case when (#2 >= 6) then (extract_month_ts(#1{ship_time}) - 6) else 0 end)))))))
+    Filter (mz_now() <= timestamp_to_mz_timestamp(date_trunc_month_ts((#1{ship_time} - (1 mon * numeric_to_double((case when (#2 < 6) then (extract_month_ts(#1{ship_time}) + 6) else 0 end + case when (#2 >= 6) then (extract_month_ts(#1{ship_time}) - 6) else 0 end)))))))
       Map (extract_month_ts(#1{ship_time}))
         ReadStorage materialize.public.items
 
 Source materialize.public.items
-  filter=((mz_now() <= timestamp_to_mz_timestamp(date_trunc_month_ts((#1{ship_time} - (1 month * numeric_to_double((case when (#2 < 6) then (extract_month_ts(#1{ship_time}) + 6) else 0 end + case when (#2 >= 6) then (extract_month_ts(#1{ship_time}) - 6) else 0 end))))))))
+  filter=((mz_now() <= timestamp_to_mz_timestamp(date_trunc_month_ts((#1{ship_time} - (1 mon * numeric_to_double((case when (#2 < 6) then (extract_month_ts(#1{ship_time}) + 6) else 0 end + case when (#2 >= 6) then (extract_month_ts(#1{ship_time}) - 6) else 0 end))))))))
   map=(extract_month_ts(#1{ship_time}))
 
 Target cluster: quickstart

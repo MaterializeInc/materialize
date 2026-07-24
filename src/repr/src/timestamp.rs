@@ -18,9 +18,12 @@ use mz_timely_util::temporal::BucketTimestamp;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize, Serializer};
 
+use chrono::{DateTime, Utc};
+
 use crate::adt::numeric::Numeric;
+use crate::adt::timestamp::CheckedTimestamp;
 use crate::refresh_schedule::RefreshSchedule;
-use crate::strconv::parse_timestamptz;
+use crate::strconv::{ParseError, parse_timestamptz, parse_timestamptz_legacy};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.timestamp.rs"));
 
@@ -536,12 +539,29 @@ impl std::str::FromStr for Timestamp {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse_with(s, parse_timestamptz)
+    }
+}
+
+impl Timestamp {
+    /// Like the [`std::str::FromStr`] impl, but the timestamp fallback uses
+    /// the frozen legacy date parsing. Solely for the storage source cast
+    /// `CastStringToMzTimestamp` (see the stability contract in
+    /// `mz_storage_types::sources::casts`).
+    pub fn from_str_legacy(s: &str) -> Result<Self, String> {
+        Self::parse_with(s, parse_timestamptz_legacy)
+    }
+
+    fn parse_with(
+        s: &str,
+        parse_fallback: fn(&str) -> Result<CheckedTimestamp<DateTime<Utc>>, ParseError>,
+    ) -> Result<Self, String> {
         Ok(Self {
             internal: s
                 .parse::<u64>()
                 .map_err(|_| "could not parse as number of milliseconds since epoch".to_string())
                 .or_else(|err_num_of_millis| {
-                    parse_timestamptz(s)
+                    parse_fallback(s)
                         .map_err(|parse_error| {
                             format!(
                                 "{}; could not parse as date and time: {}",

@@ -16,10 +16,8 @@ Use `ALTER SOURCE` to:
 
 ## Syntax
 
-{{< tabs >}}
+{{< tabs level=3 >}}
 {{< tab "Add subsource" >}}
-
-### Add subsource
 
 To add the specified upstream table(s) to the specified PostgreSQL/MySQL/SQL Server source:
 
@@ -33,8 +31,6 @@ To add the specified upstream table(s) to the specified PostgreSQL/MySQL/SQL Ser
 
 {{< tab "Rename" >}}
 
-### Rename
-
 To rename a source:
 
 {{% include-syntax file="examples/alter_source" example="syntax-rename" %}}
@@ -42,16 +38,12 @@ To rename a source:
 {{< /tab >}}
 {{< tab "Change owner" >}}
 
-### Change owner
-
 To change the owner of a source:
 
 {{% include-syntax file="examples/alter_source" example="syntax-change-owner" %}}
 
 {{< /tab >}}
 {{< tab "(Re)Set retain history config" >}}
-
-### (Re)Set retain history config
 
 To set the retention history for a source:
 
@@ -63,8 +55,6 @@ To reset the retention history to the default for a source:
 
 {{< /tab >}}
 {{< tab "(Re)Set timestamp interval" >}}
-
-### (Re)Set timestamp interval
 
 To set the timestamp interval for a source:
 

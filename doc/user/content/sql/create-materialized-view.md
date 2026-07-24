@@ -34,18 +34,14 @@ offers lower latency for direct querying within that cluster.
 
 ## Syntax
 
-{{< tabs >}}
+{{< tabs level=3 >}}
 {{< tab "CREATE MATERIALIZED VIEW" >}}
-
-### Create materialized view
 
 {{% include-syntax file="examples/create_materialized_view" example="syntax" %}}
 
 {{< /tab >}}
 
 {{< tab "CREATE REPLACEMENT MATERIALIZED VIEW" >}}
-
-### Create replacement materialized view
 
 {{% include-headless "/headless/replacement-views/public-preview-annotation" %}}
 
