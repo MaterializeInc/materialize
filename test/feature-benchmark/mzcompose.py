@@ -935,3 +935,5 @@ def _create_feature_benchmark_result_entry(
             MeasurementType.MEMORY_CLUSTERD, empty_measurement
         ),
     )
+
+# no-op marker: branch exists only to run the nightly feature-benchmark on plain main.
