@@ -14,6 +14,7 @@ use std::fmt;
 use mz_repr::RelationDesc;
 
 use crate::ast::Ident;
+use crate::catalog::SessionCatalog;
 use crate::normalize;
 use crate::plan::PlanError;
 use crate::plan::query::SelectOptionExtracted;
@@ -29,18 +30,7 @@ pub fn maybe_rename_columns(
     column_names: &[Ident],
 ) -> Result<(), PlanError> {
     if column_names.len() > desc.typ().column_types.len() {
-        sql_bail!(
-            "{0} definition names {1} column{2}, but {0} has {3} column{4}",
-            context,
-            column_names.len(),
-            if column_names.len() == 1 { "" } else { "s" },
-            desc.typ().column_types.len(),
-            if desc.typ().column_types.len() == 1 {
-                ""
-            } else {
-                "s"
-            },
-        )
+        return Err(column_count_mismatch(&context, desc, column_names));
     }
 
     for (i, name) in column_names.iter().enumerate() {
@@ -48,6 +38,51 @@ pub fn maybe_rename_columns(
     }
 
     Ok(())
+}
+
+/// Like [`maybe_rename_columns`], but requires the length of `column_names`,
+/// when non-empty, to match the arity of `desc` exactly.
+///
+/// The exactness requirement is lifted while re-planning a persisted catalog
+/// item, signaled by the `unsafe_enable_incomplete_view_column_lists` flag
+/// that `SystemVars::enable_for_item_parsing` force-enables during bootstrap.
+/// A view that an earlier version accepted with fewer names than columns must
+/// keep re-planning, or rehydration would turn a graceful planning error into
+/// a fatal bootstrap panic.
+pub fn maybe_rename_columns_exact(
+    catalog: &dyn SessionCatalog,
+    context: impl fmt::Display,
+    desc: &mut RelationDesc,
+    column_names: &[Ident],
+) -> Result<(), PlanError> {
+    if !column_names.is_empty()
+        && column_names.len() < desc.typ().column_types.len()
+        && !catalog
+            .system_vars()
+            .unsafe_enable_incomplete_view_column_lists()
+    {
+        return Err(column_count_mismatch(&context, desc, column_names));
+    }
+    maybe_rename_columns(context, desc, column_names)
+}
+
+fn column_count_mismatch(
+    context: &dyn fmt::Display,
+    desc: &RelationDesc,
+    column_names: &[Ident],
+) -> PlanError {
+    sql_err!(
+        "{0} definition names {1} column{2}, but {0} has {3} column{4}",
+        context,
+        column_names.len(),
+        if column_names.len() == 1 { "" } else { "s" },
+        desc.typ().column_types.len(),
+        if desc.typ().column_types.len() == 1 {
+            ""
+        } else {
+            "s"
+        },
+    )
 }
 
 /// Specifies the side of a join.
