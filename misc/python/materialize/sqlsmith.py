@@ -124,7 +124,7 @@ known_errors = [
     "window functions are not allowed in AND argument",  # wrong error message
     "window functions are not allowed in aggregate function",
     "invalid IANA Time Zone Database identifier",
-    "Top-level LIMIT must be a constant expression",
+    "Invalid LIMIT clause",
     "LIMIT must not be negative",
     "materialized view objects cannot depend on log sources",  # explain create materialized view
     "aggregate functions are not allowed in OR argument",

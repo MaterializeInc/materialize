@@ -4187,6 +4187,18 @@ impl HirScalarExpr {
     ///
     /// Panics if this expression does not have type [`SqlScalarType::Int64`].
     pub fn try_into_literal_int64(self) -> Result<i64, PlanError> {
+        match self.clone().try_into_nullable_literal_int64()? {
+            Some(value) => Ok(value),
+            None => Err(PlanError::ConstantExpressionSimplificationFailed(format!(
+                "Expected an expression that evaluates to a non-null value, got {}",
+                self
+            ))),
+        }
+    }
+
+    /// Like [`try_into_literal_int64`](Self::try_into_literal_int64), but an expression that
+    /// evaluates to null is `Ok(None)` instead of an error.
+    pub fn try_into_nullable_literal_int64(self) -> Result<Option<i64>, PlanError> {
         // TODO: add the `is_constant` check also to all the other into_literal_... (by adding it to
         // `simplify_to_literal`), but those should be just soft_asserts at first that it doesn't
         // actually happen that it's weaker than `reduce`, and then add them for real after 1 week.
@@ -4198,19 +4210,14 @@ impl HirScalarExpr {
                 self
             )));
         }
-        self.clone()
-            .simplify_to_literal_with_result()
-            .and_then(|row| {
-                let datum = row.unpack_first();
-                if datum.is_null() {
-                    Err(PlanError::ConstantExpressionSimplificationFailed(format!(
-                        "Expected an expression that evaluates to a non-null value, got {}",
-                        self
-                    )))
-                } else {
-                    Ok(datum.unwrap_int64())
-                }
-            })
+        self.simplify_to_literal_with_result().map(|row| {
+            let datum = row.unpack_first();
+            if datum.is_null() {
+                None
+            } else {
+                Some(datum.unwrap_int64())
+            }
+        })
     }
 
     pub fn contains_parameters(&self) -> bool {
