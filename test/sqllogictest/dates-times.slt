@@ -1802,3 +1802,58 @@ SELECT make_timestamp(2020, 13, 1, 0, 0, 0)
 
 query error timestamp out of range
 SELECT make_timestamp(2020, 1, 1, 12, 60, 0)
+
+# Ambiguous all-numeric dates follow the pinned DateStyle 'ISO, MDY': a one- or
+# two-digit leading field starts a month-day-year date, and a two-digit year is
+# windowed into 1970..=2069 (SQL-461).
+
+query T
+SELECT DATE '01/02/03'
+----
+2003-01-02
+
+query T
+SELECT DATE '1-2-3'
+----
+2003-01-02
+
+query T
+SELECT DATE '01/02/1999'
+----
+1999-01-02
+
+query T
+SELECT DATE '01/02/69'
+----
+2069-01-02
+
+query T
+SELECT DATE '01/02/70'
+----
+1970-01-02
+
+# A leading field of three or more digits is a year, with no windowing.
+query T
+SELECT DATE '0099-01-08'
+----
+0099-01-08
+
+query error invalid input syntax for type date: MONTH must be \[1, 12\], got 99: "99\-01\-08"
+SELECT DATE '99-01-08'
+
+# BC years are never windowed.
+query T
+SELECT DATE '01/02/03 BC'
+----
+0003-01-02 BC
+
+# Timestamps interpret the date part the same way.
+query T
+SELECT TIMESTAMP '01/02/03 04:05:06'
+----
+2003-01-02 04:05:06
+
+query T
+SELECT TIMESTAMP WITH TIME ZONE '01/02/03 04:05:06+00'
+----
+2003-01-02 04:05:06+00

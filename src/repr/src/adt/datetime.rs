@@ -816,12 +816,13 @@ impl ParsedDateTime {
     pub fn build_parsed_datetime_timestamp(
         value: &str,
         era: CalendarEra,
+        order: DateOrder,
     ) -> Result<ParsedDateTime, String> {
         let mut pdt = ParsedDateTime::default();
 
         let mut ts_actual = tokenize_time_str(value)?;
 
-        fill_pdt_date(&mut pdt, &mut ts_actual)?;
+        fill_pdt_date(&mut pdt, &mut ts_actual, order, era)?;
 
         if let CalendarEra::BC = era {
             pdt.year = pdt.year.map(|mut y| {
@@ -1083,6 +1084,8 @@ impl ParsedDateTime {
 fn fill_pdt_date(
     pdt: &mut ParsedDateTime,
     actual: &mut VecDeque<TimeStrToken>,
+    order: DateOrder,
+    era: CalendarEra,
 ) -> Result<(), String> {
     use TimeStrToken::*;
 
@@ -1127,6 +1130,26 @@ fn fill_pdt_date(
         _ => (),
     }
 
+    // PostgreSQL under the pinned `DateStyle = ISO, MDY` reads a separated
+    // date whose leading field has one or two digits as month-day-year, and
+    // only a leading field of three or more digits as year-month-day. The
+    // formats below fill fields positionally as year-month-day, so record the
+    // digit counts up front and reorder the fields after a successful fill.
+    let mdy = match (order, actual.front()) {
+        (DateOrder::Mdy, Some(&Num(_, digits))) => digits <= 2,
+        _ => false,
+    };
+    // Digit count of the third numeric field, the year in a month-day-year
+    // date, which decides two-digit-year windowing.
+    let year_digits = actual
+        .iter()
+        .take_while(|t| matches!(t, Num(..) | Dash | Delim))
+        .filter_map(|t| match t {
+            Num(_, digits) => Some(*digits),
+            _ => None,
+        })
+        .nth(2);
+
     let valid_formats = [
         [
             Num(0, 1), // year
@@ -1156,6 +1179,22 @@ fn fill_pdt_date(
     for expected in valid_formats {
         match fill_pdt_from_tokens(pdt, actual, &expected, DateTimeField::Year, 1) {
             Ok(()) => {
+                // In a month-day-year date the positional fill above put the
+                // month in `year`, the day in `month`, and the year in `day`.
+                if mdy {
+                    if let (Some(month), Some(day), Some(mut year)) = (pdt.year, pdt.month, pdt.day)
+                    {
+                        // Window two-digit years into 1970..=2069, as
+                        // PostgreSQL does. Explicit BC years are never
+                        // windowed.
+                        if era == CalendarEra::AD && year_digits.is_some_and(|d| d <= 2) {
+                            year.unit += if year.unit < 70 { 2000 } else { 1900 };
+                        }
+                        pdt.year = Some(year);
+                        pdt.month = Some(month);
+                        pdt.day = Some(day);
+                    }
+                }
                 return Ok(());
             }
             Err(_) => {
@@ -1813,10 +1852,23 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<VecDeque<TimeStrToken>, S
     Ok(toks)
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CalendarEra {
     BC,
     AD,
+}
+
+/// Determines how ambiguous all-numeric dates like `01/02/03` are interpreted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DateOrder {
+    /// PostgreSQL semantics under the pinned `DateStyle = ISO, MDY`: a date
+    /// whose leading field has one or two digits is month-day-year, and a
+    /// two-digit year is windowed into 1970..=2069.
+    Mdy,
+    /// Always year-month-day, with no year windowing. Frozen behavior for
+    /// storage source casts, which must not change across releases (see the
+    /// stability contract in `mz_storage_types::sources::casts`).
+    LegacyYmd,
 }
 
 /// Takes a 'date timezone' 'date time timezone' string and splits it into 'date
@@ -2842,10 +2894,79 @@ mod tests {
                 ..Default::default()
             },
         );
+        // A one- or two-digit leading field starts a month-day-year date, and
+        // a two-digit year is windowed into 1970..=2069.
+        run_test_build_parsed_datetime_timestamp(
+            "01/02/03",
+            ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(2003, 0)),
+                month: Some(DateTimeFieldValue::new(1, 0)),
+                day: Some(DateTimeFieldValue::new(2, 0)),
+                ..Default::default()
+            },
+        );
+        run_test_build_parsed_datetime_timestamp(
+            "01-02-70 3:4:5.6",
+            ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(1970, 0)),
+                month: Some(DateTimeFieldValue::new(1, 0)),
+                day: Some(DateTimeFieldValue::new(2, 0)),
+                hour: Some(DateTimeFieldValue::new(3, 0)),
+                minute: Some(DateTimeFieldValue::new(4, 0)),
+                second: Some(DateTimeFieldValue::new(5, 600_000_000)),
+                ..Default::default()
+            },
+        );
+        // A four-digit year in month-day-year position is not windowed.
+        run_test_build_parsed_datetime_timestamp(
+            "1/2/1999",
+            ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(1999, 0)),
+                month: Some(DateTimeFieldValue::new(1, 0)),
+                day: Some(DateTimeFieldValue::new(2, 0)),
+                ..Default::default()
+            },
+        );
+        // BC years are never windowed.
+        assert_eq!(
+            ParsedDateTime::build_parsed_datetime_timestamp(
+                "01/02/03",
+                CalendarEra::BC,
+                DateOrder::Mdy,
+            )
+            .unwrap(),
+            ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(-3, 0)),
+                month: Some(DateTimeFieldValue::new(1, 0)),
+                day: Some(DateTimeFieldValue::new(2, 0)),
+                ..Default::default()
+            },
+        );
+        // The legacy order keeps the frozen year-month-day interpretation
+        // with no windowing.
+        assert_eq!(
+            ParsedDateTime::build_parsed_datetime_timestamp(
+                "01/02/03",
+                CalendarEra::AD,
+                DateOrder::LegacyYmd,
+            )
+            .unwrap(),
+            ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(1, 0)),
+                month: Some(DateTimeFieldValue::new(2, 0)),
+                day: Some(DateTimeFieldValue::new(3, 0)),
+                ..Default::default()
+            },
+        );
 
         fn run_test_build_parsed_datetime_timestamp(test: &str, res: ParsedDateTime) {
             assert_eq!(
-                ParsedDateTime::build_parsed_datetime_timestamp(test, CalendarEra::AD).unwrap(),
+                ParsedDateTime::build_parsed_datetime_timestamp(
+                    test,
+                    CalendarEra::AD,
+                    DateOrder::Mdy
+                )
+                .unwrap(),
                 res
             );
         }
