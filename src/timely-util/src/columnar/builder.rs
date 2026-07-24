@@ -44,10 +44,12 @@ where
     #[inline]
     fn push_into(&mut self, item: T) {
         self.current.push(item);
-        // If there is less than 10% slop with 2MB backing allocations, mint a container.
+        // If there is less than 10% slop with the ship-size backing allocation,
+        // mint a container. Shares `SHIP_WORDS` with the merger path so builder
+        // and merger chunks are sized comparably.
         use columnar::Borrow;
         let words = indexed::length_in_words(&self.current.borrow());
-        let round = (words + ((1 << 18) - 1)) & !((1 << 18) - 1);
+        let round = (words + (super::SHIP_WORDS - 1)) & !(super::SHIP_WORDS - 1);
         if round - words < round / 10 {
             /// Move the contents from `current` to a `Vec<u64>` allocation built via
             /// `indexed::encode` (so no zero-init pre-pass), and push it to `pending`.
