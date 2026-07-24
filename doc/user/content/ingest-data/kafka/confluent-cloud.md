@@ -187,17 +187,14 @@ select those same AZs during the Confluent PrivateLink ingress setup.
     data from your topic. By default, the source will be created in the active
     cluster; to use a different cluster, use the `IN CLUSTER` clause.
 
-    ```mzsql
-    CREATE SOURCE confluent_source
-        FROM KAFKA CONNECTION confluent_cloud (TOPIC '<topic-name>')
-        FORMAT JSON;
-    ```
+    {{< include-headless-with file="/headless/kafka-create-source-syntax"
+    source="confluent_source" connection="confluent_cloud" topic="<topic-name>"
+    table="confluent_table" format="FORMAT JSON" >}}
 
-    If the command executes without an error and outputs _CREATE SOURCE_, it
-    means that you have successfully connected Materialize to your Confluent
-    Cloud Kafka cluster.
+    If the command executes without an error, it means that you have
+    successfully connected Materialize to your Confluent Cloud Kafka cluster.
 
-    **Note:** The example above used `JSON`, but you can also ingest Kafka messages
+    **Note:** The examples above use `JSON`, but you can also ingest Kafka messages
     formatted in other supported formats; e.g., [Avro and CSV](/sql/create-source/kafka/#syntax).
     You can find more details about the various different supported formats and
     possible configurations in the [reference documentation](/sql/create-source/kafka/).

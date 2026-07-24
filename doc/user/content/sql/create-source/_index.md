@@ -70,7 +70,51 @@ For details, see [CREATE SOURCE: SQL Server(Legacy)](/sql/create-source/sql-serv
 
 {{< /tab >}}
 
-{{< tab "Kafka/Redpanda" >}}
+{{< tab "Kafka/Redpanda (New)" >}}
+
+{{< tabs >}}
+
+{{< tab "Format Avro" >}}
+
+{{% include-example file="examples/create_source_kafka_v2" example="syntax-avro" %}}
+
+{{< /tab >}}
+
+{{< tab "Format JSON" >}}
+
+{{% include-example file="examples/create_source_kafka_v2" example="syntax-json" %}}
+
+{{< /tab >}}
+
+{{< tab "Format TEXT/BYTES" >}}
+
+{{% include-example file="examples/create_source_kafka_v2" example="syntax-text-bytes" %}}
+
+{{< /tab >}}
+
+{{< tab "Format CSV" >}}
+
+{{% include-example file="examples/create_source_kafka_v2" example="syntax-csv" %}}
+
+{{< /tab >}}
+{{< tab "Format Protobuf" >}}
+
+{{% include-example file="examples/create_source_kafka_v2"
+example="syntax-protobuf" %}}
+{{< /tab >}}
+
+{{< tab "KEY FORMAT VALUE FORMAT" >}}
+
+{{% include-example file="examples/create_source_kafka_v2" example="syntax-key-value-format" %}}
+
+{{< /tab >}}
+
+{{< /tabs >}}
+
+For details, see [CREATE SOURCE: Kafka/Redpanda (New Syntax)](/sql/create-source/kafka-v2/).
+{{< /tab >}}
+
+{{< tab "Kafka/Redpanda (Legacy)" >}}
 
 {{< tabs >}}
 
@@ -111,7 +155,7 @@ example="syntax-protobuf" %}}
 
 {{< /tabs >}}
 
-For details, see [CREATE SOURCE: Kafka/Redpanda](/sql/create-source/kafka/).
+For details, see [CREATE SOURCE: Kafka/Redpanda (Legacy Syntax)](/sql/create-source/kafka/).
 {{< /tab >}}
 
 {{< tab "Webhook" >}}

@@ -257,6 +257,13 @@ connection](/sql/create-connection/#confluent-schema-registry):
 Create the sources for the specific Kafka topic
 (`<topic.prefix>.<database>.<collection>`).
 
+{{< tabs >}}
+{{< tab "Legacy Syntax" >}}
+
+With the legacy syntax, each source decodes its topic directly and is itself
+queryable. Picking up an upstream schema change requires dropping and recreating
+the source, which incurs downtime.
+
 ```mzsql
 CREATE SOURCE mdb_items
 FROM KAFKA CONNECTION kafka_connection (TOPIC 'mdb-prod-rs0.test.items')
@@ -264,10 +271,39 @@ FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
 ENVELOPE UPSERT;
 
 CREATE SOURCE mdb_orders
-FROM KAFKA CONNECTION kafka_connection (TOPIC 'mdb-prod-rs0.test.items')
+FROM KAFKA CONNECTION kafka_connection (TOPIC 'mdb-prod-rs0.test.orders')
 FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
 ENVELOPE UPSERT;
 ```
+
+{{< /tab >}}
+{{< tab "New Syntax" >}}
+
+With the new syntax, create a source for each topic and then a table that
+decodes it. Each table pins its own reader schema, which lets you pick up
+upstream schema changes without downtime. For details, see [Handle upstream
+schema changes with zero downtime](/ingest-data/kafka/source-versioning/).
+
+```mzsql
+CREATE SOURCE mdb_items_src
+FROM KAFKA CONNECTION kafka_connection (TOPIC 'mdb-prod-rs0.test.items');
+
+CREATE TABLE mdb_items
+FROM SOURCE mdb_items_src (REFERENCE "mdb-prod-rs0.test.items")
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+ENVELOPE UPSERT;
+
+CREATE SOURCE mdb_orders_src
+FROM KAFKA CONNECTION kafka_connection (TOPIC 'mdb-prod-rs0.test.orders');
+
+CREATE TABLE mdb_orders
+FROM SOURCE mdb_orders_src (REFERENCE "mdb-prod-rs0.test.orders")
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+ENVELOPE UPSERT;
+```
+
+{{< /tab >}}
+{{< /tabs >}}
 
 ### 3. Query the data
 

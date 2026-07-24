@@ -1,0 +1,185 @@
+- name: "syntax-avro"
+  code: |
+    CREATE SOURCE [IF NOT EXISTS] <src_name>
+    [IN CLUSTER <cluster_name>]
+    FROM KAFKA CONNECTION <connection_name> (
+      TOPIC '<topic>'
+      [, GROUP ID PREFIX '<group_id_prefix>']
+      [, START OFFSET ( <partition_offset> [, ...] ) ]
+      [, START TIMESTAMP <timestamp> ]
+    )
+    [EXPOSE PROGRESS AS <progress_subsource_name>]
+    [WITH ( <with_option> [, ...] )];
+
+    CREATE TABLE [IF NOT EXISTS] <table_name>
+    FROM SOURCE <src_name>
+    FORMAT AVRO
+        USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name>
+          [KEY STRATEGY <key_strategy>]
+          [VALUE STRATEGY <value_strategy>]
+      | USING AWS GLUE SCHEMA REGISTRY CONNECTION <glue_connection_name> (
+          SCHEMA NAME = '<schema_name>'
+        )
+    [INCLUDE
+        KEY [AS <name>]
+      | PARTITION [AS <name>]
+      | OFFSET [AS <name>]
+      | TIMESTAMP [AS <name>]
+      | HEADERS [AS <name>]
+      | HEADER '<key>' AS <name> [BYTES]
+      [, ...]
+    ]
+    [ENVELOPE
+        NONE
+      | DEBEZIUM
+      | UPSERT [ ( VALUE DECODING ERRORS = INLINE [AS <name>] ) ]
+    ];
+
+- name: "syntax-json"
+  code: |
+    CREATE SOURCE [IF NOT EXISTS] <src_name>
+    [IN CLUSTER <cluster_name>]
+    FROM KAFKA CONNECTION <connection_name> (
+      TOPIC '<topic>'
+      [, GROUP ID PREFIX '<group_id_prefix>']
+      [, START OFFSET ( <partition_offset> [, ...] ) ]
+      [, START TIMESTAMP <timestamp> ]
+    )
+    [EXPOSE PROGRESS AS <progress_subsource_name>]
+    [WITH ( <with_option> [, ...] )];
+
+    CREATE TABLE [IF NOT EXISTS] <table_name>
+    FROM SOURCE <src_name>
+    FORMAT JSON
+    [INCLUDE
+        PARTITION [AS <name>]
+      | OFFSET [AS <name>]
+      | TIMESTAMP [AS <name>]
+      | HEADERS [AS <name>]
+      | HEADER '<key>' AS <name> [BYTES]
+      [, ...]
+    ]
+    [ENVELOPE NONE];
+
+- name: "syntax-text-bytes"
+  code: |
+    CREATE SOURCE [IF NOT EXISTS] <src_name>
+    [IN CLUSTER <cluster_name>]
+    FROM KAFKA CONNECTION <connection_name> (
+      TOPIC '<topic>'
+      [, GROUP ID PREFIX '<group_id_prefix>']
+      [, START OFFSET ( <partition_offset> [, ...] ) ]
+      [, START TIMESTAMP <timestamp> ]
+    )
+    [EXPOSE PROGRESS AS <progress_subsource_name>]
+    [WITH ( <with_option> [, ...] )];
+
+    CREATE TABLE [IF NOT EXISTS] <table_name>
+    FROM SOURCE <src_name>
+    FORMAT TEXT | BYTES
+    [INCLUDE
+        PARTITION [AS <name>]
+      | OFFSET [AS <name>]
+      | TIMESTAMP [AS <name>]
+      | HEADERS [AS <name>]
+      | HEADER '<key>' AS <name> [BYTES]
+      [, ...]
+    ]
+    [ENVELOPE NONE];
+
+- name: "syntax-csv"
+  code: |
+    CREATE SOURCE [IF NOT EXISTS] <src_name>
+    [IN CLUSTER <cluster_name>]
+    FROM KAFKA CONNECTION <connection_name> (
+      TOPIC '<topic>'
+      [, GROUP ID PREFIX '<group_id_prefix>']
+      [, START OFFSET ( <partition_offset> [, ...] ) ]
+      [, START TIMESTAMP <timestamp> ]
+    )
+    [EXPOSE PROGRESS AS <progress_subsource_name>]
+    [WITH ( <with_option> [, ...] )];
+
+    CREATE TABLE [IF NOT EXISTS] <table_name>
+    FROM SOURCE <src_name>
+    FORMAT CSV WITH <n> COLUMNS | WITH HEADER [ ( <col_name> [, ...] ) ]
+    [INCLUDE
+        PARTITION [AS <name>]
+      | OFFSET [AS <name>]
+      | TIMESTAMP [AS <name>]
+      | HEADERS [AS <name>]
+      | HEADER '<key>' AS <name> [BYTES]
+      [, ...]
+    ]
+    [ENVELOPE NONE];
+
+- name: "syntax-protobuf"
+  code: |
+    CREATE SOURCE [IF NOT EXISTS] <src_name>
+    [IN CLUSTER <cluster_name>]
+    FROM KAFKA CONNECTION <connection_name> (
+      TOPIC '<topic>'
+      [, GROUP ID PREFIX '<group_id_prefix>']
+      [, START OFFSET ( <partition_offset> [, ...] ) ]
+      [, START TIMESTAMP <timestamp> ]
+    )
+    [EXPOSE PROGRESS AS <progress_subsource_name>]
+    [WITH ( <with_option> [, ...] )];
+
+    CREATE TABLE [IF NOT EXISTS] <table_name>
+    FROM SOURCE <src_name>
+    FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name>
+      | FORMAT PROTOBUF MESSAGE '<message_name>' USING SCHEMA '<schema_bytes>'
+    [INCLUDE
+        KEY [AS <name>]
+      | PARTITION [AS <name>]
+      | OFFSET [AS <name>]
+      | TIMESTAMP [AS <name>]
+      | HEADERS [AS <name>]
+      | HEADER '<key>' AS <name> [BYTES]
+      [, ...]
+    ]
+    [ENVELOPE
+        NONE
+      | UPSERT [ ( VALUE DECODING ERRORS = INLINE [AS <name>] ) ]
+    ];
+
+- name: "syntax-key-value-format"
+  code: |
+    CREATE SOURCE [IF NOT EXISTS] <src_name>
+    [IN CLUSTER <cluster_name>]
+    FROM KAFKA CONNECTION <connection_name> (
+      TOPIC '<topic>'
+      [, GROUP ID PREFIX '<group_id_prefix>']
+      [, START OFFSET ( <partition_offset> [, ...] ) ]
+      [, START TIMESTAMP <timestamp> ]
+    )
+    [EXPOSE PROGRESS AS <progress_subsource_name>]
+    [WITH ( <with_option> [, ...] )];
+
+    CREATE TABLE [IF NOT EXISTS] <table_name>
+    FROM SOURCE <src_name>
+    KEY FORMAT <key_format> VALUE FORMAT <value_format>
+    -- <key_format> and <value_format> can be:
+    -- AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <conn_name>
+    --     [KEY STRATEGY <strategy>]
+    --     [VALUE STRATEGY <strategy>]
+    -- | AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION <glue_conn_name> (SCHEMA NAME = '<schema_name>')
+    -- | CSV WITH <num> COLUMNS DELIMITED BY <char>
+    -- | JSON | TEXT | BYTES
+    -- | PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION <conn_name>
+    -- | PROTOBUF MESSAGE '<message_name>' USING SCHEMA '<schema_bytes>'
+    [INCLUDE
+        KEY [AS <name>]
+      | PARTITION [AS <name>]
+      | OFFSET [AS <name>]
+      | TIMESTAMP [AS <name>]
+      | HEADERS [AS <name>]
+      | HEADER '<key>' AS <name> [BYTES]
+      [, ...]
+    ]
+    [ENVELOPE
+        NONE
+      | DEBEZIUM
+      | UPSERT [(VALUE DECODING ERRORS = INLINE [AS name])]
+    ];
