@@ -393,8 +393,27 @@ than panicking.
   process. Profilers cannot tell them apart by name. A per-worker rename in the
   worker entrypoint would fix it, and would fix the pre-existing storage and
   compute collision as a side effect.
+* **The interactive runtime is an introspection blind spot.** It runs with
+  logging disabled and serves introspection from maintenance's published copies,
+  which is what keeps introspection answerable during hydration. The cost is that
+  the interactive runtime's own dataflows, arrangement sizes, and scheduling are
+  not visible in introspection at all. Restoring visibility must not reintroduce
+  the hydration-blocking the forwarding avoids, so it likely means the interactive
+  runtime publishing its own logging arrangements for a reader to consume, or a
+  separate introspection channel, rather than turning its local logging back on.
 * **Per-runtime memory attribution.** Arrangement-size introspection does not yet
-  attribute memory per runtime.
+  attribute memory per runtime, a specific case of the blind spot above.
+* **Storage introspection is patched into maintenance introspection.** A
+  pre-existing coupling, where storage's introspection is merged into the compute
+  runtime's introspection, is inherited unchanged by the split. It complicates
+  per-runtime attribution and wants untangling independently of this work.
+* **Two-runtime adds a metric label that breaks existing dashboards.** `Solo`
+  omits the role label, so a single-runtime deployment is unchanged. But with the
+  feature enabled the maintenance runtime's metrics carry `role="maintenance"`, a
+  new label on existing series that breaks exact-match dashboards and alerts. The
+  clean fix is to keep the maintenance runtime label-free, matching the
+  pre-existing series, and label only the interactive runtime, so enabling the
+  feature adds new series rather than relabeling existing ones.
 
 ## Testing strategy
 
