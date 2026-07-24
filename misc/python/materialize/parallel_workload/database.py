@@ -708,8 +708,17 @@ class MySqlSource(DBObject):
         self.cluster = cluster
         self.schema = schema
         self.num_rows = 0
+        # Bias toward a single-column key: only tables with a single-column
+        # integer primary key take the parallel PK-range snapshot path, the
+        # rest fall back to a whole-table read by one worker.
+        num_keys = rng.choice([1, 1, 1, 2, rng.randint(2, 10)])
+        # Rows inserted upstream before CREATE SOURCE so the initial snapshot
+        # has data to read and split across workers. Kept within the SMALLINT
+        # range because every key column receives the row's negated sequence
+        # number.
+        self.prepopulate_rows = rng.choice([0, 100, rng.randint(1000, 30000)])
         fields = []
-        for i in range(rng.randint(1, 10)):
+        for i in range(num_keys):
             fields.append(
                 # naughtify: MySql column identifiers are escaped differently for MySql sources: key3_ЁЂЃЄЅІЇЈЉЊЋЌЍЎЏА gets "", but pg8000.native.identifier() doesn't
                 Field(f"key{i}", rng.choice(DATA_TYPES_FOR_KEY), True)
@@ -737,7 +746,7 @@ class MySqlSource(DBObject):
         return f"{self.schema}.{self.name()}"
 
     def create(self, exe: Executor) -> None:
-        self.executor.create(logging_exe=exe)
+        self.executor.create(logging_exe=exe, prepopulate_rows=self.prepopulate_rows)
 
 
 class PostgresSource(DBObject):
