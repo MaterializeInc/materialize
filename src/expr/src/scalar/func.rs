@@ -2225,9 +2225,41 @@ fn timezone_offset<'a>(
         Err(_) => return Err(EvalError::InvalidIanaTimezoneId(tz_str.into())),
     };
     let offset = tz.offset_from_utc_datetime(&b.naive_utc());
+    // Zones without an alphabetic abbreviation get the numeric form rendered
+    // from the offset, e.g. "+05". This matches PostgreSQL, whose tzdata files
+    // have the same rendering applied by zic's %z expansion.
+    let abbrev = match offset.abbreviation() {
+        Some(abbrev) => abbrev.to_string(),
+        None => {
+            const SECONDS_PER_MINUTE: i64 = 60;
+            const MINUTES_PER_HOUR: i64 = 60;
+            let secs = (offset.base_utc_offset() + offset.dst_offset()).num_seconds();
+            let sign = if secs < 0 { '-' } else { '+' };
+            let (mins, s) = (
+                secs.abs() / SECONDS_PER_MINUTE,
+                secs.abs() % SECONDS_PER_MINUTE,
+            );
+            let (h, m) = (mins / MINUTES_PER_HOUR, mins % MINUTES_PER_HOUR);
+            if s != 0 {
+                // Unreachable for current tzdata: sub-minute offsets exist
+                // only for pre-standardization history (e.g. Africa/Monrovia
+                // until 1972), and tzdata gives all of them alphabetic names.
+                // We render rather than trust that invariant forever.
+                // chrono-tz's own Display impl instead asserts, and a scalar
+                // function must not panic.
+                format!("{sign}{h:02}{m:02}{s:02}")
+            } else if m != 0 {
+                // Fractional-hour zones, e.g. Asia/Kathmandu renders "+0545".
+                format!("{sign}{h:02}{m:02}")
+            } else {
+                // Whole-hour zones, e.g. Asia/Almaty renders "+05".
+                format!("{sign}{h:02}")
+            }
+        }
+    };
     Ok(temp_storage.make_datum(|packer| {
         packer.push_list_with(|packer| {
-            packer.push(Datum::from(offset.abbreviation()));
+            packer.push(Datum::from(abbrev.as_str()));
             packer.push(Datum::from(offset.base_utc_offset()));
             packer.push(Datum::from(offset.dst_offset()));
         });

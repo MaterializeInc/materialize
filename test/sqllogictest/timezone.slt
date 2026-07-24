@@ -286,3 +286,102 @@ SELECT timezone_offset('PST', now())
 
 query error invalid IANA Time Zone Database identifier: '-05'
 SELECT timezone_offset('-05', now())
+
+# Zones whose rules changed in tzdata 2023a through 2024b: Egypt reinstated
+# DST, Kazakhstan unified on UTC+5, Paraguay abolished DST, Greenland adopted
+# EU DST rules. Asserting on them keeps the compiled-in tzdata from silently
+# going stale. Zones without an alphabetic abbreviation show the numeric
+# offset form, and Asia/Kathmandu pins that rendering for fractional-hour
+# offsets.
+
+statement ok
+SET unsafe_new_transaction_wall_time = '2026-07-15 00:00:00 UTC';
+
+query TTTT
+SELECT * FROM pg_catalog.pg_timezone_names
+WHERE name IN ('Africa/Cairo', 'Asia/Almaty', 'America/Asuncion', 'America/Nuuk', 'Asia/Kathmandu')
+ORDER BY name
+----
+Africa/Cairo
+EEST
+03:00:00
+true
+America/Asuncion
+-03
+-03:00:00
+false
+America/Nuuk
+-01
+-01:00:00
+true
+Asia/Almaty
++05
+05:00:00
+false
+Asia/Kathmandu
++0545
+05:45:00
+false
+
+statement ok
+SET unsafe_new_transaction_wall_time = '2026-01-15 00:00:00 UTC';
+
+query TTTT
+SELECT * FROM pg_catalog.pg_timezone_names
+WHERE name IN ('Africa/Cairo', 'Asia/Almaty', 'America/Asuncion', 'America/Nuuk', 'Asia/Kathmandu')
+ORDER BY name
+----
+Africa/Cairo
+EET
+02:00:00
+false
+America/Asuncion
+-03
+-03:00:00
+false
+America/Nuuk
+-02
+-02:00:00
+false
+Asia/Almaty
++05
+05:00:00
+false
+Asia/Kathmandu
++0545
+05:45:00
+false
+
+query TT
+SELECT timezone_offset('Asia/Almaty', '2026-07-15 00:00:00 UTC'), timezone_offset('Africa/Cairo', '2026-07-15 00:00:00 UTC')
+----
+(+05,05:00:00,00:00:00)
+(EEST,02:00:00,01:00:00)
+
+# These pin historical rules: a timestamp from before a zone's rule change
+# must resolve under the rules in force at that instant, not current rules.
+
+# Kazakhstan unified on UTC+5 on 2024-03-01. Instants before that must keep
+# Almaty's earlier UTC+6.
+
+query T
+SELECT timezone_offset('Asia/Almaty', '2023-06-15 00:00:00 UTC')
+----
+(+06,06:00:00,00:00:00)
+
+# Egypt reinstated DST on 2023-04-28 after seven years without it. An instant
+# from that first reinstated summer must already resolve to EEST.
+
+query T
+SELECT timezone_offset('Africa/Cairo', '2023-08-01 00:00:00 UTC')
+----
+(EEST,02:00:00,01:00:00)
+
+# Asia/Choibalsan's separate pre-2008 history was judged unsupportable and
+# merged into Asia/Ulaanbaatar in tzdata 2024b. This asserts the current
+# belief about the past. If a data update breaks it, IANA rewrote history.
+
+query T
+SELECT timezone_offset('Asia/Choibalsan', '1995-06-15 00:00:00 UTC')
+----
+(+09,08:00:00,01:00:00)
