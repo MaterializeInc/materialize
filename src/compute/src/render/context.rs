@@ -15,6 +15,7 @@ use std::rc::Rc;
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::trace::chunk::ChunkBatcher;
 use differential_dataflow::trace::cursor::{BatchCursor, BatchKey, BatchVal};
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
@@ -34,7 +35,8 @@ use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow
 use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::{Col2ValBatcher, Col2ValPagedBatcher, columnar_exchange};
+use mz_timely_util::columnar::chunk::{ChunkChunker, ColumnChunk, UnchunkBuilder};
+use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
 use mz_timely_util::columnation::ColumnationChunker;
 use timely::ContainerBuilder;
 use timely::container::{CapacityContainerBuilder, PushInto};
@@ -1190,9 +1192,9 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         let oks = if use_paged_path {
             ok_stream.mz_arrange_core::<
                 _,
-                batcher::ColumnChunker<_>,
-                Col2ValPagedBatcher<_, _, _, _>,
-                RowRowColPagedBuilder<_, _>,
+                ChunkChunker<(Row, Row), T, Diff>,
+                ChunkBatcher<ColumnChunk<(Row, Row), T, Diff>>,
+                UnchunkBuilder<RowRowColPagedBuilder<T, Diff>, (Row, Row), T, Diff>,
                 RowRowSpine<_, _>,
             >(exchange, name)
         } else {

@@ -102,44 +102,6 @@ pub const COLUMN_PAGED_BATCHER_SPILL_WORKER_COUNT: Config<usize> = Config::new(
 )
 .scoped(ParameterScope::Replica);
 
-/// Compress chunks the column-paged batcher spills, using lz4. Only
-/// meaningful when [`ENABLE_COLUMN_PAGED_BATCHER_SPILL`] is `true`; the codec
-/// is applied on the pageout path and reversed on page-in. Trades CPU for a
-/// smaller on-storage (and, for the swap backend, resident) footprint.
-///
-/// Off by default so the spill path's cost stays a pure copy until compression
-/// is shown to pay for itself on the target workload.
-pub const COLUMN_PAGED_BATCHER_LZ4: Config<bool> = Config::new(
-    "column_paged_batcher_lz4",
-    false,
-    "Compress column-paged batcher chunks with lz4 on the spill path. Only meaningful when \
-     `enable_column_paged_batcher_spill = true`.",
-)
-.scoped(ParameterScope::Replica);
-
-/// Proactively evict the column-paged batcher's lz4-compressed spill chunks
-/// from RSS via `MADV_PAGEOUT` when spilling to the swap backend. Only
-/// meaningful when [`COLUMN_PAGED_BATCHER_LZ4`] is `true` and the active
-/// backend is swap (no scratch directory): on that path the compressed bytes
-/// stay resident in the process address space and currently receive no madvise
-/// at all, so the kernel reclaims them only lazily under LRU pressure.
-/// `MADV_PAGEOUT` instead swaps them out eagerly at spill time, holding RSS at
-/// the budget rather than letting it drift up to the pressure cliff. A later
-/// page-in re-faults the pages — cheap because lz4 shrank the byte volume,
-/// which is what makes eager eviction pay off on this path.
-///
-/// Off by default: the eager-reclaim syscall is the one kernel interaction the
-/// pager design singled out as risky, so it stays gated until proven on the
-/// target workload.
-pub const COLUMN_PAGED_BATCHER_SWAP_PAGEOUT: Config<bool> = Config::new(
-    "column_paged_batcher_swap_pageout",
-    false,
-    "Eagerly evict the column-paged batcher's lz4-compressed swap-backend spill chunks from RSS \
-     via `MADV_PAGEOUT` (they otherwise receive no madvise and are reclaimed only lazily). Only \
-     meaningful when `column_paged_batcher_lz4 = true` and the swap backend is active.",
-)
-.scoped(ParameterScope::Replica);
-
 /// Eagerly compress unbacked buffer-pool chunks to `BackedResident` on idle
 /// spill threads (write-behind). The chunk stays readable in its slot while
 /// a compressed extent accumulates on the swap device, so budget-driven
@@ -596,8 +558,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_COLUMN_PAGED_BATCHER)
         .add(&ENABLE_COLUMN_PAGED_BATCHER_SPILL)
         .add(&COLUMN_PAGED_BATCHER_BUDGET_FRACTION)
-        .add(&COLUMN_PAGED_BATCHER_LZ4)
-        .add(&COLUMN_PAGED_BATCHER_SWAP_PAGEOUT)
         .add(&COLUMN_PAGED_BATCHER_SPILL_WORKER_COUNT)
         .add(&COLUMN_PAGED_BATCHER_EAGER_BACKING)
         .add(&COLUMN_PAGED_BATCHER_POOL_RSS_TARGET_FRACTION)

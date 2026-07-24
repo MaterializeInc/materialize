@@ -122,6 +122,39 @@ pub trait ExtentCodec: std::fmt::Debug + Send + Sync {
     /// original body's length, and implementations must panic on a length
     /// mismatch rather than truncate or pad.
     fn decode(&self, stored: &[u8], body: &mut [u8]);
+
+    /// Reconstructs the byte range `[offset, offset + dst.len())` of the
+    /// `body_len`-byte body into `dst`. The range lies within the body.
+    ///
+    /// The default decodes the whole body into a reused scratch and copies
+    /// the range out, which is all a whole-block stored form can do. A
+    /// codec whose stored form has interior structure (independently
+    /// compressed sub-blocks with an offset index) overrides this to decode
+    /// only the parts the range touches, which is what makes a sub-range
+    /// read cost less than a whole-body read.
+    fn decode_range(&self, stored: &[u8], body_len: usize, offset: usize, dst: &mut [u8]) {
+        let end = offset
+            .checked_add(dst.len())
+            .expect("range end overflows usize");
+        assert!(end <= body_len, "range end {end} exceeds body {body_len}");
+        // Reads run on worker threads, so the scratch mirrors the write
+        // side's `Shrink` policy: capacity beyond the ~2 MiB chunk target
+        // is released rather than parked per thread.
+        use std::cell::RefCell;
+        thread_local! {
+            static SCRATCH: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+        }
+        SCRATCH.with(|cell| {
+            let mut scratch = cell.borrow_mut();
+            scratch.resize(body_len, 0);
+            self.decode(stored, &mut scratch);
+            dst.copy_from_slice(&scratch[offset..end]);
+            if scratch.capacity() > 2 << 20 {
+                scratch.clear();
+                scratch.shrink_to_fit();
+            }
+        });
+    }
 }
 
 /// The largest stored form [`ExtentCodec::encode`] may produce for a

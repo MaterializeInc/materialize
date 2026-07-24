@@ -10,7 +10,7 @@
 //! Dyncfgs used by the storage layer. Despite their name, these can be used
 //! "statically" during rendering, or dynamically within timely operators.
 
-use mz_dyncfg::{Config, ConfigSet};
+use mz_dyncfg::{Config, ConfigSet, ParameterScope};
 use std::time::Duration;
 
 /// When dataflows observe an invariant violation it is either due to a bug or due to the cluster
@@ -334,7 +334,8 @@ pub const ENABLE_UPSERT_PAGED_SPILL: Config<bool> = Config::new(
     false,
     "Allow the upsert-v2 source stash to spill chunks to the shared buffer pool, gated \
      independently of the compute `enable_column_paged_batcher_spill`.",
-);
+)
+.scoped(ParameterScope::Replica);
 
 // RocksDB
 
