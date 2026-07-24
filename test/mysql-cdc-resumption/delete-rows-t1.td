@@ -12,3 +12,4 @@ $ mysql-connect name=mysql url=mysql://root@${arg.mysql-host} password=${arg.mys
 $ mysql-execute name=mysql
 USE public;
 DELETE FROM t1 WHERE f1 % 2 = 0;
+DELETE FROM t1pk WHERE pk % 2 = 0;

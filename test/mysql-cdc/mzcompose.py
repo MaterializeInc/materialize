@@ -216,22 +216,57 @@ def workflow_many_inserts(c: Composition, parser: WorkflowArgumentParser) -> Non
     """
     Tests a scenario that caused a consistency issue in the past. We insert a
     large number of rows into a table, then create a source for that table while
-    simultaneously inserting many more rows into the table in a background
-    thread, then finally verify that the correct count of rows is captured by
-    the source.
+    simultaneously writing to the table in a background thread, then finally
+    verify that the exact count and checksum of rows is captured by the source.
 
     In earlier incarnations of the MySQL source, the source accidentally failed
     to snapshot inside of a repeatable read transaction.
+
+    The source runs on a multi-worker cluster so the snapshot is split into
+    per-worker PK ranges, and the background writes mix inserts, updates and
+    deletes so every kind of concurrent change races the range reads and the
+    subsequent rewind.
     """
     mysql_version = get_targeted_mysql_version(parser)
     with c.override(create_mysql(mysql_version)):
         c.up("materialized", "mysql", Service("testdrive", idle=True))
 
-        # Records to before creating the source.
+        # Records to insert before creating the source. Their pk values are
+        # deterministic (pk = f2 = 1..initial_records), so the concurrent
+        # update and delete below can target pk ranges of these rows while
+        # keeping the final checksum exact.
         initial_sql, initial_records = _make_inserts(txns=1, txn_size=1_000_000)
 
-        # Records to insert concurrently with creating the source.
-        concurrent_sql, concurrent_records = _make_inserts(txns=1000, txn_size=100)
+        # Records to insert concurrently with creating the source, with an
+        # update and a delete of disjoint pk ranges of the initial rows
+        # interleaved between the insert transactions.
+        first_sql, first_records = _make_inserts(txns=300, txn_size=100)
+        second_sql, second_records = _make_inserts(txns=300, txn_size=100)
+        third_sql, third_records = _make_inserts(txns=400, txn_size=100)
+        # The indentation matches the _make_inserts blocks so the dedent in
+        # do_inserts still finds a common prefix.
+        concurrent_sql = "\n".join(
+            [
+                first_sql,
+                "            UPDATE many_inserts SET f2 = f2 + 10 WHERE pk BETWEEN 100001 AND 200000;",
+                second_sql,
+                "            DELETE FROM many_inserts WHERE pk BETWEEN 1 AND 50000;",
+                third_sql,
+            ]
+        )
+        concurrent_records = first_records + second_records + third_records
+
+        expected_count = initial_records + concurrent_records - 50_000
+        expected_sum = (
+            # initial rows: f2 = 1..initial_records
+            initial_records * (initial_records + 1) // 2
+            # each concurrent insert transaction contributes f2 = 1..100
+            + (concurrent_records // 100) * (100 * 101 // 2)
+            # update delta
+            + 10 * 100_000
+            # deleted rows: f2 = pk = 1..50000
+            - 50_000 * 50_001 // 2
+        )
 
         # Set up the MySQL server with the initial records, set up the connection to
         # the MySQL server in Materialize.
@@ -274,11 +309,14 @@ def workflow_many_inserts(c: Composition, parser: WorkflowArgumentParser) -> Non
     print("--- Start many concurrent inserts")
     insert_thread.start()
 
-    # Create the source.
+    # Create the source on a multi-worker cluster so the snapshot is split
+    # into per-worker PK ranges.
     c.testdrive(
         args=["--no-reset"],
         input=dedent("""
+            > CREATE CLUSTER many_inserts_cluster SIZE 'scale=1,workers=8'
             > CREATE SOURCE s1
+                IN CLUSTER many_inserts_cluster
                 FROM MYSQL CONNECTION mysql_conn;
             > CREATE TABLE many_inserts FROM SOURCE s1 (REFERENCE public.many_inserts);
             """),
@@ -287,14 +325,188 @@ def workflow_many_inserts(c: Composition, parser: WorkflowArgumentParser) -> Non
     # Ensure the source eventually sees the right number of records.
     insert_thread.join()
 
-    print("--- Validate concurrent inserts")
+    print("--- Validate concurrent writes")
     c.testdrive(
         args=["--no-reset"],
         input=dedent(f"""
-            > SELECT count(*) FROM many_inserts
-            {initial_records + concurrent_records}
+            > SELECT count(*), sum(f2) FROM many_inserts
+            {expected_count} {expected_sum}
             """),
     )
+
+
+def workflow_snapshot_network_disruption(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Cut the network mid-way through a parallel PK-range snapshot and verify
+    that the retried snapshot converges to exact, duplicate-free data.
+
+    The source connects through toxiproxy with a per-connection bandwidth cap
+    so the range reads are slow enough to be interrupted reliably. The data is
+    loaded into MySQL directly, bypassing the proxy.
+    """
+    mysql_version = get_targeted_mysql_version(parser)
+    rows = 2_000_000
+    expected_sum = 7 * rows * (rows + 1) // 2
+    with c.override(create_mysql(mysql_version)):
+        c.up("materialized", "mysql", "toxiproxy", Service("testdrive", idle=True))
+
+        c.testdrive(
+            dedent(f"""
+                $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
+                {{
+                  "name": "mysql",
+                  "listen": "0.0.0.0:3306",
+                  "upstream": "mysql:3306",
+                  "enabled": true
+                }}
+
+                $ http-request method=POST url=http://toxiproxy:8474/proxies/mysql/toxics content-type=application/json
+                {{
+                  "name": "mysql_bandwidth",
+                  "type": "bandwidth",
+                  "stream": "downstream",
+                  "attributes": {{"rate": 500}}
+                }}
+
+                $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+
+                $ mysql-execute name=mysql
+                DROP DATABASE IF EXISTS public;
+                CREATE DATABASE public;
+                USE public;
+                CREATE TABLE ten (f1 INTEGER);
+                INSERT INTO ten VALUES (1), (2), (3), (4), (5), (6), (7), (8), (9), (10);
+                CREATE TABLE big_pk (pk BIGINT PRIMARY KEY, f2 BIGINT);
+                SET @i := 0;
+                INSERT INTO big_pk SELECT @i := @i + 1, @i * 7 FROM ten a1, ten a2, ten a3, ten a4, ten a5, ten a6, ten a7 LIMIT {rows};
+
+                > CREATE SECRET mysqlpass AS '{MySql.DEFAULT_ROOT_PASSWORD}'
+                > CREATE CONNECTION mysql_toxi_conn TO MYSQL (
+                    HOST toxiproxy,
+                    USER root,
+                    PASSWORD SECRET mysqlpass
+                  )
+
+                > CREATE CLUSTER snapshot_disruption_cluster SIZE 'scale=1,workers=8'
+                > CREATE SOURCE big_pk_source
+                  IN CLUSTER snapshot_disruption_cluster
+                  FROM MYSQL CONNECTION mysql_toxi_conn;
+                > CREATE TABLE big_pk FROM SOURCE big_pk_source (REFERENCE public.big_pk);
+
+                # Wait until the PK-range reads are mid-flight.
+                > SELECT sum(u.snapshot_records_staged) > 0
+                  FROM mz_internal.mz_source_statistics u
+                  JOIN mz_objects o ON o.id = u.id
+                  WHERE o.name IN ('big_pk_source', 'big_pk');
+                true
+
+                # Cut every proxied connection mid-read.
+                $ http-request method=POST url=http://toxiproxy:8474/proxies/mysql content-type=application/json
+                {{
+                  "name": "mysql",
+                  "listen": "0.0.0.0:3306",
+                  "upstream": "mysql:3306",
+                  "enabled": false
+                }}
+
+                > SELECT count(*) > 0 FROM mz_internal.mz_source_statuses WHERE error LIKE '%Connection refused%';
+                true
+
+                # Restore the network at full speed and expect the snapshot to
+                # be retried to exact completion.
+                $ http-request method=DELETE url=http://toxiproxy:8474/proxies/mysql/toxics/mysql_bandwidth
+
+                $ http-request method=POST url=http://toxiproxy:8474/proxies/mysql content-type=application/json
+                {{
+                  "name": "mysql",
+                  "listen": "0.0.0.0:3306",
+                  "upstream": "mysql:3306",
+                  "enabled": true
+                }}
+
+                > SELECT count(*), count(DISTINCT pk), sum(f2) FROM big_pk;
+                {rows} {rows} {expected_sum}
+
+                > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'big_pk_source';
+                running
+                """),
+        )
+
+
+def workflow_snapshot_max_connections(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Several parallel snapshots racing for a max_connections budget far below
+    their combined peak demand must all hydrate eventually.
+
+    During setup a parallel snapshot holds up to 2 * workers + 1 upstream
+    connections per source (every worker's read connection plus the leader's
+    sampling and lock connections), so four workers=8 sources want ~68
+    connections at peak while MySQL only grants 25. Sources whose connects are
+    rejected restart transiently and must converge as competitors finish and
+    release connections.
+    """
+    mysql_version = get_targeted_mysql_version(parser)
+    num_sources = 4
+    rows = 200_000
+    expected_sum = 3 * rows * (rows + 1) // 2
+    with c.override(create_mysql(mysql_version)):
+        c.up("materialized", "mysql", Service("testdrive", idle=True))
+
+        setup = [dedent(f"""
+                $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+                ALTER SYSTEM SET max_mysql_connections = 1000
+
+                $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+
+                $ mysql-execute name=mysql
+                SET GLOBAL max_connections = 25;
+                DROP DATABASE IF EXISTS public;
+                CREATE DATABASE public;
+                USE public;
+                """)]
+        for i in range(num_sources):
+            setup.append(dedent(f"""
+                    $ mysql-execute name=mysql
+                    CREATE TABLE conn_squeeze_{i} (pk BIGINT PRIMARY KEY, f2 BIGINT);
+                    SET @i := 0;
+                    INSERT INTO conn_squeeze_{i} SELECT @i := @i + 1, @i * 3 FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT {rows};
+                    """))
+        setup.append(dedent(f"""
+                > CREATE SECRET mysqlpass AS '{MySql.DEFAULT_ROOT_PASSWORD}'
+                > CREATE CONNECTION mysql_conn TO MYSQL (
+                    HOST mysql,
+                    USER root,
+                    PASSWORD SECRET mysqlpass
+                  )
+                """))
+        for i in range(num_sources):
+            setup.append(dedent(f"""
+                    > CREATE CLUSTER conn_squeeze_cluster_{i} SIZE 'scale=1,workers=8'
+                    > CREATE SOURCE conn_squeeze_source_{i}
+                      IN CLUSTER conn_squeeze_cluster_{i}
+                      FROM MYSQL CONNECTION mysql_conn;
+                    > CREATE TABLE conn_squeeze_{i} FROM SOURCE conn_squeeze_source_{i} (REFERENCE public.conn_squeeze_{i});
+                    """))
+        validate = [dedent(f"""
+                > SELECT count(*), count(DISTINCT pk), sum(f2) FROM conn_squeeze_{i};
+                {rows} {rows} {expected_sum}
+                """) for i in range(num_sources)]
+        validate.append(dedent(f"""
+                > SELECT count(*) FROM mz_internal.mz_source_statuses
+                  WHERE name LIKE 'conn_squeeze_source_%' AND status = 'running';
+                {num_sources}
+
+                $ mysql-execute name=mysql
+                SET GLOBAL max_connections = 1000;
+                """))
+        c.testdrive(
+            args=["--default-timeout=600s"],
+            input="\n".join(setup + validate),
+        )
 
 
 def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None:
