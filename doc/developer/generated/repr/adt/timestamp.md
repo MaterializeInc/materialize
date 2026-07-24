@@ -1,6 +1,6 @@
 ---
 source: src/repr/src/adt/timestamp.rs
-revision: 2bd0f58824
+revision: 26cb0194dc
 ---
 
 # mz-repr::adt::timestamp

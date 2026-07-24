@@ -1,6 +1,6 @@
 ---
 source: src/ore/src/metrics.rs
-revision: 03de4421ba
+revision: 94054eb165
 ---
 
 # mz-ore::metrics
@@ -14,6 +14,7 @@ Key types and traits:
 * `MetricVisibility` — documentation-metadata enum with variants `Internal` (the default) and `Public`. Set via the `visibility:` field of the `metric!` macro and consumed by `bin/gen-metrics-catalog` to produce the user-facing metrics reference. It has no effect on metric behavior at runtime; the macro only type-checks the value at compile time.
 * `MetricTag` — documentation-metadata enum categorizing a metric in the user-facing metrics catalog. Variants include `Environment`, `Compute`, `Source`, and `Sink`. Set via the `tags:` field of the `metric!` macro and consumed by `bin/gen-metrics-catalog`. It has no effect at runtime.
 * `MakeCollector` — trait implemented for all standard Prometheus metric types; enables generic registration.
+* `register_collector_with_dropper` on `MetricsRegistry` — registers a collector and returns an opaque `Box<dyn Any + Send + Sync>` handle that unregisters the collector when dropped. Intended for collectors with a bounded lifetime (e.g. a metric sink torn down with its dataflow). A duplicate registration soft-panics and returns a no-op handle rather than crashing the process.
 * `DeleteOnDropWrapper<M>` — wraps a `MetricVec` so that only delete-on-drop child metrics can be created from it, preventing label leaks; re-exported type aliases (`CounterVec`, `GaugeVec`, `IntCounterVec`, etc.) shadow the raw Prometheus types.
 * `ComputedGenericGauge` / `ComputedGauge` / `ComputedIntGauge` / `ComputedUIntGauge` — gauges whose value is recomputed from a closure on every scrape.
 * `MetricsFutureExt` — extension trait adding `wall_time()` and `exec_time()` combinators to any `Future`; the resulting `WallTimeFuture` / `ExecTimeFuture` record elapsed or CPU time to a Histogram or Counter.

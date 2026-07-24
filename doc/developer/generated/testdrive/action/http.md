@@ -1,6 +1,6 @@
 ---
 source: src/testdrive/src/action/http.rs
-revision: e757b4d11b
+revision: 5b2cefc829
 ---
 
 # testdrive::action::http

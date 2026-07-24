@@ -1,6 +1,6 @@
 ---
 source: src/testdrive/src/action/kafka/wait_topic.rs
-revision: 2280405a2e
+revision: 5b2cefc829
 ---
 
 # testdrive::action::kafka::wait_topic

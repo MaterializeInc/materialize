@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/date.rs
-revision: 703a0c27c8
+revision: 26cb0194dc
 ---
 
 # mz-expr::scalar::func::impls::date
