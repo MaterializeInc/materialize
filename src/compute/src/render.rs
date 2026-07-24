@@ -1259,17 +1259,12 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                             mfp,
                             Some((key, row)),
                             self.until.clone(),
-                            &self.config_set,
                         );
                         CollectionBundle::from_edge(oks, errs)
                     }
                     mz_compute_types::plan::GetPlan::Collection(mfp) => {
-                        let (oks, errs) = collection.as_collection_core(
-                            mfp,
-                            None,
-                            self.until.clone(),
-                            &self.config_set,
-                        );
+                        let (oks, errs) =
+                            collection.as_collection_core(mfp, None, self.until.clone());
                         CollectionBundle::from_edge(oks, errs)
                     }
                 }
@@ -1284,12 +1279,8 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                 if mfp.is_identity() {
                     input
                 } else {
-                    let (oks, errs) = input.as_collection_core(
-                        mfp,
-                        input_key_val,
-                        self.until.clone(),
-                        &self.config_set,
-                    );
+                    let (oks, errs) =
+                        input.as_collection_core(mfp, input_key_val, self.until.clone());
                     CollectionBundle::from_edge(oks, errs)
                 }
             }

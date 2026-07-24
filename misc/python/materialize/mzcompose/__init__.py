@@ -600,7 +600,6 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "compute_mv_sink_advance_persist_frontiers",
     "compute_prometheus_introspection_scrape_interval",
     "enable_compute_replica_expiration",
-    "enable_compute_render_fueled_as_specific_collection",
     "compute_logical_backpressure_max_retained_capabilities",
     "compute_logical_backpressure_inflight_slack",
     "persist_fetch_semaphore_cost_adjustment",
