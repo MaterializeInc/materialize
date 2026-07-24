@@ -559,3 +559,7 @@ query error value out of range: overflow
 SELECT s.state, c.name FROM
     (SELECT DISTINCT state FROM cities) s,
     LATERAL (SELECT name FROM cities LIMIT pow(10000, 1000)) c;
+
+# A LIMIT at the top level of a SELECT must be a constant.
+query error Invalid LIMIT clause: Expected a constant expression
+SELECT name FROM cities LIMIT (SELECT 1);
