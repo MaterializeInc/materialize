@@ -1294,12 +1294,14 @@ class HydrationChurn(Action):
         self.cur = self.conn.cursor()
 
     def _run(self, conns: queue.Queue):
-        self.cur.execute(f"CREATE MATERIALIZED VIEW {self.name} AS {self.view_sql}")
+        self.cur.execute(
+            f"CREATE MATERIALIZED VIEW {self.name} AS {self.view_sql}".encode()
+        )
         # Force hydration to complete before we drop, so the maintenance runtime
         # actually does the build work rather than cancelling it immediately.
-        self.cur.execute(f"SELECT count(*) FROM {self.name}")
+        self.cur.execute(f"SELECT count(*) FROM {self.name}".encode())
         self.cur.fetchall()
-        self.cur.execute(f"DROP MATERIALIZED VIEW {self.name}")
+        self.cur.execute(f"DROP MATERIALIZED VIEW {self.name}".encode())
 
     def __str__(self) -> str:
         return f"hydration churn {self.name}"
