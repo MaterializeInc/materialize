@@ -780,6 +780,7 @@ mz_aws_privatelink_connection_status_history
 mz_aws_privatelink_connection_statuses
 mz_builtin_materialized_views
 mz_builtin_sources
+mz_builtin_tables
 mz_catalog_raw
 mz_cluster_auto_scaling_strategies
 mz_cluster_deployment_lineage
