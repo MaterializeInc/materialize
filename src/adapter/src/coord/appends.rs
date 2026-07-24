@@ -50,6 +50,7 @@ use mz_ore::assert_none;
 use mz_ore::halt;
 use mz_ore::instrument;
 use mz_ore::now::NowFn;
+use mz_ore::soft_panic_or_log;
 use mz_ore::task;
 use mz_repr::{CatalogItemId, GlobalId, Timestamp};
 use mz_sql::names::ResolvedIds;
@@ -200,10 +201,6 @@ impl InternalWriteResponder {
             tx: Some(tx),
             expected_target_global_id,
         }
-    }
-
-    fn expected_target_global_id(&self) -> GlobalId {
-        self.expected_target_global_id
     }
 
     pub(crate) fn send(mut self, result: WriteResult) {
@@ -905,6 +902,15 @@ impl Coordinator {
                                     responder: UserWriteResponder::Internal { conn_id, result },
                                 });
                             } else {
+                                // Retry by riding the next group commit
+                                // initiate, at the latest the periodic
+                                // timeline advancement tick. Internal writes
+                                // have no `ExecuteContext`, so they can't use
+                                // `defer_op` like session writes. Lock hold
+                                // times are short while frontend OCC
+                                // sequencing is enabled because the
+                                // coordinator's lock-based read-then-write
+                                // path is disabled.
                                 self.pending_writes.push(PendingWriteTxn::User {
                                     span,
                                     writes,
@@ -970,22 +976,26 @@ impl Coordinator {
                     responder: UserWriteResponder::Internal { result, .. },
                 } => {
                     assert_none!(write_locks, "should have merged together all locks above");
-                    let current_global_id = if writes.len() == 1 {
-                        writes.keys().next().and_then(|id| {
-                            self.catalog()
-                                .try_get_entry(id)
-                                .map(|entry| entry.latest_global_id())
-                        })
-                    } else {
-                        None
+                    // Frontend internal writes target exactly one table,
+                    // enforced at enqueue time in `handle_attempt_write`.
+                    let mut writes = writes.into_iter();
+                    let (target_id, table_data) = match (writes.next(), writes.next()) {
+                        (Some(write), None) => write,
+                        _ => {
+                            soft_panic_or_log!("internal write must target exactly one table");
+                            result.send(WriteResult::TargetChanged);
+                            continue;
+                        }
                     };
-                    if current_global_id != Some(result.expected_target_global_id()) {
+                    let current_global_id = self
+                        .catalog()
+                        .try_get_entry(&target_id)
+                        .map(|entry| entry.latest_global_id());
+                    if current_global_id != Some(result.expected_target_global_id) {
                         result.send(WriteResult::TargetChanged);
                         continue;
                     }
-                    for (id, table_data) in writes {
-                        appends.entry(id).or_default().extend(table_data);
-                    }
+                    appends.entry(target_id).or_default().extend(table_data);
                     internal_results.push(result);
                 }
                 PendingWriteTxn::System { updates, source } => {

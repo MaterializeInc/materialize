@@ -397,14 +397,18 @@ pub enum Command {
     /// that becomes `true` when cancellation is requested for the connection.
     ///
     /// This is shared by coordinator staged sequencing and frontend
-    /// read-then-write execution.
+    /// read-then-write execution. `operation_id` identifies the registering
+    /// operation, a matching unregister only removes a watch registered with
+    /// the same id.
     RegisterConnectionCancelWatch {
         conn_id: ConnectionId,
         operation_id: Uuid,
         tx: oneshot::Sender<watch::Receiver<bool>>,
     },
 
-    /// Unregisters a previously registered connection-scoped cancellation watch.
+    /// Unregisters the connection-scoped cancellation watch registered with
+    /// the same `operation_id`. A no-op if a newer operation has since
+    /// registered its own watch.
     UnregisterConnectionCancelWatch {
         conn_id: ConnectionId,
         operation_id: Uuid,

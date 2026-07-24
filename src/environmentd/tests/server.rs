@@ -1579,6 +1579,49 @@ fn test_frontend_read_then_write_constant_insert_prepares_unmaterializable_funct
 
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
+fn test_frontend_read_then_write_rejected_in_multi_statement_batch() {
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .with_system_parameter_default(
+            "enable_adapter_frontend_occ_read_then_write".to_string(),
+            "true".to_string(),
+        )
+        .start_blocking();
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    client.batch_execute("CREATE TABLE t (a int)").unwrap();
+    client.batch_execute("INSERT INTO t VALUES (1)").unwrap();
+
+    // Non-constant DML in a multi-statement implicit transaction (a simple
+    // query batch) is prohibited, matching the coordinator's transaction
+    // gate. Allowing it into the OCC path would commit the write durably
+    // mid-batch, breaking the batch's atomicity.
+    let err = client
+        .batch_execute("INSERT INTO t SELECT * FROM t; SELECT 1")
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("cannot be run inside a transaction block"),
+        "unexpected error: {err}"
+    );
+
+    // Constant INSERTs join the implicit transaction's write ops, so a later
+    // error in the batch rolls them back.
+    let err = client
+        .batch_execute("INSERT INTO t VALUES (2); SELECT 1/0")
+        .unwrap_err();
+    assert!(err.to_string().contains("division by zero"));
+
+    let count = client
+        .query_one("SELECT count(*)::int4 FROM t", &[])
+        .unwrap()
+        .get::<_, i32>(0);
+    assert_eq!(count, 1, "no batch write may have committed");
+}
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_frontend_read_then_write_constant_insert_respects_max_result_size() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
