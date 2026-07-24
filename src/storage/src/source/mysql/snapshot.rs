@@ -424,6 +424,8 @@ async fn lock_and_prepare_snapshot(
         )
         .await?;
 
+    restore_default_wait_timeout(&mut *lock_conn).await?;
+
     let errored_outputs = verify_output_schemas(&mut *lock_conn, tables).await?;
     let errored: BTreeSet<usize> = errored_outputs.iter().map(|(idx, _)| *idx).collect();
     let sample_tables: BTreeMap<MySqlTableName, Vec<SourceOutputInfo>> = tables
@@ -770,12 +772,7 @@ pub(crate) fn render<'scope>(
                     Ok(()) => (),
                 };
 
-                // This connection sits idle while the leader samples and locks. Restore
-                // the server-default wait_timeout (28800) so a lowered global value
-                // cannot reap it before the leader's broadcast arrives.
-                #[allow(clippy::disallowed_methods)] // static SQL string
-                conn.query_drop("SET @@session.wait_timeout = 28800")
-                    .await?;
+                restore_default_wait_timeout(&mut *conn).await?;
 
                 let mut lock_conn = if is_snapshot_leader {
                     match lock_and_prepare_snapshot(
@@ -1103,6 +1100,15 @@ fn publish_snapshot_size(
     }
 }
 
+/// Restores the server-default wait_timeout (28800) so a lowered global value
+/// cannot reap the connection while it sits idle during snapshot setup.
+async fn restore_default_wait_timeout<Q>(conn: &mut Q) -> Result<(), mysql_async::Error>
+where
+    Q: Queryable,
+{
+    #[allow(clippy::disallowed_methods)]
+    conn.query_drop("SET @@session.wait_timeout = 28800").await
+}
 async fn lock_tables_and_read_gtid_set(
     lock_conn: &mut MySqlConn,
     lock_clauses: &str,
