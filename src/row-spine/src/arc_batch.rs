@@ -20,9 +20,9 @@
 //! instead. The impls delegate straight through to the inner batch, so `ArcBatch<B>` behaves
 //! exactly like `B` except that its handle is atomically reference counted.
 //!
-//! This mirrors differential's own `rc_blanket_impls` (for `Rc<B>`), swapping in `Arc`. It replaces
-//! the fork-side `arc_blanket_impls`, keeping the sharing machinery in Materialize so the vendored
-//! differential-dataflow fork is not needed for it.
+//! This mirrors differential's own `rc_blanket_impls` (for `Rc<B>`), swapping in `Arc`. Keeping it
+//! here as a newtype lets cross-thread arrangement sharing build against a released
+//! differential-dataflow, with no differential-side `Arc` batch impls required.
 
 use std::sync::Arc;
 
@@ -64,9 +64,8 @@ impl<B> std::ops::Deref for ArcBatch<B> {
 impl<B: BatchReader + Navigable> Navigable for ArcBatch<B> {
     type Cursor = ArcBatchCursor<B::Cursor>;
     fn cursor(&self) -> Self::Cursor {
-        // Call the inner batch's cursor explicitly. While the differential fork is still
-        // `[patch]`-active, `Arc<B>: Navigable` too, so `self.0.cursor()` would resolve to that
-        // impl and yield the wrong cursor type. This disambiguates to `B`'s cursor.
+        // Disambiguate to the inner batch's cursor, reached through the `Deref`, so the wrapper's
+        // `Cursor` is `B`'s rather than any impl that might exist on `Arc<B>` itself.
         ArcBatchCursor::new(<B as Navigable>::cursor(&self.0))
     }
 }
@@ -242,9 +241,8 @@ mod tests {
     /// [`ArcBatch`]) back a cross-runtime shared trace; the default `Rc`-backed spines are
     /// worker-local by design and do not have it.
     ///
-    /// Ported from the differential-dataflow primitive's own `tests/trace.rs`
-    /// `test_batches_read_from_other_thread`, adapted from the fork's `arc_blanket_impls` (which
-    /// this newtype replaces) to `ArcBatch`.
+    /// Mirrors differential-dataflow's own `tests/trace.rs` cross-thread batch read, over the local
+    /// [`ArcBatch`] newtype.
     #[mz_ore::test]
     fn arc_batch_reads_from_other_thread() {
         fn assert_send_sync<T: Send + Sync>(_: &T) {}

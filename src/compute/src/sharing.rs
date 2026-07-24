@@ -26,6 +26,7 @@ use std::sync::{Arc, Mutex};
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use mz_repr::{Diff, GlobalId, Timestamp};
+use timely::progress::Antichain;
 use timely::scheduling::activate::SyncActivator;
 
 use crate::shared_trace::{Published, SharedTraceHandle};
@@ -326,6 +327,32 @@ impl ArrangementSharingRegistry {
     /// to `notify`.
     pub fn note_frontier(&self, id: GlobalId, worker_index: usize) {
         self.notify(id, worker_index);
+    }
+
+    /// Forwards the controller's logical compaction `frontier` for `id` into its published slot on
+    /// `worker_index`, if one exists.
+    ///
+    /// Called from `handle_allow_compaction` alongside the local `TraceManager` update, so a
+    /// cross-runtime publisher follows the controller's compaction without reading trace internals.
+    /// The same frontier drives the index's `oks` and `errs`, matching `TraceManager::allow_compaction`.
+    /// A no-op for unshared ids (no slot) and for a slot still holding placeholders (a placeholder's
+    /// `note_writer_logical` simply records the floor a later `adopt` will honor). Does not `notify`:
+    /// compaction bookkeeping alone gives a waiting reader nothing new to serve.
+    pub fn note_allow_compaction(
+        &self,
+        id: GlobalId,
+        worker_index: usize,
+        frontier: &Antichain<Timestamp>,
+    ) {
+        let map = self.inner.map.lock().expect("registry poisoned");
+        if let Some(arr) = map
+            .get(&id)
+            .and_then(|slots| slots.get(worker_index))
+            .and_then(|slot| slot.as_ref())
+        {
+            arr.oks.note_writer_logical(frontier);
+            arr.errs.note_writer_logical(frontier);
+        }
     }
 
     /// Marks `id` dirty for worker `worker_index` and fires its coalescing waker.

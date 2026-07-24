@@ -93,9 +93,8 @@ mod spines {
         ArcBuilder<crate::dictionary::builders::ValRowColPagedBuilder<K, T, R>>;
 
     /// A generic `Arc`-backed key/value spine, for callers outside `mz_compute` that need an
-    /// arrangement over non-`Row`-specialized types. Mirrors the differential fork's
-    /// `ArcOrdValSpine`, but backed by the local [`ArcBatch`] newtype instead of the fork's
-    /// `arc_blanket_impls`.
+    /// arrangement over non-`Row`-specialized types. The `Arc` handle rides on the local
+    /// [`ArcBatch`] newtype, so no differential-side `Arc` batch impls are required.
     pub type ArcOrdValSpine<K, V, T, R> = Spine<ArcBatch<OrdValBatch<Vector<((K, V), T, R)>>>>;
     /// Generic `Arc`-backed key-only spine. See [`ArcOrdValSpine`].
     pub type ArcOrdKeySpine<K, T, R> = Spine<ArcBatch<OrdKeyBatch<Vector<((K, ()), T, R)>>>>;
