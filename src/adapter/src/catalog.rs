@@ -53,6 +53,7 @@ use mz_license_keys::ValidatedLicenseKey;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_ore::result::ResultExt as _;
+use mz_ore::soft_assert_or_log;
 use mz_persist_client::PersistClient;
 use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
@@ -1077,6 +1078,30 @@ impl Catalog {
             return Err(Error::new(ErrorKind::SchemaNotEmpty(MZ_TEMP_SCHEMA.into())));
         }
         Ok(())
+    }
+
+    /// Registers the session `uuid` <-> `conn_id` mapping used to stamp and
+    /// apply durable temporary items owned by the session.
+    pub fn register_session_mapping(&mut self, uuid: Uuid, conn_id: ConnectionId) {
+        let prev = self
+            .state
+            .session_conns_by_uuid
+            .insert(uuid, conn_id.clone());
+        soft_assert_or_log!(prev.is_none(), "duplicate session mapping for {uuid}");
+        self.state.session_uuids_by_conn.insert(conn_id, uuid);
+    }
+
+    /// Removes the session mapping for `conn_id`.
+    ///
+    /// Callers must only do this after the transaction dropping the session's
+    /// temporary items has been applied, since applying an ephemeral item
+    /// update resolves the owning connection through this mapping.
+    pub fn unregister_session_mapping(&mut self, conn_id: &ConnectionId) {
+        let uuid = self.state.session_uuids_by_conn.remove(conn_id);
+        soft_assert_or_log!(uuid.is_some(), "no session mapping for {conn_id}");
+        if let Some(uuid) = uuid {
+            self.state.session_conns_by_uuid.remove(&uuid);
+        }
     }
 
     pub(crate) fn object_dependents(

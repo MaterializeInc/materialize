@@ -435,7 +435,15 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
 
                 "connection"
             }
-            CreateView(_) => "view",
+            CreateView(stmt) => {
+                let mut definition = stmt.definition.query.to_ast_string_stable();
+                // PostgreSQL appends a semicolon in `pg_views.definition`, we
+                // do the same for compatibility's sake.
+                definition.push(';');
+                info.insert("definition", json!(definition));
+
+                "view"
+            }
             CreateMaterializedView(stmt) => {
                 let Some(in_cluster) = stmt.in_cluster else {
                     return Err("missing IN CLUSTER".into());
@@ -452,7 +460,13 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
 
                 "materialized-view"
             }
-            CreateTable(_) | CreateTableFromSource(_) => "table",
+            CreateTable(_) => "table",
+            CreateTableFromSource(stmt) => {
+                let source_id = get_item_id(stmt.source)?;
+                info.insert("source_id", json!(source_id));
+
+                "table"
+            }
             CreateSource(stmt) => {
                 let Some(in_cluster) = stmt.in_cluster else {
                     return Err("missing IN CLUSTER".into());

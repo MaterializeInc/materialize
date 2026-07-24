@@ -67,6 +67,7 @@ use tracing::{Instrument, debug_span, info, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
+use crate::catalog::{DropObjectInfo, Op};
 use crate::command::{
     CatalogSnapshot, Command, ExecuteResponse, Response, SASLChallengeResponse,
     SASLVerifyProofResponse, StartupResponse, SuperuserAttribute,
@@ -846,6 +847,11 @@ impl Coordinator {
                     authenticated_role: role_id,
                     deferred_lock: None,
                 };
+                // Register the session's uuid <-> connection mapping before
+                // responding, so durable temporary items created by the
+                // session can always resolve their owner.
+                self.catalog_mut()
+                    .register_session_mapping(uuid, conn_id.clone());
                 let update = self.catalog().state().pack_session_update(&conn, Diff::ONE);
                 let update = self.catalog().state().resolve_builtin_table_update(update);
                 self.begin_session_for_statement_logging(&conn);
@@ -1983,7 +1989,29 @@ impl Coordinator {
         // waits for its own retraction before it observes retirement.
         drop(retire_notify);
 
-        self.drop_temp_items(&conn_id).await;
+        // Drop all temporary items owned by the session, dependents included,
+        // in one catalog transaction. This must commit before the mz_sessions
+        // retraction below is queued, so a crash in between leaves a session
+        // row without items rather than orphaned temporary items. Cleanup
+        // that fails to commit (e.g. because this process is being fenced
+        // out) is reclaimed the next time a catalog is opened with write
+        // intent.
+        let temp_items: Vec<_> = self.catalog().state().get_temp_items(&conn_id).collect();
+        if !temp_items.is_empty() {
+            let all_items = self.catalog().object_dependents(&temp_items, &conn_id);
+            let op = Op::DropObjects(
+                all_items
+                    .into_iter()
+                    .map(DropObjectInfo::manual_drop_from_object_id)
+                    .collect(),
+            );
+            if let Err(err) = self
+                .catalog_transact_with_context(Some(&conn_id), None, vec![op])
+                .await
+            {
+                warn!(%conn_id, "failed to drop temporary items: {err:?}");
+            }
+        }
         // Only call catalog_mut() if a temporary schema actually exists for this connection.
         // This avoids an expensive Arc::make_mut clone for the common case where the connection
         // never created any temporary objects.
@@ -1992,6 +2020,9 @@ impl Coordinator {
                 .drop_temporary_schema(&conn_id)
                 .unwrap_or_terminate("unable to drop temporary schema");
         }
+        // The transaction dropping the session's temporary items has been
+        // applied, so the mapping is safe to remove.
+        self.catalog_mut().unregister_session_mapping(&conn_id);
         let conn = self.active_conns.remove(&conn_id).expect("conn must exist");
         let session_type = metrics::session_type_label_value(conn.user());
         self.metrics
@@ -2011,7 +2042,6 @@ impl Coordinator {
             .state()
             .pack_session_update(&conn, Diff::MINUS_ONE);
         let update = self.catalog().state().resolve_builtin_table_update(update);
-
         let _builtin_update_notify = self.builtin_table_update().defer(vec![update]);
     }
 

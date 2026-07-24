@@ -93,6 +93,7 @@ use serde::Serialize;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
+use uuid::Uuid;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::AdapterError;
@@ -169,9 +170,33 @@ pub struct CatalogState {
     #[serde(skip)]
     pub(super) temporary_schemas: imbl::OrdMap<ConnectionId, Schema>,
 
+    // Maps the owning session of temporary objects to the connection whose
+    // temporary schema holds them, and back. Registered by the coordinator
+    // when a session connects and unregistered when it terminates, strictly
+    // after the transaction dropping the session's temporary items has been
+    // applied. Sessions are not durable, so this covers exactly the sessions
+    // served by this process. Ephemeral item updates whose owner is absent
+    // from these maps (e.g. items of another envd's sessions observed while
+    // following the catalog read-only during a zero-downtime deployment) are
+    // skipped when applying.
+    //
+    // These maps are mutated outside of `Catalog::transact` and must stay
+    // invisible to session-visible catalog reads (name resolution, planning).
+    // Only the transact and apply paths for temporary items consult them.
+    // `#[serde(skip)]` for the same reason as `temporary_schemas`.
+    #[serde(skip)]
+    pub(super) session_conns_by_uuid: imbl::OrdMap<Uuid, ConnectionId>,
+    #[serde(skip)]
+    pub(super) session_uuids_by_conn: imbl::OrdMap<ConnectionId, Uuid>,
+
     // Read-only state not derived from the durable catalog.
     #[serde(skip)]
     pub(super) config: mz_sql::catalog::CatalogConfig,
+    /// The deploy generation of the envd incarnation that opened the catalog,
+    /// from the durable fence token. Stamped onto this process's rows in
+    /// `mz_sessions`.
+    #[serde(skip)]
+    pub(super) deploy_generation: u64,
     pub(super) cluster_replica_sizes: ClusterReplicaSizeMap,
     #[serde(skip)]
     pub(crate) availability_zones: Vec<String>,
@@ -305,6 +330,8 @@ impl CatalogState {
             ambient_schemas_by_name: Default::default(),
             ambient_schemas_by_id: Default::default(),
             temporary_schemas: Default::default(),
+            session_conns_by_uuid: Default::default(),
+            session_uuids_by_conn: Default::default(),
             clusters_by_id: Default::default(),
             clusters_by_name: Default::default(),
             network_policies_by_name: Default::default(),
@@ -325,6 +352,7 @@ impl CatalogState {
                 )),
                 helm_chart_version: None,
             },
+            deploy_generation: Default::default(),
             cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
             availability_zones: Default::default(),
             system_configuration: Arc::new(SystemVars::default()),
@@ -839,6 +867,37 @@ impl CatalogState {
     /// any temporary objects.
     pub fn has_temporary_schema(&self, conn: &ConnectionId) -> bool {
         self.temporary_schemas.contains_key(conn)
+    }
+
+    /// Converts an in-memory catalog entry into its durable representation.
+    ///
+    /// The durable owner of a temporary entry is the session whose connection
+    /// currently holds it, resolved from the session mapping registered at
+    /// connect.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `entry` is temporary and its connection has no session
+    /// mapping, which means the entry outlived its session.
+    pub(super) fn durable_item(&self, entry: CatalogEntry) -> mz_catalog::durable::Item {
+        let ephemeral_owner_session = entry.conn_id().map(|conn_id| {
+            *self.session_uuids_by_conn.get(conn_id).unwrap_or_else(|| {
+                panic!("no session record for connection {conn_id} owning temporary item")
+            })
+        });
+        let (create_sql, global_id, extra_versions) = entry.item.into_serialized();
+        mz_catalog::durable::Item {
+            id: entry.id,
+            oid: entry.oid,
+            global_id,
+            schema_id: entry.name.qualifiers.schema_spec.into(),
+            name: entry.name.item,
+            create_sql,
+            owner_id: entry.owner_id,
+            privileges: entry.privileges.into_all_values().collect(),
+            extra_versions,
+            ephemeral_owner_session,
+        }
     }
 
     /// Gets a type named `name` from exactly one of the system schemas.
@@ -1758,13 +1817,6 @@ impl CatalogState {
             .into_first()
     }
 
-    pub(super) fn find_temp_schema(&self, schema_id: &SchemaId) -> &Schema {
-        self.temporary_schemas
-            .values()
-            .filter(|schema| schema.id() == &SchemaSpecifier::from(*schema_id))
-            .into_first()
-    }
-
     pub fn get_mz_catalog_schema_id(&self) -> SchemaId {
         self.ambient_schemas_by_name[MZ_CATALOG_SCHEMA]
     }
@@ -1848,6 +1900,7 @@ impl CatalogState {
                 },
                 id: SchemaSpecifier::Temporary,
                 oid,
+                ephemeral_owner_session: None,
                 items: BTreeMap::new(),
                 functions: BTreeMap::new(),
                 types: BTreeMap::new(),

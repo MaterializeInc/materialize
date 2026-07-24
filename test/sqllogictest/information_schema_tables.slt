@@ -250,7 +250,7 @@ MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_tables
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_timezone_abbreviations
@@ -266,7 +266,7 @@ BASE TABLE
 materialize
 mz_catalog
 mz_views
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_activity_log_thinned
@@ -294,6 +294,10 @@ VIEW
 materialize
 mz_internal
 mz_builtin_sources
+VIEW
+materialize
+mz_internal
+mz_builtin_tables
 VIEW
 materialize
 mz_internal

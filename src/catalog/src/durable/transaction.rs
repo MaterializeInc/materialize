@@ -40,6 +40,7 @@ use mz_sql_parser::ast::QualifiedReplica;
 use mz_storage_client::controller::StorageTxn;
 use mz_storage_types::controller::StorageError;
 use tracing::warn;
+use uuid::Uuid;
 
 use crate::builtin::BuiltinLog;
 use crate::durable::initialize::{
@@ -183,8 +184,14 @@ impl<'a> Transaction<'a> {
         // predicate answers both "do these two conflict?" and "did this update keep the same key?".
         let database_unique_fn: fn(&DatabaseValue, &DatabaseValue) -> bool =
             |a, b| a.name == b.name;
-        let schema_unique_fn: fn(&SchemaValue, &SchemaValue) -> bool =
-            |a, b| a.database_id == b.database_id && a.name == b.name;
+        // Temporary schemas from different sessions may share a name (every
+        // session's temporary schema is called "mz_temp"), so name uniqueness
+        // is additionally scoped by the owning session.
+        let schema_unique_fn: fn(&SchemaValue, &SchemaValue) -> bool = |a, b| {
+            a.database_id == b.database_id
+                && a.name == b.name
+                && a.ephemeral_owner_session == b.ephemeral_owner_session
+        };
         let role_key: fn(&RoleValue, &RoleValue) -> bool = |a, b| a.name == b.name;
         let cluster_unique_fn: fn(&ClusterValue, &ClusterValue) -> bool = |a, b| a.name == b.name;
         let network_policy_unique_fn: fn(&NetworkPolicyValue, &NetworkPolicyValue) -> bool =
@@ -204,21 +211,29 @@ impl<'a> Transaction<'a> {
                 schema_unique_fn,
                 schema_unique_fn,
             )?,
+            // Temporary items from different sessions may share a name in the
+            // temporary schema (whose durable schema id is a sentinel shared
+            // by every session), so name uniqueness is additionally scoped by
+            // the owning session.
             items: TableTransaction::new_with_uniqueness_fn(
                 items,
                 |a: &ItemValue, b| {
-                    a.schema_id == b.schema_id && a.name == b.name && {
-                        // `item_type` is slow, only compute if needed.
-                        let a_type = a.item_type();
-                        let b_type = b.item_type();
-                        (a_type != CatalogItemType::Type && b_type != CatalogItemType::Type)
-                            || (a_type == CatalogItemType::Type && b_type.conflicts_with_type())
-                            || (b_type == CatalogItemType::Type && a_type.conflicts_with_type())
-                    }
+                    a.schema_id == b.schema_id
+                        && a.name == b.name
+                        && a.ephemeral_owner_session == b.ephemeral_owner_session
+                        && {
+                            // `item_type` is slow, only compute if needed.
+                            let a_type = a.item_type();
+                            let b_type = b.item_type();
+                            (a_type != CatalogItemType::Type && b_type != CatalogItemType::Type)
+                                || (a_type == CatalogItemType::Type && b_type.conflicts_with_type())
+                                || (b_type == CatalogItemType::Type && a_type.conflicts_with_type())
+                        }
                 },
                 |prev: &ItemValue, next| {
                     prev.schema_id == next.schema_id
                         && prev.name == next.name
+                        && prev.ephemeral_owner_session == next.ephemeral_owner_session
                         // `item_type` is slow, only compute it once name and schema match.
                         && prev.item_type() == next.item_type()
                 },
@@ -346,6 +361,7 @@ impl<'a> Transaction<'a> {
             owner_id,
             privileges,
             oid,
+            None,
         )?;
         Ok((id, oid))
     }
@@ -359,7 +375,15 @@ impl<'a> Transaction<'a> {
         oid: u32,
     ) -> Result<(), CatalogError> {
         let id = SchemaId::System(schema_id);
-        self.insert_schema(id, None, schema_name.to_string(), owner_id, privileges, oid)
+        self.insert_schema(
+            id,
+            None,
+            schema_name.to_string(),
+            owner_id,
+            privileges,
+            oid,
+            None,
+        )
     }
 
     pub(crate) fn insert_schema(
@@ -370,6 +394,7 @@ impl<'a> Transaction<'a> {
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         oid: u32,
+        ephemeral_owner_session: Option<Uuid>,
     ) -> Result<(), CatalogError> {
         match self.schemas.insert(
             SchemaKey { id: schema_id },
@@ -379,6 +404,7 @@ impl<'a> Transaction<'a> {
                 owner_id,
                 privileges,
                 oid,
+                ephemeral_owner_session,
             },
             self.op_id,
         ) {
@@ -742,10 +768,20 @@ impl<'a> Transaction<'a> {
         privileges: Vec<MzAclItem>,
         temporary_oids: &HashSet<u32>,
         versions: BTreeMap<RelationVersion, GlobalId>,
+        ephemeral_owner_session: Option<Uuid>,
     ) -> Result<u32, CatalogError> {
         let oid = self.allocate_oid(temporary_oids)?;
         self.insert_item(
-            id, oid, global_id, schema_id, item_name, create_sql, owner_id, privileges, versions,
+            id,
+            oid,
+            global_id,
+            schema_id,
+            item_name,
+            create_sql,
+            owner_id,
+            privileges,
+            versions,
+            ephemeral_owner_session,
         )?;
         Ok(oid)
     }
@@ -761,6 +797,7 @@ impl<'a> Transaction<'a> {
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         extra_versions: BTreeMap<RelationVersion, GlobalId>,
+        ephemeral_owner_session: Option<Uuid>,
     ) -> Result<(), CatalogError> {
         match self.items.insert(
             ItemKey { id },
@@ -773,12 +810,28 @@ impl<'a> Transaction<'a> {
                 oid,
                 global_id,
                 extra_versions,
+                ephemeral_owner_session,
             },
             self.op_id,
         ) {
             Ok(_) => Ok(()),
             Err(_) => Err(SqlCatalogError::ItemAlreadyExists(id, item_name.to_owned()).into()),
         }
+    }
+
+    /// Removes every item owned by an ephemeral session from the transaction.
+    ///
+    /// Used to reclaim temporary items when the catalog is opened with write
+    /// intent, at which point every session that could own one is dead.
+    pub fn remove_ephemeral_items(&mut self) {
+        let keys: Vec<_> = self
+            .items
+            .items()
+            .into_iter()
+            .filter(|(_, value)| value.ephemeral_owner_session.is_some())
+            .map(|(key, _)| key.clone())
+            .collect();
+        self.items.delete_by_keys(keys, self.op_id);
     }
 
     pub fn get_and_increment_id(&mut self, key: String) -> Result<u64, CatalogError> {

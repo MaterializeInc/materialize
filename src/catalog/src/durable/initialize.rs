@@ -146,6 +146,7 @@ static MZ_CATALOG_SCHEMA: LazyLock<Schema> = LazyLock::new(|| Schema {
     name: "mz_catalog".to_string(),
     owner_id: MZ_SYSTEM_ROLE_ID,
     privileges: SYSTEM_SCHEMA_PRIVILEGES.clone(),
+    ephemeral_owner_session: None,
 });
 static PG_CATALOG_SCHEMA: LazyLock<Schema> = LazyLock::new(|| Schema {
     id: SchemaId::System(PG_CATALOG_SCHEMA_ID),
@@ -154,6 +155,7 @@ static PG_CATALOG_SCHEMA: LazyLock<Schema> = LazyLock::new(|| Schema {
     name: "pg_catalog".to_string(),
     owner_id: MZ_SYSTEM_ROLE_ID,
     privileges: SYSTEM_SCHEMA_PRIVILEGES.clone(),
+    ephemeral_owner_session: None,
 });
 static MZ_INTERNAL_SCHEMA: LazyLock<Schema> = LazyLock::new(|| Schema {
     id: SchemaId::System(MZ_INTERNAL_SCHEMA_ID),
@@ -162,6 +164,7 @@ static MZ_INTERNAL_SCHEMA: LazyLock<Schema> = LazyLock::new(|| Schema {
     name: "mz_internal".to_string(),
     owner_id: MZ_SYSTEM_ROLE_ID,
     privileges: SYSTEM_SCHEMA_PRIVILEGES.clone(),
+    ephemeral_owner_session: None,
 });
 static INFORMATION_SCHEMA: LazyLock<Schema> = LazyLock::new(|| Schema {
     id: SchemaId::System(INFORMATION_SCHEMA_ID),
@@ -170,6 +173,7 @@ static INFORMATION_SCHEMA: LazyLock<Schema> = LazyLock::new(|| Schema {
     name: "information_schema".to_string(),
     owner_id: MZ_SYSTEM_ROLE_ID,
     privileges: SYSTEM_SCHEMA_PRIVILEGES.clone(),
+    ephemeral_owner_session: None,
 });
 static MZ_UNSAFE_SCHEMA: LazyLock<Schema> = LazyLock::new(|| Schema {
     id: SchemaId::System(MZ_UNSAFE_SCHEMA_ID),
@@ -178,6 +182,7 @@ static MZ_UNSAFE_SCHEMA: LazyLock<Schema> = LazyLock::new(|| Schema {
     name: "mz_unsafe".to_string(),
     owner_id: MZ_SYSTEM_ROLE_ID,
     privileges: SYSTEM_SCHEMA_PRIVILEGES.clone(),
+    ephemeral_owner_session: None,
 });
 static MZ_CATALOG_UNSTABLE_SCHEMA: LazyLock<Schema> = LazyLock::new(|| Schema {
     id: SchemaId::System(MZ_CATALOG_UNSTABLE_SCHEMA_ID),
@@ -186,6 +191,7 @@ static MZ_CATALOG_UNSTABLE_SCHEMA: LazyLock<Schema> = LazyLock::new(|| Schema {
     name: "mz_catalog_unstable".to_string(),
     owner_id: MZ_SYSTEM_ROLE_ID,
     privileges: SYSTEM_SCHEMA_PRIVILEGES.clone(),
+    ephemeral_owner_session: None,
 });
 static MZ_INTROSPECTION_SCHEMA: LazyLock<Schema> = LazyLock::new(|| Schema {
     id: SchemaId::System(MZ_INTROSPECTION_SCHEMA_ID),
@@ -194,6 +200,7 @@ static MZ_INTROSPECTION_SCHEMA: LazyLock<Schema> = LazyLock::new(|| Schema {
     name: "mz_introspection".to_string(),
     owner_id: MZ_SYSTEM_ROLE_ID,
     privileges: SYSTEM_SCHEMA_PRIVILEGES.clone(),
+    ephemeral_owner_session: None,
 });
 static SYSTEM_SCHEMAS: LazyLock<BTreeMap<&str, &Schema>> = LazyLock::new(|| {
     [
@@ -513,6 +520,7 @@ pub(crate) async fn initialize(
             )),
         }))
         .collect(),
+        ephemeral_owner_session: None,
     };
 
     for schema in SYSTEM_SCHEMAS.values().chain(iter::once(&&public_schema)) {
@@ -523,6 +531,7 @@ pub(crate) async fn initialize(
             schema.owner_id,
             schema.privileges.clone(),
             schema.oid,
+            None,
         )?;
     }
     audit_events.push((

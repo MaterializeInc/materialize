@@ -3107,6 +3107,7 @@ pub static MZ_SESSIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
             "connected_at",
             SqlScalarType::TimestampTz { precision: None }.nullable(false),
         )
+        .with_column("deploy_generation", SqlScalarType::UInt64.nullable(false))
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "The globally unique ID of the session."),
@@ -3125,6 +3126,10 @@ pub static MZ_SESSIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
         (
             "connected_at",
             "The time at which the session connected to the system.",
+        ),
+        (
+            "deploy_generation",
+            "The deploy generation of the environment process that serves the session.",
         ),
     ]),
     is_retained_metrics_object: false,

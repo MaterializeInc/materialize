@@ -1323,6 +1323,18 @@ impl UnopenedPersistCatalogState {
                 txn.set_setting("migration_version".into(), old_version.map(Into::into))?;
             }
 
+            // Opening the catalog with write intent fences out every previous
+            // catalog owner, so all sessions served by previous owners are
+            // dead. Reclaim the temporary items they owned here, before
+            // anything else reads the catalog. A same-generation restart also
+            // invalidates all sessions, so this reclaims every ephemeral
+            // item, not just those of older deploy generations. Read-only
+            // catalogs follow a live writer whose sessions are alive, and
+            // must not locally diverge from the shard contents.
+            if mode != Mode::Readonly {
+                txn.remove_ephemeral_items();
+            }
+
             txn.set_catalog_content_version(catalog_content_version)?;
             txn
         } else {

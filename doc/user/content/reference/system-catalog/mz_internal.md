@@ -878,6 +878,7 @@ The `mz_sessions` table contains a row for each active session in the system.
 | `role_id`        | [`text`]                       | The role ID of the role that the session is logged in as. Corresponds to [`mz_catalog.mz_roles`](../mz_catalog#mz_roles). |
 | `client_ip`      | [`text`]                       | The IP address of the client that initiated the session.                                                                  |
 | `connected_at`   | [`timestamp with time zone`]   | The time at which the session connected to the system.                                                                    |
+| `deploy_generation` | [`uint8`]                   | The deploy generation of the environment process that serves the session.                                                 |
 
 
 ## `mz_overridden_system_parameters`
@@ -1500,6 +1501,7 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_activity_log_thinned -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_materialized_views -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_sources -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_tables -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_catalog_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_cluster_replica_size_internal -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_cluster_workload_classes -->

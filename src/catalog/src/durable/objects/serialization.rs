@@ -514,6 +514,7 @@ impl RustType<proto::SchemaValue> for SchemaValue {
             owner_id: self.owner_id.into_proto(),
             privileges: self.privileges.into_proto(),
             oid: self.oid,
+            ephemeral_owner_session: self.ephemeral_owner_session,
         }
     }
 
@@ -524,6 +525,7 @@ impl RustType<proto::SchemaValue> for SchemaValue {
             owner_id: proto.owner_id.into_rust()?,
             privileges: proto.privileges.into_rust()?,
             oid: proto.oid,
+            ephemeral_owner_session: proto.ephemeral_owner_session,
         })
     }
 }
@@ -563,6 +565,7 @@ impl RustType<proto::ItemValue> for ItemValue {
                     version: version.into_proto(),
                 })
                 .collect(),
+            ephemeral_owner_session: self.ephemeral_owner_session,
         }
     }
 
@@ -588,6 +591,7 @@ impl RustType<proto::ItemValue> for ItemValue {
             oid: proto.oid,
             global_id: proto.global_id.into_rust()?,
             extra_versions,
+            ephemeral_owner_session: proto.ephemeral_owner_session,
         })
     }
 }

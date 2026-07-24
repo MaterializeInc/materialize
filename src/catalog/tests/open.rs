@@ -323,6 +323,7 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
                     database_id: Some(db_id),
                     owner_id: RoleId::User(i),
                     privileges: Vec::new(),
+                    ephemeral_owner_session: None,
                 },
             ));
         }

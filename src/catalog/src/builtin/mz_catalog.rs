@@ -931,10 +931,11 @@ pub static MZ_INDEX_COLUMNS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTa
         column_semantic_types: &[("index_id", SemanticType::CatalogItemId)],
     }),
 });
-pub static MZ_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+pub static MZ_TABLES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
     name: "mz_tables",
     schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_TABLES_OID,
+    oid: oid::MV_MZ_TABLES_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
         .with_column("oid", SqlScalarType::Oid.nullable(false))
@@ -974,6 +975,68 @@ pub static MZ_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
             "The ID of the source associated with the table, if any. Corresponds to `mz_sources.id`.",
         ),
     ]),
+    // Temporary tables live in a per-session temporary schema that has no
+    // durable schema record. Their rows keep the temporary schema sentinel
+    // "0" that the previous builtin-table implementation exposed.
+    sql: Box::leak(format!("
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL oid,
+    ASSERT NOT NULL schema_id,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL owner_id,
+    ASSERT NOT NULL privileges
+) AS
+WITH
+    user_tables AS (
+        SELECT
+            mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+            (data->'value'->>'oid')::oid AS oid,
+            CASE WHEN data->'value'->>'ephemeral_owner_session' IS NULL
+                THEN mz_internal.parse_catalog_id(data->'value'->'schema_id')
+                ELSE '0'
+            END AS schema_id,
+            data->'value'->>'name' AS name,
+            mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
+            mz_internal.parse_catalog_privileges(data->'value'->'privileges') AS privileges,
+            data->'value'->'definition'->'V1'->>'create_sql' AS create_sql,
+            mz_internal.redact_sql(data->'value'->'definition'->'V1'->>'create_sql') AS redacted_create_sql,
+            mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'source_id' AS source_id
+        FROM mz_internal.mz_catalog_raw
+        WHERE
+            data->>'kind' = 'Item' AND
+            mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'type' = 'table'
+    ),
+    builtin_mappings AS (
+        SELECT
+            data->'key'->>'schema_name' AS schema_name,
+            data->'key'->>'object_name' AS name,
+            's' || (data->'value'->>'catalog_id') AS id
+        FROM mz_internal.mz_catalog_raw
+        WHERE
+            data->>'kind' = 'GidMapping' AND
+            data->'key'->>'object_type' = '1'
+    ),
+    builtin_tables AS (
+        SELECT
+            m.id,
+            t.oid,
+            s.id AS schema_id,
+            t.name,
+            '{MZ_SYSTEM_ROLE_ID}' AS owner_id,
+            t.privileges,
+            NULL::text AS create_sql,
+            NULL::text AS redacted_create_sql,
+            NULL::text AS source_id
+        FROM mz_internal.mz_builtin_tables t
+        JOIN builtin_mappings m USING (schema_name, name)
+        JOIN mz_schemas s ON s.name = t.schema_name
+        WHERE s.database_id IS NULL
+    )
+SELECT * FROM user_tables
+UNION ALL
+SELECT * FROM builtin_tables").into_boxed_str()),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
@@ -1014,6 +1077,7 @@ pub static MZ_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
             ]
         },
     }),
+}
 });
 
 pub static MZ_CONNECTIONS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
@@ -1267,10 +1331,11 @@ pub static MZ_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| {
         }),
     }
 });
-pub static MZ_VIEWS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+pub static MZ_VIEWS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
     name: "mz_views",
     schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_VIEWS_OID,
+    oid: oid::MV_MZ_VIEWS_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
         .with_column("oid", SqlScalarType::Oid.nullable(false))
@@ -1307,6 +1372,75 @@ pub static MZ_VIEWS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
             "The redacted `CREATE` SQL statement for the view.",
         ),
     ]),
+    // Temporary views live in a per-session temporary schema that has no
+    // durable schema record. Their rows keep the temporary schema sentinel
+    // "0" that the previous builtin-table implementation exposed.
+    //
+    // `mz_internal.mz_builtin_views` lists every builtin view except itself,
+    // since its definition cannot contain itself, so that one view is absent
+    // here.
+    sql: Box::leak(format!("
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL oid,
+    ASSERT NOT NULL schema_id,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL definition,
+    ASSERT NOT NULL owner_id,
+    ASSERT NOT NULL privileges,
+    ASSERT NOT NULL create_sql,
+    ASSERT NOT NULL redacted_create_sql
+) AS
+WITH
+    user_views AS (
+        SELECT
+            mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+            (data->'value'->>'oid')::oid AS oid,
+            CASE WHEN data->'value'->>'ephemeral_owner_session' IS NULL
+                THEN mz_internal.parse_catalog_id(data->'value'->'schema_id')
+                ELSE '0'
+            END AS schema_id,
+            data->'value'->>'name' AS name,
+            mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'definition' AS definition,
+            mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
+            mz_internal.parse_catalog_privileges(data->'value'->'privileges') AS privileges,
+            data->'value'->'definition'->'V1'->>'create_sql' AS create_sql,
+            mz_internal.redact_sql(data->'value'->'definition'->'V1'->>'create_sql') AS redacted_create_sql
+        FROM mz_internal.mz_catalog_raw
+        WHERE
+            data->>'kind' = 'Item' AND
+            mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'type' = 'view'
+    ),
+    builtin_mappings AS (
+        SELECT
+            data->'key'->>'schema_name' AS schema_name,
+            data->'key'->>'object_name' AS name,
+            's' || (data->'value'->>'catalog_id') AS id
+        FROM mz_internal.mz_catalog_raw
+        WHERE
+            data->>'kind' = 'GidMapping' AND
+            data->'key'->>'object_type' = '4'
+    ),
+    builtin_views AS (
+        SELECT
+            m.id,
+            v.oid,
+            s.id AS schema_id,
+            v.name,
+            v.definition,
+            '{MZ_SYSTEM_ROLE_ID}' AS owner_id,
+            v.privileges,
+            v.create_sql,
+            mz_internal.redact_sql(v.create_sql) AS redacted_create_sql
+        FROM mz_internal.mz_builtin_views v
+        JOIN builtin_mappings m USING (schema_name, name)
+        JOIN mz_schemas s ON s.name = v.schema_name
+        WHERE s.database_id IS NULL
+    )
+SELECT * FROM user_views
+UNION ALL
+SELECT * FROM builtin_views").into_boxed_str()),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
@@ -1338,6 +1472,7 @@ pub static MZ_VIEWS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
             ]
         },
     }),
+}
 });
 
 pub static MZ_MATERIALIZED_VIEWS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {

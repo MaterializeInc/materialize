@@ -468,6 +468,7 @@ connection_id  uint4  The␠connection␠ID␠of␠the␠session.␠Unique␠onl
 role_id  text  The␠role␠ID␠of␠the␠role␠that␠the␠session␠is␠logged␠in␠as.␠Corresponds␠to␠`mz_catalog.mz_roles`.
 client_ip  text  The␠IP␠address␠of␠the␠client␠that␠initiated␠the␠session.
 connected_at  timestamp␠with␠time␠zone  The␠time␠at␠which␠the␠session␠connected␠to␠the␠system.
+deploy_generation  uint8  The␠deploy␠generation␠of␠the␠environment␠process␠that␠serves␠the␠session.
 
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_overridden_system_parameters' ORDER BY position
@@ -780,6 +781,7 @@ mz_aws_privatelink_connection_status_history
 mz_aws_privatelink_connection_statuses
 mz_builtin_materialized_views
 mz_builtin_sources
+mz_builtin_tables
 mz_catalog_raw
 mz_cluster_auto_scaling_strategies
 mz_cluster_deployment_lineage

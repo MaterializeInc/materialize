@@ -121,17 +121,6 @@ impl Coordinator {
                         .or_insert_with(|| CatalogImplication::None);
                     entry.absorb(update);
                 }
-                ParsedStateUpdateKind::TemporaryItem {
-                    durable_item,
-                    parsed_item: _,
-                    connection: _,
-                    parsed_full_name: _,
-                } => {
-                    let entry = catalog_implications
-                        .entry(durable_item.id.clone())
-                        .or_insert_with(|| CatalogImplication::None);
-                    entry.absorb(update);
-                }
                 ParsedStateUpdateKind::Cluster {
                     durable_cluster,
                     parsed_cluster: _,
@@ -1790,45 +1779,6 @@ impl CatalogImplication {
     fn absorb(&mut self, catalog_update: ParsedStateUpdate) {
         match catalog_update.kind {
             ParsedStateUpdateKind::Item {
-                durable_item: _,
-                parsed_item,
-                connection,
-                parsed_full_name,
-            } => match parsed_item {
-                CatalogItem::Table(table) => {
-                    self.absorb_table(table, Some(parsed_full_name), catalog_update.diff)
-                }
-                CatalogItem::Source(source) => {
-                    self.absorb_source(
-                        (source, connection),
-                        Some(parsed_full_name),
-                        catalog_update.diff,
-                    );
-                }
-                CatalogItem::Sink(sink) => {
-                    self.absorb_sink(sink, Some(parsed_full_name), catalog_update.diff);
-                }
-                CatalogItem::Index(index) => {
-                    self.absorb_index(index, Some(parsed_full_name), catalog_update.diff);
-                }
-                CatalogItem::MaterializedView(mv) => {
-                    self.absorb_materialized_view(mv, Some(parsed_full_name), catalog_update.diff);
-                }
-                CatalogItem::View(view) => {
-                    self.absorb_view(view, Some(parsed_full_name), catalog_update.diff);
-                }
-
-                CatalogItem::Secret(secret) => {
-                    self.absorb_secret(secret, None, catalog_update.diff);
-                }
-                CatalogItem::Connection(connection) => {
-                    self.absorb_connection(connection, None, catalog_update.diff);
-                }
-                CatalogItem::Log(_) => {}
-                CatalogItem::Type(_) => {}
-                CatalogItem::Func(_) => {}
-            },
-            ParsedStateUpdateKind::TemporaryItem {
                 durable_item: _,
                 parsed_item,
                 connection,
