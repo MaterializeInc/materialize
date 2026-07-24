@@ -2280,7 +2280,6 @@ mod index_peek_tests {
     use crate::extensions::arrange::{KeyCollection, MzArrange};
     use crate::render::errors::DataflowErrorSer;
     use crate::shared_trace::PublishArrangement;
-    use crate::sharing::SharedIndexArrangement;
     use crate::typedefs::{ErrAgent, ErrBatcher, ErrBuilder, ErrSpine, RowRowAgent, RowRowSpine};
 
     fn row(x: i64) -> Row {
@@ -2405,8 +2404,6 @@ mod index_peek_tests {
                     RowRowBuilder<_, _>,
                     RowRowSpine<_, _>,
                 >("test oks");
-                let published_oks = PublishArrangement::publish(&oks);
-
                 let (mut errs_input, errs_collection) =
                     scope.new_collection::<DataflowErrorSer, Diff>();
                 let errs = KeyCollection::from(errs_collection).mz_arrange::<
@@ -2415,17 +2412,11 @@ mod index_peek_tests {
                     ErrBuilder<_, _>,
                     ErrSpine<_, _>,
                 >("test errs");
-                let published_errs = PublishArrangement::publish(&errs);
 
-                registry_in.insert(
-                    id,
-                    0,
-                    1,
-                    SharedIndexArrangement {
-                        oks: published_oks,
-                        errs: published_errs,
-                    },
-                );
+                let slot = registry_in.get_or_create_placeholder(id, 0, 1);
+                PublishArrangement::adopt(&oks, &slot.oks);
+                PublishArrangement::adopt(&errs, &slot.errs);
+                registry_in.notify(id, 0);
 
                 for (k, v) in rows {
                     oks_input.update((k, v), Diff::ONE);
@@ -2598,8 +2589,6 @@ mod index_peek_tests {
                         RowRowBuilder<_, _>,
                         RowRowSpine<_, _>,
                     >("test oks");
-                    let published_oks = PublishArrangement::publish(&oks);
-
                     let (errs_input, errs_collection) =
                         scope.new_collection::<DataflowErrorSer, Diff>();
                     let errs = KeyCollection::from(errs_collection).mz_arrange::<
@@ -2608,17 +2597,11 @@ mod index_peek_tests {
                         ErrBuilder<_, _>,
                         ErrSpine<_, _>,
                     >("test errs");
-                    let published_errs = PublishArrangement::publish(&errs);
 
-                    registry_in.insert(
-                        id,
-                        worker_index,
-                        peers,
-                        SharedIndexArrangement {
-                            oks: published_oks,
-                            errs: published_errs,
-                        },
-                    );
+                    let slot = registry_in.get_or_create_placeholder(id, worker_index, peers);
+                    PublishArrangement::adopt(&oks, &slot.oks);
+                    PublishArrangement::adopt(&errs, &slot.errs);
+                    registry_in.notify(id, worker_index);
                     (oks_input, errs_input)
                 });
 
@@ -2744,8 +2727,6 @@ mod index_peek_tests {
                 RowRowBuilder<_, _>,
                 RowRowSpine<_, _>,
             >("test oks");
-            let published_oks = PublishArrangement::publish(&oks);
-
             let (errs_input, errs_collection) = scope.new_collection::<DataflowErrorSer, Diff>();
             let errs = KeyCollection::from(errs_collection).mz_arrange::<
                 ColumnationChunker<_>,
@@ -2753,17 +2734,11 @@ mod index_peek_tests {
                 ErrBuilder<_, _>,
                 ErrSpine<_, _>,
             >("test errs");
-            let published_errs = PublishArrangement::publish(&errs);
 
-            registry_in.insert(
-                id,
-                scope.index(),
-                scope.peers(),
-                SharedIndexArrangement {
-                    oks: published_oks,
-                    errs: published_errs,
-                },
-            );
+            let slot = registry_in.get_or_create_placeholder(id, scope.index(), scope.peers());
+            PublishArrangement::adopt(&oks, &slot.oks);
+            PublishArrangement::adopt(&errs, &slot.errs);
+            registry_in.notify(id, scope.index());
             (oks_input, errs_input)
         });
 
@@ -2917,8 +2892,6 @@ mod index_peek_tests {
                         RowRowBuilder<_, _>,
                         RowRowSpine<_, _>,
                     >("test oks");
-                    let published_oks = PublishArrangement::publish(&oks);
-
                     let (errs_input, errs_collection) =
                         scope.new_collection::<DataflowErrorSer, Diff>();
                     let errs = KeyCollection::from(errs_collection).mz_arrange::<
@@ -2927,17 +2900,12 @@ mod index_peek_tests {
                         ErrBuilder<_, _>,
                         ErrSpine<_, _>,
                     >("test errs");
-                    let published_errs = PublishArrangement::publish(&errs);
 
-                    registry_in.insert(
-                        id,
-                        scope.index(),
-                        scope.peers(),
-                        SharedIndexArrangement {
-                            oks: published_oks,
-                            errs: published_errs,
-                        },
-                    );
+                    let slot =
+                        registry_in.get_or_create_placeholder(id, scope.index(), scope.peers());
+                    PublishArrangement::adopt(&oks, &slot.oks);
+                    PublishArrangement::adopt(&errs, &slot.errs);
+                    registry_in.notify(id, scope.index());
                     (oks_input, errs_input)
                 });
 
