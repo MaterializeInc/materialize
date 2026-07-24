@@ -424,7 +424,14 @@ async fn lock_and_prepare_snapshot(
         )
         .await?;
 
-    restore_default_wait_timeout(&mut *lock_conn).await?;
+    if let Some(timeout) = config
+        .config
+        .parameters
+        .mysql_source_timeouts
+        .snapshot_wait_timeout
+    {
+        set_wait_timeout(&mut *lock_conn, timeout).await?;
+    }
 
     let errored_outputs = verify_output_schemas(&mut *lock_conn, tables).await?;
     let errored: BTreeSet<usize> = errored_outputs.iter().map(|(idx, _)| *idx).collect();
@@ -772,7 +779,14 @@ pub(crate) fn render<'scope>(
                     Ok(()) => (),
                 };
 
-                restore_default_wait_timeout(&mut *conn).await?;
+                if let Some(timeout) = config
+                    .config
+                    .parameters
+                    .mysql_source_timeouts
+                    .snapshot_wait_timeout
+                {
+                    set_wait_timeout(&mut *conn, timeout).await?;
+                }
 
                 let mut lock_conn = if is_snapshot_leader {
                     match lock_and_prepare_snapshot(
@@ -1100,14 +1114,19 @@ fn publish_snapshot_size(
     }
 }
 
-/// Restores the server-default wait_timeout (28800) so a lowered global value
-/// cannot reap the connection while it sits idle during snapshot setup.
-async fn restore_default_wait_timeout<Q>(conn: &mut Q) -> Result<(), mysql_async::Error>
+/// Sets the session wait_timeout so a lowered global value cannot reap the
+/// connection while it sits idle during snapshot setup.
+async fn set_wait_timeout<Q>(conn: &mut Q, timeout: Duration) -> Result<(), mysql_async::Error>
 where
     Q: Queryable,
 {
+    // Interpolating a `Duration` integer; not parameterizable in MySQL `SET`.
     #[allow(clippy::disallowed_methods)]
-    conn.query_drop("SET @@session.wait_timeout = 28800").await
+    conn.query_drop(format!(
+        "SET @@session.wait_timeout = {}",
+        timeout.as_secs()
+    ))
+    .await
 }
 async fn lock_tables_and_read_gtid_set(
     lock_conn: &mut MySqlConn,

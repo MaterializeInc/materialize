@@ -15,8 +15,8 @@ use std::time::Duration;
 use aws_rds::RdsTokenError;
 pub use tunnel::{
     Config, DEFAULT_CONNECT_TIMEOUT, DEFAULT_SNAPSHOT_LOCK_WAIT_TIMEOUT,
-    DEFAULT_SNAPSHOT_MAX_EXECUTION_TIME, DEFAULT_TCP_KEEPALIVE, MySqlConn, TimeoutConfig,
-    TunnelConfig,
+    DEFAULT_SNAPSHOT_MAX_EXECUTION_TIME, DEFAULT_SNAPSHOT_WAIT_TIMEOUT, DEFAULT_TCP_KEEPALIVE,
+    MySqlConn, TimeoutConfig, TunnelConfig,
 };
 
 mod desc;
