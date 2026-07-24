@@ -183,12 +183,27 @@ def get_parallelism_count() -> int:
     return int(get_var(BuildkiteEnvVar.BUILDKITE_PARALLEL_JOB_COUNT, 1))
 
 
+# Accumulates across shard_list calls because a workflow can shard multiple
+# lists (e.g. sqllogictest shards each step's file list separately). Each
+# upload overwrites the key with the accumulated items so far.
+_shard_info_items: list[str] = []
+
+
 def _upload_shard_info_metadata(items: list[str]) -> None:
+    _shard_info_items.extend(items)
+    # The label is unique per parallel job (mkpipeline appends the shard
+    # number), so shards don't overwrite each other's entry.
     label = get_var(BuildkiteEnvVar.BUILDKITE_LABEL) or get_var(
         BuildkiteEnvVar.BUILDKITE_STEP_KEY
     )
     spawn.runv(
-        ["buildkite-agent", "meta-data", "set", f"Shard for {label}", ", ".join(items)]
+        [
+            "buildkite-agent",
+            "meta-data",
+            "set",
+            f"Shard for {label}",
+            ", ".join(_shard_info_items),
+        ]
     )
 
 
