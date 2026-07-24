@@ -200,6 +200,22 @@ replacement.
 1. In the `compute_cluster`, use [`CREATE REPLACEMENT MATERIALIZED
 VIEW`](/sql/create-materialized-view/) to create `mv_winning_bids_v2` with the
 updated materialized view defintion:
+   {{< note >}}
+   A replacement materialized view **must** have the same output schema as the
+   materialized view it replaces (same column names, column types, column order,
+   nullability, and keys). Schema changes are not supported, including
+   non-breaking changes such as adding a new column. Replacing a materialized
+   view with a different output schema fails with the error `replacement schema
+   differs from target schema`.
+   {{< /note >}}
+
+   The replacement materialized view:
+   - References the original view using `FOR auction_house.mv_winning_bids`.
+   - Specifies the same output schema as the original view (i.e., same column
+     names, column types, column order, nullability, and keys) in its `SELECT`
+     statement.
+   - Computes results independently while the original continues serving
+     queries.
 
    ```mzsql
    -- Create a replacement for the winning bids view
@@ -231,16 +247,7 @@ updated materialized view defintion:
    AND b.amount > 50;  -- New filter: only include winning bids above 50
    ```
 
-   The replacement materialized view:
-   - References the original view using `FOR auction_house.mv_winning_bids`.
-   - Specifies the same output schema as the original view (i.e., same column
-     names, column types, column order, nullability, and keys) in its `SELECT`
-     statement.
-   - Computes results independently while the original continues serving
-     queries.
-
    {{< note >}}
-
    {{% include-headless "/headless/replacement-views/querying-replacement-view" %}}
    {{< /note >}}
 1. Before applying the replacement materialized view, wait for it to fully hydrate. To query
