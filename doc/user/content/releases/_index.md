@@ -621,7 +621,7 @@ is the cause of lag, you can diagnose the root cause.
   when using `TEXT COLUMNS`.
 - Fixed `COPY FROM ... (FORMAT PARQUET)` producing range values that did not
   compare equal to logically-identical values constructed in SQL.
-- Fixed missing audit log entries for `ALTER TABLE ADD COLUMN` and
+- Fixed missing audit log entries for
   `ALTER SOURCE ... SET (TIMESTAMP INTERVAL)`.
 - Fixed the Console Data Explorer page intermittently failing to load due to
   a WebSocket connection race condition.
