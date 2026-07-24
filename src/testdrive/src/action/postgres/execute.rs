@@ -11,7 +11,7 @@ use anyhow::{Context, anyhow, bail};
 use mz_ore::task;
 use tokio_postgres::Client;
 
-use crate::action::{ControlFlow, State};
+use crate::action::{BackgroundTask, ControlFlow, State};
 use crate::parser::BuiltinCommand;
 use crate::util::postgres::postgres_client;
 
@@ -31,7 +31,7 @@ async fn execute_input(cmd: BuiltinCommand, client: &Client) -> Result<(), anyho
 
 pub async fn run_execute(
     mut cmd: BuiltinCommand,
-    state: &State,
+    state: &mut State,
 ) -> Result<ControlFlow, anyhow::Error> {
     let connection = cmd.args.string("connection")?;
     let background = cmd.args.opt_bool("background")?.unwrap_or(false);
@@ -40,11 +40,21 @@ pub async fn run_execute(
     match (connection.starts_with("postgres://"), background) {
         (true, true) => {
             let (client_inner, _) = postgres_client(&connection, state.default_timeout).await?;
-            task::spawn(|| "postgres-execute", async move {
-                match execute_input(cmd, &client_inner).await {
-                    Ok(_) => {}
-                    Err(e) => println!("Error in backgrounded postgres-execute query: {e}"),
-                }
+            let desc = cmd.input.first().cloned().unwrap_or_default();
+            // Capture a cancel token before moving the client into the task, so
+            // the query can be stopped on the server if the task overruns its
+            // deadline and must be aborted.
+            let cancel_token = client_inner.cancel_token();
+            let handle = task::spawn(|| "postgres-execute", async move {
+                execute_input(cmd, &client_inner).await
+            });
+            // The task is joined at the end of the file so that failures fail
+            // the test, as documented.
+            state.background_tasks.push(BackgroundTask {
+                desc,
+                handle,
+                cancel_token,
+                url: connection,
             });
         }
         (false, true) => bail!("cannot use 'background' arg with referenced connection"),

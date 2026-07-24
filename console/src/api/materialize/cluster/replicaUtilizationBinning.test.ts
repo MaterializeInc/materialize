@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import {
+  attachOfflineEvents,
   Bucket,
   bucketRowsToBucketsByReplicaId,
   maxByMetric,
@@ -175,6 +176,55 @@ describe("rebucketUtilizationSamples", () => {
     expect(rows[0].bucketStart.getTime()).toBeLessThan(
       rows[1].bucketStart.getTime(),
     );
+  });
+});
+
+describe("attachOfflineEvents", () => {
+  const mkEvent = (overrides: Partial<OfflineEvent> = {}): OfflineEvent => ({
+    replicaId: "u1",
+    occurredAt: new Date(30_000).toISOString(),
+    status: "offline",
+    reason: "oom-killed",
+    ...overrides,
+  });
+
+  it("attaches events to the matching (replica, bucket) row", () => {
+    const rows = [
+      mkBucketRow(),
+      mkBucketRow({
+        bucketStart: new Date(MINUTE),
+        bucketEnd: new Date(2 * MINUTE),
+      }),
+    ];
+    const result = attachOfflineEvents(rows, [mkEvent()], MINUTE);
+    expect(result[0].offlineEvents).toEqual([mkEvent()]);
+    expect(result[1].offlineEvents).toBeNull();
+  });
+
+  it("drops events with no matching bucket", () => {
+    const rows = [mkBucketRow()];
+    const result = attachOfflineEvents(
+      rows,
+      [
+        mkEvent({ occurredAt: new Date(5 * MINUTE).toISOString() }),
+        mkEvent({ replicaId: "u2" }),
+      ],
+      MINUTE,
+    );
+    expect(result[0].offlineEvents).toBeNull();
+  });
+
+  it("aggregates multiple events in the same bucket", () => {
+    const rows = [mkBucketRow()];
+    const result = attachOfflineEvents(
+      rows,
+      [
+        mkEvent({ occurredAt: new Date(10_000).toISOString() }),
+        mkEvent({ occurredAt: new Date(50_000).toISOString(), reason: null }),
+      ],
+      MINUTE,
+    );
+    expect(result[0].offlineEvents).toHaveLength(2);
   });
 });
 

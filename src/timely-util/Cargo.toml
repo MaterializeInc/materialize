@@ -40,7 +40,7 @@ either.workspace = true
 futures-util.workspace = true
 lgalloc.workspace = true
 lz4_flex.workspace = true
-mz-ore = { path = "../ore", default-features = false, features = ["async", "process", "tracing", "test", "num-traits", "region", "differential-dataflow", "overflowing", "pager"] }
+mz-ore = { path = "../ore", default-features = false, features = ["async", "process", "tracing", "test", "num-traits", "region", "differential-dataflow", "overflowing", "pager", "pool"] }
 num-traits.workspace = true
 serde.workspace = true
 timely.workspace = true

@@ -15,6 +15,7 @@ import { buildSubscribeQuery } from "~/api/materialize/buildSubscribeQuery";
 
 import { fetchClusterDeploymentLineage } from "./clusterDeploymentLineage";
 import {
+  attachOfflineEvents,
   bucketRowsToBucketsByReplicaId,
   rebucketUtilizationSamples,
   UtilizationBucketRow,
@@ -627,6 +628,95 @@ export function buildConsoleClusterUtilizationOverview24hSubscribe<T>(
   );
 }
 
+/**
+ * Offline events for a cluster's replicas since `startDate`, one row per
+ * event. The un-binned 3h view carries no status columns, so the <=3h tier
+ * fetches events with this query and merges them client-side
+ * (`attachOfflineEvents`).
+ */
+export function buildReplicaOfflineEventsQuery({
+  clusterIds,
+  startDate,
+  resolveLineage = false,
+}: {
+  clusterIds?: string[];
+  startDate: string;
+  // When true, expand clusterIds to past blue-green deployments in SQL, like
+  // the utilization builders. The poll path passes pre-expanded ids instead.
+  resolveLineage?: boolean;
+}) {
+  let query = queryBuilder
+    .with("charted_replicas", (qb) => {
+      const history = qb
+        .selectFrom("mz_cluster_replica_history")
+        .select(["replica_id", "cluster_id"]);
+      // Union the current replicas since mz_cluster_replica_history doesn't
+      // include system clusters.
+      const current = qb
+        .selectFrom("mz_cluster_replicas")
+        .select(["id as replica_id", "cluster_id"]);
+      return history.union(current);
+    })
+    .selectFrom("mz_cluster_replica_status_history as rsh")
+    .innerJoin("charted_replicas as r", "r.replica_id", "rsh.replica_id")
+    .select([
+      "rsh.replica_id as replicaId",
+      // Via timestamptz so the text carries an explicit offset. A naive
+      // timestamp string would parse as local time in the browser.
+      sql<string>`rsh.occurred_at::timestamptz::text`.as("occurredAt"),
+      "rsh.status",
+      "rsh.reason",
+    ])
+    // Processes should share the same state, so take the first process's.
+    .where("rsh.process_id", "=", "0")
+    .where("rsh.status", "=", "offline")
+    .where(
+      "rsh.occurred_at",
+      ">=",
+      sql<Date>`${sql.lit(startDate)}::timestamptz`,
+    );
+
+  if (clusterIds !== undefined && clusterIds.length > 0) {
+    if (resolveLineage) {
+      query = query.where((eb) =>
+        eb.or([
+          eb(
+            "r.cluster_id",
+            "in",
+            eb
+              .selectFrom("mz_cluster_deployment_lineage")
+              .select("cluster_id")
+              .where("current_deployment_cluster_id", "in", clusterIds),
+          ),
+          eb("r.cluster_id", "in", clusterIds),
+        ]),
+      );
+    } else {
+      query = query.where("r.cluster_id", "in", clusterIds);
+    }
+  }
+
+  return query;
+}
+
+export async function fetchReplicaOfflineEvents({
+  params,
+  queryKey,
+  requestOptions,
+}: {
+  params: Parameters<typeof buildReplicaOfflineEventsQuery>[0];
+  queryKey: QueryKey;
+  requestOptions?: RequestInit;
+}) {
+  const res = await executeSqlV2({
+    queries: buildReplicaOfflineEventsQuery(params).compile(),
+    queryKey,
+    requestOptions,
+    sessionVariables: { transaction_isolation: "serializable" },
+  });
+  return res.rows;
+}
+
 export async function fetchReplicaUtilizationHistory({
   params,
   queryKey,
@@ -668,19 +758,34 @@ export async function fetchReplicaUtilizationHistory({
 
   if (params.utilizationView === "unbinned3h") {
     // Un-binned 3h base: cheap indexed point-lookup, then bin client-side.
-    const unbinnedRes = await executeSqlV2({
-      queries: buildConsoleClusterUtilizationUnbinned3hQuery({
-        clusterIds: clusterIdsFilter,
-        replicaId: params.replicaId,
-      }).compile(),
-      queryKey,
-      requestOptions,
-      sessionVariables: { transaction_isolation: "serializable" },
-    });
-    rows = rebucketUtilizationSamples(
-      unbinnedRes.rows,
+    // Offline events aren't in the un-binned view, so fetch them alongside.
+    const [unbinnedRes, offlineEvents] = await Promise.all([
+      executeSqlV2({
+        queries: buildConsoleClusterUtilizationUnbinned3hQuery({
+          clusterIds: clusterIdsFilter,
+          replicaId: params.replicaId,
+        }).compile(),
+        queryKey,
+        requestOptions,
+        sessionVariables: { transaction_isolation: "serializable" },
+      }),
+      fetchReplicaOfflineEvents({
+        params: {
+          clusterIds: clusterIdsFilter,
+          startDate: params.startDate,
+        },
+        queryKey: [...queryKey, "offlineEvents"],
+        requestOptions,
+      }),
+    ]);
+    rows = attachOfflineEvents(
+      rebucketUtilizationSamples(
+        unbinnedRes.rows,
+        params.bucketSizeMs,
+        new Date(params.startDate).getTime(),
+      ),
+      offlineEvents,
       params.bucketSizeMs,
-      new Date(params.startDate).getTime(),
     );
   } else {
     let utilizationQuery;

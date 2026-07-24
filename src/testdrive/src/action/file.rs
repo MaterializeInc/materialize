@@ -13,7 +13,7 @@ use std::str::FromStr;
 use anyhow::bail;
 use async_compression::tokio::write::{BzEncoder, GzipEncoder, XzEncoder, ZstdEncoder};
 use tokio::fs::{self, OpenOptions};
-use tokio::io::{AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncWrite, AsyncWriteExt, BufWriter};
 
 use crate::action::{ControlFlow, State};
 use crate::format::bytes;
@@ -49,27 +49,70 @@ pub(crate) fn build_compression(cmd: &mut BuiltinCommand) -> Result<Compression,
     }
 }
 
-/// Returns an iterator of lines that form the content of a file.
-pub(crate) fn build_contents(
-    cmd: &mut BuiltinCommand,
-) -> Result<Box<dyn Iterator<Item = Vec<u8>> + Send + Sync + 'static>, anyhow::Error> {
-    let header = cmd.args.opt_string("header");
-    let trailing_newline = cmd.args.opt_bool("trailing-newline")?.unwrap_or(true);
-    let repeat = cmd.args.opt_parse("repeat")?.unwrap_or(1);
+/// The parsed contents of a file to be written: an optional header line
+/// followed by the input lines repeated `repeat` times. Every line is
+/// terminated by a newline, except that with `trailing_newline == false` the
+/// final newline is omitted.
+///
+/// Lines are streamed on write (see [`Contents::write_to`]) rather than
+/// materialized, so a large `repeat` generates a large file without holding
+/// the whole file in memory.
+pub(crate) struct Contents {
+    header: Option<String>,
+    /// Input lines with their escape sequences already resolved.
+    lines: Vec<Vec<u8>>,
+    repeat: usize,
+    trailing_newline: bool,
+}
 
-    // Collect our contents into a buffer.
-    let mut contents = vec![];
-    for line in &cmd.input {
-        contents.push(bytes::unescape(line.as_bytes())?);
+impl Contents {
+    pub(crate) fn parse(cmd: &mut BuiltinCommand) -> Result<Contents, anyhow::Error> {
+        let header = cmd.args.opt_string("header");
+        let trailing_newline = cmd.args.opt_bool("trailing-newline")?.unwrap_or(true);
+        let repeat: usize = cmd.args.opt_parse("repeat")?.unwrap_or(1);
+
+        let mut lines = vec![];
+        for line in &cmd.input {
+            lines.push(bytes::unescape(line.as_bytes())?);
+        }
+
+        Ok(Contents {
+            header,
+            lines,
+            repeat,
+            trailing_newline,
+        })
     }
-    if !trailing_newline {
-        contents.pop();
+
+    /// The output lines in order: the header, if any, then the input lines
+    /// repeated `repeat` times. Newlines are not included.
+    fn output_lines(&self) -> impl Iterator<Item = &[u8]> {
+        let header = self.header.as_deref().map(str::as_bytes).into_iter();
+        let body = (0..self.repeat).flat_map(move |_| self.lines.iter().map(Vec::as_slice));
+        header.chain(body)
     }
 
-    let header_line = header.into_iter().map(|val| val.as_bytes().to_vec());
-    let content_lines = std::iter::repeat_n(contents, repeat).flatten();
-
-    Ok(Box::new(header_line.chain(content_lines)))
+    /// Streams the contents to `writer`, terminating each line with a newline
+    /// and suppressing the final newline when `trailing_newline` is false.
+    pub(crate) async fn write_to<W>(&self, writer: &mut W) -> Result<(), anyhow::Error>
+    where
+        W: AsyncWrite + Unpin,
+    {
+        let mut wrote_line = false;
+        for line in self.output_lines() {
+            // Emit the newline that terminates the previous line only once we
+            // know another line follows, so the final newline can be dropped.
+            if wrote_line {
+                writer.write_all(b"\n").await?;
+            }
+            writer.write_all(line).await?;
+            wrote_line = true;
+        }
+        if wrote_line && self.trailing_newline {
+            writer.write_all(b"\n").await?;
+        }
+        Ok(())
+    }
 }
 
 fn build_path(state: &State, cmd: &mut BuiltinCommand) -> Result<PathBuf, anyhow::Error> {
@@ -94,7 +137,7 @@ pub async fn run_append(
 ) -> Result<ControlFlow, anyhow::Error> {
     let path = build_path(state, &mut cmd)?;
     let compression = build_compression(&mut cmd)?;
-    let contents = build_contents(&mut cmd)?;
+    let contents = Contents::parse(&mut cmd)?;
     cmd.args.done()?;
 
     println!("Appending to file {}", path.display());
@@ -109,13 +152,14 @@ pub async fn run_append(
         Compression::Bzip2 => Box::new(BzEncoder::new(file)),
         Compression::Xz => Box::new(XzEncoder::new(file)),
         Compression::Zstd => Box::new(ZstdEncoder::new(file)),
-        Compression::None => Box::new(file),
+        // The compression encoders buffer their writes, but a bare
+        // `tokio::fs::File` turns every per-line `write_all` into a separate
+        // blocking filesystem job. Buffer it so a large `repeat` issues writes
+        // in bounded chunks rather than two jobs per line.
+        Compression::None => Box::new(BufWriter::new(file)),
     };
 
-    for line in contents {
-        file.write_all(&line).await?;
-        file.write_all("\n".as_bytes()).await?;
-    }
+    contents.write_to(&mut file).await?;
     file.shutdown().await?;
 
     Ok(ControlFlow::Continue)

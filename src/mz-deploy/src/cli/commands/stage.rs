@@ -33,7 +33,22 @@ use crate::project::ir::object_id::ObjectId;
 use crate::project::resolve::normalize::{self, NormalizingVisitor};
 use crate::verbose;
 use mz_ore::option::OptionExt;
+use mz_sql_parser::ast::Ident;
 use std::collections::BTreeSet;
+
+/// Reject a stage name long enough that appending the staging suffix
+/// `_<stage_name>` to a schema or cluster identifier would exceed the
+/// identifier length limit and panic during deploy.
+fn validate_stage_name(stage_name: &str) -> Result<(), CliError> {
+    // The suffix is appended to existing identifiers, so reserve headroom for
+    // the base name rather than letting the suffix consume the whole limit.
+    if stage_name.len() + 1 > Ident::MAX_LENGTH / 2 {
+        return Err(CliError::InvalidEnvironmentName {
+            name: stage_name.to_string(),
+        });
+    }
+    Ok(())
+}
 use std::fmt;
 use std::path::Path;
 use std::time::Instant;
@@ -204,6 +219,7 @@ pub async fn run(
         .owned()
         .or_else(|| git::get_git_commit(directory).map(|sha| sha.chars().take(7).collect()))
         .unwrap_or_else(executor::generate_random_env_name);
+    validate_stage_name(&stage_name)?;
 
     let planned_project = super::compile::run(settings, true).await?;
     let staging_suffix = format!("_{}", stage_name);
@@ -241,7 +257,13 @@ pub async fn run(
     .await?;
 
     if !dry_run {
-        record_stage_metadata(
+        // Metadata is written before any resources are created, so a failure
+        // partway through can leave deployment rows behind that block
+        // re-staging under the same name. Roll them back on failure, unless
+        // --no-rollback asks to preserve state for debugging. The rollback runs
+        // a suffix-matching CASCADE drop, so honoring the flag here also avoids
+        // dropping resources the operator asked to keep.
+        if let Err(e) = record_stage_metadata(
             &client,
             directory,
             &stage_name,
@@ -251,7 +273,16 @@ pub async fn run(
             &analysis.replacement_mvs,
             &planned_project.replacement_schemas,
         )
-        .await?;
+        .await
+        {
+            if no_rollback {
+                progress::error("Deployment failed (skipping rollback due to --no-rollback flag)");
+            } else {
+                progress::error("Deployment failed, rolling back...");
+                rollback_staging_resources(&client, &stage_name).await;
+            }
+            return Err(e);
+        }
     }
 
     if dry_run {
@@ -2138,5 +2169,12 @@ mod tests {
             staging_snapshot.schemas.is_empty(),
             "Override should not create entries for schemas with no objects"
         );
+    }
+
+    #[mz_ore::test]
+    fn test_validate_stage_name_length() {
+        assert!(validate_stage_name("prod").is_ok());
+        assert!(validate_stage_name(&"a".repeat(Ident::MAX_LENGTH / 2 - 1)).is_ok());
+        assert!(validate_stage_name(&"a".repeat(Ident::MAX_LENGTH)).is_err());
     }
 }

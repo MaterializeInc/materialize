@@ -49,6 +49,7 @@ prometheus = { workspace = true, optional = true }
 proptest = { workspace = true, optional = true }
 proptest-derive = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
+scopeguard = { workspace = true, optional = true }
 smallvec = { workspace = true, optional = true }
 stacker = { workspace = true, optional = true }
 sentry = { workspace = true, optional = true }
@@ -145,7 +146,7 @@ tokio-console = ["console-subscriber", "tokio", "tokio/tracing", "network"]
 cli = ["clap"]
 stack = ["stacker"]
 test = ["anyhow", "ctor", "tracing-subscriber", "assert"]
-metrics = ["prometheus", "assert"]
+metrics = ["prometheus", "scopeguard", "assert"]
 id_gen = ["hibitset", "rand", "uuid"]
 capture = ["tracing-capture"]
 assert-no-tracing = ["ctor"]

@@ -22,7 +22,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::{MetricsRegistry, UIntGauge};
 use pprof_util::ProfStartTime;
-use tikv_jemalloc_ctl::{epoch, stats};
+use tikv_jemalloc_ctl::{epoch, raw, stats};
 
 #[allow(non_upper_case_globals)]
 #[unsafe(export_name = "malloc_conf")]
@@ -45,6 +45,26 @@ pub struct JemallocStats {
 pub trait JemallocProfCtlExt {
     fn dump_stats(&mut self, json_format: bool) -> anyhow::Result<String>;
     fn stats(&self) -> anyhow::Result<JemallocStats>;
+
+    /// Pauses allocation sampling by clearing jemalloc's `prof.active` mallctl.
+    ///
+    /// Unlike [`JemallocProfCtl::deactivate`], this leaves `prof.reset`
+    /// untouched, so the profile accumulated so far and the profiling metadata
+    /// (start time, sample rate) survive. Pair with [`resume`](Self::resume) to
+    /// keep extending the same profile. Use this to briefly stop sampling, for
+    /// example while capturing a CPU profile, without discarding the heap
+    /// profile collected so far. A caller that intends to start a fresh profile
+    /// wants [`JemallocProfCtl::deactivate`] instead.
+    ///
+    /// Takes `&self` deliberately: pausing does not touch the tracked metadata,
+    /// only the global mallctl.
+    fn pause(&self) -> anyhow::Result<()>;
+
+    /// Resumes allocation sampling by setting jemalloc's `prof.active` mallctl.
+    ///
+    /// The counterpart to [`pause`](Self::pause). Sampling continues into the
+    /// profile that `pause` preserved.
+    fn resume(&self) -> anyhow::Result<()>;
 }
 
 impl JemallocProfCtlExt for JemallocProfCtl {
@@ -59,6 +79,20 @@ impl JemallocProfCtlExt for JemallocProfCtl {
 
     fn stats(&self) -> anyhow::Result<JemallocStats> {
         JemallocStats::get()
+    }
+
+    fn pause(&self) -> anyhow::Result<()> {
+        // SAFETY: "prof.active" is documented as writable and taking a bool:
+        // http://jemalloc.net/jemalloc.3.html#prof.active
+        unsafe { raw::write(b"prof.active\0", false) }?;
+        Ok(())
+    }
+
+    fn resume(&self) -> anyhow::Result<()> {
+        // SAFETY: "prof.active" is documented as writable and taking a bool:
+        // http://jemalloc.net/jemalloc.3.html#prof.active
+        unsafe { raw::write(b"prof.active\0", true) }?;
+        Ok(())
     }
 }
 

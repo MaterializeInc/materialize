@@ -206,6 +206,15 @@ pub const MYSQL_REPLICATION_HEARTBEAT_INTERVAL: Config<Duration> = Config::new(
     "Replication heartbeat interval requested from the MySQL server.",
 );
 
+/// Whether to split snapshot reads of tables with a supported single-column
+/// primary key into per-worker PK ranges. When disabled, each table is read
+/// whole by a single worker.
+pub static MYSQL_SOURCE_SNAPSHOT_PARALLELISM: Config<bool> = Config::new(
+    "mysql_source_snapshot_parallelism",
+    true,
+    "Whether to split MySQL snapshot reads across workers by primary-key ranges.",
+);
+
 // Postgres
 
 /// Interval to poll `confirmed_flush_lsn` to get a resumption lsn.
@@ -310,18 +319,20 @@ pub const STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING: Config<Option<usize>> = C
     "Limit snapshot buffering in upsert.",
 );
 
-/// Allow the upsert-v2 source stash's paged columnar merge batcher to spill
-/// cold chains out of RSS via the column pager. The stash draws from the same
-/// shared budget pool (and backend / codec) as the compute column-paged
-/// batcher — there is one budget — but this flag gates the stash's
-/// participation independently of the compute-side
-/// `enable_column_paged_batcher_spill`.
+/// Allow the upsert-v2 source stash's chunk batcher to spill cold chains out
+/// of RSS via the process buffer pool. The stash draws from the same shared
+/// pool budget as the compute chunk batchers — there is one budget — but
+/// this flag gates the stash's participation independently of the
+/// compute-side `enable_column_paged_batcher_spill`.
 ///
 /// Off by default; the stash keeps every chunk resident until enabled.
+/// Enabling it also installs the process buffer pool (via compute's config
+/// handler, which reads this flag from the aggregate dyncfg set), so
+/// storage-only spilling needs no compute-side gate.
 pub const ENABLE_UPSERT_PAGED_SPILL: Config<bool> = Config::new(
     "enable_upsert_paged_spill",
     false,
-    "Allow the upsert-v2 source stash to spill chunks via the shared column pager, gated \
+    "Allow the upsert-v2 source stash to spill chunks to the shared buffer pool, gated \
      independently of the compute `enable_column_paged_batcher_spill`.",
 );
 
@@ -416,6 +427,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&KAFKA_SINK_BATCH_SIZE)
         .add(&KAFKA_SINK_BATCH_NUM_MESSAGES)
         .add(&MYSQL_REPLICATION_HEARTBEAT_INTERVAL)
+        .add(&MYSQL_SOURCE_SNAPSHOT_PARALLELISM)
         .add(&ORE_OVERFLOWING_BEHAVIOR)
         .add(&PG_FETCH_SLOT_RESUME_LSN_INTERVAL)
         .add(&PG_SCHEMA_VALIDATION_INTERVAL)

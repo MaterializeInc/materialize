@@ -1866,6 +1866,19 @@ class FlipFlagsAction(Action):
         self.flags_with_values["column_paged_batcher_swap_pageout"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values["column_paged_batcher_spill_worker_count"] = [
+            "0",
+            "2",
+            "4",
+        ]
+        self.flags_with_values["column_paged_batcher_eager_backing"] = (
+            BOOLEAN_FLAG_VALUES
+        )
+        self.flags_with_values["column_paged_batcher_pool_rss_target_fraction"] = [
+            "0.0",
+            "0.25",
+            "0.5",
+        ]
         self.flags_with_values["enable_upsert_paged_spill"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["webhook_max_request_size_bytes"] = [
             # 1 MiB, 5 MiB (default), 10 MiB
@@ -2032,6 +2045,7 @@ class FlipFlagsAction(Action):
             "kafka_buffered_event_resize_threshold_elements",
             "kafka_low_watermark_check",
             "mysql_replication_heartbeat_interval",
+            "mysql_source_snapshot_parallelism",
             "postgres_fetch_slot_resume_lsn_interval",
             "pg_schema_validation_interval",
             "storage_enforce_external_addresses",

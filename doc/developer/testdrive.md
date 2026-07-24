@@ -572,6 +572,8 @@ CREATE TABLE postgres_execute (f1 INTEGER);
 
 If any of the statements fail, the entire test will fail. Any result sets returned from the server are ignored and not checked for correctness.
 
+With `background=true` (only valid for URL connections), the statements execute in the background while the test continues. The task is joined at the end of the file, and a failure or a task that does not complete within the default timeout fails the test.
+
 #### `$ postgres-connect name=.... url=...`
 
 Creates a named psql connection that can be used by multiple `$ postgres-execute` statements
@@ -639,6 +641,8 @@ BEGIN TRANSACTION INSERT INTO t1 VALUES (1); INSERT INTO t2 VALUES (2); COMMIT;
 ```
 
 The output of the queries is not validated in any way. An error during execution will cause the test to fail.
+
+Transient SQL Server errors (deadlock victim, agent still starting) are retried by re-executing the failed line in its entirety. With `split-lines=false` the whole body is one query, so a retry re-executes all of it. Keep each line (or, with `split-lines=false`, the body) a single statement or safe to re-execute.
 
 ## Connecting to DuckDB
 
@@ -849,7 +853,7 @@ Sets the variable named VAR to the ID of the key schema with which data was
 written. The variable is only set if the format of the key was Confluent Avro
 or Protobuf.
 
-#### `kafka-verify-data format=avro [sink=... | topic=...] [sort-messages=true] [partial-search=usize]`
+#### `kafka-verify-data format=avro [sink=... | topic=...] [sort-messages=true] [partial-search=usize] [exhaustive=bool]`
 
 Obtains the data from the specified `sink` or `topic` and compares it to the expected data recorded in the test.
 
@@ -859,6 +863,17 @@ be ordered according to the following rules:
  - earlier timestamps sort first
  - deletes sort before inserts
  - as all items are sorted as strings, "10" sorts before "2"
+
+The action consumes exactly as many messages as the test expects and stops. Consecutive
+`$ kafka-verify-data` commands on the same topic resume where the previous one stopped, so a topic
+is verified in chunks. At the end of the test file, testdrive verifies that no records remain after
+the final `$ kafka-verify-data` for each topic. This catches extra or duplicated records that the
+chunked verification would otherwise miss.
+
+Set `exhaustive=false` to exempt a topic from that end-of-file check. Use it when the topic
+legitimately keeps records this command does not verify, for example a topic written by more than one
+sink, a topic that also serves as a sink's progress topic, or a topic whose later records are checked
+by other means.
 
 It is possible to call `$ kafka-verify-data` multiple times on the same topic in case the test needs to check
 that the data arrives in some partial order. For example, to make sure that all of timestamp `1` arrived
@@ -878,7 +893,9 @@ If `partial-search=usize` is specified, up to `partial-search` records will be r
 compared to the provided records. The records do not have to match starting at the beginning of the sink but
 once one record matches, the following must all match.  There are permitted to be records remaining in the
 topic after the matching is complete.  Note that if the topic is not required to have `partial-search`
-elements in it but there will be an attempt to read up to this number with a blocking read.
+elements in it but there will be an attempt to read up to this number with a blocking read. A final
+`$ kafka-verify-data` with `partial-search` disables the end-of-file check for that topic because
+remaining records are explicitly permitted.
 
 #### `kafka-verify-topic [sink=... | topic=...] [await-value-schema=false] [await-key-schema=false]`
 

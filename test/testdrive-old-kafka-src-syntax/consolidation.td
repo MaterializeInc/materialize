@@ -246,3 +246,19 @@ contains:imestamp
 contains:imestamp
 > SELECT * FROM nums_compacted AS OF 6
 8
+
+# The sink keeps emitting the changes for transactions 4, 5, and 6. Verify them
+# here so the whole topic is consumed and the end-of-file exhaustion check does
+# not flag them as unverified records.
+
+$ kafka-verify-data headers=materialize-timestamp format=avro sink=materialize.public.nums_sink sort-messages=true
+4	{"before": null, "after": {"row": {"num": 6}}}
+4	{"before": {"row": {"num": 5}}, "after": null}
+
+$ kafka-verify-data headers=materialize-timestamp format=avro sink=materialize.public.nums_sink sort-messages=true
+5	{"before": null, "after": {"row": {"num": 7}}}
+5	{"before": {"row": {"num": 6}}, "after": null}
+
+$ kafka-verify-data headers=materialize-timestamp format=avro sink=materialize.public.nums_sink sort-messages=true
+6	{"before": null, "after": {"row": {"num": 8}}}
+6	{"before": {"row": {"num": 7}}, "after": null}
