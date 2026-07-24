@@ -330,6 +330,73 @@ scale=1,workers=4
 
 > DROP CLUSTER cc_forced CASCADE
 
+# A second ALTER to the same target can force an in-flight reconfiguration to
+# cut over without replacing the target replica.
+> CREATE CLUSTER cc_force_existing (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
+
+> CREATE TABLE cc_force_existing_t (id int)
+
+> INSERT INTO cc_force_existing_t VALUES (1)
+
+> CREATE MATERIALIZED VIEW cc_force_existing_slow IN CLUSTER cc_force_existing AS
+  SELECT mz_unsafe.mz_sleep(id * 3600) AS s FROM cc_force_existing_t
+
+> ALTER CLUSTER cc_force_existing SET (SIZE 'scale=1,workers=4') WITH (WAIT UNTIL READY (TIMEOUT '600s', ON TIMEOUT 'ROLLBACK'))
+
+# The long deadline leaves both the realized and un-hydrated target replicas
+# online while the reconfiguration remains in progress.
+> SELECT r.size, bool_and(status.status = 'online')
+  FROM mz_cluster_replicas r
+  JOIN mz_clusters c ON c.id = r.cluster_id
+  JOIN mz_internal.mz_cluster_replica_statuses status ON status.replica_id = r.id
+  WHERE c.name = 'cc_force_existing'
+  GROUP BY r.size
+scale=1,workers=1 true
+scale=1,workers=4 true
+
+> SELECT recon.status
+  FROM mz_internal.mz_cluster_reconfigurations recon
+  JOIN mz_clusters c ON c.id = recon.cluster_id
+  WHERE c.name = 'cc_force_existing'
+in-progress
+
+$ set-from-sql var=cc_force_existing_target_id
+SELECT r.id::text
+FROM mz_cluster_replicas r
+JOIN mz_clusters c ON c.id = r.cluster_id
+WHERE c.name = 'cc_force_existing' AND r.size = 'scale=1,workers=4'
+
+# Replace only the deadline and timeout action. The existing target shape and
+# replica are reused, and the elapsed deadline forces cut-over on the next tick.
+> ALTER CLUSTER cc_force_existing SET (SIZE 'scale=1,workers=4') WITH (WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT 'COMMIT'))
+
+> SELECT r.id::text = '${cc_force_existing_target_id}', r.size
+  FROM mz_cluster_replicas r
+  JOIN mz_clusters c ON c.id = r.cluster_id
+  WHERE c.name = 'cc_force_existing'
+true scale=1,workers=4
+
+> SELECT row_number() OVER (ORDER BY id), details->>'transition', details->>'forced'
+  FROM mz_catalog.mz_audit_events
+  WHERE event_type = 'alter'
+    AND object_type = 'cluster'
+    AND details->>'cluster_name' = 'cc_force_existing'
+    AND details->>'transition' IS NOT NULL
+1 started <null>
+2 started <null>
+3 finalized true
+
+# Only the first ALTER created a target replica.
+> SELECT count(*)
+  FROM mz_catalog.mz_audit_events
+  WHERE event_type = 'create'
+    AND object_type = 'cluster-replica'
+    AND details->>'cluster_name' = 'cc_force_existing'
+    AND details->>'reason' = 'reconfiguration'
+1
+
+> DROP CLUSTER cc_force_existing CASCADE
+
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET unsafe_enable_unstable_dependencies = false
 
