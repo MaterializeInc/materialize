@@ -581,14 +581,20 @@ where
                 // not-yet-emitted batch.
                 let upper = frontier.frontier().to_owned();
 
-                // Refresh the chain from the trace, but only accept batches the stream frontier
-                // has reached, so the published upper and the enqueued batches stay consistent.
+                // Seed every importer with the full trace snapshot: forward all batches, do NOT gate
+                // on the stream frontier. The stream frontier lags the trace by a scheduling round
+                // (the batch data is delivered, the frontier notification catches up a round later),
+                // so a `batch.upper() <= stream_frontier` gate wrongly drops batches whose data has
+                // already been sealed. When the Spine has merged an old batch and a leading one into
+                // a single batch whose upper leads the frontier, that gate drops the whole batch,
+                // stranding its historical part and leaving a late importer's snapshot missing rows.
+                // Forwarding all batches costs only momentary memory, since batches are Arc-shared.
+                // It cannot double-count: the stream emits each original batch once and never
+                // re-emits a merged batch, so future `arrived` batches never carry what the seed
+                // already holds. The stream frontier still drives the published `upper` and the
+                // incremental `Frontier` instructions below, which is where it is authoritative.
                 let mut chain = Vec::new();
-                agent.map_batches(|batch| {
-                    if timely::PartialOrder::less_equal(&batch.upper().borrow(), &upper.borrow()) {
-                        chain.push(batch.clone());
-                    }
-                });
+                agent.map_batches(|batch| chain.push(batch.clone()));
                 // Contract: publishing carries no independent compaction floor. The trace's writer
                 // (and, in Materialize, the controller) drive `since` through their own trace
                 // handles. Only a live importer's registered hold may hold the trace back, and it
