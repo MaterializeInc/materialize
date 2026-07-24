@@ -50,7 +50,7 @@ use timely::progress::{Antichain, Timestamp};
 
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange, MzArrangeCore};
-use crate::render::columnar::{CollectionEdge, vec_to_columnar};
+use crate::render::columnar::{CollectionEdge, columnar_to_vec, flat_map_datums, vec_to_columnar};
 use crate::render::errors::{DataflowErrorSer, ErrorLogger};
 use crate::render::{LinearJoinSpec, MaybeBucketByTime, RenderTimestamp};
 use crate::typedefs::{
@@ -559,7 +559,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                         1
                     },
                 );
-                (CollectionEdge::Columnar(ok.as_collection()), err)
+                (ok.as_collection(), err)
             }
         }
     }
@@ -611,7 +611,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 .collection
                 .clone()
                 .expect("Invariant violated: CollectionBundle contains no collection.");
-            let (ok_stream, err_stream) = oks.flat_map_datums::<DCB, _>(max_demand, logic);
+            let (ok_stream, err_stream) = flat_map_datums::<_, DCB, _>(oks, max_demand, logic);
             let errs = errs.concat(err_stream.as_collection());
             (ok_stream, errs)
         }
@@ -965,7 +965,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             },
         );
 
-        (CollectionEdge::Columnar(stream.as_collection()), errors)
+        (stream.as_collection(), errors)
     }
     pub fn ensure_collections(
         mut self,
@@ -1035,11 +1035,11 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 // produces a `Vec` stream. Decode the edge into it, then re-encode
                 // the `Vec` result to columnar at the boundary so the bucketed
                 // output edge stays columnar like every other producer.
-                CollectionEdge::Columnar(vec_to_columnar(T::maybe_apply_temporal_bucketing(
-                    oks.into_vec().inner,
+                vec_to_columnar(T::maybe_apply_temporal_bucketing(
+                    columnar_to_vec(oks).inner,
                     as_of.clone(),
                     summary,
-                )))
+                ))
             } else {
                 oks
             };
@@ -1063,26 +1063,27 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 } else {
                     strategy
                 };
-                let oks =
-                    if matches!(effective_strategy, ArrangementStrategy::TemporalBucketing)
-                        && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(config_set)
-                    {
-                        let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
-                            .get(config_set)
-                            .try_into()
-                            .expect("must fit");
-                        bucketed = true;
-                        // Temporal bucketing is `Vec`-internal: it consumes
-                        // and produces a `Vec` stream. Decode the edge into it, then
-                        // re-encode the `Vec` result to columnar at the boundary so the
-                        // bucketed output edge stays columnar like every other producer.
-                        let oks = oks.into_vec();
-                        CollectionEdge::Columnar(vec_to_columnar(
-                            T::maybe_apply_temporal_bucketing(oks.inner, as_of.clone(), summary),
-                        ))
-                    } else {
-                        oks
-                    };
+                let oks = if matches!(effective_strategy, ArrangementStrategy::TemporalBucketing)
+                    && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(config_set)
+                {
+                    let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
+                        .get(config_set)
+                        .try_into()
+                        .expect("must fit");
+                    bucketed = true;
+                    // Temporal bucketing is `Vec`-internal: it consumes
+                    // and produces a `Vec` stream. Decode the edge into it, then
+                    // re-encode the `Vec` result to columnar at the boundary so the
+                    // bucketed output edge stays columnar like every other producer.
+                    let oks = columnar_to_vec(oks);
+                    vec_to_columnar(T::maybe_apply_temporal_bucketing(
+                        oks.inner,
+                        as_of.clone(),
+                        summary,
+                    ))
+                } else {
+                    oks
+                };
                 let use_paged_path = ENABLE_COLUMN_PAGED_BATCHER.get(config_set);
                 let (oks, errs_keyed, passthrough) = Self::arrange_collection(
                     &name,
@@ -1135,125 +1136,66 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         // references, which is what we need to push into columnar streams. Instead, we use a
         // bespoke operator that also optimizes reuse of allocations across individual updates.
         //
-        // The two arms differ only in how records are read from the input container and in the
-        // variant of the passthrough output, which preserves the input variant. The ok output is
-        // columnar in both arms, since the arrangement key/value is always columnar.
-        let (ok_stream, err_stream, passthrough) = match oks {
-            CollectionEdge::Vec(oks) => {
-                let mut builder =
-                    OperatorBuilder::new("FormArrangementKey".to_string(), oks.inner.scope());
-                let (ok_output, ok_stream) = builder.new_output();
-                let mut ok_output =
-                    OutputBuilder::<_, ColumnBuilder<((Row, Row), T, Diff)>>::from(ok_output);
-                let (err_output, err_stream) = builder.new_output();
-                let mut err_output = OutputBuilder::from(err_output);
-                let (passthrough_output, passthrough_stream) = builder.new_output();
-                let mut passthrough_output = OutputBuilder::from(passthrough_output);
-                let mut input = builder.new_input(oks.inner, Pipeline);
-                builder.set_notify_for(0, FrontierInterest::Never);
-                builder.build(move |_capabilities| {
-                    let mut key_buf = Row::default();
-                    let mut val_buf = Row::default();
-                    let mut datums = DatumVec::new();
-                    move |_frontiers| {
-                        // Scoped to the activation so the arena's retained capacity does not
-                        // outlive a single scheduling invocation; cleared per row to reuse it
-                        // within the batch.
-                        let mut temp_storage = RowArena::new();
-                        let mut ok_output = ok_output.activate();
-                        let mut err_output = err_output.activate();
-                        let mut passthrough_output = passthrough_output.activate();
-                        input.for_each(|time, data| {
-                            let mut ok_session = ok_output.session_with_builder(&time);
-                            let mut err_session = err_output.session(&time);
-                            for (row, time, diff) in data.iter() {
-                                temp_storage.clear();
-                                let datums = datums.borrow_with(row);
-                                let key_iter = key.iter().map(|k| k.eval(&datums, &temp_storage));
-                                match key_buf.packer().try_extend(key_iter) {
-                                    Ok(()) => {
-                                        let val_datum_iter = thinning.iter().map(|c| datums[*c]);
-                                        val_buf.packer().extend(val_datum_iter);
-                                        ok_session.give(((&*key_buf, &*val_buf), time, diff));
-                                    }
-                                    Err(e) => {
-                                        err_session.give((e.into(), time.clone(), *diff));
-                                    }
+        // The passthrough output forwards the input `Column` unchanged, so downstream consumers
+        // can reuse the collection without teeing.
+        let (ok_stream, err_stream, passthrough) = {
+            let mut builder =
+                OperatorBuilder::new("FormArrangementKey".to_string(), oks.inner.scope());
+            let (ok_output, ok_stream) = builder.new_output();
+            let mut ok_output =
+                OutputBuilder::<_, ColumnBuilder<((Row, Row), T, Diff)>>::from(ok_output);
+            let (err_output, err_stream) = builder.new_output();
+            let mut err_output = OutputBuilder::from(err_output);
+            let (passthrough_output, passthrough_stream) = builder.new_output();
+            // The passthrough forwards the input `Column` unchanged; its builder's container
+            // type must match the input so `give_container` can hand the batch through.
+            let mut passthrough_output = OutputBuilder::<
+                _,
+                CapacityContainerBuilder<Column<(Row, T, Diff)>>,
+            >::from(passthrough_output);
+            let mut input = builder.new_input(oks.inner, Pipeline);
+            builder.set_notify_for(0, FrontierInterest::Never);
+            builder.build(move |_capabilities| {
+                let mut key_buf = Row::default();
+                let mut val_buf = Row::default();
+                let mut datums = DatumVec::new();
+                move |_frontiers| {
+                    // Scoped to the activation so the arena's retained capacity does not
+                    // outlive a single scheduling invocation; cleared per row to reuse it
+                    // within the batch.
+                    let mut temp_storage = RowArena::new();
+                    let mut ok_output = ok_output.activate();
+                    let mut err_output = err_output.activate();
+                    let mut passthrough_output = passthrough_output.activate();
+                    input.for_each(|time, data| {
+                        let mut ok_session = ok_output.session_with_builder(&time);
+                        let mut err_session = err_output.session(&time);
+                        // Rows are read from the borrowed column, never materialized as
+                        // owned `Row`s. Times and diffs are owned only on the error path.
+                        for (row, t, d) in data.borrow().into_index_iter() {
+                            temp_storage.clear();
+                            let datums = datums.borrow_with(row);
+                            let key_iter = key.iter().map(|k| k.eval(&datums, &temp_storage));
+                            match key_buf.packer().try_extend(key_iter) {
+                                Ok(()) => {
+                                    let val_datum_iter = thinning.iter().map(|c| datums[*c]);
+                                    val_buf.packer().extend(val_datum_iter);
+                                    ok_session.give(((&*key_buf, &*val_buf), t, d));
+                                }
+                                Err(e) => {
+                                    err_session.give((
+                                        e.into(),
+                                        Columnar::into_owned(t),
+                                        Columnar::into_owned(d),
+                                    ));
                                 }
                             }
-                            passthrough_output.session(&time).give_container(data);
-                        });
-                    }
-                });
-                (
-                    ok_stream,
-                    err_stream,
-                    CollectionEdge::Vec(passthrough_stream.as_collection()),
-                )
-            }
-            CollectionEdge::Columnar(oks) => {
-                let mut builder =
-                    OperatorBuilder::new("FormArrangementKey".to_string(), oks.inner.scope());
-                let (ok_output, ok_stream) = builder.new_output();
-                let mut ok_output =
-                    OutputBuilder::<_, ColumnBuilder<((Row, Row), T, Diff)>>::from(ok_output);
-                let (err_output, err_stream) = builder.new_output();
-                let mut err_output = OutputBuilder::from(err_output);
-                let (passthrough_output, passthrough_stream) = builder.new_output();
-                // The passthrough forwards the input `Column` unchanged; its builder's container
-                // type must match the input so `give_container` can hand the batch through.
-                let mut passthrough_output = OutputBuilder::<
-                    _,
-                    CapacityContainerBuilder<Column<(Row, T, Diff)>>,
-                >::from(passthrough_output);
-                let mut input = builder.new_input(oks.inner, Pipeline);
-                builder.set_notify_for(0, FrontierInterest::Never);
-                builder.build(move |_capabilities| {
-                    let mut key_buf = Row::default();
-                    let mut val_buf = Row::default();
-                    let mut datums = DatumVec::new();
-                    move |_frontiers| {
-                        // Scoped to the activation so the arena's retained capacity does not
-                        // outlive a single scheduling invocation; cleared per row to reuse it
-                        // within the batch.
-                        let mut temp_storage = RowArena::new();
-                        let mut ok_output = ok_output.activate();
-                        let mut err_output = err_output.activate();
-                        let mut passthrough_output = passthrough_output.activate();
-                        input.for_each(|time, data| {
-                            let mut ok_session = ok_output.session_with_builder(&time);
-                            let mut err_session = err_output.session(&time);
-                            // Rows are read from the borrowed column, never materialized as
-                            // owned `Row`s. Times and diffs are owned only on the error path.
-                            for (row, t, d) in data.borrow().into_index_iter() {
-                                temp_storage.clear();
-                                let datums = datums.borrow_with(row);
-                                let key_iter = key.iter().map(|k| k.eval(&datums, &temp_storage));
-                                match key_buf.packer().try_extend(key_iter) {
-                                    Ok(()) => {
-                                        let val_datum_iter = thinning.iter().map(|c| datums[*c]);
-                                        val_buf.packer().extend(val_datum_iter);
-                                        ok_session.give(((&*key_buf, &*val_buf), t, d));
-                                    }
-                                    Err(e) => {
-                                        err_session.give((
-                                            e.into(),
-                                            Columnar::into_owned(t),
-                                            Columnar::into_owned(d),
-                                        ));
-                                    }
-                                }
-                            }
-                            passthrough_output.session(&time).give_container(data);
-                        });
-                    }
-                });
-                (
-                    ok_stream,
-                    err_stream,
-                    CollectionEdge::Columnar(passthrough_stream.as_collection()),
-                )
-            }
+                        }
+                        passthrough_output.session(&time).give_container(data);
+                    });
+                }
+            });
+            (ok_stream, err_stream, passthrough_stream.as_collection())
         };
 
         let exchange =
@@ -1508,76 +1450,46 @@ mod tests {
         updates
     }
 
-    /// Arranges `rows` (each stamped with its own time) as both a `Vec` edge and
-    /// the equivalent columnar edge, keyed by `key`, and returns the sorted ok
-    /// and err outputs of each arm plus whether the columnar arm kept the
-    /// columnar passthrough variant.
-    fn arrange_both_arms(
+    /// Arranges `rows` (each stamped with its own time) as a columnar edge, keyed
+    /// by `key` with the full row as the value, and returns the sorted ok and err
+    /// outputs read back from the arrangement.
+    fn arrange_columnar(
         rows: Vec<(Row, u64)>,
         key: Vec<LirScalarExpr>,
-    ) -> (
-        Vec<OkUpdate>,
-        Vec<OkUpdate>,
-        Vec<(String, Timestamp, Diff)>,
-        Vec<(String, Timestamp, Diff)>,
-        bool,
-    ) {
+    ) -> (Vec<OkUpdate>, Vec<(String, Timestamp, Diff)>) {
         let thinning = vec![0, 1];
-        let (ok_vec, ok_col, err_vec, err_col, col_is_columnar) =
-            timely::execute_directly(move |worker| {
-                worker.dataflow::<Timestamp, _, _>(|scope| {
-                    let (mut input, collection) = scope.new_collection();
+        let (ok, err) = timely::execute_directly(move |worker| {
+            worker.dataflow::<Timestamp, _, _>(|scope| {
+                let (mut input, collection) = scope.new_collection();
+                let (arranged, errs, _passthrough) =
+                    CollectionBundle::<Timestamp>::arrange_collection(
+                        &"col".to_string(),
+                        vec_to_columnar(collection),
+                        key,
+                        thinning,
+                        false,
+                    );
+                let ok = arranged
+                    .as_collection(|k, v| (k.to_row(), v.to_row()))
+                    .inner
+                    .capture();
+                let err = errs.inner.capture();
 
-                    let (vec_arranged, vec_errs, _vec_passthrough) =
-                        CollectionBundle::<Timestamp>::arrange_collection(
-                            &"vec".to_string(),
-                            CollectionEdge::Vec(collection.clone()),
-                            key.clone(),
-                            thinning.clone(),
-                            false,
-                        );
-                    let (col_arranged, col_errs, col_passthrough) =
-                        CollectionBundle::<Timestamp>::arrange_collection(
-                            &"col".to_string(),
-                            CollectionEdge::Columnar(vec_to_columnar(collection)),
-                            key,
-                            thinning,
-                            false,
-                        );
-                    let col_is_columnar = matches!(col_passthrough, CollectionEdge::Columnar(_));
-
-                    let ok_vec = vec_arranged
-                        .as_collection(|k, v| (k.to_row(), v.to_row()))
-                        .inner
-                        .capture();
-                    let ok_col = col_arranged
-                        .as_collection(|k, v| (k.to_row(), v.to_row()))
-                        .inner
-                        .capture();
-                    let err_vec = vec_errs.inner.capture();
-                    let err_col = col_errs.inner.capture();
-
-                    let max_time = rows.iter().map(|(_, t)| *t).max().unwrap_or(0);
-                    for (row, time) in rows {
-                        input.update_at(row, Timestamp::from(time), Diff::ONE);
-                    }
-                    input.advance_to(Timestamp::from(max_time + 1));
-                    input.flush();
-                    (ok_vec, ok_col, err_vec, err_col, col_is_columnar)
-                })
-            });
-        (
-            extract_ok(ok_vec),
-            extract_ok(ok_col),
-            extract_err(err_vec),
-            extract_err(err_col),
-            col_is_columnar,
-        )
+                let max_time = rows.iter().map(|(_, t)| *t).max().unwrap_or(0);
+                for (row, time) in rows {
+                    input.update_at(row, Timestamp::from(time), Diff::ONE);
+                }
+                input.advance_to(Timestamp::from(max_time + 1));
+                input.flush();
+                (ok, err)
+            })
+        });
+        (extract_ok(ok), extract_err(err))
     }
 
     // Uniform two-column rows so `Column(0)` keys and full-row thinning are in
-    // bounds for every record. Times span three distinct values so the columnar
-    // arm's per-record time handling is exercised, not just t=0.
+    // bounds for every record. Times span three distinct values so the per-record
+    // time handling is exercised, not just t=0.
     fn test_rows() -> Vec<(Row, u64)> {
         vec![
             (Row::pack_slice(&[Datum::Int32(1), Datum::String("a")]), 0),
@@ -1587,48 +1499,39 @@ mod tests {
         ]
     }
 
-    /// The columnar arm of the arrange input produces the same arranged contents
-    /// as the `Vec` arm and keeps the columnar passthrough variant.
-    ///
-    /// What this proves: correctness of the columnar key-forming path (a mangled
-    /// key or dropped record would diverge from the `Vec` arm) and that the
-    /// columnar arm actually ran (the passthrough stays `Columnar`).
-    ///
-    /// What it does NOT prove: absence of a silent decode. A hypothetical
-    /// `columnar_to_vec` on the ok path would yield identical contents and still
-    /// return a `Columnar` passthrough. The no-decode property holds by code
-    /// inspection: the columnar arm reads records via `into_index_iter` on the
-    /// borrowed column and never calls `into_vec`.
+    /// The columnar arrange input forms the arrangement keyed by column 0 with the
+    /// full row as the value, producing exactly the input records. A mangled key
+    /// or a dropped record would diverge from the expected set.
     #[mz_ore::test]
-    fn arrange_collection_arms_agree() {
-        let (ok_vec, ok_col, err_vec, err_col, col_is_columnar) =
-            arrange_both_arms(test_rows(), vec![LirScalarExpr::column(0)]);
+    fn arrange_collection_keys_correctly() {
+        let rows = test_rows();
+        let mut expected: Vec<OkUpdate> = rows
+            .iter()
+            .map(|(row, t)| {
+                let key = Row::pack_slice(&[row.iter().next().unwrap()]);
+                ((key, row.clone()), Timestamp::from(*t), Diff::ONE)
+            })
+            .collect();
+        expected.sort();
 
-        assert!(
-            col_is_columnar,
-            "columnar arrange input must keep the columnar passthrough variant"
-        );
-        assert!(!ok_vec.is_empty());
-        assert_eq!(ok_vec, ok_col);
-        assert!(err_vec.is_empty() && err_col.is_empty());
+        let (ok, err) = arrange_columnar(rows, vec![LirScalarExpr::column(0)]);
+        assert_eq!(ok, expected);
+        assert!(err.is_empty());
     }
 
     /// A key expression that always errors drives every record onto the error
     /// path, exercising the columnar arm's `into_owned` reconstruction of the
-    /// error's `(time, diff)`. The two arms must agree on the errors, and the ok
-    /// output must be empty on both.
+    /// error's `(time, diff)`. The ok output must be empty and the errors present.
     #[mz_ore::test]
-    fn arrange_collection_arms_agree_on_error_path() {
+    fn arrange_collection_error_path() {
         let key = vec![LirScalarExpr::literal(
             Err(EvalError::DivisionByZero),
             ReprScalarType::Int32,
         )];
-        let (ok_vec, ok_col, err_vec, err_col, _col_is_columnar) =
-            arrange_both_arms(test_rows(), key);
+        let (ok, err) = arrange_columnar(test_rows(), key);
 
-        assert!(ok_vec.is_empty() && ok_col.is_empty());
-        assert!(!err_vec.is_empty());
-        assert_eq!(err_vec, err_col);
+        assert!(ok.is_empty());
+        assert!(!err.is_empty());
     }
 
     fn extract_row_updates(
@@ -1643,16 +1546,12 @@ mod tests {
         updates
     }
 
-    /// A `Get -> ArrangeBy` chain carries the columnar arm end to end. A
-    /// non-identity MFP drives `as_collection_core` down its columnar producer
-    /// path, and feeding that edge into the arrange input keeps the columnar
-    /// passthrough, so no `ColumnarToVec` sits on the arrange path.
-    ///
-    /// The producer output is checked against the projected input. Arrange
-    /// correctness itself is covered by `arrange_collection_arms_agree`; here we
-    /// only assert the variant survives the hand-off.
+    /// A `Get -> ArrangeBy` chain: a non-identity MFP drives `as_collection_core`
+    /// down its columnar producer path, and feeding that edge into the arrange
+    /// input produces the projected rows. Arrange correctness itself is covered by
+    /// `arrange_collection_keys_correctly`; here we check the producer output.
     #[mz_ore::test]
-    fn get_arrange_by_carries_columnar_end_to_end() {
+    fn get_arrange_by_produces_projected_rows() {
         let rows = vec![
             (Row::pack_slice(&[Datum::Int64(1), Datum::Int64(10)]), 0u64),
             (Row::pack_slice(&[Datum::Int64(2), Datum::Int64(20)]), 1),
@@ -1674,81 +1573,67 @@ mod tests {
             .collect();
         expected.sort();
 
-        let (producer_is_columnar, passthrough_is_columnar, produced) =
-            timely::execute_directly(move |worker| {
-                worker.dataflow::<Timestamp, _, _>(|scope| {
-                    let (mut input, collection) = scope.new_collection();
-                    let (_err_input, errs) = scope.new_collection::<DataflowErrorSer, Diff>();
-                    let bundle = CollectionBundle::from_edge(CollectionEdge::Vec(collection), errs);
-                    let (edge, _errs) = bundle.as_collection_core(mfp, None, Antichain::new());
-                    let producer_is_columnar = matches!(edge, CollectionEdge::Columnar(_));
-                    // Tee the producer output for a content check, then feed the
-                    // original edge into the arrange input.
-                    let produced = edge.clone().into_vec().inner.capture();
-                    let (_arranged, _arrange_errs, passthrough) =
-                        CollectionBundle::<Timestamp>::arrange_collection(
-                            &"arrange".to_string(),
-                            edge,
-                            vec![LirScalarExpr::column(0)],
-                            vec![0],
-                            false,
-                        );
-                    let passthrough_is_columnar =
-                        matches!(passthrough, CollectionEdge::Columnar(_));
+        let produced = timely::execute_directly(move |worker| {
+            worker.dataflow::<Timestamp, _, _>(|scope| {
+                let (mut input, collection) = scope.new_collection();
+                let (_err_input, errs) = scope.new_collection::<DataflowErrorSer, Diff>();
+                let bundle = CollectionBundle::from_edge(vec_to_columnar(collection), errs);
+                let (edge, _errs) = bundle.as_collection_core(mfp, None, Antichain::new());
+                // Tee the producer output for a content check, then feed the
+                // original edge into the arrange input.
+                let produced = columnar_to_vec(edge.clone()).inner.capture();
+                let (_arranged, _arrange_errs, _passthrough) =
+                    CollectionBundle::<Timestamp>::arrange_collection(
+                        &"arrange".to_string(),
+                        edge,
+                        vec![LirScalarExpr::column(0)],
+                        vec![0],
+                        false,
+                    );
 
-                    let max_time = rows.iter().map(|(_, t)| *t).max().unwrap();
-                    for (row, time) in rows {
-                        input.update_at(row, Timestamp::from(time), Diff::ONE);
-                    }
-                    input.advance_to(Timestamp::from(max_time + 1));
-                    input.flush();
-                    (producer_is_columnar, passthrough_is_columnar, produced)
-                })
-            });
+                let max_time = rows.iter().map(|(_, t)| *t).max().unwrap();
+                for (row, time) in rows {
+                    input.update_at(row, Timestamp::from(time), Diff::ONE);
+                }
+                input.advance_to(Timestamp::from(max_time + 1));
+                input.flush();
+                produced
+            })
+        });
 
-        assert!(
-            producer_is_columnar,
-            "a non-identity MFP must produce a columnar edge"
-        );
-        assert!(
-            passthrough_is_columnar,
-            "the arrange input must keep the columnar passthrough (no ColumnarToVec)"
-        );
         assert_eq!(extract_row_updates(produced), expected);
     }
 
-    /// The reworked identity fast-path returns the unarranged input edge
-    /// unchanged, so a columnar producer stays columnar and a `Vec` producer
-    /// stays `Vec` with no repack in either direction.
+    /// The identity fast-path returns the unarranged input edge unchanged, with no
+    /// repack, so its contents pass straight through.
     #[mz_ore::test]
     fn as_collection_core_identity_passes_edge_through() {
-        for columnar_input in [false, true] {
-            let is_columnar = timely::execute_directly(move |worker| {
-                worker.dataflow::<Timestamp, _, _>(|scope| {
-                    let (mut input, collection) = scope.new_collection::<Row, Diff>();
-                    let (_err_input, errs) = scope.new_collection::<DataflowErrorSer, Diff>();
-                    let edge = if columnar_input {
-                        CollectionEdge::Columnar(vec_to_columnar(collection))
-                    } else {
-                        CollectionEdge::Vec(collection)
-                    };
-                    let bundle = CollectionBundle::from_edge(edge, errs);
-                    let identity = MapFilterProject::<LirScalarExpr>::new(1)
-                        .into_plan()
-                        .expect("identity mfp");
-                    let (out, _errs) = bundle.as_collection_core(identity, None, Antichain::new());
-                    let is_columnar = matches!(out, CollectionEdge::Columnar(_));
-                    input.update(Row::pack_slice(&[Datum::Int64(1)]), Diff::ONE);
-                    input.advance_to(Timestamp::from(1u64));
-                    input.flush();
-                    is_columnar
-                })
-            });
-            assert_eq!(
-                is_columnar, columnar_input,
-                "the identity fast-path must preserve the input edge variant"
-            );
-        }
+        let expected = vec![(
+            Row::pack_slice(&[Datum::Int64(1)]),
+            Timestamp::from(0u64),
+            Diff::ONE,
+        )];
+        let captured = timely::execute_directly(move |worker| {
+            worker.dataflow::<Timestamp, _, _>(|scope| {
+                let (mut input, collection) = scope.new_collection::<Row, Diff>();
+                let (_err_input, errs) = scope.new_collection::<DataflowErrorSer, Diff>();
+                let bundle = CollectionBundle::from_edge(vec_to_columnar(collection), errs);
+                let identity = MapFilterProject::<LirScalarExpr>::new(1)
+                    .into_plan()
+                    .expect("identity mfp");
+                let (out, _errs) = bundle.as_collection_core(identity, None, Antichain::new());
+                let captured = columnar_to_vec(out).inner.capture();
+                input.update_at(
+                    Row::pack_slice(&[Datum::Int64(1)]),
+                    Timestamp::from(0u64),
+                    Diff::ONE,
+                );
+                input.advance_to(Timestamp::from(1u64));
+                input.flush();
+                captured
+            })
+        });
+        assert_eq!(extract_row_updates(captured), expected);
     }
 
     /// The columnar producer folds within-batch duplicates: input rows that
@@ -1786,13 +1671,9 @@ mod tests {
             worker.dataflow::<Timestamp, _, _>(|scope| {
                 let (mut input, collection) = scope.new_collection();
                 let (_err_input, errs) = scope.new_collection::<DataflowErrorSer, Diff>();
-                let bundle = CollectionBundle::from_edge(CollectionEdge::Vec(collection), errs);
+                let bundle = CollectionBundle::from_edge(vec_to_columnar(collection), errs);
                 let (edge, _errs) = bundle.as_collection_core(mfp, None, Antichain::new());
-                assert!(
-                    matches!(edge, CollectionEdge::Columnar(_)),
-                    "a non-identity MFP must produce a columnar edge"
-                );
-                let captured = edge.into_vec().inner.capture();
+                let captured = columnar_to_vec(edge).inner.capture();
                 // Feed all rows at the same time in one batch so the fold is
                 // within-batch, not a downstream re-consolidation.
                 for row in rows {
@@ -1828,13 +1709,13 @@ mod tests {
             .collect();
         expected.sort();
 
-        let (is_columnar, captured) = timely::execute_directly(move |worker| {
+        let captured = timely::execute_directly(move |worker| {
             worker.dataflow::<Timestamp, _, _>(|scope| {
                 let (mut input, collection) = scope.new_collection();
                 let (arranged, arr_errs, _passthrough) =
                     CollectionBundle::<Timestamp>::arrange_collection(
                         &"agg".to_string(),
-                        CollectionEdge::Vec(collection),
+                        vec_to_columnar(collection),
                         key.clone(),
                         vec![1],
                         false,
@@ -1854,8 +1735,7 @@ mod tests {
                     ArrangementFlavor::Local(arranged, err_arranged),
                 );
                 let (edge, _errs) = bundle.as_specific_collection(Some(&key));
-                let is_columnar = matches!(edge, CollectionEdge::Columnar(_));
-                let captured = edge.into_vec().inner.capture();
+                let captured = columnar_to_vec(edge).inner.capture();
 
                 let max_time = rows.iter().map(|(_, t)| *t).max().unwrap();
                 for (row, time) in rows {
@@ -1863,14 +1743,10 @@ mod tests {
                 }
                 input.advance_to(Timestamp::from(max_time + 1));
                 input.flush();
-                (is_columnar, captured)
+                captured
             })
         });
 
-        assert!(
-            is_columnar,
-            "as_specific_collection must materialize the arrangement as a columnar edge"
-        );
         assert_eq!(extract_row_updates(captured), expected);
     }
 }
