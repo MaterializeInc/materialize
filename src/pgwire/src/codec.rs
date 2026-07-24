@@ -141,8 +141,11 @@ where
     pub fn set_encode_state(
         &mut self,
         encode_state: Vec<(mz_pgrepr::Type, mz_pgwire_common::Format)>,
+        extra_float_digits: i32,
     ) {
-        self.inner.get_mut().codec_mut().encode_state = encode_state;
+        let codec = self.inner.get_mut().codec_mut();
+        codec.encode_state = encode_state;
+        codec.extra_float_digits = extra_float_digits;
     }
 
     /// Enables or disables copy mode on the codec.
@@ -217,6 +220,10 @@ where
 pub struct Codec {
     decode_state: DecodeState,
     encode_state: Vec<(mz_pgrepr::Type, mz_pgwire_common::Format)>,
+    /// The session's `extra_float_digits` when `encode_state` was installed.
+    /// Adjusts the text encoding of floats in `DataRow` messages. Any positive
+    /// value selects the shortest round-trippable encoding.
+    extra_float_digits: i32,
     /// When true, skip the aggregate buffer size check in `decode()`.
     /// During COPY FROM STDIN, many small CopyData frames accumulate in the
     /// TCP read buffer and can exceed MAX_REQUEST_SIZE even though individual
@@ -231,6 +238,7 @@ impl Codec {
         Codec {
             decode_state: DecodeState::Head,
             encode_state: vec![],
+            extra_float_digits: 1,
             in_copy_mode: false,
         }
     }
@@ -405,7 +413,7 @@ impl Codec {
                     if let Some(f) = f {
                         let base = dst.len();
                         dst.put_u32(0);
-                        f.encode(ty, *format, dst)?;
+                        f.encode(ty, *format, dst, self.extra_float_digits)?;
                         let len = dst.len() - base - 4;
                         let len = i32::try_from(len).map_err(|_| {
                             io::Error::new(

@@ -1,0 +1,37 @@
+# SET extra_float_digits adjusts the text encoding of floats in query
+# results, as in PostgreSQL: zero and negative values limit the number of
+# significant digits, positive values select the shortest round-trippable
+# encoding. This lives in pgtest-mz because, unlike PostgreSQL, COPY ... TO
+# STDOUT does not honor the parameter (see below).
+
+send
+Query {"query": "SET extra_float_digits = 0"}
+Query {"query": "SELECT 0.1::float8 + 0.2::float8 AS f"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"SET"}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"f"}]}
+DataRow {"fields":["0.3"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+# COPY ... TO STDOUT always uses the shortest round-trippable encoding. Its
+# output encoding is shared with COPY TO <s3>, which runs in the dataflow
+# layer, where results must not depend on session variables.
+send
+Query {"query": "COPY (SELECT 0.1::float8 + 0.2::float8) TO STDOUT"}
+----
+
+until
+ReadyForQuery
+----
+CopyOut {"format":"text","column_formats":["text"]}
+CopyData "0.30000000000000004\n"
+CopyDone
+CommandComplete {"tag":"COPY 1"}
+ReadyForQuery {"status":"I"}

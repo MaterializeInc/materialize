@@ -2504,6 +2504,7 @@ where
                 .map(|ty| mz_pgrepr::Type::from(&ty.scalar_type))
                 .zip_eq(result_formats)
                 .collect(),
+            self.adapter_client.session().vars().extra_float_digits(),
         );
 
         let mut total_sent_rows = 0;
