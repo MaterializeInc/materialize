@@ -169,6 +169,43 @@ As long as the offset continues increasing, Materialize is generating data. For
 more details on monitoring source ingestion progress and debugging related
 issues, see [Troubleshooting](/ops/troubleshooting/).
 
+## Ingesting data
+
+Once a load generator source is created, use [`CREATE TABLE FROM
+SOURCE`](/sql/create-table/) to create a table for each relation described
+above that you want to ingest. For example, assuming a TPCH source named
+`tpch`:
+
+```mzsql
+CREATE TABLE orders FROM SOURCE tpch (REFERENCE orders);
+```
+
+For **multi-output generators** (`AUCTION`, `MARKETING`, `TPCH`), the
+`REFERENCE` clause is required: specify one of the table names listed above
+(e.g. `bids`, `customers`, `lineitem`). Omitting `REFERENCE` results in an
+error, since Materialize cannot determine which table you're referring to.
+
+Materialize's only single-output generator, `KEY VALUE`
+{{< private-preview-inline />}}, does not require `REFERENCE`, since there is
+only one table available:
+
+```mzsql
+CREATE TABLE kv_tbl FROM SOURCE kv_gen;
+```
+
+You can create multiple tables that reference the same load generator table.
+
+{{< note >}}
+`TEXT COLUMNS` and `EXCLUDE COLUMNS` are not supported for load generator
+tables. If specified, they are silently ignored.
+{{< /note >}}
+
+### Handling table schema changes
+
+The tables produced by a load generator have a fixed schema defined by
+Materialize, not by an upstream system, so there is no upstream schema change to
+handle.
+
 ## Examples
 
 ### Creating an auction load generator
@@ -352,6 +389,26 @@ ORDER BY
  N            | O            | 74281600 |   111337230039 | 106883023012.04 | 112227399730.9018 |  25.49430183051871 | 38212.221432873834 | 0.03999775539657235 |     2913655
  R            | F            | 37770949 |    56610551077 |   54347734573.7 |  57066196254.4557 | 25.496431466814634 |  38213.68205054471 | 0.03997848687172654 |     1481421
 ```
+
+### Creating tables from a load generator source
+
+To create a load generator source without immediately ingesting any of its
+tables, and then explicitly create tables for only the ones you want:
+
+```mzsql
+CREATE SOURCE tpch
+  FROM LOAD GENERATOR TPCH (SCALE FACTOR 1);
+
+BEGIN;
+CREATE TABLE orders FROM SOURCE tpch (REFERENCE orders);
+CREATE TABLE lineitem FROM SOURCE tpch (REFERENCE lineitem);
+COMMIT;
+```
+
+Unlike the [previous example](#creating-a-tpch-load-generator), `FOR ALL
+TABLES` is omitted from `CREATE SOURCE`, and only the `orders` and `lineitem`
+tables are created; the other TPCH tables are not ingested unless you also
+create tables for them.
 
 ## Related pages
 
