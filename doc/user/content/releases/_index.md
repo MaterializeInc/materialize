@@ -19,6 +19,28 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.35.0
+*Released to Materialize Cloud: 2026-07-23* <br>
+*Released to Materialize Self-Managed: 2026-07-24* <br>
+
+### Improvements {#v26.35-improvements}
+- **Faster read queries under write load**: Read-only queries (e.g., `SELECT 1`) are no longer blocked by concurrent write transactions; under high write load, victim query latency drops from multiple seconds to single-digit milliseconds.
+- **Faster MySQL source snapshots**: Initial snapshots for MySQL sources are now parallelized across workers, providing up to 2.7x faster snapshotting for sources with large individual tables.
+- **Better query plans for correlated subqueries**: Queries using patterns like `1 IN (SELECT 1 WHERE p)` and `NOT EXISTS (SELECT 1 WHERE p)` are now optimized to a simple filter, eliminating unnecessary semi/anti-joins.
+- **Console billing breakdown by account and cluster**: The billing page now shows a per-account and per-cluster cost breakdown with a stacked bar chart and expandable ledger, displaying account display names and real per-cluster usage figures.
+- **`mz-debug` CPU profiling**: The `mz-debug` diagnostic tool now automatically collects CPU profiles alongside memory profiles for Self-Managed deployments.
+
+### Bug Fixes {#v26.35-bug-fixes}
+- Fixed a critical bug where a pending replacement materialized view could destroy the data of its live target materialized view after an environmentd restart.
+- Fixed `COPY FROM PARQUET` failing for columns of types `oid`, `time`, `timestamptz`, `char`, `varchar`, and `mz_timestamp`.
+- Fixed incorrect results for `variance`, `stddev`, and related aggregate functions when used with `DISTINCT` on inputs containing values that differ only in sign (e.g., `-2` and `2`).
+- Fixed `ALTER CLUSTER ... WITH (WAIT UNTIL READY ...)` hanging indefinitely and rolling back when the cluster hosts a single-replica source (PostgreSQL, MySQL, or SQL Server).
+- Fixed `mz_object_arrangement_sizes` silently omitting arrangements smaller than 10 MiB and showing stale sizes after an environmentd restart.
+- Fixed `EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW` crashing environmentd when the materialized view's cached plan referenced a since-dropped index.
+- Fixed array literals with empty dimensions (e.g., `'{{},{}}'::text[]`) and multi-dimensional `array_fill` calls silently producing incorrect results instead of returning errors matching PostgreSQL behavior.
+- Fixed replica utilization charts in the Console failing to load on initial page render and flashing a loading spinner when switching time filters.
+- Fixed replica crash and OOM markers not appearing in the "Last hour" and "Last 3 hours" Console utilization chart windows.
+
 ## v26.34.0
 *Released to Materialize Cloud: 2026-07-21* <br>
 *Released to Materialize Self-Managed: 2026-07-21* <br>
