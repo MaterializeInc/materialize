@@ -116,9 +116,7 @@ use futures::{StreamExt as _, TryStreamExt};
 use itertools::Itertools;
 use mysql_async::prelude::Queryable;
 use mysql_async::{IsolationLevel, Row as MySqlRow, TxOpts};
-use mz_mysql_util::{
-    ER_NO_SUCH_TABLE, MySqlConn, MySqlError, pack_mysql_row, query_sys_var, quote_identifier,
-};
+use mz_mysql_util::{MySqlConn, MySqlError, pack_mysql_row, query_sys_var, quote_identifier};
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
@@ -234,7 +232,7 @@ async fn compute_sampled_splits<Q>(
     pk_col: &(String, SqlScalarType),
     worker_count: usize,
     total: u64,
-) -> Result<Option<PkBoundaries>, SnapshotSetupError>
+) -> Result<Option<PkBoundaries>, TransientError>
 where
     Q: Queryable,
 {
@@ -276,8 +274,7 @@ where
                 "SELECT {col_literal} FROM {table}{predicate} \
                  ORDER BY {col} LIMIT 1 OFFSET {offset}"
             ))
-            .await
-            .map_err(classify_query_error)?;
+            .await?;
         // Defensive: if a concurrent write shrank the range out from under us, stop and
         // use the boundaries found so far. Fewer partitions is still correct.
         let Some(mut row) = row else { break };
@@ -313,7 +310,7 @@ async fn sample_pk_bounds(
         BTreeMap<MySqlTableName, Option<PkBoundaries>>,
         BTreeMap<MySqlTableName, u64>,
     ),
-    SnapshotSetupError,
+    TransientError,
 > {
     let ssh_tunnel_manager = &config.config.connection_context.ssh_tunnel_manager;
     let worker_count = config.worker_count;
@@ -381,7 +378,7 @@ async fn sample_pk_bounds(
                     None => None,
                 };
                 pool.borrow_mut().push(conn);
-                Ok::<_, SnapshotSetupError>((table.clone(), count, splits))
+                Ok::<_, TransientError>((table.clone(), count, splits))
             }
         })
         // At most `worker_count` connections are checked out at once, so the pool
@@ -419,7 +416,7 @@ async fn lock_and_prepare_snapshot(
     task_name: &str,
     tables: &BTreeMap<MySqlTableName, Vec<SourceOutputInfo>>,
     metrics: &MySqlSnapshotMetrics,
-) -> Result<(SnapshotInfo, BTreeMap<MySqlTableName, u64>, MySqlConn), SnapshotSetupError> {
+) -> Result<(SnapshotInfo, BTreeMap<MySqlTableName, u64>, MySqlConn), TransientError> {
     let mut lock_conn = connection_config
         .connect(
             task_name,
@@ -452,7 +449,7 @@ async fn lock_and_prepare_snapshot(
     )
     .await?;
 
-    let lock_clauses = tables
+    let lock_clauses = sample_tables
         .keys()
         .map(|t| format!("{} READ", t))
         .collect::<Vec<String>>()
@@ -484,7 +481,7 @@ async fn lock_and_prepare_snapshot(
 async fn verify_output_schemas<Q>(
     conn: &mut Q,
     tables: &BTreeMap<MySqlTableName, Vec<SourceOutputInfo>>,
-) -> Result<Vec<(usize, DefiniteError)>, SnapshotSetupError>
+) -> Result<Vec<(usize, DefiniteError)>, TransientError>
 where
     Q: Queryable,
 {
@@ -800,20 +797,7 @@ pub(crate) fn render<'scope>(
                             // Broadcast the failure sentinel so non-leaders exit cleanly instead
                             // of deadlocking on the feedback loop.
                             snapshot_handle.give(&snapshot_cap_set[0], None);
-                            match err {
-                                SnapshotSetupError::Definite(e) => {
-                                    return Ok(return_definite_error(
-                                        e,
-                                        &all_outputs,
-                                        &raw_handle,
-                                        data_cap_set,
-                                        &definite_error_handle,
-                                        definite_error_cap_set,
-                                    )
-                                    .await);
-                                }
-                                SnapshotSetupError::Transient(e) => return Err(e),
-                            }
+                            return Err(err);
                         }
                     }
                 } else {
@@ -1119,39 +1103,11 @@ fn publish_snapshot_size(
     }
 }
 
-enum SnapshotSetupError {
-    Definite(DefiniteError),
-    Transient(TransientError),
-}
-
-impl From<mysql_async::Error> for SnapshotSetupError {
-    fn from(e: mysql_async::Error) -> Self {
-        SnapshotSetupError::Transient(e.into())
-    }
-}
-
-impl From<MySqlError> for SnapshotSetupError {
-    fn from(e: MySqlError) -> Self {
-        SnapshotSetupError::Transient(e.into())
-    }
-}
-
-fn classify_query_error(e: mysql_async::Error) -> SnapshotSetupError {
-    match e {
-        mysql_async::Error::Server(mysql_async::ServerError { code, message, .. })
-            if code == ER_NO_SUCH_TABLE =>
-        {
-            SnapshotSetupError::Definite(DefiniteError::TableDropped(message))
-        }
-        e => SnapshotSetupError::Transient(e.into()),
-    }
-}
-
 async fn lock_tables_and_read_gtid_set(
     lock_conn: &mut MySqlConn,
     lock_clauses: &str,
     lock_wait_timeout: Option<Duration>,
-) -> Result<String, SnapshotSetupError> {
+) -> Result<String, TransientError> {
     if let Some(timeout) = lock_wait_timeout {
         // Interpolating a `Duration` integer; not parameterizable in MySQL `SET`.
         #[allow(clippy::disallowed_methods)]
@@ -1165,11 +1121,12 @@ async fn lock_tables_and_read_gtid_set(
 
     // `lock_clauses` is built from `MySqlTableName::Display`, which escapes both
     // schema and table via `quote_identifier`.
-    #[allow(clippy::disallowed_methods)]
-    lock_conn
-        .query_drop(format!("LOCK TABLES {lock_clauses}"))
-        .await
-        .map_err(classify_query_error)?;
+    if !lock_clauses.is_empty() {
+        #[allow(clippy::disallowed_methods)]
+        lock_conn
+            .query_drop(format!("LOCK TABLES {lock_clauses}"))
+            .await?;
+    }
 
     let snapshot_gtid_set = query_sys_var(lock_conn, "global.gtid_executed").await?;
     Ok(snapshot_gtid_set)
@@ -1228,7 +1185,7 @@ struct TableStatistics {
 async fn collect_table_statistics<Q>(
     conn: &mut Q,
     table: &MySqlTableName,
-) -> Result<TableStatistics, SnapshotSetupError>
+) -> Result<TableStatistics, TransientError>
 where
     Q: Queryable,
 {
@@ -1236,15 +1193,12 @@ where
 
     // `MySqlTableName::Display` escapes both identifier components via
     // `quote_identifier`, so this interpolation is safe; not parameterizable.
-    // `classify_query_error` turns a dropped table into a definite error, matching
-    // the boundary-sampling query rather than retrying forever.
     #[allow(clippy::disallowed_methods)]
     let count_row: Option<u64> = conn
         .query_first(format!("SELECT COUNT(*) FROM {}", table))
         .wall_time()
         .set_at(&mut stats.count_latency)
-        .await
-        .map_err(classify_query_error)?;
+        .await?;
     // `COUNT(*)` returns exactly one row, so `None` should be impossible. Default to 0
     // defensively rather than failing the snapshot on a protocol quirk.
     stats.count = count_row.unwrap_or(0);
