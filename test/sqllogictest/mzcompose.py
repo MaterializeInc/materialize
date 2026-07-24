@@ -642,6 +642,10 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/jsonb.slt",
         "test/sqllogictest/keys.slt",
         "test/sqllogictest/like.slt",
+        # A top-level LIMIT must fold to a constant, but a view's LIMIT may be a
+        # non-constant expression, so the `LIMIT (SELECT 1)` error diverges from
+        # the view, which accepts it.
+        "test/sqllogictest/limit_expr.slt",
         "test/sqllogictest/list.slt",
         "test/sqllogictest/list_subquery.slt",
         "test/sqllogictest/managed_cluster.slt",
@@ -1081,6 +1085,10 @@ def compileSlowSltConfig() -> SltRunConfig:
         "test/sqllogictest/temporal.slt",
         # The extra statements make it more flaky from timing issues, when expecting a refresh to not yet have happened.
         "test/sqllogictest/materialized_views.slt",
+        # A top-level LIMIT must fold to a constant, but a view's LIMIT may be a
+        # non-constant expression, so the `LIMIT (SELECT 1)` error diverges from
+        # the view, which accepts it.
+        "test/sqllogictest/limit_expr.slt",
     }
 
     tests = file_util.resolve_paths_with_wildcard(tests)
