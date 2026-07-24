@@ -206,6 +206,15 @@ pub const MYSQL_REPLICATION_HEARTBEAT_INTERVAL: Config<Duration> = Config::new(
     "Replication heartbeat interval requested from the MySQL server.",
 );
 
+/// Whether to split snapshot reads of tables with a supported single-column
+/// primary key into per-worker PK ranges. When disabled, each table is read
+/// whole by a single worker.
+pub static MYSQL_SOURCE_SNAPSHOT_PARALLELISM: Config<bool> = Config::new(
+    "mysql_source_snapshot_parallelism",
+    true,
+    "Whether to split MySQL snapshot reads across workers by primary-key ranges.",
+);
+
 // Postgres
 
 /// Interval to poll `confirmed_flush_lsn` to get a resumption lsn.
@@ -418,6 +427,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&KAFKA_SINK_BATCH_SIZE)
         .add(&KAFKA_SINK_BATCH_NUM_MESSAGES)
         .add(&MYSQL_REPLICATION_HEARTBEAT_INTERVAL)
+        .add(&MYSQL_SOURCE_SNAPSHOT_PARALLELISM)
         .add(&ORE_OVERFLOWING_BEHAVIOR)
         .add(&PG_FETCH_SLOT_RESUME_LSN_INTERVAL)
         .add(&PG_SCHEMA_VALIDATION_INTERVAL)

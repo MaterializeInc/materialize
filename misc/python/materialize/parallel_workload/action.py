@@ -2045,6 +2045,7 @@ class FlipFlagsAction(Action):
             "kafka_buffered_event_resize_threshold_elements",
             "kafka_low_watermark_check",
             "mysql_replication_heartbeat_interval",
+            "mysql_source_snapshot_parallelism",
             "postgres_fetch_slot_resume_lsn_interval",
             "pg_schema_validation_interval",
             "storage_enforce_external_addresses",
