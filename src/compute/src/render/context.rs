@@ -36,6 +36,7 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
+use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, Col2ValPagedBatcher, columnar_exchange};
 use mz_timely_util::columnation::ColumnationChunker;
 use timely::ContainerBuilder;
@@ -301,7 +302,7 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
     /// The `max_demand` parameter limits the number of columns decoded from the
     /// input. Only the first `max_demand` columns are decoded. Pass `usize::MAX` to
     /// decode all columns.
-    pub fn flat_map<D, DCB, L>(
+    pub fn flat_map<DCB, L>(
         &self,
         key: Option<&Row>,
         max_demand: usize,
@@ -311,8 +312,7 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
     )
     where
-        D: Data,
-        DCB: ContainerBuilder + PushInto<(D, T, Diff)>,
+        DCB: ContainerBuilder,
         L: for<'a, 'b> FnMut(
                 &'a mut DatumVecBorrow<'b>,
                 T,
@@ -326,7 +326,7 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
         // decode (and the activation-scoped arena it decodes into).
         match &self {
             ArrangementFlavor::Local(oks, errs) => {
-                let (oks, mfp_errs) = CollectionBundle::<T>::flat_map_core_fallible::<_, _, DCB, _>(
+                let (oks, mfp_errs) = CollectionBundle::<T>::flat_map_core_fallible::<_, DCB, _>(
                     oks.clone(),
                     key,
                     max_demand,
@@ -338,7 +338,7 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
                 (oks, errs)
             }
             ArrangementFlavor::Trace(_, oks, errs) => {
-                let (oks, mfp_errs) = CollectionBundle::<T>::flat_map_core_fallible::<_, _, DCB, _>(
+                let (oks, mfp_errs) = CollectionBundle::<T>::flat_map_core_fallible::<_, DCB, _>(
                     oks.clone(),
                     key,
                     max_demand,
@@ -621,7 +621,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// The `max_demand` parameter limits the number of columns decoded from the
     /// input. Only the first `max_demand` columns are decoded. Pass `usize::MAX` to
     /// decode all columns.
-    pub fn flat_map<D, DCB, L>(
+    pub fn flat_map<DCB, L>(
         &self,
         key_val: Option<(Vec<LirScalarExpr>, Option<Row>)>,
         max_demand: usize,
@@ -631,8 +631,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
     )
     where
-        D: Data,
-        DCB: ContainerBuilder + PushInto<(D, T, Diff)>,
+        DCB: ContainerBuilder,
         L: for<'a> FnMut(
                 &'a mut DatumVecBorrow<'_>,
                 T,
@@ -648,7 +647,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         if let Some((key, val)) = key_val {
             self.arrangement(&key)
                 .expect("Should have ensured during planning that this arrangement exists.")
-                .flat_map::<_, DCB, _>(val.as_ref(), max_demand, logic)
+                .flat_map::<DCB, _>(val.as_ref(), max_demand, logic)
         } else {
             let (oks, errs) = self
                 .collection
@@ -670,7 +669,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// callback writes ok results into the first session and errors into the second, returning
     /// the number of records produced. See [`ArrangementFlavor::flat_map`] for the fuel
     /// rationale.
-    fn flat_map_core_fallible<Tr, D, DCB, L>(
+    fn flat_map_core_fallible<Tr, DCB, L>(
         trace: Arranged<'scope, Tr>,
         key: Option<&<<BatchCursor<Tr> as Cursor>::KeyContainer as BatchContainer>::Owned>,
         max_demand: usize,
@@ -685,8 +684,10 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         for<'a> BatchCursor<Tr>:
             Cursor<Key<'a>: ExtendDatums, Val<'a>: ExtendDatums, Time = T, Diff = mz_repr::Diff>,
         <<BatchCursor<Tr> as Cursor>::KeyContainer as BatchContainer>::Owned: PartialEq,
-        D: Data,
-        DCB: ContainerBuilder + PushInto<(D, T, Diff)>,
+        // The builder accepts whatever `logic` gives it, so the push bound lives at the `give`
+        // call site rather than here. This lets a caller push borrowed records into a columnar
+        // builder that has no owned-tuple `Push`.
+        DCB: ContainerBuilder,
         // `logic` receives the key and value already decoded into a `DatumVecBorrow`. The decode
         // (and its arena/`DatumVec`) lives in the per-activation closure below, so it is scoped to
         // a single scheduling invocation rather than to the operator.
@@ -912,10 +913,10 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         until: Antichain<mz_repr::Timestamp>,
         config_set: &ConfigSet,
     ) -> (
-        VecCollection<'scope, T, mz_repr::Row, Diff>,
+        CollectionEdge<'scope, T>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
     ) {
-        // If the MFP is trivial, we can just call `as_collection`.
+        // If the MFP is trivial, we can just return the collection.
         // In the case that we weren't going to apply the `key_val` optimization,
         // this path results in a slightly smaller and faster
         // dataflow graph, and is intended to fix
@@ -928,7 +929,21 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
 
         if mfp_plan.is_identity() && !has_key_val {
             let key = key_val.map(|(k, _v)| k);
-            return self.as_specific_collection(key.as_deref(), config_set);
+            return match key {
+                // Unarranged identity: hand the edge straight through, so a
+                // columnar producer stays columnar without a `ColumnarToVec` hop.
+                None => self
+                    .collection
+                    .clone()
+                    .expect("The unarranged collection doesn't exist."),
+                // Keyed identity reads an existing arrangement, which is
+                // row-based. Wrap it as a `Vec` edge. `as_specific_collection`
+                // stays the consumer leaf.
+                Some(key) => {
+                    let (oks, errs) = self.as_specific_collection(Some(&key), config_set);
+                    (CollectionEdge::Vec(oks), errs)
+                }
+            };
         }
 
         // Apply demand-based column pruning. We round-trip through MIR
@@ -948,48 +963,54 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         // Wrap in an `Rc` so that lifetimes work out.
         let until = std::rc::Rc::new(until);
 
-        let (stream, errors) = self
-            .flat_map::<_, ConsolidatingContainerBuilder<Vec<(Row, T, Diff)>>, _>(
-                key_val,
-                max_demand,
-                move |row_datums, time, diff, ok_session, err_session| {
-                    let mut row_builder = SharedRow::get();
-                    let until = std::rc::Rc::clone(&until);
-                    let temp_storage = RowArena::new();
-                    let row_iter = row_datums.iter();
-                    let mut datums_local = datum_vec.borrow();
-                    datums_local.extend(row_iter);
-                    let event_time = time.event_time();
-                    let mut work: usize = 0;
-                    for result in mfp_plan.evaluate(
-                        &mut datums_local,
-                        &temp_storage,
-                        event_time,
-                        diff.clone(),
-                        move |time| !until.less_equal(time),
-                        &mut row_builder,
-                    ) {
-                        work += 1;
-                        match result {
-                            Ok((row, event_time, diff)) => {
-                                // Copy the whole time, and re-populate event time.
-                                let mut time: T = time.clone();
-                                *time.event_time_mut() = event_time;
-                                ok_session.give((row, time, diff));
-                            }
-                            Err((e, event_time, diff)) => {
-                                // Copy the whole time, and re-populate event time.
-                                let mut time: T = time.clone();
-                                *time.event_time_mut() = event_time;
-                                err_session.give((e, time, diff));
-                            }
+        // The ok output is built into a `Column`, so this producer emits the
+        // columnar edge. `ConsolidatingColumnBuilder` folds within-batch
+        // duplicates, matching the row-based `ConsolidatingContainerBuilder`
+        // this replaced. It stages owned `(Row, T, Diff)` tuples to consolidate
+        // in place, so the records are given owned; `mfp_plan.evaluate` already
+        // produces a fresh owned `Row` per result, so this is a move into
+        // staging, not a new allocation.
+        let (stream, errors) = self.flat_map::<ConsolidatingColumnBuilder<Row, T, Diff>, _>(
+            key_val,
+            max_demand,
+            move |row_datums, time, diff, ok_session, err_session| {
+                let mut row_builder = SharedRow::get();
+                let until = std::rc::Rc::clone(&until);
+                let temp_storage = RowArena::new();
+                let row_iter = row_datums.iter();
+                let mut datums_local = datum_vec.borrow();
+                datums_local.extend(row_iter);
+                let event_time = time.event_time();
+                let mut work: usize = 0;
+                for result in mfp_plan.evaluate(
+                    &mut datums_local,
+                    &temp_storage,
+                    event_time,
+                    diff.clone(),
+                    move |time| !until.less_equal(time),
+                    &mut row_builder,
+                ) {
+                    work += 1;
+                    match result {
+                        Ok((row, event_time, diff)) => {
+                            // Copy the whole time, and re-populate event time.
+                            let mut time: T = time.clone();
+                            *time.event_time_mut() = event_time;
+                            ok_session.give((row, time, diff));
+                        }
+                        Err((e, event_time, diff)) => {
+                            // Copy the whole time, and re-populate event time.
+                            let mut time: T = time.clone();
+                            *time.event_time_mut() = event_time;
+                            err_session.give((e, time, diff));
                         }
                     }
-                    work
-                },
-            );
+                }
+                work
+            },
+        );
 
-        (stream.as_collection(), errors)
+        (CollectionEdge::Columnar(stream.as_collection()), errors)
     }
     pub fn ensure_collections(
         mut self,
@@ -1055,11 +1076,18 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     .try_into()
                     .expect("must fit");
                 bucketed = true;
-                T::maybe_apply_temporal_bucketing(oks.inner, as_of.clone(), summary)
+                // Temporal bucketing consumes and produces a `Vec` edge, so
+                // decode here. This is the sanctioned leaf decode where a
+                // `Vec`-internal operator meets the columnar edge.
+                CollectionEdge::Vec(T::maybe_apply_temporal_bucketing(
+                    oks.into_vec().inner,
+                    as_of.clone(),
+                    summary,
+                ))
             } else {
                 oks
             };
-            self.collection = Some((CollectionEdge::Vec(oks), errs));
+            self.collection = Some((oks, errs));
         }
         for (key, _, thinning) in collections.arranged {
             if !self.arranged.contains_key(&key) {
@@ -1345,7 +1373,7 @@ where
     }
     /// Perform roughly `fuel` work through the cursor, applying `logic` and sending results to
     /// the two output sessions.
-    fn do_work<D, DCB, L>(
+    fn do_work<DCB, L>(
         &mut self,
         key: Option<&C::Key<'_>>,
         logic: &mut L,
@@ -1353,8 +1381,9 @@ where
         ok_output: &mut OutputBuilderSession<'_, C::Time, DCB>,
         err_output: &mut OutputBuilderSession<'_, C::Time, ECB<C::Time>>,
     ) where
-        D: Data,
-        DCB: ContainerBuilder + PushInto<(D, C::Time, C::Diff)>,
+        // The push bound lives at `logic`'s `give` call site, not here, so a caller can push
+        // borrowed records into a columnar builder that has no owned-tuple `Push`.
+        DCB: ContainerBuilder,
         L: FnMut(
             C::Key<'_>,
             C::Val<'_>,
@@ -1485,7 +1514,7 @@ fn walk_cursor<C, F>(
 #[cfg(test)]
 mod tests {
     use differential_dataflow::input::Input;
-    use mz_expr::EvalError;
+    use mz_expr::{EvalError, MapFilterProject};
     use mz_repr::{Datum, ReprScalarType, Timestamp};
     use timely::dataflow::operators::Capture;
     use timely::dataflow::operators::capture::{Event, Extract};
@@ -1643,5 +1672,187 @@ mod tests {
         assert!(ok_vec.is_empty() && ok_col.is_empty());
         assert!(!err_vec.is_empty());
         assert_eq!(err_vec, err_col);
+    }
+
+    fn extract_row_updates(
+        captured: Captured<(Row, Timestamp, Diff)>,
+    ) -> Vec<(Row, Timestamp, Diff)> {
+        let mut updates: Vec<_> = captured
+            .extract()
+            .into_iter()
+            .flat_map(|(_, data)| data)
+            .collect();
+        updates.sort();
+        updates
+    }
+
+    /// A `Get -> ArrangeBy` chain carries the columnar arm end to end. A
+    /// non-identity MFP drives `as_collection_core` down its columnar producer
+    /// path, and feeding that edge into the arrange input keeps the columnar
+    /// passthrough, so no `ColumnarToVec` sits on the arrange path.
+    ///
+    /// The producer output is checked against the projected input. Arrange
+    /// correctness itself is covered by `arrange_collection_arms_agree`; here we
+    /// only assert the variant survives the hand-off.
+    #[mz_ore::test]
+    fn get_arrange_by_carries_columnar_end_to_end() {
+        let rows = vec![
+            (Row::pack_slice(&[Datum::Int64(1), Datum::Int64(10)]), 0u64),
+            (Row::pack_slice(&[Datum::Int64(2), Datum::Int64(20)]), 1),
+            (Row::pack_slice(&[Datum::Int64(1), Datum::Int64(10)]), 1),
+        ];
+        // Project away column 1; the output row carries only column 0. A
+        // projection is non-identity, so `as_collection_core` takes the columnar
+        // producer path rather than the identity passthrough.
+        let mfp = MapFilterProject::<LirScalarExpr>::new(2)
+            .project(vec![0])
+            .into_plan()
+            .expect("mfp");
+        let mut expected: Vec<(Row, Timestamp, Diff)> = rows
+            .iter()
+            .map(|(r, t)| {
+                let col0 = r.iter().next().unwrap();
+                (Row::pack_slice(&[col0]), Timestamp::from(*t), Diff::ONE)
+            })
+            .collect();
+        expected.sort();
+
+        let config_set = ConfigSet::default();
+        let (producer_is_columnar, passthrough_is_columnar, produced) =
+            timely::execute_directly(move |worker| {
+                worker.dataflow::<Timestamp, _, _>(|scope| {
+                    let (mut input, collection) = scope.new_collection();
+                    let (_err_input, errs) = scope.new_collection::<DataflowErrorSer, Diff>();
+                    let bundle = CollectionBundle::from_edge(CollectionEdge::Vec(collection), errs);
+                    let (edge, _errs) =
+                        bundle.as_collection_core(mfp, None, Antichain::new(), &config_set);
+                    let producer_is_columnar = matches!(edge, CollectionEdge::Columnar(_));
+                    // Tee the producer output for a content check, then feed the
+                    // original edge into the arrange input.
+                    let produced = edge.clone().into_vec().inner.capture();
+                    let (_arranged, _arrange_errs, passthrough) =
+                        CollectionBundle::<Timestamp>::arrange_collection(
+                            &"arrange".to_string(),
+                            edge,
+                            vec![LirScalarExpr::column(0)],
+                            vec![0],
+                            false,
+                        );
+                    let passthrough_is_columnar =
+                        matches!(passthrough, CollectionEdge::Columnar(_));
+
+                    let max_time = rows.iter().map(|(_, t)| *t).max().unwrap();
+                    for (row, time) in rows {
+                        input.update_at(row, Timestamp::from(time), Diff::ONE);
+                    }
+                    input.advance_to(Timestamp::from(max_time + 1));
+                    input.flush();
+                    (producer_is_columnar, passthrough_is_columnar, produced)
+                })
+            });
+
+        assert!(
+            producer_is_columnar,
+            "a non-identity MFP must produce a columnar edge"
+        );
+        assert!(
+            passthrough_is_columnar,
+            "the arrange input must keep the columnar passthrough (no ColumnarToVec)"
+        );
+        assert_eq!(extract_row_updates(produced), expected);
+    }
+
+    /// The reworked identity fast-path returns the unarranged input edge
+    /// unchanged, so a columnar producer stays columnar and a `Vec` producer
+    /// stays `Vec` with no repack in either direction.
+    #[mz_ore::test]
+    fn as_collection_core_identity_passes_edge_through() {
+        for columnar_input in [false, true] {
+            let config_set = ConfigSet::default();
+            let is_columnar = timely::execute_directly(move |worker| {
+                worker.dataflow::<Timestamp, _, _>(|scope| {
+                    let (mut input, collection) = scope.new_collection::<Row, Diff>();
+                    let (_err_input, errs) = scope.new_collection::<DataflowErrorSer, Diff>();
+                    let edge = if columnar_input {
+                        CollectionEdge::Columnar(vec_to_columnar(collection))
+                    } else {
+                        CollectionEdge::Vec(collection)
+                    };
+                    let bundle = CollectionBundle::from_edge(edge, errs);
+                    let identity = MapFilterProject::<LirScalarExpr>::new(1)
+                        .into_plan()
+                        .expect("identity mfp");
+                    let (out, _errs) =
+                        bundle.as_collection_core(identity, None, Antichain::new(), &config_set);
+                    let is_columnar = matches!(out, CollectionEdge::Columnar(_));
+                    input.update(Row::pack_slice(&[Datum::Int64(1)]), Diff::ONE);
+                    input.advance_to(Timestamp::from(1u64));
+                    input.flush();
+                    is_columnar
+                })
+            });
+            assert_eq!(
+                is_columnar, columnar_input,
+                "the identity fast-path must preserve the input edge variant"
+            );
+        }
+    }
+
+    /// The columnar producer folds within-batch duplicates: input rows that
+    /// project to the same output row at the same time collapse to one record
+    /// with summed diff, matching the row-based `ConsolidatingContainerBuilder`
+    /// this replaced. A plain `ColumnBuilder` would emit both records.
+    #[mz_ore::test]
+    fn as_collection_core_consolidates_within_batch() {
+        // `[1, 10]` and `[1, 20]` both project (dropping column 1) to `[1]` at
+        // t=0, so their `+1` diffs must fold to `+2`. `[2, 30]` projects to a
+        // distinct record.
+        let rows = vec![
+            Row::pack_slice(&[Datum::Int64(1), Datum::Int64(10)]),
+            Row::pack_slice(&[Datum::Int64(1), Datum::Int64(20)]),
+            Row::pack_slice(&[Datum::Int64(2), Datum::Int64(30)]),
+        ];
+        let mfp = MapFilterProject::<LirScalarExpr>::new(2)
+            .project(vec![0])
+            .into_plan()
+            .expect("mfp");
+        let expected = vec![
+            (
+                Row::pack_slice(&[Datum::Int64(1)]),
+                Timestamp::from(0u64),
+                Diff::from(2),
+            ),
+            (
+                Row::pack_slice(&[Datum::Int64(2)]),
+                Timestamp::from(0u64),
+                Diff::ONE,
+            ),
+        ];
+
+        let config_set = ConfigSet::default();
+        let captured = timely::execute_directly(move |worker| {
+            worker.dataflow::<Timestamp, _, _>(|scope| {
+                let (mut input, collection) = scope.new_collection();
+                let (_err_input, errs) = scope.new_collection::<DataflowErrorSer, Diff>();
+                let bundle = CollectionBundle::from_edge(CollectionEdge::Vec(collection), errs);
+                let (edge, _errs) =
+                    bundle.as_collection_core(mfp, None, Antichain::new(), &config_set);
+                assert!(
+                    matches!(edge, CollectionEdge::Columnar(_)),
+                    "a non-identity MFP must produce a columnar edge"
+                );
+                let captured = edge.into_vec().inner.capture();
+                // Feed all rows at the same time in one batch so the fold is
+                // within-batch, not a downstream re-consolidation.
+                for row in rows {
+                    input.update_at(row, Timestamp::from(0u64), Diff::ONE);
+                }
+                input.advance_to(Timestamp::from(1u64));
+                input.flush();
+                captured
+            })
+        });
+
+        assert_eq!(extract_row_updates(captured), expected);
     }
 }

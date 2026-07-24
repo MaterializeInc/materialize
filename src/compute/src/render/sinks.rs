@@ -80,12 +80,16 @@ impl<'g, T: RenderTimestamp> Context<'g, T> {
             let mut mfp = MapFilterProject::<LirScalarExpr>::new(unthinned_arity);
             mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
             let mfp_plan = mfp.into_plan().expect("MFP planning failed");
-            bundle.as_collection_core(
+            // The sink serializes rows, so decode to `Vec` here. This is the
+            // sanctioned sink leaf, the same seam as the raw-collection arm
+            // above.
+            let (oks, errs) = bundle.as_collection_core(
                 mfp_plan,
                 Some((key.clone(), None)),
                 self.until.clone(),
                 &self.config_set,
-            )
+            );
+            (oks.into_vec(), errs)
         };
 
         // Attach logging of dataflow errors.
