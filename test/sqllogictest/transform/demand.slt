@@ -29,6 +29,9 @@ select x from (select x, 1/a from (select 2 as x), t);
 # A `dummy` used to occur in the following plan before putting an extra call to `ProjectionPushdown` after the `Demand`
 # call in the physical optimizer, because at the time of the first `Demand` call, the column that is later dummied in
 # the second call is still being used in a join constraint, but this join is then eliminated by `RedundantJoin`.
+#
+# This query also exercises `UnionBranchCancellation` running again after the final `RelationCSE`: it folds a
+# `union(get l0, negate(get l0), constant)` left behind by the earlier passes into the fast path below.
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 select
@@ -87,27 +90,10 @@ from
 where true
 limit coalesce(43, 120);
 ----
-Explained Query:
+Explained Query (fast path):
   Finish limit=43 output=[#0..=#3]
-    With
-      cte l0 =
-        Distinct project=[] // { arity: 0 }
-          TopK limit=13 // { arity: 0 }
-            Filter error("timestamp out of range") // { arity: 0 }
-              Project () // { arity: 0 }
-                ReadIndex on=mz_columns mz_columns_ind=[*** full scan ***] // { arity: 8 }
-    Return // { arity: 4 }
-      Map (833564499, null, null, 2024-12-18 12:54:29.994 UTC) // { arity: 4 }
-        TopK limit=90 // { arity: 0 }
-          Union // { arity: 0 }
-            Get l0 // { arity: 0 }
-            Negate // { arity: 0 }
-              Get l0 // { arity: 0 }
-            Constant // { arity: 0 }
-              - ()
-
-Used Indexes:
-  - mz_catalog.mz_columns_ind (*** full scan ***)
+    Constant
+      - (833564499, null, null, 2024-12-18 12:54:29.994 UTC)
 
 Target cluster: mz_catalog_server
 

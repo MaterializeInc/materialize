@@ -1845,6 +1845,9 @@ class FlipFlagsAction(Action):
             "false",
         ]
         self.flags_with_values["enable_case_literal_transform"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_union_cancellation_after_relation_cse"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["enable_cast_elimination"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_fixed_correlated_cte_lowering"] = (
             BOOLEAN_FLAG_VALUES

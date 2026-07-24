@@ -284,6 +284,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_simplify_from_less_existence
     enable_simplify_quantified_comparisons
     enable_time_at_time_zone
+    enable_union_cancellation_after_relation_cse
     enable_unlimited_retain_history
     enable_will_distinct_propagation
     enable_with_ordinality_legacy_fallback
