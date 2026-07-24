@@ -1746,6 +1746,7 @@ impl Instance {
         mut read_hold: ReadHold,
         target_replica: Option<ReplicaId>,
         peek_response_tx: oneshot::Sender<PeekResponse>,
+        notify_coordinator: bool,
     ) -> Result<(), PeekError> {
         use PeekError::*;
 
@@ -1778,6 +1779,7 @@ impl Instance {
                 peek_response_tx,
                 limit: finishing.limit.map(usize::cast_from),
                 offset: finishing.offset,
+                notify_coordinator,
             },
         );
 
@@ -1810,15 +1812,19 @@ impl Instance {
         self.metrics
             .observe_peek_response(&PeekResponse::Canceled, duration);
 
-        // Enqueue a notification for the cancellation.
-        let otel_ctx = peek.otel_ctx.clone();
-        otel_ctx.attach_as_parent();
+        // Enqueue a notification for the cancellation. Frontend-sequenced peeks
+        // opt out: they observe the cancellation via their response channel and
+        // do not want the coordinator woken.
+        if peek.notify_coordinator {
+            let otel_ctx = peek.otel_ctx.clone();
+            otel_ctx.attach_as_parent();
 
-        self.deliver_response(ComputeControllerResponse::PeekNotification(
-            uuid,
-            PeekNotification::Canceled,
-            otel_ctx,
-        ));
+            self.deliver_response(ComputeControllerResponse::PeekNotification(
+                uuid,
+                PeekNotification::Canceled,
+                otel_ctx,
+            ));
+        }
 
         // Finish the peek.
         // This will also propagate the cancellation to the replicas.
@@ -2105,14 +2111,18 @@ impl Instance {
         let duration = peek.requested_at.elapsed();
         self.metrics.observe_peek_response(&response, duration);
 
-        let notification = PeekNotification::new(&response, peek.offset, peek.limit);
-        // NOTE: We use the `otel_ctx` from the response, not the pending peek, because we
-        // currently want the parent to be whatever the compute worker did with this peek.
-        self.deliver_response(ComputeControllerResponse::PeekNotification(
-            uuid,
-            notification,
-            otel_ctx,
-        ));
+        // Frontend-sequenced peeks stream their rows directly to the session and
+        // track completion off the coordinator task, so skip the notification.
+        if peek.notify_coordinator {
+            let notification = PeekNotification::new(&response, peek.offset, peek.limit);
+            // NOTE: We use the `otel_ctx` from the response, not the pending peek, because we
+            // currently want the parent to be whatever the compute worker did with this peek.
+            self.deliver_response(ComputeControllerResponse::PeekNotification(
+                uuid,
+                notification,
+                otel_ctx,
+            ));
+        }
 
         self.finish_peek(uuid, response)
     }
@@ -3062,6 +3072,14 @@ struct PendingPeek {
     limit: Option<usize>,
     /// The offset into the peek's result.
     offset: usize,
+    /// Whether to emit a `PeekNotification` to the controller response channel
+    /// on completion or cancellation.
+    ///
+    /// Classic coordinator-sequenced peeks set this so the coordinator can
+    /// retire their `pending_peeks` entry. Frontend-sequenced peeks stream rows
+    /// directly to the session and track themselves off the coordinator task, so
+    /// they set this `false` to keep the response side off the coordinator too.
+    notify_coordinator: bool,
 }
 
 #[derive(Debug, Clone)]

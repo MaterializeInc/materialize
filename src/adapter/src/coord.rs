@@ -209,6 +209,7 @@ use crate::explain::optimizer_trace::{DispatchGuard, OptimizerTrace};
 use crate::metrics::Metrics;
 use crate::optimize::dataflows::{ComputeInstanceSnapshot, DataflowBuilder};
 use crate::optimize::{self, Optimize, OptimizerConfig};
+use crate::peek_registry::FrontendPeekRegistry;
 use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::{
     StatementEndedExecutionReason, StatementLifecycleEvent, StatementLoggingId,
@@ -2042,6 +2043,11 @@ pub struct Coordinator {
     pending_peeks: BTreeMap<Uuid, PendingPeek>,
     /// A map from client connection ids to a set of all pending peeks for that client.
     client_pending_peeks: BTreeMap<ConnectionId, BTreeMap<Uuid, ClusterId>>,
+    /// Registry of in-flight frontend-sequenced peeks, shared with every
+    /// session's `PeekClient`. Frontend peeks register/unregister here off the
+    /// coordinator task. The coordinator only consults it to cancel a
+    /// connection's peeks (see [`Coordinator::cancel_pending_peeks`]).
+    frontend_peek_registry: Arc<FrontendPeekRegistry>,
 
     /// A map from client connection ids to pending linearize read transaction.
     pending_linearize_read_txns: BTreeMap<ConnectionId, PendingReadTxn>,
@@ -5043,6 +5049,12 @@ pub fn serve(
 
         let (group_commit_tx, group_commit_rx) = appends::notifier();
 
+        // Shared between the coordinator and every session's `PeekClient`. Fixed
+        // shard count keeps the hot-path locks contention-spread across
+        // concurrent sessions.
+        let frontend_peek_registry = Arc::new(FrontendPeekRegistry::new(64));
+        let coord_frontend_peek_registry = Arc::clone(&frontend_peek_registry);
+
         let parent_span = tracing::Span::current();
         let thread = thread::Builder::new()
             // The Coordinator thread tends to keep a lot of data on its stack. To
@@ -5093,6 +5105,7 @@ pub fn serve(
                     txn_read_holds: Default::default(),
                     pending_peeks: BTreeMap::new(),
                     client_pending_peeks: BTreeMap::new(),
+                    frontend_peek_registry: coord_frontend_peek_registry,
                     pending_linearize_read_txns: BTreeMap::new(),
                     serialized_ddl: LockedVecDeque::new(),
                     active_compute_sinks: BTreeMap::new(),
@@ -5215,6 +5228,7 @@ pub fn serve(
                     now,
                     environment_id,
                     segment_client_clone,
+                    frontend_peek_registry,
                 );
                 Ok((handle, client))
             }

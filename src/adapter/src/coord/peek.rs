@@ -963,6 +963,9 @@ impl crate::coord::Coordinator {
                 read_hold,
                 target_replica,
                 rows_tx,
+                // Classic coordinator-sequenced peek: the coordinator relies on
+                // the `PeekNotification` to retire its `pending_peeks` entry.
+                true,
             )
             .map_err(AdapterError::concurrent_dependency_drop_from_peek_error);
         if let Err(e) = peek_result {
@@ -1020,6 +1023,9 @@ impl crate::coord::Coordinator {
             persist_client,
             peek_stash_read_batch_size_bytes,
             peek_stash_read_memory_budget_bytes,
+            // Classic coordinator-sequenced peeks are tracked in `pending_peeks`,
+            // not the shared registry, so there is nothing to clean up here.
+            None,
         );
 
         Ok(crate::ExecuteResponse::SendingRowsStreaming {
@@ -1042,8 +1048,13 @@ impl crate::coord::Coordinator {
         mut persist_client: mz_persist_client::PersistClient,
         peek_stash_read_batch_size_bytes: usize,
         peek_stash_read_memory_budget_bytes: usize,
+        registration_guard: Option<crate::peek_registry::PeekRegistrationGuard>,
     ) -> impl futures::Stream<Item = PeekResponseUnary> {
         async_stream::stream!({
+            // Held for the stream's lifetime. On completion or drop it removes
+            // the peek's registry entry (frontend peeks only; `None` otherwise).
+            let _registration_guard = registration_guard;
+
             let result = rows_rx.await;
 
             let rows = match result {
@@ -1245,6 +1256,17 @@ impl crate::coord::Coordinator {
     /// Cancel and remove all pending peeks that were initiated by the client with `conn_id`.
     #[mz_ore::instrument(level = "debug")]
     pub(crate) fn cancel_pending_peeks(&mut self, conn_id: &ConnectionId) {
+        // Cancel fast-path peeks tracked in the shared registry, off-loaded from
+        // the coordinator's own `pending_peeks`. The session observes the
+        // `Canceled` response via its `rows_rx`, so no coordinator-side
+        // retirement is needed here.
+        for (uuid, cluster_id) in self.frontend_peek_registry.take_conn(conn_id) {
+            let _ = self
+                .controller
+                .compute
+                .cancel_peek(cluster_id, uuid, PeekResponse::Canceled);
+        }
+
         if let Some(uuids) = self.client_pending_peeks.remove(conn_id) {
             self.metrics
                 .canceled_peeks
