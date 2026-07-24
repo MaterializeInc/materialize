@@ -881,6 +881,7 @@ impl From<CatalogEntry> for durable::Item {
             owner_id: entry.owner_id,
             privileges: entry.privileges.into_all_values().collect(),
             extra_versions,
+            ephemeral_owner_session: None,
         }
     }
 }

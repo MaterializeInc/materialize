@@ -1302,6 +1302,7 @@ impl CatalogState {
                     owner_id,
                     privileges,
                     extra_versions,
+                    ephemeral_owner_session: _,
                 } = item;
                 let schema = self.find_non_temp_schema(&schema_id);
                 let name = QualifiedItemName {

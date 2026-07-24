@@ -865,6 +865,7 @@ fn add_new_remove_old_builtin_items_migration(
                     *c.owner_id,
                     acl_items,
                     versions,
+                    None,
                 )?;
                 true
             }

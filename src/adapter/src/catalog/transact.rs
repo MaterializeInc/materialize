@@ -1846,6 +1846,7 @@ impl Catalog {
                         privileges.clone(),
                         &temporary_oids,
                         versions,
+                        None,
                     )?;
                     info!(
                         "create {} {} ({})",
@@ -3397,6 +3398,7 @@ fn tx_replace_item(
         owner_id,
         privileges,
         extra_versions,
+        ephemeral_owner_session,
     } = new_entry.into();
 
     tx.remove_item(id)?;
@@ -3410,6 +3412,7 @@ fn tx_replace_item(
         owner_id,
         privileges,
         extra_versions,
+        ephemeral_owner_session,
     )?;
 
     Ok(())
