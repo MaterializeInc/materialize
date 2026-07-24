@@ -19,5 +19,8 @@ mz-repr = { path = "../repr" }
 mz-timely-util = { path = "../timely-util", default-features = false }
 timely.workspace = true
 
+[dev-dependencies]
+mz-ore = { path = "../ore", default-features = false, features = ["columnation"] }
+
 [features]
 default = ["mz-ore/default", "mz-timely-util/default"]
