@@ -51,9 +51,7 @@ use mz_adapter_types::dyncfgs::{
 use super::return_if_err;
 use crate::AdapterError::AlterClusterWhilePendingReplicas;
 use crate::catalog::{self, Op, ReplicaCreateDropReason};
-use crate::config::{
-    ClusterEvalContext, ClusterScopeContext, ReplicaEvalContext, ReplicaScopeContext,
-};
+use crate::config::{ClusterEvalContext, ClusterScopeContext, ReplicaEvalContext};
 use crate::coord::{
     AlterCluster, AlterClusterAwaitReconfiguration, AlterClusterFinalize,
     AlterClusterWaitForHydrated, ClusterReplicaStatuses, ClusterStage, Coordinator, Message,
@@ -1348,20 +1346,14 @@ impl Coordinator {
                 *session.current_role_id(),
                 ReplicaCreateDropReason::Manual,
             )?;
-            replica_ctxs.push(ReplicaEvalContext {
+            replica_ctxs.push(ReplicaEvalContext::for_replica(
                 cluster_id,
+                cluster_ctx.clone(),
                 replica_id,
-                cluster: cluster_ctx.clone(),
-                replica: ReplicaScopeContext {
-                    id: replica_id.to_string(),
-                    name: replica_name,
-                    is_builtin: cluster_id.is_system(),
-                    size: size.clone(),
-                    size_family,
-                    cluster_id: cluster_id.to_string(),
-                    cluster_name: cluster_name.clone(),
-                },
-            });
+                replica_name,
+                size.clone(),
+                size_family,
+            ));
         }
 
         // Fold the new cluster's cluster-coherent and the replicas' replica-local
@@ -1598,20 +1590,14 @@ impl Coordinator {
             // Only orchestrated (managed-location) replicas have a size and size
             // family, so only they carry replica-local overrides.
             if let ReplicaLocation::Managed(location) = &config.location {
-                replica_ctxs.push(ReplicaEvalContext {
-                    cluster_id: id,
+                replica_ctxs.push(ReplicaEvalContext::for_replica(
+                    id,
+                    cluster_ctx.clone(),
                     replica_id,
-                    cluster: cluster_ctx.clone(),
-                    replica: ReplicaScopeContext {
-                        id: replica_id.to_string(),
-                        name: replica_name.clone(),
-                        is_builtin: id.is_system(),
-                        size: location.size.clone(),
-                        size_family: location.allocation.family().to_string(),
-                        cluster_id: id.to_string(),
-                        cluster_name: cluster_name.clone(),
-                    },
-                });
+                    replica_name.clone(),
+                    location.size.clone(),
+                    location.allocation.family().to_string(),
+                ));
             }
 
             ops.push(catalog::Op::CreateClusterReplica {
@@ -1762,24 +1748,18 @@ impl Coordinator {
         // Build the replica's eval context from the plan before `config` moves
         // into the op. Only managed replicas have a size (and size family).
         let replica_ctx = match &config.location {
-            ReplicaLocation::Managed(location) => Some(ReplicaEvalContext {
+            ReplicaLocation::Managed(location) => Some(ReplicaEvalContext::for_replica(
                 cluster_id,
-                replica_id,
-                cluster: ClusterScopeContext {
+                ClusterScopeContext {
                     id: cluster_id.to_string(),
                     name: cluster_name.clone(),
                     is_builtin,
                 },
-                replica: ReplicaScopeContext {
-                    id: replica_id.to_string(),
-                    name: name.to_string(),
-                    is_builtin,
-                    size: location.size.clone(),
-                    size_family: location.allocation.family().to_string(),
-                    cluster_id: cluster_id.to_string(),
-                    cluster_name,
-                },
-            }),
+                replica_id,
+                name.to_string(),
+                location.size.clone(),
+                location.allocation.family().to_string(),
+            )),
             ReplicaLocation::Unmanaged(_) => None,
         };
 
@@ -2084,20 +2064,14 @@ impl Coordinator {
                             owner_id,
                             reason.clone(),
                         )?;
-                        replica_ctxs.push(ReplicaEvalContext {
+                        replica_ctxs.push(ReplicaEvalContext::for_replica(
                             cluster_id,
+                            cluster_ctx.clone(),
                             replica_id,
-                            cluster: cluster_ctx.clone(),
-                            replica: ReplicaScopeContext {
-                                id: replica_id.to_string(),
-                                name: replica_name,
-                                is_builtin: cluster_id.is_system(),
-                                size: new_size.clone(),
-                                size_family,
-                                cluster_id: cluster_id.to_string(),
-                                cluster_name: cluster_ctx.name.clone(),
-                            },
-                        });
+                            replica_name,
+                            new_size.clone(),
+                            size_family,
+                        ));
                     }
                 }
                 AlterClusterPlanStrategy::For(_) | AlterClusterPlanStrategy::UntilReady { .. } => {
@@ -2120,20 +2094,14 @@ impl Coordinator {
                             owner_id,
                             reason.clone(),
                         )?;
-                        replica_ctxs.push(ReplicaEvalContext {
+                        replica_ctxs.push(ReplicaEvalContext::for_replica(
                             cluster_id,
+                            cluster_ctx.clone(),
                             replica_id,
-                            cluster: cluster_ctx.clone(),
-                            replica: ReplicaScopeContext {
-                                id: replica_id.to_string(),
-                                name: replica_name,
-                                is_builtin: cluster_id.is_system(),
-                                size: new_size.clone(),
-                                size_family,
-                                cluster_id: cluster_id.to_string(),
-                                cluster_name: cluster_ctx.name.clone(),
-                            },
-                        });
+                            replica_name,
+                            new_size.clone(),
+                            size_family,
+                        ));
                     }
                     finalization_needed = NeedsFinalization::Yes;
                 }
@@ -2174,20 +2142,14 @@ impl Coordinator {
                     owner_id,
                     reason.clone(),
                 )?;
-                replica_ctxs.push(ReplicaEvalContext {
+                replica_ctxs.push(ReplicaEvalContext::for_replica(
                     cluster_id,
+                    cluster_ctx.clone(),
                     replica_id,
-                    cluster: cluster_ctx.clone(),
-                    replica: ReplicaScopeContext {
-                        id: replica_id.to_string(),
-                        name: replica_name,
-                        is_builtin: cluster_id.is_system(),
-                        size: new_size.clone(),
-                        size_family,
-                        cluster_id: cluster_id.to_string(),
-                        cluster_name: cluster_ctx.name.clone(),
-                    },
-                });
+                    replica_name,
+                    new_size.clone(),
+                    size_family,
+                ));
             }
         }
 
