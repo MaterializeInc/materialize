@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import React, { ReactElement } from "react";
 
@@ -155,8 +156,10 @@ describe("UsagePage", () => {
     // parent 14/19 ≈ 73.7%, child 5/19 ≈ 26.3%.
     expect(within(accountRows[0]).getByText("73.7%")).toBeVisible();
     expect(within(accountRows[1]).getByText("26.3%")).toBeVisible();
-    // Accounts render expanded, so every cluster row is visible inline,
-    // region-qualified ("aws/us-east-1 / <cluster>").
+    // Accounts render collapsed by default (SAS-168); expand both to reveal
+    // their cluster rows, region-qualified ("aws/us-east-1 / <cluster>").
+    await userEvent.click(accountRows[0]);
+    await userEvent.click(accountRows[1]);
     for (const cluster of ["quickstart.r1", "compute.r1", "prod.r1"]) {
       expect(
         await ledger.findByText(`aws/us-east-1 / ${cluster}`),
@@ -406,17 +409,20 @@ describe("UsagePage", () => {
     const ledger = within(
       await screen.findByTestId("account-spend-ledger", {}, { timeout: 5_000 }),
     );
-    // The account renders expanded, so its clusters are visible inline. Scope
-    // lookups to the ledger table. Storage and egress (both empty
-    // cluster_grouping_key) stay on separate rows via `category`.
-    expect(await ledger.findByText("aws/us-east-1 / default.r1")).toBeVisible();
-    expect(await ledger.findByText("aws/us-east-1 / Storage")).toBeVisible();
-    expect(await ledger.findByText("aws/us-east-1 / Egress")).toBeVisible();
+    // Accounts render collapsed by default (SAS-168); expand to reveal its
+    // clusters. Scope lookups to the ledger table. Storage and egress (both
+    // empty cluster_grouping_key) stay on separate rows via `category`.
+    await userEvent.click(await ledger.findByTestId("account-row"));
+    await waitFor(() => {
+      expect(ledger.getByText("aws/us-east-1 / default.r1")).toBeVisible();
+      expect(ledger.getByText("aws/us-east-1 / Storage")).toBeVisible();
+      expect(ledger.getByText("aws/us-east-1 / Egress")).toBeVisible();
+    });
     // The compute row's usage renders in credits, the storage/egress rows'
     // in GB.
-    expect(await ledger.findByText("2.5 credits")).toBeVisible();
-    expect(await ledger.findByText("10.75 GB")).toBeVisible();
-    expect(await ledger.findByText("3 GB")).toBeVisible();
+    expect(ledger.getByText("2.5 credits")).toBeVisible();
+    expect(ledger.getByText("10.75 GB")).toBeVisible();
+    expect(ledger.getByText("3 GB")).toBeVisible();
   });
 
   it("falls back to 'Other' when a row has neither cluster key nor category", async () => {
@@ -451,8 +457,12 @@ describe("UsagePage", () => {
     const ledger = within(
       await screen.findByTestId("account-spend-ledger", {}, { timeout: 5_000 }),
     );
-    // The account renders expanded, so its one cluster row is visible inline.
-    expect(await ledger.findByText("aws/us-east-1 / Other")).toBeVisible();
+    // Accounts render collapsed by default (SAS-168); expand to reveal its
+    // one cluster row.
+    await userEvent.click(await ledger.findByTestId("account-row"));
+    await waitFor(() => {
+      expect(ledger.getByText("aws/us-east-1 / Other")).toBeVisible();
+    });
   });
 
   it("filters the ledger by region", async () => {

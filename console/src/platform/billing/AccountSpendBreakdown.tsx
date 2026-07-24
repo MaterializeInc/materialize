@@ -406,7 +406,8 @@ const TrendSparkline = ({
  * always-visible parent row (caret + color swatch + label, its share of the
  * period total, a daily-total trend, and its total cost) and its clusters are
  * indented, region-qualified child rows revealed by the disclosure. Groups
- * default open so the whole ledger is visible without interaction.
+ * default closed, so the ledger opens to a compact summary and clusters are
+ * revealed on demand.
  */
 const AccountLedgerGroup = ({
   account,
@@ -424,6 +425,7 @@ const AccountLedgerGroup = ({
   return (
     <LedgerGroup
       rowCount={account.clusters.length}
+      defaultIsOpen={false}
       data-testid="account-row"
       renderHeader={(isOpen) => (
         <>
