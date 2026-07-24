@@ -264,6 +264,11 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
             let span = info_span!("timely", name = Self::NAME, worker_id = worker_idx);
             let _span_guard = span.enter();
 
+            // Every Timely instance in this process names its threads `timely:work-N`, restarting
+            // the index at 0, so storage and compute worker threads collide under the same OS
+            // thread name. Rename to disambiguate them for profilers and `top -H`.
+            mz_ore::process::set_current_thread_name(&format!("{}:{worker_idx}", Self::NAME));
+
             let _tokio_guard = tokio_executor.enter();
             let client_rx = client_rxs.lock().unwrap()[worker_idx % config.workers]
                 .take()
