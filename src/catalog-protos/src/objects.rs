@@ -11,6 +11,14 @@
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
+use uuid::Uuid;
+
+/// A proptest strategy for [`Uuid`]s, which don't implement `Arbitrary`.
+#[cfg(any(test, feature = "proptest"))]
+fn any_uuid() -> impl proptest::strategy::Strategy<Value = Uuid> {
+    use proptest::strategy::Strategy;
+    proptest::arbitrary::any::<u128>().prop_map(Uuid::from_u128)
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
@@ -237,6 +245,13 @@ pub struct ItemValue {
     pub oid: u32,
     pub global_id: GlobalId,
     pub extra_versions: Vec<ItemVersion>,
+    /// `Some(uuid)` marks a temporary item owned by, and only visible to, the
+    /// session with that UUID. `None` is a normal durable item.
+    #[cfg_attr(
+        any(test, feature = "proptest"),
+        proptest(strategy = "proptest::option::of(any_uuid())")
+    )]
+    pub ephemeral_owner_session: Option<Uuid>,
 }
 
 #[derive(
