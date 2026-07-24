@@ -502,8 +502,8 @@ mod tests {
                 >("test errs");
 
                 let slot = registry_in.get_or_create_placeholder(id, 0, 1);
-                PublishArrangement::adopt(&oks, &slot.oks);
-                PublishArrangement::adopt(&errs, &slot.errs);
+                PublishArrangement::adopt(&oks, &slot.oks, || {});
+                PublishArrangement::adopt(&errs, &slot.errs, || {});
                 registry_in.notify(id, 0);
 
                 for (k, v) in rows {
@@ -1060,8 +1060,8 @@ mod tests {
             >("input errs");
 
             let slot = registry_in.get_or_create_placeholder(id, worker_index, peers);
-            PublishArrangement::adopt(&oks, &slot.oks);
-            PublishArrangement::adopt(&errs, &slot.errs);
+            PublishArrangement::adopt(&oks, &slot.oks, || {});
+            PublishArrangement::adopt(&errs, &slot.errs, || {});
             registry_in.notify(id, worker_index);
             (oks_input, errs_input)
         });
@@ -1232,7 +1232,7 @@ mod tests {
             // Install this arrangement's publisher into the pre-existing placeholder Arc, rather than
             // minting a fresh publication point. Importers already registered against the placeholder
             // (built before this call) now begin to fill.
-            PublishArrangement::adopt(&oks, placeholder);
+            PublishArrangement::adopt(&oks, placeholder, || {});
             oks_input
         });
 
@@ -1648,8 +1648,8 @@ mod tests {
 
                     let slot =
                         publisher_registry.get_or_create_placeholder(id, worker_index, peers);
-                    PublishArrangement::adopt(&oks, &slot.oks);
-                    PublishArrangement::adopt(&errs, &slot.errs);
+                    PublishArrangement::adopt(&oks, &slot.oks, || {});
+                    PublishArrangement::adopt(&errs, &slot.errs, || {});
                     publisher_registry.notify(id, worker_index);
                     (oks_input, errs_input)
                 });

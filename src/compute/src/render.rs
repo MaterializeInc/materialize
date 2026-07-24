@@ -150,7 +150,7 @@ use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::vec::ToStream;
 use timely::dataflow::operators::vec::{BranchWhen, Filter};
-use timely::dataflow::operators::{Capability, InspectCore, Operator, Probe, probe};
+use timely::dataflow::operators::{Capability, Operator, Probe, probe};
 use timely::dataflow::{Scope, Stream, StreamVec};
 use timely::order::{Product, TotalOrder};
 use timely::progress::timestamp::Refines;
@@ -970,34 +970,6 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
                 // happen before their traces are moved into the `TraceBundle` below. Publishing pins
                 // no compaction floor of its own, so the local trace behavior is unchanged.
                 if should_publish_index(&compute_state.worker_config, compute_state.role()) {
-                    // Seal signal for interactive fast-path peeks. `insert` fires the interactive
-                    // worker's waker on publication, but a later frontier advance with no new
-                    // publication must also re-examine a peek waiting only on the seal. Tap the
-                    // output progress streams: on each advance, mark the id dirty and wake the
-                    // interactive worker of the same ordinal via `note_frontier`.
-                    //
-                    // Both the oks and errs streams must signal. A peek whose result is an error
-                    // (for example a runtime division-by-zero or a `WITH MUTUALLY RECURSIVE ...
-                    // ERROR AT RECURSION LIMIT` that trips its limit) carries its data on the errs
-                    // stream, whose frontier is held back until the error is emitted. Without an
-                    // errs tap the interactive import at that as_of is never re-woken once the errs
-                    // frontier finally advances, and the peek hangs. The oks stream is trivially
-                    // sealed for such a peek, and vice versa for a normal result, so tapping only
-                    // one stream leaves the other class of peek stuck.
-                    let worker_index = self.scope.index();
-                    let oks_registry = compute_state.sharing_registry.clone();
-                    oks.stream = oks.stream.inspect_container(move |event| {
-                        if event.is_err() {
-                            oks_registry.note_frontier(idx_id, worker_index);
-                        }
-                    });
-                    let errs_registry = compute_state.sharing_registry.clone();
-                    errs.stream = errs.stream.inspect_container(move |event| {
-                        if event.is_err() {
-                            errs_registry.note_frontier(idx_id, worker_index);
-                        }
-                    });
-
                     // Adopt the registry's placeholder slot for `idx_id` rather than publishing
                     // fresh and inserting: whichever side (this maintenance render, or an
                     // interactive import ahead of it) touches `idx_id` first creates the slot, so
@@ -1005,13 +977,31 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
                     // reader has already imported. `get_or_create_placeholder` does not notify on
                     // create, so notify explicitly once both halves are adopted, mirroring the
                     // notification `insert` used to fire for a freshly published slot.
+                    //
+                    // Each adopt's `on_seal` re-examines a fast-path peek parked on this
+                    // arrangement's seal. The publisher fires it when the published `upper` advances,
+                    // after the state lock is released, so the peek reads the advanced upper and
+                    // completes. It replaces an upstream stream tap, which fired before the sink
+                    // advanced `upper` and so left the peek stuck on a stale upper once the advance
+                    // was the last one. Both the oks and errs publishers signal: a peek whose result
+                    // is an error (for example a runtime division-by-zero or a `WITH MUTUALLY
+                    // RECURSIVE ... ERROR AT RECURSION LIMIT` that trips its limit) carries its data
+                    // on the errs stream, whose frontier is held back until the error is emitted, so
+                    // an oks-only signal would leave it stuck, and vice versa for a normal result.
+                    let worker_index = self.scope.index();
                     let slot = compute_state.sharing_registry.get_or_create_placeholder(
                         idx_id,
                         worker_index,
                         self.scope.peers(),
                     );
-                    PublishArrangement::adopt(&oks, &slot.oks);
-                    PublishArrangement::adopt(&errs, &slot.errs);
+                    let oks_registry = compute_state.sharing_registry.clone();
+                    PublishArrangement::adopt(&oks, &slot.oks, move || {
+                        oks_registry.note_frontier(idx_id, worker_index)
+                    });
+                    let errs_registry = compute_state.sharing_registry.clone();
+                    PublishArrangement::adopt(&errs, &slot.errs, move || {
+                        errs_registry.note_frontier(idx_id, worker_index)
+                    });
                     compute_state.sharing_registry.notify(idx_id, worker_index);
                 }
 
@@ -1147,41 +1137,31 @@ where
                 // `mz_repr::Timestamp`), so publish and record the worker ordinal from `outer`. As
                 // above, `publish` borrows the arrangements, so it happens before their traces move.
                 if should_publish_index(&compute_state.worker_config, compute_state.role()) {
-                    // Seal signal for interactive fast-path peeks. See `export_index`: forward each
-                    // advance of the re-arranged `outer`-scope output frontier to `note_frontier`,
-                    // so a peek waiting only on the seal is re-examined even without a new
-                    // publication.
-                    //
-                    // Both the oks and errs streams must signal. A peek whose result is an error
-                    // carries its data on the errs stream, whose frontier is held back until the
-                    // error is emitted. Tapping only oks leaves such a peek stuck once the errs
-                    // frontier finally advances. See the matching tap in `export_index`.
-                    let worker_index = outer.index();
-                    let oks_registry = compute_state.sharing_registry.clone();
-                    oks.stream = oks.stream.inspect_container(move |event| {
-                        if event.is_err() {
-                            oks_registry.note_frontier(idx_id, worker_index);
-                        }
-                    });
-                    let errs_registry = compute_state.sharing_registry.clone();
-                    errs.stream = errs.stream.inspect_container(move |event| {
-                        if event.is_err() {
-                            errs_registry.note_frontier(idx_id, worker_index);
-                        }
-                    });
-
                     // Adopt the registry's placeholder slot for `idx_id` rather than publishing
                     // fresh and inserting. See the matching adopt in `export_index` for why: it
                     // fills a slot in place instead of risking an overwrite of a placeholder a
                     // reader has already imported, and it must notify explicitly once both halves
                     // are adopted since `get_or_create_placeholder` does not notify on create.
+                    //
+                    // Each adopt's `on_seal` re-examines a fast-path peek parked on this
+                    // arrangement's seal, fired by the publisher when the published `upper` advances
+                    // after its state lock is released, so the peek reads the advanced upper. See
+                    // `export_index` for why this replaces an upstream stream tap, and why both the
+                    // oks and errs publishers must signal.
+                    let worker_index = outer.index();
                     let slot = compute_state.sharing_registry.get_or_create_placeholder(
                         idx_id,
                         worker_index,
                         outer.peers(),
                     );
-                    PublishArrangement::adopt(&oks, &slot.oks);
-                    PublishArrangement::adopt(&errs, &slot.errs);
+                    let oks_registry = compute_state.sharing_registry.clone();
+                    PublishArrangement::adopt(&oks, &slot.oks, move || {
+                        oks_registry.note_frontier(idx_id, worker_index)
+                    });
+                    let errs_registry = compute_state.sharing_registry.clone();
+                    PublishArrangement::adopt(&errs, &slot.errs, move || {
+                        errs_registry.note_frontier(idx_id, worker_index)
+                    });
                     compute_state.sharing_registry.notify(idx_id, worker_index);
                 }
 
@@ -2453,8 +2433,8 @@ mod interactive_import_tests {
         >("test errs");
 
         let slot = registry.get_or_create_placeholder(id, 0, 1);
-        PublishArrangement::adopt(&oks, &slot.oks);
-        PublishArrangement::adopt(&errs, &slot.errs);
+        PublishArrangement::adopt(&oks, &slot.oks, || {});
+        PublishArrangement::adopt(&errs, &slot.errs, || {});
         registry.notify(id, 0);
 
         for (k, v) in rows {
@@ -2574,8 +2554,8 @@ mod interactive_import_tests {
         >("test errs");
 
         let slot = registry.get_or_create_placeholder(id, 0, 1);
-        PublishArrangement::adopt(&oks, &slot.oks);
-        PublishArrangement::adopt(&errs, &slot.errs);
+        PublishArrangement::adopt(&oks, &slot.oks, || {});
+        PublishArrangement::adopt(&errs, &slot.errs, || {});
         registry.notify(id, 0);
 
         for (k, v) in rows {

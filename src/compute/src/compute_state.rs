@@ -2395,8 +2395,8 @@ mod index_peek_tests {
                 >("test errs");
 
                 let slot = registry_in.get_or_create_placeholder(id, 0, 1);
-                PublishArrangement::adopt(&oks, &slot.oks);
-                PublishArrangement::adopt(&errs, &slot.errs);
+                PublishArrangement::adopt(&oks, &slot.oks, || {});
+                PublishArrangement::adopt(&errs, &slot.errs, || {});
                 registry_in.notify(id, 0);
 
                 for (k, v) in rows {
@@ -2580,8 +2580,8 @@ mod index_peek_tests {
                     >("test errs");
 
                     let slot = registry_in.get_or_create_placeholder(id, worker_index, peers);
-                    PublishArrangement::adopt(&oks, &slot.oks);
-                    PublishArrangement::adopt(&errs, &slot.errs);
+                    PublishArrangement::adopt(&oks, &slot.oks, || {});
+                    PublishArrangement::adopt(&errs, &slot.errs, || {});
                     registry_in.notify(id, worker_index);
                     (oks_input, errs_input)
                 });
@@ -2717,8 +2717,8 @@ mod index_peek_tests {
             >("test errs");
 
             let slot = registry_in.get_or_create_placeholder(id, scope.index(), scope.peers());
-            PublishArrangement::adopt(&oks, &slot.oks);
-            PublishArrangement::adopt(&errs, &slot.errs);
+            PublishArrangement::adopt(&oks, &slot.oks, || {});
+            PublishArrangement::adopt(&errs, &slot.errs, || {});
             registry_in.notify(id, scope.index());
             (oks_input, errs_input)
         });
@@ -2884,8 +2884,8 @@ mod index_peek_tests {
 
                     let slot =
                         registry_in.get_or_create_placeholder(id, scope.index(), scope.peers());
-                    PublishArrangement::adopt(&oks, &slot.oks);
-                    PublishArrangement::adopt(&errs, &slot.errs);
+                    PublishArrangement::adopt(&oks, &slot.oks, || {});
+                    PublishArrangement::adopt(&errs, &slot.errs, || {});
                     registry_in.notify(id, scope.index());
                     (oks_input, errs_input)
                 });

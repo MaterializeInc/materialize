@@ -25,7 +25,6 @@ use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::scope_label::ScopeExt;
 use timely::ContainerBuilder;
 use timely::container::{ContainerBuilder as _, PushInto};
-use timely::dataflow::operators::InspectCore;
 use timely::logging::{TimelyEvent, TimelyEventBuilder};
 use timely::logging_core::{Logger, Registry};
 use timely::order::Product;
@@ -397,41 +396,35 @@ fn publish_logging_index(
     // Re-import the trace handles to obtain live arrangement streams `publish` can attach a
     // publisher operator to. The publisher refreshes its published chain from the trace, the
     // authoritative source, so the re-import replay only drives the publisher's wakeups.
-    let mut oks = oks_trace
+    let oks = oks_trace
         .clone()
         .import_named(scope.clone(), &format!("PublishLog({id})"));
-    let mut errs = errs_trace
+    let errs = errs_trace
         .clone()
         .import_named(scope.clone(), &format!("PublishLogErr({id})"));
-
-    // Seal signal for interactive peeks, mirroring `render::export_index`. On each frontier advance
-    // of either stream, wake the interactive worker of the same ordinal via `note_frontier` so an
-    // import waiting on the seal at that as_of is re-examined. Both streams must signal: an
-    // introspection read whose result is an error (for example a division-by-zero surfacing in
-    // `mz_compute_error_counts_raw_unified`) carries its data on the errs stream, and without an
-    // errs tap the interactive import is never re-woken once the errs frontier advances.
-    let worker_index = scope.index();
-    let oks_registry = registry.clone();
-    oks.stream = oks.stream.inspect_container(move |event| {
-        if event.is_err() {
-            oks_registry.note_frontier(id, worker_index);
-        }
-    });
-    let errs_registry = registry.clone();
-    errs.stream = errs.stream.inspect_container(move |event| {
-        if event.is_err() {
-            errs_registry.note_frontier(id, worker_index);
-        }
-    });
 
     // Adopt the registry's placeholder slot for `id` rather than publishing fresh and inserting:
     // whichever side (this maintenance publish, or an interactive import ahead of it) touches `id`
     // first creates the slot, so this fills it in place instead of overwriting a placeholder a reader
     // has already imported. `get_or_create_placeholder` does not notify on create, so notify
     // explicitly once both halves are adopted, mirroring the notification `insert` used to fire.
+    //
+    // Each adopt's `on_seal` re-examines an interactive read parked on this introspection index's
+    // seal, fired by the publisher when the published `upper` advances after its state lock is
+    // released, so the read reads the advanced upper. It replaces an upstream stream tap, which fired
+    // before the sink advanced `upper`. Both streams signal: an introspection read whose result is an
+    // error (for example a division-by-zero surfacing in `mz_compute_error_counts_raw_unified`)
+    // carries its data on the errs stream, so an oks-only signal would leave it stuck.
+    let worker_index = scope.index();
     let slot = registry.get_or_create_placeholder(id, worker_index, scope.peers());
-    PublishArrangement::adopt(&oks, &slot.oks);
-    PublishArrangement::adopt(&errs, &slot.errs);
+    let oks_registry = registry.clone();
+    PublishArrangement::adopt(&oks, &slot.oks, move || {
+        oks_registry.note_frontier(id, worker_index)
+    });
+    let errs_registry = registry.clone();
+    PublishArrangement::adopt(&errs, &slot.errs, move || {
+        errs_registry.note_frontier(id, worker_index)
+    });
     registry.notify(id, worker_index);
 }
 
