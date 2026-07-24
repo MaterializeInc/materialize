@@ -30,9 +30,6 @@ SERVICES = [
     Testdrive(no_reset=True, seed=1),
 ]
 
-MZ_SYSTEM_CONNECTION_URL = (
-    "postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}"
-)
 USER_CONNECTION_URL = (
     "postgres://materialize:materialize@${testdrive.materialize-sql-addr}"
 )
@@ -52,10 +49,9 @@ def header(test_name: str, drop_schema: bool) -> str:
             CREATE SCHEMA public /* {test_name} */;
             GRANT ALL PRIVILEGES ON SCHEMA public TO materialize;
             """)
-    # Create connections.
+    # Create connections. mz_system is a built-in testdrive connection.
     header += dedent(f"""
         $ postgres-connect name=user url={USER_CONNECTION_URL}
-        $ postgres-connect name=mz_system url={MZ_SYSTEM_CONNECTION_URL}
         """)
     return header.strip()
 

@@ -42,7 +42,7 @@ class Generator:
         """Records EXPLAIN query for timing and prints `> {query}`."""
 ```
 
-`header()` is inherited - it resets the `public` schema and grants privileges. `footer()` prints a blank line. `generate()` calls `header()` → `body()` → `footer()`.
+`header()` is inherited - it resets the `public` schema and grants privileges. `footer()` prints a blank line. `generate()` calls `header()` → `body()` → `footer()`. `mz_system` is a built-in testdrive connection, so `$ postgres-execute connection=mz_system` works in `body()` without any registration.
 
 ## How to Add a New Limits Test
 
