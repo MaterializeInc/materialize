@@ -36,9 +36,10 @@ use mz_catalog::durable::debug::{
     CollectionType, CommentCollection, ConfigCollection, DatabaseCollection, DebugCatalogState,
     DefaultPrivilegeCollection, IdAllocatorCollection, ItemCollection, NetworkPolicyCollection,
     ReplicaSystemConfigurationCollection, RoleAuthCollection, RoleCollection, SchemaCollection,
-    SettingCollection, SourceReferencesCollection, StorageCollectionMetadataCollection,
-    SystemConfigurationCollection, SystemItemMappingCollection, SystemPrivilegeCollection, Trace,
-    TxnWalShardCollection, UnfinalizedShardsCollection,
+    SessionCollection, SettingCollection, SourceReferencesCollection,
+    StorageCollectionMetadataCollection, SystemConfigurationCollection,
+    SystemItemMappingCollection, SystemPrivilegeCollection, Trace, TxnWalShardCollection,
+    UnfinalizedShardsCollection,
 };
 use mz_catalog::durable::{
     BootstrapArgs, OpenableDurableCatalogState, persist_backed_catalog_state,
@@ -304,6 +305,7 @@ macro_rules! for_collection {
             CollectionType::Role => $fn::<RoleCollection>($($arg),*).await?,
             CollectionType::RoleAuth => $fn::<RoleAuthCollection>($($arg),*).await?,
             CollectionType::Schema => $fn::<SchemaCollection>($($arg),*).await?,
+            CollectionType::Session => $fn::<SessionCollection>($($arg),*).await?,
             CollectionType::Setting => $fn::<SettingCollection>($($arg),*).await?,
             CollectionType::SourceReferences => $fn::<SourceReferencesCollection>($($arg),*).await?,
             CollectionType::SystemConfiguration => {
@@ -466,6 +468,7 @@ async fn dump(
         roles,
         role_auth,
         schemas,
+        sessions,
         settings,
         source_references,
         system_object_mappings,
@@ -522,6 +525,7 @@ async fn dump(
     dump_col(&mut data, roles, &ignore, stats_only, consolidate);
     dump_col(&mut data, role_auth, &ignore, stats_only, consolidate);
     dump_col(&mut data, schemas, &ignore, stats_only, consolidate);
+    dump_col(&mut data, sessions, &ignore, stats_only, consolidate);
     dump_col(&mut data, settings, &ignore, stats_only, consolidate);
     dump_col(
         &mut data,

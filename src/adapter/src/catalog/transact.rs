@@ -40,13 +40,12 @@ use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, ClusterConfig, ClusterVariant, DataSourceDesc, DefaultPrivileges,
     ReconfigurationState, ReconfigurationStatus, ReconfigurationTarget, SourceReferences,
-    StateDiff, StateUpdate, StateUpdateKind, TemporaryItem,
 };
 use mz_cluster_controller::ctx::RefreshWindowDecision;
 use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::HashSet;
-use mz_ore::instrument;
+use mz_ore::{instrument, soft_assert_or_log};
 use mz_persist_types::ShardId;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap, merge_mz_acl_items};
@@ -74,6 +73,7 @@ use mz_sql_parser::ast::{QualifiedReplica, Value};
 use mz_storage_client::storage_collections::StorageCollections;
 use serde::{Deserialize, Serialize};
 use tracing::{info, trace};
+use uuid::Uuid;
 
 use crate::AdapterError;
 use crate::catalog::state::LocalExpressionCache;
@@ -170,6 +170,17 @@ pub enum Op {
         name: QualifiedItemName,
         item: CatalogItem,
         owner_id: RoleId,
+    },
+    CreateSession {
+        uuid: Uuid,
+        connection_id: u32,
+        role_id: RoleId,
+        client_ip: Option<String>,
+        connected_at: mz_ore::now::EpochMillis,
+    },
+
+    DropSession {
+        uuid: Uuid,
     },
     CreateNetworkPolicy {
         rules: Vec<NetworkPolicyRule>,
@@ -996,7 +1007,7 @@ impl Catalog {
         let mut updates = Vec::new();
 
         for op in ops {
-            let temporary_item_updates = Self::transact_op(
+            Self::transact_op(
                 oracle_write_ts,
                 session,
                 op,
@@ -1010,22 +1021,7 @@ impl Catalog {
             )
             .await?;
 
-            // Temporary items are not stored in the durable catalog, so they need to be handled
-            // separately for updating state and builtin tables.
-            // TODO(jkosh44) Some more thought needs to be given as to how temporary tables work
-            // in a multi-subscriber catalog world.
-            let upper = tx.upper();
-            let temporary_item_updates =
-                temporary_item_updates
-                    .into_iter()
-                    .map(|(item, diff)| StateUpdate {
-                        kind: StateUpdateKind::TemporaryItem(item),
-                        ts: upper,
-                        diff,
-                    });
-
             let mut op_updates: Vec<_> = tx.get_and_commit_op_updates();
-            op_updates.extend(temporary_item_updates);
             if !op_updates.is_empty() {
                 // Clone the cache so each apply_updates call has access to cached expressions.
                 // The cache uses `remove` semantics, so we need a fresh clone for each call.
@@ -1095,10 +1091,6 @@ impl Catalog {
     /// Performs the transaction operation described by `op`. This function prepares the changes in
     /// `tx`, but does not update `state`. `state` will be updated when applying the durable
     /// changes.
-    ///
-    /// Optionally returns a builtin table update for any builtin table updates than cannot be
-    /// derived from the durable catalog state, and temporary item diffs. These are all very weird
-    /// scenarios and ideally in the future don't exist.
     #[instrument]
     async fn transact_op(
         oracle_write_ts: mz_repr::Timestamp,
@@ -1111,9 +1103,7 @@ impl Catalog {
         storage_collections_to_create: &mut BTreeSet<GlobalId>,
         storage_collections_to_drop: &mut BTreeSet<GlobalId>,
         storage_collections_to_register: &mut BTreeMap<GlobalId, ShardId>,
-    ) -> Result<Vec<(TemporaryItem, StateDiff)>, AdapterError> {
-        let mut temporary_item_updates = Vec::new();
-
+    ) -> Result<(), AdapterError> {
         match op {
             Op::CheckClusterState {
                 cluster_id,
@@ -1169,7 +1159,7 @@ impl Catalog {
                     )?;
                 }
 
-                tx.update_item(id, new_entry.into())?;
+                tx.update_item(id, state.durable_item(new_entry))?;
 
                 Self::log_update(state, &id);
             }
@@ -1219,7 +1209,7 @@ impl Catalog {
                     )?;
                 }
 
-                tx.update_item(id, new_entry.into())?;
+                tx.update_item(id, state.durable_item(new_entry))?;
 
                 Self::log_update(state, &id);
             }
@@ -1342,7 +1332,7 @@ impl Catalog {
                     )?;
                 }
 
-                tx.update_item(id, new_entry.into())?;
+                tx.update_item(id, state.durable_item(new_entry))?;
                 storage_collections_to_register.insert(new_global_id, shard_id);
             }
             Op::AlterMaterializedViewApplyReplacement { id, replacement_id } => {
@@ -1370,7 +1360,7 @@ impl Catalog {
                 tx.remove_item(replacement_id)?;
 
                 new_entry.id = replacement_id;
-                tx_replace_item(tx, state, id, new_entry, &mut temporary_item_updates)?;
+                tx_replace_item(tx, state, id, new_entry)?;
 
                 let comment_id = CommentObjectId::MaterializedView(replacement_id);
                 tx.drop_comments(&[comment_id].into())?;
@@ -1783,25 +1773,34 @@ impl Catalog {
                             ErrorKind::InvalidTemporarySchema,
                         )));
                     }
-                    let oid = tx.allocate_oid(&temporary_oids)?;
+                    // The durable owner of a temporary item is the session
+                    // that created it, whose record was written to the
+                    // durable catalog when it connected.
+                    let owner_session = session.map(|session| session.uuid()).ok_or_else(|| {
+                        AdapterError::Internal(
+                            "temporary items can only be created by a session".to_string(),
+                        )
+                    })?;
+                    soft_assert_or_log!(
+                        session.map(|session| session.conn_id()) == item.conn_id(),
+                        "temporary item connection must match the creating session"
+                    );
 
                     let schema_id = name.qualifiers.schema_spec.clone().into();
                     let item_type = item.typ();
                     let (create_sql, global_id, versions) = item.to_serialized();
-
-                    let item = TemporaryItem {
+                    tx.insert_user_item(
                         id,
-                        oid,
                         global_id,
                         schema_id,
-                        name: name.item.clone(),
+                        &name.item,
                         create_sql,
-                        conn_id: item.conn_id().cloned(),
                         owner_id,
-                        privileges: privileges.clone(),
-                        extra_versions: versions,
-                    };
-                    temporary_item_updates.push((item, StateDiff::Addition));
+                        privileges.clone(),
+                        &temporary_oids,
+                        versions,
+                        Some(owner_session),
+                    )?;
 
                     info!(
                         "create temporary {} {} ({})",
@@ -1846,6 +1845,7 @@ impl Catalog {
                         privileges.clone(),
                         &temporary_oids,
                         versions,
+                        None,
                     )?;
                     info!(
                         "create {} {} ({})",
@@ -2023,6 +2023,18 @@ impl Catalog {
                     )?;
                 }
             }
+            Op::CreateSession {
+                uuid,
+                connection_id,
+                role_id,
+                client_ip,
+                connected_at,
+            } => {
+                tx.insert_session(uuid, connection_id, role_id, client_ip, connected_at)?;
+            }
+            Op::DropSession { uuid } => {
+                tx.remove_sessions(&BTreeSet::from([uuid]));
+            }
             Op::UpdateSourceReferences {
                 source_id,
                 references,
@@ -2045,17 +2057,8 @@ impl Catalog {
                 tx.drop_comments(&delta.comments)?;
 
                 // Drop any items.
-                let (durable_items_to_drop, temporary_items_to_drop): (BTreeSet<_>, BTreeSet<_>) =
-                    delta
-                        .items
-                        .iter()
-                        .map(|id| id)
-                        .partition(|id| !state.get_entry(*id).item().is_temporary());
-                tx.remove_items(&durable_items_to_drop)?;
-                temporary_item_updates.extend(temporary_items_to_drop.into_iter().map(|id| {
-                    let entry = state.get_entry(&id);
-                    (entry.clone().into(), StateDiff::Retraction)
-                }));
+                let items_to_drop: BTreeSet<_> = delta.items.iter().copied().collect();
+                tx.remove_items(&items_to_drop)?;
 
                 for item_id in delta.items {
                     let entry = state.get_entry(&item_id);
@@ -2380,14 +2383,7 @@ impl Catalog {
                             let entry = state.get_entry(id);
                             let mut new_entry = entry.clone();
                             update_privilege_fn(&mut new_entry.privileges);
-                            if !new_entry.item().is_temporary() {
-                                tx.update_item(*id, new_entry.into())?;
-                            } else {
-                                temporary_item_updates
-                                    .push((entry.clone().into(), StateDiff::Retraction));
-                                temporary_item_updates
-                                    .push((new_entry.into(), StateDiff::Addition));
-                            }
+                            tx.update_item(*id, state.durable_item(new_entry))?;
                         }
                         ObjectId::Role(_) | ObjectId::ClusterReplica(_) => {}
                     },
@@ -2620,21 +2616,10 @@ impl Catalog {
                             }))
                         })?;
 
-                    if !to_entry.item().is_temporary() {
-                        tx.update_item(*id, to_entry.into())?;
-                    } else {
-                        temporary_item_updates
-                            .push((dependent_item.clone().into(), StateDiff::Retraction));
-                        temporary_item_updates.push((to_entry.into(), StateDiff::Addition));
-                    }
+                    tx.update_item(*id, state.durable_item(to_entry))?;
                     updates.push(*id);
                 }
-                if !new_entry.item().is_temporary() {
-                    tx.update_item(id, new_entry.into())?;
-                } else {
-                    temporary_item_updates.push((entry.clone().into(), StateDiff::Retraction));
-                    temporary_item_updates.push((new_entry.into(), StateDiff::Addition));
-                }
+                tx.update_item(id, state.durable_item(new_entry))?;
 
                 updates.push(id);
                 for id in updates {
@@ -2670,16 +2655,9 @@ impl Catalog {
 
                 let mut updates: Vec<CatalogItemId> = Vec::new();
                 let mut items_to_update = BTreeMap::new();
-                // Dedup guard covering both persistent and temporary items. An
-                // item can be reached more than once: once as a member of the
-                // schema and again for each object in the schema it depends on.
-                // Persistent items are also tracked in `items_to_update`, but
-                // temporary items only land in `temporary_item_updates` (a Vec
-                // with no dedup), so a temp dependent referencing multiple
-                // objects in the renamed schema would otherwise be enqueued once
-                // per reference. That produces duplicate retraction/addition
-                // updates that consolidate to an invalid diff (e.g. -2) and
-                // panic catalog apply.
+                // An item can be reached more than once: once as a member of
+                // the schema and again for each object in the schema it
+                // depends on. Skip items that were already rewritten.
                 let mut seen: BTreeSet<CatalogItemId> = BTreeSet::new();
 
                 let mut update_item = |id: &CatalogItemId| {
@@ -2705,12 +2683,7 @@ impl Catalog {
                         })?;
 
                     // Queue updates for Catalog storage and Builtin Tables.
-                    if !new_entry.item().is_temporary() {
-                        items_to_update.insert(*id, new_entry.into());
-                    } else {
-                        temporary_item_updates.push((entry.clone().into(), StateDiff::Retraction));
-                        temporary_item_updates.push((new_entry.into(), StateDiff::Addition));
-                    }
+                    items_to_update.insert(*id, state.durable_item(new_entry));
                     updates.push(*id);
 
                     Ok::<_, AdapterError>(())
@@ -2866,13 +2839,7 @@ impl Catalog {
                             new_owner,
                         );
                         new_entry.owner_id = new_owner;
-                        if !new_entry.item().is_temporary() {
-                            tx.update_item(*id, new_entry.into())?;
-                        } else {
-                            temporary_item_updates
-                                .push((entry.clone().into(), StateDiff::Retraction));
-                            temporary_item_updates.push((new_entry.into(), StateDiff::Addition));
-                        }
+                        tx.update_item(*id, state.durable_item(new_entry))?;
                     }
                     ObjectId::NetworkPolicy(id) => {
                         let mut policy = state.get_network_policy(id).clone();
@@ -3024,11 +2991,9 @@ impl Catalog {
             }
             Op::UpdateItem { id, name, to_item } => {
                 // A non-temporary item must not depend on a temporary one.
-                // Temporary objects are session-scoped and never persisted, so
-                // a durable item referencing one is a dangling reference that
-                // panics the coordinator when its create_sql is re-planned on
-                // catalog apply (apply emits durable items before temporary
-                // ones, relying on this invariant). `Op::CreateItem` enforces
+                // Temporary objects are session-scoped and disappear with
+                // their session, so a longer-lived item referencing one would
+                // be left with a dangling reference. `Op::CreateItem` enforces
                 // it; mirror it here so ALTER paths (e.g. ALTER SINK ... SET
                 // FROM) cannot repoint a persistent item at a temporary one.
                 if !to_item.is_temporary() {
@@ -3051,7 +3016,7 @@ impl Catalog {
                 let mut entry = state.get_entry(&id).clone();
                 entry.name = name.clone();
                 entry.item = to_item.clone();
-                tx.update_item(id, entry.into())?;
+                tx.update_item(id, state.durable_item(entry))?;
 
                 if Self::should_audit_log_item(&to_item) {
                     let mut full_name = Self::full_name_detail(
@@ -3256,7 +3221,7 @@ impl Catalog {
                 }
             }
         };
-        Ok(temporary_item_updates)
+        Ok(())
     }
 
     fn log_update(state: &CatalogState, id: &CatalogItemId) {
@@ -3346,26 +3311,12 @@ fn tx_replace_item(
     state: &CatalogState,
     id: CatalogItemId,
     new_entry: CatalogEntry,
-    temporary_item_updates: &mut Vec<(TemporaryItem, StateDiff)>,
 ) -> Result<(), AdapterError> {
     let new_id = new_entry.id;
 
     // Rewrite dependent objects to point to the new ID.
     for use_id in new_entry.referenced_by() {
         let dependent = state.get_entry(use_id);
-
-        // Temporary items live only in the in-memory catalog, never in the durable
-        // transaction. They must be rewritten via `temporary_item_updates`. Routing them
-        // through `tx.update_item` would be a no-op (they are not in `tx`), leaving the
-        // temporary object referencing the removed `id` and tripping the catalog
-        // consistency check. Mirrors how `Op::RenameItem` handles temporary dependents.
-        if dependent.item().is_temporary() {
-            let mut rewritten = dependent.clone();
-            rewritten.item = rewritten.item.replace_item_refs(id, new_id);
-            temporary_item_updates.push((dependent.clone().into(), StateDiff::Retraction));
-            temporary_item_updates.push((rewritten.into(), StateDiff::Addition));
-            continue;
-        }
 
         // The dependent might be dropped in the same tx, so check.
         if tx.get_item(use_id).is_none() {
@@ -3374,7 +3325,7 @@ fn tx_replace_item(
 
         let mut dependent = dependent.clone();
         dependent.item = dependent.item.replace_item_refs(id, new_id);
-        tx.update_item(*use_id, dependent.into())?;
+        tx.update_item(*use_id, state.durable_item(dependent))?;
     }
 
     // Move comments to the new ID.
@@ -3397,7 +3348,8 @@ fn tx_replace_item(
         owner_id,
         privileges,
         extra_versions,
-    } = new_entry.into();
+        ephemeral_owner_session,
+    } = state.durable_item(new_entry);
 
     tx.remove_item(id)?;
     tx.insert_item(
@@ -3410,6 +3362,7 @@ fn tx_replace_item(
         owner_id,
         privileges,
         extra_versions,
+        ephemeral_owner_session,
     )?;
 
     Ok(())

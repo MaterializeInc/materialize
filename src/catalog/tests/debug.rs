@@ -102,6 +102,7 @@ impl Debug for StableTrace<'_> {
             roles,
             role_auth,
             schemas,
+            sessions,
             settings,
             source_references,
             system_object_mappings,
@@ -148,6 +149,7 @@ impl Debug for StableTrace<'_> {
             .field("roles", roles)
             .field("role_auth", role_auth)
             .field("schemas", schemas)
+            .field("sessions", sessions)
             .field("settings", &settings)
             .field("source_references", source_references)
             .field("system_object_mappings", system_object_mappings)

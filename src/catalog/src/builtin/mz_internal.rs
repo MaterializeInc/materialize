@@ -3094,53 +3094,75 @@ pub static MZ_SUBSCRIPTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTa
     }),
 });
 
-pub static MZ_SESSIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_sessions",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::TABLE_MZ_SESSIONS_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::Uuid.nullable(false))
-        .with_column("connection_id", SqlScalarType::UInt32.nullable(false))
-        .with_column("role_id", SqlScalarType::String.nullable(false))
-        .with_column("client_ip", SqlScalarType::String.nullable(true))
-        .with_column(
-            "connected_at",
-            SqlScalarType::TimestampTz { precision: None }.nullable(false),
-        )
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("id", "The globally unique ID of the session."),
-        (
-            "connection_id",
-            "The connection ID of the session. Unique only for active sessions and can be recycled. Corresponds to `pg_backend_pid()`.",
-        ),
-        (
-            "role_id",
-            "The role ID of the role that the session is logged in as. Corresponds to `mz_catalog.mz_roles`.",
-        ),
-        (
-            "client_ip",
-            "The IP address of the client that initiated the session.",
-        ),
-        (
-            "connected_at",
-            "The time at which the session connected to the system.",
-        ),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "active_session",
-        description: "Currently active sessions",
-        links: &const {
-            [OntologyLink {
-                name: "logged_in_as",
-                target: "role",
-                properties: LinkProperties::fk("role_id", "id", Cardinality::ManyToOne),
-            }]
-        },
-        column_semantic_types: &[("role_id", SemanticType::RoleId)],
-    }),
+pub static MZ_SESSIONS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_sessions",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_SESSIONS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::Uuid.nullable(false))
+            .with_column("connection_id", SqlScalarType::UInt32.nullable(false))
+            .with_column("role_id", SqlScalarType::String.nullable(false))
+            .with_column("client_ip", SqlScalarType::String.nullable(true))
+            .with_column(
+                "connected_at",
+                SqlScalarType::TimestampTz { precision: None }.nullable(false),
+            )
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "The globally unique ID of the session."),
+            (
+                "connection_id",
+                "The connection ID of the session. Unique only for active sessions and can be recycled. Corresponds to `pg_backend_pid()`.",
+            ),
+            (
+                "role_id",
+                "The role ID of the role that the session is logged in as. Corresponds to `mz_catalog.mz_roles`.",
+            ),
+            (
+                "client_ip",
+                "The IP address of the client that initiated the session.",
+            ),
+            (
+                "connected_at",
+                "The time at which the session connected to the system.",
+            ),
+        ]),
+        // `connected_at` is serialized by `proto::EpochMillis` as
+        // `{"millis": <u64>}`. Dividing by 1000.0 and feeding to
+        // `to_timestamp` matches `mz_ore::now::to_datetime`'s round-trip
+        // through `chrono::DateTime::from_timestamp_millis`.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL connection_id,
+    ASSERT NOT NULL role_id,
+    ASSERT NOT NULL connected_at
+) AS
+SELECT
+    (data->'key'->>'uuid')::uuid                                             AS id,
+    (data->'value'->>'connection_id')::uint4                                 AS connection_id,
+    mz_internal.parse_catalog_id(data->'value'->'role_id')                   AS role_id,
+    data->'value'->>'client_ip'                                              AS client_ip,
+    to_timestamp(((data->'value'->'connected_at'->>'millis')::float8) / 1000.0) AS connected_at
+FROM mz_internal.mz_catalog_raw
+WHERE data->>'kind' = 'Session'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "active_session",
+            description: "Currently active sessions",
+            links: &const {
+                [OntologyLink {
+                    name: "logged_in_as",
+                    target: "role",
+                    properties: LinkProperties::fk("role_id", "id", Cardinality::ManyToOne),
+                }]
+            },
+            column_semantic_types: &[("role_id", SemanticType::RoleId)],
+        }),
+    }
 });
 
 pub static MZ_OVERRIDDEN_SYSTEM_PARAMETERS: LazyLock<BuiltinMaterializedView> =

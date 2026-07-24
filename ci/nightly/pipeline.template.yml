@@ -211,8 +211,6 @@ steps:
                 - HEAD
                 - --target
                 - common-ancestor
-                - --regression-against
-                - common-ancestor
                 - --workload-group-marker
                 - "DmlDqlWorkload"
                 - --max-concurrency
@@ -236,8 +234,6 @@ steps:
                 - --target
                 - HEAD
                 - --target
-                - common-ancestor
-                - --regression-against
                 - common-ancestor
                 - --workload-group-marker
                 - "DdlWorkload"
@@ -266,8 +262,6 @@ steps:
                 - --target
                 - HEAD
                 - --target
-                - common-ancestor
-                - --regression-against
                 - common-ancestor
                 - --workload-group-marker
                 - "ConnectionWorkload"

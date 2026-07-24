@@ -45,12 +45,6 @@ pub enum ParsedStateUpdateKind {
         connection: Option<GenericSourceConnection>,
         parsed_full_name: String,
     },
-    TemporaryItem {
-        durable_item: memory::objects::TemporaryItem,
-        parsed_item: memory::objects::CatalogItem,
-        connection: Option<GenericSourceConnection>,
-        parsed_full_name: String,
-    },
     Cluster {
         durable_cluster: durable::objects::Cluster,
         parsed_cluster: memory::objects::Cluster,
@@ -97,7 +91,6 @@ pub fn parse_state_update(
 ) -> Option<ParsedStateUpdate> {
     let kind = match state_update.kind {
         StateUpdateKind::Item(item) => Some(parse_item_update(catalog, item)),
-        StateUpdateKind::TemporaryItem(item) => Some(parse_temporary_item_update(catalog, item)),
         StateUpdateKind::Cluster(cluster) => Some(parse_cluster_update(catalog, cluster)),
         StateUpdateKind::ClusterReplica(replica) => {
             Some(parse_cluster_replica_update(catalog, replica))
@@ -139,22 +132,6 @@ fn parse_item_update(
     }
 }
 
-fn parse_temporary_item_update(
-    catalog: &CatalogState,
-    durable_item: memory::objects::TemporaryItem,
-) -> ParsedStateUpdateKind {
-    let (parsed_item, connection, parsed_full_name) =
-        parse_item_update_common(catalog, &durable_item.id);
-
-    ParsedStateUpdateKind::TemporaryItem {
-        durable_item,
-        parsed_item,
-        connection,
-        parsed_full_name,
-    }
-}
-
-// Shared between temporary items and durable items.
 fn parse_item_update_common(
     catalog: &CatalogState,
     item_id: &CatalogItemId,

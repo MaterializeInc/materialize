@@ -43,7 +43,7 @@ use derivative::Derivative;
 use futures::future::{BoxFuture, FutureExt};
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::GROUP_COMMIT_MAX_ATTEMPTS;
-use mz_catalog::builtin::{BuiltinTable, MZ_SESSIONS};
+use mz_catalog::builtin::BuiltinTable;
 use mz_dyncfg::{ConfigSet, ConfigValHandle};
 use mz_expr::CollectionPlan;
 use mz_ore::assert_none;
@@ -71,8 +71,11 @@ use crate::statement_logging::StatementLoggingId;
 use crate::util::{CompletedClientTransmitter, ResultExt};
 use crate::{AdapterError, ExecuteContext};
 
-/// Tables that we emit updates for when starting a new session.
-pub(crate) static REQUIRED_BUILTIN_TABLES: &[&LazyLock<BuiltinTable>] = &[&MZ_SESSIONS];
+/// Builtin tables whose session-startup writes a query must wait on before
+/// reading. Currently empty: session records live in the durable catalog and
+/// are committed before startup responds. The machinery remains for future
+/// tables written at session startup.
+pub(crate) static REQUIRED_BUILTIN_TABLES: &[&LazyLock<BuiltinTable>] = &[];
 
 /// An operation that was deferred waiting on a resource to be available.
 ///

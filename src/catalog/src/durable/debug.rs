@@ -67,6 +67,7 @@ pub enum CollectionType {
     Role,
     RoleAuth,
     Schema,
+    Session,
     Setting,
     SourceReferences,
     SystemConfiguration,
@@ -235,6 +236,14 @@ collection_impl!({
     update: StateUpdateKind::Schema,
 });
 collection_impl!({
+    name: SessionCollection,
+    key: proto::SessionKey,
+    value: proto::SessionValue,
+    collection_type: CollectionType::Session,
+    trace_field: sessions,
+    update: StateUpdateKind::Session,
+});
+collection_impl!({
     name: SettingCollection,
     key: proto::SettingKey,
     value: proto::SettingValue,
@@ -360,6 +369,7 @@ pub struct Trace {
     pub roles: CollectionTrace<RoleCollection>,
     pub role_auth: CollectionTrace<RoleAuthCollection>,
     pub schemas: CollectionTrace<SchemaCollection>,
+    pub sessions: CollectionTrace<SessionCollection>,
     pub settings: CollectionTrace<SettingCollection>,
     pub source_references: CollectionTrace<SourceReferencesCollection>,
     pub system_object_mappings: CollectionTrace<SystemItemMappingCollection>,
@@ -389,6 +399,7 @@ impl Trace {
             roles: CollectionTrace::new(),
             role_auth: CollectionTrace::new(),
             schemas: CollectionTrace::new(),
+            sessions: CollectionTrace::new(),
             settings: CollectionTrace::new(),
             source_references: CollectionTrace::new(),
             system_object_mappings: CollectionTrace::new(),
@@ -418,6 +429,7 @@ impl Trace {
             roles,
             role_auth,
             schemas,
+            sessions,
             settings,
             source_references,
             system_object_mappings,
@@ -443,6 +455,7 @@ impl Trace {
         roles.sort();
         role_auth.sort();
         schemas.sort();
+        sessions.sort();
         settings.sort();
         source_references.sort();
         system_object_mappings.sort();

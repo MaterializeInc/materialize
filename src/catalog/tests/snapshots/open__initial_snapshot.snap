@@ -1,5 +1,6 @@
 ---
 source: src/catalog/tests/open.rs
+assertion_line: 524
 expression: test_snapshot
 ---
 Snapshot {
@@ -94,6 +95,7 @@ Snapshot {
                 },
             ],
             oid: 16656,
+            ephemeral_owner_session: None,
         },
         SchemaKey {
             id: System(
@@ -139,6 +141,7 @@ Snapshot {
                 },
             ],
             oid: 16657,
+            ephemeral_owner_session: None,
         },
         SchemaKey {
             id: System(
@@ -184,6 +187,7 @@ Snapshot {
                 },
             ],
             oid: 16658,
+            ephemeral_owner_session: None,
         },
         SchemaKey {
             id: System(
@@ -229,6 +233,7 @@ Snapshot {
                 },
             ],
             oid: 16659,
+            ephemeral_owner_session: None,
         },
         SchemaKey {
             id: System(
@@ -274,6 +279,7 @@ Snapshot {
                 },
             ],
             oid: 16660,
+            ephemeral_owner_session: None,
         },
         SchemaKey {
             id: System(
@@ -319,6 +325,7 @@ Snapshot {
                 },
             ],
             oid: 16972,
+            ephemeral_owner_session: None,
         },
         SchemaKey {
             id: System(
@@ -364,6 +371,7 @@ Snapshot {
                 },
             ],
             oid: 16973,
+            ephemeral_owner_session: None,
         },
         SchemaKey {
             id: User(
@@ -413,6 +421,7 @@ Snapshot {
                 },
             ],
             oid: 20001,
+            ephemeral_owner_session: None,
         },
     },
     roles: {
@@ -561,6 +570,7 @@ Snapshot {
     },
     role_auth: {},
     items: {},
+    sessions: {},
     comments: {},
     clusters: {
         ClusterKey {

@@ -11,7 +11,7 @@
 mod tests;
 
 use std::cmp::max;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Debug;
 use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
@@ -832,6 +832,9 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
                     StateUpdateKind::Schema(key, value) => {
                         apply(&mut snapshot.schemas, key, value, diff);
                     }
+                    StateUpdateKind::Session(key, value) => {
+                        apply(&mut snapshot.sessions, key, value, diff);
+                    }
                     StateUpdateKind::Setting(key, value) => {
                         apply(&mut snapshot.settings, key, value, diff);
                     }
@@ -1323,6 +1326,22 @@ impl UnopenedPersistCatalogState {
                 txn.set_setting("migration_version".into(), old_version.map(Into::into))?;
             }
 
+            // Opening the catalog with write intent fences out every previous
+            // catalog owner, so all sessions recorded by previous owners are
+            // dead. Reclaim their session records and the temporary items
+            // they owned here, before anything else reads the catalog. A
+            // same-generation restart also invalidates all sessions, so this
+            // reclaims every record, not just those of older deploy
+            // generations. Read-only catalogs follow a live writer whose
+            // sessions are alive, and must not locally diverge from the shard
+            // contents.
+            if mode != Mode::Readonly {
+                let stale_sessions: BTreeSet<_> =
+                    txn.get_sessions().map(|session| session.uuid).collect();
+                txn.remove_sessions(&stale_sessions);
+                txn.remove_ephemeral_items();
+            }
+
             txn.set_catalog_content_version(catalog_content_version)?;
             txn
         } else {
@@ -1664,6 +1683,13 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
             .token()
             .expect("opened catalog state must have an epoch")
             .epoch
+    }
+
+    fn deploy_generation(&self) -> u64 {
+        self.fenceable_token
+            .token()
+            .expect("opened catalog state must have a fence token")
+            .deploy_generation
     }
 
     fn metrics(&self) -> &Metrics {
@@ -2112,6 +2138,7 @@ impl Trace {
                 }
                 StateUpdateKind::Role(k, v) => trace.roles.values.push(((k, v), ts, diff)),
                 StateUpdateKind::Schema(k, v) => trace.schemas.values.push(((k, v), ts, diff)),
+                StateUpdateKind::Session(k, v) => trace.sessions.values.push(((k, v), ts, diff)),
                 StateUpdateKind::Setting(k, v) => trace.settings.values.push(((k, v), ts, diff)),
                 StateUpdateKind::SourceReferences(k, v) => {
                     trace.source_references.values.push(((k, v), ts, diff))

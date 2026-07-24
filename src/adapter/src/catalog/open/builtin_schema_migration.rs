@@ -301,6 +301,29 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_CATALOG_SCHEMA,
             "mz_kafka_sources",
         ),
+        // Converting mz_sessions, mz_tables and mz_views from builtin tables
+        // to materialized views over mz_catalog_raw changes their catalog
+        // fingerprints, so each needs an explicit replacement step. See the
+        // NOTE above: this version must stay at the workspace's current dev
+        // version until the change ships.
+        MigrationStep::replacement(
+            "26.35.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_sessions",
+        ),
+        MigrationStep::replacement(
+            "26.35.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_tables",
+        ),
+        MigrationStep::replacement(
+            "26.35.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_views",
+        ),
     ]
 });
 

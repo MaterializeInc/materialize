@@ -293,6 +293,22 @@ pub const GROUP_COMMIT_MAX_ATTEMPTS: Config<usize> = Config::new(
     "Maximum number of txns-shard write attempts before rebuilding environmentd. Values below 1 are treated as 1.",
 );
 
+/// Minimum interval between batched session catalog commits.
+///
+/// Session connects and disconnects each write the durable catalog. The
+/// coordinator folds all pending session ops into one catalog commit, and
+/// this interval bounds how often such commits happen: a session op that
+/// arrives within the interval of the previous commit waits for the next one.
+/// This caps the catalog-shard write rate from connection churn at the cost
+/// of up to one interval of added connection latency, only under sustained
+/// churn. Zero disables the floor, committing as soon as the coordinator
+/// gets to it.
+pub const SESSION_OP_FLUSH_INTERVAL: Config<Duration> = Config::new(
+    "session_op_flush_interval",
+    Duration::from_millis(50),
+    "Minimum interval between batched session catalog commits.",
+);
+
 /// OIDC client ID for the web console.
 pub const CONSOLE_OIDC_CLIENT_ID: Config<&'static str> = Config::new(
     "console_oidc_client_id",
@@ -467,6 +483,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&WEBHOOK_MAX_REQUEST_SIZE_BYTES)
         .add(&USER_ID_POOL_BATCH_SIZE)
         .add(&GROUP_COMMIT_MAX_ATTEMPTS)
+        .add(&SESSION_OP_FLUSH_INTERVAL)
         .add(&CONSOLE_OIDC_CLIENT_ID)
         .add(&CONSOLE_OIDC_SCOPES)
         .add(&ARRANGEMENT_SIZE_HISTORY_COLLECTION_INTERVAL)

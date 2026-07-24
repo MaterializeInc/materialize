@@ -1140,7 +1140,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_COLUMNS),
         // mz_indexes is generated dynamically below with inlined builtin VALUES.
         Builtin::Table(&MZ_INDEX_COLUMNS),
-        Builtin::Table(&MZ_TABLES),
+        Builtin::MaterializedView(&MZ_TABLES),
         // mz_sources is generated dynamically below with inlined builtin VALUES.
         Builtin::Table(&MZ_SOURCE_REFERENCES),
         Builtin::MaterializedView(&MZ_POSTGRES_SOURCES),
@@ -1149,7 +1149,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_SQL_SERVER_SOURCE_TABLES),
         Builtin::Table(&MZ_KAFKA_SOURCE_TABLES),
         Builtin::Table(&MZ_SINKS),
-        Builtin::Table(&MZ_VIEWS),
+        Builtin::MaterializedView(&MZ_VIEWS),
         Builtin::Table(&MZ_TYPES),
         Builtin::Table(&MZ_TYPE_PG_METADATA),
         Builtin::Table(&MZ_ARRAY_TYPES),
@@ -1187,7 +1187,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_AWS_PRIVATELINK_CONNECTIONS),
         Builtin::Table(&MZ_AWS_CONNECTIONS),
         Builtin::Table(&MZ_SUBSCRIPTIONS),
-        Builtin::Table(&MZ_SESSIONS),
+        Builtin::MaterializedView(&MZ_SESSIONS),
         Builtin::MaterializedView(&MZ_OVERRIDDEN_SYSTEM_PARAMETERS),
         Builtin::MaterializedView(&MZ_CLUSTER_SYSTEM_PARAMETERS),
         Builtin::MaterializedView(&MZ_REPLICA_SYSTEM_PARAMETERS),

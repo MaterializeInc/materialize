@@ -453,6 +453,7 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
             owner_id: RoleId::User(1),
             privileges: vec![],
             extra_versions: BTreeMap::new(),
+            ephemeral_owner_session: None,
         },
         Item {
             id: CatalogItemId::User(200),
@@ -464,6 +465,7 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
             owner_id: RoleId::User(2),
             privileges: vec![],
             extra_versions: BTreeMap::new(),
+            ephemeral_owner_session: None,
         },
     ];
 
@@ -490,6 +492,7 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
             item.owner_id,
             item.privileges.clone(),
             item.extra_versions.clone(),
+            item.ephemeral_owner_session,
         )
         .unwrap();
     }
@@ -744,6 +747,7 @@ async fn test_persist_ddl_detection_with_batch_allocated_ids() {
             RoleId::User(1),
             vec![],
             BTreeMap::new(),
+            None,
         )
         .unwrap();
     }

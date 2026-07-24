@@ -528,9 +528,7 @@ mz_pseudo_types                ""
 mz_role_auth                   ""
 mz_sinks                       ""
 mz_ssh_tunnel_connections      ""
-mz_tables                      ""
 mz_types                       ""
-mz_views                       ""
 
 > SHOW VIEWS FROM mz_catalog
 name                       comment
@@ -561,6 +559,8 @@ mz_secrets            mz_catalog_server   ""
 mz_sources            mz_catalog_server   ""
 mz_system_privileges  mz_catalog_server   ""
 mz_materialized_views mz_catalog_server   ""
+mz_tables             mz_catalog_server   ""
+mz_views              mz_catalog_server   ""
 
 # Check default sources, tables, and views in mz_catalog_unstable.
 
@@ -616,7 +616,6 @@ mz_object_global_ids                     ""
 mz_optimizer_notices                     ""
 mz_postgres_source_tables                ""
 mz_replacements                          ""
-mz_sessions                              ""
 mz_source_references                     ""
 mz_sql_server_source_tables              ""
 mz_storage_usage_by_shard                ""
@@ -630,6 +629,8 @@ name                                     comment
 mz_activity_log_thinned                  ""
 mz_builtin_materialized_views            ""
 mz_builtin_sources                       ""
+mz_builtin_tables                        ""
+mz_builtin_views                         ""
 mz_cluster_deployment_lineage            ""
 mz_cluster_replica_history               ""
 mz_cluster_replica_metrics               ""
@@ -734,6 +735,7 @@ mz_overridden_system_parameters mz_catalog_server   ""
 mz_pending_cluster_replicas    mz_catalog_server   ""
 mz_postgres_sources            mz_catalog_server   ""
 mz_replica_system_parameters   mz_catalog_server   ""
+mz_sessions                    mz_catalog_server   ""
 
 # Check default sources, tables, and views in mz_introspection.
 

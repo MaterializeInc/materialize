@@ -22,10 +22,11 @@ use crate::durable::objects::{
     IntrospectionSourceIndexCatalogItemId, IntrospectionSourceIndexGlobalId, ItemKey, ItemValue,
     NetworkPolicyKey, NetworkPolicyValue, ReplicaSystemConfigurationKey,
     ReplicaSystemConfigurationValue, RoleKey, RoleValue, SchemaKey, SchemaValue,
-    ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
-    SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
-    StorageCollectionMetadataValue, SystemCatalogItemId, SystemGlobalId, SystemPrivilegesKey,
-    SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
+    ServerConfigurationKey, ServerConfigurationValue, SessionKey, SessionValue, SettingKey,
+    SettingValue, SourceReference, SourceReferencesKey, SourceReferencesValue,
+    StorageCollectionMetadataKey, StorageCollectionMetadataValue, SystemCatalogItemId,
+    SystemGlobalId, SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue,
+    UnfinalizedShardKey,
 };
 use crate::durable::{
     BurstState, ClusterConfig, ClusterVariant, ClusterVariantManaged, ReconfigurationState,
@@ -514,6 +515,7 @@ impl RustType<proto::SchemaValue> for SchemaValue {
             owner_id: self.owner_id.into_proto(),
             privileges: self.privileges.into_proto(),
             oid: self.oid,
+            ephemeral_owner_session: self.ephemeral_owner_session,
         }
     }
 
@@ -524,6 +526,7 @@ impl RustType<proto::SchemaValue> for SchemaValue {
             owner_id: proto.owner_id.into_rust()?,
             privileges: proto.privileges.into_rust()?,
             oid: proto.oid,
+            ephemeral_owner_session: proto.ephemeral_owner_session,
         })
     }
 }
@@ -563,6 +566,7 @@ impl RustType<proto::ItemValue> for ItemValue {
                     version: version.into_proto(),
                 })
                 .collect(),
+            ephemeral_owner_session: self.ephemeral_owner_session,
         }
     }
 
@@ -588,6 +592,7 @@ impl RustType<proto::ItemValue> for ItemValue {
             oid: proto.oid,
             global_id: proto.global_id.into_rust()?,
             extra_versions,
+            ephemeral_owner_session: proto.ephemeral_owner_session,
         })
     }
 }
@@ -732,6 +737,40 @@ impl RustType<proto::NetworkPolicyValue> for NetworkPolicyValue {
             owner_id: proto.owner_id.into_rust()?,
             privileges: proto.privileges.into_rust()?,
             oid: proto.oid,
+        })
+    }
+}
+
+impl RustType<proto::SessionKey> for SessionKey {
+    fn into_proto(&self) -> proto::SessionKey {
+        proto::SessionKey { uuid: self.uuid }
+    }
+
+    fn from_proto(proto: proto::SessionKey) -> Result<Self, TryFromProtoError> {
+        Ok(SessionKey { uuid: proto.uuid })
+    }
+}
+
+impl RustType<proto::SessionValue> for SessionValue {
+    fn into_proto(&self) -> proto::SessionValue {
+        proto::SessionValue {
+            deploy_generation: self.deploy_generation,
+            connection_id: self.connection_id,
+            role_id: self.role_id.into_proto(),
+            client_ip: self.client_ip.clone(),
+            connected_at: proto::EpochMillis {
+                millis: self.connected_at,
+            },
+        }
+    }
+
+    fn from_proto(proto: proto::SessionValue) -> Result<Self, TryFromProtoError> {
+        Ok(SessionValue {
+            deploy_generation: proto.deploy_generation,
+            connection_id: proto.connection_id,
+            role_id: proto.role_id.into_rust()?,
+            client_ip: proto.client_ip,
+            connected_at: proto.connected_at.into_rust()?,
         })
     }
 }

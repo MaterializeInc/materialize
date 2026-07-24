@@ -25,8 +25,8 @@ use mz_sql::rbac;
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 
 use crate::builtin::{
-    Builtin, BuiltinLog, BuiltinMaterializedView, BuiltinSource, BuiltinView, Cardinality,
-    LinkProperties, Ontology, OntologyLink, PUBLIC_SELECT,
+    Builtin, BuiltinLog, BuiltinMaterializedView, BuiltinSource, BuiltinTable, BuiltinView,
+    Cardinality, LinkProperties, Ontology, OntologyLink, PUBLIC_SELECT,
 };
 
 /// Generate builtin views reporting the given builtins.
@@ -47,14 +47,32 @@ pub(super) fn builtins(
         Builtin::MaterializedView(x) => Some(*x),
         _ => None,
     });
+    let table_iter = builtin_items.iter().filter_map(|b| match b {
+        Builtin::Table(x) => Some(*x),
+        _ => None,
+    });
 
-    let sources = make_builtin_sources(source_iter, log_iter);
-    let materialized_views = make_builtin_materialized_views(mv_iter);
+    let sources: &'static BuiltinView =
+        Box::leak(Box::new(make_builtin_sources(source_iter, log_iter)));
+    let materialized_views: &'static BuiltinView =
+        Box::leak(Box::new(make_builtin_materialized_views(mv_iter)));
+    let tables: &'static BuiltinView = Box::leak(Box::new(make_builtin_tables(table_iter)));
 
-    [sources, materialized_views].into_iter().map(|v| {
-        let static_ref = Box::leak(Box::new(v));
-        Builtin::View(static_ref)
-    })
+    // The views reporter is generated last so that it also lists the reporter
+    // views built above. It cannot list itself, since its definition would
+    // have to contain itself.
+    let view_iter = builtin_items
+        .iter()
+        .filter_map(|b| match b {
+            Builtin::View(x) => Some(*x),
+            _ => None,
+        })
+        .chain([sources, materialized_views, tables]);
+    let views: &'static BuiltinView = Box::leak(Box::new(make_builtin_views(view_iter)));
+
+    [sources, materialized_views, tables, views]
+        .into_iter()
+        .map(Builtin::View)
 }
 
 fn make_builtin_sources(
@@ -162,6 +180,104 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, cluster_name, definition, pr
             .with_key(vec![2])
             .with_key(vec![4])
             .with_key(vec![6])
+            .finish(),
+        column_comments: Default::default(),
+        sql: Box::leak(sql.into_boxed_str()),
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    }
+}
+
+fn make_builtin_tables(iter: impl Iterator<Item = &'static BuiltinTable>) -> BuiltinView {
+    let owner_priv = rbac::owner_privilege(ObjectType::Table, MZ_SYSTEM_ROLE_ID);
+    let values = iter
+        .map(|table| {
+            let schema = escaped_string_literal(table.schema);
+            let name = escaped_string_literal(table.name);
+            let privileges = make_privileges_sql(&table.access, &owner_priv);
+            format!("({}::oid, {}, {}, {})", table.oid, schema, name, privileges)
+        })
+        .join(",");
+    let sql = format!(
+        "
+SELECT oid, schema_name, name, privileges
+FROM (VALUES {values}) AS v(oid, schema_name, name, privileges)"
+    );
+
+    BuiltinView {
+        name: "mz_builtin_tables",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_BUILTIN_TABLES_OID,
+        desc: RelationDesc::builder()
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("schema_name", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column(
+                "privileges",
+                SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
+            )
+            // NOTE: Unlike source and materialized view names, table (and
+            // view) names are not necessarily unique across builtin schemas,
+            // so the OID is the only declared key.
+            .with_key(vec![0])
+            .finish(),
+        column_comments: Default::default(),
+        sql: Box::leak(sql.into_boxed_str()),
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    }
+}
+
+fn make_builtin_views<'a>(iter: impl Iterator<Item = &'a BuiltinView>) -> BuiltinView {
+    let owner_priv = rbac::owner_privilege(ObjectType::View, MZ_SYSTEM_ROLE_ID);
+    let values = iter
+        .map(|view| {
+            let stmt = mz_sql::parse::parse(&view.create_sql())
+                .expect("valid sql")
+                .into_element()
+                .ast;
+            let Statement::CreateView(stmt) = stmt else {
+                panic!("invalid builtin view SQL");
+            };
+
+            let definition = format!("{};", stmt.definition.query.to_ast_string_stable());
+            let definition = escaped_string_literal(&definition);
+            let create_sql = stmt.to_ast_string_stable();
+            let create_sql = escaped_string_literal(&create_sql);
+
+            let schema = escaped_string_literal(view.schema);
+            let name = escaped_string_literal(view.name);
+            let privileges = make_privileges_sql(&view.access, &owner_priv);
+
+            format!(
+                "({}::oid, {}, {}, {}, {}, {})",
+                view.oid, schema, name, definition, privileges, create_sql
+            )
+        })
+        .join(",");
+    let sql = format!(
+        "
+SELECT oid, schema_name, name, definition, privileges, create_sql
+FROM (VALUES {values}) AS v(oid, schema_name, name, definition, privileges, create_sql)"
+    );
+
+    BuiltinView {
+        name: "mz_builtin_views",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_BUILTIN_VIEWS_OID,
+        desc: RelationDesc::builder()
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("schema_name", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("definition", SqlScalarType::String.nullable(false))
+            .with_column(
+                "privileges",
+                SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
+            )
+            .with_column("create_sql", SqlScalarType::String.nullable(false))
+            // NOTE: View names are not necessarily unique across builtin
+            // schemas, so the OID is the only declared key.
+            .with_key(vec![0])
             .finish(),
         column_comments: Default::default(),
         sql: Box::leak(sql.into_boxed_str()),

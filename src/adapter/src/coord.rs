@@ -372,6 +372,13 @@ pub enum Message {
         conn_id: ConnectionId,
     },
     LinearizeReads,
+    /// Commits all pending session catalog ops in one catalog transaction.
+    ///
+    /// Scheduled when the pending buffer transitions from empty to non-empty,
+    /// so a burst of session connects and disconnects coalesces into a small
+    /// number of catalog commits. See
+    /// [`Coordinator::enqueue_session_op`](crate::coord::Coordinator).
+    FlushSessionOps,
     StagedBatches {
         conn_id: ConnectionId,
         table_id: CatalogItemId,
@@ -529,6 +536,7 @@ impl Message {
             Message::ClusterEvent(_) => "cluster_event",
             Message::CancelPendingPeeks { .. } => "cancel_pending_peeks",
             Message::LinearizeReads => "linearize_reads",
+            Message::FlushSessionOps => "flush_session_ops",
             Message::StagedBatches { .. } => "staged_batches",
             Message::StorageUsageSchedule => "storage_usage_schedule",
             Message::StorageUsageFetch => "storage_usage_fetch",
@@ -2183,6 +2191,16 @@ pub struct Coordinator {
     /// `None` when we transition out of read-only mode and write out any
     /// buffered updates.
     buffered_builtin_table_updates: Option<Vec<BuiltinTableUpdate>>,
+
+    /// Session catalog ops waiting to be committed by the next
+    /// [`Message::FlushSessionOps`]. All pending ops commit in a single
+    /// catalog transaction, so a burst of session connects and disconnects
+    /// costs a small number of catalog commits instead of one per session.
+    pending_session_ops: Vec<command_handler::PendingSessionOp>,
+    /// When the last batched session commit started, used to enforce
+    /// [`SESSION_OP_FLUSH_INTERVAL`](mz_adapter_types::dyncfgs::SESSION_OP_FLUSH_INTERVAL)
+    /// between commits. `None` until the first commit.
+    last_session_op_flush: Option<Instant>,
 
     license_key: ValidatedLicenseKey,
 
@@ -5127,6 +5145,8 @@ pub fn serve(
                     cluster_replica_statuses: ClusterReplicaStatuses::new(),
                     read_only_controllers,
                     buffered_builtin_table_updates: Some(Vec::new()),
+                    pending_session_ops: Vec::new(),
+                    last_session_op_flush: None,
                     license_key,
                     user_id_pool: IdPool::empty(),
                     persist_client,
