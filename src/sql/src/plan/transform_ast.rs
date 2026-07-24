@@ -720,11 +720,25 @@ impl<'a> Desugarer<'a> {
 
         // `$expr = ALL ($array_expr)`
         // =>
-        // `$expr = ALL (SELECT elem FROM unnest($array_expr) _ (elem))`
+        // `CASE WHEN $array_expr IS NULL THEN NULL
+        //       ELSE $expr = ALL (SELECT elem FROM unnest($array_expr) _ (elem)) END`
         //
         // and analogously for other operators and ANY.
+        //
+        // The `IS NULL` guard is required because a NULL array is distinct from
+        // an empty array. PG yields NULL for the former but the empty-set answer
+        // (false for ANY, true for ALL) for the latter, whereas `unnest` maps
+        // both to zero rows and so cannot tell them apart.
         if let Expr::AnyExpr { left, op, right } | Expr::AllExpr { left, op, right } = expr {
             let binding = ident!("elem");
+
+            // Clone the array expression for the null guard before it is consumed
+            // into the `unnest` call below.
+            let array_is_null = Expr::IsExpr {
+                expr: Box::new((**right).clone()),
+                construct: IsExprConstruct::Null,
+                negated: false,
+            };
 
             let subquery = Query::select(
                 Select::default()
@@ -758,7 +772,7 @@ impl<'a> Desugarer<'a> {
 
             let op = op.clone();
 
-            *expr = match expr {
+            let any_all = match expr {
                 Expr::AnyExpr { .. } => Expr::AnySubquery {
                     left,
                     op,
@@ -770,6 +784,13 @@ impl<'a> Desugarer<'a> {
                     right: Box::new(subquery),
                 },
                 _ => unreachable!(),
+            };
+
+            *expr = Expr::Case {
+                operand: None,
+                conditions: vec![array_is_null],
+                results: vec![Expr::null()],
+                else_result: Some(Box::new(any_all)),
             };
         }
 

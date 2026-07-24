@@ -417,10 +417,9 @@ fn array_position<'a>(
         return Err(EvalError::MultiDimensionalArraySearch);
     }
 
-    if search == Datum::Null {
-        return Ok(None);
-    }
-
+    // Comparisons use IS NOT DISTINCT FROM semantics, so a NULL search term
+    // matches a NULL element rather than yielding NULL. `Datum` equality already
+    // treats `Null == Null` as true, so the search loop below handles it.
     let skip = match initial_pos.0 {
         None => 0,
         Some(None) => return Err(EvalError::MustNotBeNull("initial position".into())),
