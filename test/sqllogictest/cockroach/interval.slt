@@ -194,77 +194,61 @@ SELECT interval '1 2:03:04' day to second
 query error invalid input syntax for type interval: Cannot determine format of all parts\. Add explicit time components, e\.g\. INTERVAL '1 day' or INTERVAL '1' DAY: "1 2"
 SELECT interval '1 2' hour to minute
 
-# SQL-474 (https://linear.app/materializeinc/issue/SQL-474): Materialize drops
-# interval fields to the left of the range qualifier's leading unit, even when
-# they were written explicitly. PG and CockroachDB keep every explicitly-written
-# field and only use the qualifier to resolve ambiguity. Some inputs also change
-# magnitude. The commented "PG/CRDB:" lines are the outputs to restore on fix.
-
-# SQL-474 PG/CRDB: 1 day 02:03:00
 query T
 SELECT interval '1 2:03' hour to minute
 ----
-02:03:00
+1 day 02:03:00
 
-# SQL-474 PG/CRDB: 1 day 02:03:00
 query T
 SELECT interval '1 2:03:04' hour to minute
 ----
-02:03:00
+1 day 02:03:00
 
 query error invalid input syntax for type interval: Cannot determine format of all parts\. Add explicit time components, e\.g\. INTERVAL '1 day' or INTERVAL '1' DAY: "1 2"
 SELECT interval '1 2' hour to second
 
-# SQL-474 PG/CRDB: 1 day 02:03:00
 query T
 SELECT interval '1 2:03' hour to second
 ----
-02:03:00
+1 day 02:03:00
 
-# SQL-474 PG/CRDB: 1 day 02:03:04
 query T
 SELECT interval '1 2:03:04' hour to second
 ----
-02:03:04
+1 day 02:03:04
 
 query error invalid input syntax for type interval: Cannot determine format of all parts\. Add explicit time components, e\.g\. INTERVAL '1 day' or INTERVAL '1' DAY: "1 2"
 SELECT interval '1 2' minute to second
 
-# SQL-474 PG/CRDB: 1 day 00:02:03 (MZ also mis-scales "2:03" as MM instead of MM:SS)
 query T
 SELECT interval '1 2:03' minute to second
 ----
-00:03:00
+1 day 00:02:03
 
-# SQL-474 PG/CRDB: 1 day 02:03:04
 query T
 SELECT interval '1 2:03:04' minute to second
 ----
-00:03:04
+1 day 02:03:04
 
-# SQL-474 PG/CRDB: 1 day 00:02:03
 query T
 SELECT interval '1 +2:03' minute to second
 ----
-00:03:00
+1 day 00:02:03
 
-# SQL-474 PG/CRDB: 1 day 02:03:04
 query T
 SELECT interval '1 +2:03:04' minute to second
 ----
-00:03:04
+1 day 02:03:04
 
-# SQL-474 PG/CRDB: 1 day -00:02:03
 query T
 SELECT interval '1 -2:03' minute to second
 ----
--00:03:00
+1 day -00:02:03
 
-# SQL-474 PG/CRDB: 1 day -02:03:04
 query T
 SELECT interval '1 -2:03:04' minute to second
 ----
--00:03:04
+1 day -02:03:04
 
 # Not supported by Materialize.
 onlyif cockroach
@@ -334,32 +318,28 @@ SELECT interval '1 2:03:04.5678' day to second(2)
 query error invalid input syntax for type interval: Cannot determine format of all parts\. Add explicit time components, e\.g\. INTERVAL '1 day' or INTERVAL '1' DAY: "1 2\.345"
 SELECT interval '1 2.345' hour to second(2)
 
-# SQL-474 PG/CRDB: 1 day 00:02:03.46
 query T
 SELECT interval '1 2:03.45678' hour to second(2)
 ----
-00:02:03.46
+1 day 00:02:03.46
 
-# SQL-474 PG/CRDB: 1 day 02:03:04.57
 query T
 SELECT interval '1 2:03:04.5678' hour to second(2)
 ----
-02:03:04.57
+1 day 02:03:04.57
 
 query error invalid input syntax for type interval: Cannot determine format of all parts\. Add explicit time components, e\.g\. INTERVAL '1 day' or INTERVAL '1' DAY: "1 2\.3456"
 SELECT interval '1 2.3456' minute to second(2)
 
-# SQL-474 PG/CRDB: 1 day 00:02:03.57
 query T
 SELECT interval '1 2:03.5678' minute to second(2)
 ----
-00:02:03.57
+1 day 00:02:03.57
 
-# SQL-474 PG/CRDB: 1 day 02:03:04.57
 query T
 SELECT interval '1 2:03:04.5678' minute to second(2)
 ----
-00:03:04.57
+1 day 02:03:04.57
 
 # Extra regression tests found when fixing this bug.
 subtest regression_43074

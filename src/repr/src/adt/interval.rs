@@ -448,27 +448,6 @@ impl Interval {
         Ok(Duration::from_micros(micros))
     }
 
-    /// Truncate the "head" of the interval, removing all time units greater than `f`.
-    pub fn truncate_high_fields(&mut self, f: DateTimeField) {
-        match f {
-            DateTimeField::Year => {}
-            DateTimeField::Month => self.months %= 12,
-            DateTimeField::Day => self.months = 0,
-            DateTimeField::Hour | DateTimeField::Minute | DateTimeField::Second => {
-                self.months = 0;
-                self.days = 0;
-                self.micros %= f.next_largest().micros_multiplier()
-            }
-            DateTimeField::Millennium
-            | DateTimeField::Century
-            | DateTimeField::Decade
-            | DateTimeField::Milliseconds
-            | DateTimeField::Microseconds => {
-                unreachable!("Cannot truncate interval by {f}");
-            }
-        }
-    }
-
     /// Truncate the "tail" of the interval, removing all time units less than `f`.
     /// # Arguments
     /// - `f`: Round the interval down to the specified time unit.
@@ -1287,99 +1266,6 @@ mod test {
             if i != j {
                 panic!(
                     "test_interval_value_truncate_low_fields failed on {} \n actual: {:?} \n expected: {:?}",
-                    test.0, i, j
-                );
-            }
-        }
-    }
-
-    #[mz_ore::test]
-    fn test_interval_value_truncate_high_fields() {
-        use DateTimeField::*;
-
-        // (month, day, microsecond) tuples
-        let mut test_cases = [
-            (
-                Year,
-                (
-                    321,
-                    7,
-                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000),
-                ),
-                (
-                    321,
-                    7,
-                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000),
-                ),
-            ),
-            (
-                Month,
-                (
-                    321,
-                    7,
-                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000),
-                ),
-                (
-                    9,
-                    7,
-                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000),
-                ),
-            ),
-            (
-                Day,
-                (
-                    321,
-                    7,
-                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000),
-                ),
-                (
-                    0,
-                    7,
-                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000),
-                ),
-            ),
-            (
-                Hour,
-                (
-                    321,
-                    7,
-                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000),
-                ),
-                (
-                    0,
-                    0,
-                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000),
-                ),
-            ),
-            (
-                Minute,
-                (
-                    321,
-                    7,
-                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000),
-                ),
-                (0, 0, (45 * 60 * 1_000_000) + (21 * 1_000_000)),
-            ),
-            (
-                Second,
-                (
-                    321,
-                    7,
-                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000),
-                ),
-                (0, 0, 21 * 1_000_000),
-            ),
-        ];
-
-        for test in test_cases.iter_mut() {
-            let mut i = Interval::new((test.1).0, (test.1).1, (test.1).2);
-            let j = Interval::new((test.2).0, (test.2).1, (test.2).2);
-
-            i.truncate_high_fields(test.0);
-
-            if i != j {
-                panic!(
-                    "test_interval_value_truncate_high_fields failed on {} \n actual: {:?} \n expected: {:?}",
                     test.0, i, j
                 );
             }
