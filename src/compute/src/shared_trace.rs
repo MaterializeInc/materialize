@@ -490,7 +490,7 @@ impl<Tr: TraceReader> TraceSnapshot<Tr> {
 ///
 /// In the differential fork these are inherent methods on `Arranged`. Materialize cannot add
 /// inherent methods to the foreign `Arranged` type, so it exposes them as this extension trait
-/// instead. Bring it into scope at a call site to use `arranged.publish()`.
+/// instead. Bring it into scope at a call site to use `arranged.adopt(...)`.
 pub trait PublishArrangement<Tr: TraceReader> {
     /// Installs this arrangement's publisher into an existing `placeholder` publication point,
     /// created by [`Published::placeholder`], rather than minting a fresh one.
