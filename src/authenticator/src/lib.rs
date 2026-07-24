@@ -8,11 +8,16 @@
 // by the Apache License, Version 2.0.
 
 pub mod oidc;
+pub mod talos;
 
 use mz_adapter::Client as AdapterClient;
 use mz_frontegg_auth::Authenticator as FronteggAuthenticator;
 
 pub use oidc::{GenericOidcAuthenticator, OidcClaims, OidcError, ValidatedClaims};
+pub use talos::{
+    DeriveCredential, TalosAuthenticator, TalosConfig, TalosError, TalosSessionHandle,
+    ValidatedTalosClaims,
+};
 
 use mz_auth::AuthenticatorKind;
 
@@ -22,6 +27,7 @@ pub enum Authenticator {
     Password(AdapterClient),
     Sasl(AdapterClient),
     Oidc(GenericOidcAuthenticator),
+    Talos(TalosAuthenticator),
     None,
 }
 
@@ -32,6 +38,7 @@ impl Authenticator {
             Authenticator::Password(_) => AuthenticatorKind::Password,
             Authenticator::Sasl(_) => AuthenticatorKind::Sasl,
             Authenticator::Oidc(_) => AuthenticatorKind::Oidc,
+            Authenticator::Talos(_) => AuthenticatorKind::Talos,
             Authenticator::None => AuthenticatorKind::None,
         }
     }
