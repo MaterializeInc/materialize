@@ -507,10 +507,18 @@ pub trait PublishArrangement<Tr: TraceReader> {
     ///
     /// Requires the adopting scope's total peer count to equal the placeholder's, panicking
     /// otherwise.
-    fn adopt(&self, placeholder: &Published<Tr>);
+    ///
+    /// `on_seal` fires once per activation on which the published `upper` advances, after the state
+    /// lock is released and `upper` reflects the advance. A fast-path peek parked on this
+    /// arrangement's seal is re-examined only through this callback, so it must observe the advanced
+    /// `upper`. Firing the wake from an upstream stream tap instead notifies before the sink advances
+    /// `upper`, so the peek reads a stale upper, parks, and is never re-woken once that advance was
+    /// the last one. See the lost-wakeup contract on
+    /// [`crate::sharing::ArrangementSharingRegistry::notify`].
+    fn adopt<F: Fn() + 'static>(&self, placeholder: &Published<Tr>, on_seal: F);
 
     /// [`PublishArrangement::adopt`], with a name for the publisher operator.
-    fn adopt_named(&self, placeholder: &Published<Tr>, name: &str);
+    fn adopt_named<F: Fn() + 'static>(&self, placeholder: &Published<Tr>, name: &str, on_seal: F);
 }
 
 impl<'scope, Tr> PublishArrangement<Tr> for Arranged<'scope, TraceAgent<Tr>>
@@ -519,14 +527,14 @@ where
     Tr::Batch: Send + Sync,
     Tr::Time: Lattice + Clone + Send + Sync,
 {
-    fn adopt(&self, placeholder: &Published<Tr>) {
+    fn adopt<F: Fn() + 'static>(&self, placeholder: &Published<Tr>, on_seal: F) {
         // Call the trait method explicitly. While the differential fork is still `[patch]`-active,
         // `Arranged` also has the fork's inherent `adopt_named`, and an inherent method would win
         // over this trait method, adopting into the fork's `Published` instead of ours.
-        PublishArrangement::adopt_named(self, placeholder, "PublishShared");
+        PublishArrangement::adopt_named(self, placeholder, "PublishShared", on_seal);
     }
 
-    fn adopt_named(&self, placeholder: &Published<Tr>, name: &str) {
+    fn adopt_named<F: Fn() + 'static>(&self, placeholder: &Published<Tr>, name: &str, on_seal: F) {
         assert_eq!(
             self.stream.scope().peers(),
             placeholder.shared.peers,
@@ -638,7 +646,7 @@ where
                     )
                 };
 
-                let (logical_target, physical_target) = {
+                let (logical_target, physical_target, upper_advanced) = {
                     let mut state = sink_shared.state.lock().expect("shared trace poisoned");
 
                     for (batch, hint) in arrived.drain(..) {
@@ -693,13 +701,24 @@ where
                         sink_shared.upper_changed.notify_all();
                     }
 
-                    (logical, physical)
+                    (logical, physical, upper_advanced)
                 };
 
                 // Apply compaction to the agent OUTSIDE the lock: `set_physical_compaction` can run
                 // an unbounded merge synchronously, which must not block concurrent readers.
                 agent.set_logical_compaction(logical_target.borrow());
                 agent.set_physical_compaction(physical_target.borrow());
+
+                // Wake fast-path peeks parked on this arrangement's seal, AFTER the state lock above
+                // is released and `state.upper` reflects the advance. The registry wake takes the
+                // `wakers` lock, and a reader takes `wakers` then the trace `state` lock, so firing it
+                // while holding `state` would invert that order and can deadlock. Firing it here, past
+                // the advance, is also what a peek the wake re-examines needs: it reads the advanced
+                // `upper` and completes. An upstream stream tap would fire before this advance, so the
+                // peek would read a stale upper and never be re-woken once this was the last advance.
+                if upper_advanced {
+                    on_seal();
+                }
             },
         );
     }
@@ -921,7 +940,7 @@ mod tests {
         Tr::Time: Lattice + Clone + Send + Sync,
     {
         let published = Published::placeholder(arranged.stream.scope().peers());
-        PublishArrangement::adopt(arranged, &published);
+        PublishArrangement::adopt(arranged, &published, || {});
         published
     }
 
