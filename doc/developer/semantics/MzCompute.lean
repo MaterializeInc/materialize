@@ -16,3 +16,4 @@ import MzCompute.State
 import MzCompute.Run
 import MzCompute.Staging
 import MzCompute.Legality
+import MzCompute.Frontiers
