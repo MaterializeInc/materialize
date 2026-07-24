@@ -69,6 +69,9 @@ jon  12
 statement error materialized view .+ definition names 2 columns, but materialized view .+ has 1 column
 CREATE MATERIALIZED VIEW error (name, age) AS SELECT 'jon'
 
+statement error materialized view .+ definition names 1 column, but materialized view .+ has 2 columns
+CREATE MATERIALIZED VIEW error (name) AS SELECT 'jon', 12
+
 
 # Test: Materialized view can be created in another cluster.
 
