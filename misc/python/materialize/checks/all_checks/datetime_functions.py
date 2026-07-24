@@ -75,7 +75,13 @@ class DateTimeFunctions(Check):
             3 334 "2024-12-31 23:59:59" "2024-12-31 18:59:59" "2024-12-31 18:59:59"
             4 335 "2025-01-01 00:00:00" "2024-12-31 19:00:00" "2024-12-31 19:00:00"
 
-            > SELECT id, jd::text, jh::text, ji::text FROM datetime_fns_convert1
+            >[version>=2603500] SELECT id, jd::text, jh::text, ji::text FROM datetime_fns_convert1
+            1 "1 mon 5 days" "35 days" "1 mon 5 days"
+            2 27:00:00 "1 day 03:00:00" "1 day 03:00:00"
+            3 "1 mon -01:00:00" "1 mon -01:00:00" "29 days 23:00:00"
+            4 00:00:00 00:00:00 00:00:00
+
+            >[version<2603500] SELECT id, jd::text, jh::text, ji::text FROM datetime_fns_convert1
             1 "1 month 5 days" "35 days" "1 month 5 days"
             2 27:00:00 "1 day 03:00:00" "1 day 03:00:00"
             3 "1 month -01:00:00" "1 month -01:00:00" "29 days 23:00:00"

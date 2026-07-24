@@ -133,7 +133,7 @@ contains:precision for type timestamp or timestamptz must be between 0 and 6
 "1 day"
 
 > SELECT INTERVAL '6' MONTH
-"6 months"
+"6 mons"
 
 > SELECT INTERVAL '10' YEAR
 "10 years"

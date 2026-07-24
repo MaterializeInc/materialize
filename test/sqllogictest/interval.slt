@@ -35,13 +35,13 @@ SELECT INTERVAL '1 2:';
 query T
 SELECT INTERVAL '1-2 3:4';
 ----
-1 year 2 months 03:04:00
+1 year 2 mons 03:04:00
 
 # Parse Y-M D H:M.
 query T
 SELECT INTERVAL '1-2 3 4:5';
 ----
-1 year 2 months 3 days 04:05:00
+1 year 2 mons 3 days 04:05:00
 
 # Parse Y- D H:
 query T
@@ -53,19 +53,19 @@ SELECT INTERVAL '1- 2 3:';
 query T
 SELECT INTERVAL '1:2:3.4 5-6';
 ----
-5 years 6 months 01:02:03.4
+5 years 6 mons 01:02:03.4
 
 # Implicit SECOND for ambiguous part.
 query T
 SELECT INTERVAL '1-2 3';
 ----
-1 year 2 months 00:00:03
+1 year 2 mons 00:00:03
 
 # Explicitly set ambiguous part.
 query T
 SELECT INTERVAL '1-2 3' HOUR;
 ----
-1 year 2 months 03:00:00
+1 year 2 mons 03:00:00
 
 # Disallow components to be set twice.
 statement error invalid input syntax for type interval: YEAR field set twice: "1 year 2 years"
@@ -94,39 +94,39 @@ SELECT INTERVAL '1-2 3 4:5:6.7' YEAR;
 query T
 SELECT INTERVAL '1-2 3 4:5:6.7' MONTH;
 ----
-1 year 2 months
+1 year 2 mons
 
 query T
 SELECT INTERVAL '1-2 3 4:5:6.7' DAY;
 ----
-1 year 2 months 3 days
+1 year 2 mons 3 days
 
 query T
 SELECT INTERVAL '1-2 3 4:5:6.7' HOUR;
 ----
-1 year 2 months 3 days 04:00:00
+1 year 2 mons 3 days 04:00:00
 
 query T
 SELECT INTERVAL '1-2 3 4:5:6.7' MINUTE;
 ----
-1 year 2 months 3 days 04:05:00
+1 year 2 mons 3 days 04:05:00
 
 query T
 SELECT INTERVAL '1-2 3 4:5:6.7' SECOND;
 ----
-1 year 2 months 3 days 04:05:06.7
+1 year 2 mons 3 days 04:05:06.7
 
 # Range qualifiers discard fields less significant than the range's low end,
 # but keep more significant fields, matching PostgreSQL.
 query T
 SELECT INTERVAL '1-2 3 4:5:6.7' MONTH TO MINUTE;
 ----
-1 year 2 months 3 days 04:05:00
+1 year 2 mons 3 days 04:05:00
 
 query T
 SELECT INTERVAL '1-2 3 4:5:6.7' DAY TO HOUR;
 ----
-1 year 2 months 3 days 04:00:00
+1 year 2 mons 3 days 04:00:00
 
 query T
 SELECT INTERVAL '12:34';
@@ -232,7 +232,7 @@ SELECT INTERVAL '1-2 3 4:5:6.7' SECOND TO SECOND;
 query T
 SELECT INTERVAL '1:2:3.4 5-6 7' DAY;
 ----
-5 years 6 months 7 days
+5 years 6 mons 7 days
 
 # Disambiguate component (YEAR), but disallow because
 # the group it's in has been closed.
@@ -243,30 +243,30 @@ SELECT INTERVAL '1:2:3.4 5-6 7' YEAR;
 query T
 SELECT INTERVAL '-1-2 -3 -4:5:6.7';
 ----
--1 years -2 months -3 days -04:05:06.7
+-1 years -2 mons -3 days -04:05:06.7
 
 # Mixed signs
 query T
 SELECT INTERVAL '-1-2 3 -4:5:6.7';
 ----
--1 years -2 months +3 days -04:05:06.7
+-1 years -2 mons +3 days -04:05:06.7
 
 # Allow skipping components.
 query T
 SELECT INTERVAL '1-2 3 4::.5';
 ----
-1 year 2 months 3 days 04:00:00.5
+1 year 2 mons 3 days 04:00:00.5
 
 # Mix negatives and missing components.
 query T
 SELECT INTERVAL '-1-2 -3 4::.5';
 ----
--1 years -2 months -3 days +04:00:00.5
+-1 years -2 mons -3 days +04:00:00.5
 
 query T
 SELECT INTERVAL '-1-2 -3 -4::.5';
 ----
--1 years -2 months -3 days -04:00:00.5
+-1 years -2 mons -3 days -04:00:00.5
 
 # Parse - and infer second value.
 query T
@@ -338,37 +338,37 @@ SELECT INTERVAL '1x2:3.4';
 query T
 SELECT INTERVAL '1 year 2 month 3 day 4 hour 5 minute 6.7 second';
 ----
-1 year 2 months 3 days 04:05:06.7
+1 year 2 mons 3 days 04:05:06.7
 
 # Plural TimeUnits.
 query T
 SELECT INTERVAL '1 years 2 months 3 days 4 hours 5 minutes 6.7 seconds';
 ----
-1 year 2 months 3 days 04:05:06.7
+1 year 2 mons 3 days 04:05:06.7
 
 # Shorthand.
 query T
 SELECT INTERVAL '1y 2mon 3d 4h 5m 6.7s';
 ----
-1 year 2 months 3 days 04:05:06.7
+1 year 2 mons 3 days 04:05:06.7
 
 # Commutative expressions.
 query T
 SELECT INTERVAL '6.7 seconds 5 minutes 3 days 4 hours 1 year 2 month';
 ----
-1 year 2 months 3 days 04:05:06.7
+1 year 2 mons 3 days 04:05:06.7
 
 # Allow mix of positive and negative components.
 query T
 SELECT INTERVAL '-6.7 seconds 5 minutes -3 days 4 hours -1 year 2 month';
 ----
--10 months -3 days +04:04:53.3
+-10 mons -3 days +04:04:53.3
 
 # Allow fractional components.
 query T
 SELECT INTERVAL '1y 2.3mon 4.5d';
 ----
-1 year 2 months 13 days 12:00:00
+1 year 2 mons 13 days 12:00:00
 
 query T
 SELECT INTERVAL '-6.7 seconds 5.6 minutes -3.4 days 4.5 hours -1.2 year 2.3 month';
@@ -391,7 +391,7 @@ SELECT INTERVAL '-1 day 0.27 seconds';
 query T
 SELECT INTERVAL '10.333 years';
 ----
-10 years 3 months
+10 years 3 mons
 
 # Fractional part with ambiguity and range.
 query T
@@ -403,7 +403,7 @@ SELECT INTERVAL '10.333' years;
 query T
 SELECT INTERVAL '1.5555555 month';
 ----
-1 month 16 days 15:59:59.856
+1 mon 16 days 15:59:59.856
 
 # Fractional day, includes nanoseconds.
 query T
@@ -433,7 +433,7 @@ SELECT INTERVAL '.33333 minute .1 second';
 query T
 SELECT INTERVAL '1year 2months 3.4days';
 ----
-1 year 2 months 3 days 09:36:00
+1 year 2 mons 3 days 09:36:00
 
 # Zero values.
 query T
@@ -450,7 +450,7 @@ SELECT INTERVAL '0 foo';
 query T
 SELECT INTERVAL '1-2 3:4 5 day';
 ----
-1 year 2 months 5 days 03:04:00
+1 year 2 mons 5 days 03:04:00
 
 # Parse + signs.
 query T
@@ -479,34 +479,34 @@ SELECT INTERVAL '01:02:03minute hour day year';
 query T
 SELECT INTERVAL '-13-10 15 -16::.27';
 ----
--13 years -10 months +15 days -16:00:00.27
+-13 years -10 mons +15 days -16:00:00.27
 
 query T
 SELECT INTERVAL '-13-10 -15 -16::.27';
 ----
--13 years -10 months -15 days -16:00:00.27
+-13 years -10 mons -15 days -16:00:00.27
 
 # Parsing output as input.
 query T
 SELECT INTERVAL '-13 years -10 months -15 days -16:00:00.27';
 ----
--13 years -10 months -15 days -16:00:00.27
+-13 years -10 mons -15 days -16:00:00.27
 
 query T
 SELECT INTERVAL '-13 years -10 months +14 days +07:59:59.73';
 ----
--13 years -10 months +14 days 07:59:59.73
+-13 years -10 mons +14 days 07:59:59.73
 
 # Commutative mixed expressions.
 query T
 SELECT INTERVAL '5 day 3:4 1-2';
 ----
-1 year 2 months 5 days 03:04:00
+1 year 2 mons 5 days 03:04:00
 
 query T
 SELECT INTERVAL '1-2 3:4 5 day';
 ----
-1 year 2 months 5 days 03:04:00
+1 year 2 mons 5 days 03:04:00
 
 # Mix style allowed, but cannot assigning to closed group.
 statement error invalid input syntax for type interval: SECOND field set twice: "1-2 3:4 5 second"
@@ -520,14 +520,14 @@ SELECT INTERVAL '1-2 5 second 3:4';
 query T
 SELECT INTERVAL '1.5555 month 2 3:4:5.6';
 ----
-1 month 18 days 19:01:41.6
+1 mon 18 days 19:01:41.6
 
 # Fractional month with terminating range. Truncation should
 # only happen after computation.
 query T
 SELECT INTERVAL '1.5555 month 2 3:4:5.6' HOUR;
 ----
-1 month 18 days 19:00:00
+1 mon 18 days 19:00:00
 
 # Fractional month with leading and terminating range.
 # Again, truncation should only happen after
@@ -535,7 +535,7 @@ SELECT INTERVAL '1.5555 month 2 3:4:5.6' HOUR;
 query T
 SELECT INTERVAL '1.5555 month 2 3:4:5.6' DAY TO HOUR;
 ----
-1 month 18 days 19:00:00
+1 mon 18 days 19:00:00
 
 # Only allow disambiguation if ambiguous element
 # is final element of interval string.
@@ -608,7 +608,7 @@ SELECT INTERVAL '0.00000001 min 0.0006 millisecond 3.5 microsecond' SECOND(5);
 query T
 SELECT INTERVAL '-1.555555555 years 2.555555555 months -3.555555555 days 4.555555555 hours -5.555555555 minutes 6.555555555 seconds';
 ----
--1 years -4 months +13 days 07:07:53.220829
+-1 years -4 mons +13 days 07:07:53.220829
 
 
 # Allow precision as second element in range.
@@ -650,7 +650,7 @@ SELECT INTERVAL '1 day 2-3 4' SECOND(-1);
 query T
 SELECT interval '02-01!1~01:02:03';
 ----
-2 years 1 month 1 day 01:02:03
+2 years 1 mon 1 day 01:02:03
 
 query T
 SELECT interval '1! hour';
@@ -666,48 +666,48 @@ SELECT interval '02!01!1~01:02:03';
 query T
 SELECT - INTERVAL '1-2 3 4:5:6.7';
 ----
--1 years -2 months -3 days -04:05:06.7
+-1 years -2 mons -3 days -04:05:06.7
 
 query T
 SELECT - INTERVAL '-1 year -2 months -3 days -04:05:06.7';
 ----
-1 year 2 months 3 days 04:05:06.7
+1 year 2 mons 3 days 04:05:06.7
 
 query T
 SELECT - INTERVAL '1 year 2 months -3 days -04:05:06.7';
 ----
--1 years -2 months +3 days 04:05:06.7
+-1 years -2 mons +3 days 04:05:06.7
 
 query T
 SELECT - INTERVAL '-1 year -2 months 3 days 04:05:06.7';
 ----
-1 year 2 months -3 days -04:05:06.7
+1 year 2 mons -3 days -04:05:06.7
 
 # Add, sub intervals
 query T
 SELECT INTERVAL '1-2 3 4:5:6.7' + INTERVAL '1-2 3 4:5:6.7';
 ----
-2 years 4 months 6 days 08:10:13.4
+2 years 4 mons 6 days 08:10:13.4
 
 query T
 SELECT INTERVAL '1-2 3 4:5:6.7' - INTERVAL '7-6 5 4:3:2.1';
 ----
--6 years -4 months -2 days +00:02:04.6
+-6 years -4 mons -2 days +00:02:04.6
 
 query T
 SELECT INTERVAL '1-2 3 4:5:6.7' + - INTERVAL '7-6 5 4:3:2.1';
 ----
--6 years -4 months -2 days +00:02:04.6
+-6 years -4 mons -2 days +00:02:04.6
 
 query T
 SELECT INTERVAL '1-2 3 4:5:6.7' + INTERVAL '-7-6 -5 -4:3:2.1';
 ----
--6 years -4 months -2 days +00:02:04.6
+-6 years -4 mons -2 days +00:02:04.6
 
 query T
 SELECT INTERVAL '1-2 3 4:5:6.7' - INTERVAL '-7-6 -5 -4:3:2.1';
 ----
-8 years 8 months 8 days 08:08:08.8
+8 years 8 mons 8 days 08:08:08.8
 
 query T
 SELECT INTERVAL '1-2 3 4:5:6.7' - INTERVAL '1-2 3 4:5:6.7'
@@ -738,7 +738,7 @@ SELECT INTERVAL '1' MONTH / 30
 query T
 SELECT INTERVAL '1' YEAR * 13/12
 ----
-1 year 1 month
+1 year 1 mon
 
 query error "10 years \* 10000000000" interval out of range
 SELECT INTERVAL '10 years' *  9999999999.999999999;
@@ -757,12 +757,12 @@ SELECT INTERVAL '1' YEAR / 360
 query T
 SELECT INTERVAL '1' YEAR * 0.9999999
 ----
-11 months 29 days 23:59:56.8896
+11 mons 29 days 23:59:56.8896
 
 query T
 SELECT INTERVAL '-1-2 -3 -4:5:6.7' * 999
 ----
--1165 years -6 months -2997 days -4081:06:33.3
+-1165 years -6 mons -2997 days -4081:06:33.3
 
 # Division by zero
 statement error division by zero
@@ -798,12 +798,12 @@ SELECT INTERVAL '-2147483648 days -2562047787 hours -59 minutes -59.999999 secon
 query T
 SELECT INTERVAL '2147483647 months 2147483647 days 9223372036854775807 us'
 ----
-178956970 years 7 months 2147483647 days 2562047788:00:54.775807
+178956970 years 7 mons 2147483647 days 2562047788:00:54.775807
 
 query T
 SELECT INTERVAL '-2147483648 months -2147483648 days -9223372036854775808 us'
 ----
--178956970 years -8 months -2147483648 days -2562047788:00:54.775808
+-178956970 years -8 mons -2147483648 days -2562047788:00:54.775808
 
 statement error Overflows maximum microseconds;
 SELECT INTERVAL '2147483647 days 2562047789 hours';
@@ -823,10 +823,10 @@ SELECT INTERVAL '2147483647 days 2562047788 hours 54 seconds' + INTERVAL '1'
 statement error "-2147483648 days -2562047788:00:54 - 00:00:01" interval out of range
 SELECT INTERVAL '-2147483648 days -2562047788 hours -54 seconds' - INTERVAL '1'
 
-statement error "178956970 years 7 months / 0.99" interval out of range
+statement error "178956970 years 7 mons / 0\.99" interval out of range
 SELECT INTERVAL '2147483647' MONTH / 0.99
 
-statement error "-178956970 years -7 months \* 1.01" interval out of range
+statement error "\-178956970 years \-7 mons \* 1\.01" interval out of range
 SELECT INTERVAL '-2147483647' MONTH * 1.01
 
 # Largest number of cumulative nanoseconds
@@ -1228,7 +1228,7 @@ SELECT INTERVAL '1 millenniums 2 centuries 3 decades 4 years'
 ----
 1234 years
 
-query error "-178956970 years -8 months" interval out of range
+query error "\-178956970 years \-8 mons" interval out of range
 SELECT -INTERVAL '-2147483648 months';
 
 query error "-2147483648 days" interval out of range
@@ -1237,7 +1237,7 @@ SELECT -INTERVAL '-2147483648 days';
 query error "-2562047788:00:54.775808" interval out of range
 SELECT -INTERVAL '-9223372036854775808 microseconds';
 
-query error "-1 months - -178956970 years -8 months" interval out of range
+query error "\-1 mons \- \-178956970 years \-8 mons" interval out of range
 SELECT INTERVAL '-1 months' - INTERVAL '-2147483648 months';
 
 query error "-1 days - -2147483648 days" interval out of range
@@ -1389,7 +1389,7 @@ true
 query T
 SELECT justify_hours(interval '6 months 3 days 52 hours 3 minutes 2 seconds');
 ----
-6 months 5 days 04:03:02
+6 mons 5 days 04:03:02
 
 query T
 SELECT justify_hours(interval '27 hours');
@@ -1399,12 +1399,12 @@ SELECT justify_hours(interval '27 hours');
 query T
 SELECT justify_days(interval '6 months 36 days 5 hours 4 minutes 3 seconds');
 ----
-7 months 6 days 05:04:03
+7 mons 6 days 05:04:03
 
 query T
 SELECT justify_days(interval '35 days');
 ----
-1 month 5 days
+1 mon 5 days
 
 query T
 SELECT justify_interval(interval '1 month -1 hour');
@@ -1414,39 +1414,39 @@ SELECT justify_interval(interval '1 month -1 hour');
 query error "2147483647 days 24:00:00" interval out of range
 SELECT justify_hours(interval '2147483647 days 24 hrs');
 
-query error "178956970 years 7 months 30 days" interval out of range
+query error "178956970 years 7 mons 30 days" interval out of range
 SELECT justify_days(interval '2147483647 months 30 days');
 
 query T
 SELECT justify_interval(interval '2147483647 days 24 hrs');
 ----
-5965232 years 4 months 8 days
+5965232 years 4 mons 8 days
 
 query T
 SELECT justify_interval(interval '-2147483648 days -24 hrs');
 ----
--5965232 years -4 months -9 days
+-5965232 years -4 mons -9 days
 
-query error "178956970 years 7 months 30 days" interval out of range
+query error "178956970 years 7 mons 30 days" interval out of range
 SELECT justify_interval(interval '2147483647 months 30 days');
 
-query error "-178956970 years -8 months -30 days" interval out of range
+query error "\-178956970 years \-8 mons \-30 days" interval out of range
 SELECT justify_interval(interval '-2147483648 months -30 days');
 
 query T
 SELECT justify_interval(interval '2147483647 months 30 days -24 hrs');
 ----
-178956970 years 7 months 29 days
+178956970 years 7 mons 29 days
 
 query T
 SELECT justify_interval(interval '-2147483648 months -30 days 24 hrs');
 ----
--178956970 years -8 months -29 days
+-178956970 years -8 mons -29 days
 
-query error "178956970 years 7 months -30 days \+1440:00:00" interval out of range
+query error "178956970 years 7 mons \-30 days \+1440:00:00" interval out of range
 SELECT justify_interval(interval '2147483647 months -30 days 1440 hrs');
 
-query error "-178956970 years -8 months \+30 days -1440:00:00" interval out of range
+query error "\-178956970 years \-8 mons \+30 days \-1440:00:00" interval out of range
 SELECT justify_interval(interval '-2147483648 months 30 days -1440 hrs');
 
 # TIMESTAMP/DATE builtins.
@@ -1454,7 +1454,7 @@ SELECT justify_interval(interval '-2147483648 months 30 days -1440 hrs');
 query T
 SELECT age('2001-04-10 22:06:45', '1957-06-13')
 ----
-43 years 9 months 27 days 22:06:45
+43 years 9 mons 27 days 22:06:45
 
 query T
 SELECT age('2017-12-10'::timestamptz, '2017-12-01'::timestamptz)
@@ -1469,7 +1469,7 @@ SELECT age('2017-12-10 04:05:01.555'::timestamp, '2017-12-10 04:05:01.550'::time
 query T
 SELECT age('0001-06-01 08:10:56.555'::timestamp, '9999-12-10 04:05:01.550'::timestamp);
 ----
--9998 years -6 months -8 days -19:54:04.995
+-9998 years -6 mons -8 days -19:54:04.995
 
 query B
 SELECT age('2020-04-05'::date + '03:00'::time, '2020-04-05'::date + '02:00'::time) = '1 hour'::interval;
@@ -1479,19 +1479,19 @@ true
 query T
 SELECT age(to_timestamp(-210833720368), to_timestamp(8200000000000));
 ----
--266528 years -8 months -17 days -12:06:08
+-266528 years -8 mons -17 days -12:06:08
 
 query T
 SELECT age(to_timestamp(8200000000000), to_timestamp(-210833720368));
 ----
-266528 years 8 months 17 days 12:06:08
+266528 years 8 mons 17 days 12:06:08
 
 # Aggregation
 
 query T
 SELECT MAX(unnest) FROM (SELECT UNNEST(ARRAY[INTERVAL '1-2 3 4:5:6.7' MONTH, INTERVAL '1-2 3 4:5:6.7' YEAR]));
 ----
-1 year 2 months
+1 year 2 mons
 
 query T
 SELECT MAX(unnest) FROM (SELECT UNNEST(ARRAY[INTERVAL '2' SECOND, INTERVAL '1' SECOND]));
@@ -1502,3 +1502,18 @@ query T
 SELECT MIN(unnest) FROM (SELECT UNNEST(ARRAY[INTERVAL '2' SECOND, INTERVAL '1' SECOND]));
 ----
 00:00:01
+
+# Regression test for SQL-463: the text encoding must spell the months field
+# "mon"/"mons" like PostgreSQL's IntervalStyle=postgres. Drivers that parse
+# that style (e.g. psycopg) silently dropped all fields following a "months"
+# spelling, corrupting results.
+simple
+SELECT '1 month 10 days'::interval, '-1 year -2 months +3 days'::interval;
+----
+1 mon 10 days,-1 years -2 mons +3 days
+COMPLETE 1
+
+query T
+SELECT ('1 month 10 days'::interval)::text;
+----
+1 mon 10 days

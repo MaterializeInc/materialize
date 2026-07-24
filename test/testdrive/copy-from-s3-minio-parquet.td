@@ -79,9 +79,9 @@ SlimJim
 Taco
 
 > SELECT interval_ym_col FROM types ORDER BY int8_col DESC;
-"-2 months"
-"1 year 1 month"
-"1 month"
+"-2 mons"
+"1 year 1 mon"
+"1 mon"
 
 > SELECT interval_dt_col FROM types ORDER BY int8_col DESC;
 "-1 days -00:00:01"
@@ -114,9 +114,9 @@ SlimJim
 Taco
 
 > SELECT interval_ym_col FROM types ORDER BY int8_col DESC;
-"-2 months"
-"1 year 1 month"
-"1 month"
+"-2 mons"
+"1 year 1 mon"
+"1 mon"
 
 > SELECT interval_dt_col FROM types ORDER BY int8_col DESC;
 "-1 days -00:00:01"
@@ -148,9 +148,9 @@ SlimJim
 Taco
 
 > SELECT interval_ym_col FROM types ORDER BY int8_col DESC;
-"-2 months"
-"1 year 1 month"
-"1 month"
+"-2 mons"
+"1 year 1 mon"
+"1 mon"
 
 > SELECT interval_dt_col FROM types ORDER BY int8_col DESC;
 "-1 days -00:00:01"
@@ -182,9 +182,9 @@ SlimJim
 Taco
 
 > SELECT interval_ym_col FROM types ORDER BY int8_col DESC;
-"-2 months"
-"1 year 1 month"
-"1 month"
+"-2 mons"
+"1 year 1 mon"
+"1 mon"
 
 > SELECT interval_dt_col FROM types ORDER BY int8_col DESC;
 "-1 days -00:00:01"
@@ -216,9 +216,9 @@ SlimJim
 Taco
 
 > SELECT interval_ym_col FROM types ORDER BY int8_col DESC;
-"-2 months"
-"1 year 1 month"
-"1 month"
+"-2 mons"
+"1 year 1 mon"
+"1 mon"
 
 > SELECT interval_dt_col FROM types ORDER BY int8_col DESC;
 "-1 days -00:00:01"
@@ -250,9 +250,9 @@ SlimJim
 Taco
 
 > SELECT interval_ym_col FROM types ORDER BY int8_col DESC;
-"-2 months"
-"1 year 1 month"
-"1 month"
+"-2 mons"
+"1 year 1 mon"
+"1 mon"
 
 > SELECT interval_dt_col FROM types ORDER BY int8_col DESC;
 "-1 days -00:00:01"
@@ -335,24 +335,24 @@ Taco
 Taco
 
 > SELECT interval_ym_col FROM types ORDER BY int8_col DESC;
-"-2 months"
-"-2 months"
-"-2 months"
-"-2 months"
-"-2 months"
-"-2 months"
-"1 year 1 month"
-"1 year 1 month"
-"1 year 1 month"
-"1 year 1 month"
-"1 year 1 month"
-"1 year 1 month"
-"1 month"
-"1 month"
-"1 month"
-"1 month"
-"1 month"
-"1 month"
+"-2 mons"
+"-2 mons"
+"-2 mons"
+"-2 mons"
+"-2 mons"
+"-2 mons"
+"1 year 1 mon"
+"1 year 1 mon"
+"1 year 1 mon"
+"1 year 1 mon"
+"1 year 1 mon"
+"1 year 1 mon"
+"1 mon"
+"1 mon"
+"1 mon"
+"1 mon"
+"1 mon"
+"1 mon"
 
 > SELECT interval_dt_col FROM types ORDER BY int8_col DESC;
 "-1 days -00:00:01"
