@@ -11,8 +11,8 @@
 # slow path (N1-N3). Unlike two_runtime_index.spec, which peeks a maintenance
 # index directly (the fast path), this creates a genuine INTERACTIVE QUERY
 # DATAFLOW: a `count(*)` reduce that imports a maintenance index and is itself
-# exported with `transient`, so the multiplexer routes its `CreateDataflow` to
-# the interactive runtime (see `mz_compute_client::multiplex`).
+# exported under a transient id (`t4000`), so the multiplexer routes its
+# `CreateDataflow` to the interactive runtime (see `mz_compute_client::multiplex`).
 #
 # The maintenance index is created but deliberately left unscheduled before the
 # query dataflow is submitted, so nothing has been published to the shared
@@ -65,14 +65,14 @@ define-schema name=count_out
 ok
 
 # The interactive query dataflow: `count(*)` over the (still unpublished)
-# maintenance index, exported `transient` so it is routed to the interactive
-# runtime instead of maintenance.
+# maintenance index, exported under a transient id (`t4000`) so it is routed to
+# the interactive runtime instead of maintenance.
 create-dataflow name=interactive-count as-of=0
   import index=2001
   build id=3000
     Reduce aggregates=[count(*)]
       Get u2000
-  export index=4000 on=3000 key=[0] transient
+  export index=t4000 on=3000 key=[0]
 ----
 ok
 
@@ -80,7 +80,7 @@ ok
 # point (its import is unpublished), so this `Schedule` races ahead of it,
 # exactly as the real controller's immediate-schedule-of-transient behavior
 # would.
-schedule id=4000
+schedule id=t4000
 ----
 ok
 
@@ -92,6 +92,6 @@ ok
 
 # The interactive runtime built and ran the reduce once notified of the
 # publication, off the maintenance worker; the result is the correct count.
-peek id=4000 schema=count_out ts=0
+peek id=t4000 schema=count_out ts=0
 ----
 3
