@@ -421,10 +421,27 @@ EOF
 
 # VARIADIC FUNCTIONS that introduce nulls
 
-query BBBBBBB
-SELECT COALESCE(NULLIF('a', 'a')) IS NULL, GREATEST(NULLIF('a', 'a')) IS NULL, LEAST(NULLIF('a', 'a')) IS NULL, MAKE_TIMESTAMP(2023, 1, 1, 0, 0, 11111) IS NULL, (ARRAY[1, 2])[3] IS NULL, (LIST[1, 2])[3] IS NULL, REGEXP_MATCH('a', 'b')  IS NULL;
+query BBBBBB
+SELECT COALESCE(NULLIF('a', 'a')) IS NULL, GREATEST(NULLIF('a', 'a')) IS NULL, LEAST(NULLIF('a', 'a')) IS NULL, (ARRAY[1, 2])[3] IS NULL, (LIST[1, 2])[3] IS NULL, REGEXP_MATCH('a', 'b')  IS NULL;
 ----
-true  true  true  true  true  true  true
+true  true  true  true  true  true
+
+# MAKE_TIMESTAMP errors on invalid fields rather than returning NULL, but its
+# return type stays nullable, so it still propagates as NULL-able.
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT MAKE_TIMESTAMP(col_not_null, 1, 1, 0, 0, 0) FROM int_table;
+----
+Explained Query:
+  Project (#2) // { types: "(r_timestamp?)" }
+    Map (makets(integer_to_bigint(#1{col_not_null}), 1, 1, 0, 0, 0)) // { types: "(r_int32?, r_int32, r_timestamp?)" }
+      ReadStorage materialize.public.int_table // { types: "(r_int32?, r_int32)" }
+
+Source materialize.public.int_table
+
+Target cluster: quickstart
+
+EOF
 
 # BINARY FUNCTIONS that introduce nulls
 # MapGetValue and ListLengthMax not covered
