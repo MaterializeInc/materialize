@@ -599,6 +599,17 @@ pub fn build_compute_dataflow(
 /// to `as_of`. Keeping them alive (for example in the dataflow's token set) pins the shared trace at
 /// `as_of`; dropping them releases the hold, after which maintenance may compact past `as_of`.
 ///
+/// Cleanup of the imported maintenance index is not this runtime's responsibility, and is not
+/// coordinated across runtimes. It rests on the controller's read-hold discipline: the controller
+/// holds a read hold on the imported id for every reader (a peek, or a dataflow importing it) and
+/// releases that hold only once the reader retires, at which point it may issue the index's
+/// `AllowCompaction` (see `mz_compute_client::controller::instance::Instance::finish_peek`). The
+/// interactive runtime releases these handle holds and reports its empty frontier when its own
+/// dataflow is dropped, which reaches the controller before it frees the index. So the imported
+/// index is never compacted or dropped while this import still reads it, without any cross-runtime
+/// signal. A controller that violated this discipline would be an incorrect protocol instantiation,
+/// which the runtime panics on rather than defends against.
+///
 /// Panics if the slot's `since` is already beyond `as_of` at import time: the controller offered
 /// an `as_of` the shared trace can no longer read accurately, a protocol error.
 ///
