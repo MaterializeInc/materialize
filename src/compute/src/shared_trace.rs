@@ -514,7 +514,7 @@ pub trait PublishArrangement<Tr: TraceReader> {
     /// `upper`. Firing the wake from an upstream stream tap instead notifies before the sink advances
     /// `upper`, so the peek reads a stale upper, parks, and is never re-woken once that advance was
     /// the last one. See the lost-wakeup contract on
-    /// [`crate::sharing::ArrangementSharingRegistry::notify`].
+    /// `crate::sharing::ArrangementSharingRegistry::notify`.
     fn adopt<F: Fn() + 'static>(&self, placeholder: &Published<Tr>, on_seal: F);
 
     /// [`PublishArrangement::adopt`], with a name for the publisher operator.
