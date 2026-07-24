@@ -5359,3 +5359,182 @@ def workflow_clusterd_generation_scheduling(
         f"{old_gen} and {new_gen} live and that new-gen selectors filter "
         f"to generation {new_gen}"
     )
+
+
+def workflow_mz_debug_scaled_replica(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    We stand up a managed cluster whose one replica has scale=2 (two clusterd
+    pods behind one service), run mz-debug, and assert one CPU profile per pod.
+    """
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument("--tag", type=str, help="Custom version tag to use")
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+
+    SCALE = 2
+    CLUSTER_NAME = "scaled_dbg"
+    # The name mz-debug matches k8s resources against, taken from the testing
+    # Materialize CR (`misc/helm-charts/testing/materialize.yaml`).
+    MZ_INSTANCE_NAME = "12345678-1234-1234-1234-123456789012"
+
+    definition = setup(c, args)
+
+    # The only scale>1 size the operator ships (`6400cc`) demands 62 CPUs and
+    # ~470 GiB per pod, which will never schedule on kind. Register a tiny
+    # scale=2 size for the test instead.
+    definition["operator"]["operator"]["clusters"]["sizes"]["mz_debug_scale2"] = {
+        "workers": 1,
+        "scale": SCALE,
+        "cpu_exclusive": False,
+        "cpu_limit": 0.1,
+        "credits_per_hour": "0.00",
+        "disk_limit": "1552MiB",
+        "memory_limit": "776MiB",
+    }
+
+    init(definition)
+    run(definition, expect_fail=False)
+
+    # Create a managed cluster whose single replica has scale=2. The internal
+    with port_forward_environmentd(6877) as port:
+        with (
+            psycopg.connect(
+                f"host=localhost port={port} user=mz_system sslmode=disable",
+                autocommit=True,
+            ) as conn,
+            conn.cursor() as cur,
+        ):
+            # `REPLICATION FACTOR 1` pins the cluster to exactly one replica, so
+            # the scale=2 size yields exactly two clusterd pods behind one
+            # service.
+            cur.execute(
+                f"CREATE CLUSTER {CLUSTER_NAME} SIZE 'mz_debug_scale2', REPLICATION FACTOR 1"
+            )
+            cur.execute(
+                "SELECT c.id, r.id "
+                "FROM mz_cluster_replicas r "
+                "JOIN mz_clusters c ON r.cluster_id = c.id "
+                f"WHERE c.name = '{CLUSTER_NAME}'"
+            )
+            rows = cur.fetchall()
+            assert len(rows) == 1, f"expected exactly one replica, got {rows}"
+            cluster_id, replica_id = rows[0]
+
+    cluster_id_selector = (
+        f"cluster.environmentd.materialize.cloud/cluster-id={cluster_id}"
+    )
+
+    def clusterd_pod_names() -> list[str]:
+        pods = json.loads(
+            spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "pods",
+                    "-l",
+                    cluster_id_selector,
+                    "-n",
+                    "materialize-environment",
+                    "-o",
+                    "json",
+                ]
+            )
+        )["items"]
+        return sorted(p["metadata"]["name"] for p in pods)
+
+    # The clusterd pods are created asynchronously after the catalog commit, so
+    # wait for them to appear before waiting on readiness (`kubectl wait` errors
+    # when no pods match its selector).
+    for _ in range(300):
+        if len(clusterd_pod_names()) >= SCALE:
+            break
+        time.sleep(1)
+    else:
+        raise RuntimeError(
+            f"scaled replica never brought up {SCALE} clusterd pods: "
+            f"{clusterd_pod_names()}"
+        )
+
+    spawn.runv(
+        [
+            "kubectl",
+            "wait",
+            "--for=condition=Ready",
+            "pod",
+            "-l",
+            cluster_id_selector,
+            "-n",
+            "materialize-environment",
+            "--timeout=300s",
+        ]
+    )
+
+    pod_names = clusterd_pod_names()
+    assert (
+        len(pod_names) == SCALE
+    ), f"expected {SCALE} clusterd pods for the scaled replica, got {pod_names}"
+
+    # Run mz-debug, capturing only CPU profiles to keep the run fast and the
+    # trigger isolated. `--dump-cpu-profiles` is on by default; we disable the
+    # other collectors. The connection URL is only parsed (system-catalog dump
+    # is off), so no live SQL connection is needed.
+    spawn.runv(
+        [
+            "./mz-debug",
+            "self-managed",
+            "--k8s-namespace",
+            "materialize-environment",
+            "--mz-instance-name",
+            MZ_INSTANCE_NAME,
+            "--mz-connection-url",
+            "postgresql://mz_system@localhost:6877/materialize",
+            "--dump-k8s=false",
+            "--dump-system-catalog=false",
+            "--dump-heap-profiles=false",
+            "--dump-prometheus-metrics=false",
+            "--dump-cpu-profiles=true",
+            "--cpu-profile-duration-seconds=1",
+        ]
+    )
+
+    # mz-debug writes `mz_debug_<timestamp>/profiles/<service>.cpuprof.pprof.gz`
+    # to its working directory. Match the scaled replica's files by its unique
+    # cluster/replica id, which appears in the clusterd service name regardless
+    # of the operator's name prefix or deploy generation.
+    replica_marker = f"cluster-{cluster_id}-replica-{replica_id}"
+    all_cpu_profiles = sorted(MZ_ROOT.glob("mz_debug_*/profiles/*.cpuprof.pprof.gz"))
+    matching = [p for p in all_cpu_profiles if replica_marker in p.name]
+    print(
+        f"CPU profiles for replica {cluster_id}/{replica_id}: "
+        f"{[p.name for p in matching]} (all: {[p.name for p in all_cpu_profiles]})"
+    )
+
+    assert matching, (
+        "mz-debug produced no CPU profile for the scaled replica's clusterd "
+        "service, so cluster discovery or CPU capture failed and Finding 2 "
+        f"cannot be assessed. All CPU profiles: {[p.name for p in all_cpu_profiles]}"
+    )
+    assert len(matching) == len(pod_names), (
+        f"mz-debug captured {len(matching)} CPU profile(s) "
+        f"({[p.name for p in matching]}) for the scale-{SCALE} replica, but it "
+        f"has {len(pod_names)} clusterd pods ({pod_names}). "
+        "`kubectl port-forward service/...` profiled only one arbitrary pod; "
+        "every pod behind the service must be profiled, with the pod ordinal in "
+        "the filename."
+    )
+
+    print(
+        f"verified mz-debug captured a CPU profile for all {len(pod_names)} "
+        f"pods of the scale-{SCALE} replica {cluster_id}/{replica_id}"
+    )

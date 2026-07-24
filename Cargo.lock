@@ -6915,6 +6915,7 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_yaml",
+ "tempfile",
  "tokio",
  "tokio-postgres",
  "tokio-util",

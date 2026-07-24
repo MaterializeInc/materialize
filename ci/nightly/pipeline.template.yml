@@ -2688,6 +2688,21 @@ steps:
         agents:
           queue: hetzner-aarch64-16cpu-32gb
 
+      - id: orchestratord-mz-debug-scaled-replica
+        topics: [self-managed]
+        label: Orchestratord mz-debug profiles every pod of a scaled replica
+        artifact_paths: ["mz_debug_*.zip"]
+        depends_on: devel-docker-tags
+        timeout_in_minutes: 60
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              run: mz-debug-scaled-replica
+              args: [--recreate-cluster]
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
       - id: orchestratord-v1-opt-in
         topics: [self-managed]
         label: "Orchestratord v1 opt-in tests"

@@ -38,5 +38,8 @@ url = { workspace = true, features = ["serde"] }
 walkdir.workspace = true
 zip.workspace = true
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [features]
 default = []
