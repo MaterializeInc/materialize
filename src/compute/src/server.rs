@@ -41,9 +41,7 @@ use tracing::{info, trace, warn};
 use uuid::Uuid;
 
 use crate::command_channel;
-use crate::compute_state::{
-    ActiveComputeState, ComputeState, PendingPeek, PendingWork, ReportedFrontier,
-};
+use crate::compute_state::{ActiveComputeState, ComputeState, PendingPeek, ReportedFrontier};
 use crate::metrics::{ComputeMetrics, WorkerMetrics};
 use crate::sharing::ArrangementSharingRegistry;
 
@@ -835,14 +833,10 @@ impl<'w> Worker<'w> {
             // Remove all interactive deferred work, which belongs to the reconciled-away client
             // connection. Its peeks live here, not in `pending_peeks`.
             compute_state.dep_index.clear();
-            for (_, work) in std::mem::take(&mut compute_state.pending_work) {
-                match work {
-                    PendingWork::Peek(peek) => {
-                        // Log dropping the peek request, reusing `PendingPeek`'s log event.
-                        if let Some(logger) = compute_state.compute_logger.as_mut() {
-                            logger.log(&PendingPeek::IndexShared(peek).as_log_event(false));
-                        }
-                    }
+            for (_, peek) in std::mem::take(&mut compute_state.pending_work) {
+                // Log dropping the peek request, reusing `PendingPeek`'s log event.
+                if let Some(logger) = compute_state.compute_logger.as_mut() {
+                    logger.log(&PendingPeek::IndexShared(peek).as_log_event(false));
                 }
             }
 

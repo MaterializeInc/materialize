@@ -121,7 +121,7 @@ pub struct ComputeState {
     /// marked dirty in the sharing registry (publication or seal) and the worker is woken. See
     /// `resolve_dirty`. Query dataflows do not defer, they build immediately and bind their imports
     /// through registry placeholders, so only peeks live here.
-    pub pending_work: BTreeMap<WorkId, PendingWork>,
+    pub pending_work: BTreeMap<WorkId, SharedIndexPeek>,
     /// Dependency id to the set of `pending_work` items waiting on it.
     ///
     /// Empty on the maintenance runtime. On a dirty event for an id, exactly the `WorkId`s indexed
@@ -302,7 +302,7 @@ impl ComputeState {
     fn enqueue_shared_peek(&mut self, peek: SharedIndexPeek) {
         let dep = peek.peek.target.id();
         let work_id = self.next_work_id();
-        self.pending_work.insert(work_id, PendingWork::Peek(peek));
+        self.pending_work.insert(work_id, peek);
         self.dep_index.entry(dep).or_default().insert(work_id);
     }
 
@@ -892,20 +892,16 @@ impl<'a> ActiveComputeState<'a> {
 
         for work_id in work_ids {
             // Take the item so its owned data can drive the walk. Re-inserted below if not ready.
-            let Some(work) = self.compute_state.pending_work.remove(&work_id) else {
+            let Some(peek) = self.compute_state.pending_work.remove(&work_id) else {
                 continue;
             };
-            match work {
-                PendingWork::Peek(peek) => match self.serve_shared_peek_once(peek) {
-                    None => self.compute_state.clear_dep_index(work_id),
-                    Some(peek) => {
-                        // Still waiting: its `dep_index` entries are untouched, so a later event
-                        // re-examines it.
-                        self.compute_state
-                            .pending_work
-                            .insert(work_id, PendingWork::Peek(peek));
-                    }
-                },
+            match self.serve_shared_peek_once(peek) {
+                None => self.compute_state.clear_dep_index(work_id),
+                Some(peek) => {
+                    // Still waiting: its `dep_index` entries are untouched, so a later event
+                    // re-examines it.
+                    self.compute_state.pending_work.insert(work_id, peek);
+                }
             }
         }
     }
@@ -918,17 +914,13 @@ impl<'a> ActiveComputeState<'a> {
         // Interactive shared-index peeks live in `pending_work`, keyed by `WorkId`. Find the one
         // carrying this uuid, drop it from the store and its dep index, and report the cancellation.
         // A scan over pending work is fine here: a cancel is an event, not a per-step poll.
-        let work_id =
-            self.compute_state
-                .pending_work
-                .iter()
-                .find_map(|(work_id, work)| match work {
-                    PendingWork::Peek(peek) if peek.peek.uuid == uuid => Some(*work_id),
-                    PendingWork::Peek(_) => None,
-                });
+        let work_id = self
+            .compute_state
+            .pending_work
+            .iter()
+            .find_map(|(work_id, peek)| (peek.peek.uuid == uuid).then_some(*work_id));
         if let Some(work_id) = work_id {
-            let Some(PendingWork::Peek(peek)) = self.compute_state.pending_work.remove(&work_id)
-            else {
+            let Some(peek) = self.compute_state.pending_work.remove(&work_id) else {
                 return;
             };
             self.compute_state.clear_dep_index(work_id);
@@ -1472,17 +1464,6 @@ impl<'a> ActiveComputeState<'a> {
 /// without borrowing it.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct WorkId(u64);
-
-/// An interactive-runtime item deferred until its registry dependency resolves.
-///
-/// A fast-path index peek waits on two events (publication, seal) keyed by `GlobalId`, resolving
-/// through the notification path and id index. A query dataflow does not defer: it builds immediately
-/// and binds its imports through registry placeholders (see `handle_create_dataflow`), so only peeks
-/// live here.
-pub enum PendingWork {
-    /// A fast-path index peek, served inline once its target index is published and sealed.
-    Peek(SharedIndexPeek),
-}
 
 /// A peek against either an index or a Persist collection.
 ///
