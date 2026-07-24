@@ -2133,7 +2133,7 @@ feature_flags!(
     {
         name: enable_cluster_schedule_refresh,
         desc: "`SCHEDULE = ON REFRESH` cluster option",
-        default: true,
+        default: false,
         enable_for_item_parsing: true,
     },
     {
