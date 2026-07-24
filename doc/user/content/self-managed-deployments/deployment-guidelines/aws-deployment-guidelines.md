@@ -69,6 +69,16 @@ Certificate Authority (CA) rather than self-signed certificates.
 {{< include-md file="shared-content/self-managed/general-rules-for-upgrades.md"
 >}}
 
+## Karpenter node expiry
+
+The examples in the [Terraform
+modules](https://github.com/MaterializeInc/materialize-terraform-self-managed)
+set `expire_after` to `Never` on the Materialize nodepool. We recommend
+keeping that value. Node expiry is not a voluntary disruption: with any other
+value, Karpenter removes nodes that reach their lifetime even if they run pods
+annotated with `karpenter.sh/do-not-disrupt`, which causes downtime unless you
+gracefully roll the nodes first.
+
 ## Node pool resizing
 
 {{% include-headless "/headless/self-managed-deployments/resize-node-pool" %}}
