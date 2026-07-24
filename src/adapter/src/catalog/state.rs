@@ -31,7 +31,7 @@ use mz_catalog::expr_cache::LocalExpressions;
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap,
-    Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView,
+    Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView, MetricSink,
     NetworkPolicy, Role, RoleAuth, Schema, Secret, Sink, Source, SourceReferences, Table,
     TableDataSource, Type, View,
 };
@@ -74,9 +74,9 @@ use mz_sql::names::{
     ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId,
 };
 use mz_sql::plan::{
-    CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
-    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
-    Plan, PlanContext,
+    CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateMetricSinkPlan,
+    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
+    CreateViewPlan, Params, Plan, PlanContext,
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
@@ -1505,6 +1505,20 @@ impl CatalogState {
                 custom_logical_compaction_window: custom_logical_compaction_window
                     .or(index.compaction_window),
                 is_retained_metrics_object,
+                optimized_plan: None,
+                physical_plan: None,
+                dataflow_metainfo: None,
+            }),
+            Plan::CreateMetricSink(CreateMetricSinkPlan {
+                metric_sink,
+                in_cluster,
+                ..
+            }) => CatalogItem::MetricSink(MetricSink {
+                create_sql: metric_sink.create_sql,
+                global_id,
+                from: metric_sink.from,
+                resolved_ids,
+                cluster_id: in_cluster,
                 optimized_plan: None,
                 physical_plan: None,
                 dataflow_metainfo: None,
