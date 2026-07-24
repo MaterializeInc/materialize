@@ -271,7 +271,7 @@ class DatabaseConnectorImpl(DatabaseConnector):
             for sql in self.update_statements:
                 sql = dedent(sql)
                 last_executed_sql = sql
-                self._execute_sql(cursor, sql, print_status=True)
+                cursor = self._execute_sql(cursor, sql, print_status=True)
 
             print("Upload completed.")
         except Exception as e:
@@ -288,7 +288,12 @@ class DatabaseConnectorImpl(DatabaseConnector):
         sql: str,
         print_status: bool = False,
         remaining_retries: int = 1,
-    ) -> None:
+    ) -> Cursor:
+        """Execute sql, retrying once on failure.
+
+        Returns the cursor to use for subsequent statements, which is a new
+        one if the connection had to be re-established.
+        """
         if self._log_sql:
             printable_sql = self.to_short_printable_sql(sql)
             print(f"> {printable_sql}")
@@ -308,17 +313,21 @@ class DatabaseConnectorImpl(DatabaseConnector):
             if remaining_retries > 0:
                 print("-- Retrying in 5 seconds...")
                 time.sleep(5)
-                self._execute_sql(
+                if cursor.connection.closed or cursor.connection.broken:
+                    print("-- Connection lost, reconnecting...")
+                    cursor = self.create_cursor(autocommit=cursor.connection.autocommit)
+                return self._execute_sql(
                     cursor=cursor,
                     sql=sql,
                     print_status=print_status,
                     remaining_retries=remaining_retries - 1,
                 )
-                return
 
             if print_status:
                 print("-- FAILED!")
             raise
+
+        return cursor
 
     def _disable_if_uploads_not_allowed(
         self,
