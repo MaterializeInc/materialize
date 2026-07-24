@@ -28,7 +28,7 @@
 //! are sent to process 0 only, reaching other processes' workers through the intra-runtime command
 //! channel), so it cannot gate responses on having seen the command.
 
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use async_trait::async_trait;
 use mz_repr::GlobalId;
@@ -56,11 +56,12 @@ pub struct Multiplexer {
     maintenance: Box<dyn ComputeClient>,
     /// The runtime that serves ephemeral, interactive peeks.
     interactive: Box<dyn ComputeClient>,
-    /// The runtime that renders each transient collection, learned from `CreateDataflow`.
+    /// The transient collections rendered by the interactive runtime, learned from `CreateDataflow`.
     ///
-    /// An entry is evicted when the collection's `AllowCompaction` reaches the empty frontier, so
-    /// the map does not grow without bound.
-    transient_owner: BTreeMap<GlobalId, Runtime>,
+    /// Only interactive-owned transient ids are recorded. Maintenance is the default in `owner_of`,
+    /// so this is a set rather than a map. An entry is evicted when the collection's
+    /// `AllowCompaction` reaches the empty frontier, so the set does not grow without bound.
+    transient_owner: BTreeSet<GlobalId>,
 }
 
 impl Multiplexer {
@@ -69,15 +70,16 @@ impl Multiplexer {
         Self {
             maintenance,
             interactive,
-            transient_owner: BTreeMap::new(),
+            transient_owner: BTreeSet::new(),
         }
     }
 
     /// The runtime that owns `id`. A recorded transient owner wins, otherwise maintenance.
     fn owner_of(&self, id: GlobalId) -> Runtime {
-        match self.transient_owner.get(&id) {
-            Some(Runtime::Interactive) => Runtime::Interactive,
-            _ => Runtime::Maintenance,
+        if self.transient_owner.contains(&id) {
+            Runtime::Interactive
+        } else {
+            Runtime::Maintenance
         }
     }
 
@@ -167,7 +169,7 @@ impl GenericClient<ComputeCommand, ComputeResponse> for Multiplexer {
                     && desc.copy_to_ids().next().is_none();
                 if to_interactive {
                     for id in desc.export_ids() {
-                        self.transient_owner.insert(id, Runtime::Interactive);
+                        self.transient_owner.insert(id);
                     }
                     self.interactive.send(CreateDataflow(desc)).await?;
                 } else {
@@ -186,7 +188,7 @@ impl GenericClient<ComputeCommand, ComputeResponse> for Multiplexer {
                 let runtime = self.owner_of(id);
                 // The empty frontier drops the collection. Evict its ownership after forwarding so
                 // `transient_owner` does not grow without bound.
-                let evict = frontier.is_empty() && self.transient_owner.contains_key(&id);
+                let evict = frontier.is_empty() && self.transient_owner.contains(&id);
                 self.client_mut(runtime)
                     .send(AllowCompaction { id, frontier })
                     .await?;
