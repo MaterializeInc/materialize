@@ -93,7 +93,7 @@ struct Inner {
     ///
     /// A re-exported id shares another index's arrangement and has no dataflow streams of its own,
     /// so it installs no seal-signal frontier tap. Its seal signal must ride on the source's tap:
-    /// [`Self::notify`] wakes an id together with everything that re-exports it, transitively.
+    /// [`ArrangementSharingRegistry::notify`] wakes an id together with everything that re-exports it, transitively.
     /// Resolved outside the `wakers` lock, so it does not enter the lost-wakeup argument.
     aliases: Mutex<BTreeMap<GlobalId, BTreeSet<GlobalId>>>,
     /// Indexed by worker ordinal; `None` until that interactive worker registers its waker.
@@ -158,8 +158,8 @@ impl ArrangementSharingRegistry {
     ///
     /// Whichever side touches `(id, worker_index)` first creates the slot; the other observes and
     /// shares the same `Arc`, so a placeholder a reader already imported is filled in place by a
-    /// later [`PublishArrangement::adopt`] rather than being overwritten by a second, disconnected
-    /// arrangement. Grows the slot vector to `peers` like [`Self::insert_shared`] when `id` is not
+    /// later [`crate::shared_trace::PublishArrangement::adopt`] rather than being overwritten by a second, disconnected
+    /// arrangement. Grows the slot vector to `peers` like `insert_shared` when `id` is not
     /// yet present.
     ///
     /// Creating a placeholder carries no data, so this does not `notify`: there is nothing yet for
@@ -277,7 +277,7 @@ impl ArrangementSharingRegistry {
     ///
     /// The whole check-and-remove runs under the map lock, and both the adoption flag and the slot's
     /// strong count are read inside one critical section of the oks point's state mutex (via
-    /// [`Published::adopted_and`]). An adopter clones the slot Arc under the map lock and holds that
+    /// `Published::adopted_and`). An adopter clones the slot Arc under the map lock and holds that
     /// clone across its `adopt` call, which sets the flag under the same state mutex. So the state-lock
     /// read here either follows the adopt (sees adopted, spares the slot) or fully precedes it, in
     /// which case the adopter's clone has not yet dropped and the strong count read in the same section
