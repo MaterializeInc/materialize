@@ -55,6 +55,33 @@ run_if_not_dry() {
   fi
 }
 
+open_self_managed_pr() {
+  local branch=$1 title=$2 pr pr_number response
+  pr=$(jq -n --arg title "$title" --arg branch "$branch" \
+    '{title: $title, head: $branch, base: "main"}' \
+    | curl -fsS \
+      -H "Authorization: token $GITHUB_TOKEN" \
+      -H "Accept: application/vnd.github+json" \
+      https://api.github.com/repos/MaterializeInc/materialize-terraform-self-managed/pulls \
+      -d @-)
+  pr_number=$(echo "$pr" | jq .number)
+  echo "Opened https://github.com/MaterializeInc/materialize-terraform-self-managed/pull/$pr_number"
+  curl -fsS -o /dev/null \
+    -H "Authorization: token $GITHUB_TOKEN" \
+    -H "Accept: application/vnd.github+json" \
+    "https://api.github.com/repos/MaterializeInc/materialize-terraform-self-managed/issues/$pr_number/labels" \
+    -d '{"labels": ["dependencies"]}'
+  response=$(echo "$pr" | jq \
+    '{query: "mutation($pr: ID!) { enablePullRequestAutoMerge(input: {pullRequestId: $pr}) { clientMutationId } }", variables: {pr: .node_id}}' \
+    | curl -sS \
+      -H "Authorization: token $GITHUB_TOKEN" \
+      https://api.github.com/graphql \
+      -d @-)
+  if echo "$response" | jq -e .errors > /dev/null; then
+    echo "Could not enable auto-merge, merge the PR manually: $response"
+  fi
+}
+
 echo "--- Publishing Helm Chart $BUILDKITE_TAG"
 rm -rf gh-pages
 # No --depth=1 because we need history for the `created` dates
@@ -209,6 +236,8 @@ else
   rm -rf materialize-terraform-self-managed
   git clone https://github.com/MaterializeInc/materialize-terraform-self-managed.git
   cd materialize-terraform-self-managed
+  BRANCH="bump-helm-chart-$BUILDKITE_TAG"
+  git checkout -b "$BRANCH"
   sed -i "s/\".*\"\(.*\) # META: helm-chart version/\"$BUILDKITE_TAG\"\\1 # META: helm-chart version/" aws/modules/operator/variables.tf azure/modules/operator/variables.tf gcp/modules/operator/variables.tf
   sed -i "s/\".*\"\(.*\) # META: mz version/\"$BUILDKITE_TAG\"\\1 # META: mz version/" kubernetes/modules/materialize-instance/variables.tf
   for dir in aws/modules/operator azure/modules/operator gcp/modules/operator kubernetes/modules/materialize-instance; do
@@ -218,11 +247,9 @@ else
   git config user.name "Buildkite"
   git add aws/modules/operator/variables.tf azure/modules/operator/variables.tf gcp/modules/operator/variables.tf kubernetes/modules/materialize-instance/variables.tf aws/modules/operator/README.md azure/modules/operator/README.md gcp/modules/operator/README.md kubernetes/modules/materialize-instance/README.md
   git commit -m "Bump to helm-chart $BUILDKITE_TAG"
-  # Bump the patch version by one (v0.1.12 -> v0.1.13)
-  TERRAFORM_SELF_MANAGED_VERSION=$(git for-each-ref --sort=creatordate --format '%(refname:strip=2)' refs/tags | grep '^v' | tail -n1 | awk -F. -v OFS=. '{$NF += 1; print}')
-  git tag "$TERRAFORM_SELF_MANAGED_VERSION"
   git --no-pager diff HEAD~
-  run_if_not_dry git push origin main "$TERRAFORM_SELF_MANAGED_VERSION"
+  run_if_not_dry git push --force origin "$BRANCH"
+  run_if_not_dry open_self_managed_pr "$BRANCH" "Bump to helm-chart $BUILDKITE_TAG"
   cd ..
 fi
 
