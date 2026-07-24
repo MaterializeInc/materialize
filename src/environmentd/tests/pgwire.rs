@@ -515,6 +515,53 @@ async fn test_startup_params_survive_reset() {
     }
 }
 
+// SQL-529: DISCARD ALL has to reset session variables over the extended query
+// protocol as well as the simple one. tokio-postgres `execute`/`query` run over
+// the extended protocol, while `batch_execute` runs over the simple one, so the
+// existing simple-protocol tests never caught this bug.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[allow(clippy::disallowed_methods)]
+async fn test_discard_all_resets_over_extended_protocol() {
+    let server = test_util::TestHarness::default().start().await;
+
+    async fn show(client: &tokio_postgres::Client, name: &str) -> String {
+        client
+            .query_one(&format!("SHOW {name}"), &[])
+            .await
+            .unwrap()
+            .get(0)
+    }
+
+    // A plain SET is reset back to the compiled-in default.
+    {
+        let client = server.connect().await.unwrap();
+        client
+            .execute("SET extra_float_digits = 1", &[])
+            .await
+            .unwrap();
+        assert_eq!(show(&client, "extra_float_digits").await, "1");
+        client.execute("DISCARD ALL", &[]).await.unwrap();
+        assert_eq!(show(&client, "extra_float_digits").await, "3");
+    }
+
+    // A startup-supplied default survives DISCARD ALL rather than reverting to
+    // the compiled-in default.
+    {
+        let client = server
+            .connect()
+            .application_name("startup_app")
+            .await
+            .unwrap();
+        client
+            .execute("SET application_name = 'changed_app'", &[])
+            .await
+            .unwrap();
+        assert_eq!(show(&client, "application_name").await, "changed_app");
+        client.execute("DISCARD ALL", &[]).await.unwrap();
+        assert_eq!(show(&client, "application_name").await, "startup_app");
+    }
+}
+
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_conn_user() {
