@@ -50,6 +50,10 @@ pub struct Char<S: AsRef<str>>(pub S);
     Deserialize,
     MzReflect
 )]
+// The serde name distinguishes this type from the `char_length` SQL function's
+// generated struct, which is also named `CharLength`. The stable LIR schema
+// registry requires container names to be unique.
+#[serde(rename = "CharMaxLength")]
 pub struct CharLength(pub(crate) u32);
 
 impl CharLength {

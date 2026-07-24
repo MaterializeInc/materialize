@@ -1,0 +1,8504 @@
+{
+  "AbsFloat32": "UNITSTRUCT",
+  "AbsFloat64": "UNITSTRUCT",
+  "AbsInt16": "UNITSTRUCT",
+  "AbsInt32": "UNITSTRUCT",
+  "AbsInt64": "UNITSTRUCT",
+  "AbsNumeric": "UNITSTRUCT",
+  "AccumulablePlan": {
+    "STRUCT": [
+      {
+        "full_aggrs": {
+          "SEQ": {
+            "TYPENAME": "LirAggregateExpr"
+          }
+        }
+      },
+      {
+        "simple_aggrs": {
+          "SEQ": {
+            "TUPLE": [
+              "U64",
+              {
+                "TYPENAME": "LirAggregateExpr"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "distinct_aggrs": {
+          "SEQ": {
+            "TUPLE": [
+              "U64",
+              {
+                "TYPENAME": "LirAggregateExpr"
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "AclItemGrantee": "UNITSTRUCT",
+  "AclItemGrantor": "UNITSTRUCT",
+  "AclItemPrivileges": "UNITSTRUCT",
+  "Acos": "UNITSTRUCT",
+  "Acosh": "UNITSTRUCT",
+  "AddDateInterval": "UNITSTRUCT",
+  "AddDateTime": "UNITSTRUCT",
+  "AddFloat32": "UNITSTRUCT",
+  "AddFloat64": "UNITSTRUCT",
+  "AddInt16": "UNITSTRUCT",
+  "AddInt32": "UNITSTRUCT",
+  "AddInt64": "UNITSTRUCT",
+  "AddInterval": "UNITSTRUCT",
+  "AddNumeric": "UNITSTRUCT",
+  "AddTimeInterval": "UNITSTRUCT",
+  "AddTimestampInterval": "UNITSTRUCT",
+  "AddTimestampTzInterval": "UNITSTRUCT",
+  "AddUint16": "UNITSTRUCT",
+  "AddUint32": "UNITSTRUCT",
+  "AddUint64": "UNITSTRUCT",
+  "AdjustNumericScale": {
+    "NEWTYPESTRUCT": {
+      "TYPENAME": "NumericMaxScale"
+    }
+  },
+  "AdjustTimestampPrecision": {
+    "STRUCT": [
+      {
+        "from": {
+          "OPTION": {
+            "TYPENAME": "TimestampPrecision"
+          }
+        }
+      },
+      {
+        "to": {
+          "OPTION": {
+            "TYPENAME": "TimestampPrecision"
+          }
+        }
+      }
+    ]
+  },
+  "AdjustTimestampTzPrecision": {
+    "STRUCT": [
+      {
+        "from": {
+          "OPTION": {
+            "TYPENAME": "TimestampPrecision"
+          }
+        }
+      },
+      {
+        "to": {
+          "OPTION": {
+            "TYPENAME": "TimestampPrecision"
+          }
+        }
+      }
+    ]
+  },
+  "AgeTimestamp": "UNITSTRUCT",
+  "AgeTimestampTz": "UNITSTRUCT",
+  "AggregateFunc": {
+    "ENUM": {
+      "0": {
+        "MaxNumeric": "UNIT"
+      },
+      "1": {
+        "MaxInt16": "UNIT"
+      },
+      "2": {
+        "MaxInt32": "UNIT"
+      },
+      "3": {
+        "MaxInt64": "UNIT"
+      },
+      "4": {
+        "MaxUInt16": "UNIT"
+      },
+      "5": {
+        "MaxUInt32": "UNIT"
+      },
+      "6": {
+        "MaxUInt64": "UNIT"
+      },
+      "7": {
+        "MaxMzTimestamp": "UNIT"
+      },
+      "8": {
+        "MaxFloat32": "UNIT"
+      },
+      "9": {
+        "MaxFloat64": "UNIT"
+      },
+      "10": {
+        "MaxBool": "UNIT"
+      },
+      "11": {
+        "MaxString": "UNIT"
+      },
+      "12": {
+        "MaxDate": "UNIT"
+      },
+      "13": {
+        "MaxTimestamp": "UNIT"
+      },
+      "14": {
+        "MaxTimestampTz": "UNIT"
+      },
+      "15": {
+        "MaxInterval": "UNIT"
+      },
+      "16": {
+        "MaxTime": "UNIT"
+      },
+      "17": {
+        "MinNumeric": "UNIT"
+      },
+      "18": {
+        "MinInt16": "UNIT"
+      },
+      "19": {
+        "MinInt32": "UNIT"
+      },
+      "20": {
+        "MinInt64": "UNIT"
+      },
+      "21": {
+        "MinUInt16": "UNIT"
+      },
+      "22": {
+        "MinUInt32": "UNIT"
+      },
+      "23": {
+        "MinUInt64": "UNIT"
+      },
+      "24": {
+        "MinMzTimestamp": "UNIT"
+      },
+      "25": {
+        "MinFloat32": "UNIT"
+      },
+      "26": {
+        "MinFloat64": "UNIT"
+      },
+      "27": {
+        "MinBool": "UNIT"
+      },
+      "28": {
+        "MinString": "UNIT"
+      },
+      "29": {
+        "MinDate": "UNIT"
+      },
+      "30": {
+        "MinTimestamp": "UNIT"
+      },
+      "31": {
+        "MinTimestampTz": "UNIT"
+      },
+      "32": {
+        "MinInterval": "UNIT"
+      },
+      "33": {
+        "MinTime": "UNIT"
+      },
+      "34": {
+        "SumInt16": "UNIT"
+      },
+      "35": {
+        "SumInt32": "UNIT"
+      },
+      "36": {
+        "SumInt64": "UNIT"
+      },
+      "37": {
+        "SumUInt16": "UNIT"
+      },
+      "38": {
+        "SumUInt32": "UNIT"
+      },
+      "39": {
+        "SumUInt64": "UNIT"
+      },
+      "40": {
+        "SumFloat32": "UNIT"
+      },
+      "41": {
+        "SumFloat64": "UNIT"
+      },
+      "42": {
+        "SumNumeric": "UNIT"
+      },
+      "43": {
+        "Count": "UNIT"
+      },
+      "44": {
+        "Any": "UNIT"
+      },
+      "45": {
+        "All": "UNIT"
+      },
+      "46": {
+        "JsonbAgg": {
+          "STRUCT": [
+            {
+              "order_by": {
+                "SEQ": {
+                  "TYPENAME": "ColumnOrder"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "47": {
+        "JsonbObjectAgg": {
+          "STRUCT": [
+            {
+              "order_by": {
+                "SEQ": {
+                  "TYPENAME": "ColumnOrder"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "48": {
+        "MapAgg": {
+          "STRUCT": [
+            {
+              "order_by": {
+                "SEQ": {
+                  "TYPENAME": "ColumnOrder"
+                }
+              }
+            },
+            {
+              "value_type": {
+                "TYPENAME": "SqlScalarType"
+              }
+            }
+          ]
+        }
+      },
+      "49": {
+        "ArrayConcat": {
+          "STRUCT": [
+            {
+              "order_by": {
+                "SEQ": {
+                  "TYPENAME": "ColumnOrder"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "50": {
+        "ListConcat": {
+          "STRUCT": [
+            {
+              "order_by": {
+                "SEQ": {
+                  "TYPENAME": "ColumnOrder"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "51": {
+        "StringAgg": {
+          "STRUCT": [
+            {
+              "order_by": {
+                "SEQ": {
+                  "TYPENAME": "ColumnOrder"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "52": {
+        "RowNumber": {
+          "STRUCT": [
+            {
+              "order_by": {
+                "SEQ": {
+                  "TYPENAME": "ColumnOrder"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "53": {
+        "Rank": {
+          "STRUCT": [
+            {
+              "order_by": {
+                "SEQ": {
+                  "TYPENAME": "ColumnOrder"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "54": {
+        "DenseRank": {
+          "STRUCT": [
+            {
+              "order_by": {
+                "SEQ": {
+                  "TYPENAME": "ColumnOrder"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "55": {
+        "LagLead": {
+          "STRUCT": [
+            {
+              "order_by": {
+                "SEQ": {
+                  "TYPENAME": "ColumnOrder"
+                }
+              }
+            },
+            {
+              "lag_lead": {
+                "TYPENAME": "LagLeadType"
+              }
+            },
+            {
+              "ignore_nulls": "BOOL"
+            }
+          ]
+        }
+      },
+      "56": {
+        "FirstValue": {
+          "STRUCT": [
+            {
+              "order_by": {
+                "SEQ": {
+                  "TYPENAME": "ColumnOrder"
+                }
+              }
+            },
+            {
+              "window_frame": {
+                "TYPENAME": "WindowFrame"
+              }
+            }
+          ]
+        }
+      },
+      "57": {
+        "LastValue": {
+          "STRUCT": [
+            {
+              "order_by": {
+                "SEQ": {
+                  "TYPENAME": "ColumnOrder"
+                }
+              }
+            },
+            {
+              "window_frame": {
+                "TYPENAME": "WindowFrame"
+              }
+            }
+          ]
+        }
+      },
+      "58": {
+        "FusedValueWindowFunc": {
+          "STRUCT": [
+            {
+              "funcs": {
+                "SEQ": {
+                  "TYPENAME": "AggregateFunc"
+                }
+              }
+            },
+            {
+              "order_by": {
+                "SEQ": {
+                  "TYPENAME": "ColumnOrder"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "59": {
+        "WindowAggregate": {
+          "STRUCT": [
+            {
+              "wrapped_aggregate": {
+                "TYPENAME": "AggregateFunc"
+              }
+            },
+            {
+              "order_by": {
+                "SEQ": {
+                  "TYPENAME": "ColumnOrder"
+                }
+              }
+            },
+            {
+              "window_frame": {
+                "TYPENAME": "WindowFrame"
+              }
+            }
+          ]
+        }
+      },
+      "60": {
+        "FusedWindowAggregate": {
+          "STRUCT": [
+            {
+              "wrapped_aggregates": {
+                "SEQ": {
+                  "TYPENAME": "AggregateFunc"
+                }
+              }
+            },
+            {
+              "order_by": {
+                "SEQ": {
+                  "TYPENAME": "ColumnOrder"
+                }
+              }
+            },
+            {
+              "window_frame": {
+                "TYPENAME": "WindowFrame"
+              }
+            }
+          ]
+        }
+      },
+      "61": {
+        "Dummy": "UNIT"
+      }
+    }
+  },
+  "AnalyzedRegex": {
+    "TUPLESTRUCT": [
+      {
+        "TYPENAME": "Regex"
+      },
+      {
+        "SEQ": {
+          "TYPENAME": "CaptureGroupDesc"
+        }
+      },
+      {
+        "TYPENAME": "AnalyzedRegexOpts"
+      }
+    ]
+  },
+  "AnalyzedRegexOpts": {
+    "STRUCT": [
+      {
+        "case_insensitive": "BOOL"
+      },
+      {
+        "global": "BOOL"
+      }
+    ]
+  },
+  "And": "UNITSTRUCT",
+  "ArrangementStrategy": {
+    "ENUM": {
+      "0": {
+        "Direct": "UNIT"
+      },
+      "1": {
+        "TemporalBucketing": "UNIT"
+      }
+    }
+  },
+  "ArrayArrayConcat": "UNITSTRUCT",
+  "ArrayContains": "UNITSTRUCT",
+  "ArrayContainsArray": "UNITSTRUCT",
+  "ArrayContainsArrayRev": "UNITSTRUCT",
+  "ArrayCreate": {
+    "STRUCT": [
+      {
+        "elem_type": {
+          "TYPENAME": "SqlScalarType"
+        }
+      }
+    ]
+  },
+  "ArrayFill": {
+    "STRUCT": [
+      {
+        "elem_type": {
+          "TYPENAME": "SqlScalarType"
+        }
+      }
+    ]
+  },
+  "ArrayIndex": {
+    "STRUCT": [
+      {
+        "offset": "I64"
+      }
+    ]
+  },
+  "ArrayLength": "UNITSTRUCT",
+  "ArrayLower": "UNITSTRUCT",
+  "ArrayPosition": "UNITSTRUCT",
+  "ArrayRemove": "UNITSTRUCT",
+  "ArrayToString": {
+    "STRUCT": [
+      {
+        "elem_type": {
+          "TYPENAME": "SqlScalarType"
+        }
+      }
+    ]
+  },
+  "ArrayUpper": "UNITSTRUCT",
+  "Ascii": "UNITSTRUCT",
+  "Asin": "UNITSTRUCT",
+  "Asinh": "UNITSTRUCT",
+  "Atan": "UNITSTRUCT",
+  "Atanh": "UNITSTRUCT",
+  "AvailableCollections": {
+    "STRUCT": [
+      {
+        "raw": "BOOL"
+      },
+      {
+        "arranged": {
+          "SEQ": {
+            "TUPLE": [
+              {
+                "SEQ": {
+                  "TYPENAME": "LirScalarExpr"
+                }
+              },
+              {
+                "SEQ": "U64"
+              },
+              {
+                "SEQ": "U64"
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "BasicPlan": {
+    "ENUM": {
+      "0": {
+        "Single": {
+          "NEWTYPE": {
+            "TYPENAME": "SingleBasicPlan"
+          }
+        }
+      },
+      "1": {
+        "Multiple": {
+          "NEWTYPE": {
+            "SEQ": {
+              "TYPENAME": "LirAggregateExpr"
+            }
+          }
+        }
+      }
+    }
+  },
+  "BasicThresholdPlan": {
+    "STRUCT": [
+      {
+        "ensure_arrangement": {
+          "TUPLE": [
+            {
+              "SEQ": {
+                "TYPENAME": "LirScalarExpr"
+              }
+            },
+            {
+              "SEQ": "U64"
+            },
+            {
+              "SEQ": "U64"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "BasicTopKPlan": {
+    "STRUCT": [
+      {
+        "group_key": {
+          "SEQ": "U64"
+        }
+      },
+      {
+        "order_key": {
+          "SEQ": {
+            "TYPENAME": "ColumnOrder"
+          }
+        }
+      },
+      {
+        "limit": {
+          "OPTION": {
+            "TYPENAME": "LirScalarExpr"
+          }
+        }
+      },
+      {
+        "offset": "U64"
+      },
+      {
+        "arity": "U64"
+      },
+      {
+        "buckets": {
+          "SEQ": "U64"
+        }
+      }
+    ]
+  },
+  "BinaryFunc": {
+    "ENUM": {
+      "0": {
+        "AddInt16": {
+          "NEWTYPE": {
+            "TYPENAME": "AddInt16"
+          }
+        }
+      },
+      "1": {
+        "AddInt32": {
+          "NEWTYPE": {
+            "TYPENAME": "AddInt32"
+          }
+        }
+      },
+      "2": {
+        "AddInt64": {
+          "NEWTYPE": {
+            "TYPENAME": "AddInt64"
+          }
+        }
+      },
+      "3": {
+        "AddUint16": {
+          "NEWTYPE": {
+            "TYPENAME": "AddUint16"
+          }
+        }
+      },
+      "4": {
+        "AddUint32": {
+          "NEWTYPE": {
+            "TYPENAME": "AddUint32"
+          }
+        }
+      },
+      "5": {
+        "AddUint64": {
+          "NEWTYPE": {
+            "TYPENAME": "AddUint64"
+          }
+        }
+      },
+      "6": {
+        "AddFloat32": {
+          "NEWTYPE": {
+            "TYPENAME": "AddFloat32"
+          }
+        }
+      },
+      "7": {
+        "AddFloat64": {
+          "NEWTYPE": {
+            "TYPENAME": "AddFloat64"
+          }
+        }
+      },
+      "8": {
+        "AddInterval": {
+          "NEWTYPE": {
+            "TYPENAME": "AddInterval"
+          }
+        }
+      },
+      "9": {
+        "AddTimestampInterval": {
+          "NEWTYPE": {
+            "TYPENAME": "AddTimestampInterval"
+          }
+        }
+      },
+      "10": {
+        "AddTimestampTzInterval": {
+          "NEWTYPE": {
+            "TYPENAME": "AddTimestampTzInterval"
+          }
+        }
+      },
+      "11": {
+        "AddDateInterval": {
+          "NEWTYPE": {
+            "TYPENAME": "AddDateInterval"
+          }
+        }
+      },
+      "12": {
+        "AddDateTime": {
+          "NEWTYPE": {
+            "TYPENAME": "AddDateTime"
+          }
+        }
+      },
+      "13": {
+        "AddTimeInterval": {
+          "NEWTYPE": {
+            "TYPENAME": "AddTimeInterval"
+          }
+        }
+      },
+      "14": {
+        "AddNumeric": {
+          "NEWTYPE": {
+            "TYPENAME": "AddNumeric"
+          }
+        }
+      },
+      "15": {
+        "AgeTimestamp": {
+          "NEWTYPE": {
+            "TYPENAME": "AgeTimestamp"
+          }
+        }
+      },
+      "16": {
+        "AgeTimestampTz": {
+          "NEWTYPE": {
+            "TYPENAME": "AgeTimestampTz"
+          }
+        }
+      },
+      "17": {
+        "BitAndInt16": {
+          "NEWTYPE": {
+            "TYPENAME": "BitAndInt16"
+          }
+        }
+      },
+      "18": {
+        "BitAndInt32": {
+          "NEWTYPE": {
+            "TYPENAME": "BitAndInt32"
+          }
+        }
+      },
+      "19": {
+        "BitAndInt64": {
+          "NEWTYPE": {
+            "TYPENAME": "BitAndInt64"
+          }
+        }
+      },
+      "20": {
+        "BitAndUint16": {
+          "NEWTYPE": {
+            "TYPENAME": "BitAndUint16"
+          }
+        }
+      },
+      "21": {
+        "BitAndUint32": {
+          "NEWTYPE": {
+            "TYPENAME": "BitAndUint32"
+          }
+        }
+      },
+      "22": {
+        "BitAndUint64": {
+          "NEWTYPE": {
+            "TYPENAME": "BitAndUint64"
+          }
+        }
+      },
+      "23": {
+        "BitOrInt16": {
+          "NEWTYPE": {
+            "TYPENAME": "BitOrInt16"
+          }
+        }
+      },
+      "24": {
+        "BitOrInt32": {
+          "NEWTYPE": {
+            "TYPENAME": "BitOrInt32"
+          }
+        }
+      },
+      "25": {
+        "BitOrInt64": {
+          "NEWTYPE": {
+            "TYPENAME": "BitOrInt64"
+          }
+        }
+      },
+      "26": {
+        "BitOrUint16": {
+          "NEWTYPE": {
+            "TYPENAME": "BitOrUint16"
+          }
+        }
+      },
+      "27": {
+        "BitOrUint32": {
+          "NEWTYPE": {
+            "TYPENAME": "BitOrUint32"
+          }
+        }
+      },
+      "28": {
+        "BitOrUint64": {
+          "NEWTYPE": {
+            "TYPENAME": "BitOrUint64"
+          }
+        }
+      },
+      "29": {
+        "BitXorInt16": {
+          "NEWTYPE": {
+            "TYPENAME": "BitXorInt16"
+          }
+        }
+      },
+      "30": {
+        "BitXorInt32": {
+          "NEWTYPE": {
+            "TYPENAME": "BitXorInt32"
+          }
+        }
+      },
+      "31": {
+        "BitXorInt64": {
+          "NEWTYPE": {
+            "TYPENAME": "BitXorInt64"
+          }
+        }
+      },
+      "32": {
+        "BitXorUint16": {
+          "NEWTYPE": {
+            "TYPENAME": "BitXorUint16"
+          }
+        }
+      },
+      "33": {
+        "BitXorUint32": {
+          "NEWTYPE": {
+            "TYPENAME": "BitXorUint32"
+          }
+        }
+      },
+      "34": {
+        "BitXorUint64": {
+          "NEWTYPE": {
+            "TYPENAME": "BitXorUint64"
+          }
+        }
+      },
+      "35": {
+        "BitShiftLeftInt16": {
+          "NEWTYPE": {
+            "TYPENAME": "BitShiftLeftInt16"
+          }
+        }
+      },
+      "36": {
+        "BitShiftLeftInt32": {
+          "NEWTYPE": {
+            "TYPENAME": "BitShiftLeftInt32"
+          }
+        }
+      },
+      "37": {
+        "BitShiftLeftInt64": {
+          "NEWTYPE": {
+            "TYPENAME": "BitShiftLeftInt64"
+          }
+        }
+      },
+      "38": {
+        "BitShiftLeftUint16": {
+          "NEWTYPE": {
+            "TYPENAME": "BitShiftLeftUint16"
+          }
+        }
+      },
+      "39": {
+        "BitShiftLeftUint32": {
+          "NEWTYPE": {
+            "TYPENAME": "BitShiftLeftUint32"
+          }
+        }
+      },
+      "40": {
+        "BitShiftLeftUint64": {
+          "NEWTYPE": {
+            "TYPENAME": "BitShiftLeftUint64"
+          }
+        }
+      },
+      "41": {
+        "BitShiftRightInt16": {
+          "NEWTYPE": {
+            "TYPENAME": "BitShiftRightInt16"
+          }
+        }
+      },
+      "42": {
+        "BitShiftRightInt32": {
+          "NEWTYPE": {
+            "TYPENAME": "BitShiftRightInt32"
+          }
+        }
+      },
+      "43": {
+        "BitShiftRightInt64": {
+          "NEWTYPE": {
+            "TYPENAME": "BitShiftRightInt64"
+          }
+        }
+      },
+      "44": {
+        "BitShiftRightUint16": {
+          "NEWTYPE": {
+            "TYPENAME": "BitShiftRightUint16"
+          }
+        }
+      },
+      "45": {
+        "BitShiftRightUint32": {
+          "NEWTYPE": {
+            "TYPENAME": "BitShiftRightUint32"
+          }
+        }
+      },
+      "46": {
+        "BitShiftRightUint64": {
+          "NEWTYPE": {
+            "TYPENAME": "BitShiftRightUint64"
+          }
+        }
+      },
+      "47": {
+        "SubInt16": {
+          "NEWTYPE": {
+            "TYPENAME": "SubInt16"
+          }
+        }
+      },
+      "48": {
+        "SubInt32": {
+          "NEWTYPE": {
+            "TYPENAME": "SubInt32"
+          }
+        }
+      },
+      "49": {
+        "SubInt64": {
+          "NEWTYPE": {
+            "TYPENAME": "SubInt64"
+          }
+        }
+      },
+      "50": {
+        "SubUint16": {
+          "NEWTYPE": {
+            "TYPENAME": "SubUint16"
+          }
+        }
+      },
+      "51": {
+        "SubUint32": {
+          "NEWTYPE": {
+            "TYPENAME": "SubUint32"
+          }
+        }
+      },
+      "52": {
+        "SubUint64": {
+          "NEWTYPE": {
+            "TYPENAME": "SubUint64"
+          }
+        }
+      },
+      "53": {
+        "SubFloat32": {
+          "NEWTYPE": {
+            "TYPENAME": "SubFloat32"
+          }
+        }
+      },
+      "54": {
+        "SubFloat64": {
+          "NEWTYPE": {
+            "TYPENAME": "SubFloat64"
+          }
+        }
+      },
+      "55": {
+        "SubInterval": {
+          "NEWTYPE": {
+            "TYPENAME": "SubInterval"
+          }
+        }
+      },
+      "56": {
+        "SubTimestamp": {
+          "NEWTYPE": {
+            "TYPENAME": "SubTimestamp"
+          }
+        }
+      },
+      "57": {
+        "SubTimestampTz": {
+          "NEWTYPE": {
+            "TYPENAME": "SubTimestampTz"
+          }
+        }
+      },
+      "58": {
+        "SubTimestampInterval": {
+          "NEWTYPE": {
+            "TYPENAME": "SubTimestampInterval"
+          }
+        }
+      },
+      "59": {
+        "SubTimestampTzInterval": {
+          "NEWTYPE": {
+            "TYPENAME": "SubTimestampTzInterval"
+          }
+        }
+      },
+      "60": {
+        "SubDate": {
+          "NEWTYPE": {
+            "TYPENAME": "SubDate"
+          }
+        }
+      },
+      "61": {
+        "SubDateInterval": {
+          "NEWTYPE": {
+            "TYPENAME": "SubDateInterval"
+          }
+        }
+      },
+      "62": {
+        "SubTime": {
+          "NEWTYPE": {
+            "TYPENAME": "SubTime"
+          }
+        }
+      },
+      "63": {
+        "SubTimeInterval": {
+          "NEWTYPE": {
+            "TYPENAME": "SubTimeInterval"
+          }
+        }
+      },
+      "64": {
+        "SubNumeric": {
+          "NEWTYPE": {
+            "TYPENAME": "SubNumeric"
+          }
+        }
+      },
+      "65": {
+        "MulInt16": {
+          "NEWTYPE": {
+            "TYPENAME": "MulInt16"
+          }
+        }
+      },
+      "66": {
+        "MulInt32": {
+          "NEWTYPE": {
+            "TYPENAME": "MulInt32"
+          }
+        }
+      },
+      "67": {
+        "MulInt64": {
+          "NEWTYPE": {
+            "TYPENAME": "MulInt64"
+          }
+        }
+      },
+      "68": {
+        "MulUint16": {
+          "NEWTYPE": {
+            "TYPENAME": "MulUint16"
+          }
+        }
+      },
+      "69": {
+        "MulUint32": {
+          "NEWTYPE": {
+            "TYPENAME": "MulUint32"
+          }
+        }
+      },
+      "70": {
+        "MulUint64": {
+          "NEWTYPE": {
+            "TYPENAME": "MulUint64"
+          }
+        }
+      },
+      "71": {
+        "MulFloat32": {
+          "NEWTYPE": {
+            "TYPENAME": "MulFloat32"
+          }
+        }
+      },
+      "72": {
+        "MulFloat64": {
+          "NEWTYPE": {
+            "TYPENAME": "MulFloat64"
+          }
+        }
+      },
+      "73": {
+        "MulNumeric": {
+          "NEWTYPE": {
+            "TYPENAME": "MulNumeric"
+          }
+        }
+      },
+      "74": {
+        "MulInterval": {
+          "NEWTYPE": {
+            "TYPENAME": "MulInterval"
+          }
+        }
+      },
+      "75": {
+        "DivInt16": {
+          "NEWTYPE": {
+            "TYPENAME": "DivInt16"
+          }
+        }
+      },
+      "76": {
+        "DivInt32": {
+          "NEWTYPE": {
+            "TYPENAME": "DivInt32"
+          }
+        }
+      },
+      "77": {
+        "DivInt64": {
+          "NEWTYPE": {
+            "TYPENAME": "DivInt64"
+          }
+        }
+      },
+      "78": {
+        "DivUint16": {
+          "NEWTYPE": {
+            "TYPENAME": "DivUint16"
+          }
+        }
+      },
+      "79": {
+        "DivUint32": {
+          "NEWTYPE": {
+            "TYPENAME": "DivUint32"
+          }
+        }
+      },
+      "80": {
+        "DivUint64": {
+          "NEWTYPE": {
+            "TYPENAME": "DivUint64"
+          }
+        }
+      },
+      "81": {
+        "DivFloat32": {
+          "NEWTYPE": {
+            "TYPENAME": "DivFloat32"
+          }
+        }
+      },
+      "82": {
+        "DivFloat64": {
+          "NEWTYPE": {
+            "TYPENAME": "DivFloat64"
+          }
+        }
+      },
+      "83": {
+        "DivNumeric": {
+          "NEWTYPE": {
+            "TYPENAME": "DivNumeric"
+          }
+        }
+      },
+      "84": {
+        "DivInterval": {
+          "NEWTYPE": {
+            "TYPENAME": "DivInterval"
+          }
+        }
+      },
+      "85": {
+        "ModInt16": {
+          "NEWTYPE": {
+            "TYPENAME": "ModInt16"
+          }
+        }
+      },
+      "86": {
+        "ModInt32": {
+          "NEWTYPE": {
+            "TYPENAME": "ModInt32"
+          }
+        }
+      },
+      "87": {
+        "ModInt64": {
+          "NEWTYPE": {
+            "TYPENAME": "ModInt64"
+          }
+        }
+      },
+      "88": {
+        "ModUint16": {
+          "NEWTYPE": {
+            "TYPENAME": "ModUint16"
+          }
+        }
+      },
+      "89": {
+        "ModUint32": {
+          "NEWTYPE": {
+            "TYPENAME": "ModUint32"
+          }
+        }
+      },
+      "90": {
+        "ModUint64": {
+          "NEWTYPE": {
+            "TYPENAME": "ModUint64"
+          }
+        }
+      },
+      "91": {
+        "ModFloat32": {
+          "NEWTYPE": {
+            "TYPENAME": "ModFloat32"
+          }
+        }
+      },
+      "92": {
+        "ModFloat64": {
+          "NEWTYPE": {
+            "TYPENAME": "ModFloat64"
+          }
+        }
+      },
+      "93": {
+        "ModNumeric": {
+          "NEWTYPE": {
+            "TYPENAME": "ModNumeric"
+          }
+        }
+      },
+      "94": {
+        "RoundNumeric": {
+          "NEWTYPE": {
+            "TYPENAME": "RoundNumericBinary"
+          }
+        }
+      },
+      "95": {
+        "Eq": {
+          "NEWTYPE": {
+            "TYPENAME": "Eq"
+          }
+        }
+      },
+      "96": {
+        "NotEq": {
+          "NEWTYPE": {
+            "TYPENAME": "NotEq"
+          }
+        }
+      },
+      "97": {
+        "Lt": {
+          "NEWTYPE": {
+            "TYPENAME": "Lt"
+          }
+        }
+      },
+      "98": {
+        "Lte": {
+          "NEWTYPE": {
+            "TYPENAME": "Lte"
+          }
+        }
+      },
+      "99": {
+        "Gt": {
+          "NEWTYPE": {
+            "TYPENAME": "Gt"
+          }
+        }
+      },
+      "100": {
+        "Gte": {
+          "NEWTYPE": {
+            "TYPENAME": "Gte"
+          }
+        }
+      },
+      "101": {
+        "LikeEscape": {
+          "NEWTYPE": {
+            "TYPENAME": "LikeEscape"
+          }
+        }
+      },
+      "102": {
+        "IsLikeMatchCaseInsensitive": {
+          "NEWTYPE": {
+            "TYPENAME": "IsLikeMatchCaseInsensitive"
+          }
+        }
+      },
+      "103": {
+        "IsLikeMatchCaseSensitive": {
+          "NEWTYPE": {
+            "TYPENAME": "IsLikeMatchCaseSensitive"
+          }
+        }
+      },
+      "104": {
+        "IsRegexpMatchCaseSensitive": {
+          "NEWTYPE": {
+            "TYPENAME": "IsRegexpMatchCaseSensitive"
+          }
+        }
+      },
+      "105": {
+        "IsRegexpMatchCaseInsensitive": {
+          "NEWTYPE": {
+            "TYPENAME": "IsRegexpMatchCaseInsensitive"
+          }
+        }
+      },
+      "106": {
+        "ToCharTimestamp": {
+          "NEWTYPE": {
+            "TYPENAME": "ToCharTimestampFormat"
+          }
+        }
+      },
+      "107": {
+        "ToCharTimestampTz": {
+          "NEWTYPE": {
+            "TYPENAME": "ToCharTimestampTzFormat"
+          }
+        }
+      },
+      "108": {
+        "DateBinTimestamp": {
+          "NEWTYPE": {
+            "TYPENAME": "DateBinTimestamp"
+          }
+        }
+      },
+      "109": {
+        "DateBinTimestampTz": {
+          "NEWTYPE": {
+            "TYPENAME": "DateBinTimestampTz"
+          }
+        }
+      },
+      "110": {
+        "ExtractInterval": {
+          "NEWTYPE": {
+            "TYPENAME": "DatePartIntervalNumeric"
+          }
+        }
+      },
+      "111": {
+        "ExtractTime": {
+          "NEWTYPE": {
+            "TYPENAME": "DatePartTimeNumeric"
+          }
+        }
+      },
+      "112": {
+        "ExtractTimestamp": {
+          "NEWTYPE": {
+            "TYPENAME": "DatePartTimestampTimestampNumeric"
+          }
+        }
+      },
+      "113": {
+        "ExtractTimestampTz": {
+          "NEWTYPE": {
+            "TYPENAME": "DatePartTimestampTimestampTzNumeric"
+          }
+        }
+      },
+      "114": {
+        "ExtractDate": {
+          "NEWTYPE": {
+            "TYPENAME": "ExtractDateUnits"
+          }
+        }
+      },
+      "115": {
+        "DatePartInterval": {
+          "NEWTYPE": {
+            "TYPENAME": "DatePartIntervalF64"
+          }
+        }
+      },
+      "116": {
+        "DatePartTime": {
+          "NEWTYPE": {
+            "TYPENAME": "DatePartTimeF64"
+          }
+        }
+      },
+      "117": {
+        "DatePartTimestamp": {
+          "NEWTYPE": {
+            "TYPENAME": "DatePartTimestampTimestampF64"
+          }
+        }
+      },
+      "118": {
+        "DatePartTimestampTz": {
+          "NEWTYPE": {
+            "TYPENAME": "DatePartTimestampTimestampTzF64"
+          }
+        }
+      },
+      "119": {
+        "DateTruncTimestamp": {
+          "NEWTYPE": {
+            "TYPENAME": "DateTruncUnitsTimestamp"
+          }
+        }
+      },
+      "120": {
+        "DateTruncTimestampTz": {
+          "NEWTYPE": {
+            "TYPENAME": "DateTruncUnitsTimestampTz"
+          }
+        }
+      },
+      "121": {
+        "DateTruncInterval": {
+          "NEWTYPE": {
+            "TYPENAME": "DateTruncInterval"
+          }
+        }
+      },
+      "122": {
+        "TimezoneTimestampBinary": {
+          "NEWTYPE": {
+            "TYPENAME": "TimezoneTimestampBinary"
+          }
+        }
+      },
+      "123": {
+        "TimezoneTimestampTzBinary": {
+          "NEWTYPE": {
+            "TYPENAME": "TimezoneTimestampTzBinary"
+          }
+        }
+      },
+      "124": {
+        "TimezoneIntervalTimestampBinary": {
+          "NEWTYPE": {
+            "TYPENAME": "TimezoneIntervalTimestampBinary"
+          }
+        }
+      },
+      "125": {
+        "TimezoneIntervalTimestampTzBinary": {
+          "NEWTYPE": {
+            "TYPENAME": "TimezoneIntervalTimestampTzBinary"
+          }
+        }
+      },
+      "126": {
+        "TimezoneIntervalTimeBinary": {
+          "NEWTYPE": {
+            "TYPENAME": "TimezoneIntervalTimeBinary"
+          }
+        }
+      },
+      "127": {
+        "TimezoneOffset": {
+          "NEWTYPE": {
+            "TYPENAME": "TimezoneOffset"
+          }
+        }
+      },
+      "128": {
+        "TextConcat": {
+          "NEWTYPE": {
+            "TYPENAME": "TextConcatBinary"
+          }
+        }
+      },
+      "129": {
+        "JsonbGetInt64": {
+          "NEWTYPE": {
+            "TYPENAME": "JsonbGetInt64"
+          }
+        }
+      },
+      "130": {
+        "JsonbGetInt64Stringify": {
+          "NEWTYPE": {
+            "TYPENAME": "JsonbGetInt64Stringify"
+          }
+        }
+      },
+      "131": {
+        "JsonbGetString": {
+          "NEWTYPE": {
+            "TYPENAME": "JsonbGetString"
+          }
+        }
+      },
+      "132": {
+        "JsonbGetStringStringify": {
+          "NEWTYPE": {
+            "TYPENAME": "JsonbGetStringStringify"
+          }
+        }
+      },
+      "133": {
+        "JsonbGetPath": {
+          "NEWTYPE": {
+            "TYPENAME": "JsonbGetPath"
+          }
+        }
+      },
+      "134": {
+        "JsonbGetPathStringify": {
+          "NEWTYPE": {
+            "TYPENAME": "JsonbGetPathStringify"
+          }
+        }
+      },
+      "135": {
+        "JsonbContainsString": {
+          "NEWTYPE": {
+            "TYPENAME": "JsonbContainsString"
+          }
+        }
+      },
+      "136": {
+        "JsonbConcat": {
+          "NEWTYPE": {
+            "TYPENAME": "JsonbConcat"
+          }
+        }
+      },
+      "137": {
+        "JsonbContainsJsonb": {
+          "NEWTYPE": {
+            "TYPENAME": "JsonbContainsJsonb"
+          }
+        }
+      },
+      "138": {
+        "JsonbDeleteInt64": {
+          "NEWTYPE": {
+            "TYPENAME": "JsonbDeleteInt64"
+          }
+        }
+      },
+      "139": {
+        "JsonbDeleteString": {
+          "NEWTYPE": {
+            "TYPENAME": "JsonbDeleteString"
+          }
+        }
+      },
+      "140": {
+        "MapContainsKey": {
+          "NEWTYPE": {
+            "TYPENAME": "MapContainsKey"
+          }
+        }
+      },
+      "141": {
+        "MapGetValue": {
+          "NEWTYPE": {
+            "TYPENAME": "MapGetValue"
+          }
+        }
+      },
+      "142": {
+        "MapContainsAllKeys": {
+          "NEWTYPE": {
+            "TYPENAME": "MapContainsAllKeys"
+          }
+        }
+      },
+      "143": {
+        "MapContainsAnyKeys": {
+          "NEWTYPE": {
+            "TYPENAME": "MapContainsAnyKeys"
+          }
+        }
+      },
+      "144": {
+        "MapContainsMap": {
+          "NEWTYPE": {
+            "TYPENAME": "MapContainsMap"
+          }
+        }
+      },
+      "145": {
+        "ConvertFrom": {
+          "NEWTYPE": {
+            "TYPENAME": "ConvertFrom"
+          }
+        }
+      },
+      "146": {
+        "Left": {
+          "NEWTYPE": {
+            "TYPENAME": "Left"
+          }
+        }
+      },
+      "147": {
+        "Position": {
+          "NEWTYPE": {
+            "TYPENAME": "Position"
+          }
+        }
+      },
+      "148": {
+        "Strpos": {
+          "NEWTYPE": {
+            "TYPENAME": "Strpos"
+          }
+        }
+      },
+      "149": {
+        "Right": {
+          "NEWTYPE": {
+            "TYPENAME": "Right"
+          }
+        }
+      },
+      "150": {
+        "RepeatString": {
+          "NEWTYPE": {
+            "TYPENAME": "RepeatString"
+          }
+        }
+      },
+      "151": {
+        "Normalize": {
+          "NEWTYPE": {
+            "TYPENAME": "Normalize"
+          }
+        }
+      },
+      "152": {
+        "Trim": {
+          "NEWTYPE": {
+            "TYPENAME": "Trim"
+          }
+        }
+      },
+      "153": {
+        "TrimLeading": {
+          "NEWTYPE": {
+            "TYPENAME": "TrimLeading"
+          }
+        }
+      },
+      "154": {
+        "TrimTrailing": {
+          "NEWTYPE": {
+            "TYPENAME": "TrimTrailing"
+          }
+        }
+      },
+      "155": {
+        "EncodedBytesCharLength": {
+          "NEWTYPE": {
+            "TYPENAME": "EncodedBytesCharLength"
+          }
+        }
+      },
+      "156": {
+        "ListLengthMax": {
+          "NEWTYPE": {
+            "TYPENAME": "ListLengthMax"
+          }
+        }
+      },
+      "157": {
+        "ArrayContains": {
+          "NEWTYPE": {
+            "TYPENAME": "ArrayContains"
+          }
+        }
+      },
+      "158": {
+        "ArrayContainsArray": {
+          "NEWTYPE": {
+            "TYPENAME": "ArrayContainsArray"
+          }
+        }
+      },
+      "159": {
+        "ArrayContainsArrayRev": {
+          "NEWTYPE": {
+            "TYPENAME": "ArrayContainsArrayRev"
+          }
+        }
+      },
+      "160": {
+        "ArrayLength": {
+          "NEWTYPE": {
+            "TYPENAME": "ArrayLength"
+          }
+        }
+      },
+      "161": {
+        "ArrayLower": {
+          "NEWTYPE": {
+            "TYPENAME": "ArrayLower"
+          }
+        }
+      },
+      "162": {
+        "ArrayRemove": {
+          "NEWTYPE": {
+            "TYPENAME": "ArrayRemove"
+          }
+        }
+      },
+      "163": {
+        "ArrayUpper": {
+          "NEWTYPE": {
+            "TYPENAME": "ArrayUpper"
+          }
+        }
+      },
+      "164": {
+        "ArrayArrayConcat": {
+          "NEWTYPE": {
+            "TYPENAME": "ArrayArrayConcat"
+          }
+        }
+      },
+      "165": {
+        "ListListConcat": {
+          "NEWTYPE": {
+            "TYPENAME": "ListListConcat"
+          }
+        }
+      },
+      "166": {
+        "ListElementConcat": {
+          "NEWTYPE": {
+            "TYPENAME": "ListElementConcat"
+          }
+        }
+      },
+      "167": {
+        "ElementListConcat": {
+          "NEWTYPE": {
+            "TYPENAME": "ElementListConcat"
+          }
+        }
+      },
+      "168": {
+        "ListRemove": {
+          "NEWTYPE": {
+            "TYPENAME": "ListRemove"
+          }
+        }
+      },
+      "169": {
+        "ListContainsList": {
+          "NEWTYPE": {
+            "TYPENAME": "ListContainsList"
+          }
+        }
+      },
+      "170": {
+        "ListContainsListRev": {
+          "NEWTYPE": {
+            "TYPENAME": "ListContainsListRev"
+          }
+        }
+      },
+      "171": {
+        "DigestString": {
+          "NEWTYPE": {
+            "TYPENAME": "DigestString"
+          }
+        }
+      },
+      "172": {
+        "DigestBytes": {
+          "NEWTYPE": {
+            "TYPENAME": "DigestBytes"
+          }
+        }
+      },
+      "173": {
+        "MzRenderTypmod": {
+          "NEWTYPE": {
+            "TYPENAME": "MzRenderTypmod"
+          }
+        }
+      },
+      "174": {
+        "Encode": {
+          "NEWTYPE": {
+            "TYPENAME": "Encode"
+          }
+        }
+      },
+      "175": {
+        "Decode": {
+          "NEWTYPE": {
+            "TYPENAME": "Decode"
+          }
+        }
+      },
+      "176": {
+        "LogNumeric": {
+          "NEWTYPE": {
+            "TYPENAME": "LogBaseNumeric"
+          }
+        }
+      },
+      "177": {
+        "Power": {
+          "NEWTYPE": {
+            "TYPENAME": "Power"
+          }
+        }
+      },
+      "178": {
+        "PowerNumeric": {
+          "NEWTYPE": {
+            "TYPENAME": "PowerNumeric"
+          }
+        }
+      },
+      "179": {
+        "GetBit": {
+          "NEWTYPE": {
+            "TYPENAME": "GetBit"
+          }
+        }
+      },
+      "180": {
+        "GetByte": {
+          "NEWTYPE": {
+            "TYPENAME": "GetByte"
+          }
+        }
+      },
+      "181": {
+        "ConstantTimeEqBytes": {
+          "NEWTYPE": {
+            "TYPENAME": "ConstantTimeEqBytes"
+          }
+        }
+      },
+      "182": {
+        "ConstantTimeEqString": {
+          "NEWTYPE": {
+            "TYPENAME": "ConstantTimeEqString"
+          }
+        }
+      },
+      "183": {
+        "RangeContainsDate": {
+          "NEWTYPE": {
+            "TYPENAME": "RangeContainsDate"
+          }
+        }
+      },
+      "184": {
+        "RangeContainsDateRev": {
+          "NEWTYPE": {
+            "TYPENAME": "RangeContainsDateRev"
+          }
+        }
+      },
+      "185": {
+        "RangeContainsI32": {
+          "NEWTYPE": {
+            "TYPENAME": "RangeContainsI32"
+          }
+        }
+      },
+      "186": {
+        "RangeContainsI32Rev": {
+          "NEWTYPE": {
+            "TYPENAME": "RangeContainsI32Rev"
+          }
+        }
+      },
+      "187": {
+        "RangeContainsI64": {
+          "NEWTYPE": {
+            "TYPENAME": "RangeContainsI64"
+          }
+        }
+      },
+      "188": {
+        "RangeContainsI64Rev": {
+          "NEWTYPE": {
+            "TYPENAME": "RangeContainsI64Rev"
+          }
+        }
+      },
+      "189": {
+        "RangeContainsNumeric": {
+          "NEWTYPE": {
+            "TYPENAME": "RangeContainsNumeric"
+          }
+        }
+      },
+      "190": {
+        "RangeContainsNumericRev": {
+          "NEWTYPE": {
+            "TYPENAME": "RangeContainsNumericRev"
+          }
+        }
+      },
+      "191": {
+        "RangeContainsRange": {
+          "NEWTYPE": {
+            "TYPENAME": "RangeContainsRange"
+          }
+        }
+      },
+      "192": {
+        "RangeContainsRangeRev": {
+          "NEWTYPE": {
+            "TYPENAME": "RangeContainsRangeRev"
+          }
+        }
+      },
+      "193": {
+        "RangeContainsTimestamp": {
+          "NEWTYPE": {
+            "TYPENAME": "RangeContainsTimestamp"
+          }
+        }
+      },
+      "194": {
+        "RangeContainsTimestampRev": {
+          "NEWTYPE": {
+            "TYPENAME": "RangeContainsTimestampRev"
+          }
+        }
+      },
+      "195": {
+        "RangeContainsTimestampTz": {
+          "NEWTYPE": {
+            "TYPENAME": "RangeContainsTimestampTz"
+          }
+        }
+      },
+      "196": {
+        "RangeContainsTimestampTzRev": {
+          "NEWTYPE": {
+            "TYPENAME": "RangeContainsTimestampTzRev"
+          }
+        }
+      },
+      "197": {
+        "RangeOverlaps": {
+          "NEWTYPE": {
+            "TYPENAME": "RangeOverlaps"
+          }
+        }
+      },
+      "198": {
+        "RangeAfter": {
+          "NEWTYPE": {
+            "TYPENAME": "RangeAfter"
+          }
+        }
+      },
+      "199": {
+        "RangeBefore": {
+          "NEWTYPE": {
+            "TYPENAME": "RangeBefore"
+          }
+        }
+      },
+      "200": {
+        "RangeOverleft": {
+          "NEWTYPE": {
+            "TYPENAME": "RangeOverleft"
+          }
+        }
+      },
+      "201": {
+        "RangeOverright": {
+          "NEWTYPE": {
+            "TYPENAME": "RangeOverright"
+          }
+        }
+      },
+      "202": {
+        "RangeAdjacent": {
+          "NEWTYPE": {
+            "TYPENAME": "RangeAdjacent"
+          }
+        }
+      },
+      "203": {
+        "RangeUnion": {
+          "NEWTYPE": {
+            "TYPENAME": "RangeUnion"
+          }
+        }
+      },
+      "204": {
+        "RangeIntersection": {
+          "NEWTYPE": {
+            "TYPENAME": "RangeIntersection"
+          }
+        }
+      },
+      "205": {
+        "RangeDifference": {
+          "NEWTYPE": {
+            "TYPENAME": "RangeDifference"
+          }
+        }
+      },
+      "206": {
+        "UuidGenerateV5": {
+          "NEWTYPE": {
+            "TYPENAME": "UuidGenerateV5"
+          }
+        }
+      },
+      "207": {
+        "MzAclItemContainsPrivilege": {
+          "NEWTYPE": {
+            "TYPENAME": "MzAclItemContainsPrivilege"
+          }
+        }
+      },
+      "208": {
+        "ParseIdent": {
+          "NEWTYPE": {
+            "TYPENAME": "ParseIdent"
+          }
+        }
+      },
+      "209": {
+        "PrettySql": {
+          "NEWTYPE": {
+            "TYPENAME": "PrettySql"
+          }
+        }
+      },
+      "210": {
+        "RegexpReplace": {
+          "NEWTYPE": {
+            "TYPENAME": "RegexpReplaceStatic"
+          }
+        }
+      },
+      "211": {
+        "StartsWith": {
+          "NEWTYPE": {
+            "TYPENAME": "StartsWith"
+          }
+        }
+      }
+    }
+  },
+  "BitAndInt16": "UNITSTRUCT",
+  "BitAndInt32": "UNITSTRUCT",
+  "BitAndInt64": "UNITSTRUCT",
+  "BitAndUint16": "UNITSTRUCT",
+  "BitAndUint32": "UNITSTRUCT",
+  "BitAndUint64": "UNITSTRUCT",
+  "BitCountBytes": "UNITSTRUCT",
+  "BitLengthBytes": "UNITSTRUCT",
+  "BitLengthString": "UNITSTRUCT",
+  "BitNotInt16": "UNITSTRUCT",
+  "BitNotInt32": "UNITSTRUCT",
+  "BitNotInt64": "UNITSTRUCT",
+  "BitNotUint16": "UNITSTRUCT",
+  "BitNotUint32": "UNITSTRUCT",
+  "BitNotUint64": "UNITSTRUCT",
+  "BitOrInt16": "UNITSTRUCT",
+  "BitOrInt32": "UNITSTRUCT",
+  "BitOrInt64": "UNITSTRUCT",
+  "BitOrUint16": "UNITSTRUCT",
+  "BitOrUint32": "UNITSTRUCT",
+  "BitOrUint64": "UNITSTRUCT",
+  "BitShiftLeftInt16": "UNITSTRUCT",
+  "BitShiftLeftInt32": "UNITSTRUCT",
+  "BitShiftLeftInt64": "UNITSTRUCT",
+  "BitShiftLeftUint16": "UNITSTRUCT",
+  "BitShiftLeftUint32": "UNITSTRUCT",
+  "BitShiftLeftUint64": "UNITSTRUCT",
+  "BitShiftRightInt16": "UNITSTRUCT",
+  "BitShiftRightInt32": "UNITSTRUCT",
+  "BitShiftRightInt64": "UNITSTRUCT",
+  "BitShiftRightUint16": "UNITSTRUCT",
+  "BitShiftRightUint32": "UNITSTRUCT",
+  "BitShiftRightUint64": "UNITSTRUCT",
+  "BitXorInt16": "UNITSTRUCT",
+  "BitXorInt32": "UNITSTRUCT",
+  "BitXorInt64": "UNITSTRUCT",
+  "BitXorUint16": "UNITSTRUCT",
+  "BitXorUint32": "UNITSTRUCT",
+  "BitXorUint64": "UNITSTRUCT",
+  "BucketedPlan": {
+    "STRUCT": [
+      {
+        "aggr_funcs": {
+          "SEQ": {
+            "TYPENAME": "AggregateFunc"
+          }
+        }
+      },
+      {
+        "buckets": {
+          "SEQ": "U64"
+        }
+      }
+    ]
+  },
+  "ByteLengthBytes": "UNITSTRUCT",
+  "ByteLengthString": "UNITSTRUCT",
+  "CaptureGroupDesc": {
+    "STRUCT": [
+      {
+        "index": "U32"
+      },
+      {
+        "name": {
+          "OPTION": "STR"
+        }
+      },
+      {
+        "nullable": "BOOL"
+      }
+    ]
+  },
+  "CaseLiteral": {
+    "STRUCT": [
+      {
+        "lookup": {
+          "SEQ": {
+            "TYPENAME": "CaseLiteralEntry"
+          }
+        }
+      },
+      {
+        "return_type": {
+          "TYPENAME": "SqlColumnType"
+        }
+      }
+    ]
+  },
+  "CaseLiteralEntry": {
+    "STRUCT": [
+      {
+        "literal": {
+          "TYPENAME": "Row"
+        }
+      },
+      {
+        "expr_index": "U64"
+      }
+    ]
+  },
+  "CastArrayToArray": {
+    "STRUCT": [
+      {
+        "return_ty": {
+          "TYPENAME": "SqlScalarType"
+        }
+      },
+      {
+        "cast_expr": {
+          "TYPENAME": "MirScalarExpr"
+        }
+      }
+    ]
+  },
+  "CastArrayToJsonb": {
+    "STRUCT": [
+      {
+        "cast_element": {
+          "TYPENAME": "MirScalarExpr"
+        }
+      }
+    ]
+  },
+  "CastArrayToListOneDim": "UNITSTRUCT",
+  "CastArrayToString": {
+    "STRUCT": [
+      {
+        "ty": {
+          "TYPENAME": "SqlScalarType"
+        }
+      }
+    ]
+  },
+  "CastBoolToInt32": "UNITSTRUCT",
+  "CastBoolToInt64": "UNITSTRUCT",
+  "CastBoolToString": "UNITSTRUCT",
+  "CastBoolToStringNonstandard": "UNITSTRUCT",
+  "CastBytesToString": "UNITSTRUCT",
+  "CastCharToString": "UNITSTRUCT",
+  "CastDateToMzTimestamp": "UNITSTRUCT",
+  "CastDateToString": "UNITSTRUCT",
+  "CastDateToTimestamp": {
+    "NEWTYPESTRUCT": {
+      "OPTION": {
+        "TYPENAME": "TimestampPrecision"
+      }
+    }
+  },
+  "CastDateToTimestampTz": {
+    "NEWTYPESTRUCT": {
+      "OPTION": {
+        "TYPENAME": "TimestampPrecision"
+      }
+    }
+  },
+  "CastFloat32ToFloat64": "UNITSTRUCT",
+  "CastFloat32ToInt16": "UNITSTRUCT",
+  "CastFloat32ToInt32": "UNITSTRUCT",
+  "CastFloat32ToInt64": "UNITSTRUCT",
+  "CastFloat32ToNumeric": {
+    "NEWTYPESTRUCT": {
+      "OPTION": {
+        "TYPENAME": "NumericMaxScale"
+      }
+    }
+  },
+  "CastFloat32ToString": "UNITSTRUCT",
+  "CastFloat32ToUint16": "UNITSTRUCT",
+  "CastFloat32ToUint32": "UNITSTRUCT",
+  "CastFloat32ToUint64": "UNITSTRUCT",
+  "CastFloat64ToFloat32": "UNITSTRUCT",
+  "CastFloat64ToInt16": "UNITSTRUCT",
+  "CastFloat64ToInt32": "UNITSTRUCT",
+  "CastFloat64ToInt64": "UNITSTRUCT",
+  "CastFloat64ToNumeric": {
+    "NEWTYPESTRUCT": {
+      "OPTION": {
+        "TYPENAME": "NumericMaxScale"
+      }
+    }
+  },
+  "CastFloat64ToString": "UNITSTRUCT",
+  "CastFloat64ToUint16": "UNITSTRUCT",
+  "CastFloat64ToUint32": "UNITSTRUCT",
+  "CastFloat64ToUint64": "UNITSTRUCT",
+  "CastInt16ToFloat32": "UNITSTRUCT",
+  "CastInt16ToFloat64": "UNITSTRUCT",
+  "CastInt16ToInt32": "UNITSTRUCT",
+  "CastInt16ToInt64": "UNITSTRUCT",
+  "CastInt16ToNumeric": {
+    "NEWTYPESTRUCT": {
+      "OPTION": {
+        "TYPENAME": "NumericMaxScale"
+      }
+    }
+  },
+  "CastInt16ToString": "UNITSTRUCT",
+  "CastInt16ToUint16": "UNITSTRUCT",
+  "CastInt16ToUint32": "UNITSTRUCT",
+  "CastInt16ToUint64": "UNITSTRUCT",
+  "CastInt2VectorToArray": "UNITSTRUCT",
+  "CastInt2VectorToString": "UNITSTRUCT",
+  "CastInt32ToBool": "UNITSTRUCT",
+  "CastInt32ToFloat32": "UNITSTRUCT",
+  "CastInt32ToFloat64": "UNITSTRUCT",
+  "CastInt32ToInt16": "UNITSTRUCT",
+  "CastInt32ToInt64": "UNITSTRUCT",
+  "CastInt32ToMzTimestamp": "UNITSTRUCT",
+  "CastInt32ToNumeric": {
+    "NEWTYPESTRUCT": {
+      "OPTION": {
+        "TYPENAME": "NumericMaxScale"
+      }
+    }
+  },
+  "CastInt32ToOid": "UNITSTRUCT",
+  "CastInt32ToPgLegacyChar": "UNITSTRUCT",
+  "CastInt32ToString": "UNITSTRUCT",
+  "CastInt32ToUint16": "UNITSTRUCT",
+  "CastInt32ToUint32": "UNITSTRUCT",
+  "CastInt32ToUint64": "UNITSTRUCT",
+  "CastInt64ToBool": "UNITSTRUCT",
+  "CastInt64ToFloat32": "UNITSTRUCT",
+  "CastInt64ToFloat64": "UNITSTRUCT",
+  "CastInt64ToInt16": "UNITSTRUCT",
+  "CastInt64ToInt32": "UNITSTRUCT",
+  "CastInt64ToMzTimestamp": "UNITSTRUCT",
+  "CastInt64ToNumeric": {
+    "NEWTYPESTRUCT": {
+      "OPTION": {
+        "TYPENAME": "NumericMaxScale"
+      }
+    }
+  },
+  "CastInt64ToOid": "UNITSTRUCT",
+  "CastInt64ToString": "UNITSTRUCT",
+  "CastInt64ToUint16": "UNITSTRUCT",
+  "CastInt64ToUint32": "UNITSTRUCT",
+  "CastInt64ToUint64": "UNITSTRUCT",
+  "CastIntervalToString": "UNITSTRUCT",
+  "CastIntervalToTime": "UNITSTRUCT",
+  "CastJsonbToBool": "UNITSTRUCT",
+  "CastJsonbToFloat32": "UNITSTRUCT",
+  "CastJsonbToFloat64": "UNITSTRUCT",
+  "CastJsonbToInt16": "UNITSTRUCT",
+  "CastJsonbToInt32": "UNITSTRUCT",
+  "CastJsonbToInt64": "UNITSTRUCT",
+  "CastJsonbToNumeric": {
+    "NEWTYPESTRUCT": {
+      "OPTION": {
+        "TYPENAME": "NumericMaxScale"
+      }
+    }
+  },
+  "CastJsonbToString": "UNITSTRUCT",
+  "CastJsonbableToJsonb": "UNITSTRUCT",
+  "CastList1ToList2": {
+    "STRUCT": [
+      {
+        "return_ty": {
+          "TYPENAME": "SqlScalarType"
+        }
+      },
+      {
+        "cast_expr": {
+          "TYPENAME": "MirScalarExpr"
+        }
+      }
+    ]
+  },
+  "CastListToJsonb": {
+    "STRUCT": [
+      {
+        "cast_element": {
+          "TYPENAME": "MirScalarExpr"
+        }
+      }
+    ]
+  },
+  "CastListToString": {
+    "STRUCT": [
+      {
+        "ty": {
+          "TYPENAME": "SqlScalarType"
+        }
+      }
+    ]
+  },
+  "CastMapToString": {
+    "STRUCT": [
+      {
+        "ty": {
+          "TYPENAME": "SqlScalarType"
+        }
+      }
+    ]
+  },
+  "CastMzTimestampToString": "UNITSTRUCT",
+  "CastMzTimestampToTimestamp": "UNITSTRUCT",
+  "CastMzTimestampToTimestampTz": "UNITSTRUCT",
+  "CastNumericToFloat32": "UNITSTRUCT",
+  "CastNumericToFloat64": "UNITSTRUCT",
+  "CastNumericToInt16": "UNITSTRUCT",
+  "CastNumericToInt32": "UNITSTRUCT",
+  "CastNumericToInt64": "UNITSTRUCT",
+  "CastNumericToMzTimestamp": "UNITSTRUCT",
+  "CastNumericToString": "UNITSTRUCT",
+  "CastNumericToUint16": "UNITSTRUCT",
+  "CastNumericToUint32": "UNITSTRUCT",
+  "CastNumericToUint64": "UNITSTRUCT",
+  "CastOidToInt32": "UNITSTRUCT",
+  "CastOidToInt64": "UNITSTRUCT",
+  "CastOidToRegClass": "UNITSTRUCT",
+  "CastOidToRegProc": "UNITSTRUCT",
+  "CastOidToRegType": "UNITSTRUCT",
+  "CastOidToString": "UNITSTRUCT",
+  "CastPgLegacyCharToChar": "UNITSTRUCT",
+  "CastPgLegacyCharToInt32": "UNITSTRUCT",
+  "CastPgLegacyCharToString": "UNITSTRUCT",
+  "CastPgLegacyCharToVarChar": "UNITSTRUCT",
+  "CastRangeToString": {
+    "STRUCT": [
+      {
+        "ty": {
+          "TYPENAME": "SqlScalarType"
+        }
+      }
+    ]
+  },
+  "CastRecord1ToRecord2": {
+    "STRUCT": [
+      {
+        "return_ty": {
+          "TYPENAME": "SqlScalarType"
+        }
+      },
+      {
+        "cast_exprs": {
+          "SEQ": {
+            "TYPENAME": "MirScalarExpr"
+          }
+        }
+      }
+    ]
+  },
+  "CastRecordToString": {
+    "STRUCT": [
+      {
+        "ty": {
+          "TYPENAME": "SqlScalarType"
+        }
+      }
+    ]
+  },
+  "CastRegClassToOid": "UNITSTRUCT",
+  "CastRegProcToOid": "UNITSTRUCT",
+  "CastRegTypeToOid": "UNITSTRUCT",
+  "CastStringToArray": {
+    "STRUCT": [
+      {
+        "return_ty": {
+          "TYPENAME": "SqlScalarType"
+        }
+      },
+      {
+        "cast_expr": {
+          "TYPENAME": "MirScalarExpr"
+        }
+      }
+    ]
+  },
+  "CastStringToBool": "UNITSTRUCT",
+  "CastStringToBytes": "UNITSTRUCT",
+  "CastStringToChar": {
+    "STRUCT": [
+      {
+        "length": {
+          "OPTION": {
+            "TYPENAME": "CharMaxLength"
+          }
+        }
+      },
+      {
+        "fail_on_len": "BOOL"
+      }
+    ]
+  },
+  "CastStringToDate": "UNITSTRUCT",
+  "CastStringToFloat32": "UNITSTRUCT",
+  "CastStringToFloat64": "UNITSTRUCT",
+  "CastStringToInt16": "UNITSTRUCT",
+  "CastStringToInt2Vector": "UNITSTRUCT",
+  "CastStringToInt32": "UNITSTRUCT",
+  "CastStringToInt64": "UNITSTRUCT",
+  "CastStringToInterval": "UNITSTRUCT",
+  "CastStringToJsonb": "UNITSTRUCT",
+  "CastStringToList": {
+    "STRUCT": [
+      {
+        "return_ty": {
+          "TYPENAME": "SqlScalarType"
+        }
+      },
+      {
+        "cast_expr": {
+          "TYPENAME": "MirScalarExpr"
+        }
+      }
+    ]
+  },
+  "CastStringToMap": {
+    "STRUCT": [
+      {
+        "return_ty": {
+          "TYPENAME": "SqlScalarType"
+        }
+      },
+      {
+        "cast_expr": {
+          "TYPENAME": "MirScalarExpr"
+        }
+      }
+    ]
+  },
+  "CastStringToMzTimestamp": "UNITSTRUCT",
+  "CastStringToNumeric": {
+    "NEWTYPESTRUCT": {
+      "OPTION": {
+        "TYPENAME": "NumericMaxScale"
+      }
+    }
+  },
+  "CastStringToOid": "UNITSTRUCT",
+  "CastStringToPgLegacyChar": "UNITSTRUCT",
+  "CastStringToPgLegacyName": "UNITSTRUCT",
+  "CastStringToRange": {
+    "STRUCT": [
+      {
+        "return_ty": {
+          "TYPENAME": "SqlScalarType"
+        }
+      },
+      {
+        "cast_expr": {
+          "TYPENAME": "MirScalarExpr"
+        }
+      }
+    ]
+  },
+  "CastStringToTime": "UNITSTRUCT",
+  "CastStringToTimestamp": {
+    "NEWTYPESTRUCT": {
+      "OPTION": {
+        "TYPENAME": "TimestampPrecision"
+      }
+    }
+  },
+  "CastStringToTimestampTz": {
+    "NEWTYPESTRUCT": {
+      "OPTION": {
+        "TYPENAME": "TimestampPrecision"
+      }
+    }
+  },
+  "CastStringToUint16": "UNITSTRUCT",
+  "CastStringToUint32": "UNITSTRUCT",
+  "CastStringToUint64": "UNITSTRUCT",
+  "CastStringToUuid": "UNITSTRUCT",
+  "CastStringToVarChar": {
+    "STRUCT": [
+      {
+        "length": {
+          "OPTION": {
+            "TYPENAME": "VarCharMaxLength"
+          }
+        }
+      },
+      {
+        "fail_on_len": "BOOL"
+      }
+    ]
+  },
+  "CastTimeToInterval": "UNITSTRUCT",
+  "CastTimeToString": "UNITSTRUCT",
+  "CastTimestampToDate": "UNITSTRUCT",
+  "CastTimestampToMzTimestamp": "UNITSTRUCT",
+  "CastTimestampToString": "UNITSTRUCT",
+  "CastTimestampToTime": "UNITSTRUCT",
+  "CastTimestampToTimestampTz": {
+    "STRUCT": [
+      {
+        "from": {
+          "OPTION": {
+            "TYPENAME": "TimestampPrecision"
+          }
+        }
+      },
+      {
+        "to": {
+          "OPTION": {
+            "TYPENAME": "TimestampPrecision"
+          }
+        }
+      }
+    ]
+  },
+  "CastTimestampTzToDate": "UNITSTRUCT",
+  "CastTimestampTzToMzTimestamp": "UNITSTRUCT",
+  "CastTimestampTzToString": "UNITSTRUCT",
+  "CastTimestampTzToTime": "UNITSTRUCT",
+  "CastTimestampTzToTimestamp": {
+    "STRUCT": [
+      {
+        "from": {
+          "OPTION": {
+            "TYPENAME": "TimestampPrecision"
+          }
+        }
+      },
+      {
+        "to": {
+          "OPTION": {
+            "TYPENAME": "TimestampPrecision"
+          }
+        }
+      }
+    ]
+  },
+  "CastUint16ToFloat32": "UNITSTRUCT",
+  "CastUint16ToFloat64": "UNITSTRUCT",
+  "CastUint16ToInt16": "UNITSTRUCT",
+  "CastUint16ToInt32": "UNITSTRUCT",
+  "CastUint16ToInt64": "UNITSTRUCT",
+  "CastUint16ToNumeric": {
+    "NEWTYPESTRUCT": {
+      "OPTION": {
+        "TYPENAME": "NumericMaxScale"
+      }
+    }
+  },
+  "CastUint16ToString": "UNITSTRUCT",
+  "CastUint16ToUint32": "UNITSTRUCT",
+  "CastUint16ToUint64": "UNITSTRUCT",
+  "CastUint32ToFloat32": "UNITSTRUCT",
+  "CastUint32ToFloat64": "UNITSTRUCT",
+  "CastUint32ToInt16": "UNITSTRUCT",
+  "CastUint32ToInt32": "UNITSTRUCT",
+  "CastUint32ToInt64": "UNITSTRUCT",
+  "CastUint32ToMzTimestamp": "UNITSTRUCT",
+  "CastUint32ToNumeric": {
+    "NEWTYPESTRUCT": {
+      "OPTION": {
+        "TYPENAME": "NumericMaxScale"
+      }
+    }
+  },
+  "CastUint32ToString": "UNITSTRUCT",
+  "CastUint32ToUint16": "UNITSTRUCT",
+  "CastUint32ToUint64": "UNITSTRUCT",
+  "CastUint64ToFloat32": "UNITSTRUCT",
+  "CastUint64ToFloat64": "UNITSTRUCT",
+  "CastUint64ToInt16": "UNITSTRUCT",
+  "CastUint64ToInt32": "UNITSTRUCT",
+  "CastUint64ToInt64": "UNITSTRUCT",
+  "CastUint64ToMzTimestamp": "UNITSTRUCT",
+  "CastUint64ToNumeric": {
+    "NEWTYPESTRUCT": {
+      "OPTION": {
+        "TYPENAME": "NumericMaxScale"
+      }
+    }
+  },
+  "CastUint64ToString": "UNITSTRUCT",
+  "CastUint64ToUint16": "UNITSTRUCT",
+  "CastUint64ToUint32": "UNITSTRUCT",
+  "CastUuidToString": "UNITSTRUCT",
+  "CastVarCharToString": "UNITSTRUCT",
+  "CatalogItemId": {
+    "ENUM": {
+      "0": {
+        "System": {
+          "NEWTYPE": "U64"
+        }
+      },
+      "1": {
+        "IntrospectionSourceIndex": {
+          "NEWTYPE": "U64"
+        }
+      },
+      "2": {
+        "User": {
+          "NEWTYPE": "U64"
+        }
+      },
+      "3": {
+        "Transient": {
+          "NEWTYPE": "U64"
+        }
+      }
+    }
+  },
+  "CbrtFloat64": "UNITSTRUCT",
+  "CeilFloat32": "UNITSTRUCT",
+  "CeilFloat64": "UNITSTRUCT",
+  "CeilNumeric": "UNITSTRUCT",
+  "CharLength": "UNITSTRUCT",
+  "CharMaxLength": {
+    "NEWTYPESTRUCT": "U32"
+  },
+  "Chr": "UNITSTRUCT",
+  "Coalesce": "UNITSTRUCT",
+  "ColumnName": {
+    "NEWTYPESTRUCT": "STR"
+  },
+  "ColumnOrder": {
+    "STRUCT": [
+      {
+        "column": "U64"
+      },
+      {
+        "desc": "BOOL"
+      },
+      {
+        "nulls_last": "BOOL"
+      }
+    ]
+  },
+  "Concat": "UNITSTRUCT",
+  "ConcatWs": "UNITSTRUCT",
+  "ConstantRows": {
+    "ENUM": {
+      "0": {
+        "Ok": {
+          "NEWTYPE": {
+            "SEQ": {
+              "TUPLE": [
+                {
+                  "TYPENAME": "Row"
+                },
+                "U64",
+                {
+                  "TYPENAME": "Overflowing"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "1": {
+        "Err": {
+          "NEWTYPE": {
+            "TYPENAME": "EvalError"
+          }
+        }
+      }
+    }
+  },
+  "ConstantTimeEqBytes": "UNITSTRUCT",
+  "ConstantTimeEqString": "UNITSTRUCT",
+  "ConvertFrom": "UNITSTRUCT",
+  "Cos": "UNITSTRUCT",
+  "Cosh": "UNITSTRUCT",
+  "Cot": "UNITSTRUCT",
+  "Crc32Bytes": "UNITSTRUCT",
+  "Crc32String": "UNITSTRUCT",
+  "DateBinTimestamp": "UNITSTRUCT",
+  "DateBinTimestampTz": "UNITSTRUCT",
+  "DateDiffDate": "UNITSTRUCT",
+  "DateDiffTime": "UNITSTRUCT",
+  "DateDiffTimestamp": "UNITSTRUCT",
+  "DateDiffTimestampTz": "UNITSTRUCT",
+  "DatePartInterval": {
+    "NEWTYPESTRUCT": {
+      "TYPENAME": "DateTimeUnits"
+    }
+  },
+  "DatePartIntervalF64": "UNITSTRUCT",
+  "DatePartIntervalNumeric": "UNITSTRUCT",
+  "DatePartTime": {
+    "NEWTYPESTRUCT": {
+      "TYPENAME": "DateTimeUnits"
+    }
+  },
+  "DatePartTimeF64": "UNITSTRUCT",
+  "DatePartTimeNumeric": "UNITSTRUCT",
+  "DatePartTimestamp": {
+    "NEWTYPESTRUCT": {
+      "TYPENAME": "DateTimeUnits"
+    }
+  },
+  "DatePartTimestampTimestampF64": "UNITSTRUCT",
+  "DatePartTimestampTimestampNumeric": "UNITSTRUCT",
+  "DatePartTimestampTimestampTzF64": "UNITSTRUCT",
+  "DatePartTimestampTimestampTzNumeric": "UNITSTRUCT",
+  "DatePartTimestampTz": {
+    "NEWTYPESTRUCT": {
+      "TYPENAME": "DateTimeUnits"
+    }
+  },
+  "DateTimeField": {
+    "ENUM": {
+      "4294967260": {
+        "Hour12": "UNIT"
+      }
+    }
+  },
+  "DateTimeFormat": {
+    "NEWTYPESTRUCT": {
+      "SEQ": {
+        "TYPENAME": "DateTimeFormatNode"
+      }
+    }
+  },
+  "DateTimeFormatNode": {
+    "ENUM": {
+      "4294967294": {
+        "Field": {
+          "STRUCT": [
+            {
+              "field": {
+                "TYPENAME": "DateTimeField"
+              }
+            },
+            {
+              "fill": "BOOL"
+            },
+            {
+              "ordinal": {
+                "TYPENAME": "OrdinalMode"
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "DateTimeUnits": {
+    "ENUM": {
+      "0": {
+        "Epoch": "UNIT"
+      },
+      "1": {
+        "Millennium": "UNIT"
+      },
+      "2": {
+        "Century": "UNIT"
+      },
+      "3": {
+        "Decade": "UNIT"
+      },
+      "4": {
+        "Year": "UNIT"
+      },
+      "5": {
+        "Quarter": "UNIT"
+      },
+      "6": {
+        "Week": "UNIT"
+      },
+      "7": {
+        "Month": "UNIT"
+      },
+      "8": {
+        "Hour": "UNIT"
+      },
+      "9": {
+        "Day": "UNIT"
+      },
+      "10": {
+        "DayOfWeek": "UNIT"
+      },
+      "11": {
+        "DayOfYear": "UNIT"
+      },
+      "12": {
+        "IsoDayOfWeek": "UNIT"
+      },
+      "13": {
+        "IsoDayOfYear": "UNIT"
+      },
+      "14": {
+        "Minute": "UNIT"
+      },
+      "15": {
+        "Second": "UNIT"
+      },
+      "16": {
+        "Milliseconds": "UNIT"
+      },
+      "17": {
+        "Microseconds": "UNIT"
+      },
+      "18": {
+        "Timezone": "UNIT"
+      },
+      "19": {
+        "TimezoneHour": "UNIT"
+      },
+      "20": {
+        "TimezoneMinute": "UNIT"
+      }
+    }
+  },
+  "DateTruncInterval": "UNITSTRUCT",
+  "DateTruncTimestamp": {
+    "NEWTYPESTRUCT": {
+      "TYPENAME": "DateTimeUnits"
+    }
+  },
+  "DateTruncTimestampTz": {
+    "NEWTYPESTRUCT": {
+      "TYPENAME": "DateTimeUnits"
+    }
+  },
+  "DateTruncUnitsTimestamp": "UNITSTRUCT",
+  "DateTruncUnitsTimestampTz": "UNITSTRUCT",
+  "Decode": "UNITSTRUCT",
+  "Degrees": "UNITSTRUCT",
+  "DeltaJoinPlan": {
+    "STRUCT": [
+      {
+        "path_plans": {
+          "SEQ": {
+            "TYPENAME": "DeltaPathPlan"
+          }
+        }
+      }
+    ]
+  },
+  "DeltaPathPlan": {
+    "STRUCT": [
+      {
+        "source_relation": "U64"
+      },
+      {
+        "source_key": {
+          "SEQ": {
+            "TYPENAME": "LirScalarExpr"
+          }
+        }
+      },
+      {
+        "initial_closure": {
+          "TYPENAME": "JoinClosure"
+        }
+      },
+      {
+        "stage_plans": {
+          "SEQ": {
+            "TYPENAME": "DeltaStagePlan"
+          }
+        }
+      },
+      {
+        "final_closure": {
+          "OPTION": {
+            "TYPENAME": "JoinClosure"
+          }
+        }
+      }
+    ]
+  },
+  "DeltaStagePlan": {
+    "STRUCT": [
+      {
+        "lookup_relation": "U64"
+      },
+      {
+        "stream_key": {
+          "SEQ": {
+            "TYPENAME": "LirScalarExpr"
+          }
+        }
+      },
+      {
+        "stream_thinning": {
+          "SEQ": "U64"
+        }
+      },
+      {
+        "lookup_key": {
+          "SEQ": {
+            "TYPENAME": "LirScalarExpr"
+          }
+        }
+      },
+      {
+        "closure": {
+          "TYPENAME": "JoinClosure"
+        }
+      }
+    ]
+  },
+  "DigestBytes": "UNITSTRUCT",
+  "DigestString": "UNITSTRUCT",
+  "DivFloat32": "UNITSTRUCT",
+  "DivFloat64": "UNITSTRUCT",
+  "DivInt16": "UNITSTRUCT",
+  "DivInt32": "UNITSTRUCT",
+  "DivInt64": "UNITSTRUCT",
+  "DivInterval": "UNITSTRUCT",
+  "DivNumeric": "UNITSTRUCT",
+  "DivUint16": "UNITSTRUCT",
+  "DivUint32": "UNITSTRUCT",
+  "DivUint64": "UNITSTRUCT",
+  "DomainLimit": {
+    "ENUM": {
+      "0": {
+        "None": "UNIT"
+      },
+      "1": {
+        "Inclusive": {
+          "NEWTYPE": "I64"
+        }
+      },
+      "2": {
+        "Exclusive": {
+          "NEWTYPE": "I64"
+        }
+      }
+    }
+  },
+  "ElementListConcat": "UNITSTRUCT",
+  "Encode": "UNITSTRUCT",
+  "EncodedBytesCharLength": "UNITSTRUCT",
+  "Eq": "UNITSTRUCT",
+  "ErrorIfNull": "UNITSTRUCT",
+  "EvalError": {
+    "ENUM": {
+      "0": {
+        "CharacterNotValidForEncoding": {
+          "NEWTYPE": "I32"
+        }
+      },
+      "1": {
+        "CharacterTooLargeForEncoding": {
+          "NEWTYPE": "I32"
+        }
+      },
+      "2": {
+        "DateBinOutOfRange": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "3": {
+        "DivisionByZero": "UNIT"
+      },
+      "4": {
+        "Unsupported": {
+          "STRUCT": [
+            {
+              "feature": "STR"
+            },
+            {
+              "discussion_no": {
+                "OPTION": "U64"
+              }
+            }
+          ]
+        }
+      },
+      "5": {
+        "FloatOverflow": "UNIT"
+      },
+      "6": {
+        "FloatUnderflow": "UNIT"
+      },
+      "7": {
+        "NumericFieldOverflow": "UNIT"
+      },
+      "8": {
+        "Float32OutOfRange": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "9": {
+        "Float64OutOfRange": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "10": {
+        "Int16OutOfRange": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "11": {
+        "Int32OutOfRange": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "12": {
+        "Int64OutOfRange": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "13": {
+        "UInt16OutOfRange": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "14": {
+        "UInt32OutOfRange": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "15": {
+        "UInt64OutOfRange": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "16": {
+        "MzTimestampOutOfRange": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "17": {
+        "MzTimestampStepOverflow": "UNIT"
+      },
+      "18": {
+        "OidOutOfRange": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "19": {
+        "IntervalOutOfRange": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "20": {
+        "TimestampCannotBeNan": "UNIT"
+      },
+      "21": {
+        "TimestampOutOfRange": "UNIT"
+      },
+      "22": {
+        "DateOutOfRange": "UNIT"
+      },
+      "23": {
+        "CharOutOfRange": "UNIT"
+      },
+      "24": {
+        "IndexOutOfRange": {
+          "STRUCT": [
+            {
+              "provided": "I32"
+            },
+            {
+              "valid_end": "I32"
+            }
+          ]
+        }
+      },
+      "25": {
+        "InvalidBase64Equals": "UNIT"
+      },
+      "26": {
+        "InvalidBase64Symbol": {
+          "NEWTYPE": "CHAR"
+        }
+      },
+      "27": {
+        "InvalidBase64EndSequence": "UNIT"
+      },
+      "28": {
+        "InvalidTimezone": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "29": {
+        "InvalidTimezoneInterval": "UNIT"
+      },
+      "30": {
+        "InvalidTimezoneConversion": "UNIT"
+      },
+      "31": {
+        "InvalidIanaTimezoneId": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "32": {
+        "InvalidLayer": {
+          "STRUCT": [
+            {
+              "max_layer": "U64"
+            },
+            {
+              "val": "I64"
+            }
+          ]
+        }
+      },
+      "33": {
+        "InvalidArray": {
+          "NEWTYPE": {
+            "TYPENAME": "InvalidArrayError"
+          }
+        }
+      },
+      "34": {
+        "InvalidEncodingName": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "35": {
+        "InvalidHashAlgorithm": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "36": {
+        "InvalidByteSequence": {
+          "STRUCT": [
+            {
+              "byte_sequence": "STR"
+            },
+            {
+              "encoding_name": "STR"
+            }
+          ]
+        }
+      },
+      "37": {
+        "InvalidJsonbCast": {
+          "STRUCT": [
+            {
+              "from": "STR"
+            },
+            {
+              "to": "STR"
+            }
+          ]
+        }
+      },
+      "38": {
+        "InvalidRegex": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "39": {
+        "InvalidRegexFlag": {
+          "NEWTYPE": "CHAR"
+        }
+      },
+      "40": {
+        "InvalidParameterValue": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "41": {
+        "InvalidDatePart": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "42": {
+        "KeyCannotBeNull": "UNIT"
+      },
+      "43": {
+        "NegSqrt": "UNIT"
+      },
+      "44": {
+        "NegLimit": "UNIT"
+      },
+      "45": {
+        "NullCharacterNotPermitted": "UNIT"
+      },
+      "46": {
+        "UnknownUnits": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "47": {
+        "UnsupportedUnits": {
+          "TUPLE": [
+            "STR",
+            "STR"
+          ]
+        }
+      },
+      "48": {
+        "UnterminatedLikeEscapeSequence": "UNIT"
+      },
+      "49": {
+        "Parse": {
+          "NEWTYPE": {
+            "TYPENAME": "ParseError"
+          }
+        }
+      },
+      "50": {
+        "ParseHex": {
+          "NEWTYPE": {
+            "TYPENAME": "ParseHexError"
+          }
+        }
+      },
+      "51": {
+        "Internal": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "52": {
+        "InfinityOutOfDomain": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "53": {
+        "NegativeOutOfDomain": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "54": {
+        "ZeroOutOfDomain": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "55": {
+        "OutOfDomain": {
+          "TUPLE": [
+            {
+              "TYPENAME": "DomainLimit"
+            },
+            {
+              "TYPENAME": "DomainLimit"
+            },
+            "STR"
+          ]
+        }
+      },
+      "56": {
+        "ComplexOutOfRange": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "57": {
+        "MultipleRowsFromSubquery": "UNIT"
+      },
+      "58": {
+        "NegativeRowsFromSubquery": "UNIT"
+      },
+      "59": {
+        "Undefined": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "60": {
+        "LikePatternTooLong": "UNIT"
+      },
+      "61": {
+        "LikeEscapeTooLong": "UNIT"
+      },
+      "62": {
+        "StringValueTooLong": {
+          "STRUCT": [
+            {
+              "target_type": "STR"
+            },
+            {
+              "length": "U64"
+            }
+          ]
+        }
+      },
+      "63": {
+        "MultidimensionalArrayRemovalNotSupported": "UNIT"
+      },
+      "64": {
+        "IncompatibleArrayDimensions": {
+          "STRUCT": [
+            {
+              "dims": {
+                "OPTION": {
+                  "TUPLEARRAY": {
+                    "CONTENT": "U64",
+                    "SIZE": 2
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "65": {
+        "TypeFromOid": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "66": {
+        "InvalidRange": {
+          "NEWTYPE": {
+            "TYPENAME": "InvalidRangeError"
+          }
+        }
+      },
+      "67": {
+        "InvalidRoleId": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "68": {
+        "InvalidPrivileges": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "69": {
+        "InvalidCatalogJson": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "70": {
+        "LetRecLimitExceeded": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "71": {
+        "MultiDimensionalArraySearch": "UNIT"
+      },
+      "72": {
+        "MustNotBeNull": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "73": {
+        "InvalidIdentifier": {
+          "STRUCT": [
+            {
+              "ident": "STR"
+            },
+            {
+              "detail": {
+                "OPTION": "STR"
+              }
+            }
+          ]
+        }
+      },
+      "74": {
+        "ArrayFillWrongArraySubscripts": "UNIT"
+      },
+      "75": {
+        "MaxArraySizeExceeded": {
+          "NEWTYPE": "U64"
+        }
+      },
+      "76": {
+        "DateDiffOverflow": {
+          "STRUCT": [
+            {
+              "unit": "STR"
+            },
+            {
+              "a": "STR"
+            },
+            {
+              "b": "STR"
+            }
+          ]
+        }
+      },
+      "77": {
+        "IfNullError": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "78": {
+        "LengthTooLarge": "UNIT"
+      },
+      "79": {
+        "AclArrayNullElement": "UNIT"
+      },
+      "80": {
+        "MzAclArrayNullElement": "UNIT"
+      },
+      "81": {
+        "PrettyError": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "82": {
+        "RedactError": {
+          "NEWTYPE": "STR"
+        }
+      }
+    }
+  },
+  "Exp": "UNITSTRUCT",
+  "ExpNumeric": "UNITSTRUCT",
+  "ExtractDate": {
+    "NEWTYPESTRUCT": {
+      "TYPENAME": "DateTimeUnits"
+    }
+  },
+  "ExtractDateUnits": "UNITSTRUCT",
+  "ExtractInterval": {
+    "NEWTYPESTRUCT": {
+      "TYPENAME": "DateTimeUnits"
+    }
+  },
+  "ExtractTime": {
+    "NEWTYPESTRUCT": {
+      "TYPENAME": "DateTimeUnits"
+    }
+  },
+  "ExtractTimestamp": {
+    "NEWTYPESTRUCT": {
+      "TYPENAME": "DateTimeUnits"
+    }
+  },
+  "ExtractTimestampTz": {
+    "NEWTYPESTRUCT": {
+      "TYPENAME": "DateTimeUnits"
+    }
+  },
+  "FloorFloat32": "UNITSTRUCT",
+  "FloorFloat64": "UNITSTRUCT",
+  "FloorNumeric": "UNITSTRUCT",
+  "GetBit": "UNITSTRUCT",
+  "GetByte": "UNITSTRUCT",
+  "GetPlan": {
+    "ENUM": {
+      "0": {
+        "PassArrangements": "UNIT"
+      },
+      "1": {
+        "Arrangement": {
+          "TUPLE": [
+            {
+              "SEQ": {
+                "TYPENAME": "LirScalarExpr"
+              }
+            },
+            {
+              "OPTION": {
+                "TYPENAME": "Row"
+              }
+            },
+            {
+              "TYPENAME": "MfpPlan"
+            }
+          ]
+        }
+      },
+      "2": {
+        "Collection": {
+          "NEWTYPE": {
+            "TYPENAME": "MfpPlan"
+          }
+        }
+      }
+    }
+  },
+  "GlobalId": {
+    "ENUM": {
+      "0": {
+        "System": {
+          "NEWTYPE": "U64"
+        }
+      },
+      "1": {
+        "IntrospectionSourceIndex": {
+          "NEWTYPE": "U64"
+        }
+      },
+      "2": {
+        "User": {
+          "NEWTYPE": "U64"
+        }
+      },
+      "3": {
+        "Transient": {
+          "NEWTYPE": "U64"
+        }
+      },
+      "4": {
+        "Explain": "UNIT"
+      }
+    }
+  },
+  "Greatest": "UNITSTRUCT",
+  "Gt": "UNITSTRUCT",
+  "Gte": "UNITSTRUCT",
+  "HierarchicalPlan": {
+    "ENUM": {
+      "0": {
+        "Monotonic": {
+          "NEWTYPE": {
+            "TYPENAME": "MonotonicPlan"
+          }
+        }
+      },
+      "1": {
+        "Bucketed": {
+          "NEWTYPE": {
+            "TYPENAME": "BucketedPlan"
+          }
+        }
+      }
+    }
+  },
+  "HmacBytes": "UNITSTRUCT",
+  "HmacString": "UNITSTRUCT",
+  "Id": {
+    "ENUM": {
+      "0": {
+        "Local": {
+          "NEWTYPE": {
+            "TYPENAME": "LocalId"
+          }
+        }
+      },
+      "1": {
+        "Global": {
+          "NEWTYPE": {
+            "TYPENAME": "GlobalId"
+          }
+        }
+      }
+    }
+  },
+  "Initcap": "UNITSTRUCT",
+  "InvalidArrayError": {
+    "ENUM": {
+      "0": {
+        "TooManyDimensions": {
+          "NEWTYPE": "U64"
+        }
+      },
+      "1": {
+        "WrongCardinality": {
+          "STRUCT": [
+            {
+              "actual": "U64"
+            },
+            {
+              "expected": "U64"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "InvalidRangeError": {
+    "ENUM": {
+      "0": {
+        "MisorderedRangeBounds": "UNIT"
+      },
+      "1": {
+        "CanonicalizationOverflow": {
+          "NEWTYPE": "STR"
+        }
+      },
+      "2": {
+        "InvalidRangeBoundFlags": "UNIT"
+      },
+      "3": {
+        "DiscontiguousUnion": "UNIT"
+      },
+      "4": {
+        "DiscontiguousDifference": "UNIT"
+      },
+      "5": {
+        "NullRangeBoundFlags": "UNIT"
+      },
+      "6": {
+        "InvalidRangeData": "UNIT"
+      }
+    }
+  },
+  "IsFalse": "UNITSTRUCT",
+  "IsLikeMatch": {
+    "NEWTYPESTRUCT": {
+      "TYPENAME": "Matcher"
+    }
+  },
+  "IsLikeMatchCaseInsensitive": "UNITSTRUCT",
+  "IsLikeMatchCaseSensitive": "UNITSTRUCT",
+  "IsNull": "UNITSTRUCT",
+  "IsRegexpMatch": {
+    "NEWTYPESTRUCT": {
+      "TYPENAME": "Regex"
+    }
+  },
+  "IsRegexpMatchCaseInsensitive": "UNITSTRUCT",
+  "IsRegexpMatchCaseSensitive": "UNITSTRUCT",
+  "IsTrue": "UNITSTRUCT",
+  "JoinClosure": {
+    "STRUCT": [
+      {
+        "ready_equivalences": {
+          "SEQ": {
+            "SEQ": {
+              "TYPENAME": "LirScalarExpr"
+            }
+          }
+        }
+      },
+      {
+        "before": {
+          "TYPENAME": "SafeMfpPlan"
+        }
+      }
+    ]
+  },
+  "JoinPlan": {
+    "ENUM": {
+      "0": {
+        "Linear": {
+          "NEWTYPE": {
+            "TYPENAME": "LinearJoinPlan"
+          }
+        }
+      },
+      "1": {
+        "Delta": {
+          "NEWTYPE": {
+            "TYPENAME": "DeltaJoinPlan"
+          }
+        }
+      }
+    }
+  },
+  "JsonbArrayLength": "UNITSTRUCT",
+  "JsonbBuildArray": "UNITSTRUCT",
+  "JsonbBuildObject": "UNITSTRUCT",
+  "JsonbConcat": "UNITSTRUCT",
+  "JsonbContainsJsonb": "UNITSTRUCT",
+  "JsonbContainsString": "UNITSTRUCT",
+  "JsonbDeleteInt64": "UNITSTRUCT",
+  "JsonbDeleteString": "UNITSTRUCT",
+  "JsonbGetInt64": "UNITSTRUCT",
+  "JsonbGetInt64Stringify": "UNITSTRUCT",
+  "JsonbGetPath": "UNITSTRUCT",
+  "JsonbGetPathStringify": "UNITSTRUCT",
+  "JsonbGetString": "UNITSTRUCT",
+  "JsonbGetStringStringify": "UNITSTRUCT",
+  "JsonbPretty": "UNITSTRUCT",
+  "JsonbStripNulls": "UNITSTRUCT",
+  "JsonbTypeof": "UNITSTRUCT",
+  "JustifyDays": "UNITSTRUCT",
+  "JustifyHours": "UNITSTRUCT",
+  "JustifyInterval": "UNITSTRUCT",
+  "KafkaMurmur2Bytes": "UNITSTRUCT",
+  "KafkaMurmur2String": "UNITSTRUCT",
+  "KeyValPlan": {
+    "STRUCT": [
+      {
+        "key_plan": {
+          "TYPENAME": "SafeMfpPlan"
+        }
+      },
+      {
+        "val_plan": {
+          "TYPENAME": "SafeMfpPlan"
+        }
+      }
+    ]
+  },
+  "LagLeadType": {
+    "ENUM": {
+      "0": {
+        "Lag": "UNIT"
+      },
+      "1": {
+        "Lead": "UNIT"
+      }
+    }
+  },
+  "Least": "UNITSTRUCT",
+  "Left": "UNITSTRUCT",
+  "LetRecLimit": {
+    "STRUCT": [
+      {
+        "max_iters": "U64"
+      },
+      {
+        "return_at_limit": "BOOL"
+      }
+    ]
+  },
+  "LikeEscape": "UNITSTRUCT",
+  "LinearJoinPlan": {
+    "STRUCT": [
+      {
+        "source_relation": "U64"
+      },
+      {
+        "source_key": {
+          "OPTION": {
+            "SEQ": {
+              "TYPENAME": "LirScalarExpr"
+            }
+          }
+        }
+      },
+      {
+        "initial_closure": {
+          "OPTION": {
+            "TYPENAME": "JoinClosure"
+          }
+        }
+      },
+      {
+        "stage_plans": {
+          "SEQ": {
+            "TYPENAME": "LinearStagePlan"
+          }
+        }
+      },
+      {
+        "final_closure": {
+          "OPTION": {
+            "TYPENAME": "JoinClosure"
+          }
+        }
+      }
+    ]
+  },
+  "LinearStagePlan": {
+    "STRUCT": [
+      {
+        "lookup_relation": "U64"
+      },
+      {
+        "stream_key": {
+          "SEQ": {
+            "TYPENAME": "LirScalarExpr"
+          }
+        }
+      },
+      {
+        "stream_thinning": {
+          "SEQ": "U64"
+        }
+      },
+      {
+        "lookup_key": {
+          "SEQ": {
+            "TYPENAME": "LirScalarExpr"
+          }
+        }
+      },
+      {
+        "closure": {
+          "TYPENAME": "JoinClosure"
+        }
+      }
+    ]
+  },
+  "LirAggregateExpr": {
+    "STRUCT": [
+      {
+        "func": {
+          "TYPENAME": "AggregateFunc"
+        }
+      },
+      {
+        "expr": {
+          "TYPENAME": "LirScalarExpr"
+        }
+      },
+      {
+        "distinct": "BOOL"
+      }
+    ]
+  },
+  "LirId": {
+    "NEWTYPESTRUCT": "U64"
+  },
+  "LirRelationExpr": {
+    "STRUCT": [
+      {
+        "lir_id": {
+          "TYPENAME": "LirId"
+        }
+      },
+      {
+        "node": {
+          "TYPENAME": "LirRelationNode"
+        }
+      }
+    ]
+  },
+  "LirRelationNode": {
+    "ENUM": {
+      "0": {
+        "Constant": {
+          "STRUCT": [
+            {
+              "rows": {
+                "TYPENAME": "ConstantRows"
+              }
+            }
+          ]
+        }
+      },
+      "1": {
+        "Get": {
+          "STRUCT": [
+            {
+              "id": {
+                "TYPENAME": "Id"
+              }
+            },
+            {
+              "keys": {
+                "TYPENAME": "AvailableCollections"
+              }
+            },
+            {
+              "plan": {
+                "TYPENAME": "GetPlan"
+              }
+            }
+          ]
+        }
+      },
+      "2": {
+        "Let": {
+          "STRUCT": [
+            {
+              "id": {
+                "TYPENAME": "LocalId"
+              }
+            },
+            {
+              "value": {
+                "TYPENAME": "LirRelationExpr"
+              }
+            },
+            {
+              "body": {
+                "TYPENAME": "LirRelationExpr"
+              }
+            }
+          ]
+        }
+      },
+      "3": {
+        "LetRec": {
+          "STRUCT": [
+            {
+              "ids": {
+                "SEQ": {
+                  "TYPENAME": "LocalId"
+                }
+              }
+            },
+            {
+              "values": {
+                "SEQ": {
+                  "TYPENAME": "LirRelationExpr"
+                }
+              }
+            },
+            {
+              "limits": {
+                "SEQ": {
+                  "OPTION": {
+                    "TYPENAME": "LetRecLimit"
+                  }
+                }
+              }
+            },
+            {
+              "body": {
+                "TYPENAME": "LirRelationExpr"
+              }
+            }
+          ]
+        }
+      },
+      "4": {
+        "Mfp": {
+          "STRUCT": [
+            {
+              "input": {
+                "TYPENAME": "LirRelationExpr"
+              }
+            },
+            {
+              "mfp": {
+                "TYPENAME": "MfpPlan"
+              }
+            },
+            {
+              "input_key_val": {
+                "OPTION": {
+                  "TUPLE": [
+                    {
+                      "SEQ": {
+                        "TYPENAME": "LirScalarExpr"
+                      }
+                    },
+                    {
+                      "OPTION": {
+                        "TYPENAME": "Row"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "5": {
+        "FlatMap": {
+          "STRUCT": [
+            {
+              "input_key": {
+                "OPTION": {
+                  "SEQ": {
+                    "TYPENAME": "LirScalarExpr"
+                  }
+                }
+              }
+            },
+            {
+              "input": {
+                "TYPENAME": "LirRelationExpr"
+              }
+            },
+            {
+              "exprs": {
+                "SEQ": {
+                  "TYPENAME": "LirScalarExpr"
+                }
+              }
+            },
+            {
+              "func": {
+                "TYPENAME": "TableFunc"
+              }
+            },
+            {
+              "mfp_after": {
+                "TYPENAME": "MfpPlan"
+              }
+            }
+          ]
+        }
+      },
+      "6": {
+        "Join": {
+          "STRUCT": [
+            {
+              "inputs": {
+                "SEQ": {
+                  "TYPENAME": "LirRelationExpr"
+                }
+              }
+            },
+            {
+              "plan": {
+                "TYPENAME": "JoinPlan"
+              }
+            }
+          ]
+        }
+      },
+      "7": {
+        "Reduce": {
+          "STRUCT": [
+            {
+              "input_key": {
+                "OPTION": {
+                  "SEQ": {
+                    "TYPENAME": "LirScalarExpr"
+                  }
+                }
+              }
+            },
+            {
+              "input": {
+                "TYPENAME": "LirRelationExpr"
+              }
+            },
+            {
+              "key_val_plan": {
+                "TYPENAME": "KeyValPlan"
+              }
+            },
+            {
+              "plan": {
+                "TYPENAME": "ReducePlan"
+              }
+            },
+            {
+              "mfp_after": {
+                "TYPENAME": "SafeMfpPlan"
+              }
+            },
+            {
+              "temporal_bucketing_strategy": {
+                "TYPENAME": "ArrangementStrategy"
+              }
+            }
+          ]
+        }
+      },
+      "8": {
+        "TopK": {
+          "STRUCT": [
+            {
+              "input": {
+                "TYPENAME": "LirRelationExpr"
+              }
+            },
+            {
+              "top_k_plan": {
+                "TYPENAME": "TopKPlan"
+              }
+            },
+            {
+              "temporal_bucketing_strategy": {
+                "TYPENAME": "ArrangementStrategy"
+              }
+            }
+          ]
+        }
+      },
+      "9": {
+        "Negate": {
+          "STRUCT": [
+            {
+              "input": {
+                "TYPENAME": "LirRelationExpr"
+              }
+            }
+          ]
+        }
+      },
+      "10": {
+        "Threshold": {
+          "STRUCT": [
+            {
+              "input": {
+                "TYPENAME": "LirRelationExpr"
+              }
+            },
+            {
+              "threshold_plan": {
+                "TYPENAME": "ThresholdPlan"
+              }
+            }
+          ]
+        }
+      },
+      "11": {
+        "Union": {
+          "STRUCT": [
+            {
+              "inputs": {
+                "SEQ": {
+                  "TYPENAME": "LirRelationExpr"
+                }
+              }
+            },
+            {
+              "consolidate_output": "BOOL"
+            },
+            {
+              "temporal_bucketing_strategies": {
+                "SEQ": {
+                  "TYPENAME": "ArrangementStrategy"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "12": {
+        "ArrangeBy": {
+          "STRUCT": [
+            {
+              "input_key": {
+                "OPTION": {
+                  "SEQ": {
+                    "TYPENAME": "LirScalarExpr"
+                  }
+                }
+              }
+            },
+            {
+              "input": {
+                "TYPENAME": "LirRelationExpr"
+              }
+            },
+            {
+              "input_mfp": {
+                "TYPENAME": "MfpPlan"
+              }
+            },
+            {
+              "forms": {
+                "TYPENAME": "AvailableCollections"
+              }
+            },
+            {
+              "strategy": {
+                "TYPENAME": "ArrangementStrategy"
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "LirScalarExpr": {
+    "ENUM": {
+      "0": {
+        "Column": {
+          "TUPLE": [
+            "U64",
+            {
+              "OPTION": "STR"
+            }
+          ]
+        }
+      },
+      "1": {
+        "Literal": {
+          "TUPLE": [
+            {
+              "TYPENAME": "LiteralValue"
+            },
+            {
+              "TYPENAME": "ReprColumnType"
+            }
+          ]
+        }
+      },
+      "2": {
+        "CallUnary": {
+          "STRUCT": [
+            {
+              "func": {
+                "TYPENAME": "UnaryFunc"
+              }
+            },
+            {
+              "expr": {
+                "TYPENAME": "LirScalarExpr"
+              }
+            }
+          ]
+        }
+      },
+      "3": {
+        "CallBinary": {
+          "STRUCT": [
+            {
+              "func": {
+                "TYPENAME": "BinaryFunc"
+              }
+            },
+            {
+              "expr1": {
+                "TYPENAME": "LirScalarExpr"
+              }
+            },
+            {
+              "expr2": {
+                "TYPENAME": "LirScalarExpr"
+              }
+            }
+          ]
+        }
+      },
+      "4": {
+        "CallVariadic": {
+          "STRUCT": [
+            {
+              "func": {
+                "TYPENAME": "VariadicFunc"
+              }
+            },
+            {
+              "exprs": {
+                "SEQ": {
+                  "TYPENAME": "LirScalarExpr"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "5": {
+        "If": {
+          "STRUCT": [
+            {
+              "cond": {
+                "TYPENAME": "LirScalarExpr"
+              }
+            },
+            {
+              "then": {
+                "TYPENAME": "LirScalarExpr"
+              }
+            },
+            {
+              "els": {
+                "TYPENAME": "LirScalarExpr"
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "ListContainsList": "UNITSTRUCT",
+  "ListContainsListRev": "UNITSTRUCT",
+  "ListCreate": {
+    "STRUCT": [
+      {
+        "elem_type": {
+          "TYPENAME": "SqlScalarType"
+        }
+      }
+    ]
+  },
+  "ListElementConcat": "UNITSTRUCT",
+  "ListIndex": "UNITSTRUCT",
+  "ListLength": "UNITSTRUCT",
+  "ListLengthMax": {
+    "STRUCT": [
+      {
+        "max_layer": "U64"
+      }
+    ]
+  },
+  "ListListConcat": "UNITSTRUCT",
+  "ListRemove": "UNITSTRUCT",
+  "ListSliceLinear": "UNITSTRUCT",
+  "LiteralValue": {
+    "ENUM": {
+      "0": {
+        "Ok": {
+          "NEWTYPE": {
+            "TYPENAME": "Row"
+          }
+        }
+      },
+      "1": {
+        "Err": {
+          "NEWTYPE": {
+            "TYPENAME": "EvalError"
+          }
+        }
+      }
+    }
+  },
+  "Ln": "UNITSTRUCT",
+  "LnNumeric": "UNITSTRUCT",
+  "LocalId": {
+    "NEWTYPESTRUCT": "U64"
+  },
+  "Log10": "UNITSTRUCT",
+  "Log10Numeric": "UNITSTRUCT",
+  "LogBaseNumeric": "UNITSTRUCT",
+  "Lower": "UNITSTRUCT",
+  "Lt": "UNITSTRUCT",
+  "Lte": "UNITSTRUCT",
+  "MakeAclItem": "UNITSTRUCT",
+  "MakeMzAclItem": "UNITSTRUCT",
+  "MakeTimestamp": "UNITSTRUCT",
+  "MapBuild": {
+    "STRUCT": [
+      {
+        "value_type": {
+          "TYPENAME": "SqlScalarType"
+        }
+      }
+    ]
+  },
+  "MapBuildFromRecordList": {
+    "STRUCT": [
+      {
+        "value_type": {
+          "TYPENAME": "SqlScalarType"
+        }
+      }
+    ]
+  },
+  "MapContainsAllKeys": "UNITSTRUCT",
+  "MapContainsAnyKeys": "UNITSTRUCT",
+  "MapContainsKey": "UNITSTRUCT",
+  "MapContainsMap": "UNITSTRUCT",
+  "MapFilterProject": {
+    "STRUCT": [
+      {
+        "expressions": {
+          "SEQ": {
+            "TYPENAME": "LirScalarExpr"
+          }
+        }
+      },
+      {
+        "predicates": {
+          "SEQ": {
+            "TUPLE": [
+              "U64",
+              {
+                "TYPENAME": "LirScalarExpr"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "projection": {
+          "SEQ": "U64"
+        }
+      },
+      {
+        "input_arity": "U64"
+      }
+    ]
+  },
+  "MapGetValue": "UNITSTRUCT",
+  "MapLength": "UNITSTRUCT",
+  "Matcher": {
+    "STRUCT": [
+      {
+        "pattern": "STR"
+      },
+      {
+        "case_insensitive": "BOOL"
+      },
+      {
+        "matcher_impl": {
+          "TYPENAME": "MatcherImpl"
+        }
+      }
+    ]
+  },
+  "MatcherImpl": {
+    "ENUM": {
+      "0": {
+        "String": {
+          "NEWTYPE": {
+            "SEQ": {
+              "TYPENAME": "Subpattern"
+            }
+          }
+        }
+      },
+      "1": {
+        "Regex": {
+          "NEWTYPE": {
+            "TYPENAME": "Regex"
+          }
+        }
+      }
+    }
+  },
+  "MfpPlan": {
+    "STRUCT": [
+      {
+        "mfp": {
+          "TYPENAME": "SafeMfpPlan"
+        }
+      },
+      {
+        "lower_bounds": {
+          "SEQ": {
+            "TYPENAME": "LirScalarExpr"
+          }
+        }
+      },
+      {
+        "upper_bounds": {
+          "SEQ": {
+            "TYPENAME": "LirScalarExpr"
+          }
+        }
+      }
+    ]
+  },
+  "MirScalarExpr": {
+    "ENUM": {
+      "0": {
+        "Column": {
+          "TUPLE": [
+            "U64",
+            {
+              "OPTION": "STR"
+            }
+          ]
+        }
+      },
+      "1": {
+        "Literal": {
+          "TUPLE": [
+            {
+              "TYPENAME": "Result"
+            },
+            {
+              "TYPENAME": "ReprColumnType"
+            }
+          ]
+        }
+      },
+      "2": {
+        "CallUnmaterializable": {
+          "NEWTYPE": {
+            "TYPENAME": "UnmaterializableFunc"
+          }
+        }
+      },
+      "3": {
+        "CallUnary": {
+          "STRUCT": [
+            {
+              "func": {
+                "TYPENAME": "UnaryFunc"
+              }
+            },
+            {
+              "expr": {
+                "TYPENAME": "MirScalarExpr"
+              }
+            }
+          ]
+        }
+      },
+      "4": {
+        "CallBinary": {
+          "STRUCT": [
+            {
+              "func": {
+                "TYPENAME": "BinaryFunc"
+              }
+            },
+            {
+              "expr1": {
+                "TYPENAME": "MirScalarExpr"
+              }
+            },
+            {
+              "expr2": {
+                "TYPENAME": "MirScalarExpr"
+              }
+            }
+          ]
+        }
+      },
+      "5": {
+        "CallVariadic": {
+          "STRUCT": [
+            {
+              "func": {
+                "TYPENAME": "VariadicFunc"
+              }
+            },
+            {
+              "exprs": {
+                "SEQ": {
+                  "TYPENAME": "MirScalarExpr"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "6": {
+        "If": {
+          "STRUCT": [
+            {
+              "cond": {
+                "TYPENAME": "MirScalarExpr"
+              }
+            },
+            {
+              "then": {
+                "TYPENAME": "MirScalarExpr"
+              }
+            },
+            {
+              "els": {
+                "TYPENAME": "MirScalarExpr"
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "ModFloat32": "UNITSTRUCT",
+  "ModFloat64": "UNITSTRUCT",
+  "ModInt16": "UNITSTRUCT",
+  "ModInt32": "UNITSTRUCT",
+  "ModInt64": "UNITSTRUCT",
+  "ModNumeric": "UNITSTRUCT",
+  "ModUint16": "UNITSTRUCT",
+  "ModUint32": "UNITSTRUCT",
+  "ModUint64": "UNITSTRUCT",
+  "MonotonicPlan": {
+    "STRUCT": [
+      {
+        "aggr_funcs": {
+          "SEQ": {
+            "TYPENAME": "AggregateFunc"
+          }
+        }
+      },
+      {
+        "must_consolidate": "BOOL"
+      }
+    ]
+  },
+  "MonotonicTop1Plan": {
+    "STRUCT": [
+      {
+        "group_key": {
+          "SEQ": "U64"
+        }
+      },
+      {
+        "order_key": {
+          "SEQ": {
+            "TYPENAME": "ColumnOrder"
+          }
+        }
+      },
+      {
+        "arity": "U64"
+      },
+      {
+        "must_consolidate": "BOOL"
+      }
+    ]
+  },
+  "MonotonicTopKPlan": {
+    "STRUCT": [
+      {
+        "group_key": {
+          "SEQ": "U64"
+        }
+      },
+      {
+        "order_key": {
+          "SEQ": {
+            "TYPENAME": "ColumnOrder"
+          }
+        }
+      },
+      {
+        "limit": {
+          "OPTION": {
+            "TYPENAME": "LirScalarExpr"
+          }
+        }
+      },
+      {
+        "arity": "U64"
+      },
+      {
+        "must_consolidate": "BOOL"
+      }
+    ]
+  },
+  "MulFloat32": "UNITSTRUCT",
+  "MulFloat64": "UNITSTRUCT",
+  "MulInt16": "UNITSTRUCT",
+  "MulInt32": "UNITSTRUCT",
+  "MulInt64": "UNITSTRUCT",
+  "MulInterval": "UNITSTRUCT",
+  "MulNumeric": "UNITSTRUCT",
+  "MulUint16": "UNITSTRUCT",
+  "MulUint32": "UNITSTRUCT",
+  "MulUint64": "UNITSTRUCT",
+  "MzAclItemContainsPrivilege": "UNITSTRUCT",
+  "MzAclItemGrantee": "UNITSTRUCT",
+  "MzAclItemGrantor": "UNITSTRUCT",
+  "MzAclItemPrivileges": "UNITSTRUCT",
+  "MzFormatPrivileges": "UNITSTRUCT",
+  "MzRenderTypmod": "UNITSTRUCT",
+  "MzRowSize": "UNITSTRUCT",
+  "MzTypeName": "UNITSTRUCT",
+  "MzValidatePrivileges": "UNITSTRUCT",
+  "MzValidateRolePrivilege": "UNITSTRUCT",
+  "NegFloat32": "UNITSTRUCT",
+  "NegFloat64": "UNITSTRUCT",
+  "NegInt16": "UNITSTRUCT",
+  "NegInt32": "UNITSTRUCT",
+  "NegInt64": "UNITSTRUCT",
+  "NegInterval": "UNITSTRUCT",
+  "NegNumeric": "UNITSTRUCT",
+  "Normalize": "UNITSTRUCT",
+  "Not": "UNITSTRUCT",
+  "NotEq": "UNITSTRUCT",
+  "NumericMaxScale": {
+    "NEWTYPESTRUCT": "U8"
+  },
+  "Or": "UNITSTRUCT",
+  "OrdinalMode": {
+    "ENUM": {
+      "4294967293": {
+        "None": "UNIT"
+      }
+    }
+  },
+  "Overflowing": {
+    "NEWTYPESTRUCT": "I64"
+  },
+  "PadChar": {
+    "STRUCT": [
+      {
+        "length": {
+          "OPTION": {
+            "TYPENAME": "CharMaxLength"
+          }
+        }
+      }
+    ]
+  },
+  "PadLeading": "UNITSTRUCT",
+  "Panic": "UNITSTRUCT",
+  "ParseCatalogAclMode": "UNITSTRUCT",
+  "ParseCatalogAuditLogDetails": "UNITSTRUCT",
+  "ParseCatalogCreateSql": "UNITSTRUCT",
+  "ParseCatalogId": "UNITSTRUCT",
+  "ParseCatalogPrivileges": "UNITSTRUCT",
+  "ParseError": {
+    "STRUCT": [
+      {
+        "kind": {
+          "TYPENAME": "ParseErrorKind"
+        }
+      },
+      {
+        "type_name": "STR"
+      },
+      {
+        "input": "STR"
+      },
+      {
+        "details": {
+          "OPTION": "STR"
+        }
+      }
+    ]
+  },
+  "ParseErrorKind": {
+    "ENUM": {
+      "0": {
+        "OutOfRange": "UNIT"
+      },
+      "1": {
+        "InvalidInputSyntax": "UNIT"
+      }
+    }
+  },
+  "ParseHexError": {
+    "ENUM": {
+      "0": {
+        "InvalidHexDigit": {
+          "NEWTYPE": "CHAR"
+        }
+      },
+      "1": {
+        "OddLength": "UNIT"
+      }
+    }
+  },
+  "ParseIdent": "UNITSTRUCT",
+  "ParseKafkaSourceDetails": "UNITSTRUCT",
+  "ParsePostgresSourceDetails": "UNITSTRUCT",
+  "PgColumnSize": "UNITSTRUCT",
+  "PgSizePretty": "UNITSTRUCT",
+  "Position": "UNITSTRUCT",
+  "Power": "UNITSTRUCT",
+  "PowerNumeric": "UNITSTRUCT",
+  "PrettySql": "UNITSTRUCT",
+  "QuoteIdent": "UNITSTRUCT",
+  "Radians": "UNITSTRUCT",
+  "RangeAdjacent": "UNITSTRUCT",
+  "RangeAfter": "UNITSTRUCT",
+  "RangeBefore": "UNITSTRUCT",
+  "RangeContainsDate": "UNITSTRUCT",
+  "RangeContainsDateRev": "UNITSTRUCT",
+  "RangeContainsI32": "UNITSTRUCT",
+  "RangeContainsI32Rev": "UNITSTRUCT",
+  "RangeContainsI64": "UNITSTRUCT",
+  "RangeContainsI64Rev": "UNITSTRUCT",
+  "RangeContainsNumeric": "UNITSTRUCT",
+  "RangeContainsNumericRev": "UNITSTRUCT",
+  "RangeContainsRange": "UNITSTRUCT",
+  "RangeContainsRangeRev": "UNITSTRUCT",
+  "RangeContainsTimestamp": "UNITSTRUCT",
+  "RangeContainsTimestampRev": "UNITSTRUCT",
+  "RangeContainsTimestampTz": "UNITSTRUCT",
+  "RangeContainsTimestampTzRev": "UNITSTRUCT",
+  "RangeCreate": {
+    "STRUCT": [
+      {
+        "elem_type": {
+          "TYPENAME": "SqlScalarType"
+        }
+      }
+    ]
+  },
+  "RangeDifference": "UNITSTRUCT",
+  "RangeEmpty": "UNITSTRUCT",
+  "RangeIntersection": "UNITSTRUCT",
+  "RangeLower": "UNITSTRUCT",
+  "RangeLowerInc": "UNITSTRUCT",
+  "RangeLowerInf": "UNITSTRUCT",
+  "RangeOverlaps": "UNITSTRUCT",
+  "RangeOverleft": "UNITSTRUCT",
+  "RangeOverright": "UNITSTRUCT",
+  "RangeUnion": "UNITSTRUCT",
+  "RangeUpper": "UNITSTRUCT",
+  "RangeUpperInc": "UNITSTRUCT",
+  "RangeUpperInf": "UNITSTRUCT",
+  "RecordCreate": {
+    "STRUCT": [
+      {
+        "field_names": {
+          "SEQ": {
+            "TYPENAME": "ColumnName"
+          }
+        }
+      }
+    ]
+  },
+  "RecordGet": {
+    "NEWTYPESTRUCT": "U64"
+  },
+  "RedactSql": "UNITSTRUCT",
+  "ReducePlan": {
+    "ENUM": {
+      "0": {
+        "Distinct": "UNIT"
+      },
+      "1": {
+        "Accumulable": {
+          "NEWTYPE": {
+            "TYPENAME": "AccumulablePlan"
+          }
+        }
+      },
+      "2": {
+        "Hierarchical": {
+          "NEWTYPE": {
+            "TYPENAME": "HierarchicalPlan"
+          }
+        }
+      },
+      "3": {
+        "Basic": {
+          "NEWTYPE": {
+            "TYPENAME": "BasicPlan"
+          }
+        }
+      }
+    }
+  },
+  "Regex": {
+    "STRUCT": [
+      {
+        "pattern": "STR"
+      },
+      {
+        "case_insensitive": "BOOL"
+      },
+      {
+        "dot_matches_new_line": "BOOL"
+      }
+    ]
+  },
+  "RegexpMatch": "UNITSTRUCT",
+  "RegexpMatchStatic": {
+    "NEWTYPESTRUCT": {
+      "TYPENAME": "Regex"
+    }
+  },
+  "RegexpReplace": "UNITSTRUCT",
+  "RegexpReplaceStatic": {
+    "STRUCT": [
+      {
+        "regex": {
+          "TYPENAME": "Regex"
+        }
+      },
+      {
+        "limit": "U64"
+      }
+    ]
+  },
+  "RegexpSplitToArray": "UNITSTRUCT",
+  "RegexpSplitToArrayStatic": {
+    "NEWTYPESTRUCT": {
+      "TYPENAME": "Regex"
+    }
+  },
+  "RepeatString": "UNITSTRUCT",
+  "Replace": "UNITSTRUCT",
+  "ReprColumnType": {
+    "STRUCT": [
+      {
+        "scalar_type": {
+          "TYPENAME": "ReprScalarType"
+        }
+      },
+      {
+        "nullable": "BOOL"
+      }
+    ]
+  },
+  "ReprScalarType": {
+    "ENUM": {
+      "0": {
+        "Bool": "UNIT"
+      },
+      "1": {
+        "Int16": "UNIT"
+      },
+      "2": {
+        "Int32": "UNIT"
+      },
+      "3": {
+        "Int64": "UNIT"
+      },
+      "4": {
+        "UInt8": "UNIT"
+      },
+      "5": {
+        "UInt16": "UNIT"
+      },
+      "6": {
+        "UInt32": "UNIT"
+      },
+      "7": {
+        "UInt64": "UNIT"
+      },
+      "8": {
+        "Float32": "UNIT"
+      },
+      "9": {
+        "Float64": "UNIT"
+      },
+      "10": {
+        "Numeric": "UNIT"
+      },
+      "11": {
+        "Date": "UNIT"
+      },
+      "12": {
+        "Time": "UNIT"
+      },
+      "13": {
+        "Timestamp": "UNIT"
+      },
+      "14": {
+        "TimestampTz": "UNIT"
+      },
+      "15": {
+        "MzTimestamp": "UNIT"
+      },
+      "16": {
+        "Interval": "UNIT"
+      },
+      "17": {
+        "Bytes": "UNIT"
+      },
+      "18": {
+        "Jsonb": "UNIT"
+      },
+      "19": {
+        "String": "UNIT"
+      },
+      "20": {
+        "Uuid": "UNIT"
+      },
+      "21": {
+        "Array": {
+          "NEWTYPE": {
+            "TYPENAME": "ReprScalarType"
+          }
+        }
+      },
+      "22": {
+        "Int2Vector": "UNIT"
+      },
+      "23": {
+        "List": {
+          "STRUCT": [
+            {
+              "element_type": {
+                "TYPENAME": "ReprScalarType"
+              }
+            }
+          ]
+        }
+      },
+      "24": {
+        "Record": {
+          "STRUCT": [
+            {
+              "fields": {
+                "SEQ": {
+                  "TYPENAME": "ReprColumnType"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "25": {
+        "Map": {
+          "STRUCT": [
+            {
+              "value_type": {
+                "TYPENAME": "ReprScalarType"
+              }
+            }
+          ]
+        }
+      },
+      "26": {
+        "Range": {
+          "STRUCT": [
+            {
+              "element_type": {
+                "TYPENAME": "ReprScalarType"
+              }
+            }
+          ]
+        }
+      },
+      "27": {
+        "MzAclItem": "UNIT"
+      },
+      "28": {
+        "AclItem": "UNIT"
+      }
+    }
+  },
+  "Result": {
+    "ENUM": {
+      "0": {
+        "Ok": {
+          "NEWTYPE": {
+            "TYPENAME": "Row"
+          }
+        }
+      },
+      "1": {
+        "Err": {
+          "NEWTYPE": {
+            "TYPENAME": "EvalError"
+          }
+        }
+      }
+    }
+  },
+  "Reverse": "UNITSTRUCT",
+  "Right": "UNITSTRUCT",
+  "RoundFloat32": "UNITSTRUCT",
+  "RoundFloat64": "UNITSTRUCT",
+  "RoundNumeric": "UNITSTRUCT",
+  "RoundNumericBinary": "UNITSTRUCT",
+  "Row": {
+    "STRUCT": [
+      {
+        "data": "BYTES"
+      }
+    ]
+  },
+  "SafeMfpPlan": {
+    "STRUCT": [
+      {
+        "mfp": {
+          "TYPENAME": "MapFilterProject"
+        }
+      }
+    ]
+  },
+  "SeahashBytes": "UNITSTRUCT",
+  "SeahashString": "UNITSTRUCT",
+  "Sin": "UNITSTRUCT",
+  "SingleBasicPlan": {
+    "STRUCT": [
+      {
+        "expr": {
+          "TYPENAME": "LirAggregateExpr"
+        }
+      },
+      {
+        "fused_unnest_list": "BOOL"
+      }
+    ]
+  },
+  "Sinh": "UNITSTRUCT",
+  "Sleep": "UNITSTRUCT",
+  "SplitPart": "UNITSTRUCT",
+  "SqlColumnType": {
+    "STRUCT": [
+      {
+        "scalar_type": {
+          "TYPENAME": "SqlScalarType"
+        }
+      },
+      {
+        "nullable": "BOOL"
+      }
+    ]
+  },
+  "SqlRelationType": {
+    "STRUCT": [
+      {
+        "column_types": {
+          "SEQ": {
+            "TYPENAME": "SqlColumnType"
+          }
+        }
+      },
+      {
+        "keys": {
+          "SEQ": {
+            "SEQ": "U64"
+          }
+        }
+      }
+    ]
+  },
+  "SqlScalarType": {
+    "ENUM": {
+      "0": {
+        "Bool": "UNIT"
+      },
+      "1": {
+        "Int16": "UNIT"
+      },
+      "2": {
+        "Int32": "UNIT"
+      },
+      "3": {
+        "Int64": "UNIT"
+      },
+      "4": {
+        "UInt16": "UNIT"
+      },
+      "5": {
+        "UInt32": "UNIT"
+      },
+      "6": {
+        "UInt64": "UNIT"
+      },
+      "7": {
+        "Float32": "UNIT"
+      },
+      "8": {
+        "Float64": "UNIT"
+      },
+      "9": {
+        "Numeric": {
+          "STRUCT": [
+            {
+              "max_scale": {
+                "OPTION": {
+                  "TYPENAME": "NumericMaxScale"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "10": {
+        "Date": "UNIT"
+      },
+      "11": {
+        "Time": "UNIT"
+      },
+      "12": {
+        "Timestamp": {
+          "STRUCT": [
+            {
+              "precision": {
+                "OPTION": {
+                  "TYPENAME": "TimestampPrecision"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "13": {
+        "TimestampTz": {
+          "STRUCT": [
+            {
+              "precision": {
+                "OPTION": {
+                  "TYPENAME": "TimestampPrecision"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "14": {
+        "Interval": "UNIT"
+      },
+      "15": {
+        "PgLegacyChar": "UNIT"
+      },
+      "16": {
+        "PgLegacyName": "UNIT"
+      },
+      "17": {
+        "Bytes": "UNIT"
+      },
+      "18": {
+        "String": "UNIT"
+      },
+      "19": {
+        "Char": {
+          "STRUCT": [
+            {
+              "length": {
+                "OPTION": {
+                  "TYPENAME": "CharMaxLength"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "20": {
+        "VarChar": {
+          "STRUCT": [
+            {
+              "max_length": {
+                "OPTION": {
+                  "TYPENAME": "VarCharMaxLength"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "21": {
+        "Jsonb": "UNIT"
+      },
+      "22": {
+        "Uuid": "UNIT"
+      },
+      "23": {
+        "Array": {
+          "NEWTYPE": {
+            "TYPENAME": "SqlScalarType"
+          }
+        }
+      },
+      "24": {
+        "List": {
+          "STRUCT": [
+            {
+              "element_type": {
+                "TYPENAME": "SqlScalarType"
+              }
+            },
+            {
+              "custom_id": {
+                "OPTION": {
+                  "TYPENAME": "CatalogItemId"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "25": {
+        "Record": {
+          "STRUCT": [
+            {
+              "fields": {
+                "SEQ": {
+                  "TUPLE": [
+                    {
+                      "TYPENAME": "ColumnName"
+                    },
+                    {
+                      "TYPENAME": "SqlColumnType"
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "custom_id": {
+                "OPTION": {
+                  "TYPENAME": "CatalogItemId"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "26": {
+        "Oid": "UNIT"
+      },
+      "27": {
+        "Map": {
+          "STRUCT": [
+            {
+              "value_type": {
+                "TYPENAME": "SqlScalarType"
+              }
+            },
+            {
+              "custom_id": {
+                "OPTION": {
+                  "TYPENAME": "CatalogItemId"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "28": {
+        "RegProc": "UNIT"
+      },
+      "29": {
+        "RegType": "UNIT"
+      },
+      "30": {
+        "RegClass": "UNIT"
+      },
+      "31": {
+        "Int2Vector": "UNIT"
+      },
+      "32": {
+        "MzTimestamp": "UNIT"
+      },
+      "33": {
+        "Range": {
+          "STRUCT": [
+            {
+              "element_type": {
+                "TYPENAME": "SqlScalarType"
+              }
+            }
+          ]
+        }
+      },
+      "34": {
+        "MzAclItem": "UNIT"
+      },
+      "35": {
+        "AclItem": "UNIT"
+      }
+    }
+  },
+  "SqrtFloat64": "UNITSTRUCT",
+  "SqrtNumeric": "UNITSTRUCT",
+  "StartsWith": "UNITSTRUCT",
+  "StepMzTimestamp": "UNITSTRUCT",
+  "StringToArray": "UNITSTRUCT",
+  "Strpos": "UNITSTRUCT",
+  "SubDate": "UNITSTRUCT",
+  "SubDateInterval": "UNITSTRUCT",
+  "SubFloat32": "UNITSTRUCT",
+  "SubFloat64": "UNITSTRUCT",
+  "SubInt16": "UNITSTRUCT",
+  "SubInt32": "UNITSTRUCT",
+  "SubInt64": "UNITSTRUCT",
+  "SubInterval": "UNITSTRUCT",
+  "SubNumeric": "UNITSTRUCT",
+  "SubTime": "UNITSTRUCT",
+  "SubTimeInterval": "UNITSTRUCT",
+  "SubTimestamp": "UNITSTRUCT",
+  "SubTimestampInterval": "UNITSTRUCT",
+  "SubTimestampTz": "UNITSTRUCT",
+  "SubTimestampTzInterval": "UNITSTRUCT",
+  "SubUint16": "UNITSTRUCT",
+  "SubUint32": "UNITSTRUCT",
+  "SubUint64": "UNITSTRUCT",
+  "Subpattern": {
+    "STRUCT": [
+      {
+        "consume": "U64"
+      },
+      {
+        "many": "BOOL"
+      },
+      {
+        "suffix": "STR"
+      }
+    ]
+  },
+  "Substr": "UNITSTRUCT",
+  "TableFunc": {
+    "ENUM": {
+      "0": {
+        "AclExplode": "UNIT"
+      },
+      "1": {
+        "MzAclExplode": "UNIT"
+      },
+      "2": {
+        "JsonbEach": "UNIT"
+      },
+      "3": {
+        "JsonbEachStringify": "UNIT"
+      },
+      "4": {
+        "JsonbObjectKeys": "UNIT"
+      },
+      "5": {
+        "JsonbArrayElements": "UNIT"
+      },
+      "6": {
+        "JsonbArrayElementsStringify": "UNIT"
+      },
+      "7": {
+        "RegexpExtract": {
+          "NEWTYPE": {
+            "TYPENAME": "AnalyzedRegex"
+          }
+        }
+      },
+      "8": {
+        "CsvExtract": {
+          "NEWTYPE": "U64"
+        }
+      },
+      "9": {
+        "GenerateSeriesInt32": "UNIT"
+      },
+      "10": {
+        "GenerateSeriesInt64": "UNIT"
+      },
+      "11": {
+        "GenerateSeriesUnoptimized": "UNIT"
+      },
+      "12": {
+        "GenerateSeriesTimestamp": "UNIT"
+      },
+      "13": {
+        "GenerateSeriesTimestampTz": "UNIT"
+      },
+      "14": {
+        "GuardSubquerySize": {
+          "STRUCT": [
+            {
+              "column_type": {
+                "TYPENAME": "SqlScalarType"
+              }
+            }
+          ]
+        }
+      },
+      "15": {
+        "RepeatRow": "UNIT"
+      },
+      "16": {
+        "RepeatRowNonNegative": "UNIT"
+      },
+      "17": {
+        "UnnestArray": {
+          "STRUCT": [
+            {
+              "el_typ": {
+                "TYPENAME": "SqlScalarType"
+              }
+            }
+          ]
+        }
+      },
+      "18": {
+        "UnnestList": {
+          "STRUCT": [
+            {
+              "el_typ": {
+                "TYPENAME": "SqlScalarType"
+              }
+            }
+          ]
+        }
+      },
+      "19": {
+        "UnnestMap": {
+          "STRUCT": [
+            {
+              "value_type": {
+                "TYPENAME": "SqlScalarType"
+              }
+            }
+          ]
+        }
+      },
+      "20": {
+        "Wrap": {
+          "STRUCT": [
+            {
+              "types": {
+                "SEQ": {
+                  "TYPENAME": "SqlColumnType"
+                }
+              }
+            },
+            {
+              "width": "U64"
+            }
+          ]
+        }
+      },
+      "21": {
+        "GenerateSubscriptsArray": "UNIT"
+      },
+      "22": {
+        "TabletizedScalar": {
+          "STRUCT": [
+            {
+              "name": "STR"
+            },
+            {
+              "relation": {
+                "TYPENAME": "SqlRelationType"
+              }
+            }
+          ]
+        }
+      },
+      "23": {
+        "RegexpMatches": "UNIT"
+      },
+      "24": {
+        "WithOrdinality": {
+          "NEWTYPE": {
+            "TYPENAME": "WithOrdinality"
+          }
+        }
+      }
+    }
+  },
+  "Tan": "UNITSTRUCT",
+  "Tanh": "UNITSTRUCT",
+  "TextConcatBinary": "UNITSTRUCT",
+  "ThresholdPlan": {
+    "ENUM": {
+      "0": {
+        "Basic": {
+          "NEWTYPE": {
+            "TYPENAME": "BasicThresholdPlan"
+          }
+        }
+      }
+    }
+  },
+  "TimestampPrecision": {
+    "NEWTYPESTRUCT": "U8"
+  },
+  "Timezone": {
+    "ENUM": {
+      "0": {
+        "FixedOffset": {
+          "NEWTYPE": "I32"
+        }
+      },
+      "1": {
+        "Tz": {
+          "NEWTYPE": "STR"
+        }
+      }
+    }
+  },
+  "TimezoneIntervalTimeBinary": "UNITSTRUCT",
+  "TimezoneIntervalTimestampBinary": "UNITSTRUCT",
+  "TimezoneIntervalTimestampTzBinary": "UNITSTRUCT",
+  "TimezoneOffset": "UNITSTRUCT",
+  "TimezoneTime": {
+    "STRUCT": [
+      {
+        "tz": {
+          "TYPENAME": "Timezone"
+        }
+      },
+      {
+        "wall_time": "STR"
+      }
+    ]
+  },
+  "TimezoneTimeVariadic": "UNITSTRUCT",
+  "TimezoneTimestamp": {
+    "NEWTYPESTRUCT": {
+      "TYPENAME": "Timezone"
+    }
+  },
+  "TimezoneTimestampBinary": "UNITSTRUCT",
+  "TimezoneTimestampTz": {
+    "NEWTYPESTRUCT": {
+      "TYPENAME": "Timezone"
+    }
+  },
+  "TimezoneTimestampTzBinary": "UNITSTRUCT",
+  "ToCharTimestamp": {
+    "STRUCT": [
+      {
+        "format_string": "STR"
+      },
+      {
+        "format": {
+          "TYPENAME": "DateTimeFormat"
+        }
+      }
+    ]
+  },
+  "ToCharTimestampFormat": "UNITSTRUCT",
+  "ToCharTimestampTz": {
+    "STRUCT": [
+      {
+        "format_string": "STR"
+      },
+      {
+        "format": {
+          "TYPENAME": "DateTimeFormat"
+        }
+      }
+    ]
+  },
+  "ToCharTimestampTzFormat": "UNITSTRUCT",
+  "ToTimestamp": "UNITSTRUCT",
+  "TopKPlan": {
+    "ENUM": {
+      "0": {
+        "MonotonicTop1": {
+          "NEWTYPE": {
+            "TYPENAME": "MonotonicTop1Plan"
+          }
+        }
+      },
+      "1": {
+        "MonotonicTopK": {
+          "NEWTYPE": {
+            "TYPENAME": "MonotonicTopKPlan"
+          }
+        }
+      },
+      "2": {
+        "Basic": {
+          "NEWTYPE": {
+            "TYPENAME": "BasicTopKPlan"
+          }
+        }
+      }
+    }
+  },
+  "Translate": "UNITSTRUCT",
+  "Trim": "UNITSTRUCT",
+  "TrimLeading": "UNITSTRUCT",
+  "TrimLeadingWhitespace": "UNITSTRUCT",
+  "TrimTrailing": "UNITSTRUCT",
+  "TrimTrailingWhitespace": "UNITSTRUCT",
+  "TrimWhitespace": "UNITSTRUCT",
+  "TruncFloat32": "UNITSTRUCT",
+  "TruncFloat64": "UNITSTRUCT",
+  "TruncNumeric": "UNITSTRUCT",
+  "TryParseMonotonicIso8601Timestamp": "UNITSTRUCT",
+  "UnaryFunc": {
+    "ENUM": {
+      "0": {
+        "Not": {
+          "NEWTYPE": {
+            "TYPENAME": "Not"
+          }
+        }
+      },
+      "1": {
+        "IsNull": {
+          "NEWTYPE": {
+            "TYPENAME": "IsNull"
+          }
+        }
+      },
+      "2": {
+        "IsTrue": {
+          "NEWTYPE": {
+            "TYPENAME": "IsTrue"
+          }
+        }
+      },
+      "3": {
+        "IsFalse": {
+          "NEWTYPE": {
+            "TYPENAME": "IsFalse"
+          }
+        }
+      },
+      "4": {
+        "BitNotInt16": {
+          "NEWTYPE": {
+            "TYPENAME": "BitNotInt16"
+          }
+        }
+      },
+      "5": {
+        "BitNotInt32": {
+          "NEWTYPE": {
+            "TYPENAME": "BitNotInt32"
+          }
+        }
+      },
+      "6": {
+        "BitNotInt64": {
+          "NEWTYPE": {
+            "TYPENAME": "BitNotInt64"
+          }
+        }
+      },
+      "7": {
+        "BitNotUint16": {
+          "NEWTYPE": {
+            "TYPENAME": "BitNotUint16"
+          }
+        }
+      },
+      "8": {
+        "BitNotUint32": {
+          "NEWTYPE": {
+            "TYPENAME": "BitNotUint32"
+          }
+        }
+      },
+      "9": {
+        "BitNotUint64": {
+          "NEWTYPE": {
+            "TYPENAME": "BitNotUint64"
+          }
+        }
+      },
+      "10": {
+        "NegInt16": {
+          "NEWTYPE": {
+            "TYPENAME": "NegInt16"
+          }
+        }
+      },
+      "11": {
+        "NegInt32": {
+          "NEWTYPE": {
+            "TYPENAME": "NegInt32"
+          }
+        }
+      },
+      "12": {
+        "NegInt64": {
+          "NEWTYPE": {
+            "TYPENAME": "NegInt64"
+          }
+        }
+      },
+      "13": {
+        "NegFloat32": {
+          "NEWTYPE": {
+            "TYPENAME": "NegFloat32"
+          }
+        }
+      },
+      "14": {
+        "NegFloat64": {
+          "NEWTYPE": {
+            "TYPENAME": "NegFloat64"
+          }
+        }
+      },
+      "15": {
+        "NegNumeric": {
+          "NEWTYPE": {
+            "TYPENAME": "NegNumeric"
+          }
+        }
+      },
+      "16": {
+        "NegInterval": {
+          "NEWTYPE": {
+            "TYPENAME": "NegInterval"
+          }
+        }
+      },
+      "17": {
+        "SqrtFloat64": {
+          "NEWTYPE": {
+            "TYPENAME": "SqrtFloat64"
+          }
+        }
+      },
+      "18": {
+        "SqrtNumeric": {
+          "NEWTYPE": {
+            "TYPENAME": "SqrtNumeric"
+          }
+        }
+      },
+      "19": {
+        "CbrtFloat64": {
+          "NEWTYPE": {
+            "TYPENAME": "CbrtFloat64"
+          }
+        }
+      },
+      "20": {
+        "AbsInt16": {
+          "NEWTYPE": {
+            "TYPENAME": "AbsInt16"
+          }
+        }
+      },
+      "21": {
+        "AbsInt32": {
+          "NEWTYPE": {
+            "TYPENAME": "AbsInt32"
+          }
+        }
+      },
+      "22": {
+        "AbsInt64": {
+          "NEWTYPE": {
+            "TYPENAME": "AbsInt64"
+          }
+        }
+      },
+      "23": {
+        "AbsFloat32": {
+          "NEWTYPE": {
+            "TYPENAME": "AbsFloat32"
+          }
+        }
+      },
+      "24": {
+        "AbsFloat64": {
+          "NEWTYPE": {
+            "TYPENAME": "AbsFloat64"
+          }
+        }
+      },
+      "25": {
+        "AbsNumeric": {
+          "NEWTYPE": {
+            "TYPENAME": "AbsNumeric"
+          }
+        }
+      },
+      "26": {
+        "CastBoolToString": {
+          "NEWTYPE": {
+            "TYPENAME": "CastBoolToString"
+          }
+        }
+      },
+      "27": {
+        "CastBoolToStringNonstandard": {
+          "NEWTYPE": {
+            "TYPENAME": "CastBoolToStringNonstandard"
+          }
+        }
+      },
+      "28": {
+        "CastBoolToInt32": {
+          "NEWTYPE": {
+            "TYPENAME": "CastBoolToInt32"
+          }
+        }
+      },
+      "29": {
+        "CastBoolToInt64": {
+          "NEWTYPE": {
+            "TYPENAME": "CastBoolToInt64"
+          }
+        }
+      },
+      "30": {
+        "CastInt16ToFloat32": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt16ToFloat32"
+          }
+        }
+      },
+      "31": {
+        "CastInt16ToFloat64": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt16ToFloat64"
+          }
+        }
+      },
+      "32": {
+        "CastInt16ToInt32": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt16ToInt32"
+          }
+        }
+      },
+      "33": {
+        "CastInt16ToInt64": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt16ToInt64"
+          }
+        }
+      },
+      "34": {
+        "CastInt16ToUint16": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt16ToUint16"
+          }
+        }
+      },
+      "35": {
+        "CastInt16ToUint32": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt16ToUint32"
+          }
+        }
+      },
+      "36": {
+        "CastInt16ToUint64": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt16ToUint64"
+          }
+        }
+      },
+      "37": {
+        "CastInt16ToString": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt16ToString"
+          }
+        }
+      },
+      "38": {
+        "CastInt2VectorToArray": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt2VectorToArray"
+          }
+        }
+      },
+      "39": {
+        "CastInt32ToBool": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt32ToBool"
+          }
+        }
+      },
+      "40": {
+        "CastInt32ToFloat32": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt32ToFloat32"
+          }
+        }
+      },
+      "41": {
+        "CastInt32ToFloat64": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt32ToFloat64"
+          }
+        }
+      },
+      "42": {
+        "CastInt32ToOid": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt32ToOid"
+          }
+        }
+      },
+      "43": {
+        "CastInt32ToPgLegacyChar": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt32ToPgLegacyChar"
+          }
+        }
+      },
+      "44": {
+        "CastInt32ToInt16": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt32ToInt16"
+          }
+        }
+      },
+      "45": {
+        "CastInt32ToInt64": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt32ToInt64"
+          }
+        }
+      },
+      "46": {
+        "CastInt32ToUint16": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt32ToUint16"
+          }
+        }
+      },
+      "47": {
+        "CastInt32ToUint32": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt32ToUint32"
+          }
+        }
+      },
+      "48": {
+        "CastInt32ToUint64": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt32ToUint64"
+          }
+        }
+      },
+      "49": {
+        "CastInt32ToString": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt32ToString"
+          }
+        }
+      },
+      "50": {
+        "CastOidToInt32": {
+          "NEWTYPE": {
+            "TYPENAME": "CastOidToInt32"
+          }
+        }
+      },
+      "51": {
+        "CastOidToInt64": {
+          "NEWTYPE": {
+            "TYPENAME": "CastOidToInt64"
+          }
+        }
+      },
+      "52": {
+        "CastOidToString": {
+          "NEWTYPE": {
+            "TYPENAME": "CastOidToString"
+          }
+        }
+      },
+      "53": {
+        "CastOidToRegClass": {
+          "NEWTYPE": {
+            "TYPENAME": "CastOidToRegClass"
+          }
+        }
+      },
+      "54": {
+        "CastRegClassToOid": {
+          "NEWTYPE": {
+            "TYPENAME": "CastRegClassToOid"
+          }
+        }
+      },
+      "55": {
+        "CastOidToRegProc": {
+          "NEWTYPE": {
+            "TYPENAME": "CastOidToRegProc"
+          }
+        }
+      },
+      "56": {
+        "CastRegProcToOid": {
+          "NEWTYPE": {
+            "TYPENAME": "CastRegProcToOid"
+          }
+        }
+      },
+      "57": {
+        "CastOidToRegType": {
+          "NEWTYPE": {
+            "TYPENAME": "CastOidToRegType"
+          }
+        }
+      },
+      "58": {
+        "CastRegTypeToOid": {
+          "NEWTYPE": {
+            "TYPENAME": "CastRegTypeToOid"
+          }
+        }
+      },
+      "59": {
+        "CastInt64ToInt16": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt64ToInt16"
+          }
+        }
+      },
+      "60": {
+        "CastInt64ToInt32": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt64ToInt32"
+          }
+        }
+      },
+      "61": {
+        "CastInt64ToUint16": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt64ToUint16"
+          }
+        }
+      },
+      "62": {
+        "CastInt64ToUint32": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt64ToUint32"
+          }
+        }
+      },
+      "63": {
+        "CastInt64ToUint64": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt64ToUint64"
+          }
+        }
+      },
+      "64": {
+        "CastInt16ToNumeric": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt16ToNumeric"
+          }
+        }
+      },
+      "65": {
+        "CastInt32ToNumeric": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt32ToNumeric"
+          }
+        }
+      },
+      "66": {
+        "CastInt64ToBool": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt64ToBool"
+          }
+        }
+      },
+      "67": {
+        "CastInt64ToNumeric": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt64ToNumeric"
+          }
+        }
+      },
+      "68": {
+        "CastInt64ToFloat32": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt64ToFloat32"
+          }
+        }
+      },
+      "69": {
+        "CastInt64ToFloat64": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt64ToFloat64"
+          }
+        }
+      },
+      "70": {
+        "CastInt64ToOid": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt64ToOid"
+          }
+        }
+      },
+      "71": {
+        "CastInt64ToString": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt64ToString"
+          }
+        }
+      },
+      "72": {
+        "CastUint16ToUint32": {
+          "NEWTYPE": {
+            "TYPENAME": "CastUint16ToUint32"
+          }
+        }
+      },
+      "73": {
+        "CastUint16ToUint64": {
+          "NEWTYPE": {
+            "TYPENAME": "CastUint16ToUint64"
+          }
+        }
+      },
+      "74": {
+        "CastUint16ToInt16": {
+          "NEWTYPE": {
+            "TYPENAME": "CastUint16ToInt16"
+          }
+        }
+      },
+      "75": {
+        "CastUint16ToInt32": {
+          "NEWTYPE": {
+            "TYPENAME": "CastUint16ToInt32"
+          }
+        }
+      },
+      "76": {
+        "CastUint16ToInt64": {
+          "NEWTYPE": {
+            "TYPENAME": "CastUint16ToInt64"
+          }
+        }
+      },
+      "77": {
+        "CastUint16ToNumeric": {
+          "NEWTYPE": {
+            "TYPENAME": "CastUint16ToNumeric"
+          }
+        }
+      },
+      "78": {
+        "CastUint16ToFloat32": {
+          "NEWTYPE": {
+            "TYPENAME": "CastUint16ToFloat32"
+          }
+        }
+      },
+      "79": {
+        "CastUint16ToFloat64": {
+          "NEWTYPE": {
+            "TYPENAME": "CastUint16ToFloat64"
+          }
+        }
+      },
+      "80": {
+        "CastUint16ToString": {
+          "NEWTYPE": {
+            "TYPENAME": "CastUint16ToString"
+          }
+        }
+      },
+      "81": {
+        "CastUint32ToUint16": {
+          "NEWTYPE": {
+            "TYPENAME": "CastUint32ToUint16"
+          }
+        }
+      },
+      "82": {
+        "CastUint32ToUint64": {
+          "NEWTYPE": {
+            "TYPENAME": "CastUint32ToUint64"
+          }
+        }
+      },
+      "83": {
+        "CastUint32ToInt16": {
+          "NEWTYPE": {
+            "TYPENAME": "CastUint32ToInt16"
+          }
+        }
+      },
+      "84": {
+        "CastUint32ToInt32": {
+          "NEWTYPE": {
+            "TYPENAME": "CastUint32ToInt32"
+          }
+        }
+      },
+      "85": {
+        "CastUint32ToInt64": {
+          "NEWTYPE": {
+            "TYPENAME": "CastUint32ToInt64"
+          }
+        }
+      },
+      "86": {
+        "CastUint32ToNumeric": {
+          "NEWTYPE": {
+            "TYPENAME": "CastUint32ToNumeric"
+          }
+        }
+      },
+      "87": {
+        "CastUint32ToFloat32": {
+          "NEWTYPE": {
+            "TYPENAME": "CastUint32ToFloat32"
+          }
+        }
+      },
+      "88": {
+        "CastUint32ToFloat64": {
+          "NEWTYPE": {
+            "TYPENAME": "CastUint32ToFloat64"
+          }
+        }
+      },
+      "89": {
+        "CastUint32ToString": {
+          "NEWTYPE": {
+            "TYPENAME": "CastUint32ToString"
+          }
+        }
+      },
+      "90": {
+        "CastUint64ToUint16": {
+          "NEWTYPE": {
+            "TYPENAME": "CastUint64ToUint16"
+          }
+        }
+      },
+      "91": {
+        "CastUint64ToUint32": {
+          "NEWTYPE": {
+            "TYPENAME": "CastUint64ToUint32"
+          }
+        }
+      },
+      "92": {
+        "CastUint64ToInt16": {
+          "NEWTYPE": {
+            "TYPENAME": "CastUint64ToInt16"
+          }
+        }
+      },
+      "93": {
+        "CastUint64ToInt32": {
+          "NEWTYPE": {
+            "TYPENAME": "CastUint64ToInt32"
+          }
+        }
+      },
+      "94": {
+        "CastUint64ToInt64": {
+          "NEWTYPE": {
+            "TYPENAME": "CastUint64ToInt64"
+          }
+        }
+      },
+      "95": {
+        "CastUint64ToNumeric": {
+          "NEWTYPE": {
+            "TYPENAME": "CastUint64ToNumeric"
+          }
+        }
+      },
+      "96": {
+        "CastUint64ToFloat32": {
+          "NEWTYPE": {
+            "TYPENAME": "CastUint64ToFloat32"
+          }
+        }
+      },
+      "97": {
+        "CastUint64ToFloat64": {
+          "NEWTYPE": {
+            "TYPENAME": "CastUint64ToFloat64"
+          }
+        }
+      },
+      "98": {
+        "CastUint64ToString": {
+          "NEWTYPE": {
+            "TYPENAME": "CastUint64ToString"
+          }
+        }
+      },
+      "99": {
+        "CastFloat32ToInt16": {
+          "NEWTYPE": {
+            "TYPENAME": "CastFloat32ToInt16"
+          }
+        }
+      },
+      "100": {
+        "CastFloat32ToInt32": {
+          "NEWTYPE": {
+            "TYPENAME": "CastFloat32ToInt32"
+          }
+        }
+      },
+      "101": {
+        "CastFloat32ToInt64": {
+          "NEWTYPE": {
+            "TYPENAME": "CastFloat32ToInt64"
+          }
+        }
+      },
+      "102": {
+        "CastFloat32ToUint16": {
+          "NEWTYPE": {
+            "TYPENAME": "CastFloat32ToUint16"
+          }
+        }
+      },
+      "103": {
+        "CastFloat32ToUint32": {
+          "NEWTYPE": {
+            "TYPENAME": "CastFloat32ToUint32"
+          }
+        }
+      },
+      "104": {
+        "CastFloat32ToUint64": {
+          "NEWTYPE": {
+            "TYPENAME": "CastFloat32ToUint64"
+          }
+        }
+      },
+      "105": {
+        "CastFloat32ToFloat64": {
+          "NEWTYPE": {
+            "TYPENAME": "CastFloat32ToFloat64"
+          }
+        }
+      },
+      "106": {
+        "CastFloat32ToString": {
+          "NEWTYPE": {
+            "TYPENAME": "CastFloat32ToString"
+          }
+        }
+      },
+      "107": {
+        "CastFloat32ToNumeric": {
+          "NEWTYPE": {
+            "TYPENAME": "CastFloat32ToNumeric"
+          }
+        }
+      },
+      "108": {
+        "CastFloat64ToNumeric": {
+          "NEWTYPE": {
+            "TYPENAME": "CastFloat64ToNumeric"
+          }
+        }
+      },
+      "109": {
+        "CastFloat64ToInt16": {
+          "NEWTYPE": {
+            "TYPENAME": "CastFloat64ToInt16"
+          }
+        }
+      },
+      "110": {
+        "CastFloat64ToInt32": {
+          "NEWTYPE": {
+            "TYPENAME": "CastFloat64ToInt32"
+          }
+        }
+      },
+      "111": {
+        "CastFloat64ToInt64": {
+          "NEWTYPE": {
+            "TYPENAME": "CastFloat64ToInt64"
+          }
+        }
+      },
+      "112": {
+        "CastFloat64ToUint16": {
+          "NEWTYPE": {
+            "TYPENAME": "CastFloat64ToUint16"
+          }
+        }
+      },
+      "113": {
+        "CastFloat64ToUint32": {
+          "NEWTYPE": {
+            "TYPENAME": "CastFloat64ToUint32"
+          }
+        }
+      },
+      "114": {
+        "CastFloat64ToUint64": {
+          "NEWTYPE": {
+            "TYPENAME": "CastFloat64ToUint64"
+          }
+        }
+      },
+      "115": {
+        "CastFloat64ToFloat32": {
+          "NEWTYPE": {
+            "TYPENAME": "CastFloat64ToFloat32"
+          }
+        }
+      },
+      "116": {
+        "CastFloat64ToString": {
+          "NEWTYPE": {
+            "TYPENAME": "CastFloat64ToString"
+          }
+        }
+      },
+      "117": {
+        "CastNumericToFloat32": {
+          "NEWTYPE": {
+            "TYPENAME": "CastNumericToFloat32"
+          }
+        }
+      },
+      "118": {
+        "CastNumericToFloat64": {
+          "NEWTYPE": {
+            "TYPENAME": "CastNumericToFloat64"
+          }
+        }
+      },
+      "119": {
+        "CastNumericToInt16": {
+          "NEWTYPE": {
+            "TYPENAME": "CastNumericToInt16"
+          }
+        }
+      },
+      "120": {
+        "CastNumericToInt32": {
+          "NEWTYPE": {
+            "TYPENAME": "CastNumericToInt32"
+          }
+        }
+      },
+      "121": {
+        "CastNumericToInt64": {
+          "NEWTYPE": {
+            "TYPENAME": "CastNumericToInt64"
+          }
+        }
+      },
+      "122": {
+        "CastNumericToUint16": {
+          "NEWTYPE": {
+            "TYPENAME": "CastNumericToUint16"
+          }
+        }
+      },
+      "123": {
+        "CastNumericToUint32": {
+          "NEWTYPE": {
+            "TYPENAME": "CastNumericToUint32"
+          }
+        }
+      },
+      "124": {
+        "CastNumericToUint64": {
+          "NEWTYPE": {
+            "TYPENAME": "CastNumericToUint64"
+          }
+        }
+      },
+      "125": {
+        "CastNumericToString": {
+          "NEWTYPE": {
+            "TYPENAME": "CastNumericToString"
+          }
+        }
+      },
+      "126": {
+        "CastMzTimestampToString": {
+          "NEWTYPE": {
+            "TYPENAME": "CastMzTimestampToString"
+          }
+        }
+      },
+      "127": {
+        "CastMzTimestampToTimestamp": {
+          "NEWTYPE": {
+            "TYPENAME": "CastMzTimestampToTimestamp"
+          }
+        }
+      },
+      "128": {
+        "CastMzTimestampToTimestampTz": {
+          "NEWTYPE": {
+            "TYPENAME": "CastMzTimestampToTimestampTz"
+          }
+        }
+      },
+      "129": {
+        "CastStringToMzTimestamp": {
+          "NEWTYPE": {
+            "TYPENAME": "CastStringToMzTimestamp"
+          }
+        }
+      },
+      "130": {
+        "CastUint64ToMzTimestamp": {
+          "NEWTYPE": {
+            "TYPENAME": "CastUint64ToMzTimestamp"
+          }
+        }
+      },
+      "131": {
+        "CastUint32ToMzTimestamp": {
+          "NEWTYPE": {
+            "TYPENAME": "CastUint32ToMzTimestamp"
+          }
+        }
+      },
+      "132": {
+        "CastInt64ToMzTimestamp": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt64ToMzTimestamp"
+          }
+        }
+      },
+      "133": {
+        "CastInt32ToMzTimestamp": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt32ToMzTimestamp"
+          }
+        }
+      },
+      "134": {
+        "CastNumericToMzTimestamp": {
+          "NEWTYPE": {
+            "TYPENAME": "CastNumericToMzTimestamp"
+          }
+        }
+      },
+      "135": {
+        "CastTimestampToMzTimestamp": {
+          "NEWTYPE": {
+            "TYPENAME": "CastTimestampToMzTimestamp"
+          }
+        }
+      },
+      "136": {
+        "CastTimestampTzToMzTimestamp": {
+          "NEWTYPE": {
+            "TYPENAME": "CastTimestampTzToMzTimestamp"
+          }
+        }
+      },
+      "137": {
+        "CastDateToMzTimestamp": {
+          "NEWTYPE": {
+            "TYPENAME": "CastDateToMzTimestamp"
+          }
+        }
+      },
+      "138": {
+        "CastStringToBool": {
+          "NEWTYPE": {
+            "TYPENAME": "CastStringToBool"
+          }
+        }
+      },
+      "139": {
+        "CastStringToPgLegacyChar": {
+          "NEWTYPE": {
+            "TYPENAME": "CastStringToPgLegacyChar"
+          }
+        }
+      },
+      "140": {
+        "CastStringToPgLegacyName": {
+          "NEWTYPE": {
+            "TYPENAME": "CastStringToPgLegacyName"
+          }
+        }
+      },
+      "141": {
+        "CastStringToBytes": {
+          "NEWTYPE": {
+            "TYPENAME": "CastStringToBytes"
+          }
+        }
+      },
+      "142": {
+        "CastStringToInt16": {
+          "NEWTYPE": {
+            "TYPENAME": "CastStringToInt16"
+          }
+        }
+      },
+      "143": {
+        "CastStringToInt32": {
+          "NEWTYPE": {
+            "TYPENAME": "CastStringToInt32"
+          }
+        }
+      },
+      "144": {
+        "CastStringToInt64": {
+          "NEWTYPE": {
+            "TYPENAME": "CastStringToInt64"
+          }
+        }
+      },
+      "145": {
+        "CastStringToUint16": {
+          "NEWTYPE": {
+            "TYPENAME": "CastStringToUint16"
+          }
+        }
+      },
+      "146": {
+        "CastStringToUint32": {
+          "NEWTYPE": {
+            "TYPENAME": "CastStringToUint32"
+          }
+        }
+      },
+      "147": {
+        "CastStringToUint64": {
+          "NEWTYPE": {
+            "TYPENAME": "CastStringToUint64"
+          }
+        }
+      },
+      "148": {
+        "CastStringToInt2Vector": {
+          "NEWTYPE": {
+            "TYPENAME": "CastStringToInt2Vector"
+          }
+        }
+      },
+      "149": {
+        "CastStringToOid": {
+          "NEWTYPE": {
+            "TYPENAME": "CastStringToOid"
+          }
+        }
+      },
+      "150": {
+        "CastStringToFloat32": {
+          "NEWTYPE": {
+            "TYPENAME": "CastStringToFloat32"
+          }
+        }
+      },
+      "151": {
+        "CastStringToFloat64": {
+          "NEWTYPE": {
+            "TYPENAME": "CastStringToFloat64"
+          }
+        }
+      },
+      "152": {
+        "CastStringToDate": {
+          "NEWTYPE": {
+            "TYPENAME": "CastStringToDate"
+          }
+        }
+      },
+      "153": {
+        "CastStringToArray": {
+          "NEWTYPE": {
+            "TYPENAME": "CastStringToArray"
+          }
+        }
+      },
+      "154": {
+        "CastStringToList": {
+          "NEWTYPE": {
+            "TYPENAME": "CastStringToList"
+          }
+        }
+      },
+      "155": {
+        "CastStringToMap": {
+          "NEWTYPE": {
+            "TYPENAME": "CastStringToMap"
+          }
+        }
+      },
+      "156": {
+        "CastStringToRange": {
+          "NEWTYPE": {
+            "TYPENAME": "CastStringToRange"
+          }
+        }
+      },
+      "157": {
+        "CastStringToTime": {
+          "NEWTYPE": {
+            "TYPENAME": "CastStringToTime"
+          }
+        }
+      },
+      "158": {
+        "CastStringToTimestamp": {
+          "NEWTYPE": {
+            "TYPENAME": "CastStringToTimestamp"
+          }
+        }
+      },
+      "159": {
+        "CastStringToTimestampTz": {
+          "NEWTYPE": {
+            "TYPENAME": "CastStringToTimestampTz"
+          }
+        }
+      },
+      "160": {
+        "CastStringToInterval": {
+          "NEWTYPE": {
+            "TYPENAME": "CastStringToInterval"
+          }
+        }
+      },
+      "161": {
+        "CastStringToNumeric": {
+          "NEWTYPE": {
+            "TYPENAME": "CastStringToNumeric"
+          }
+        }
+      },
+      "162": {
+        "CastStringToUuid": {
+          "NEWTYPE": {
+            "TYPENAME": "CastStringToUuid"
+          }
+        }
+      },
+      "163": {
+        "CastStringToChar": {
+          "NEWTYPE": {
+            "TYPENAME": "CastStringToChar"
+          }
+        }
+      },
+      "164": {
+        "PadChar": {
+          "NEWTYPE": {
+            "TYPENAME": "PadChar"
+          }
+        }
+      },
+      "165": {
+        "CastStringToVarChar": {
+          "NEWTYPE": {
+            "TYPENAME": "CastStringToVarChar"
+          }
+        }
+      },
+      "166": {
+        "CastCharToString": {
+          "NEWTYPE": {
+            "TYPENAME": "CastCharToString"
+          }
+        }
+      },
+      "167": {
+        "CastVarCharToString": {
+          "NEWTYPE": {
+            "TYPENAME": "CastVarCharToString"
+          }
+        }
+      },
+      "168": {
+        "CastDateToTimestamp": {
+          "NEWTYPE": {
+            "TYPENAME": "CastDateToTimestamp"
+          }
+        }
+      },
+      "169": {
+        "CastDateToTimestampTz": {
+          "NEWTYPE": {
+            "TYPENAME": "CastDateToTimestampTz"
+          }
+        }
+      },
+      "170": {
+        "CastDateToString": {
+          "NEWTYPE": {
+            "TYPENAME": "CastDateToString"
+          }
+        }
+      },
+      "171": {
+        "CastTimeToInterval": {
+          "NEWTYPE": {
+            "TYPENAME": "CastTimeToInterval"
+          }
+        }
+      },
+      "172": {
+        "CastTimeToString": {
+          "NEWTYPE": {
+            "TYPENAME": "CastTimeToString"
+          }
+        }
+      },
+      "173": {
+        "CastIntervalToString": {
+          "NEWTYPE": {
+            "TYPENAME": "CastIntervalToString"
+          }
+        }
+      },
+      "174": {
+        "CastIntervalToTime": {
+          "NEWTYPE": {
+            "TYPENAME": "CastIntervalToTime"
+          }
+        }
+      },
+      "175": {
+        "CastTimestampToDate": {
+          "NEWTYPE": {
+            "TYPENAME": "CastTimestampToDate"
+          }
+        }
+      },
+      "176": {
+        "AdjustTimestampPrecision": {
+          "NEWTYPE": {
+            "TYPENAME": "AdjustTimestampPrecision"
+          }
+        }
+      },
+      "177": {
+        "CastTimestampToTimestampTz": {
+          "NEWTYPE": {
+            "TYPENAME": "CastTimestampToTimestampTz"
+          }
+        }
+      },
+      "178": {
+        "CastTimestampToString": {
+          "NEWTYPE": {
+            "TYPENAME": "CastTimestampToString"
+          }
+        }
+      },
+      "179": {
+        "CastTimestampToTime": {
+          "NEWTYPE": {
+            "TYPENAME": "CastTimestampToTime"
+          }
+        }
+      },
+      "180": {
+        "CastTimestampTzToDate": {
+          "NEWTYPE": {
+            "TYPENAME": "CastTimestampTzToDate"
+          }
+        }
+      },
+      "181": {
+        "CastTimestampTzToTimestamp": {
+          "NEWTYPE": {
+            "TYPENAME": "CastTimestampTzToTimestamp"
+          }
+        }
+      },
+      "182": {
+        "AdjustTimestampTzPrecision": {
+          "NEWTYPE": {
+            "TYPENAME": "AdjustTimestampTzPrecision"
+          }
+        }
+      },
+      "183": {
+        "CastTimestampTzToString": {
+          "NEWTYPE": {
+            "TYPENAME": "CastTimestampTzToString"
+          }
+        }
+      },
+      "184": {
+        "CastTimestampTzToTime": {
+          "NEWTYPE": {
+            "TYPENAME": "CastTimestampTzToTime"
+          }
+        }
+      },
+      "185": {
+        "CastPgLegacyCharToString": {
+          "NEWTYPE": {
+            "TYPENAME": "CastPgLegacyCharToString"
+          }
+        }
+      },
+      "186": {
+        "CastPgLegacyCharToChar": {
+          "NEWTYPE": {
+            "TYPENAME": "CastPgLegacyCharToChar"
+          }
+        }
+      },
+      "187": {
+        "CastPgLegacyCharToVarChar": {
+          "NEWTYPE": {
+            "TYPENAME": "CastPgLegacyCharToVarChar"
+          }
+        }
+      },
+      "188": {
+        "CastPgLegacyCharToInt32": {
+          "NEWTYPE": {
+            "TYPENAME": "CastPgLegacyCharToInt32"
+          }
+        }
+      },
+      "189": {
+        "CastBytesToString": {
+          "NEWTYPE": {
+            "TYPENAME": "CastBytesToString"
+          }
+        }
+      },
+      "190": {
+        "CastStringToJsonb": {
+          "NEWTYPE": {
+            "TYPENAME": "CastStringToJsonb"
+          }
+        }
+      },
+      "191": {
+        "CastJsonbToString": {
+          "NEWTYPE": {
+            "TYPENAME": "CastJsonbToString"
+          }
+        }
+      },
+      "192": {
+        "CastJsonbableToJsonb": {
+          "NEWTYPE": {
+            "TYPENAME": "CastJsonbableToJsonb"
+          }
+        }
+      },
+      "193": {
+        "CastJsonbToInt16": {
+          "NEWTYPE": {
+            "TYPENAME": "CastJsonbToInt16"
+          }
+        }
+      },
+      "194": {
+        "CastJsonbToInt32": {
+          "NEWTYPE": {
+            "TYPENAME": "CastJsonbToInt32"
+          }
+        }
+      },
+      "195": {
+        "CastJsonbToInt64": {
+          "NEWTYPE": {
+            "TYPENAME": "CastJsonbToInt64"
+          }
+        }
+      },
+      "196": {
+        "CastJsonbToFloat32": {
+          "NEWTYPE": {
+            "TYPENAME": "CastJsonbToFloat32"
+          }
+        }
+      },
+      "197": {
+        "CastJsonbToFloat64": {
+          "NEWTYPE": {
+            "TYPENAME": "CastJsonbToFloat64"
+          }
+        }
+      },
+      "198": {
+        "CastJsonbToNumeric": {
+          "NEWTYPE": {
+            "TYPENAME": "CastJsonbToNumeric"
+          }
+        }
+      },
+      "199": {
+        "CastJsonbToBool": {
+          "NEWTYPE": {
+            "TYPENAME": "CastJsonbToBool"
+          }
+        }
+      },
+      "200": {
+        "CastUuidToString": {
+          "NEWTYPE": {
+            "TYPENAME": "CastUuidToString"
+          }
+        }
+      },
+      "201": {
+        "CastRecordToString": {
+          "NEWTYPE": {
+            "TYPENAME": "CastRecordToString"
+          }
+        }
+      },
+      "202": {
+        "CastRecord1ToRecord2": {
+          "NEWTYPE": {
+            "TYPENAME": "CastRecord1ToRecord2"
+          }
+        }
+      },
+      "203": {
+        "CastArrayToArray": {
+          "NEWTYPE": {
+            "TYPENAME": "CastArrayToArray"
+          }
+        }
+      },
+      "204": {
+        "CastArrayToJsonb": {
+          "NEWTYPE": {
+            "TYPENAME": "CastArrayToJsonb"
+          }
+        }
+      },
+      "205": {
+        "CastArrayToString": {
+          "NEWTYPE": {
+            "TYPENAME": "CastArrayToString"
+          }
+        }
+      },
+      "206": {
+        "CastListToString": {
+          "NEWTYPE": {
+            "TYPENAME": "CastListToString"
+          }
+        }
+      },
+      "207": {
+        "CastListToJsonb": {
+          "NEWTYPE": {
+            "TYPENAME": "CastListToJsonb"
+          }
+        }
+      },
+      "208": {
+        "CastList1ToList2": {
+          "NEWTYPE": {
+            "TYPENAME": "CastList1ToList2"
+          }
+        }
+      },
+      "209": {
+        "CastArrayToListOneDim": {
+          "NEWTYPE": {
+            "TYPENAME": "CastArrayToListOneDim"
+          }
+        }
+      },
+      "210": {
+        "CastMapToString": {
+          "NEWTYPE": {
+            "TYPENAME": "CastMapToString"
+          }
+        }
+      },
+      "211": {
+        "CastInt2VectorToString": {
+          "NEWTYPE": {
+            "TYPENAME": "CastInt2VectorToString"
+          }
+        }
+      },
+      "212": {
+        "CastRangeToString": {
+          "NEWTYPE": {
+            "TYPENAME": "CastRangeToString"
+          }
+        }
+      },
+      "213": {
+        "CeilFloat32": {
+          "NEWTYPE": {
+            "TYPENAME": "CeilFloat32"
+          }
+        }
+      },
+      "214": {
+        "CeilFloat64": {
+          "NEWTYPE": {
+            "TYPENAME": "CeilFloat64"
+          }
+        }
+      },
+      "215": {
+        "CeilNumeric": {
+          "NEWTYPE": {
+            "TYPENAME": "CeilNumeric"
+          }
+        }
+      },
+      "216": {
+        "FloorFloat32": {
+          "NEWTYPE": {
+            "TYPENAME": "FloorFloat32"
+          }
+        }
+      },
+      "217": {
+        "FloorFloat64": {
+          "NEWTYPE": {
+            "TYPENAME": "FloorFloat64"
+          }
+        }
+      },
+      "218": {
+        "FloorNumeric": {
+          "NEWTYPE": {
+            "TYPENAME": "FloorNumeric"
+          }
+        }
+      },
+      "219": {
+        "Ascii": {
+          "NEWTYPE": {
+            "TYPENAME": "Ascii"
+          }
+        }
+      },
+      "220": {
+        "BitCountBytes": {
+          "NEWTYPE": {
+            "TYPENAME": "BitCountBytes"
+          }
+        }
+      },
+      "221": {
+        "BitLengthBytes": {
+          "NEWTYPE": {
+            "TYPENAME": "BitLengthBytes"
+          }
+        }
+      },
+      "222": {
+        "BitLengthString": {
+          "NEWTYPE": {
+            "TYPENAME": "BitLengthString"
+          }
+        }
+      },
+      "223": {
+        "ByteLengthBytes": {
+          "NEWTYPE": {
+            "TYPENAME": "ByteLengthBytes"
+          }
+        }
+      },
+      "224": {
+        "ByteLengthString": {
+          "NEWTYPE": {
+            "TYPENAME": "ByteLengthString"
+          }
+        }
+      },
+      "225": {
+        "CharLength": {
+          "NEWTYPE": {
+            "TYPENAME": "CharLength"
+          }
+        }
+      },
+      "226": {
+        "Chr": {
+          "NEWTYPE": {
+            "TYPENAME": "Chr"
+          }
+        }
+      },
+      "227": {
+        "IsLikeMatch": {
+          "NEWTYPE": {
+            "TYPENAME": "IsLikeMatch"
+          }
+        }
+      },
+      "228": {
+        "IsRegexpMatch": {
+          "NEWTYPE": {
+            "TYPENAME": "IsRegexpMatch"
+          }
+        }
+      },
+      "229": {
+        "RegexpMatch": {
+          "NEWTYPE": {
+            "TYPENAME": "RegexpMatchStatic"
+          }
+        }
+      },
+      "230": {
+        "ExtractInterval": {
+          "NEWTYPE": {
+            "TYPENAME": "ExtractInterval"
+          }
+        }
+      },
+      "231": {
+        "ExtractTime": {
+          "NEWTYPE": {
+            "TYPENAME": "ExtractTime"
+          }
+        }
+      },
+      "232": {
+        "ExtractTimestamp": {
+          "NEWTYPE": {
+            "TYPENAME": "ExtractTimestamp"
+          }
+        }
+      },
+      "233": {
+        "ExtractTimestampTz": {
+          "NEWTYPE": {
+            "TYPENAME": "ExtractTimestampTz"
+          }
+        }
+      },
+      "234": {
+        "ExtractDate": {
+          "NEWTYPE": {
+            "TYPENAME": "ExtractDate"
+          }
+        }
+      },
+      "235": {
+        "DatePartInterval": {
+          "NEWTYPE": {
+            "TYPENAME": "DatePartInterval"
+          }
+        }
+      },
+      "236": {
+        "DatePartTime": {
+          "NEWTYPE": {
+            "TYPENAME": "DatePartTime"
+          }
+        }
+      },
+      "237": {
+        "DatePartTimestamp": {
+          "NEWTYPE": {
+            "TYPENAME": "DatePartTimestamp"
+          }
+        }
+      },
+      "238": {
+        "DatePartTimestampTz": {
+          "NEWTYPE": {
+            "TYPENAME": "DatePartTimestampTz"
+          }
+        }
+      },
+      "239": {
+        "DateTruncTimestamp": {
+          "NEWTYPE": {
+            "TYPENAME": "DateTruncTimestamp"
+          }
+        }
+      },
+      "240": {
+        "DateTruncTimestampTz": {
+          "NEWTYPE": {
+            "TYPENAME": "DateTruncTimestampTz"
+          }
+        }
+      },
+      "241": {
+        "TimezoneTimestamp": {
+          "NEWTYPE": {
+            "TYPENAME": "TimezoneTimestamp"
+          }
+        }
+      },
+      "242": {
+        "TimezoneTimestampTz": {
+          "NEWTYPE": {
+            "TYPENAME": "TimezoneTimestampTz"
+          }
+        }
+      },
+      "243": {
+        "TimezoneTime": {
+          "NEWTYPE": {
+            "TYPENAME": "TimezoneTime"
+          }
+        }
+      },
+      "244": {
+        "ToTimestamp": {
+          "NEWTYPE": {
+            "TYPENAME": "ToTimestamp"
+          }
+        }
+      },
+      "245": {
+        "ToCharTimestamp": {
+          "NEWTYPE": {
+            "TYPENAME": "ToCharTimestamp"
+          }
+        }
+      },
+      "246": {
+        "ToCharTimestampTz": {
+          "NEWTYPE": {
+            "TYPENAME": "ToCharTimestampTz"
+          }
+        }
+      },
+      "247": {
+        "JustifyDays": {
+          "NEWTYPE": {
+            "TYPENAME": "JustifyDays"
+          }
+        }
+      },
+      "248": {
+        "JustifyHours": {
+          "NEWTYPE": {
+            "TYPENAME": "JustifyHours"
+          }
+        }
+      },
+      "249": {
+        "JustifyInterval": {
+          "NEWTYPE": {
+            "TYPENAME": "JustifyInterval"
+          }
+        }
+      },
+      "250": {
+        "JsonbArrayLength": {
+          "NEWTYPE": {
+            "TYPENAME": "JsonbArrayLength"
+          }
+        }
+      },
+      "251": {
+        "JsonbTypeof": {
+          "NEWTYPE": {
+            "TYPENAME": "JsonbTypeof"
+          }
+        }
+      },
+      "252": {
+        "JsonbStripNulls": {
+          "NEWTYPE": {
+            "TYPENAME": "JsonbStripNulls"
+          }
+        }
+      },
+      "253": {
+        "JsonbPretty": {
+          "NEWTYPE": {
+            "TYPENAME": "JsonbPretty"
+          }
+        }
+      },
+      "254": {
+        "ParseCatalogAclMode": {
+          "NEWTYPE": {
+            "TYPENAME": "ParseCatalogAclMode"
+          }
+        }
+      },
+      "255": {
+        "ParseCatalogAuditLogDetails": {
+          "NEWTYPE": {
+            "TYPENAME": "ParseCatalogAuditLogDetails"
+          }
+        }
+      },
+      "256": {
+        "ParseCatalogCreateSql": {
+          "NEWTYPE": {
+            "TYPENAME": "ParseCatalogCreateSql"
+          }
+        }
+      },
+      "257": {
+        "ParseCatalogId": {
+          "NEWTYPE": {
+            "TYPENAME": "ParseCatalogId"
+          }
+        }
+      },
+      "258": {
+        "ParseCatalogPrivileges": {
+          "NEWTYPE": {
+            "TYPENAME": "ParseCatalogPrivileges"
+          }
+        }
+      },
+      "259": {
+        "ParseKafkaSourceDetails": {
+          "NEWTYPE": {
+            "TYPENAME": "ParseKafkaSourceDetails"
+          }
+        }
+      },
+      "260": {
+        "ParsePostgresSourceDetails": {
+          "NEWTYPE": {
+            "TYPENAME": "ParsePostgresSourceDetails"
+          }
+        }
+      },
+      "261": {
+        "RedactSql": {
+          "NEWTYPE": {
+            "TYPENAME": "RedactSql"
+          }
+        }
+      },
+      "262": {
+        "RoundFloat32": {
+          "NEWTYPE": {
+            "TYPENAME": "RoundFloat32"
+          }
+        }
+      },
+      "263": {
+        "RoundFloat64": {
+          "NEWTYPE": {
+            "TYPENAME": "RoundFloat64"
+          }
+        }
+      },
+      "264": {
+        "RoundNumeric": {
+          "NEWTYPE": {
+            "TYPENAME": "RoundNumeric"
+          }
+        }
+      },
+      "265": {
+        "TruncFloat32": {
+          "NEWTYPE": {
+            "TYPENAME": "TruncFloat32"
+          }
+        }
+      },
+      "266": {
+        "TruncFloat64": {
+          "NEWTYPE": {
+            "TYPENAME": "TruncFloat64"
+          }
+        }
+      },
+      "267": {
+        "TruncNumeric": {
+          "NEWTYPE": {
+            "TYPENAME": "TruncNumeric"
+          }
+        }
+      },
+      "268": {
+        "TrimWhitespace": {
+          "NEWTYPE": {
+            "TYPENAME": "TrimWhitespace"
+          }
+        }
+      },
+      "269": {
+        "TrimLeadingWhitespace": {
+          "NEWTYPE": {
+            "TYPENAME": "TrimLeadingWhitespace"
+          }
+        }
+      },
+      "270": {
+        "TrimTrailingWhitespace": {
+          "NEWTYPE": {
+            "TYPENAME": "TrimTrailingWhitespace"
+          }
+        }
+      },
+      "271": {
+        "Initcap": {
+          "NEWTYPE": {
+            "TYPENAME": "Initcap"
+          }
+        }
+      },
+      "272": {
+        "RecordGet": {
+          "NEWTYPE": {
+            "TYPENAME": "RecordGet"
+          }
+        }
+      },
+      "273": {
+        "ListLength": {
+          "NEWTYPE": {
+            "TYPENAME": "ListLength"
+          }
+        }
+      },
+      "274": {
+        "MapLength": {
+          "NEWTYPE": {
+            "TYPENAME": "MapLength"
+          }
+        }
+      },
+      "275": {
+        "MapBuildFromRecordList": {
+          "NEWTYPE": {
+            "TYPENAME": "MapBuildFromRecordList"
+          }
+        }
+      },
+      "276": {
+        "Upper": {
+          "NEWTYPE": {
+            "TYPENAME": "Upper"
+          }
+        }
+      },
+      "277": {
+        "Lower": {
+          "NEWTYPE": {
+            "TYPENAME": "Lower"
+          }
+        }
+      },
+      "278": {
+        "Cos": {
+          "NEWTYPE": {
+            "TYPENAME": "Cos"
+          }
+        }
+      },
+      "279": {
+        "Acos": {
+          "NEWTYPE": {
+            "TYPENAME": "Acos"
+          }
+        }
+      },
+      "280": {
+        "Cosh": {
+          "NEWTYPE": {
+            "TYPENAME": "Cosh"
+          }
+        }
+      },
+      "281": {
+        "Acosh": {
+          "NEWTYPE": {
+            "TYPENAME": "Acosh"
+          }
+        }
+      },
+      "282": {
+        "Sin": {
+          "NEWTYPE": {
+            "TYPENAME": "Sin"
+          }
+        }
+      },
+      "283": {
+        "Asin": {
+          "NEWTYPE": {
+            "TYPENAME": "Asin"
+          }
+        }
+      },
+      "284": {
+        "Sinh": {
+          "NEWTYPE": {
+            "TYPENAME": "Sinh"
+          }
+        }
+      },
+      "285": {
+        "Asinh": {
+          "NEWTYPE": {
+            "TYPENAME": "Asinh"
+          }
+        }
+      },
+      "286": {
+        "Tan": {
+          "NEWTYPE": {
+            "TYPENAME": "Tan"
+          }
+        }
+      },
+      "287": {
+        "Atan": {
+          "NEWTYPE": {
+            "TYPENAME": "Atan"
+          }
+        }
+      },
+      "288": {
+        "Tanh": {
+          "NEWTYPE": {
+            "TYPENAME": "Tanh"
+          }
+        }
+      },
+      "289": {
+        "Atanh": {
+          "NEWTYPE": {
+            "TYPENAME": "Atanh"
+          }
+        }
+      },
+      "290": {
+        "Cot": {
+          "NEWTYPE": {
+            "TYPENAME": "Cot"
+          }
+        }
+      },
+      "291": {
+        "Degrees": {
+          "NEWTYPE": {
+            "TYPENAME": "Degrees"
+          }
+        }
+      },
+      "292": {
+        "Radians": {
+          "NEWTYPE": {
+            "TYPENAME": "Radians"
+          }
+        }
+      },
+      "293": {
+        "Log10": {
+          "NEWTYPE": {
+            "TYPENAME": "Log10"
+          }
+        }
+      },
+      "294": {
+        "Log10Numeric": {
+          "NEWTYPE": {
+            "TYPENAME": "Log10Numeric"
+          }
+        }
+      },
+      "295": {
+        "Ln": {
+          "NEWTYPE": {
+            "TYPENAME": "Ln"
+          }
+        }
+      },
+      "296": {
+        "LnNumeric": {
+          "NEWTYPE": {
+            "TYPENAME": "LnNumeric"
+          }
+        }
+      },
+      "297": {
+        "Exp": {
+          "NEWTYPE": {
+            "TYPENAME": "Exp"
+          }
+        }
+      },
+      "298": {
+        "ExpNumeric": {
+          "NEWTYPE": {
+            "TYPENAME": "ExpNumeric"
+          }
+        }
+      },
+      "299": {
+        "Sleep": {
+          "NEWTYPE": {
+            "TYPENAME": "Sleep"
+          }
+        }
+      },
+      "300": {
+        "Panic": {
+          "NEWTYPE": {
+            "TYPENAME": "Panic"
+          }
+        }
+      },
+      "301": {
+        "AdjustNumericScale": {
+          "NEWTYPE": {
+            "TYPENAME": "AdjustNumericScale"
+          }
+        }
+      },
+      "302": {
+        "PgColumnSize": {
+          "NEWTYPE": {
+            "TYPENAME": "PgColumnSize"
+          }
+        }
+      },
+      "303": {
+        "MzRowSize": {
+          "NEWTYPE": {
+            "TYPENAME": "MzRowSize"
+          }
+        }
+      },
+      "304": {
+        "MzTypeName": {
+          "NEWTYPE": {
+            "TYPENAME": "MzTypeName"
+          }
+        }
+      },
+      "305": {
+        "StepMzTimestamp": {
+          "NEWTYPE": {
+            "TYPENAME": "StepMzTimestamp"
+          }
+        }
+      },
+      "306": {
+        "RangeLower": {
+          "NEWTYPE": {
+            "TYPENAME": "RangeLower"
+          }
+        }
+      },
+      "307": {
+        "RangeUpper": {
+          "NEWTYPE": {
+            "TYPENAME": "RangeUpper"
+          }
+        }
+      },
+      "308": {
+        "RangeEmpty": {
+          "NEWTYPE": {
+            "TYPENAME": "RangeEmpty"
+          }
+        }
+      },
+      "309": {
+        "RangeLowerInc": {
+          "NEWTYPE": {
+            "TYPENAME": "RangeLowerInc"
+          }
+        }
+      },
+      "310": {
+        "RangeUpperInc": {
+          "NEWTYPE": {
+            "TYPENAME": "RangeUpperInc"
+          }
+        }
+      },
+      "311": {
+        "RangeLowerInf": {
+          "NEWTYPE": {
+            "TYPENAME": "RangeLowerInf"
+          }
+        }
+      },
+      "312": {
+        "RangeUpperInf": {
+          "NEWTYPE": {
+            "TYPENAME": "RangeUpperInf"
+          }
+        }
+      },
+      "313": {
+        "MzAclItemGrantor": {
+          "NEWTYPE": {
+            "TYPENAME": "MzAclItemGrantor"
+          }
+        }
+      },
+      "314": {
+        "MzAclItemGrantee": {
+          "NEWTYPE": {
+            "TYPENAME": "MzAclItemGrantee"
+          }
+        }
+      },
+      "315": {
+        "MzAclItemPrivileges": {
+          "NEWTYPE": {
+            "TYPENAME": "MzAclItemPrivileges"
+          }
+        }
+      },
+      "316": {
+        "MzFormatPrivileges": {
+          "NEWTYPE": {
+            "TYPENAME": "MzFormatPrivileges"
+          }
+        }
+      },
+      "317": {
+        "MzValidatePrivileges": {
+          "NEWTYPE": {
+            "TYPENAME": "MzValidatePrivileges"
+          }
+        }
+      },
+      "318": {
+        "MzValidateRolePrivilege": {
+          "NEWTYPE": {
+            "TYPENAME": "MzValidateRolePrivilege"
+          }
+        }
+      },
+      "319": {
+        "AclItemGrantor": {
+          "NEWTYPE": {
+            "TYPENAME": "AclItemGrantor"
+          }
+        }
+      },
+      "320": {
+        "AclItemGrantee": {
+          "NEWTYPE": {
+            "TYPENAME": "AclItemGrantee"
+          }
+        }
+      },
+      "321": {
+        "AclItemPrivileges": {
+          "NEWTYPE": {
+            "TYPENAME": "AclItemPrivileges"
+          }
+        }
+      },
+      "322": {
+        "QuoteIdent": {
+          "NEWTYPE": {
+            "TYPENAME": "QuoteIdent"
+          }
+        }
+      },
+      "323": {
+        "TryParseMonotonicIso8601Timestamp": {
+          "NEWTYPE": {
+            "TYPENAME": "TryParseMonotonicIso8601Timestamp"
+          }
+        }
+      },
+      "324": {
+        "RegexpSplitToArray": {
+          "NEWTYPE": {
+            "TYPENAME": "RegexpSplitToArrayStatic"
+          }
+        }
+      },
+      "325": {
+        "PgSizePretty": {
+          "NEWTYPE": {
+            "TYPENAME": "PgSizePretty"
+          }
+        }
+      },
+      "326": {
+        "Crc32Bytes": {
+          "NEWTYPE": {
+            "TYPENAME": "Crc32Bytes"
+          }
+        }
+      },
+      "327": {
+        "Crc32String": {
+          "NEWTYPE": {
+            "TYPENAME": "Crc32String"
+          }
+        }
+      },
+      "328": {
+        "KafkaMurmur2Bytes": {
+          "NEWTYPE": {
+            "TYPENAME": "KafkaMurmur2Bytes"
+          }
+        }
+      },
+      "329": {
+        "KafkaMurmur2String": {
+          "NEWTYPE": {
+            "TYPENAME": "KafkaMurmur2String"
+          }
+        }
+      },
+      "330": {
+        "SeahashBytes": {
+          "NEWTYPE": {
+            "TYPENAME": "SeahashBytes"
+          }
+        }
+      },
+      "331": {
+        "SeahashString": {
+          "NEWTYPE": {
+            "TYPENAME": "SeahashString"
+          }
+        }
+      },
+      "332": {
+        "Reverse": {
+          "NEWTYPE": {
+            "TYPENAME": "Reverse"
+          }
+        }
+      }
+    }
+  },
+  "UnmaterializableFunc": {
+    "ENUM": {
+      "0": {
+        "CurrentDatabase": "UNIT"
+      },
+      "1": {
+        "CurrentSchema": "UNIT"
+      },
+      "2": {
+        "CurrentSchemasWithSystem": "UNIT"
+      },
+      "3": {
+        "CurrentSchemasWithoutSystem": "UNIT"
+      },
+      "4": {
+        "CurrentTimestamp": "UNIT"
+      },
+      "5": {
+        "CurrentUser": "UNIT"
+      },
+      "6": {
+        "IsRbacEnabled": "UNIT"
+      },
+      "7": {
+        "MzIsSuperuser": "UNIT"
+      },
+      "8": {
+        "MzNow": "UNIT"
+      },
+      "9": {
+        "MzRoleOidMemberships": "UNIT"
+      },
+      "10": {
+        "MzSessionId": "UNIT"
+      },
+      "11": {
+        "MzSessionRoleMemberships": "UNIT"
+      },
+      "12": {
+        "MzUptime": "UNIT"
+      },
+      "13": {
+        "MzVersion": "UNIT"
+      },
+      "14": {
+        "MzVersionNum": "UNIT"
+      },
+      "15": {
+        "PgBackendPid": "UNIT"
+      },
+      "16": {
+        "PgPostmasterStartTime": "UNIT"
+      },
+      "17": {
+        "SessionUser": "UNIT"
+      },
+      "18": {
+        "Version": "UNIT"
+      },
+      "19": {
+        "ViewableVariables": "UNIT"
+      }
+    }
+  },
+  "Upper": "UNITSTRUCT",
+  "UuidGenerateV5": "UNITSTRUCT",
+  "VarCharMaxLength": {
+    "NEWTYPESTRUCT": "U32"
+  },
+  "VariadicFunc": {
+    "ENUM": {
+      "0": {
+        "Coalesce": {
+          "NEWTYPE": {
+            "TYPENAME": "Coalesce"
+          }
+        }
+      },
+      "1": {
+        "Greatest": {
+          "NEWTYPE": {
+            "TYPENAME": "Greatest"
+          }
+        }
+      },
+      "2": {
+        "Least": {
+          "NEWTYPE": {
+            "TYPENAME": "Least"
+          }
+        }
+      },
+      "3": {
+        "Concat": {
+          "NEWTYPE": {
+            "TYPENAME": "Concat"
+          }
+        }
+      },
+      "4": {
+        "ConcatWs": {
+          "NEWTYPE": {
+            "TYPENAME": "ConcatWs"
+          }
+        }
+      },
+      "5": {
+        "MakeTimestamp": {
+          "NEWTYPE": {
+            "TYPENAME": "MakeTimestamp"
+          }
+        }
+      },
+      "6": {
+        "PadLeading": {
+          "NEWTYPE": {
+            "TYPENAME": "PadLeading"
+          }
+        }
+      },
+      "7": {
+        "Substr": {
+          "NEWTYPE": {
+            "TYPENAME": "Substr"
+          }
+        }
+      },
+      "8": {
+        "Replace": {
+          "NEWTYPE": {
+            "TYPENAME": "Replace"
+          }
+        }
+      },
+      "9": {
+        "JsonbBuildArray": {
+          "NEWTYPE": {
+            "TYPENAME": "JsonbBuildArray"
+          }
+        }
+      },
+      "10": {
+        "JsonbBuildObject": {
+          "NEWTYPE": {
+            "TYPENAME": "JsonbBuildObject"
+          }
+        }
+      },
+      "11": {
+        "MapBuild": {
+          "NEWTYPE": {
+            "TYPENAME": "MapBuild"
+          }
+        }
+      },
+      "12": {
+        "ArrayCreate": {
+          "NEWTYPE": {
+            "TYPENAME": "ArrayCreate"
+          }
+        }
+      },
+      "13": {
+        "ArrayToString": {
+          "NEWTYPE": {
+            "TYPENAME": "ArrayToString"
+          }
+        }
+      },
+      "14": {
+        "ArrayIndex": {
+          "NEWTYPE": {
+            "TYPENAME": "ArrayIndex"
+          }
+        }
+      },
+      "15": {
+        "ListCreate": {
+          "NEWTYPE": {
+            "TYPENAME": "ListCreate"
+          }
+        }
+      },
+      "16": {
+        "RecordCreate": {
+          "NEWTYPE": {
+            "TYPENAME": "RecordCreate"
+          }
+        }
+      },
+      "17": {
+        "ListIndex": {
+          "NEWTYPE": {
+            "TYPENAME": "ListIndex"
+          }
+        }
+      },
+      "18": {
+        "ListSliceLinear": {
+          "NEWTYPE": {
+            "TYPENAME": "ListSliceLinear"
+          }
+        }
+      },
+      "19": {
+        "SplitPart": {
+          "NEWTYPE": {
+            "TYPENAME": "SplitPart"
+          }
+        }
+      },
+      "20": {
+        "RegexpMatch": {
+          "NEWTYPE": {
+            "TYPENAME": "RegexpMatch"
+          }
+        }
+      },
+      "21": {
+        "HmacString": {
+          "NEWTYPE": {
+            "TYPENAME": "HmacString"
+          }
+        }
+      },
+      "22": {
+        "HmacBytes": {
+          "NEWTYPE": {
+            "TYPENAME": "HmacBytes"
+          }
+        }
+      },
+      "23": {
+        "ErrorIfNull": {
+          "NEWTYPE": {
+            "TYPENAME": "ErrorIfNull"
+          }
+        }
+      },
+      "24": {
+        "DateBinTimestamp": {
+          "NEWTYPE": {
+            "TYPENAME": "DateBinTimestamp"
+          }
+        }
+      },
+      "25": {
+        "DateBinTimestampTz": {
+          "NEWTYPE": {
+            "TYPENAME": "DateBinTimestampTz"
+          }
+        }
+      },
+      "26": {
+        "DateDiffTimestamp": {
+          "NEWTYPE": {
+            "TYPENAME": "DateDiffTimestamp"
+          }
+        }
+      },
+      "27": {
+        "DateDiffTimestampTz": {
+          "NEWTYPE": {
+            "TYPENAME": "DateDiffTimestampTz"
+          }
+        }
+      },
+      "28": {
+        "DateDiffDate": {
+          "NEWTYPE": {
+            "TYPENAME": "DateDiffDate"
+          }
+        }
+      },
+      "29": {
+        "DateDiffTime": {
+          "NEWTYPE": {
+            "TYPENAME": "DateDiffTime"
+          }
+        }
+      },
+      "30": {
+        "And": {
+          "NEWTYPE": {
+            "TYPENAME": "And"
+          }
+        }
+      },
+      "31": {
+        "Or": {
+          "NEWTYPE": {
+            "TYPENAME": "Or"
+          }
+        }
+      },
+      "32": {
+        "RangeCreate": {
+          "NEWTYPE": {
+            "TYPENAME": "RangeCreate"
+          }
+        }
+      },
+      "33": {
+        "MakeAclItem": {
+          "NEWTYPE": {
+            "TYPENAME": "MakeAclItem"
+          }
+        }
+      },
+      "34": {
+        "MakeMzAclItem": {
+          "NEWTYPE": {
+            "TYPENAME": "MakeMzAclItem"
+          }
+        }
+      },
+      "35": {
+        "Translate": {
+          "NEWTYPE": {
+            "TYPENAME": "Translate"
+          }
+        }
+      },
+      "36": {
+        "ArrayPosition": {
+          "NEWTYPE": {
+            "TYPENAME": "ArrayPosition"
+          }
+        }
+      },
+      "37": {
+        "ArrayFill": {
+          "NEWTYPE": {
+            "TYPENAME": "ArrayFill"
+          }
+        }
+      },
+      "38": {
+        "StringToArray": {
+          "NEWTYPE": {
+            "TYPENAME": "StringToArray"
+          }
+        }
+      },
+      "39": {
+        "TimezoneTimeVariadic": {
+          "NEWTYPE": {
+            "TYPENAME": "TimezoneTimeVariadic"
+          }
+        }
+      },
+      "40": {
+        "RegexpSplitToArray": {
+          "NEWTYPE": {
+            "TYPENAME": "RegexpSplitToArray"
+          }
+        }
+      },
+      "41": {
+        "RegexpReplace": {
+          "NEWTYPE": {
+            "TYPENAME": "RegexpReplace"
+          }
+        }
+      },
+      "42": {
+        "CaseLiteral": {
+          "NEWTYPE": {
+            "TYPENAME": "CaseLiteral"
+          }
+        }
+      }
+    }
+  },
+  "WindowFrame": {
+    "STRUCT": [
+      {
+        "units": {
+          "TYPENAME": "WindowFrameUnits"
+        }
+      },
+      {
+        "start_bound": {
+          "TYPENAME": "WindowFrameBound"
+        }
+      },
+      {
+        "end_bound": {
+          "TYPENAME": "WindowFrameBound"
+        }
+      }
+    ]
+  },
+  "WindowFrameBound": {
+    "ENUM": {
+      "0": {
+        "UnboundedPreceding": "UNIT"
+      },
+      "1": {
+        "OffsetPreceding": {
+          "NEWTYPE": "U64"
+        }
+      },
+      "2": {
+        "CurrentRow": "UNIT"
+      },
+      "3": {
+        "OffsetFollowing": {
+          "NEWTYPE": "U64"
+        }
+      },
+      "4": {
+        "UnboundedFollowing": "UNIT"
+      }
+    }
+  },
+  "WindowFrameUnits": {
+    "ENUM": {
+      "0": {
+        "Rows": "UNIT"
+      },
+      "1": {
+        "Range": "UNIT"
+      },
+      "2": {
+        "Groups": "UNIT"
+      }
+    }
+  },
+  "WithOrdinality": {
+    "STRUCT": [
+      {
+        "inner": {
+          "TYPENAME": "TableFunc"
+        }
+      }
+    ]
+  }
+}

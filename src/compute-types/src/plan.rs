@@ -203,6 +203,66 @@ impl std::fmt::Display for LirId {
     }
 }
 
+/// Version of the stable LIR serialization format.
+///
+/// Bump this when the serialized representation of [`LirRelationExpr`] or
+/// anything it transitively contains changes. The schema snapshot test in
+/// `tests/lir_schema.rs` enforces that the traced schema matches the
+/// checked-in `tests/snapshots/lir_v{LIR_VERSION}.yaml`.
+pub const LIR_VERSION: u64 = 1;
+
+pub use constant_rows_serde::ConstantRows;
+
+/// Serializes `LirRelationNode::Constant`'s rows through the named
+/// [`ConstantRows`] mirror enum instead of std `Result`.
+///
+/// The stable LIR schema registry maps each container name to a single
+/// format, and `Result` would clash with the differently instantiated
+/// `Result` in `LirScalarExpr::Literal`. The mirror has the same variant
+/// order as `Result`, so the encoded bytes are unchanged.
+mod constant_rows_serde {
+    use mz_expr::EvalError;
+    use mz_repr::{Diff, Row, Timestamp};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    /// The serialized form of `LirRelationNode::Constant`'s rows.
+    #[derive(Debug, Serialize, Deserialize)]
+    pub enum ConstantRows {
+        /// See `Result::Ok`.
+        Ok(Vec<(Row, Timestamp, Diff)>),
+        /// See `Result::Err`.
+        Err(EvalError),
+    }
+
+    /// Borrowing mirror of [`ConstantRows`], to serialize without cloning.
+    #[derive(Serialize)]
+    #[serde(rename = "ConstantRows")]
+    enum ConstantRowsRef<'a> {
+        Ok(&'a Vec<(Row, Timestamp, Diff)>),
+        Err(&'a EvalError),
+    }
+
+    pub fn serialize<S: Serializer>(
+        rows: &Result<Vec<(Row, Timestamp, Diff)>, EvalError>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        let mirror = match rows {
+            Ok(rows) => ConstantRowsRef::Ok(rows),
+            Err(err) => ConstantRowsRef::Err(err),
+        };
+        mirror.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Result<Vec<(Row, Timestamp, Diff)>, EvalError>, D::Error> {
+        Ok(match ConstantRows::deserialize(deserializer)? {
+            ConstantRows::Ok(rows) => Ok(rows),
+            ConstantRows::Err(err) => Err(err),
+        })
+    }
+}
+
 /// A rendering plan with as much conditional logic as possible removed.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct LirRelationExpr {
@@ -218,6 +278,7 @@ pub enum LirRelationNode {
     /// A collection containing a pre-determined collection.
     Constant {
         /// Explicit update triples for the collection.
+        #[serde(with = "constant_rows_serde")]
         rows: Result<Vec<(Row, Timestamp, Diff)>, EvalError>,
     },
     /// A reference to a bound collection.
