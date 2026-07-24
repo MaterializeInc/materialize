@@ -18,6 +18,7 @@ use mz_expr::{Eval, MfpPlan};
 use mz_repr::{DatumVec, RowArena, SharedRow};
 use mz_repr::{Diff, Row, RowRef, Timestamp};
 use mz_timely_util::columnar::Column;
+use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
 use mz_timely_util::operator::StreamExt;
 use timely::Container;
 use timely::container::DrainContainer;
@@ -76,15 +77,19 @@ impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
         };
 
         use differential_dataflow::AsCollection;
-        let ok_collection = oks.as_collection();
+        let ok_collection = CollectionEdge::Columnar(oks.as_collection());
         let new_err_collection = errs.as_collection();
         let err_collection = err_collection.concat(new_err_collection);
-        CollectionBundle::from_collections(ok_collection, err_collection)
+        CollectionBundle::from_edge(ok_collection, err_collection)
     }
 }
 
 /// Output ok-session container builder for [`flat_map_stage`].
-type FlatMapOk<T> = ConsolidatingContainerBuilder<Vec<(Row, T, Diff)>>;
+///
+/// Consolidating like the err builder, but emits `Column<(Row, T, Diff)>` so
+/// the FlatMap output travels as the columnar edge. Output rows are freshly
+/// built by the mfp, so the owned give into staging is a move, not a new alloc.
+type FlatMapOk<T> = ConsolidatingColumnBuilder<Row, T, Diff>;
 /// Output err-session container builder for [`flat_map_stage`].
 type FlatMapErr<T> = ConsolidatingContainerBuilder<Vec<(DataflowErrorSer, T, Diff)>>;
 
@@ -137,7 +142,7 @@ fn flat_map_stage<'scope, T, C>(
     until: Antichain<Timestamp>,
     budget: usize,
 ) -> (
-    Stream<'scope, T, Vec<(Row, T, Diff)>>,
+    Stream<'scope, T, Column<(Row, T, Diff)>>,
     Stream<'scope, T, Vec<(DataflowErrorSer, T, Diff)>>,
 )
 where
@@ -329,7 +334,7 @@ mod tests {
     use differential_dataflow::input::Input;
     use mz_expr::MapFilterProject;
     use mz_repr::{Datum, ReprScalarType};
-    use timely::dataflow::operators::Inspect;
+    use timely::dataflow::operators::InspectCore;
     use timely::dataflow::operators::capture::{Capture, Extract};
 
     use super::*;
@@ -370,7 +375,13 @@ mod tests {
                 let scope = stream.scope();
                 let (oks, _errs) =
                     flat_map_stage(stream, scope, exprs, func, mfp, Antichain::new(), budget);
-                oks.inspect(move |_| *sink.borrow_mut() += 1);
+                // The columnar output ships whole `Column`s, so count records
+                // through the container rather than per raw element.
+                oks.inspect_container(move |event| {
+                    if let Ok((_time, data)) = event {
+                        *sink.borrow_mut() += data.borrow().into_index_iter().count();
+                    }
+                });
                 input
             });
 
@@ -479,21 +490,105 @@ mod tests {
             })
         });
 
-        let extract_sorted = |captured: std::sync::mpsc::Receiver<_>| {
-            let mut updates: Vec<(Row, Timestamp, Diff)> = captured
-                .extract()
-                .into_iter()
-                .flat_map(|(_, data)| data)
-                .collect();
-            updates.sort();
-            updates
-        };
-        let vec_updates = extract_sorted(vec_captured);
+        let vec_updates = extract_sorted_columns(vec_captured);
         assert!(!vec_updates.is_empty());
         assert!(
             vec_updates.iter().any(|(_, _, d)| *d < Diff::ZERO),
             "the retraction must survive as a negative diff"
         );
-        assert_eq!(vec_updates, extract_sorted(col_captured));
+        assert_eq!(vec_updates, extract_sorted_columns(col_captured));
+    }
+
+    /// Decodes a capture of the columnar FlatMap output into sorted owned
+    /// `(row, time, diff)` updates.
+    fn extract_sorted_columns(
+        captured: std::sync::mpsc::Receiver<
+            timely::dataflow::operators::capture::Event<Timestamp, Column<(Row, Timestamp, Diff)>>,
+        >,
+    ) -> Vec<(Row, Timestamp, Diff)> {
+        let mut updates: Vec<(Row, Timestamp, Diff)> = captured
+            .extract()
+            .into_iter()
+            .flat_map(|(_, col)| {
+                col.borrow()
+                    .into_index_iter()
+                    .map(|(v, t, d)| {
+                        (
+                            Columnar::into_owned(v),
+                            Columnar::into_owned(t),
+                            Columnar::into_owned(d),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        updates.sort();
+        updates
+    }
+
+    #[mz_ore::test]
+    fn flat_map_output_consolidates_within_batch() {
+        // Two distinct input rows whose table-function expansions overlap once
+        // the mfp projects away the differing `stop` column. The overlapping
+        // output rows land at the same time in one batch, so the consolidating
+        // columnar output builder must fold them into summed diffs.
+        let captured = timely::execute_directly(move |worker| {
+            worker.dataflow::<Timestamp, _, _>(|scope| {
+                let (mut input, collection) = scope.new_collection();
+                let exprs = vec![
+                    LirScalarExpr::column(0),
+                    LirScalarExpr::column(1),
+                    LirScalarExpr::literal_ok(Datum::Int64(1), ReprScalarType::Int64),
+                ];
+                let func = TableFunc::GenerateSeriesInt64;
+                // Project to only the generated value (column 2), collapsing the
+                // two input rows' distinct (start, stop) prefixes.
+                let mfp = MapFilterProject::<LirScalarExpr>::new(3)
+                    .project(vec![2])
+                    .into_plan()
+                    .expect("project mfp");
+                let stream = collection.inner;
+                let scope = stream.scope();
+                let (oks, _errs) = flat_map_stage(
+                    stream,
+                    scope,
+                    exprs,
+                    func,
+                    mfp,
+                    Antichain::new(),
+                    usize::MAX,
+                );
+                let captured = oks.capture();
+                // Both rows at t=0: generate_series(1, 2) -> {1, 2},
+                // generate_series(1, 3) -> {1, 2, 3}. Generated 1 and 2 appear on
+                // both, so they must fold to a diff of two.
+                input.advance_to(Timestamp::from(0_u64));
+                input.update(input_row(2), Diff::ONE);
+                input.update(input_row(3), Diff::ONE);
+                input.advance_to(Timestamp::from(1_u64));
+                input.flush();
+                captured
+            })
+        });
+
+        let updates = extract_sorted_columns(captured);
+        let expected = vec![
+            (
+                Row::pack_slice(&[Datum::Int64(1)]),
+                Timestamp::from(0_u64),
+                Diff::from(2),
+            ),
+            (
+                Row::pack_slice(&[Datum::Int64(2)]),
+                Timestamp::from(0_u64),
+                Diff::from(2),
+            ),
+            (
+                Row::pack_slice(&[Datum::Int64(3)]),
+                Timestamp::from(0_u64),
+                Diff::ONE,
+            ),
+        ];
+        assert_eq!(updates, expected);
     }
 }
