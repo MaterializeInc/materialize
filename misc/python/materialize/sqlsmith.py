@@ -64,6 +64,7 @@ known_errors = [
     "step size cannot equal zero",
     "stride must be greater than zero",
     "timestamp out of range",
+    "date out of range",
     "integer out of range",
     "unterminated escape sequence in LIKE",
     "null character not permitted",
