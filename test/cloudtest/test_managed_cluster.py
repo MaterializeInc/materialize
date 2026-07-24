@@ -511,3 +511,73 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
             """),
         no_reset=True,
     )
+
+    # A single-replica source (Postgres CDC) stays scheduled on the replica it
+    # already runs on and never hydrates on a reconfiguration's target
+    # replicas. Readiness must skip it and instead gate on the target replicas
+    # being online, so the resize completes and cuts over. Regression coverage
+    # for SQL-530, where this wedged until the deadline rolled the resize back.
+    mz.testdrive.run(
+        input=dedent("""
+            $ postgres-execute connection=postgres://postgres:postgres@postgres
+            ALTER USER postgres WITH replication;
+            DROP SCHEMA IF EXISTS public CASCADE;
+            DROP PUBLICATION IF EXISTS mz_source;
+            CREATE SCHEMA public;
+            CREATE TABLE pg_t (f1 INTEGER PRIMARY KEY);
+            ALTER TABLE pg_t REPLICA IDENTITY FULL;
+            INSERT INTO pg_t VALUES (1), (2), (3);
+            CREATE PUBLICATION mz_source FOR TABLE pg_t;
+
+            > CREATE CLUSTER source_reconfig (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
+
+            > CREATE SECRET pg_source_pass AS 'postgres'
+
+            > CREATE CONNECTION pg_source_conn TO POSTGRES (
+                HOST 'postgres',
+                DATABASE postgres,
+                USER postgres,
+                PASSWORD SECRET pg_source_pass
+              )
+
+            > CREATE SOURCE pg_source
+              IN CLUSTER source_reconfig
+              FROM POSTGRES CONNECTION pg_source_conn (PUBLICATION 'mz_source')
+
+            > CREATE TABLE pg_t FROM SOURCE pg_source (REFERENCE pg_t)
+
+            > SELECT * FROM pg_t
+            1
+            2
+            3
+
+            > ALTER CLUSTER source_reconfig SET (SIZE 'scale=1,workers=2') WITH (WAIT UNTIL READY (TIMEOUT '300s', ON TIMEOUT ROLLBACK))
+
+            # The background ALTER returns immediately. The raised timeout
+            # covers the target replica pod's boot before the cut-over.
+            $ set-sql-timeout duration=120s
+
+            > SELECT size FROM mz_clusters WHERE name = 'source_reconfig'
+            "scale=1,workers=2"
+
+            > SELECT recon.status
+              FROM mz_internal.mz_cluster_reconfigurations recon
+              JOIN mz_clusters c ON c.id = recon.cluster_id
+              WHERE c.name = 'source_reconfig'
+            finalized
+
+            $ set-sql-timeout duration=default
+
+            # The source keeps serving and ingesting across the cut-over.
+            $ postgres-execute connection=postgres://postgres:postgres@postgres
+            INSERT INTO pg_t VALUES (4);
+
+            > SELECT * FROM pg_t
+            1
+            2
+            3
+            4
+            """),
+        no_reset=True,
+    )
+    assert_no_pending("source_reconfig")

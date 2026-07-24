@@ -2133,8 +2133,12 @@ class FlipFlagsAction(Action):
             # `EXPERIMENTAL ARRANGEMENT COMPRESSION` is managed-only. The
             # tracked `managed` flag can lag reality (e.g. an in-flight CREATE
             # lost to a kill), so the option can land on a cluster that is
-            # unmanaged by the time the ALTER runs.
+            # unmanaged by the time the ALTER runs. Two code paths reject it:
+            # the planner and the sequencer's defense-in-depth check, each with
+            # its own message, and which one fires depends on the timing of the
+            # desync.
             "EXPERIMENTAL ARRANGEMENT COMPRESSION not supported for unmanaged clusters",
+            "Cannot change EXPERIMENTAL ARRANGEMENT COMPRESSION of unmanaged clusters",
         ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> bool:
@@ -2181,10 +2185,20 @@ class FlipFlagsAction(Action):
         conn = None
 
         try:
-            conn = self.create_system_connection(exe)
             if cluster is not None:
-                self.set_cluster_compression(conn, cluster)
+                # Serialize with ReconfigureClusterAction: any managed-to-
+                # managed ALTER CLUSTER folds onto an in-flight graceful
+                # reconfiguration record and, lacking a WAIT clause, replaces
+                # its deadline with the 24h default (SQL-568), which strands
+                # the reconfiguration that action is polling on.
+                # TODO: Reenable running without the lock when SQL-568 is fixed
+                with cluster.lock:
+                    if cluster not in exe.db.clusters:
+                        return False
+                    conn = self.create_system_connection(exe)
+                    self.set_cluster_compression(conn, cluster)
             else:
+                conn = self.create_system_connection(exe)
                 self.flip_flag(conn, flag_name, flag_value)
                 exe.db.flags[flag_name] = flag_value
             return True
@@ -2577,6 +2591,91 @@ class DropClusterReplicaAction(Action):
         return True
 
 
+class ReconfigureClusterAction(Action):
+    """Gracefully resize a random managed cluster and assert convergence.
+
+    Regression coverage for SQL-530: readiness must not wait for
+    single-replica sources (Postgres, MySQL, SQL Server) hosted on the
+    cluster, which never hydrate on the reconfiguration's target replicas
+    and used to wedge the reconfiguration until its deadline rolled it back.
+    """
+
+    def applicable(self, exe: Executor) -> bool:
+        # Convergence cannot be asserted while environmentd is killed,
+        # restored from backup, or fenced out by a 0dt deploy.
+        return exe.db.scenario not in (
+            Scenario.Kill,
+            Scenario.BackupRestore,
+            Scenario.ZeroDowntimeDeploy,
+        )
+
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            managed_clusters = [c for c in exe.db.clusters if c.managed]
+            if not managed_clusters:
+                return False
+            cluster = self.rng.choice(managed_clusters)
+        # Hold the cluster lock for the whole reconfiguration so no concurrent
+        # rename, swap, or drop invalidates the polled name and no concurrent
+        # resize folds another size into the in-flight record.
+        with cluster.lock:
+            if cluster not in exe.db.clusters:
+                return False
+            new_size = self.rng.choice(
+                [
+                    s
+                    for s in [
+                        "scale=1,workers=1",
+                        "scale=1,workers=4",
+                        "scale=2,workers=2",
+                    ]
+                    if s != cluster.size
+                ]
+            )
+            alter_started = time.time()
+            exe.execute(
+                f"ALTER CLUSTER {cluster} SET (SIZE '{new_size}') WITH (WAIT UNTIL READY (TIMEOUT '120s', ON TIMEOUT ROLLBACK))",
+                http=Http.RANDOM,
+            )
+            # With background ALTER CLUSTER the statement returns immediately
+            # and the controller converges the durable record, so poll the
+            # realized config. A rollback at the deadline (status "timed-out")
+            # is a legitimate outcome: readiness can be genuinely unreachable,
+            # e.g. when another worker put a REFRESH EVERY materialized view
+            # with a far-future refresh on the cluster, which cannot hydrate
+            # on the target replicas before its refresh time. What must never
+            # happen is the record staying "in-progress" past its deadline,
+            # which is how a wedged readiness check (SQL-530) manifests. Only
+            # trust a terminal status once the ALTER's own deadline has
+            # passed: builtin table reads can lag the catalog, so before that
+            # a terminal status can only be a stale record from an earlier
+            # reconfiguration of this cluster.
+            name_literal = cluster.name().replace("'", "''")
+            query = (
+                "SELECT c.size, r.status FROM mz_clusters c "
+                "LEFT JOIN mz_internal.mz_cluster_reconfigurations r ON r.cluster_id = c.id "
+                f"WHERE c.name = '{name_literal}'"
+            )
+            status = None
+            deadline = time.time() + 180
+            while time.time() < deadline:
+                exe.execute(query)
+                size, status = exe.cur.fetchall()[0]
+                if size == new_size:
+                    cluster.size = new_size
+                    return True
+                if time.time() > alter_started + 120 and status in (
+                    "timed-out",
+                    "resource-exhausted",
+                ):
+                    return True
+                time.sleep(1)
+            raise ValueError(
+                f"Graceful reconfiguration of cluster {cluster} to size {new_size} "
+                f"did not complete (reconfiguration status: {status})"
+            )
+
+
 class GrantPrivilegesAction(Action):
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
@@ -2743,7 +2842,16 @@ class ReconnectAction(Action):
                 # Reapply the session settings from Worker.run, they don't
                 # survive the reconnect.
                 cur.execute("SET auto_route_catalog_queries TO false")
-                cur.execute("SELECT pg_backend_pid()")
+                try:
+                    cur.execute("SELECT pg_backend_pid()")
+                except Exception as e:
+                    # FlipFlags may have poisoned the global default cluster to
+                    # `dont_exist`. Reconnecting can't fix a missing default, so
+                    # pin the session to a live cluster instead of wedging.
+                    if "unknown cluster 'dont_exist'" not in str(e):
+                        raise
+                    self._pin_default_cluster(exe, conn, cur)
+                    cur.execute("SELECT pg_backend_pid()")
                 if not exe.use_ws:
                     exe.pg_pid = cur.fetchall()[0][0]
             except Exception as e:
@@ -2766,6 +2874,27 @@ class ReconnectAction(Action):
             else:
                 break
         return True
+
+    def _pin_default_cluster(
+        self, exe: Executor, conn: Connection, cur: psycopg.Cursor
+    ) -> None:
+        """Pin the reconnected session onto `quickstart` (recreated at setup,
+        never dropped) after the global default was poisoned to `dont_exist`.
+        The WS session inherits the same poisoned default and must be pinned
+        too. `SET cluster` is rejected inside a transaction, so clear the
+        aborted probe transaction and run it in autocommit mode."""
+        conn.rollback()
+        prev_autocommit = conn.autocommit
+        conn.autocommit = True
+        cur.execute("SET cluster = quickstart")
+        conn.autocommit = prev_autocommit
+        if exe.use_ws:
+            # Best effort: on failure the worker just fails WS queries until
+            # FlipFlags resets the default, still better than wedging.
+            try:
+                exe.ws_query("SET cluster = quickstart;")
+            except QueryError:
+                pass
 
 
 class CancelAction(Action):
@@ -3737,6 +3866,7 @@ ddl_action_list = ActionList(
         (SwapClusterAction, 10),
         (CreateClusterReplicaAction, 2),
         (DropClusterReplicaAction, 2),
+        (ReconfigureClusterAction, 1),
         (SetClusterAction, 1),
         (CreateWebhookSourceAction, 2),
         (DropWebhookSourceAction, 2),

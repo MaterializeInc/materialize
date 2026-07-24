@@ -141,6 +141,10 @@ def run(
         system_exe.execute("ALTER SYSTEM SET max_sql_server_connections = 1000000")
         system_exe.execute("ALTER SYSTEM SET max_kafka_connections = 1000000")
         system_exe.execute("ALTER SYSTEM SET idle_in_transaction_session_timeout = 0")
+        # Gates the WITH (WAIT ...) clause used by ReconfigureClusterAction.
+        system_exe.execute(
+            "ALTER SYSTEM SET enable_zero_downtime_cluster_reconfiguration = true"
+        )
         # Most queries should not fail because of privileges
         for object_type in [
             "TABLES",
