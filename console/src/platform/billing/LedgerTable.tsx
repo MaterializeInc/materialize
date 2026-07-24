@@ -171,6 +171,8 @@ export interface LedgerGroupProps extends PropsWithChildren {
   "data-testid"?: string;
   /** data-testid for the collapsible child-row region. */
   contentTestId?: string;
+  /** Called with the new open state whenever the group is toggled. */
+  onOpenChange?: (isOpen: boolean) => void;
 }
 
 /** An expandable group: clickable parent row plus collapsible child rows. */
@@ -181,9 +183,14 @@ export const LedgerGroup = ({
   isLoading,
   "data-testid": testId,
   contentTestId,
+  onOpenChange,
   children,
 }: LedgerGroupProps) => {
   const { isOpen, onToggle } = useDisclosure({ defaultIsOpen });
+  const handleToggle = () => {
+    onToggle();
+    onOpenChange?.(!isOpen);
+  };
   return (
     <>
       <Box
@@ -191,11 +198,11 @@ export const LedgerGroup = ({
         role="row"
         aria-expanded={isOpen}
         tabIndex={0}
-        onClick={onToggle}
+        onClick={handleToggle}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
-            onToggle();
+            handleToggle();
           }
         }}
         cursor="pointer"

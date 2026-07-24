@@ -20,7 +20,7 @@ import { BarStack, LinePath } from "@visx/shape";
 import { useTooltip, useTooltipInPortal } from "@visx/tooltip";
 import { parseISO } from "date-fns";
 import { motion } from "framer-motion";
-import React, { useMemo } from "react";
+import React, { useMemo, useState } from "react";
 
 import {
   CostBreakdownAccount,
@@ -415,17 +415,20 @@ const AccountLedgerGroup = ({
   share,
   trend,
   color,
+  onOpenChange,
 }: {
   account: CostBreakdownAccount;
   total: number;
   share: number;
   trend: number[];
   color: string;
+  onOpenChange: (isOpen: boolean) => void;
 }) => {
   return (
     <LedgerGroup
       rowCount={account.clusters.length}
       defaultIsOpen={false}
+      onOpenChange={onOpenChange}
       data-testid="account-row"
       renderHeader={(isOpen) => (
         <>
@@ -500,6 +503,12 @@ const UnifiedLedger = ({
   const { colors } = useTheme<MaterializeTheme>();
   const totals = accounts.map((account) => accountTotal(account));
   const grandTotal = totals.reduce((sum, total) => sum + total, 0);
+  // Tracks which accounts are currently expanded, so the shared Usage header
+  // (SAS-169) can hide itself while nothing underneath it has a value to show.
+  const [openAccountIds, setOpenAccountIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const anyOpen = openAccountIds.size > 0;
 
   return (
     <LedgerTable
@@ -507,7 +516,7 @@ const UnifiedLedger = ({
       templateColumns="minmax(200px, 1fr) minmax(90px, auto) minmax(90px, auto) minmax(120px, 1fr) minmax(90px, auto)"
       columns={[
         { label: "Account / cluster" },
-        { label: "Usage", numeric: true },
+        { label: anyOpen ? "Usage" : null, numeric: true },
         { label: "Share of total", numeric: true },
         { label: "Trend" },
         { label: "Cost", numeric: true },
@@ -525,6 +534,17 @@ const UnifiedLedger = ({
             trend={series.get(account.external_customer_id) ?? []}
             color={
               colorFor.get(account.external_customer_id) ?? colors.accent.purple
+            }
+            onOpenChange={(isOpen) =>
+              setOpenAccountIds((prev) => {
+                const next = new Set(prev);
+                if (isOpen) {
+                  next.add(account.external_customer_id);
+                } else {
+                  next.delete(account.external_customer_id);
+                }
+                return next;
+              })
             }
           />
         );
