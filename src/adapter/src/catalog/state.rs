@@ -93,6 +93,7 @@ use serde::Serialize;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
+use uuid::Uuid;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::AdapterError;
@@ -168,6 +169,22 @@ pub struct CatalogState {
     // active connections, so this must be `#[serde(skip)]`.
     #[serde(skip)]
     pub(super) temporary_schemas: imbl::OrdMap<ConnectionId, Schema>,
+
+    // Maps the owning session of temporary objects to the connection whose
+    // temporary schema holds them, and back. Registered by the coordinator
+    // at a session's first temporary-item creation, strictly before the
+    // transaction that persists the item, and unregistered when the session
+    // terminates, strictly after the transaction dropping its temporary
+    // items has been applied.
+    //
+    // These maps are mutated outside of `Catalog::transact` and must stay
+    // invisible to session-visible catalog reads (name resolution, planning).
+    // Only the transact and apply paths for temporary items consult them.
+    // `#[serde(skip)]` for the same reason as `temporary_schemas`.
+    #[serde(skip)]
+    pub(super) ephemeral_owner_conns_by_uuid: imbl::OrdMap<Uuid, ConnectionId>,
+    #[serde(skip)]
+    pub(super) ephemeral_owner_uuids_by_conn: imbl::OrdMap<ConnectionId, Uuid>,
 
     // Read-only state not derived from the durable catalog.
     #[serde(skip)]
@@ -305,6 +322,8 @@ impl CatalogState {
             ambient_schemas_by_name: Default::default(),
             ambient_schemas_by_id: Default::default(),
             temporary_schemas: Default::default(),
+            ephemeral_owner_conns_by_uuid: Default::default(),
+            ephemeral_owner_uuids_by_conn: Default::default(),
             clusters_by_id: Default::default(),
             clusters_by_name: Default::default(),
             network_policies_by_name: Default::default(),
@@ -840,6 +859,52 @@ impl CatalogState {
     /// any temporary objects.
     pub fn has_temporary_schema(&self, conn: &ConnectionId) -> bool {
         self.temporary_schemas.contains_key(conn)
+    }
+
+    /// Returns true if the given connection's session is registered as an
+    /// ephemeral owner, i.e. it owns (or has owned) durable temporary items.
+    pub fn is_ephemeral_owner(&self, conn: &ConnectionId) -> bool {
+        self.ephemeral_owner_uuids_by_conn.contains_key(conn)
+    }
+
+    /// Converts an in-memory catalog entry into its durable representation.
+    ///
+    /// The durable owner of a temporary entry is the session whose connection
+    /// currently holds it, resolved from the ephemeral-owner mapping
+    /// registered at the session's first temporary-item creation. Returns an
+    /// error if no such mapping exists for the owning connection, so that
+    /// the conversion never silently persists a temporary item without its
+    /// owner session.
+    pub(super) fn durable_item(
+        &self,
+        entry: CatalogEntry,
+    ) -> Result<mz_catalog::durable::Item, AdapterError> {
+        let ephemeral_owner_session = entry
+            .conn_id()
+            .map(|conn_id| {
+                self.ephemeral_owner_uuids_by_conn
+                    .get(conn_id)
+                    .copied()
+                    .ok_or_else(|| {
+                        AdapterError::Internal(format!(
+                            "no session record for connection {conn_id} owning temporary item"
+                        ))
+                    })
+            })
+            .transpose()?;
+        let (create_sql, global_id, extra_versions) = entry.item.into_serialized();
+        Ok(mz_catalog::durable::Item {
+            id: entry.id,
+            oid: entry.oid,
+            global_id,
+            schema_id: entry.name.qualifiers.schema_spec.into(),
+            name: entry.name.item,
+            create_sql,
+            owner_id: entry.owner_id,
+            privileges: entry.privileges.into_all_values().collect(),
+            extra_versions,
+            ephemeral_owner_session,
+        })
     }
 
     /// Gets a type named `name` from exactly one of the system schemas.
@@ -1755,13 +1820,6 @@ impl CatalogState {
             .values()
             .filter_map(|database| database.schemas_by_id.get(schema_id))
             .chain(self.ambient_schemas_by_id.values())
-            .filter(|schema| schema.id() == &SchemaSpecifier::from(*schema_id))
-            .into_first()
-    }
-
-    pub(super) fn find_temp_schema(&self, schema_id: &SchemaId) -> &Schema {
-        self.temporary_schemas
-            .values()
             .filter(|schema| schema.id() == &SchemaSpecifier::from(*schema_id))
             .into_first()
     }

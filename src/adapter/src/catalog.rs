@@ -56,6 +56,7 @@ use mz_license_keys::ValidatedLicenseKey;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_ore::result::ResultExt as _;
+use mz_ore::soft_assert_or_log;
 use mz_persist_client::PersistClient;
 use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
@@ -1192,6 +1193,46 @@ impl Catalog {
             return Err(Error::new(ErrorKind::SchemaNotEmpty(MZ_TEMP_SCHEMA.into())));
         }
         Ok(())
+    }
+
+    /// Registers the session as an ephemeral owner: the `uuid` <-> `conn_id`
+    /// mapping used to stamp and apply durable temporary items owned by the
+    /// session.
+    ///
+    /// The coordinator calls this at a session's first temporary-item
+    /// creation, strictly before the transaction that persists the item, and
+    /// guards on [`CatalogState::is_ephemeral_owner`], so registering an
+    /// already-registered connection is a bug.
+    pub fn register_ephemeral_owner(&mut self, uuid: Uuid, conn_id: ConnectionId) {
+        let prev = self
+            .state
+            .ephemeral_owner_conns_by_uuid
+            .insert(uuid, conn_id.clone());
+        soft_assert_or_log!(
+            prev.is_none(),
+            "duplicate ephemeral owner registration for {uuid}"
+        );
+        self.state
+            .ephemeral_owner_uuids_by_conn
+            .insert(conn_id, uuid);
+    }
+
+    /// Removes the ephemeral-owner registration for `conn_id`.
+    ///
+    /// Callers guard on [`CatalogState::is_ephemeral_owner`], so
+    /// unregistering an unregistered connection is a bug. They must also
+    /// only do this after the transaction dropping the session's temporary
+    /// items has been applied, since applying an ephemeral item update
+    /// resolves the owning connection through this mapping.
+    pub fn unregister_ephemeral_owner(&mut self, conn_id: &ConnectionId) {
+        let uuid = self.state.ephemeral_owner_uuids_by_conn.remove(conn_id);
+        soft_assert_or_log!(
+            uuid.is_some(),
+            "no ephemeral owner registration for {conn_id}"
+        );
+        if let Some(uuid) = uuid {
+            self.state.ephemeral_owner_conns_by_uuid.remove(&uuid);
+        }
     }
 
     pub(crate) fn object_dependents(

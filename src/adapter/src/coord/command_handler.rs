@@ -67,6 +67,7 @@ use tracing::{Instrument, debug_span, info, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
+use crate::catalog::{DropObjectInfo, Op};
 use crate::command::{
     CatalogSnapshot, Command, ExecuteResponse, Response, SASLChallengeResponse,
     SASLVerifyProofResponse, StartupResponse, SuperuserAttribute,
@@ -81,7 +82,7 @@ use crate::error::{AdapterError, AuthenticationError};
 use crate::notice::AdapterNotice;
 use crate::session::{Session, TransactionOps, TransactionStatus};
 use crate::statement_logging::{StatementEndedExecutionReason, WatchSetCreation};
-use crate::util::{ClientTransmitter, ResultExt};
+use crate::util::ClientTransmitter;
 use crate::webhook::{
     AppendWebhookResponse, AppendWebhookValidator, WebhookAppender, WebhookAppenderInvalidator,
 };
@@ -2018,14 +2019,44 @@ impl Coordinator {
         // waits for its own retraction before it observes retirement.
         drop(retire_notify);
 
-        self.drop_temp_items(&conn_id).await;
+        // Drop all temporary items owned by the session, dependents included,
+        // in one catalog transaction. This must commit before the mz_sessions
+        // retraction below is queued, so a crash in between leaves a session
+        // row without items rather than orphaned temporary items. Cleanup
+        // that fails to commit (e.g. because this process is being fenced
+        // out) is reclaimed the next time a catalog is opened with write
+        // intent.
+        let temp_items: Vec<_> = self.catalog().state().get_temp_items(&conn_id).collect();
+        if !temp_items.is_empty() {
+            let all_items = self.catalog().object_dependents(&temp_items, &conn_id);
+            let op = Op::DropObjects(
+                all_items
+                    .into_iter()
+                    .map(DropObjectInfo::manual_drop_from_object_id)
+                    .collect(),
+            );
+            if let Err(err) = self
+                .catalog_transact_with_context(Some(&conn_id), None, vec![op])
+                .await
+            {
+                warn!(%conn_id, "failed to drop temporary items: {err:?}");
+            }
+        }
         // Only call catalog_mut() if a temporary schema actually exists for this connection.
         // This avoids an expensive Arc::make_mut clone for the common case where the connection
         // never created any temporary objects.
         if self.catalog().state().has_temporary_schema(&conn_id) {
-            self.catalog_mut()
-                .drop_temporary_schema(&conn_id)
-                .unwrap_or_terminate("unable to drop temporary schema");
+            if let Err(err) = self.catalog_mut().drop_temporary_schema(&conn_id) {
+                warn!(%conn_id, "failed to drop temporary schema: {err:?}");
+            }
+        }
+        // A session is registered as an ephemeral owner only if it created
+        // temporary items, so gating on it avoids an Arc::make_mut clone for
+        // the common case, like the temporary schema gate above. The
+        // transaction dropping the session's temporary items has been
+        // applied, so the registration is safe to remove.
+        if self.catalog().state().is_ephemeral_owner(&conn_id) {
+            self.catalog_mut().unregister_ephemeral_owner(&conn_id);
         }
         let conn = self.active_conns.remove(&conn_id).expect("conn must exist");
         let session_type = metrics::session_type_label_value(conn.user());
