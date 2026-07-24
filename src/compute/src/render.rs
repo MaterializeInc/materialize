@@ -2651,9 +2651,13 @@ mod interactive_import_tests {
                 (oks_hold, errs_hold)
             });
 
-            // The writer requests compaction well past `as_of`, then a filler tick reactivates the
-            // publisher so it recomputes its forwarded `since` from the current reader holds.
+            // The controller requests compaction well past `as_of`. `note_allow_compaction` forwards
+            // that floor into the published slot, exactly as `handle_allow_compaction` does in
+            // production, and the writer handle advances too so the trace can physically compact. A
+            // filler tick reactivates the publisher so it recomputes its forwarded `since` (still
+            // pinned to `as_of` here by the live reader hold).
             let target = Antichain::from_elem(Timestamp::from(10_u64));
+            registry.note_allow_compaction(id, 0, &target);
             oks_writer.set_logical_compaction(target.borrow());
             oks_writer.set_physical_compaction(target.borrow());
             tick(
@@ -2716,9 +2720,11 @@ mod interactive_import_tests {
                     publish_index_with_writer(scope, &registry, id, rows.clone())
                 });
 
-            // Advance the writer's compaction well past `as_of`, with no reader hold registered
-            // yet, then tick so the publisher forwards it into the published `since`.
+            // The controller advances compaction well past `as_of`, with no reader hold registered
+            // yet. `note_allow_compaction` forwards it into the slot so the publisher advances the
+            // published `since` past `as_of` on the next tick.
             let target = Antichain::from_elem(Timestamp::from(10_u64));
+            registry.note_allow_compaction(id, 0, &target);
             oks_writer.set_logical_compaction(target.borrow());
             oks_writer.set_physical_compaction(target.borrow());
             tick(
