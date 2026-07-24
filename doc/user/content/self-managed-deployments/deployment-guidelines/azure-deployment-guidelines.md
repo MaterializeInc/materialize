@@ -50,16 +50,12 @@ significantly degrade performance and is not supported.
 
 ### Swap support
 
-{{< tabs >}}
+{{< tabs level=4 >}}
 {{< tab "New Terraform" >}}
-#### New Terraform
-
 The new Materialize [Terraform module](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/azure/examples/simple) supports configuring swap out of the box.
 
 {{< /tab >}}
 {{< tab "Legacy Terraform" >}}
-#### Legacy Terraform
-
 The Legacy Terraform provider, adds preliminary swap support in v0.6.1, via the [`swap_enabled`](https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#input_swap_enabled) variable.
 With this change, the Terraform:
   - Creates a node group for Materialize.

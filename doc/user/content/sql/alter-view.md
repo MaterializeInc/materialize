@@ -12,10 +12,8 @@ Use `ALTER VIEW` to:
 
 ## Syntax
 
-{{< tabs >}}
+{{< tabs level=3 >}}
 {{< tab "Rename" >}}
-
-### Rename
 
 To rename a view:
 
@@ -23,8 +21,6 @@ To rename a view:
 
 {{< /tab >}}
 {{< tab "Change owner" >}}
-
-### Change owner
 
 To change the owner of a view:
 

@@ -83,31 +83,27 @@
         }
       });
 
-      // Generate TOC HTML
+      // Build the TOC as DOM nodes rather than an HTML string, so heading text
+      // is escaped automatically. A heading containing `<`, `>`, or `&` (e.g. a
+      // generics or comparison example) would otherwise corrupt the markup.
       if (tocItems.length > 0) {
-        let tocHTML = '<ul>';
-        tocItems.forEach(h2Item => {
-          tocHTML += `<li><a href="#${h2Item.id}">${h2Item.text}</a>`;
-          if (h2Item.children.length > 0) {
-            tocHTML += '<ul>';
-            h2Item.children.forEach(h3Item => {
-              tocHTML += `<li><a href="#${h3Item.id}">${h3Item.text}</a>`;
-              if (h3Item.children && h3Item.children.length > 0) {
-                tocHTML += '<ul>';
-                h3Item.children.forEach(h4Item => {
-                  tocHTML += `<li><a href="#${h4Item.id}">${h4Item.text}</a></li>`;
-                });
-                tocHTML += '</ul>';
-              }
-              tocHTML += '</li>';
-            });
-            tocHTML += '</ul>';
+        const buildNode = (item) => {
+          const li = document.createElement("li");
+          const a = document.createElement("a");
+          a.setAttribute("href", `#${item.id}`);
+          a.textContent = item.text;
+          li.appendChild(a);
+          if (item.children && item.children.length > 0) {
+            const ul = document.createElement("ul");
+            item.children.forEach(child => ul.appendChild(buildNode(child)));
+            li.appendChild(ul);
           }
-          tocHTML += '</li>';
-        });
-        tocHTML += '</ul>';
+          return li;
+        };
 
-        tocNav.innerHTML = tocHTML;
+        const rootUl = document.createElement("ul");
+        tocItems.forEach(item => rootUl.appendChild(buildNode(item)));
+        tocNav.replaceChildren(rootUl);
       }
     }, 50);
   });
@@ -180,113 +176,90 @@
     if (activeId) $(`.toc [href="#${activeId}"]`).addClass("active");
   });
 
+  // Fixed header height used to offset every scroll target: 65px banner + 60px
+  // menubar. Kept in one constant so hashchange and TOC-click paths land
+  // headings at the same position. NOTE: assumes the banner is present.
+  const HEADER_OFFSET = 125;
+
+  function scrollToHeading(el) {
+    const rect = el.getBoundingClientRect();
+    const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+    window.scrollTo({ top: rect.top + scrollTop - HEADER_OFFSET, behavior: "smooth" });
+  }
+
+  // Activate the tab that directly owns `pane`, mirroring the class toggling in
+  // the tab initializer (head.html): within a `.code-tabs` group the nav items
+  // and panes share an index.
+  function activatePane(pane) {
+    const group = pane.closest(".code-tabs");
+    if (!group) return;
+    const navTabs = group.querySelector(".nav-tabs");
+    const tabContent = group.querySelector(".tab-content");
+    if (!navTabs || !tabContent) return;
+
+    const siblingPanes = Array.from(tabContent.children).filter(c =>
+      c.classList.contains("tab-pane")
+    );
+    const index = siblingPanes.indexOf(pane);
+    if (index === -1) return;
+
+    siblingPanes.forEach(p => p.classList.remove("active"));
+    Array.from(navTabs.children).forEach(item => item.classList.remove("active"));
+    pane.classList.add("active");
+    if (navTabs.children[index]) navTabs.children[index].classList.add("active");
+  }
+
+  // Reveal `el` by activating every tab-pane on the path down to it. Handles
+  // nested tab groups: an inner heading is only visible once its outer pane is
+  // active too. A no-op when `el` is not inside any tab.
+  function activateTabsFor(el) {
+    const panes = [];
+    let pane = el.closest(".tab-pane");
+    while (pane) {
+      panes.push(pane);
+      pane = pane.parentElement ? pane.parentElement.closest(".tab-pane") : null;
+    }
+    // Outermost first, so each pane is shown before we descend into it.
+    panes.reverse().forEach(activatePane);
+  }
+
+  // Navigate to a heading by id: reveal its tab(s), then scroll. Shared by
+  // hashchange (deep links, back/forward) and TOC clicks so both paths behave
+  // identically, including for headings inside non-default or nested tabs.
+  function navigateToHeading(targetId) {
+    const targetElement = document.getElementById(targetId);
+    if (!targetElement) return;
+
+    activateTabsFor(targetElement);
+    // Activation toggles `display`, so wait one frame for layout to settle
+    // before measuring the heading's position.
+    requestAnimationFrame(() => {
+      scrollToHeading(targetElement);
+      $(window).trigger("scroll");
+    });
+  }
+
   // Scroll to our massaged offsets on a hashchange event, to override the
   // browser's automatic scroll to the unmassaged offset.
   $(window).on("hashchange", function () {
-    const hash = window.location.hash;
-    if (hash) {
-      const targetId = hash.substring(1);
-      const targetElement = document.getElementById(targetId);
-      if (targetElement) {
-        // Wait a bit for any tab switching to complete
-        setTimeout(() => {
-          const rect = targetElement.getBoundingClientRect();
-          const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
-          const targetOffset = rect.top + scrollTop - 125; // 65px banner + 60px menubar = 125px total
-          window.scrollTo({ top: targetOffset, behavior: 'smooth' });
-
-          // Update TOC highlighting after scrolling
-          setTimeout(() => {
-            $(window).trigger('scroll');
-          }, 50);
-        }, 100);
-      }
-    }
+    if (window.location.hash) navigateToHeading(window.location.hash.substring(1));
   });
 
   // Trigger an initial hash change event to handle scrolling to the page's
   // initial hash, but only if there's actually a hash in the URL.
   $(() => {
-    if (window.location.hash) {
-      $(window).trigger("hashchange");
-    }
+    if (window.location.hash) $(window).trigger("hashchange");
   });
 
-  // Handle TOC link clicks - prevent default and scroll manually to account for fixed header
-  $(document).on("click", ".toc a", function(e) {
-    const $clickedLink = $(this);
-    const href = $clickedLink.attr("href");
+  // Handle TOC link clicks: prevent the default jump, reveal any containing
+  // tab, update the URL, then scroll manually to account for the fixed header.
+  $(document).on("click", ".toc a", function (e) {
+    const href = $(this).attr("href");
     if (!href || !href.startsWith("#")) return;
+    if (!document.getElementById(href.substring(1))) return;
 
-    const targetId = href.substring(1); // Remove the # from href
-    const targetElement = document.getElementById(targetId);
-
-    if (targetElement) {
-      // Check if the target is inside a tab-pane
-      const tabPane = targetElement.closest(".tab-pane");
-
-      if (tabPane) {
-        // Prevent default anchor behavior - we'll handle scrolling manually
-        e.preventDefault();
-
-        // Find the parent tab group
-        const tabGroup = tabPane.closest(".code-tabs");
-
-        if (tabGroup) {
-          // Find the index of this tab-pane
-          const tabContent = tabGroup.querySelector(".tab-content");
-          const allPanes = Array.from(tabContent.children).filter(child =>
-            child.classList.contains("tab-pane")
-          );
-          const tabIndex = allPanes.indexOf(tabPane);
-
-          if (tabIndex !== -1) {
-            // Activate the tab
-            const navTabs = tabGroup.querySelector(".nav-tabs");
-            const navItems = navTabs.querySelectorAll(".nav-item");
-
-            // Remove active class from all tabs and panes
-            navItems.forEach(item => item.classList.remove("active"));
-            allPanes.forEach(pane => pane.classList.remove("active"));
-
-            // Add active class to the target tab and pane
-            if (navItems[tabIndex]) {
-              navItems[tabIndex].classList.add("active");
-            }
-            tabPane.classList.add("active");
-
-            // Scroll to the target heading after tab is activated
-            setTimeout(() => {
-              const rect = targetElement.getBoundingClientRect();
-              const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
-              // Add extra offset (125px: 65px banner + 60px menubar) to ensure this heading is clearly the active one
-              // when there are multiple headings close together (e.g., h2 followed by h3)
-              const targetOffset = rect.top + scrollTop - 125;
-              window.scrollTo({ top: targetOffset, behavior: 'smooth' });
-
-              // Update TOC highlighting after scrolling
-              setTimeout(() => {
-                $(window).trigger('scroll');
-              }, 50);
-            }, 50);
-          }
-        }
-      } else {
-        // Regular TOC link (not in a tab) - prevent default and scroll manually
-        e.preventDefault();
-        const rect = targetElement.getBoundingClientRect();
-        const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
-        const targetOffset = rect.top + scrollTop - 65;
-        window.scrollTo({ top: targetOffset, behavior: 'smooth' });
-
-        // Update URL hash without triggering hashchange
-        history.pushState(null, null, href);
-
-        // Update TOC highlighting after scrolling
-        setTimeout(() => {
-          $(window).trigger('scroll');
-        }, 50);
-      }
-    }
+    e.preventDefault();
+    history.pushState(null, null, href);
+    navigateToHeading(href.substring(1));
   });
 </script>

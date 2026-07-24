@@ -30,8 +30,6 @@ have no runtime effect.
 
 {{< tabs >}}
 
-<!-- ============ CLUSTER syntax ==============  -->
-
 {{< tab "Cluster" >}}
 
 For specific cluster(s):
@@ -52,8 +50,6 @@ FROM <role_name> [, ... ]
 ;
 ```
 {{</ tab >}}
-
-<!-- ================== Connection syntax ======================  -->
 
 {{< tab "Connection">}}
 
@@ -76,8 +72,6 @@ FROM <role_name> [, ... ];
 
 {{</ tab >}}
 
-<!-- ================== Database syntax =====================  -->
-
 {{< tab "Database">}}
 
 For specific database(s):
@@ -97,8 +91,6 @@ FROM <role_name> [, ... ];
 ```
 
 {{</ tab >}}
-
-<!-- =============== Materialized view syntax ===================  -->
 
 {{< tab "Materialized view/view/source">}}
 
@@ -128,8 +120,6 @@ FROM <role_name> [, ... ];
 
 {{</ tab >}}
 
-<!-- ================== Network policy syntax ==================  -->
-
 {{< tab "Network policy">}}
 
 For specific network policies:
@@ -149,8 +139,6 @@ FROM <role_name> [, ... ];
 ```
 
 {{</ tab >}}
-
-<!-- ==================== Schema syntax =====================  -->
 
 {{< tab "Schema">}}
 
@@ -172,8 +160,6 @@ FROM <role_name> [, ... ];
 
 {{</ tab >}}
 
-<!-- ==================== Secret syntax =====================  -->
-
 {{< tab "Secret">}}
 
 For specific secret(s):
@@ -194,8 +180,6 @@ FROM <role_name> [, ... ];
 
 {{</ tab >}}
 
-<!-- ==================== System syntax =====================  -->
-
 {{< tab "System">}}
 
 ```mzsql
@@ -205,8 +189,6 @@ FROM <role_name> [, ... ];
 ```
 
 {{</ tab >}}
-
-<!-- ==================== Type syntax =======================  -->
 
 {{< tab "Type">}}
 
@@ -228,8 +210,6 @@ FROM <role_name> [, ... ];
 ```
 
 {{</ tab >}}
-
-<!-- ======================= Table syntax =====================  -->
 
 {{< tab "Table">}}
 
