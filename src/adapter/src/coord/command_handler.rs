@@ -2027,6 +2027,11 @@ impl Coordinator {
                 .drop_temporary_schema(&conn_id)
                 .unwrap_or_terminate("unable to drop temporary schema");
         }
+        // The transaction dropping the session's temporary items has been
+        // applied, so the registration is safe to remove.
+        if self.catalog().state().is_ephemeral_owner(&conn_id) {
+            self.catalog_mut().unregister_ephemeral_owner(&conn_id);
+        }
         let conn = self.active_conns.remove(&conn_id).expect("conn must exist");
         let session_type = metrics::session_type_label_value(conn.user());
         self.metrics
