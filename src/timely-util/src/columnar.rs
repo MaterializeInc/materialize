@@ -168,11 +168,11 @@ where
     }
 }
 
-/// Words per 2 MiB. `length_in_words` returns serialized size in `u64` units,
+/// Words per 32 KiB. `length_in_words` returns serialized size in `u64` units,
 /// so this is the page count we round up to. Picked to match
 /// [`builder::ColumnBuilder`]'s output granularity so chunks shipped from the
 /// merger and chunks shipped from the builder are sized comparably.
-const SHIP_WORDS: usize = 1 << 18;
+const SHIP_WORDS: usize = 1 << 12;
 
 /// Returns true once the serialized size of `borrow` is within 10% of the next
 /// `SHIP_WORDS` boundary.
@@ -192,7 +192,7 @@ where
 impl<C: Columnar> SizableContainer for Column<C> {
     fn at_capacity(&self) -> bool {
         // Match `ColumnBuilder`'s ship heuristic: serialized size within 10%
-        // of the next 2 MiB. Aligns chunk-size choices across the two paths
+        // of the next 32 KiB. Aligns chunk-size choices across the two paths
         // and keeps recipients dealing with a single granularity.
         //
         // Serialized chunks (`Bytes` / `Align`) have no typed builder to push
