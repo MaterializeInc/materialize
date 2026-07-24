@@ -283,6 +283,10 @@ impl ArrangementSharingRegistry {
         };
         let should_evict = match slots.get(worker_index).and_then(|slot| slot.as_ref()) {
             Some(slot) => {
+                // NOTE: this consults only the `oks` adoption flag, not `errs`. That is sound
+                // only because every publish site (both maintenance sites in render.rs and
+                // `publish_logging_index`) adopts `oks` before `errs`, so there is no window
+                // where `errs` is adopted but `oks` is not.
                 let (adopted, strong_count) = slot.oks.adopted_and(|| Arc::strong_count(slot));
                 !adopted && strong_count == 1
             }
