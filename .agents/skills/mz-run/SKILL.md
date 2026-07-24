@@ -38,9 +38,13 @@ timestamp-oracle state is global, not per-worktree: every local `environmentd`
 across all worktrees shares it (mzdata only holds the blob and environment-id).
 Resetting while another instance runs wipes its state unrecoverably. Before
 `--reset`, check for another instance with `ss -ltnp | grep 6875` and
-`pgrep -af environmentd`. If one exists, reuse it or run on isolated ports and a
-separate CRDB. Prefer unit tests or `bin/mzcompose` (own containerized CRDB) over
-a second bare-metal instance.
+`pgrep -af environmentd`. If one exists, reuse it, or point yours at a different
+metadata backend with `--postgres <url>` (`bin/environmentd`, env `MZDEV_POSTGRES`)
+instead of the shared default. That can be a dedicated instance you spin up
+yourself, or a shared-but-different Postgres/CockroachDB you and others already
+point at deliberately, which avoids both the reset hazard and the cost of
+spinning up a fresh CRDB per instance. Prefer unit tests or `bin/mzcompose` (own
+containerized CRDB) over a second bare-metal instance when neither applies.
 
 Access Materialize using psql:
 * `psql -p 6875 -h localhost -U materialize` for regular access.

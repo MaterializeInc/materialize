@@ -126,9 +126,11 @@ Two files control license policy, **keep in sync**: `deny.toml` (`[licenses].all
 * A new feature flag should default off in production but default ON in the
   test/CI configuration, so the new code path is exercised by sqllogictest,
   testdrive, and optimizer goldens before it earns trust. Production safety and
-  test coverage are separate settings. Find how other recently added flags get
-  forced on in CI, for example a default-features-for-testing list or a system
-  variable test override, and follow that pattern.
+  test coverage are separate settings. Wire the override through
+  `system_parameter_default`: the `--system-parameter-default=NAME=VALUE` CLI
+  flag (env `SYSTEM_PARAMETER_DEFAULT`) for sqllogictest and environmentd
+  binaries, or `TestHarness::with_system_parameter_default` for Rust
+  integration tests.
 
 ## Code comments
 

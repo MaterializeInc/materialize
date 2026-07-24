@@ -41,8 +41,11 @@ bin/sqllogictest -- PATH [PATH ...]
 
 `PATH` is relative to the repo root, usually a file in `test/sqllogictest/`.
 sqllogictest accepts a list of files, not just one, and runs them in order.
-Prefer batching files into one invocation: it matches how CI drives the suite,
-so goldens generated one-file-per-process can diverge from CI's batched context.
+Prefer batching files into one invocation: each invocation bootstraps a fresh
+catalog and cluster, which is slow, so batching amortizes that startup cost
+across files instead of paying it per file. It also matches how CI drives the
+suite, so goldens generated one-file-per-process can diverge from CI's batched
+context.
 Rewrite expected results with `bin/sqllogictest -- --rewrite-results PATH`.
 
 When a plan changes only because of nondeterministic IDs in the output,
