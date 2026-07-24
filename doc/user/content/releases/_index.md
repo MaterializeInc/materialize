@@ -81,7 +81,7 @@ SELECT cluster_id, status, deadline, on_timeout, target, changes
 FROM mz_internal.mz_cluster_reconfigurations;
 ```
 
-For more information, see [`ALTER CLUSTER`: Monitoring a resize](/sql/alter-cluster/#monitoring-a-resize).
+For more information, see [`ALTER CLUSTER`: Resizing process](/sql/alter-cluster/#resizing-process).
 
 ### AWS Glue Schema Registry Support for Sinks {#v26.34-aws-glue-schema-registry-support-sinks}
 
