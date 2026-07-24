@@ -778,11 +778,11 @@ class Timestamp(DataType):
         in_query: bool = False,
     ) -> Any:
         if rng.randrange(100) == 0:
-            result = "1-01-01"
+            result = "0001-01-01"
         elif rng.randrange(100) == 0:
             result = "99999-12-31"
         else:
-            result = f"{rng.randrange(1, 100000)}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}"
+            result = f"{rng.randrange(1, 100000):04}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}"
         return f"TIMESTAMP '{result}'" if in_query else str(result)
 
     @staticmethod
@@ -813,11 +813,11 @@ class TimestampTz(DataType):
         in_query: bool = False,
     ) -> Any:
         if rng.randrange(100) == 0:
-            result = "1-01-01"
+            result = "0001-01-01"
         elif rng.randrange(100) == 0:
             result = "99999-12-31"
         else:
-            result = f"{rng.randrange(1, 100000)}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}"
+            result = f"{rng.randrange(1, 100000):04}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}"
         return f"TIMESTAMPTZ '{result}'" if in_query else str(result)
 
     @staticmethod
@@ -878,11 +878,11 @@ class Date(DataType):
         in_query: bool = False,
     ) -> Any:
         if rng.randrange(100) == 0:
-            result = "1-01-01"
+            result = "0001-01-01"
         elif rng.randrange(100) == 0:
             result = "99999-12-31"
         else:
-            result = f"{rng.randrange(1, 100000)}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}"
+            result = f"{rng.randrange(1, 100000):04}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}"
         return f"DATE '{result}'" if in_query else result
 
     @staticmethod
@@ -1099,8 +1099,8 @@ class DateRange(DataType):
         day2 = rng.randrange(1, 29)
         bounds = rng.choice(["[)", "[]", "()", "(]"])
         if in_query:
-            return f"daterange('{year1}-{month1}-{day1}'::date, '{year2}-{month2}-{day2}'::date, '{bounds}')"
-        return f"{bounds[0]}{year1}-{month1}-{day1},{year2}-{month2}-{day2}{bounds[1]}"
+            return f"daterange('{year1:04}-{month1}-{day1}'::date, '{year2:04}-{month2}-{day2}'::date, '{bounds}')"
+        return f"{bounds[0]}{year1:04}-{month1}-{day1},{year2:04}-{month2}-{day2}{bounds[1]}"
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
@@ -1134,8 +1134,8 @@ class TsRange(DataType):
         day2 = rng.randrange(1, 29)
         bounds = rng.choice(["[)", "[]", "()", "(]"])
         if in_query:
-            return f"tsrange('{year1}-{month1}-{day1}'::timestamp, '{year2}-{month2}-{day2}'::timestamp, '{bounds}')"
-        return f"{bounds[0]}{year1}-{month1}-{day1},{year2}-{month2}-{day2}{bounds[1]}"
+            return f"tsrange('{year1:04}-{month1}-{day1}'::timestamp, '{year2:04}-{month2}-{day2}'::timestamp, '{bounds}')"
+        return f"{bounds[0]}{year1:04}-{month1}-{day1},{year2:04}-{month2}-{day2}{bounds[1]}"
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
@@ -1169,8 +1169,8 @@ class TsTzRange(DataType):
         day2 = rng.randrange(1, 29)
         bounds = rng.choice(["[)", "[]", "()", "(]"])
         if in_query:
-            return f"tstzrange('{year1}-{month1}-{day1}'::timestamptz, '{year2}-{month2}-{day2}'::timestamptz, '{bounds}')"
-        return f"{bounds[0]}{year1}-{month1}-{day1},{year2}-{month2}-{day2}{bounds[1]}"
+            return f"tstzrange('{year1:04}-{month1}-{day1}'::timestamptz, '{year2:04}-{month2}-{day2}'::timestamptz, '{bounds}')"
+        return f"{bounds[0]}{year1:04}-{month1}-{day1},{year2:04}-{month2}-{day2}{bounds[1]}"
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
