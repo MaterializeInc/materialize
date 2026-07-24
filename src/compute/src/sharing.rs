@@ -253,6 +253,13 @@ impl ArrangementSharingRegistry {
     /// unadopted and unreferenced, so the registry does not leak it. An ADOPTED slot is left alone: it
     /// is cleaned up by the maintenance publisher's drop through [`Self::remove`].
     ///
+    /// This is registry HYGIENE, not a correctness mechanism, and has no production caller today. The
+    /// leaked slot it reclaims is a bounded, empty placeholder. Correctness of when an imported index
+    /// may compact or drop rests entirely on the controller's read-hold discipline (see
+    /// `mz_compute_client::controller::instance::Instance::finish_peek`), not on eviction: the
+    /// controller holds a read hold on the index for every reader and frees it only after the reader
+    /// retires. Retained for a future reader-teardown hygiene path and exercised by tests.
+    ///
     /// Call this from a reader's teardown after it has dropped its `Arc<SharedIndexArrangement>`. It is
     /// a no-op unless the map is the sole owner of the slot Arc, so calling it while another reader (or
     /// an in-flight adopter) still holds a clone does nothing.
