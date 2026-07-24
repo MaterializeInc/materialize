@@ -1,6 +1,6 @@
 ---
 source: src/storage-controller/src/persist_handles/read_only_table_worker.rs
-revision: 00cc513fa5
+revision: a60edac7f1
 ---
 
 # storage-controller::persist_handles::read_only_table_worker

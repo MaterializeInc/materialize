@@ -1,6 +1,6 @@
 ---
 source: src/compute-types/src/plan/lowering.rs
-revision: f74a121770
+revision: 380c8dd1a1
 ---
 
 # compute-types::plan::lowering

@@ -1,6 +1,6 @@
 ---
 source: src/cluster-controller/src/strategy.rs
-revision: 74f18a3354
+revision: fca741734d
 ---
 
 # cluster-controller::strategy
@@ -20,7 +20,7 @@ Key types:
 * `DesiredReplica` — a replica slot a strategy desires this tick, characterized by a `ReplicaShape`.
 * `SignalRequest` — declares which live signals a strategy needs for a cluster this tick: `hydration: bool` (probe per-replica hydration) and `hydratable_objects: bool` (check whether the cluster has at least one dataflow-backed object). The controller unions requests across strategies and fetches only what is needed.
 * `ConfigSignals` — environment-wide dyncfg values latched by the kernel once per tick: `burst_enabled` (the break-glass flag for the hydration-burst strategy) and `default_burst_linger` (the system-default linger duration written into new burst records when the policy omits one). Not durable state, so never witness material.
-* `LiveSignals` — the fulfilled live signals for one cluster: `hydrated_replicas` is the set of replica IDs (among controller-owned replicas) that have all current collections hydrated; `has_hydratable_objects` is whether the cluster has at least one dataflow-backed object. A signal not requested by any strategy is left at its empty default.
+* `LiveSignals` — the fulfilled live signals for one cluster: `hydrated_replicas` is the set of replica IDs (among controller-owned replicas) that are online and have all current collections hydrated; `has_hydratable_objects` is whether the cluster has at least one dataflow-backed object. A signal not requested by any strategy is left at its empty default.
 * `BaselineStrategy` — the always-present implicit strategy. Desires `replication_factor` replicas at the cluster's realized shape. With only the baseline engaged the desired set equals the realized set, so a steady-state managed cluster reconciles to no decisions. The baseline is what makes other strategies purely additive.
 * `BASELINE_STRATEGY_NAME` — the audit-attribution string `"baseline"`.
 * `GracefulReconfigurationStrategy` — engaged whenever the durable `reconfiguration` record is in progress. Desires `target.replication_factor` replicas at the target shape in addition to the baseline's realized-shape replicas. Once enough target replicas are hydrated, `update_state` cuts over (advances the realized config, marks the record finalized). On a timeout, behavior is governed by the record's `on_timeout`: `Commit` cuts over to the un-hydrated target, `Rollback` (the default) marks the record timed out and stops desiring the target replicas.

@@ -1,12 +1,13 @@
 ---
 source: src/adapter/src/catalog.rs
-revision: 605cc6fd1a
+revision: a60edac7f1
 ---
 
 # adapter::catalog
 
 The coordinator's catalog layer: wraps the `mz_catalog` crate's durable store and in-memory objects with the additional adapter-specific logic needed to drive DDL and serve catalog queries.
 `Catalog` is the top-level struct exposing the full catalog API: it holds a `CatalogState` (in-memory view), an `ExpressionCacheHandle`, a `transient_revision` counter, a `shared_transient_revision: Arc<AtomicU64>` shared across all clones, and delegates persistence to the durable store. `Catalog::transient_revision_is_current` compares the clone's frozen revision against the shared latest, letting a snapshot holder detect staleness from off-thread without a Coordinator round-trip.
+`CatalogUpperHandle` is a handle for advancing the durable catalog upper off the coordinator loop; its `advance_upper` method advances the upper to at least a given timestamp.
 Child modules divide responsibilities: `state` owns the in-memory data structures and `SessionCatalog` impl; `transact` executes atomic DDL operations; `apply` reconciles durable diffs into in-memory state; `open` bootstraps the catalog at startup; `migrate` rewrites stored SQL for syntax changes; `builtin_table_updates` maintains system-table row diffs; `consistency` provides invariant checking; `timeline` resolves timeline contexts for timestamp selection; and `cluster_state` projects live cluster config into plain-data `ExpectedClusterState` structs for conditional catalog writes.
 Re-exports include `InjectedAuditEvent` from `transact`. Builtin materialized views are handled alongside tables and views in descriptor tests.
 `is_reserved_role_name` returns true for names that match `is_reserved_name`, `is_public_role`, or the `RESERVED_ROLE_SPECIFICATION_NAMES` list. `RESERVED_ROLE_SPECIFICATION_NAMES` contains the five lowercase PostgreSQL role-specification keywords (`current_user`, `current_role`, `session_user`, `user`, `none`) that would be ambiguous in statements like `GRANT ... TO CURRENT_USER`; only the lowercase spellings are reserved, matching what unquoted identifiers normalize to.

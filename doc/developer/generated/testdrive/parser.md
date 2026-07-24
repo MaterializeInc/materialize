@@ -1,6 +1,6 @@
 ---
 source: src/testdrive/src/parser.rs
-revision: e72050bb7e
+revision: 5b2cefc829
 ---
 
 # testdrive::parser
