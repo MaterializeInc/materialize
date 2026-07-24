@@ -79,11 +79,13 @@ fn floor_numeric(mut a: Numeric) -> Numeric {
 }
 
 fn log_guard_numeric(val: &Numeric, function_name: &str) -> Result<(), EvalError> {
-    if val.is_negative() {
-        return Err(EvalError::NegativeOutOfDomain(function_name.into()));
-    }
+    // Check zero before the sign, like PostgreSQL, so that a negative zero
+    // (which the dec crate considers negative) reports the same error as +0.
     if val.is_zero() {
         return Err(EvalError::ZeroOutOfDomain(function_name.into()));
+    }
+    if val.is_negative() {
+        return Err(EvalError::NegativeOutOfDomain(function_name.into()));
     }
     Ok(())
 }

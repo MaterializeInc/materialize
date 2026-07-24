@@ -1242,6 +1242,133 @@ SELECT * FROM t3 WHERE t3.c0 = 0.8::INT OR t3.c0 = -0.1;
 -0.1
 1
 
+# Regression tests for SQL-452: `LiteralConstraints` packs the equality
+# literal into a `Row` and the index lookup seeks that exact byte-encoded key.
+# SQL float equality treats -0.0 = 0.0 (and NaN = NaN), so row packing must
+# canonicalize the encodings that float equality conflates, otherwise a lookup
+# for +0.0 misses a stored -0.0.
+# NOTE: a genuine -0.0 needs a text->float cast (`'-0'::float8`), a `-0.0`
+# literal goes through `numeric` (no signed zero) and arrives as +0.0.
+
+statement ok
+CREATE TABLE t_neg_zero (id int, c0 float8)
+
+statement ok
+CREATE INDEX t_neg_zero_i ON t_neg_zero (c0)
+
+statement ok
+INSERT INTO t_neg_zero VALUES (1, '-0'::float8)
+
+# `-0.0 = 0.0` is true, so id=1 must be returned.
+query I
+SELECT id FROM t_neg_zero WHERE c0 = 0.0
+----
+1
+
+# Control: without a matching index (a filter scan) the row is also returned.
+statement ok
+CREATE TABLE t_neg_zero_noidx (id int, c0 float8)
+
+statement ok
+INSERT INTO t_neg_zero_noidx VALUES (1, '-0'::float8)
+
+query I
+SELECT id FROM t_neg_zero_noidx WHERE c0 = 0.0
+----
+1
+
+# Multiplicity (also covers float4): both zeros match `c0 = 0.0` and one
+# lookup key must find both rows.
+statement ok
+CREATE TABLE t_both_zero (c0 float4)
+
+statement ok
+CREATE INDEX t_both_zero_i ON t_both_zero (c0)
+
+statement ok
+INSERT INTO t_both_zero VALUES ('0'::float4), ('-0'::float4)
+
+query I
+SELECT count(*) FROM t_both_zero WHERE c0 = 0.0
+----
+2
+
+# The mirror image: a -0.0 literal must find a stored +0.0.
+statement ok
+CREATE TABLE t_pos_zero (c0 float8)
+
+statement ok
+CREATE INDEX t_pos_zero_i ON t_pos_zero (c0)
+
+statement ok
+INSERT INTO t_pos_zero VALUES ('0'::float8)
+
+query I
+SELECT count(*) FROM t_pos_zero WHERE c0 = '-0'::float8
+----
+1
+
+statement ok
+CREATE TABLE t_neg_zero_f4 (c0 float4)
+
+statement ok
+CREATE INDEX t_neg_zero_f4_i ON t_neg_zero_f4 (c0)
+
+statement ok
+INSERT INTO t_neg_zero_f4 VALUES ('-0'::float4)
+
+query I
+SELECT count(*) FROM t_neg_zero_f4 WHERE c0 = 0.0
+----
+1
+
+# NaN: SQL float equality treats NaN = NaN, but NaN bit patterns differ
+# (parsed 'NaN' vs arithmetic results like inf - inf), so packing must
+# canonicalize them too.
+statement ok
+CREATE TABLE t_nan (c0 float8)
+
+statement ok
+CREATE INDEX t_nan_i ON t_nan (c0)
+
+statement ok
+INSERT INTO t_nan VALUES ('inf'::float8 - 'inf'::float8)
+
+query I
+SELECT count(*) FROM t_nan WHERE c0 = 'NaN'::float8
+----
+1
+
+# Two equal literals that used to have distinct encodings must dedupe into a
+# single lookup key.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT count(*) FROM t_both_zero WHERE c0 = '0'::float4 OR c0 = '-0'::float4;
+----
+Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[count(*)]
+        Project ()
+          ReadIndex on=materialize.public.t_both_zero t_both_zero_i=[lookup value=(0)]
+  Return
+    Union
+      Get l0
+      Map (0)
+        Union
+          Negate
+            Project ()
+              Get l0
+          Constant
+            - ()
+
+Used Indexes:
+  - materialize.public.t_both_zero_i (lookup)
+
+Target cluster: quickstart
+
+EOF
+
 # Check the nullability- and unique key inference:
 # The `ReadIndex` should have
 # - non-nullable first 3 columns

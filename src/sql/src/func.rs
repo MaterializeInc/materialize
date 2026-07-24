@@ -6096,11 +6096,18 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
         // - If you are writing functions here that do not simply use
         //   `BinaryFunc::Eq`, you will break row equality (used in e.g.
         //   DISTINCT operations and JOINs). In short, this is totally verboten.
-        // - The implementation of `BinaryFunc::Eq` is byte equality on two
-        //   datums, and we enforce that both inputs to the function are of the
-        //   same type in planning. However, it's possible that we will perform
-        //   equality on types not listed here (e.g. `Varchar`) due to decisions
-        //   made in the optimizer.
+        // - `BinaryFunc::Eq` is `Datum` equality, and we enforce that both
+        //   inputs to the function are of the same type in planning. `Datum`
+        //   equality must agree with byte equality of packed rows, because
+        //   arrangement keys and index lookups compare packed bytes. Packing
+        //   upholds this by canonicalizing every type whose `Datum` equality
+        //   is coarser than bit equality (see `push_datum` in `mz_repr`:
+        //   floats collapse -0.0/+0.0 and all NaN payloads, numerics are
+        //   reduced). A type whose `Datum` equality identifies values with
+        //   distinct packed encodings must not be listed here without a
+        //   matching canonicalization in packing.
+        // - It's possible that we will perform equality on types not listed
+        //   here (e.g. `Varchar`) due to decisions made in the optimizer.
         // - Null inputs are handled by `BinaryFunc::eval` checking `propagates_nulls`.
         "=" => Scalar {
             params!(Numeric, Numeric) => BF::from(func::Eq) => Bool, 1752;
