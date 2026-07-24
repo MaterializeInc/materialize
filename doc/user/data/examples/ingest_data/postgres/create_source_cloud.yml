@@ -85,16 +85,14 @@
     [Snapshotting considerations](#snapshotting) for more information.
     {{< /tip >}}
 
-    {{< tabs >}}
+    {{< tabs level=4 >}}
     {{< tab "Legacy Syntax" >}}
-    #### Legacy syntax
 
     {{% include-example file="examples/ingest_data/postgres/create_source_cloud" example="create-source-legacy" %}}
     {{% include-example file="examples/ingest_data/postgres/create_source_cloud" example="schema-changes" %}}
     {{< /tab >}}
 
     {{< tab "New Syntax" >}}
-    #### New syntax
 
     {{% include-example file="examples/ingest_data/postgres/create_source_cloud" example="create-source" %}}
     {{% include-example file="examples/ingest_data/postgres/create_source_cloud" example="schema-changes" %}}

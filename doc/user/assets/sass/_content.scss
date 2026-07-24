@@ -862,6 +862,19 @@ p+p {
             border: 1px solid #9c86e0;
             padding: rem(0.8) rem(0.5) rem(0.6) rem(0.6);
         }
+
+        // Headings injected for `{{< tabs level=N >}}` groups exist only to feed
+        // the table of contents. The tab strip already shows the title, so hide
+        // the in-body copy. Keep it in flow (height 0, not display:none) so the
+        // TOC scroll offset and scrollspy still resolve a real position for it.
+        > .tab-toc-heading {
+            height: 0;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-size: 0;
+            line-height: 0;
+        }
     }
 
     &.has-left-overflow .nav-tabs::before {
@@ -873,6 +886,34 @@ p+p {
     }
 
 
+}
+
+// In light mode the stock palette makes the inactive tabs (solid gray, dark
+// purple border) read heavier than the active tab (pale lavender, lighter than
+// its neighbors), so it's hard to tell which is selected. Recede the inactive
+// tabs, then give the active tab a crisper lavender fill, a bold label, and a
+// brand-colored top accent bar. The accent is an inset shadow so it adds no box
+// height and the active tab stays aligned with the rest. Dark mode already
+// distinguishes the active tab with a deep-purple fill, so scope this to light.
+body.light .code-tabs .nav-tabs li {
+    background: var(--gray-lightest);
+    border-color: var(--gray-light);
+
+    a {
+        color: var(--gray-dark);
+    }
+
+    &.active {
+        border-color: #9c86e0;
+        border-bottom-color: var(--bg);
+
+        a {
+            color: var(--purple-dark);
+            font-weight: 700;
+            background: #ece1fb;
+            box-shadow: inset 0 3px 0 var(--brand);
+        }
+    }
 }
 
 .table-scrollable {

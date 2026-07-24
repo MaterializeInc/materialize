@@ -156,11 +156,17 @@ document.addEventListener("DOMContentLoaded", function () {
       // Update pane ID to be unique
       pane.setAttribute("id", paneId);
 
-      // Add heading inside tab pane if level is specified
+      // When a heading level is specified, inject a heading per pane so the tab
+      // titles appear in the table of contents at that level. The heading is
+      // visually hidden (see `.tab-toc-heading` in _content.scss): the tab strip
+      // already shows the title, so a second visible copy in the pane body is
+      // redundant. It stays in the DOM (rather than being dropped) so the TOC
+      // builder and scrollspy in toc.html treat it like any other heading anchor.
       if (headingLevel) {
         const level = parseInt(headingLevel);
         if (level >= 1 && level <= 6) {
           const heading = document.createElement(`h${level}`);
+          heading.className = "tab-toc-heading";
           heading.textContent = title;
           heading.id = `${paneId}-heading`;
           pane.insertBefore(heading, pane.firstChild);
