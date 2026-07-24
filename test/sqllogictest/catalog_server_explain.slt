@@ -7601,7 +7601,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_catalog"."mz_timezone_names";
 ----
 Explained Query (fast path):
-  →Constant (596 rows)
+  →Constant (597 rows)
 
 Target cluster: mz_catalog_server
 
@@ -21265,7 +21265,7 @@ query T multiline
 EXPLAIN SELECT * FROM "pg_catalog"."pg_timezone_names";
 ----
 Explained Query (fast path):
-  →Constant (596 rows)
+  →Constant (597 rows)
 
 Target cluster: mz_catalog_server
 
