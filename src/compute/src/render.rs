@@ -125,15 +125,13 @@ use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
 use mz_compute_types::dyncfgs::{
     COMPUTE_APPLY_COLUMN_DEMANDS, COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK,
     COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES, ENABLE_COMPUTE_LOGICAL_BACKPRESSURE,
-    ENABLE_COMPUTE_TEMPORAL_BUCKETING, ENABLE_INDEX_ARRANGEMENT_SHARING,
-    SUBSCRIBE_SNAPSHOT_OPTIMIZATION, TEMPORAL_BUCKETING_SUMMARY,
+    ENABLE_COMPUTE_TEMPORAL_BUCKETING, SUBSCRIBE_SNAPSHOT_OPTIMIZATION, TEMPORAL_BUCKETING_SUMMARY,
 };
 use mz_compute_types::plan::render_plan::{
     self, BindStage, LetBind, LetFreePlan, RecBind, RenderPlan,
 };
 use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_compute_types::plan::{ArrangementStrategy, LirId};
-use mz_dyncfg::ConfigSet;
 use mz_expr::{EvalError, Id, LocalId, permutation_for_arrangement};
 use mz_persist_client::operators::shard_source::{ErrorHandler, SnapshotMode};
 use mz_repr::explain::DummyHumanizer;
@@ -190,19 +188,6 @@ mod top_k;
 
 pub use context::CollectionBundle;
 pub use join::LinearJoinSpec;
-
-/// Whether a freshly rendered index should be published into the per-process arrangement-sharing
-/// registry.
-///
-/// Publication happens when the `enable_index_arrangement_sharing` dyncfg is on. It is additionally
-/// forced on for a two-runtime process's maintenance and interactive runtimes (see
-/// [`ComputeRuntimeRole::publishes_unconditionally`]): maintenance publishes its maintained indexes
-/// and interactive publishes its transient query outputs, both read from the registry. Coupling
-/// publication to the runtime rather than the dyncfg alone keeps a disabled dyncfg from leaving an
-/// interactive read blocking until it times out.
-fn should_publish_index(worker_config: &ConfigSet, role: ComputeRuntimeRole) -> bool {
-    ENABLE_INDEX_ARRANGEMENT_SHARING.get(worker_config) || role.publishes_unconditionally()
-}
 
 /// Guard that presses a differential [`ShutdownButton`] when dropped.
 ///
@@ -965,11 +950,12 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
                     errs.stream = errs.stream.log_dataflow_errors(logger, idx_id);
                 }
 
-                // Publish the arrangement into the per-process sharing registry when the gate opens
-                // (see `should_publish_index`). `publish` borrows the arrangements, so it must
-                // happen before their traces are moved into the `TraceBundle` below. Publishing pins
+                // Publish the arrangement into the per-process sharing registry when this role
+                // publishes (see `ComputeRuntimeRole::publishes`). `publish` borrows the
+                // arrangements, so it must happen before their traces are moved into the
+                // `TraceBundle` below. Publishing pins
                 // no compaction floor of its own, so the local trace behavior is unchanged.
-                if should_publish_index(&compute_state.worker_config, compute_state.role()) {
+                if compute_state.role().publishes() {
                     // Adopt the registry's placeholder slot for `idx_id` rather than publishing
                     // fresh and inserting: whichever side (this maintenance render, or an
                     // interactive import ahead of it) touches `idx_id` first creates the slot, so
@@ -1021,7 +1007,7 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
                 // builds no streams of its own, so it installs no seal-signal tap like the `Local`
                 // arm above. `reexport` records `idx_id` as an alias of `gid` so `gid`'s tap wakes
                 // interactive peeks waiting on `idx_id`'s seal. Without that, such a peek hangs.
-                if should_publish_index(&compute_state.worker_config, compute_state.role()) {
+                if compute_state.role().publishes() {
                     compute_state.sharing_registry.reexport(
                         &gid,
                         idx_id,
@@ -1131,12 +1117,12 @@ where
                     errs.stream = errs.stream.log_dataflow_errors(logger, idx_id);
                 }
 
-                // Publish the arrangement into the per-process sharing registry when the gate opens
-                // (see `should_publish_index`). The
+                // Publish the arrangement into the per-process sharing registry when this role
+                // publishes (see `ComputeRuntimeRole::publishes`). The
                 // arrangements were re-arranged onto `outer` above (the worker scope carrying
                 // `mz_repr::Timestamp`), so publish and record the worker ordinal from `outer`. As
                 // above, `publish` borrows the arrangements, so it happens before their traces move.
-                if should_publish_index(&compute_state.worker_config, compute_state.role()) {
+                if compute_state.role().publishes() {
                     // Adopt the registry's placeholder slot for `idx_id` rather than publishing
                     // fresh and inserting. See the matching adopt in `export_index` for why: it
                     // fills a slot in place instead of risking an overwrite of a placeholder a
@@ -1178,7 +1164,7 @@ where
 
                 // Mirror the trace aliasing in the sharing registry: re-register the arrangement
                 // already published under `gid` on this worker under `idx_id` as well.
-                if should_publish_index(&compute_state.worker_config, compute_state.role()) {
+                if compute_state.role().publishes() {
                     compute_state.sharing_registry.reexport(
                         &gid,
                         idx_id,
@@ -2373,8 +2359,6 @@ mod interactive_import_tests {
     use differential_dataflow::input::{Input, InputSession};
     use differential_dataflow::operators::arrange::Arranged;
     use differential_dataflow::trace::TraceReader;
-    use mz_compute_types::dyncfgs::ENABLE_INDEX_ARRANGEMENT_SHARING;
-    use mz_dyncfg::{ConfigSet, ConfigUpdates};
     use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
     use mz_row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
     use mz_timely_util::columnation::ColumnationChunker;
@@ -2388,7 +2372,7 @@ mod interactive_import_tests {
     use crate::sharing::{ArrangementSharingRegistry, SharedOksFrontier};
     use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, RowRowAgent, RowRowSpine};
 
-    use super::{import_shared_index, should_publish_index};
+    use super::import_shared_index;
     use crate::server::ComputeRuntimeRole;
 
     fn test_rows() -> Vec<(Row, Row)> {
@@ -2748,44 +2732,25 @@ mod interactive_import_tests {
         });
     }
 
-    /// A two-runtime process's maintenance runtime publishes into the sharing registry even with
-    /// the `enable_index_arrangement_sharing` dyncfg off. Its interactive peer reads only from the
-    /// registry, so unconditional publication is what keeps interactive peeks from blocking until
-    /// they time out.
+    /// A two-runtime process's maintenance runtime publishes into the sharing registry. Its
+    /// interactive peer reads only from the registry, so publication is what keeps interactive
+    /// peeks from blocking until they time out.
     #[mz_ore::test]
-    fn maintenance_role_publishes_without_dyncfg() {
-        let config = ConfigSet::default().add(&ENABLE_INDEX_ARRANGEMENT_SHARING);
-        // Dyncfg left at its default (off).
-        assert!(should_publish_index(
-            &config,
-            ComputeRuntimeRole::Maintenance
-        ));
+    fn maintenance_role_publishes() {
+        assert!(ComputeRuntimeRole::Maintenance.publishes());
     }
 
     /// A two-runtime process's interactive runtime publishes its transient query outputs into the
-    /// sharing registry even with the dyncfg off, so a result peek served from the registry can read
-    /// the output and receive its seal notifications.
+    /// sharing registry, so a result peek served from the registry can read the output and receive
+    /// its seal notifications.
     #[mz_ore::test]
-    fn interactive_role_publishes_without_dyncfg() {
-        let config = ConfigSet::default().add(&ENABLE_INDEX_ARRANGEMENT_SHARING);
-        // Dyncfg left at its default (off).
-        assert!(should_publish_index(
-            &config,
-            ComputeRuntimeRole::Interactive
-        ));
+    fn interactive_role_publishes() {
+        assert!(ComputeRuntimeRole::Interactive.publishes());
     }
 
-    /// The `Solo` (single-runtime) role publishes only when the dyncfg opts in, preserving the
-    /// original single-runtime behavior.
+    /// The `Solo` (single-runtime) role has no registry peer, so it does not publish.
     #[mz_ore::test]
-    fn solo_role_requires_dyncfg_to_publish() {
-        let off = ConfigSet::default().add(&ENABLE_INDEX_ARRANGEMENT_SHARING);
-        assert!(!should_publish_index(&off, ComputeRuntimeRole::Solo));
-
-        let on = ConfigSet::default().add(&ENABLE_INDEX_ARRANGEMENT_SHARING);
-        let mut updates = ConfigUpdates::default();
-        updates.add(&ENABLE_INDEX_ARRANGEMENT_SHARING, true);
-        updates.apply(&on);
-        assert!(should_publish_index(&on, ComputeRuntimeRole::Solo));
+    fn solo_role_does_not_publish() {
+        assert!(!ComputeRuntimeRole::Solo.publishes());
     }
 }

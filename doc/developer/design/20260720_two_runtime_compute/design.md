@@ -322,9 +322,9 @@ two runtimes.
   initializers guard on role, so `Solo` still runs them exactly once.
 * `Maintenance` owns index maintenance and the process globals in a two-runtime
   process. It publishes its maintained indexes, and its logging and introspection
-  indexes, into the registry. Publication into the registry is gated on the role,
-  not on the dyncfg, so a disabled dyncfg cannot strand an interactive read that
-  would otherwise block until it times out.
+  indexes, into the registry. Publication is decided by the role rather than a
+  separate flag: `Maintenance` and `Interactive` publish, `Solo` does not, since
+  it has no registry peer to read what it would publish.
 * `Interactive` shares the process globals owned by `Maintenance` and reads only
   from the registry. It runs with logging disabled and serves introspection peeks
   from maintenance's published copies, so introspection during hydration returns

@@ -271,11 +271,6 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
-            "enable_index_arrangement_sharing",
-            "false",
-            ["true", "false"],
-        ),
-        VariableSystemParameter(
             "enable_scoped_system_parameters",
             "false",
             ["true", "false"],

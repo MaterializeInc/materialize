@@ -1028,9 +1028,9 @@ impl<'a> ActiveComputeState<'a> {
         // If this collection is an index, remove its trace.
         self.compute_state.traces.remove(&id);
         // Drop any published arrangement for this index from the sharing registry. Done
-        // unconditionally rather than gated on `enable_index_arrangement_sharing`, so a slot
-        // published while the flag was on is still reclaimed if the flag is later turned off. The
-        // call is a no-op when nothing was published for `id`.
+        // unconditionally rather than gated on the role's publish decision, so a slot published by
+        // a publishing role is always reclaimed. The call is a no-op when nothing was published for
+        // `id`.
         self.compute_state.sharing_registry.remove(&id);
         // If the collection is unscheduled, remove it from the list of waiting collections.
         self.compute_state.suspended_collections.remove(&id);
