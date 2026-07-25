@@ -384,6 +384,16 @@ pub static MZ_ACTIVE_PEEKS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|| B
     }),
 });
 
+pub static MZ_COMPUTE_EXPORT_ARRANGEMENTS_PER_WORKER: LazyLock<BuiltinLog> =
+    LazyLock::new(|| BuiltinLog {
+        name: "mz_compute_export_arrangements_per_worker",
+        schema: MZ_INTROSPECTION_SCHEMA,
+        oid: oid::LOG_MZ_COMPUTE_EXPORT_ARRANGEMENTS_PER_WORKER_OID,
+        variant: LogVariant::Compute(ComputeLog::ExportArrangement),
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    });
+
 pub static MZ_COMPUTE_LIR_MAPPING_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
     name: "mz_compute_lir_mapping_per_worker",
     schema: MZ_INTROSPECTION_SCHEMA,
@@ -719,6 +729,36 @@ FROM      mz_catalog.mz_objects mo
         links: &const { [] },
         column_semantic_types: &[("global_id", SemanticType::GlobalId)],
     }),
+});
+
+pub static MZ_COMPUTE_EXPORT_ARRANGEMENTS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_compute_export_arrangements",
+    schema: MZ_INTROSPECTION_SCHEMA,
+    oid: oid::VIEW_MZ_COMPUTE_EXPORT_ARRANGEMENTS_OID,
+    desc: RelationDesc::builder()
+        .with_column("export_id", SqlScalarType::String.nullable(false))
+        .with_column("operator_id", SqlScalarType::UInt64.nullable(false))
+        .with_key(vec![0])
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "export_id",
+            "The ID of the index export. Corresponds to `mz_compute_exports.export_id`.",
+        ),
+        (
+            "operator_id",
+            "The ID of the dataflow operator holding the export's arrangement. Corresponds to \
+             `mz_dataflow_operators.id`. An index whose plan reuses an already-arranged \
+             collection renders no arrange operator of its own, and points at the operator it \
+             reuses, which lies outside the index's own `mz_lir_mapping` operator range.",
+        ),
+    ]),
+    sql: "
+SELECT export_id, operator_id
+FROM mz_introspection.mz_compute_export_arrangements_per_worker
+WHERE worker_id = 0::uint8",
+    access: vec![PUBLIC_SELECT],
+    ontology: None,
 });
 
 pub static MZ_LIR_MAPPING: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {

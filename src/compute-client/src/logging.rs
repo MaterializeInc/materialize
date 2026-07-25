@@ -182,6 +182,9 @@ pub enum ComputeLog {
     LirMapping,
     /// Mappings from dataflows to `GlobalId`s.
     DataflowGlobal,
+    /// Mappings from index exports to the dataflow operator holding the
+    /// arrangement they serve.
+    ExportArrangement,
     /// Prometheus metrics gathered from the metrics registry.
     PrometheusMetrics,
 }
@@ -383,6 +386,17 @@ impl LogVariant {
                 .with_column("worker_id", SqlScalarType::UInt64.nullable(false))
                 .with_column("global_id", SqlScalarType::String.nullable(false))
                 .with_key(vec![0, 1, 2])
+                .finish(),
+
+            // `operator_id` names the operator that actually holds the records, which
+            // is not always inside the export's own LIR node: an index whose plan
+            // reuses an already-arranged collection renders no operators of its own,
+            // and points at the arrangement it reuses.
+            LogVariant::Compute(ComputeLog::ExportArrangement) => RelationDesc::builder()
+                .with_column("export_id", SqlScalarType::String.nullable(false))
+                .with_column("worker_id", SqlScalarType::UInt64.nullable(false))
+                .with_column("operator_id", SqlScalarType::UInt64.nullable(false))
+                .with_key(vec![0, 1])
                 .finish(),
 
             LogVariant::Compute(ComputeLog::PrometheusMetrics) => RelationDesc::builder()
