@@ -25,6 +25,7 @@ use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{
     CatalogItem, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
 };
+use mz_controller_types::ClusterId;
 use mz_expr::{
     CollectionPlan, Eval, MapFilterProject, OptimizedMirRelationExpr, ResultSpec, RowSetFinishing,
 };
@@ -4916,6 +4917,7 @@ impl Coordinator {
         source_ids: &BTreeSet<GlobalId>,
         query_as_of: &Antichain<Timestamp>,
         is_oneshot: bool,
+        cluster_id: ClusterId,
     ) -> Result<Box<dyn mz_transform::StatisticsOracle>, AdapterError> {
         super::statistics_oracle(
             session,
@@ -4924,6 +4926,9 @@ impl Coordinator {
             is_oneshot,
             self.catalog().system_config(),
             self.controller.storage_collections.as_ref(),
+            self.catalog().state(),
+            cluster_id,
+            &self.index_cardinalities,
         )
         .await
     }

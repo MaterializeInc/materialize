@@ -122,7 +122,7 @@ SELECT mz_unsafe.mz_sleep(8)
 query IT
 SELECT id, global_id FROM mz_internal.mz_dataflow_global_ids ORDER BY id, global_id;
 ----
-11  t<id>
+12  t<id>
 
 
 query TI
