@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/source/mysql/snapshot.rs
-revision: fe04b48e6f
+revision: 8d40d19a29
 ---
 
 # mz-storage::source::mysql::snapshot
@@ -14,8 +14,8 @@ Handles resumption correctly by skipping tables whose outputs have already been 
 The leader's setup is encapsulated in `lock_and_prepare_snapshot`, which:
 
 1. Verifies output schemas against planning-time descriptors via `verify_output_schemas`.
-2. Samples exact row counts and, for tables with a supported single-column primary key, computes PK-range split boundaries via `sample_pk_bounds` (runs concurrently over at most `worker_count` connections). The `MYSQL_SOURCE_SNAPSHOT_PARALLELISM` dyncfg disables splitting, putting every table in single-worker fallback mode.
-3. Acquires `LOCK TABLES … READ` and reads `@@global.gtid_executed` as the snapshot upper via `lock_tables_and_read_gtid_set`. This helper optionally sets `@@session.lock_wait_timeout` before locking. `SnapshotSetupError` classifies errors from this step, distinguishing definite errors (e.g. `ER_NO_SUCH_TABLE`) from transient ones.
+2. Samples exact row counts and, for tables with a supported single-column primary key, computes PK-range split boundaries via `sample_pk_bounds` (runs concurrently over at most `worker_count` connections). The `mysql_source_snapshot_parallelism` dyncfg disables splitting, putting every table in single-worker fallback mode.
+3. Acquires `LOCK TABLES … READ` and reads `@@global.gtid_executed` as the snapshot upper via `lock_tables_and_read_gtid_set`. This helper optionally sets `@@session.lock_wait_timeout` before locking.
 4. Broadcasts the resulting `SnapshotInfo` (GTID set, per-table PK boundaries, and any schema-errored outputs) to all workers via a timely feedback loop.
 
 ## Snapshot reading (all workers)
