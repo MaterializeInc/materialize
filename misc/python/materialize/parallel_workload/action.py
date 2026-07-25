@@ -1909,6 +1909,12 @@ class FlipFlagsAction(Action):
             "0.5",
         ]
         self.flags_with_values["enable_upsert_paged_spill"] = BOOLEAN_FLAG_VALUES
+        # 0 forces the estimated-size path for every table, the default forces
+        # the exact COUNT(*) path for workload-sized tables.
+        self.flags_with_values["mysql_source_snapshot_exact_count_max_rows"] = [
+            "0",
+            "1000000",
+        ]
         self.flags_with_values["webhook_max_request_size_bytes"] = [
             # 1 MiB, 5 MiB (default), 10 MiB
             "1048576",

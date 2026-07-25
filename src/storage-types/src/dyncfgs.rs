@@ -215,6 +215,16 @@ pub static MYSQL_SOURCE_SNAPSHOT_PARALLELISM: Config<bool> = Config::new(
     "Whether to split MySQL snapshot reads across workers by primary-key ranges.",
 );
 
+/// The largest optimizer-estimated table size for which the MySQL snapshot size
+/// gauge is computed with an exact `COUNT(*)`. Larger tables report the
+/// `information_schema` estimate directly, skipping the O(rows) count.
+pub static MYSQL_SOURCE_SNAPSHOT_EXACT_COUNT_MAX_ROWS: Config<usize> = Config::new(
+    "mysql_source_snapshot_exact_count_max_rows",
+    1_000_000,
+    "Maximum estimated table size for which MySQL snapshots compute an exact COUNT(*) \
+     for the size gauge; larger tables report the information_schema estimate.",
+);
+
 // Postgres
 
 /// Interval to poll `confirmed_flush_lsn` to get a resumption lsn.
@@ -427,6 +437,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&KAFKA_SINK_BATCH_SIZE)
         .add(&KAFKA_SINK_BATCH_NUM_MESSAGES)
         .add(&MYSQL_REPLICATION_HEARTBEAT_INTERVAL)
+        .add(&MYSQL_SOURCE_SNAPSHOT_EXACT_COUNT_MAX_ROWS)
         .add(&MYSQL_SOURCE_SNAPSHOT_PARALLELISM)
         .add(&ORE_OVERFLOWING_BEHAVIOR)
         .add(&PG_FETCH_SLOT_RESUME_LSN_INTERVAL)

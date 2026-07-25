@@ -471,7 +471,8 @@ where
     }))
 }
 
-/// For every table, read the exact row count (for the snapshot size gauge) and, for a
+/// For every table, read the row count (for the snapshot size gauge, exact only for
+/// small tables) and, for a
 /// supported single-column primary key, compute the PK-range split boundaries,
 /// concurrently over at most `worker_count` connections. `None` bounds means
 /// single-worker fallback for that table.
@@ -500,6 +501,10 @@ async fn probe_counts_and_pk_bounds(
     // they feed the snapshot size gauge.
     let parallelism_enabled = mz_storage_types::dyncfgs::MYSQL_SOURCE_SNAPSHOT_PARALLELISM
         .get(config.config.config_set());
+    let exact_count_max_rows = u64::cast_from(
+        mz_storage_types::dyncfgs::MYSQL_SOURCE_SNAPSHOT_EXACT_COUNT_MAX_ROWS
+            .get(config.config.config_set()),
+    );
 
     let pooled_conns: Rc<RefCell<Vec<MySqlConn>>> = Rc::new(RefCell::new(Vec::new()));
     // Counting walks a table's index (O(rows)), so run tables concurrently, capped at
@@ -530,8 +535,9 @@ async fn probe_counts_and_pk_bounds(
                         conn
                     }
                 };
-                // Exact row count, feeding the snapshot size gauge.
-                let stats = collect_table_statistics(&mut *conn, table).await?;
+                // Row count for the snapshot size gauge.
+                let stats =
+                    collect_table_statistics(&mut *conn, table, exact_count_max_rows).await?;
                 metrics.record_table_count_latency(
                     table.1.clone(),
                     table.0.clone(),
@@ -912,8 +918,8 @@ pub(crate) fn render<'scope>(
                     .await?;
                 let task_name = format!("timely-{worker_id} MySQL snapshotter");
 
-                // Exact per-table row counts, computed once during the leader's table
-                // probe and reused to publish the snapshot size gauge.
+                // Per-table row counts, computed once during the leader's table probe
+                // and reused to publish the snapshot size gauge.
                 let mut snapshot_counts: BTreeMap<MySqlTableName, u64> = BTreeMap::new();
 
                 let mut conn = connection_config
@@ -1249,7 +1255,7 @@ pub(crate) fn render<'scope>(
     )
 }
 
-/// Publish the exact snapshot size to each table's statistics gauges, using the counts
+/// Publish the snapshot size to each table's statistics gauges, using the counts
 /// computed once during the leader's table probe. Called leader-only so the summed
 /// worker-local gauges
 /// reflect the upstream total without double-counting.
@@ -1358,26 +1364,51 @@ struct TableStatistics {
     count: u64,
 }
 
+/// Row count for the snapshot size gauge. Tables whose optimizer row estimate exceeds
+/// `exact_count_max_rows` report the estimate directly, everything else is counted
+/// exactly with `COUNT(*)`. The gauge only drives progress reporting, and an estimate is
+/// a fair trade for skipping an O(rows) index walk on a large table.
 async fn collect_table_statistics<Q>(
     conn: &mut Q,
     table: &MySqlTableName,
+    exact_count_max_rows: u64,
 ) -> Result<TableStatistics, TransientError>
 where
     Q: Queryable,
 {
     let mut stats = TableStatistics::default();
 
-    // `MySqlTableName::Display` escapes both identifier components via
-    // `quote_identifier`, so this interpolation is safe; not parameterizable.
-    #[allow(clippy::disallowed_methods)]
-    let count_row: Option<u64> = conn
-        .query_first(format!("SELECT COUNT(*) FROM {}", table))
+    // The optimizer's row estimate for the table. InnoDB keeps it roughly current
+    // (within the churn since the last stats recalculation), but it can be NULL or
+    // stale-at-zero, in which case we fall through to the exact count.
+    let estimate: Option<Option<u64>> = conn
+        .exec_first(
+            "SELECT table_rows FROM information_schema.tables \
+             WHERE table_schema = ? AND table_name = ?",
+            (&table.0, &table.1),
+        )
         .wall_time()
         .set_at(&mut stats.count_latency)
         .await?;
-    // `COUNT(*)` returns exactly one row, so `None` should be impossible. Default to 0
-    // defensively rather than failing the snapshot on a protocol quirk.
-    stats.count = count_row.unwrap_or(0);
+    match estimate.flatten() {
+        Some(estimate) if estimate > exact_count_max_rows => {
+            stats.count = estimate;
+        }
+        _ => {
+            // `MySqlTableName::Display` escapes both identifier components via
+            // `quote_identifier`, so this interpolation is safe; not parameterizable.
+            #[allow(clippy::disallowed_methods)]
+            let count_row: Option<u64> = conn
+                .query_first(format!("SELECT COUNT(*) FROM {}", table))
+                .wall_time()
+                .set_at(&mut stats.count_latency)
+                .await?;
+            // `COUNT(*)` returns exactly one row, so `None` should be impossible.
+            // Default to 0 defensively rather than failing the snapshot on a protocol
+            // quirk.
+            stats.count = count_row.unwrap_or(0);
+        }
+    }
 
     Ok(stats)
 }
