@@ -38,6 +38,7 @@ use crate::catalog::Catalog;
 use crate::command::{CatalogSnapshot, Command};
 use crate::coord::peek::FastPathPlan;
 use crate::coord::{Coordinator, ExecuteContextGuard};
+use crate::peek_registry::{FrontendPeekRegistry, PeekRegistrationGuard, PendingPeekEntry};
 use crate::session::{LifecycleTimestamps, Session};
 use crate::statement_logging::{
     FrontendStatementLoggingEvent, PreparedStatementEvent, PreparedStatementLoggingInfo,
@@ -75,6 +76,10 @@ pub struct PeekClient {
     persist_client: PersistClient,
     /// Statement logging state for frontend peek sequencing.
     pub statement_logging_frontend: StatementLoggingFrontend,
+    /// Registry of in-flight frontend peeks, shared with the coordinator. Peeks
+    /// register/unregister here directly rather than through a coordinator
+    /// round-trip.
+    peek_registry: Arc<FrontendPeekRegistry>,
 }
 
 impl PeekClient {
@@ -90,6 +95,7 @@ impl PeekClient {
         optimizer_metrics: OptimizerMetrics,
         persist_client: PersistClient,
         statement_logging_frontend: StatementLoggingFrontend,
+        peek_registry: Arc<FrontendPeekRegistry>,
     ) -> Self {
         Self {
             coordinator_client,
@@ -101,6 +107,7 @@ impl PeekClient {
             statement_logging_frontend,
             oracles: Default::default(), // lazily populated
             persist_client,
+            peek_registry,
         }
     }
 
@@ -273,10 +280,10 @@ impl PeekClient {
     ///
     /// `logging_guard` owns end-of-execution logging for this statement. For a
     /// constant peek it stays armed and the caller logs the end from the
-    /// returned result. For a `PeekExisting`/`PeekPersist` peek, successful
-    /// registration with the coordinator hands ownership of the end to the
-    /// coordinator and the guard is defused here. That holds even when the
-    /// subsequent `client.peek()` fails to issue.
+    /// returned result. For a `PeekExisting`/`PeekPersist` peek the guard is
+    /// defused here once the peek is registered in the shared registry, since
+    /// end-of-execution logging is not owned by the frontend from that point.
+    /// That holds even when the subsequent `client.peek()` fails to issue.
     pub(crate) async fn implement_fast_path_peek_plan(
         &mut self,
         fast_path: FastPathPlan,
@@ -292,7 +299,10 @@ impl PeekClient {
         peek_stash_read_batch_size_bytes: usize,
         peek_stash_read_memory_budget_bytes: usize,
         conn_id: mz_adapter_types::connection::ConnectionId,
-        depends_on: std::collections::BTreeSet<mz_repr::GlobalId>,
+        // NOTE: Unused in the prototype. The coordinator used this for DROP
+        // CLUSTER teardown of registered peeks, which the shared registry does
+        // not yet implement.
+        _depends_on: std::collections::BTreeSet<mz_repr::GlobalId>,
         watch_set: Option<WatchSetCreation>,
         logging_guard: &mut StatementLoggingGuard,
     ) -> Result<crate::ExecuteResponse, AdapterError> {
@@ -411,26 +421,24 @@ impl PeekClient {
             .await
             .map_err(AdapterError::concurrent_dependency_drop_from_instance_missing)?;
 
-        // Register coordinator tracking of this peek. This has to complete before issuing the peek.
+        // Register the peek in the shared registry, off the coordinator task.
+        // This must happen strictly before the peek is issued so that a
+        // concurrent cancellation observes the entry.
         //
         // Warning: If we fail to actually issue the peek after this point, then we need to
-        // unregister it to avoid an orphaned registration.
-        self.call_coordinator(|tx| Command::RegisterFrontendPeek {
+        // remove the registration to avoid an orphaned entry.
+        self.peek_registry.register(
             uuid,
-            conn_id: conn_id.clone(),
-            cluster_id: compute_instance,
-            depends_on,
-            is_fast_path: true,
-            watch_set,
-            tx,
-        })
-        .await?;
+            PendingPeekEntry {
+                conn_id: conn_id.clone(),
+                cluster_id: compute_instance,
+            },
+        );
 
-        // The peek is registered: the coordinator's `pending_peeks` entry now
-        // owns end-of-execution logging. It logs the end on peek completion,
-        // cancellation, concurrent teardown (e.g. a DROP CLUSTER), or the
-        // unregistration below. We defuse the guard so the frontend doesn't
-        // also log the end.
+        // The peek's rows stream directly to the session and its registration is
+        // cleaned up off the coordinator task. Statement-logging end is not
+        // owned by the coordinator here, so we defuse the guard to avoid
+        // double-logging the end. For non-sampled statements this is a no-op.
         logging_guard.defuse();
 
         // Test-only synchronization point: parks a peek between registration
@@ -452,6 +460,10 @@ impl PeekClient {
                 target_read_hold,
                 target_replica,
                 rows_tx,
+                // Frontend-sequenced peek: rows stream directly to the session
+                // and the registry entry is cleaned up off the coordinator task,
+                // so no `PeekNotification` is wanted.
+                false,
             )
             .await;
 
@@ -460,22 +472,19 @@ impl PeekClient {
                 err,
                 compute_instance,
             );
-            // The peek failed to issue, so no peek response will ever arrive.
-            // The coordinator owns end-of-execution logging (see above), so we
-            // ask it to unregister the peek and retire it with this error. If
-            // a concurrent teardown already retired the peek, the end is
-            // already logged and the unregistration is a no-op.
-            self.call_coordinator(|tx| Command::UnregisterFrontendPeek {
-                uuid,
-                reason: statement_logging::StatementEndedExecutionReason::Errored {
-                    error: err.to_string(),
-                },
-                tx,
-            })
-            .await;
+            // The peek failed to issue, so no peek response will ever arrive and
+            // no response stream will be created to clean up the entry. Remove
+            // the registration here to avoid an orphan. Removal is idempotent,
+            // so a concurrent teardown that already removed it makes this a
+            // no-op.
+            let _ = self.peek_registry.remove(uuid);
             return Err(err);
         }
 
+        // Hand the registration to the response stream: it is removed when the
+        // stream completes or is dropped, keeping the registry bounded without
+        // any coordinator involvement.
+        let registration_guard = PeekRegistrationGuard::new(Arc::clone(&self.peek_registry), uuid);
         let peek_response_stream = Coordinator::create_peek_response_stream(
             rows_rx,
             finishing,
@@ -485,6 +494,7 @@ impl PeekClient {
             self.persist_client.clone(),
             peek_stash_read_batch_size_bytes,
             peek_stash_read_memory_budget_bytes,
+            Some(registration_guard),
         );
 
         Ok(crate::ExecuteResponse::SendingRowsStreaming {
