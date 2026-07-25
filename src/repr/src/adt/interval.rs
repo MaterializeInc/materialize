@@ -448,27 +448,6 @@ impl Interval {
         Ok(Duration::from_micros(micros))
     }
 
-    /// Truncate the "head" of the interval, removing all time units greater than `f`.
-    pub fn truncate_high_fields(&mut self, f: DateTimeField) {
-        match f {
-            DateTimeField::Year => {}
-            DateTimeField::Month => self.months %= 12,
-            DateTimeField::Day => self.months = 0,
-            DateTimeField::Hour | DateTimeField::Minute | DateTimeField::Second => {
-                self.months = 0;
-                self.days = 0;
-                self.micros %= f.next_largest().micros_multiplier()
-            }
-            DateTimeField::Millennium
-            | DateTimeField::Century
-            | DateTimeField::Decade
-            | DateTimeField::Milliseconds
-            | DateTimeField::Microseconds => {
-                unreachable!("Cannot truncate interval by {f}");
-            }
-        }
-    }
-
     /// Truncate the "tail" of the interval, removing all time units less than `f`.
     /// # Arguments
     /// - `f`: Round the interval down to the specified time unit.
@@ -753,7 +732,7 @@ impl Interval {
 ///
 /// Example outputs:
 ///
-/// * 1 year 2 months 5 days 03:04:00
+/// * 1 year 2 mons 5 days 03:04:00
 /// * -1 year +5 days +18:59:29.3
 /// * 00:00:00
 impl fmt::Display for Interval {
@@ -793,7 +772,7 @@ impl fmt::Display for Interval {
             if neg_months {
                 f.write_char('-')?;
             }
-            write!(f, "{} month", months)?;
+            write!(f, "{} mon", months)?;
             if months > 1 || neg_months {
                 f.write_char('s')?;
             }
@@ -943,12 +922,12 @@ mod test {
             .to_string()
         }
 
-        assert_eq!(mon(1), "1 month");
+        assert_eq!(mon(1), "1 mon");
         assert_eq!(mon(12), "1 year");
-        assert_eq!(mon(13), "1 year 1 month");
+        assert_eq!(mon(13), "1 year 1 mon");
         assert_eq!(mon(24), "2 years");
-        assert_eq!(mon(25), "2 years 1 month");
-        assert_eq!(mon(26), "2 years 2 months");
+        assert_eq!(mon(25), "2 years 1 mon");
+        assert_eq!(mon(26), "2 years 2 mons");
 
         fn dur(days: i32, micros: i64) -> String {
             Interval::new(0, days, micros).to_string()
@@ -1022,14 +1001,14 @@ mod test {
         fn mon_dur(mon: i32, days: i32, micros: i64) -> String {
             Interval::new(mon, days, micros).to_string()
         }
-        assert_eq!(&mon_dur(1, 2, 6 * 1_000_000), "1 month 2 days 00:00:06");
+        assert_eq!(&mon_dur(1, 2, 6 * 1_000_000), "1 mon 2 days 00:00:06");
         assert_eq!(
             &mon_dur(1, 2, (45 * 60 * 1_000_000) + (6 * 1_000_000)),
-            "1 month 2 days 00:45:06"
+            "1 mon 2 days 00:45:06"
         );
         assert_eq!(
             &mon_dur(1, 2, (3 * 60 * 60 * 1_000_000) + (6 * 1_000_000)),
-            "1 month 2 days 03:00:06"
+            "1 mon 2 days 03:00:06"
         );
         assert_eq!(
             &mon_dur(
@@ -1037,37 +1016,37 @@ mod test {
                 0,
                 (3 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (6 * 1_000_000)
             ),
-            "2 years 2 months 03:45:06"
+            "2 years 2 mons 03:45:06"
         );
         assert_eq!(
             &mon_dur(26, 0, (3 * 60 * 60 * 1_000_000) + (6 * 1_000_000)),
-            "2 years 2 months 03:00:06"
+            "2 years 2 mons 03:00:06"
         );
         assert_eq!(
             &mon_dur(26, 0, 3 * 60 * 60 * 1_000_000),
-            "2 years 2 months 03:00:00"
+            "2 years 2 mons 03:00:00"
         );
         assert_eq!(
             &mon_dur(26, 0, (45 * 60 * 1_000_000) + (6 * 1_000_000)),
-            "2 years 2 months 00:45:06"
+            "2 years 2 mons 00:45:06"
         );
         assert_eq!(
             &mon_dur(26, 0, 45 * 60 * 1_000_000),
-            "2 years 2 months 00:45:00"
+            "2 years 2 mons 00:45:00"
         );
-        assert_eq!(&mon_dur(26, 0, 6 * 1_000_000), "2 years 2 months 00:00:06");
+        assert_eq!(&mon_dur(26, 0, 6 * 1_000_000), "2 years 2 mons 00:00:06");
 
         assert_eq!(
             &mon_dur(26, -2, -6 * 1_000_000),
-            "2 years 2 months -2 days -00:00:06"
+            "2 years 2 mons -2 days -00:00:06"
         );
         assert_eq!(
             &mon_dur(26, -2, (-45 * 60 * 1_000_000) + (-6 * 1_000_000)),
-            "2 years 2 months -2 days -00:45:06"
+            "2 years 2 mons -2 days -00:45:06"
         );
         assert_eq!(
             &mon_dur(26, -2, (-3 * 60 * 60 * 1_000_000) + (-6 * 1_000_000)),
-            "2 years 2 months -2 days -03:00:06"
+            "2 years 2 mons -2 days -03:00:06"
         );
         assert_eq!(
             &mon_dur(
@@ -1075,37 +1054,34 @@ mod test {
                 0,
                 (-3 * 60 * 60 * 1_000_000) + (-45 * 60 * 1_000_000) + (-6 * 1_000_000)
             ),
-            "2 years 2 months -03:45:06"
+            "2 years 2 mons -03:45:06"
         );
         assert_eq!(
             &mon_dur(26, 0, (-3 * 60 * 60 * 1_000_000) + (-6 * 1_000_000)),
-            "2 years 2 months -03:00:06"
+            "2 years 2 mons -03:00:06"
         );
         assert_eq!(
             &mon_dur(26, 0, -3 * 60 * 60 * 1_000_000),
-            "2 years 2 months -03:00:00"
+            "2 years 2 mons -03:00:00"
         );
         assert_eq!(
             &mon_dur(26, 0, (-45 * 60 * 1_000_000) + (-6 * 1_000_000)),
-            "2 years 2 months -00:45:06"
+            "2 years 2 mons -00:45:06"
         );
         assert_eq!(
             &mon_dur(26, 0, -45 * 60 * 1_000_000),
-            "2 years 2 months -00:45:00"
+            "2 years 2 mons -00:45:00"
         );
-        assert_eq!(
-            &mon_dur(26, 0, -6 * 1_000_000),
-            "2 years 2 months -00:00:06"
-        );
+        assert_eq!(&mon_dur(26, 0, -6 * 1_000_000), "2 years 2 mons -00:00:06");
 
-        assert_eq!(&mon_dur(-1, 2, 6 * 1_000_000), "-1 months +2 days 00:00:06");
+        assert_eq!(&mon_dur(-1, 2, 6 * 1_000_000), "-1 mons +2 days 00:00:06");
         assert_eq!(
             &mon_dur(-1, 2, (45 * 60 * 1_000_000) + (6 * 1_000_000)),
-            "-1 months +2 days 00:45:06"
+            "-1 mons +2 days 00:45:06"
         );
         assert_eq!(
             &mon_dur(-1, 2, (3 * 60 * 60 * 1_000_000) + (6 * 1_000_000)),
-            "-1 months +2 days 03:00:06"
+            "-1 mons +2 days 03:00:06"
         );
         assert_eq!(
             &mon_dur(
@@ -1113,40 +1089,40 @@ mod test {
                 0,
                 (3 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (6 * 1_000_000)
             ),
-            "-2 years -2 months +03:45:06"
+            "-2 years -2 mons +03:45:06"
         );
         assert_eq!(
             &mon_dur(-26, 0, (3 * 60 * 60 * 1_000_000) + (6 * 1_000_000)),
-            "-2 years -2 months +03:00:06"
+            "-2 years -2 mons +03:00:06"
         );
         assert_eq!(
             &mon_dur(-26, 0, 3 * 60 * 60 * 1_000_000),
-            "-2 years -2 months +03:00:00"
+            "-2 years -2 mons +03:00:00"
         );
         assert_eq!(
             &mon_dur(-26, 0, (45 * 60 * 1_000_000) + (6 * 1_000_000)),
-            "-2 years -2 months +00:45:06"
+            "-2 years -2 mons +00:45:06"
         );
         assert_eq!(
             &mon_dur(-26, 0, 45 * 60 * 1_000_000),
-            "-2 years -2 months +00:45:00"
+            "-2 years -2 mons +00:45:00"
         );
         assert_eq!(
             &mon_dur(-26, 0, 6 * 1_000_000),
-            "-2 years -2 months +00:00:06"
+            "-2 years -2 mons +00:00:06"
         );
 
         assert_eq!(
             &mon_dur(-26, -2, -6 * 1_000_000),
-            "-2 years -2 months -2 days -00:00:06"
+            "-2 years -2 mons -2 days -00:00:06"
         );
         assert_eq!(
             &mon_dur(-26, -2, (-45 * 60 * 1_000_000) + (-6 * 1_000_000)),
-            "-2 years -2 months -2 days -00:45:06"
+            "-2 years -2 mons -2 days -00:45:06"
         );
         assert_eq!(
             &mon_dur(-26, -2, (-3 * 60 * 60 * 1_000_000) + (-6 * 1_000_000)),
-            "-2 years -2 months -2 days -03:00:06"
+            "-2 years -2 mons -2 days -03:00:06"
         );
         assert_eq!(
             &mon_dur(
@@ -1154,27 +1130,27 @@ mod test {
                 0,
                 (-3 * 60 * 60 * 1_000_000) + (-45 * 60 * 1_000_000) + (-6 * 1_000_000)
             ),
-            "-2 years -2 months -03:45:06"
+            "-2 years -2 mons -03:45:06"
         );
         assert_eq!(
             &mon_dur(-26, 0, (-3 * 60 * 60 * 1_000_000) + (-6 * 1_000_000)),
-            "-2 years -2 months -03:00:06"
+            "-2 years -2 mons -03:00:06"
         );
         assert_eq!(
             &mon_dur(-26, 0, -3 * 60 * 60 * 1_000_000),
-            "-2 years -2 months -03:00:00"
+            "-2 years -2 mons -03:00:00"
         );
         assert_eq!(
             &mon_dur(-26, 0, (-45 * 60 * 1_000_000) + (-6 * 1_000_000)),
-            "-2 years -2 months -00:45:06"
+            "-2 years -2 mons -00:45:06"
         );
         assert_eq!(
             &mon_dur(-26, 0, -45 * 60 * 1_000_000),
-            "-2 years -2 months -00:45:00"
+            "-2 years -2 mons -00:45:00"
         );
         assert_eq!(
             &mon_dur(-26, 0, -6 * 1_000_000),
-            "-2 years -2 months -00:00:06"
+            "-2 years -2 mons -00:00:06"
         );
     }
 
@@ -1287,99 +1263,6 @@ mod test {
             if i != j {
                 panic!(
                     "test_interval_value_truncate_low_fields failed on {} \n actual: {:?} \n expected: {:?}",
-                    test.0, i, j
-                );
-            }
-        }
-    }
-
-    #[mz_ore::test]
-    fn test_interval_value_truncate_high_fields() {
-        use DateTimeField::*;
-
-        // (month, day, microsecond) tuples
-        let mut test_cases = [
-            (
-                Year,
-                (
-                    321,
-                    7,
-                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000),
-                ),
-                (
-                    321,
-                    7,
-                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000),
-                ),
-            ),
-            (
-                Month,
-                (
-                    321,
-                    7,
-                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000),
-                ),
-                (
-                    9,
-                    7,
-                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000),
-                ),
-            ),
-            (
-                Day,
-                (
-                    321,
-                    7,
-                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000),
-                ),
-                (
-                    0,
-                    7,
-                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000),
-                ),
-            ),
-            (
-                Hour,
-                (
-                    321,
-                    7,
-                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000),
-                ),
-                (
-                    0,
-                    0,
-                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000),
-                ),
-            ),
-            (
-                Minute,
-                (
-                    321,
-                    7,
-                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000),
-                ),
-                (0, 0, (45 * 60 * 1_000_000) + (21 * 1_000_000)),
-            ),
-            (
-                Second,
-                (
-                    321,
-                    7,
-                    (13 * 60 * 60 * 1_000_000) + (45 * 60 * 1_000_000) + (21 * 1_000_000),
-                ),
-                (0, 0, 21 * 1_000_000),
-            ),
-        ];
-
-        for test in test_cases.iter_mut() {
-            let mut i = Interval::new((test.1).0, (test.1).1, (test.1).2);
-            let j = Interval::new((test.2).0, (test.2).1, (test.2).2);
-
-            i.truncate_high_fields(test.0);
-
-            if i != j {
-                panic!(
-                    "test_interval_value_truncate_high_fields failed on {} \n actual: {:?} \n expected: {:?}",
                     test.0, i, j
                 );
             }

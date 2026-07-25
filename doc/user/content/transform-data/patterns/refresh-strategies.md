@@ -293,5 +293,8 @@ WHERE object_type = 'cluster-replica'
 ORDER BY occurred_at DESC;
 ```
 
-Any commands attributed to scheduled refreshes will be marked with
-`"reason":"schedule"` under the `details` column.
+A replica created for a scheduled refresh is marked with `"reason":"schedule"`
+under the `details` column, along with a `scheduling_policies` entry that names
+the materialized views behind the decision. When the refresh window closes, the
+replica's `drop` event is marked with `"reason":"retired"` and carries no
+further detail.

@@ -11,10 +11,8 @@ Use `ALTER INDEX` to:
 
 ## Syntax
 
-{{< tabs >}}
+{{< tabs level=3 >}}
 {{< tab "Rename" >}}
-
-### Rename
 
 To rename an index:
 

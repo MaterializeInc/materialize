@@ -92,7 +92,7 @@ SELECT (LIST[1, null] :: TEXT LIST)::text
 query T
 SELECT (LIST['foo', 'f}o', '"\', null, 'null', 'NULL'])::text
 ----
-{foo,"f}o","\"\\",NULL,null,"NULL"}
+{foo,"f}o","\"\\",NULL,"null","NULL"}
 
 query T
 SELECT (list[list[list['"']]])::text

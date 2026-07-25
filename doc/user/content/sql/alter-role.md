@@ -13,11 +13,9 @@ menu:
 ## Syntax
 
 
-{{< tabs >}}
+{{< tabs level=3 >}}
 
 {{< tab "Cloud" >}}
-
-### Cloud
 
 {{% include-syntax file="examples/rbac-cloud/alter_roles" example="alter-role-syntax" %}}
 
@@ -26,7 +24,6 @@ menu:
 example="alter-role-details" %}}
 {{< /tab >}}
 {{< tab "Self-Managed" >}}
-### Self-Managed
 
 {{% include-syntax file="examples/rbac-sm/alter_roles" example="alter-role-syntax" %}}
 

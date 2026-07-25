@@ -168,7 +168,7 @@ use within a [transaction block](/sql/begin/#ddl-only-transactions).
 
 {{< include-md file="shared-content/sql-server-supported-types.md" >}}
 
-{{< include-md file="shared-content/sql-server-unsupported-type-handling.md" >}}
+{{% include-headless "/headless/sql-server-unsupported-type-handling" %}}
 
 {{< /tab >}}
 

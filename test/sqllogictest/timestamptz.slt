@@ -182,7 +182,7 @@ FROM (
 1␠hour␠30␠minutes true
 
 query error timestamp out of range
-select timezone('1 day'::interval, '1-12-31'::timestamptz+'262141 years'::interval)
+select timezone('1 day'::interval, '0001-12-31'::timestamptz+'262141 years'::interval)
 
 # Regression test for database-issues#CLU-92: a leap-second timestamptz combined
 # with a fixed offset that shifts the seconds off `:59` previously panicked

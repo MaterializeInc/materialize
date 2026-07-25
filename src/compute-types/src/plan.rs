@@ -79,12 +79,17 @@ impl LoweringMetrics {
 /// These forms may include "raw", meaning as a streamed collection, but also any
 /// number of "arranged" representations.
 ///
-/// Each arranged representation is described by a `KeyValRowMapping`, or rather
-/// at the moment by its three fields in a triple. These fields explain how to form
-/// a "key" by applying some expressions to each row, how to select "values" from
-/// columns not explicitly captured by the key, and how to return to the original
-/// row from the concatenation of key and value. Further explanation is available
-/// in the documentation for `KeyValRowMapping`.
+/// Each arranged representation is described by a `(to_key, permutation, thinning)`
+/// triple, built by `permutation_for_arrangement`. `to_key` (length `K`) are the key
+/// expressions over a row. `permutation` (length `A`, the raw/unthinned arity) maps
+/// each row column to its position in the `(key, value)` concatenation. `thinning`
+/// (length `M`) lists the row columns that form the value, in value order, so a value
+/// datum at concatenation position `c >= K` came from row column `thinning[c - K]`.
+///
+/// This triple is unrelated to `KeyValRowMapping`'s `(to_key, to_val, to_row)` fields
+/// despite the visual resemblance: `permutation` here plays the role of
+/// `KeyValRowMapping::to_row`, and `thinning` plays the role of
+/// `KeyValRowMapping::to_val`. Do not assume the same field order.
 #[derive(
     Clone,
     Debug,
@@ -99,9 +104,8 @@ impl LoweringMetrics {
 pub struct AvailableCollections {
     /// Whether the collection exists in unarranged form.
     pub raw: bool,
-    /// The list of available arrangements, presented as a `KeyValRowMapping`,
-    /// but here represented by a triple `(to_key, to_val, to_row)` instead.
-    /// The documentation for `KeyValRowMapping` explains these fields better.
+    /// The list of available arrangements, each a `(to_key, permutation, thinning)`
+    /// triple. See the struct-level documentation for field semantics.
     pub arranged: Vec<(Vec<LirScalarExpr>, Vec<usize>, Vec<usize>)>,
 }
 

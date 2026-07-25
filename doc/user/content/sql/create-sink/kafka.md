@@ -141,7 +141,7 @@ generated Avro schema.
 
 #### Using [AWS Glue Schema Registry](/sql/create-connection/#aws-glue-schema-registry)
 
-{{< private-preview />}}
+{{< public-preview />}}
 
   * Materialize registers Avro schemas for the key, if present, and the value in
     the registry named by the connection. The registry must already exist.
@@ -695,7 +695,7 @@ CREATE CONNECTION csr_basic_http
 {{< /tab >}}
 {{< tab "AWS Glue" >}}
 
-{{< private-preview />}}
+{{< public-preview />}}
 
 ```mzsql
 CREATE CONNECTION aws_conn TO AWS (
@@ -729,7 +729,7 @@ CREATE SINK avro_sink
 {{< /tab >}}
 {{< tab "Avro AWS Glue">}}
 
-{{< private-preview />}}
+{{< public-preview />}}
 
 The registry named by the connection must already exist. The IAM role assumed
 by the AWS connection must have the schema-write permissions listed under [AWS
@@ -781,7 +781,7 @@ CREATE SINK avro_sink
 {{< /tab >}}
 {{< tab "Avro AWS Glue">}}
 
-{{< private-preview />}}
+{{< public-preview />}}
 The registry named by the connection must already exist. The IAM role assumed
 by the AWS connection must have the schema-write permissions listed under [AWS
 Glue Schema Registry](/sql/create-connection/#aws-glue-schema-registry).
@@ -845,7 +845,7 @@ CREATE SINK compatibility_level_sink
 {{< /tab >}}
 {{< tab "Avro AWS Glue">}}
 
-{{< private-preview />}}
+{{< public-preview />}}
 ```mzsql
 CREATE SINK compatibility_level_sink
   IN CLUSTER my_io_cluster

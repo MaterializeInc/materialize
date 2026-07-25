@@ -30,5 +30,5 @@ SELECT justify_days(interval '35 days');
 ```nofmt
   justify_days
 ----------------
- 1 month 5 days
+ 1 mon 5 days
 ```

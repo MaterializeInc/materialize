@@ -81,3 +81,28 @@ pub fn exit_thread_safe(error_code: i32) -> ! {
     // [1]: https://github.com/rust-lang/rust/issues/126600
     unsafe { libc::_exit(error_code) };
 }
+
+/// Sets the OS-level name of the calling thread, visible to tools like `top -H`, `perf`,
+/// `samply`, and `/proc/<pid>/task/*/comm`.
+///
+/// Linux truncates thread names to 15 bytes (16 with the NUL terminator); `name` is truncated to
+/// fit. Best-effort: a no-op on non-Linux platforms, and silently does nothing if the underlying
+/// syscall fails.
+pub fn set_current_thread_name(name: &str) {
+    #[cfg(target_os = "linux")]
+    {
+        let mut truncated = name.to_string();
+        while truncated.len() > 15 {
+            truncated.pop();
+        }
+        if let Ok(name) = std::ffi::CString::new(truncated) {
+            unsafe {
+                libc::pthread_setname_np(libc::pthread_self(), name.as_ptr());
+            }
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = name;
+    }
+}

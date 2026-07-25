@@ -16,15 +16,13 @@ of materializing the view.
 
 ## Syntax
 
-{{< tabs >}}
+{{< tabs level=3 >}}
 {{< tab "CREATE VIEW" >}}
-### Create view
 To create a view:
 
 {{% include-syntax file="examples/create_view" example="syntax" %}}
 {{< /tab >}}
 {{< tab "CREATE OR REPLACE VIEW" >}}
-### Create or replace view
 To create, or if a view exists with the same name, replace it with the view
 defined in this statement:
 

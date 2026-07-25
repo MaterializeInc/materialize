@@ -624,7 +624,7 @@ class MySqlExecutor(Executor):
         self.source = f"mysql_source{num}"
         self.num = num
 
-    def create(self, logging_exe: Any | None = None) -> None:
+    def create(self, logging_exe: Any | None = None, prepopulate_rows: int = 0) -> None:
         self.logging_exe = logging_exe
         self.mysql_conn = pymysql.connect(
             host="127.0.0.1",
@@ -652,6 +652,27 @@ class MySqlExecutor(Executor):
                 cur,
                 f"CREATE TABLE `{self.table}` ({', '.join(values)} {primary_key});",
             )
+            # Rows inserted before CREATE SOURCE are read by the initial
+            # snapshot instead of arriving through replication. Every key
+            # column receives the row's NEGATIVE sequence number: workload
+            # generators only ever emit non-negative keys for plain INSERTs
+            # (Definition.numeric_value), so negative keys cannot collide
+            # with them and trigger duplicate-key errors. Callers must keep
+            # prepopulate_rows within the smallest key column type's range.
+            if prepopulate_rows and keys:
+                key_names = ", ".join(f"`{key}`" for key in keys)
+                batch_size = 5000
+                for start in range(1, prepopulate_rows + 1, batch_size):
+                    batch = ", ".join(
+                        "(" + ", ".join([str(-j)] * len(keys)) + ")"
+                        for j in range(
+                            start, min(start + batch_size, prepopulate_rows + 1)
+                        )
+                    )
+                    self.execute(
+                        cur,
+                        f"INSERT INTO `{self.table}` ({key_names}) VALUES {batch};",
+                    )
         self.mysql_conn.autocommit(False)
 
         with self.mz_conn.cursor() as cur:

@@ -27,6 +27,7 @@ from psycopg.errors import OperationalError
 
 import materialize.parallel_workload.column
 from materialize.data_ingest.data_type import (
+    DATA_TYPES,
     NUMBER_TYPES,
     Boolean,
     Text,
@@ -43,7 +44,6 @@ from materialize.mzcompose.services.materialized import (
 )
 from materialize.mzcompose.services.minio import minio_blob_uri
 from materialize.parallel_workload.database import (
-    DATA_TYPES,
     DB,
     MAX_CLUSTER_REPLICAS,
     MAX_CLUSTERS,
@@ -200,6 +200,7 @@ class Action:
             # a path that wrongly accepts it instead panics the coordinator on
             # catalog apply, which surfaces as an unexpected failure.
             "non-temporary items cannot depend on temporary item",
+            "is not of expected type SqlColumnType",  # TODO: Remove when SQL-566 is fixed
         ]
         if exe.db.complexity in (Complexity.DDL, Complexity.DDLOnly):
             result.extend(
@@ -309,24 +310,27 @@ class Action:
 
         join = obj_name != obj2_name and obj not in exe.db.views and columns
 
-        if join:
-            all_columns = list(obj.columns) + list(obj2.columns)
-        else:
-            all_columns = obj.columns
+        all_columns = list(obj.columns) + list(obj2.columns) if join else obj.columns
 
+        column_types = []
         if self.rng.random() < 0.9:
+            column_types = [
+                self.rng.choice(list(DATA_TYPES))
+                for i in range(self.rng.randint(1, 10))
+            ]
             expressions = ", ".join(
                 [
                     expression(
-                        self.rng.choice(list(DATA_TYPES)),
+                        column_type,
                         all_columns,
                         self.rng,
                         expr_kind,
                     )
-                    for i in range(self.rng.randint(1, 10))
+                    for column_type in column_types
                 ]
             )
             if self.rng.choice([True, False]):
+                column_types = []
                 column1 = self.rng.choice(all_columns)
                 column2 = self.rng.choice(all_columns)
                 column3 = self.rng.choice(all_columns)
@@ -369,17 +373,42 @@ class Action:
         if self.rng.choice([True, False]):
             query += f" WHERE {expression(Boolean, all_columns, self.rng, expr_kind)}"
 
-        if self.rng.choice([True, False]):
-            query += f" UNION ALL SELECT {expressions} FROM {obj_name}"
+        if bool(column_types) and self.rng.choice([True, False]):
+            obj3 = self.rng.choice(exe.db.db_objects())
+            obj3_name = str(obj3)
+            column3 = self.rng.choice(obj3.columns)
+            obj4 = self.rng.choice(exe.db.db_objects())
+            obj4_name = str(obj4)
+            columns_union = [
+                c
+                for c in obj4.columns
+                if c.data_type == column3.data_type and c.data_type != TextTextMap
+            ]
+            join_union = (
+                obj3_name != obj4_name and obj3 not in exe.db.views and columns_union
+            )
+            all_columns_union = (
+                list(obj3.columns) + list(obj4.columns) if join_union else obj3.columns
+            )
+            expressions3 = ", ".join(
+                [
+                    expression(
+                        column_type,
+                        all_columns_union,
+                        self.rng,
+                        expr_kind,
+                    )
+                    for column_type in column_types
+                ]
+            )
+            query += f" UNION ALL SELECT {expressions3} FROM {obj3_name}"
 
-            if join:
-                column2 = self.rng.choice(columns)
-                query += f" JOIN {obj2_name} ON {column} = {column2}"
+            if join_union:
+                column4 = self.rng.choice(columns_union)
+                query += f" JOIN {obj4_name} ON {column3} = {column4}"
 
             if self.rng.choice([True, False]):
-                query += (
-                    f" WHERE {expression(Boolean, all_columns, self.rng, expr_kind)}"
-                )
+                query += f" WHERE {expression(Boolean, all_columns_union, self.rng, expr_kind)}"
 
         query += f" LIMIT {self.rng.randint(0, 100)}"
         return query
@@ -1891,6 +1920,9 @@ class FlipFlagsAction(Action):
             "'30s'",
             "'60s'",
         ]
+        self.flags_with_values["mysql_source_snapshot_parallelism"] = (
+            BOOLEAN_FLAG_VALUES
+        )
 
         # If you are adding a new config flag in Materialize, consider using it
         # here instead of just marking it as uninteresting to silence the
@@ -2045,7 +2077,6 @@ class FlipFlagsAction(Action):
             "kafka_buffered_event_resize_threshold_elements",
             "kafka_low_watermark_check",
             "mysql_replication_heartbeat_interval",
-            "mysql_source_snapshot_parallelism",
             "postgres_fetch_slot_resume_lsn_interval",
             "pg_schema_validation_interval",
             "storage_enforce_external_addresses",
@@ -3746,9 +3777,8 @@ ddl_action_list = ActionList(
         (DropIcebergSinkAction, 4),
         (CreateKafkaSourceAction, 4),
         (DropKafkaSourceAction, 4),
-        # TODO: Reenable when https://linear.app/materializeinc/issue/SS-307 is fixed
-        # (CreateMySqlSourceAction, 4),
-        # (DropMySqlSourceAction, 4),
+        (CreateMySqlSourceAction, 4),
+        (DropMySqlSourceAction, 4),
         (CreatePostgresSourceAction, 4),
         (DropPostgresSourceAction, 4),
         # TODO: Reenable when https://linear.app/materializeinc/issue/SS-290 is fixed

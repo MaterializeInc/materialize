@@ -20,9 +20,8 @@ Because indexes are scoped to a single cluster, they are most useful for acceler
 
 ## Syntax
 
-{{< tabs >}}
+{{< tabs level=3 >}}
 {{< tab "CREATE INDEX" >}}
-### Create index
 
 Create an index using the specified columns as the index key.
 
@@ -30,7 +29,6 @@ Create an index using the specified columns as the index key.
 
 {{< /tab >}}
 {{< tab "CREATE DEFAULT INDEX" >}}
-### Create default index
 
 Create a default index using a set of columns that uniquely identify each row.
 If this set of columns cannot be inferred, all columns are used.
