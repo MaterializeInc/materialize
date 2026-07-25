@@ -250,6 +250,13 @@ def get_variable_system_parameters(
             "true",
             ["true", "false"],
         ),
+        # On by default so the index cardinality path is exercised in CI. Note this
+        # only has an effect where `enable_cardinality_estimates` and the session's
+        # `enable_session_cardinality_estimates` are also on, both of which remain
+        # off; tests that want the whole path set all three explicitly.
+        VariableSystemParameter(
+            "enable_index_cardinality_estimates", "true", ["true", "false"]
+        ),
         VariableSystemParameter(
             "enable_compute_sync_mv_sink",
             "true",
