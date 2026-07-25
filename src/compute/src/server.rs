@@ -56,6 +56,67 @@ pub struct ComputeInstanceContext {
     pub connection_context: ConnectionContext,
 }
 
+/// Which of a process's compute runtimes a given runtime is.
+///
+/// A clusterd process runs a single `Solo` runtime by default. When an interactive runtime is
+/// configured, the process instead runs a `Maintenance` and an `Interactive` runtime side by side.
+/// The named roles share per-process resources (persist cache, metrics registry, log spans). The
+/// role distinguishes them so that only the globals-owning runtime runs the non-idempotent
+/// process-global initializers, and so metric series and log spans do not collide.
+///
+/// `Solo` exists so the single-runtime default stays behaviorally identical to a deployment without
+/// a second runtime: no `role` metric label, and it owns the process globals just as the sole
+/// runtime always has.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ComputeRuntimeRole {
+    /// The sole runtime of a single-runtime process. Owns index maintenance and the process-global
+    /// initializers.
+    Solo,
+    /// The maintenance runtime of a two-runtime process. Owns index maintenance and the
+    /// process-global initializers.
+    Maintenance,
+    /// The interactive runtime of a two-runtime process. Shares the process globals owned by
+    /// maintenance and serves reads.
+    Interactive,
+}
+
+impl ComputeRuntimeRole {
+    /// The `role` metric/log label for this role, or `None` for `Solo`.
+    ///
+    /// `Solo` omits the label so a single-runtime deployment registers exactly as it did before a
+    /// second runtime existed, keeping exact-match dashboards and alerts unchanged.
+    pub fn label(self) -> Option<&'static str> {
+        match self {
+            ComputeRuntimeRole::Solo => None,
+            ComputeRuntimeRole::Maintenance => Some("maintenance"),
+            ComputeRuntimeRole::Interactive => Some("interactive"),
+        }
+    }
+
+    /// Whether this role runs the non-idempotent, process-global initializers.
+    ///
+    /// `Solo` and `Maintenance` run them. An interactive runtime shares the same process and
+    /// inherits the globals maintenance installs, so re-running them would either double-apply a
+    /// non-idempotent effect or race maintenance.
+    pub fn owns_process_globals(self) -> bool {
+        matches!(
+            self,
+            ComputeRuntimeRole::Solo | ComputeRuntimeRole::Maintenance
+        )
+    }
+
+    /// Whether this role publishes its rendered indexes for its in-process peer to read.
+    ///
+    /// `Maintenance` publishes its maintained indexes, which its interactive peer reads. `Interactive`
+    /// publishes its transient query outputs. `Solo` has no in-process peer, so it does not publish.
+    pub fn publishes(self) -> bool {
+        matches!(
+            self,
+            ComputeRuntimeRole::Maintenance | ComputeRuntimeRole::Interactive
+        )
+    }
+}
+
 /// Type alias for the storage timely log reader.
 pub(crate) type StorageTimelyLogReader =
     Arc<EventLink<mz_repr::Timestamp, Vec<(Duration, TimelyEvent)>>>;
@@ -84,6 +145,7 @@ struct Config {
 /// Initiates a timely dataflow computation, processing compute commands.
 pub async fn serve(
     timely_config: TimelyConfig,
+    role: ComputeRuntimeRole,
     metrics_registry: &MetricsRegistry,
     persist_clients: Arc<PersistClientCache>,
     txns_ctx: TxnsContext,
@@ -111,7 +173,7 @@ pub async fn serve(
         persist_clients,
         txns_ctx,
         tracing_handle,
-        metrics: ComputeMetrics::register_with(metrics_registry),
+        metrics: ComputeMetrics::register_with(metrics_registry, role),
         context,
         metrics_registry: metrics_registry.clone(),
         workers_per_process,
