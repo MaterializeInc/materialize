@@ -22,6 +22,7 @@ const TimeRangeSelect = ({ timeRange, setTimeRange }: TimeRangeSelectProps) => {
     7: "Last 7 days",
     14: "Last 14 days",
     30: "Last 30 days",
+    60: "Last 60 days",
     90: "Last 90 days",
     100: "Last 100 days",
   };
