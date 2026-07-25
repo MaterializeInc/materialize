@@ -37,8 +37,8 @@ SELECT mz_unsafe.mz_sleep(8)
 query IT
 SELECT id, global_id FROM mz_internal.mz_dataflow_global_ids ORDER BY id, global_id;
 ----
-6  u2
-6  u3
+7  u2
+7  u3
 
 query TI
 SELECT global_id, lir_id FROM mz_internal.mz_lir_mapping ORDER BY global_id, lir_id DESC;

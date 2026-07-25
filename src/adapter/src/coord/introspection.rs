@@ -728,16 +728,41 @@ const SUBSCRIBES: &[SubscribeSpec] = &[
     //
     // Transient export IDs (`t*`) are ephemeral dataflows (peeks, subscribes,
     // including this one); we drop them to avoid self-feedback churn.
+    // Reads the two raw record logs rather than `mz_arrangement_sizes`. That view
+    // expands to nine grouped CTEs outer-joined against
+    // `mz_dataflow_operators_per_worker`, and going through it made this the most
+    // expensive dataflow on the replica, an order of magnitude above the other
+    // introspection subscribes. The neighbouring arrangement sizes spec reads raw
+    // logs for the same reason.
+    //
+    // The join is an outer join so that an index whose arrangement holds no records
+    // reports zero rather than dropping out. Zero and unknown mean very different
+    // things to a join orderer.
+    //
+    // Transient export IDs (`t*`) are ephemeral dataflows (peeks, subscribes,
+    // including this one); we drop them to avoid self-feedback churn.
+    //
+    // Introspection source indexes (`si*`) are dropped for a different reason. They
+    // are announced in `mz_compute_export_arrangements`, but the logging dataflows
+    // that hold them do not report arrangement records unless `log_logging` is
+    // enabled, so the outer join would score every one of them zero. A confident
+    // zero is the worst estimate a join orderer can be given, so leave them unknown
+    // instead. They start reporting real counts if `log_logging` is turned on, at
+    // which point this filter is what needs revisiting.
     SubscribeSpec {
         sink: SubscribeSink::IndexCardinalities,
         sql: "SUBSCRIBE (
             SELECT
                 ea.export_id,
-                COALESCE(SUM(ar.records), 0)::int8 AS records
+                count(r.operator_id)::int8 AS records
             FROM mz_introspection.mz_compute_export_arrangements AS ea
-            JOIN mz_introspection.mz_arrangement_sizes AS ar
-              ON ar.operator_id = ea.operator_id
+            LEFT JOIN (
+                SELECT operator_id FROM mz_introspection.mz_arrangement_records_raw
+                UNION ALL
+                SELECT operator_id FROM mz_introspection.mz_arrangement_batcher_records_raw
+            ) AS r ON r.operator_id = ea.operator_id
             WHERE ea.export_id NOT LIKE 't%'
+              AND ea.export_id NOT LIKE 'si%'
             GROUP BY ea.export_id
         )",
     },

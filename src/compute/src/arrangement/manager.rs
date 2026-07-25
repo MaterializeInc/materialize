@@ -146,6 +146,11 @@ impl<Tr> PaddedTrace<Tr>
 where
     Tr: TraceReader,
 {
+    /// Returns a reference to the wrapped trace.
+    pub fn inner(&self) -> &Tr {
+        &self.trace
+    }
+
     /// Turns this trace into a padded version that reports empty data for all times less than the
     /// trace's current logical compaction frontier.
     fn into_padded(mut self) -> Self {
@@ -261,6 +266,11 @@ impl TraceBundle {
             to_drop: Some(Rc::new(Box::new(to_drop))),
             ..self
         }
+    }
+
+    /// Returns a reference to the `oks` trace.
+    pub fn oks(&self) -> &PaddedTrace<RowRowAgent<Timestamp, Diff>> {
+        &self.oks
     }
 
     /// Returns a mutable reference to the `oks` trace.

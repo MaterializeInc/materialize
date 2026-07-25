@@ -70,7 +70,7 @@ use uuid::Uuid;
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
-use crate::logging::compute::{CollectionLogging, ComputeEvent, PeekEvent};
+use crate::logging::compute::{CollectionLogging, ComputeEvent, ExportArrangement, PeekEvent};
 use crate::logging::initialize::LoggingTraces;
 use crate::metrics::{CollectionMetrics, WorkerMetrics};
 use crate::render::{LinearJoinSpec, StartSignal};
@@ -865,6 +865,22 @@ impl<'a> ActiveComputeState<'a> {
             let id = log_index_ids
                 .remove(&log)
                 .expect("`logging::initialize` does not invent logs");
+
+            // Logging indexes never pass through `render::export_index`, so announce
+            // their arrangement here or they would be the only exports missing from
+            // `mz_compute_export_arrangements`.
+            // Log through the local handle: `compute_state.compute_logger` is only
+            // assigned once this loop finishes, so reading it here would silently
+            // drop every event.
+            let operator_id = trace.oks().inner().operator().global_id;
+            self.compute_state
+                .export_arrangement_operators
+                .insert(id, operator_id);
+            logger.log(&ComputeEvent::ExportArrangement(ExportArrangement {
+                export_id: id,
+                operator_id: u64::cast_from(operator_id),
+            }));
+
             self.compute_state.traces.set(id, trace);
 
             // Initialize compute and logging state for the logging index.
