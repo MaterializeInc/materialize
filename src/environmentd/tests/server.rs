@@ -1681,11 +1681,129 @@ fn test_frontend_read_then_write_nonconstant_insert_in_transaction() {
     // Outside a transaction the same statement commits on its own.
     client.batch_execute(BIG_INSERT).unwrap();
     assert_eq!(count(&mut client), 40000);
+
+    // The command tag counts diffs, not distinct rows: 20000 copies of the
+    // same row consolidate into one row with diff 20000.
+    client.batch_execute("BEGIN").unwrap();
+    let inserted = client
+        .execute("INSERT INTO t SELECT 1 FROM generate_series(1, 20000)", &[])
+        .unwrap();
+    assert_eq!(inserted, 20000);
+    client.batch_execute("COMMIT").unwrap();
+    assert_eq!(count(&mut client), 60000);
+
+    // Deferred and constant writes mix freely in one transaction and all land
+    // at COMMIT.
+    client.batch_execute("BEGIN").unwrap();
+    assert_eq!(client.execute(BIG_INSERT, &[]).unwrap(), 20000);
+    assert_eq!(client.execute(BIG_INSERT, &[]).unwrap(), 20000);
+    assert_eq!(client.execute("INSERT INTO t VALUES (1)", &[]).unwrap(), 1);
+    client.batch_execute("COMMIT").unwrap();
+    assert_eq!(count(&mut client), 100001);
+
+    // Constraint violations are caught while the diffs are being collected, so
+    // the statement fails and the transaction buffers nothing.
+    client
+        .batch_execute("CREATE TABLE nn (a int NOT NULL)")
+        .unwrap();
+    client.batch_execute("BEGIN").unwrap();
+    let err = client
+        .execute(
+            "INSERT INTO nn SELECT CASE WHEN g = 5 THEN NULL ELSE g END \
+             FROM generate_series(1, 20000) g",
+            &[],
+        )
+        .unwrap_err();
+    let db_err = err.as_db_error().expect("expected db error");
+    assert!(
+        db_err.message().contains("violates not-null constraint"),
+        "unexpected error: {err:?}"
+    );
+    let _ = client.batch_execute("ROLLBACK");
+    let nn_count = client
+        .query_one("SELECT count(*)::int4 FROM nn", &[])
+        .unwrap()
+        .get::<_, i32>(0);
+    assert_eq!(nn_count, 0, "failed write must not land");
+
+    // RETURNING needs the rows to be visible now, so it cannot wait for
+    // COMMIT. The transaction gate rejects it whether or not the values fold.
+    client.batch_execute("BEGIN").unwrap();
+    let err = client
+        .query(&format!("{BIG_INSERT} RETURNING a"), &[])
+        .unwrap_err();
+    let db_err = err.as_db_error().expect("expected db error");
+    assert!(
+        db_err
+            .message()
+            .contains("cannot be run inside a transaction block"),
+        "unexpected error: {err:?}"
+    );
+    let _ = client.batch_execute("ROLLBACK");
+}
+
+/// A transaction that has committed itself to DDL or to a subscribe cannot
+/// take a write. The reported error must be the one the coordinator reports,
+/// not whatever the write-op merge in the session state machine happens to
+/// produce.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_frontend_read_then_write_rejected_in_non_writable_transaction() {
+    const BIG_INSERT: &str = "INSERT INTO t SELECT generate_series(1, 20000)";
+
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .with_system_parameter_default(
+            "enable_adapter_frontend_occ_read_then_write".to_string(),
+            "true".to_string(),
+        )
+        .start_blocking();
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("CREATE TABLE t (a int)").unwrap();
+    client.batch_execute("CREATE TABLE z (a int)").unwrap();
+    client.batch_execute("CREATE TABLE u (a int)").unwrap();
+    client.batch_execute("INSERT INTO u VALUES (1)").unwrap();
+
+    let assert_read_only = |client: &mut postgres::Client, setup: &[&str]| {
+        client.batch_execute("BEGIN").unwrap();
+        for stmt in setup {
+            client.batch_execute(stmt).unwrap();
+        }
+        let err = client.execute(BIG_INSERT, &[]).unwrap_err();
+        let db_err = err.as_db_error().expect("expected db error");
+        assert!(
+            db_err.message().contains("transaction in read-only mode"),
+            "after {setup:?}, unexpected error: {err:?}"
+        );
+        // The failed statement aborts the transaction, so the rollback is what
+        // hands the session back in a usable state for the next case.
+        let _ = client.batch_execute("ROLLBACK");
+    };
+
+    // Each case rolls back, so the catalog changes never apply and the next
+    // case starts from the same state.
+    assert_read_only(&mut client, &["ALTER TABLE z RENAME TO z2"]);
+    assert_read_only(&mut client, &["CREATE TABLE zz (i int)"]);
+    // The FETCH is what pins the transaction to the subscribe, the DECLARE
+    // alone leaves it undecided.
+    assert_read_only(
+        &mut client,
+        &["DECLARE c CURSOR FOR SUBSCRIBE u", "FETCH 1 c"],
+    );
+
+    let count = client
+        .query_one("SELECT count(*)::int4 FROM t", &[])
+        .unwrap()
+        .get::<_, i32>(0);
+    assert_eq!(count, 0, "no rejected write may have landed");
 }
 
 /// Changing a startup-only parameter is allowed and warns that it only takes
 /// effect after a restart. The running process keeps its sampled value, so the
-/// routing decision cannot change underneath open sessions.
+/// routing decision cannot change underneath open sessions. A change that is
+/// rejected, or a `RESET ALL` that leaves the parameter where it was, must not
+/// warn.
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_startup_only_system_var_warns() {
@@ -1700,36 +1818,75 @@ fn test_startup_only_system_var_warns() {
         .connect(postgres::NoTls)
         .unwrap();
 
+    const WARNING: &str = "only take effect when environmentd restarts";
+    let drain = |rx: &mut futures::channel::mpsc::UnboundedReceiver<_>| -> Vec<String> {
+        std::iter::from_fn(|| rx.try_recv().ok())
+            .map(|notice: postgres::error::DbError| notice.message().to_string())
+            .collect()
+    };
+
     for stmt in [
         "ALTER SYSTEM SET enable_adapter_frontend_occ_read_then_write = true",
         "ALTER SYSTEM RESET enable_adapter_frontend_occ_read_then_write",
     ] {
         client.batch_execute(stmt).unwrap();
-        let notices: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok())
-            .map(|notice| notice.message().to_string())
-            .collect();
+        let notices = drain(&mut rx);
         assert!(
-            notices
-                .iter()
-                .any(|message| message.contains("only read when environmentd starts")),
+            notices.iter().any(|message| message.contains(WARNING)),
             "{stmt} did not warn, notices: {notices:?}"
         );
     }
+
+    // A rejected change must not warn: the catalog value does not move, so a
+    // restart would not pick anything new up.
+    let err = client
+        .batch_execute("ALTER SYSTEM SET max_concurrent_occ_writes = 'not-a-number'")
+        .unwrap_err();
+    let db_err = err.as_db_error().expect("expected db error");
+    assert!(
+        db_err
+            .message()
+            .contains("requires a \"unsigned integer\" value"),
+        "unexpected error: {err:?}"
+    );
+    let notices = drain(&mut rx);
+    assert!(
+        !notices.iter().any(|message| message.contains(WARNING)),
+        "rejected change warned, notices: {notices:?}"
+    );
+
+    // Zero permits would block every read-then-write until its statement
+    // timeout, so the parameter is constrained to at least 1.
+    let err = client
+        .batch_execute("ALTER SYSTEM SET max_concurrent_occ_writes = 0")
+        .unwrap_err();
+    let db_err = err.as_db_error().expect("expected db error");
+    assert!(
+        db_err
+            .message()
+            .contains("only supports values in range 1.."),
+        "unexpected error: {err:?}"
+    );
 
     // `RESET ALL` also goes through, and warns for the parameter it changes.
     client
         .batch_execute("ALTER SYSTEM SET enable_adapter_frontend_occ_read_then_write = true")
         .unwrap();
-    while rx.try_recv().is_ok() {}
+    let _ = drain(&mut rx);
     client.batch_execute("ALTER SYSTEM RESET ALL").unwrap();
-    let notices: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok())
-        .map(|notice| notice.message().to_string())
-        .collect();
+    let notices = drain(&mut rx);
     assert!(
-        notices
-            .iter()
-            .any(|message| message.contains("only read when environmentd starts")),
+        notices.iter().any(|message| message.contains(WARNING)),
         "RESET ALL did not warn, notices: {notices:?}"
+    );
+
+    // Everything is at its effective default now, so a second `RESET ALL`
+    // changes no startup-only parameter and must stay quiet about them.
+    client.batch_execute("ALTER SYSTEM RESET ALL").unwrap();
+    let notices = drain(&mut rx);
+    assert!(
+        !notices.iter().any(|message| message.contains(WARNING)),
+        "RESET ALL warned without changing anything, notices: {notices:?}"
     );
 }
 

@@ -103,11 +103,17 @@ Both are now active (no longer `#[ignore]`d) and passing.
   (`qa_legacy_far_future_refresh_mv_statement_timeout`, still `#[ignore]`d).
   This pre-existing hang is intentionally left unchanged; the fix is OCC-only.
 
-### Corollary / operational footgun (still open)
+### Corollary: `max_concurrent_occ_writes` is constrained to `>= 1`
 
-The same "block before the timeout is enforced" structure used to mean
-`max_concurrent_occ_writes = 0` (settable via `system_parameter_default`;
-`ALTER SYSTEM SET` is correctly rejected) sizes the semaphore to zero permits
-and bricks every read-then-write after restart. With the central timeout, such
-operations now at least *time out* instead of hanging forever, but a value of
-`0` is still a footgun — consider rejecting it (require `>= 1`).
+The same "block before the timeout is enforced" structure meant that
+`max_concurrent_occ_writes = 0` sizes the semaphore to zero permits and bricks
+every read-then-write after restart. With the central timeout such operations
+at least *time out* instead of hanging forever, but zero permits is still a
+footgun, so the parameter now carries a domain constraint requiring at least
+1. That covers both ways of setting it, `ALTER SYSTEM SET` and
+`system_parameter_default`.
+
+`ALTER SYSTEM SET`/`RESET` of the parameter is allowed, since the value is
+sampled once at boot and the running process cannot observe a later change.
+The statement emits a warning that the change only takes effect when
+`environmentd` restarts.

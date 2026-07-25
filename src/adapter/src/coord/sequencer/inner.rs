@@ -4197,7 +4197,6 @@ impl Coordinator {
         plan::AlterSystemSetPlan { name, value }: plan::AlterSystemSetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session, Some(&name))?;
-        Self::notice_if_startup_only(session, &name);
         // We want to ensure that the network policy we're switching too actually exists.
         if NETWORK_POLICY.name.to_string().to_lowercase() == name.clone().to_lowercase() {
             self.validate_alter_system_network_policy(session, &value)?;
@@ -4214,6 +4213,7 @@ impl Coordinator {
         };
         self.catalog_transact(Some(session), vec![op]).await?;
 
+        Self::notice_if_startup_only(session, &name);
         session.add_notice(AdapterNotice::VarDefaultUpdated {
             role: None,
             var_name: Some(name),
@@ -4228,9 +4228,9 @@ impl Coordinator {
         plan::AlterSystemResetPlan { name }: plan::AlterSystemResetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session, Some(&name))?;
-        Self::notice_if_startup_only(session, &name);
         let op = catalog::Op::ResetSystemConfiguration { name: name.clone() };
         self.catalog_transact(Some(session), vec![op]).await?;
+        Self::notice_if_startup_only(session, &name);
         session.add_notice(AdapterNotice::VarDefaultUpdated {
             role: None,
             var_name: Some(name),
@@ -4245,9 +4245,16 @@ impl Coordinator {
         _: plan::AlterSystemResetAllPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session, None)?;
-        self.notice_startup_only_reset_all(session);
+        // Which parameters `RESET ALL` changes has to be read before the
+        // transaction applies it, afterwards they all read as their default.
+        let startup_only_changed = self.startup_only_vars_changed_by_reset_all();
         let op = catalog::Op::ResetAllSystemConfiguration;
         self.catalog_transact(Some(session), vec![op]).await?;
+        for name in startup_only_changed {
+            session.add_notice(AdapterNotice::StartupOnlyVarUpdated {
+                var_name: name.to_string(),
+            });
+        }
         session.add_notice(AdapterNotice::VarDefaultUpdated {
             role: None,
             var_name: None,
@@ -4268,12 +4275,17 @@ impl Coordinator {
         ]
     }
 
-    /// Warns that a change to a startup-only parameter only takes effect after
-    /// a restart.
+    /// Warns that the parameter an `ALTER SYSTEM SET`/`RESET` names is only
+    /// read at startup, so the running process keeps its sampled value.
     ///
     /// We let the change through: the catalog value is what the next process
     /// start reads, and the running process cannot observe it, so there is no
     /// window where two code paths are live at once.
+    ///
+    /// The operator named the parameter, so restating the restart requirement
+    /// is appropriate whether or not the value actually changed.
+    /// `startup_only_vars_changed_by_reset_all` is value-based instead, because
+    /// `RESET ALL` names every parameter.
     fn notice_if_startup_only(session: &Session, name: &str) {
         if Self::startup_only_vars()
             .iter()
@@ -4285,26 +4297,26 @@ impl Coordinator {
         }
     }
 
-    /// Warns for every startup-only parameter that `RESET ALL` actually
-    /// changes. Parameters already at their effective default are untouched,
-    /// so they get no notice.
-    fn notice_startup_only_reset_all(&self, session: &Session) {
+    /// The startup-only parameters whose value `ALTER SYSTEM RESET ALL` would
+    /// change. Parameters already at their effective default are untouched, so
+    /// they are not reported.
+    fn startup_only_vars_changed_by_reset_all(&self) -> Vec<&'static str> {
         let config = self.catalog().system_config();
         let defaults = config.defaults();
-        for name in Self::startup_only_vars() {
-            let Ok(var) = config.get(name) else {
-                continue;
-            };
-            let current = var.value();
-            if defaults
-                .get(name)
-                .is_some_and(|default| default != &current)
-            {
-                session.add_notice(AdapterNotice::StartupOnlyVarUpdated {
-                    var_name: name.to_string(),
-                });
-            }
-        }
+        Self::startup_only_vars()
+            .into_iter()
+            .filter(|name| {
+                // Both names are registered system vars, a lookup failure
+                // would mean the definitions and this list have drifted apart.
+                let current = config
+                    .get(name)
+                    .expect("startup-only parameter is a registered system var")
+                    .value();
+                defaults
+                    .get(*name)
+                    .is_some_and(|default| default != &current)
+            })
+            .collect()
     }
 
     // TODO(jkosh44) Move this into rbac.rs once RBAC is always on.

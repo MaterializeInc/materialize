@@ -132,8 +132,9 @@ pub enum AdapterNotice {
         role: Option<String>,
         var_name: Option<String>,
     },
-    /// A system parameter that `environmentd` only reads at startup was
-    /// changed, so the running process keeps using its old value.
+    /// An `ALTER SYSTEM` statement named a system parameter that
+    /// `environmentd` only reads at startup, so the running process keeps the
+    /// value it sampled at boot.
     StartupOnlyVarUpdated {
         var_name: String,
     },
@@ -517,8 +518,7 @@ impl fmt::Display for AdapterNotice {
             }
             AdapterNotice::StartupOnlyVarUpdated { var_name } => write!(
                 f,
-                "{} is only read when environmentd starts, so this change takes \
-                 effect after the next restart",
+                "changes to {} only take effect when environmentd restarts",
                 var_name.quoted()
             ),
             AdapterNotice::Welcome(message) => message.fmt(f),

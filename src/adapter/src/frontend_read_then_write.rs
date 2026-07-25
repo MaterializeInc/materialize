@@ -21,7 +21,9 @@
 //! 4. Acquire OCC semaphore
 //! 5. Create subscribe via Coordinator Command
 //! 6. Run OCC loop (receive diffs, attempt write, retry on conflict)
-//! 7. Return result
+//! 7. Return the result. The write either went through the coordinator during
+//!    the loop, or, for a selection that reads no persisted state inside a
+//!    transaction, we buffer the diffs as session write ops that land at COMMIT
 //!
 //! ## Rollout note
 //!
@@ -162,9 +164,11 @@ enum OccOutcome {
         response: ExecuteResponse,
         write_ts: Option<Timestamp>,
     },
-    /// The selection reads no persisted state, so these diffs are a blind
-    /// write. They belong to the session's transaction and must not become
-    /// visible before it commits, so the caller buffers them as write ops.
+    /// These diffs are a blind write: the subscribe ran to completion, which
+    /// only a dataflow over no persisted inputs does, so the diffs do not
+    /// depend on any read frontier. They belong to the session's transaction
+    /// and must not become visible before it commits, so the caller buffers
+    /// them as write ops.
     Deferred {
         response: ExecuteResponse,
         diffs: Vec<(Row, Diff)>,
@@ -262,6 +266,21 @@ impl PeekClient {
         statement_logging_id: Option<StatementLoggingId>,
         attempt_state: Arc<FrontendWriteAttemptState>,
     ) -> Result<ExecuteResponse, AdapterError> {
+        // A transaction that has taken a timestamped read, was opened READ
+        // ONLY, or is committed to some other kind of operation cannot take a
+        // write. Check up front, mirroring `sequence_insert`: the marker op
+        // below rejects only some of those states, and only with its own
+        // errors, so without this check the reported error and SQLSTATE would
+        // depend on which path sequenced the statement.
+        //
+        // Both this and the marker op require an open transaction. The
+        // frontends start one before they execute anything, and a `Failed`
+        // transaction only ever admits COMMIT/ROLLBACK, so DML never arrives
+        // in a state where these panic.
+        if !session.transaction().allows_writes() {
+            return Err(AdapterError::ReadOnlyTransaction);
+        }
+
         let validation_result =
             self.validate_read_then_write(catalog, session, &plan, target_cluster)?;
 
@@ -280,16 +299,16 @@ impl PeekClient {
 
         // Mark this as a write transaction in the session state machine. For a
         // single statement that lets auto-commit handle the write correctly.
-        // Inside a transaction it is also the check that rejects a write after
-        // a timestamped read ("transaction in read-only mode"), so it has to
-        // run before we execute anything. The rows are added later: either the
-        // coordinator's group commit applies them directly, or, in a
-        // transaction, they are buffered as write ops once we know them.
+        // The rows are added later: either the coordinator's group commit
+        // applies them directly, or, in a transaction, they are buffered as
+        // write ops once we know them.
         session.add_transaction_ops(TransactionOps::Writes(vec![]))?;
 
         // A write that reads persisted state commits at the frontier it
-        // observed, which cannot be deferred to COMMIT. Only writes that read
-        // nothing may run in a transaction, and those are the ones we buffer.
+        // observed, which cannot be deferred to COMMIT, so inside a
+        // transaction only writes that read nothing get here. See the
+        // read-dependency check in
+        // `SessionClient::try_frontend_read_then_write`.
         let defer_write = session.transaction().is_in_multi_statement_transaction();
 
         // Prepare expressions (resolve unmaterializable functions like
@@ -443,6 +462,14 @@ impl PeekClient {
                 Ok(response)
             }
             OccOutcome::Deferred { response, diffs } => {
+                // NOTE: A buffered session write carries no target-generation
+                // guard. The immediate path pins `target_global_id` and group
+                // commit re-validates it, but a `WriteOp` only names the
+                // `CatalogItemId` and commit staging resolves whatever global
+                // id is current then. So an `ALTER TABLE ... ADD COLUMN` that
+                // lands between here and COMMIT appends rows of the old arity
+                // under the new schema. This holds for every buffered write,
+                // not just ours.
                 session.add_transaction_ops(TransactionOps::Writes(vec![WriteOp {
                     id: target_id,
                     rows: TableData::Rows(diffs),
@@ -940,11 +967,12 @@ impl PeekClient {
                         break result;
                     }
 
-                    // A write that depends on reading persisted state cannot
-                    // be deferred: its diffs are only valid at the frontier we
-                    // observed. Such statements are rejected before we get
-                    // here, in `SessionClient::try_frontend_read_then_write`,
-                    // because they cannot run in a transaction at all.
+                    // A write that reads persisted state cannot be deferred:
+                    // its diffs are only valid at the frontier we observed.
+                    // Inside a transaction such statements are rejected before
+                    // we execute anything, by the read-dependency check in
+                    // `SessionClient::try_frontend_read_then_write`, so this is
+                    // defense in depth.
                     if defer_write {
                         soft_panic_or_log!(
                             "read-dependent read-then-write reached the OCC write path \

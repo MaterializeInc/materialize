@@ -41,7 +41,7 @@ use uncased::UncasedStr;
 use crate::session::user::{SUPPORT_USER, SYSTEM_USER, User};
 use crate::session::vars::constraints::{
     BYTESIZE_AT_LEAST_1MB, DomainConstraint, NON_ZERO_DURATION, NUMERIC_BOUNDED_0_1_INCLUSIVE,
-    NUMERIC_NON_NEGATIVE, ValueConstraint,
+    NUMERIC_NON_NEGATIVE, U32_AT_LEAST_1, ValueConstraint,
 };
 use crate::session::vars::errors::VarError;
 use crate::session::vars::polyfill::{LazyValueFn, lazy_value, value};
@@ -645,12 +645,16 @@ pub static ALLOWED_CLUSTER_REPLICA_SIZES: VarDefinition = VarDefinition::new(
     true,
 );
 
+/// Sizes the OCC write semaphore at boot. Zero permits would block every
+/// read-then-write until its `statement_timeout`, so the value must be at
+/// least 1.
 pub static MAX_CONCURRENT_OCC_WRITES: VarDefinition = VarDefinition::new(
     "max_concurrent_occ_writes",
     value!(u32; 4),
     "Maximum number of concurrent read-then-write (DELETE/UPDATE) operations using OCC. Read at startup; changes require an environmentd restart (Materialize).",
     false,
-);
+)
+.with_constraint(&U32_AT_LEAST_1);
 
 pub static MAX_OCC_RETRIES: VarDefinition = VarDefinition::new(
     "max_occ_retries",

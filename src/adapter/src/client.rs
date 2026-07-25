@@ -1644,7 +1644,7 @@ impl SessionClient {
         outer_ctx_extra: &mut Option<ExecuteContextGuard>,
         attempt_state: Arc<FrontendWriteAttemptState>,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
-        use mz_expr::RowSetFinishing;
+        use mz_expr::{CollectionPlan, RowSetFinishing};
         use mz_sql::ast::ConstantVisitor;
         use mz_sql::plan::{MutationKind, Plan, ReadThenWritePlan};
         use mz_sql_parser::ast::{InsertStatement, Statement};
@@ -1692,6 +1692,9 @@ impl SessionClient {
         // path commit immediately and cannot be rolled back at transaction
         // end. `Failed` transactions pass through, pgwire only admits
         // COMMIT/ROLLBACK in that state.
+        //
+        // An AST-constant source can still plan to a read, so the check on the
+        // planned selection further down narrows this.
         {
             let session = self.session.as_ref().expect("SessionClient invariant");
             match session.transaction() {
@@ -1847,10 +1850,7 @@ impl SessionClient {
                 // through the RTW path, where timestamp selection
                 // handles REFRESH and other time-dependent reads
                 // correctly.
-                let has_read_deps = {
-                    use mz_expr::CollectionPlan;
-                    !insert_plan.values.depends_on().is_empty()
-                };
+                let has_read_deps = !insert_plan.values.depends_on().is_empty();
 
                 if !has_read_deps {
                     let optimized_mir = if insert_plan.values.as_const().is_some() {
@@ -1968,6 +1968,26 @@ impl SessionClient {
                 ));
             }
         };
+
+        // Inside a transaction, only a write that reads no persisted state can
+        // run on this path: its diffs are frontier-independent, so they can sit
+        // in the session's write ops until COMMIT. A write that reads persisted
+        // state commits at the frontier it observed and cannot wait.
+        //
+        // The AST gate above is not enough to establish this. It admits
+        // INSERTs whose source is constant in the AST, and such a statement can
+        // still plan to a selection with `Get` nodes, because SQL-implemented
+        // builtins (`pg_get_viewdef`, `text` to `reg*` casts, ...) read system
+        // relations. So decide on the planned selection, and do it before we
+        // execute a dataflow for a statement we would then refuse.
+        {
+            let session = self.session.as_ref().expect("SessionClient invariant");
+            if session.transaction().is_in_multi_statement_transaction()
+                && !rtw_plan.selection.depends_on().is_empty()
+            {
+                return Err(prohibited_in_transaction(&stmt));
+            }
+        }
 
         let session = self.session.as_mut().expect("SessionClient invariant");
         self.peek_client
