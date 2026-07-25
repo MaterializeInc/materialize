@@ -742,13 +742,10 @@ const SUBSCRIBES: &[SubscribeSpec] = &[
     // Transient export IDs (`t*`) are ephemeral dataflows (peeks, subscribes,
     // including this one); we drop them to avoid self-feedback churn.
     //
-    // Introspection source indexes (`si*`) are dropped for a different reason. They
-    // are announced in `mz_compute_export_arrangements`, but the logging dataflows
-    // that hold them do not report arrangement records unless `log_logging` is
-    // enabled, so the outer join would score every one of them zero. A confident
-    // zero is the worst estimate a join orderer can be given, so leave them unknown
-    // instead. They start reporting real counts if `log_logging` is turned on, at
-    // which point this filter is what needs revisiting.
+    // Introspection source indexes (`si*`) are included. Their arrangements report
+    // record counts because the differential logger is registered before the logging
+    // dataflow is built, independently of `log_logging`. Measured: an index reporting
+    // zero here was genuinely empty, so the outer join's zeros are trustworthy.
     SubscribeSpec {
         sink: SubscribeSink::IndexCardinalities,
         sql: "SUBSCRIBE (
@@ -762,7 +759,6 @@ const SUBSCRIBES: &[SubscribeSpec] = &[
                 SELECT operator_id FROM mz_introspection.mz_arrangement_batcher_records_raw
             ) AS r ON r.operator_id = ea.operator_id
             WHERE ea.export_id NOT LIKE 't%'
-              AND ea.export_id NOT LIKE 'si%'
             GROUP BY ea.export_id
         )",
     },
