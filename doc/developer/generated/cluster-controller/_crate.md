@@ -1,6 +1,6 @@
 ---
 source: src/cluster-controller/src/lib.rs
-revision: 74f18a3354
+revision: 6eeaca032b
 ---
 
 # mz-cluster-controller
@@ -11,15 +11,15 @@ The crate depends only on primitive id/shape types and the `ClusterControllerCtx
 
 Key modules:
 
-* `ctx` — The `ClusterControllerCtx` trait (the pull/apply boundary), `ClusterState`, `StateWrite`, `Decision`, `ApplyOutcome`, `ObservedReplica`, `ReconfigurationWrite`, `BurstWrite`, and the compare-and-append witness types re-exported from `mz-adapter-types`.
-* `strategy` — The `Strategy` trait (three pure functions per tick plus `signal_request`), `DesiredReplica`, `SignalRequest`, `ConfigSignals`, `LiveSignals`, `BaselineStrategy` (the always-present implicit strategy that holds the steady-state replica set), `GracefulReconfigurationStrategy` (engaged while a reconfiguration record is in progress), and `HydrationBurstStrategy` (engaged for clusters with an `ON HYDRATION` auto-scaling policy).
+* `ctx` — The `ClusterControllerCtx` trait (the pull/apply boundary), `ClusterState`, `StateWrite`, `Decision`, `ApplyOutcome`, `ObservedReplica`, `CreateReason`, `RefreshMvInfo`, `RefreshWindowInputs`, `RefreshWindowDecision`, `ReconfigurationWrite`, `BurstWrite`, and the compare-and-append witness types re-exported from `mz-adapter-types`.
+* `strategy` — The `Strategy` trait (three pure functions per tick plus `signal_request`), `DesiredReplica`, `SignalRequest`, `ConfigSignals`, `LiveSignals`, `BaselineStrategy` (the always-present implicit strategy that holds the steady-state replica set for MANUAL clusters), `GracefulReconfigurationStrategy` (engaged while a reconfiguration record is in progress), `OnRefreshStrategy` (engaged for clusters with a non-MANUAL `ClusterSchedule`), and `HydrationBurstStrategy` (engaged for clusters with an `ON HYDRATION` auto-scaling policy).
 
 Key types defined in `lib.rs`:
 
-* `ClusterController` — holds the strategy set (baseline, graceful-reconfiguration, hydration-burst) and a `ConfigSet` handle for dyncfgs; drives `reconcile` ticks.
+* `ClusterController` — holds the strategy set (baseline, graceful-reconfiguration, on-refresh, hydration-burst) and a `ConfigSet` handle for dyncfgs; drives `reconcile` ticks.
 * `reconcile` — two-phase tick: phase 1 (`update_state`) fetches live signals, merges and applies durable writes per cluster; phase 2 (`desired_replicas`) diffs the unified desired set against the actual replicas and emits creates/drops. A `ResourceExhausted` outcome from phase 2 triggers `shed_decision`.
 * `merge_state_writes` — disjoint-union join of per-strategy `StateWrite`s under a conflict alarm via `soft_panic_or_log!`.
-* `reconcile_replicas` — pure multiset union/diff kernel that closes the replica gap; only controller-owned replicas (those passing `ObservedReplica::owned_shape`) participate in the diff.
+* `reconcile_replicas` — pure multiset diff kernel that closes the replica gap. The desired count per shape is the `max` over strategies (not the sum), so a replica satisfies every strategy that wants one of its shape. Only controller-owned replicas (those passing `ObservedReplica::owned_shape`) participate in the diff.
 * `ReplicaNameGen` — generates deterministic fresh replica names past the highest observed `rNN` index.
 * `shed_decision` — emits an `UpdateClusterState` that marks the graceful reconfiguration as `ResourceExhausted` when a phase-2 apply is rejected for exceeding the resource budget.
 * `config_signals` — latches `ConfigSignals` from the controller's `ConfigSet` once per tick, so every strategy evaluates against a consistent environment-wide config.

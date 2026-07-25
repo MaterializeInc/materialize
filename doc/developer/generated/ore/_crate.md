@@ -1,6 +1,6 @@
 ---
 source: src/ore/src/lib.rs
-revision: 12fbe31d24
+revision: f2082d0163
 ---
 
 # mz-ore
@@ -25,6 +25,7 @@ Modules are included here when they are broadly useful but too small to warrant 
 | `hint` | `black_box` and `likely`/`unlikely` branch hints |
 | `iter` | Iterator extensions and adapters |
 | `lex` | Lexer helpers for SQL-related parsing |
+| `memory` | Physical memory introspection: `physical_memory_bytes` returns available RAM clamped by cgroup limits |
 | `now` | `NowFn` — injectable clock for deterministic timestamps |
 | `num` | Numeric formatting helpers |
 | `option` | `OptionExt` trait |
@@ -56,6 +57,7 @@ Modules are included here when they are broadly useful but too small to warrant 
 | `netio` | `network` | Async networking utilities: framed codec, DNS, socket helpers, timeouts |
 | `overflowing` | `overflowing` | `Overflowing<T>` newtype for wrapping arithmetic |
 | `pager` | `pager` (unix only) | Swap-backed and file-backed pager backends for spilling data out of memory; provides `SwapPager` and `FilePager` |
+| `pool` | `pool` (unix only) | Prototype buffer pool for dataflow state: size-class virtual-memory regions with swap-backed extent store for evicted chunks |
 | `panic` | `panic` | Panic handler with Sentry integration |
 | `process` | `process` | `halting` process exit via `libc` |
 | `region` | `region` | Columnar region allocator with lgalloc support |

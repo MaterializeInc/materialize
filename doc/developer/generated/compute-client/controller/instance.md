@@ -1,6 +1,6 @@
 ---
 source: src/compute-client/src/controller/instance.rs
-revision: e926ec3a86
+revision: 94054eb165
 ---
 
 # mz-compute-client::controller::instance

@@ -1,6 +1,6 @@
 ---
 source: src/compute-types/src/plan/scalar.rs
-revision: 822256a77d
+revision: 380c8dd1a1
 ---
 
 # compute-types::plan::scalar

@@ -1,6 +1,6 @@
 ---
 source: src/testdrive/src/lib.rs
-revision: d7429ca6b9
+revision: 5b2cefc829
 ---
 
 # testdrive

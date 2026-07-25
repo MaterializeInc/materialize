@@ -1,6 +1,6 @@
 ---
 source: src/testdrive/src/action/kafka/verify_commit.rs
-revision: 2a6ac3ab4c
+revision: 5b2cefc829
 ---
 
 # testdrive::action::kafka::verify_commit

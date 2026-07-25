@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/transform_hir.rs
-revision: eab8136a84
+revision: b6b85cfcef
 ---
 
 # mz-sql::plan::transform_hir
