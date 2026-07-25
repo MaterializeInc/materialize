@@ -100,6 +100,20 @@ Dataflow exports that don't have any errors are not included in this view.
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_error_counts_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_error_counts_raw -->
 
+## `mz_compute_export_arrangements`
+
+The `mz_compute_export_arrangements` view describes which [dataflow] operator holds the arrangement that each index serves.
+
+An index whose plan reuses an already-arranged collection builds no arrangement of its own, and points at the operator whose arrangement it reuses. That operator can belong to another object's part of the dataflow, so this mapping cannot be derived from [`mz_lir_mapping`](#mz_lir_mapping).
+
+<!-- RELATION_SPEC mz_introspection.mz_compute_export_arrangements -->
+| Field         | Type      | Meaning                                                                                                             |
+| ------------- | --------- | --------                                                                                                            |
+| `export_id`   | [`text`]  | The ID of the index exported by the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).  |
+| `operator_id` | [`uint8`] | The ID of the operator holding the arrangement. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators). |
+
+<!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_export_arrangements_per_worker -->
+
 ## `mz_compute_exports`
 
 The `mz_compute_exports` view describes the objects exported by [dataflows][dataflow] in the system.

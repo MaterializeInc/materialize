@@ -1409,9 +1409,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Index(&MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_OBJECT_IND),
         Builtin::Index(&MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_TS_IND),
         Builtin::Log(&MZ_COMPUTE_LIR_MAPPING_PER_WORKER),
-        Builtin::Log(&MZ_COMPUTE_EXPORT_ARRANGEMENTS_PER_WORKER),
         Builtin::View(&MZ_LIR_MAPPING),
-        Builtin::View(&MZ_COMPUTE_EXPORT_ARRANGEMENTS),
         Builtin::Source(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES),
         Builtin::Source(&MZ_CLUSTER_REPLICA_FRONTIERS),
         Builtin::View(&MZ_COMPUTE_HYDRATION_STATUSES),
@@ -1488,6 +1486,11 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_INDEX_ADVICE),
         Builtin::View(&MZ_MCP_DATA_PRODUCTS),
         Builtin::View(&MZ_MCP_DATA_PRODUCT_DETAILS),
+        // Appended rather than grouped with the other compute logs: item IDs
+        // follow this list's order, so inserting mid-list renumbers every item
+        // after the insertion point.
+        Builtin::Log(&MZ_COMPUTE_EXPORT_ARRANGEMENTS_PER_WORKER),
+        Builtin::View(&MZ_COMPUTE_EXPORT_ARRANGEMENTS),
     ];
 
     builtin_items.extend(notice::builtins());

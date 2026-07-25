@@ -941,6 +941,14 @@ mz_compute_error_counts_raw
 SOURCE
 materialize
 mz_introspection
+mz_compute_export_arrangements
+VIEW
+materialize
+mz_introspection
+mz_compute_export_arrangements_per_worker
+SOURCE
+materialize
+mz_introspection
 mz_compute_exports
 VIEW
 materialize
