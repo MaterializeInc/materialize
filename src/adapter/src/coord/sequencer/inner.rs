@@ -4197,7 +4197,7 @@ impl Coordinator {
         plan::AlterSystemSetPlan { name, value }: plan::AlterSystemSetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session, Some(&name))?;
-        Self::reject_if_startup_only(&name)?;
+        Self::notice_if_startup_only(session, &name);
         // We want to ensure that the network policy we're switching too actually exists.
         if NETWORK_POLICY.name.to_string().to_lowercase() == name.clone().to_lowercase() {
             self.validate_alter_system_network_policy(session, &value)?;
@@ -4228,7 +4228,7 @@ impl Coordinator {
         plan::AlterSystemResetPlan { name }: plan::AlterSystemResetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session, Some(&name))?;
-        Self::reject_if_startup_only(&name)?;
+        Self::notice_if_startup_only(session, &name);
         let op = catalog::Op::ResetSystemConfiguration { name: name.clone() };
         self.catalog_transact(Some(session), vec![op]).await?;
         session.add_notice(AdapterNotice::VarDefaultUpdated {
@@ -4245,7 +4245,7 @@ impl Coordinator {
         _: plan::AlterSystemResetAllPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session, None)?;
-        self.reject_reset_all_if_startup_only_nondefault()?;
+        self.notice_startup_only_reset_all(session);
         let op = catalog::Op::ResetAllSystemConfiguration;
         self.catalog_transact(Some(session), vec![op]).await?;
         session.add_notice(AdapterNotice::VarDefaultUpdated {
@@ -4255,61 +4255,56 @@ impl Coordinator {
         Ok(ExecuteResponse::AlteredSystemConfiguration)
     }
 
-    /// Rejects `ALTER SYSTEM SET` / `RESET` for system parameters whose value
-    /// is sampled once at `environmentd` startup and cannot be changed
-    /// dynamically.
+    /// System parameters whose value `environmentd` samples once at startup.
     ///
-    /// Mutating these at runtime would update the catalog without affecting
-    /// the running process, leaving operators (and us, in tests like
-    /// `parallel-workload`) with the false impression that the change took
-    /// effect. For switches that gate fundamentally different code paths —
-    /// e.g. `enable_adapter_frontend_occ_read_then_write`, where the
-    /// lock-based and OCC paths cannot safely run concurrently within one
-    /// process — that confusion is dangerous, so we refuse the operation
-    /// outright. `max_concurrent_occ_writes` is startup-only for the same
-    /// reason (it sizes the OCC semaphore at boot); there the risk is only a
-    /// silent no-op rather than data corruption, but we reject it too for
-    /// consistency.
-    ///
-    /// NOTE: this only guards the SQL `ALTER SYSTEM` path. LaunchDarkly /
-    /// `system_parameter_default` sync writes the catalog value directly (via
-    /// `Command::SetSystemVars`) and is expected to be paired with an
-    /// `environmentd` restart for the new value to take effect.
-    fn reject_if_startup_only(name: &str) -> Result<(), AdapterError> {
-        let startup_only: &[&str] = &[
+    /// `enable_adapter_frontend_occ_read_then_write` selects between the
+    /// lock-based and the OCC read-then-write path. Both are never live in one
+    /// process, so the choice is fixed at boot and every session inherits it.
+    /// `max_concurrent_occ_writes` sizes the OCC semaphore at boot.
+    fn startup_only_vars() -> [&'static str; 2] {
+        [
             FRONTEND_READ_THEN_WRITE.name(),
             MAX_CONCURRENT_OCC_WRITES.name(),
-        ];
-        if startup_only.iter().any(|n| n.eq_ignore_ascii_case(name)) {
-            return Err(AdapterError::Unstructured(anyhow!(
-                "{name} is read once at environmentd startup and cannot be \
-                 changed at runtime; set it via system_parameter_default and \
-                 restart environmentd to change it"
-            )));
-        }
-        Ok(())
+        ]
     }
 
-    fn reject_reset_all_if_startup_only_nondefault(&self) -> Result<(), AdapterError> {
+    /// Warns that a change to a startup-only parameter only takes effect after
+    /// a restart.
+    ///
+    /// We let the change through: the catalog value is what the next process
+    /// start reads, and the running process cannot observe it, so there is no
+    /// window where two code paths are live at once.
+    fn notice_if_startup_only(session: &Session, name: &str) {
+        if Self::startup_only_vars()
+            .iter()
+            .any(|n| n.eq_ignore_ascii_case(name))
+        {
+            session.add_notice(AdapterNotice::StartupOnlyVarUpdated {
+                var_name: name.to_string(),
+            });
+        }
+    }
+
+    /// Warns for every startup-only parameter that `RESET ALL` actually
+    /// changes. Parameters already at their effective default are untouched,
+    /// so they get no notice.
+    fn notice_startup_only_reset_all(&self, session: &Session) {
         let config = self.catalog().system_config();
         let defaults = config.defaults();
-        for name in [
-            FRONTEND_READ_THEN_WRITE.name(),
-            MAX_CONCURRENT_OCC_WRITES.name(),
-        ] {
-            let current = config.get(name)?.value();
+        for name in Self::startup_only_vars() {
+            let Ok(var) = config.get(name) else {
+                continue;
+            };
+            let current = var.value();
             if defaults
                 .get(name)
                 .is_some_and(|default| default != &current)
             {
-                return Err(AdapterError::Unstructured(anyhow!(
-                    "ALTER SYSTEM RESET ALL would reset {name}, which is read once at \
-                     environmentd startup. Reset it via system_parameter_default and restart \
-                     environmentd"
-                )));
+                session.add_notice(AdapterNotice::StartupOnlyVarUpdated {
+                    var_name: name.to_string(),
+                });
             }
         }
-        Ok(())
     }
 
     // TODO(jkosh44) Move this into rbac.rs once RBAC is always on.

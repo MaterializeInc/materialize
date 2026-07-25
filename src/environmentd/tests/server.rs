@@ -1626,6 +1626,113 @@ fn test_frontend_read_then_write_rejected_in_multi_statement_batch() {
     assert_eq!(count, 1, "no batch write may have committed");
 }
 
+/// An INSERT whose values read no persisted state may run in a transaction,
+/// even when the values are too large to fold into a literal. The rows are
+/// buffered as session write ops, so they commit with the transaction and
+/// disappear if it does not commit.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_frontend_read_then_write_nonconstant_insert_in_transaction() {
+    // Above `FOLD_CONSTANTS_LIMIT`, so the planned values stay a dataflow
+    // instead of folding into a constant.
+    const BIG_INSERT: &str = "INSERT INTO t SELECT generate_series(1, 20000)";
+
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .with_system_parameter_default(
+            "enable_adapter_frontend_occ_read_then_write".to_string(),
+            "true".to_string(),
+        )
+        .start_blocking();
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("CREATE TABLE t (a int)").unwrap();
+
+    let count = |client: &mut postgres::Client| {
+        client
+            .query_one("SELECT count(*)::int4 FROM t", &[])
+            .unwrap()
+            .get::<_, i32>(0)
+    };
+
+    client
+        .batch_execute(&format!("BEGIN; {BIG_INSERT}; COMMIT;"))
+        .unwrap();
+    assert_eq!(count(&mut client), 20000);
+
+    client
+        .batch_execute(&format!("BEGIN; {BIG_INSERT}; ROLLBACK;"))
+        .unwrap();
+    assert_eq!(count(&mut client), 20000, "rolled back write must not land");
+
+    // A later error in the same implicit batch aborts the transaction, so the
+    // write must not be visible.
+    let err = client
+        .batch_execute(&format!("{BIG_INSERT}; SELECT 1/0;"))
+        .unwrap_err();
+    let db_err = err.as_db_error().expect("expected db error");
+    assert!(
+        db_err.message().contains("division by zero"),
+        "unexpected error: {err:?}"
+    );
+    let _ = client.batch_execute("ROLLBACK");
+    assert_eq!(count(&mut client), 20000, "aborted write must not land");
+
+    // Outside a transaction the same statement commits on its own.
+    client.batch_execute(BIG_INSERT).unwrap();
+    assert_eq!(count(&mut client), 40000);
+}
+
+/// Changing a startup-only parameter is allowed and warns that it only takes
+/// effect after a restart. The running process keeps its sampled value, so the
+/// routing decision cannot change underneath open sessions.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_startup_only_system_var_warns() {
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
+
+    let (tx, mut rx) = futures::channel::mpsc::unbounded();
+    let mut client = server
+        .pg_config_internal()
+        .notice_callback(move |notice| tx.unbounded_send(notice).expect("send notice"))
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    for stmt in [
+        "ALTER SYSTEM SET enable_adapter_frontend_occ_read_then_write = true",
+        "ALTER SYSTEM RESET enable_adapter_frontend_occ_read_then_write",
+    ] {
+        client.batch_execute(stmt).unwrap();
+        let notices: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok())
+            .map(|notice| notice.message().to_string())
+            .collect();
+        assert!(
+            notices
+                .iter()
+                .any(|message| message.contains("only read when environmentd starts")),
+            "{stmt} did not warn, notices: {notices:?}"
+        );
+    }
+
+    // `RESET ALL` also goes through, and warns for the parameter it changes.
+    client
+        .batch_execute("ALTER SYSTEM SET enable_adapter_frontend_occ_read_then_write = true")
+        .unwrap();
+    while rx.try_recv().is_ok() {}
+    client.batch_execute("ALTER SYSTEM RESET ALL").unwrap();
+    let notices: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok())
+        .map(|notice| notice.message().to_string())
+        .collect();
+    assert!(
+        notices
+            .iter()
+            .any(|message| message.contains("only read when environmentd starts")),
+        "RESET ALL did not warn, notices: {notices:?}"
+    );
+}
+
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_frontend_read_then_write_constant_insert_respects_max_result_size() {

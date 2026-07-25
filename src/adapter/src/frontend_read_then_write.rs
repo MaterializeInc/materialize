@@ -59,6 +59,7 @@ use mz_repr::{
 use mz_sql::catalog::CatalogError;
 use mz_sql::plan::{self, MutationKind, Params, QueryWhen};
 use mz_sql::session::metadata::SessionMetadata;
+use mz_storage_client::client::TableData;
 use prometheus::Histogram;
 use qcell::QCell;
 use timely::progress::Antichain;
@@ -74,7 +75,7 @@ use crate::coord::{Coordinator, ExecuteContextGuard, TargetCluster};
 use crate::error::AdapterError;
 use crate::optimize::Optimize;
 use crate::optimize::dataflows::{ComputeInstanceSnapshot, EvalTime, ExprPrep, ExprPrepOneShot};
-use crate::session::{LifecycleTimestamps, Session, TransactionOps, TransactionStatus};
+use crate::session::{LifecycleTimestamps, Session, TransactionOps, WriteOp};
 use crate::statement_logging::{
     PreparedStatementLoggingInfo, StatementLifecycleEvent, StatementLoggingId,
 };
@@ -152,6 +153,22 @@ impl FrontendWriteAttemptState {
             _ => None,
         }
     }
+}
+
+/// What the OCC loop produced.
+enum OccOutcome {
+    /// The write is durable at `write_ts`, or there was nothing to write.
+    Committed {
+        response: ExecuteResponse,
+        write_ts: Option<Timestamp>,
+    },
+    /// The selection reads no persisted state, so these diffs are a blind
+    /// write. They belong to the session's transaction and must not become
+    /// visible before it commits, so the caller buffers them as write ops.
+    Deferred {
+        response: ExecuteResponse,
+        diffs: Vec<(Row, Diff)>,
+    },
 }
 
 /// A handle to an internal subscribe (not visible in introspection collections
@@ -261,19 +278,19 @@ impl PeekClient {
             self.log_set_cluster(logging_id, cluster_id, cluster_name);
         }
 
-        // Multi-statement transactions are rejected in
-        // `SessionClient::try_frontend_read_then_write`, so we're always in a
-        // single-statement (autocommit) transaction here. The actual data is
-        // written via the coordinator's group commit path, bypassing session
-        // transaction ops. The empty Writes(vec![]) just marks this as a write
-        // transaction in the session state machine so auto-commit handles it
-        // correctly. This is safe because a single-statement transaction has
-        // no ROLLBACK opportunity.
-        debug_assert!(
-            matches!(session.transaction(), TransactionStatus::Started(_)),
-            "read-then-write requires a single-statement transaction"
-        );
+        // Mark this as a write transaction in the session state machine. For a
+        // single statement that lets auto-commit handle the write correctly.
+        // Inside a transaction it is also the check that rejects a write after
+        // a timestamped read ("transaction in read-only mode"), so it has to
+        // run before we execute anything. The rows are added later: either the
+        // coordinator's group commit applies them directly, or, in a
+        // transaction, they are buffered as write ops once we know them.
         session.add_transaction_ops(TransactionOps::Writes(vec![]))?;
+
+        // A write that reads persisted state commits at the frontier it
+        // observed, which cannot be deferred to COMMIT. Only writes that read
+        // nothing may run in a transaction, and those are the ones we buffer.
+        let defer_write = session.transaction().is_in_multi_statement_transaction();
 
         // Prepare expressions (resolve unmaterializable functions like
         // current_user())
@@ -402,6 +419,7 @@ impl PeekClient {
                 statement_logging_id,
                 as_of,
                 attempt_state,
+                defer_write,
             )
             .await;
 
@@ -416,12 +434,22 @@ impl PeekClient {
         // its subscribe while we are still consolidating diffs and retrying.
         drop(permit);
 
-        let (result, write_ts) = result?;
-        if let Some(write_ts) = write_ts {
-            session.apply_write(write_ts);
+        let outcome = result?;
+        match outcome {
+            OccOutcome::Committed { response, write_ts } => {
+                if let Some(write_ts) = write_ts {
+                    session.apply_write(write_ts);
+                }
+                Ok(response)
+            }
+            OccOutcome::Deferred { response, diffs } => {
+                session.add_transaction_ops(TransactionOps::Writes(vec![WriteOp {
+                    id: target_id,
+                    rows: TableData::Rows(diffs),
+                }]))?;
+                Ok(response)
+            }
         }
-
-        Ok(result)
     }
 
     /// Validate a read-then-write operation.
@@ -746,10 +774,8 @@ impl PeekClient {
         statement_logging_id: Option<StatementLoggingId>,
         as_of: Timestamp,
         attempt_state: Arc<FrontendWriteAttemptState>,
-    ) -> (
-        usize,
-        Result<(ExecuteResponse, Option<Timestamp>), AdapterError>,
-    ) {
+        defer_write: bool,
+    ) -> (usize, Result<OccOutcome, AdapterError>) {
         let mut state = OccState::new();
 
         // Correctness invariant for retries:
@@ -781,8 +807,12 @@ impl PeekClient {
                     // `consolidate_updates`.
                     state.consolidate(Timestamp::MIN);
                     if state.all_diffs.is_empty() {
-                        break build_no_rows_response(&kind, &returning)
-                            .map(|response| (response, None));
+                        break build_no_rows_response(&kind, &returning).map(|response| {
+                            OccOutcome::Committed {
+                                response,
+                                write_ts: None,
+                            }
+                        });
                     }
                     let success_response = match self.build_success_response(
                         &kind,
@@ -800,6 +830,19 @@ impl PeekClient {
                         .iter()
                         .map(|(row, _ts, diff)| (row.clone(), *diff))
                         .collect_vec();
+
+                    // Inside a transaction the rows must not become visible
+                    // before COMMIT, and they have to disappear on ROLLBACK,
+                    // so we hand them back to the caller to buffer as session
+                    // write ops. The transaction's commit submits them to
+                    // group commit like any other buffered write.
+                    if defer_write {
+                        break Ok(OccOutcome::Deferred {
+                            response: success_response,
+                            diffs,
+                        });
+                    }
+
                     attempt_state.mark_write_submitted();
                     let result = self
                         .call_coordinator(|tx| Command::AttemptWrite {
@@ -818,7 +861,10 @@ impl PeekClient {
                             if let Some(id) = statement_logging_id {
                                 self.log_set_timestamp(id, timestamp);
                             }
-                            break Ok((success_response, Some(timestamp)));
+                            break Ok(OccOutcome::Committed {
+                                response: success_response,
+                                write_ts: Some(timestamp),
+                            });
                         }
                         WriteResult::TimestampPassed { .. } => {
                             // Unreachable: blind writes use
@@ -869,10 +915,12 @@ impl PeekClient {
                                 ) {
                                     ProcessResult::Continue { .. } => {}
                                     ProcessResult::NoRowsMatched => {
-                                        break Some(
-                                            build_no_rows_response(&kind, &returning)
-                                                .map(|response| (response, None)),
-                                        );
+                                        break Some(build_no_rows_response(&kind, &returning).map(
+                                            |response| OccOutcome::Committed {
+                                                response,
+                                                write_ts: None,
+                                            },
+                                        ));
                                     }
                                     ProcessResult::Error(e) => {
                                         break Some(Err(e));
@@ -890,6 +938,21 @@ impl PeekClient {
                     };
                     if let Some(result) = drain_err {
                         break result;
+                    }
+
+                    // A write that depends on reading persisted state cannot
+                    // be deferred: its diffs are only valid at the frontier we
+                    // observed. Such statements are rejected before we get
+                    // here, in `SessionClient::try_frontend_read_then_write`,
+                    // because they cannot run in a transaction at all.
+                    if defer_write {
+                        soft_panic_or_log!(
+                            "read-dependent read-then-write reached the OCC write path \
+                             inside a transaction"
+                        );
+                        break Err(AdapterError::Internal(
+                            "read-then-write cannot be run inside a transaction block".into(),
+                        ));
                     }
 
                     let write_ts = state
@@ -943,7 +1006,10 @@ impl PeekClient {
                             }
                             // N.B. subscribe_handle is dropped here, which
                             // fires off the cleanup message.
-                            break Ok((success_response, Some(timestamp)));
+                            break Ok(OccOutcome::Committed {
+                                response: success_response,
+                                write_ts: Some(timestamp),
+                            });
                         }
                         WriteResult::TimestampPassed {
                             next_eligible_timestamp,
@@ -1004,8 +1070,12 @@ impl PeekClient {
                     }
                 }
                 ProcessResult::NoRowsMatched => {
-                    break build_no_rows_response(&kind, &returning)
-                        .map(|response| (response, None));
+                    break build_no_rows_response(&kind, &returning).map(|response| {
+                        OccOutcome::Committed {
+                            response,
+                            write_ts: None,
+                        }
+                    });
                 }
                 ProcessResult::Error(e) => {
                     break Err(e);

@@ -1969,31 +1969,6 @@ impl SessionClient {
             }
         };
 
-        // Only single-statement (`Started`) transactions may enter the OCC
-        // loop, its writes commit immediately and cannot be rolled back at
-        // transaction end. Multi-statement transactions reach this point only
-        // for AST-constant INSERTs whose planned expression turned out
-        // non-constant. Match the coordinator's error precedence: `mz_now()`
-        // gets its dedicated error, everything else is prohibited in a
-        // transaction block. The coordinator's lock-based path additionally
-        // supports INSERTs of volatile constants (for example `random()`) in
-        // transaction blocks by buffering the diffs until commit, which the
-        // OCC path cannot do.
-        {
-            let session = self.session.as_ref().expect("SessionClient invariant");
-            if !matches!(session.transaction(), TransactionStatus::Started(_)) {
-                let contains_temporal = rtw_plan.selection.contains_temporal()
-                    || rtw_plan.assignments.values().any(|e| e.contains_temporal())
-                    || rtw_plan.returning.iter().any(|e| e.contains_temporal());
-                if contains_temporal {
-                    return Err(AdapterError::Unsupported(
-                        "calls to mz_now in write statements",
-                    ));
-                }
-                return Err(prohibited_in_transaction(&stmt));
-            }
-        }
-
         let session = self.session.as_mut().expect("SessionClient invariant");
         self.peek_client
             .frontend_read_then_write(

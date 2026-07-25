@@ -1931,10 +1931,9 @@ class FlipFlagsAction(Action):
         # behavior, you should add it. Feature flags which turn on/off
         # externally visible features should not be flipped.
         self.uninteresting_flags: list[str] = [
-            # Read once at environmentd startup; runtime ALTER SYSTEM SET is
-            # rejected (see sequence_alter_system_set). Flipping it here would
-            # be a no-op at best and confusing if any future code path forgot
-            # to consult the cached value.
+            # Read once at environmentd startup, so an ALTER SYSTEM SET only
+            # takes effect after a restart. Flipping it here would be a no-op
+            # for the running process.
             "enable_adapter_frontend_occ_read_then_write",
             "enable_compute_half_join2",
             "enable_mz_join_core",
