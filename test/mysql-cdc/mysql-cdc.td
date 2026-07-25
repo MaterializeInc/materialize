@@ -556,6 +556,12 @@ true
 
 > DROP SOURCE large_cluster_source CASCADE;
 
+#
+# Integer PK. PK-range splitting only supports string-like keys with a binary
+# collation, so this falls back to a single-worker whole-table read and must
+# still produce a complete, duplicate-free snapshot.
+#
+
 $ mysql-execute name=mysql
 DROP TABLE IF EXISTS pk_range_test;
 CREATE TABLE pk_range_test (id BIGINT PRIMARY KEY, val BIGINT);
@@ -592,7 +598,8 @@ $ mysql-execute name=mysql
 DROP TABLE pk_range_test;
 
 #
-# Same, but for a single-column non-integer (char) PK.
+# Char PK under the server-default collation (utf8mb4_0900_ai_ci), which is not
+# a supported binary collation: single-worker fallback.
 #
 
 $ mysql-execute name=mysql
@@ -661,9 +668,15 @@ ee 200
 $ mysql-execute name=mysql
 DROP TABLE pk_comp_test;
 
+#
+# Far more workers than rows. The interpolated boundaries slice the narrow
+# MIN..MAX span into many ranges, most of them empty, and every row must still
+# arrive exactly once.
+#
+
 $ mysql-execute name=mysql
 DROP TABLE IF EXISTS pk_surplus_test;
-CREATE TABLE pk_surplus_test (id CHAR(26) PRIMARY KEY, val BIGINT);
+CREATE TABLE pk_surplus_test (id CHAR(26) COLLATE utf8mb4_bin PRIMARY KEY, val BIGINT);
 SET @i := 0;
 INSERT INTO pk_surplus_test SELECT LPAD(CONV(@i := @i + 1, 10, 36), 26, '0'), @i FROM mysql.time_zone t1 LIMIT 3;
 
@@ -689,12 +702,13 @@ $ mysql-execute name=mysql
 DROP TABLE pk_surplus_test;
 
 #
-# Empty table.
+# Empty table with a splittable PK: MIN/MAX are NULL, so boundary interpolation
+# falls back to a single-worker read of nothing.
 #
 
 $ mysql-execute name=mysql
 DROP TABLE IF EXISTS pk_empty_test;
-CREATE TABLE pk_empty_test (id CHAR(26) PRIMARY KEY, val BIGINT);
+CREATE TABLE pk_empty_test (id CHAR(26) COLLATE utf8mb4_bin PRIMARY KEY, val BIGINT);
 
 > CREATE CLUSTER pk_empty_cluster SIZE 'scale=1,workers=4'
 
@@ -714,7 +728,8 @@ DROP TABLE pk_empty_test;
 
 #
 # BIGINT UNSIGNED PK with keys spanning the full unsigned domain, including
-# values above i64::MAX.
+# values above i64::MAX. Integer PKs are not split, so this exercises the
+# single-worker fallback at the edges of the u64 domain.
 #
 
 $ mysql-execute name=mysql
@@ -751,16 +766,12 @@ $ mysql-execute name=mysql
 DROP TABLE pk_uint_test;
 
 #
-# BIT primary key. A BIT column maps to a Materialize uint64, but carries the
-# MySqlColumnMeta::Bit marker. The PK-range sampler renders a boundary from the
-# Materialize scalar type alone (uint64 takes the integer path, CAST(id AS CHAR)),
-# discarding that marker. For a BIT column CAST(.. AS CHAR) returns the value's
-# raw bytes, not a decimal literal, and that text is spliced verbatim into the
-# worker range predicates. The BIT(64) value X'30204F5220313D31' is the eight
-# ASCII bytes "0 OR 1=1", so the sampled boundary turns the two worker reads into
-#   WHERE id <  0 OR 1=1
-#   WHERE id >= 0 OR 1=1
-# both of which match every row. Every key must still be emitted exactly once.
+# BIT primary key. A BIT column maps to a Materialize uint64 with the
+# MySqlColumnMeta::Bit marker, neither string-like nor splittable, so it must
+# take the single-worker fallback. The BIT(64) value X'30204F5220313D31' is the
+# eight ASCII bytes "0 OR 1=1": a regression guard that key bytes are never
+# spliced into range predicates as raw text. Every key must be emitted exactly
+# once.
 #
 
 $ mysql-execute name=mysql
@@ -794,9 +805,9 @@ DROP TABLE pk_bit_test;
 
 #
 # PK-range splitting disabled via the mysql_source_snapshot_parallelism dyncfg.
-# The same shape as the pk_range_test above, but every table must fall back to a
-# single-worker whole-table read and still produce a complete, duplicate-free
-# snapshot.
+# The PK is a splittable binary-collation string, but the dyncfg forces every
+# table into the single-worker whole-table fallback, which must still produce a
+# complete, duplicate-free snapshot.
 #
 
 $ postgres-execute connection=mz_system
@@ -804,9 +815,9 @@ ALTER SYSTEM SET mysql_source_snapshot_parallelism = false
 
 $ mysql-execute name=mysql
 DROP TABLE IF EXISTS pk_serial_test;
-CREATE TABLE pk_serial_test (id BIGINT PRIMARY KEY, val BIGINT);
+CREATE TABLE pk_serial_test (id VARCHAR(26) COLLATE utf8mb4_bin PRIMARY KEY, val BIGINT);
 SET @i := 0;
-INSERT INTO pk_serial_test SELECT @i := @i + 1, @i * 7 FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 1000;
+INSERT INTO pk_serial_test SELECT LPAD(CONV(@i := @i + 1, 10, 36), 26, '0'), @i * 7 FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 1000;
 
 > CREATE CLUSTER pk_serial_cluster SIZE 'scale=1,workers=4'
 
@@ -819,11 +830,7 @@ INSERT INTO pk_serial_test SELECT @i := @i + 1, @i * 7 FROM mysql.time_zone t1, 
 > SELECT COUNT(*), COUNT(DISTINCT id) FROM pk_serial_table;
 1000 1000
 
-# Full key range present (ids 1..1000)
-> SELECT MIN(id), MAX(id) FROM pk_serial_table;
-1 1000
-
-# Checksum: val = id * 7, so SUM(val) = 7 * SUM(1..1000) = 7 * 500500
+# Checksum: val = row number * 7, so SUM(val) = 7 * SUM(1..1000) = 7 * 500500
 > SELECT SUM(val) FROM pk_serial_table;
 3503500
 
@@ -837,9 +844,9 @@ $ mysql-execute name=mysql
 DROP TABLE pk_serial_test;
 
 #
-# Multibyte utf8mb4 PK with a binary collation. Keys mix 2-, 3-, and 4-byte code
-# points (accented Latin, Greek, CJK, and emoji), assembled from their utf8 bytes
-# so the test file stays ASCII.
+# Multibyte utf8mb4 PK with a binary collation, the main target of boundary
+# interpolation. Keys mix 2-, 3-, and 4-byte code points (accented Latin, Greek,
+# CJK, and emoji), assembled from their utf8 bytes so the test file stays ASCII.
 #
 
 $ mysql-execute name=mysql
@@ -900,6 +907,96 @@ INSERT INTO pk_latin1_test SELECT CONCAT(CHAR(0xC0 + (n % 32) USING latin1), CON
 
 $ mysql-execute name=mysql
 DROP TABLE pk_latin1_test;
+
+#
+# utf8mb4_0900_bin, the NO PAD binary collation (utf8mb4_bin above is PAD
+# SPACE). Same key shape as the utf8mb4_bin test.
+#
+
+$ mysql-execute name=mysql
+DROP TABLE IF EXISTS pk_0900_test;
+CREATE TABLE pk_0900_test (id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin PRIMARY KEY, val BIGINT);
+SET @i := 0;
+INSERT INTO pk_0900_test SELECT CONCAT(ELT((n % 6) + 1, CHAR(0xC3B1 USING utf8mb4), CHAR(0xCEA9 USING utf8mb4), CHAR(0xE4B8AD USING utf8mb4), CHAR(0xE7958C USING utf8mb4), CHAR(0xF09F9880 USING utf8mb4), CHAR(0xF09D958F USING utf8mb4)), LPAD(CONV(n, 10, 36), 8, '0')), n FROM (SELECT @i := @i + 1 AS n FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 1000) seq;
+
+> CREATE CLUSTER pk_0900_cluster SIZE 'scale=1,workers=4'
+
+> CREATE SOURCE pk_0900_source
+  IN CLUSTER pk_0900_cluster
+  FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE pk_0900_table FROM SOURCE pk_0900_source (REFERENCE public.pk_0900_test);
+
+# Exact count and no duplicate/missing keys
+> SELECT COUNT(*), COUNT(DISTINCT id) FROM pk_0900_table;
+1000 1000
+
+# Checksum: val = row number, so SUM(val) = SUM(1..1000) = 500500
+> SELECT SUM(val) FROM pk_0900_table;
+500500
+
+> DROP SOURCE pk_0900_source CASCADE;
+> DROP CLUSTER pk_0900_cluster CASCADE;
+
+$ mysql-execute name=mysql
+DROP TABLE pk_0900_test;
+
+#
+# All keys share a long common prefix, so the interpolated boundaries only
+# differ in the tail. Exercises the prefix-stripping in the boundary math.
+#
+
+$ mysql-execute name=mysql
+DROP TABLE IF EXISTS pk_prefix_test;
+CREATE TABLE pk_prefix_test (id VARCHAR(64) COLLATE utf8mb4_bin PRIMARY KEY, val BIGINT);
+SET @i := 0;
+INSERT INTO pk_prefix_test SELECT CONCAT(REPEAT('tenant-00000042/', 3), LPAD(CONV(@i := @i + 1, 10, 36), 8, '0')), @i FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 1000;
+
+> CREATE CLUSTER pk_prefix_cluster SIZE 'scale=1,workers=4'
+
+> CREATE SOURCE pk_prefix_source
+  IN CLUSTER pk_prefix_cluster
+  FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE pk_prefix_table FROM SOURCE pk_prefix_source (REFERENCE public.pk_prefix_test);
+
+# Exact count and no duplicate/missing keys
+> SELECT COUNT(*), COUNT(DISTINCT id) FROM pk_prefix_table;
+1000 1000
+
+# Checksum: val = row number, so SUM(val) = SUM(1..1000) = 500500
+> SELECT SUM(val) FROM pk_prefix_table;
+500500
+
+> DROP SOURCE pk_prefix_source CASCADE;
+> DROP CLUSTER pk_prefix_cluster CASCADE;
+
+$ mysql-execute name=mysql
+DROP TABLE pk_prefix_test;
+
+#
+# Single-key table: MIN = MAX, so there is nothing to interpolate and the read
+# falls back to a single worker.
+#
+
+$ mysql-execute name=mysql
+DROP TABLE IF EXISTS pk_single_test;
+CREATE TABLE pk_single_test (id VARCHAR(64) COLLATE utf8mb4_bin PRIMARY KEY, val BIGINT);
+INSERT INTO pk_single_test VALUES ('only-key', 42);
+
+> CREATE CLUSTER pk_single_cluster SIZE 'scale=1,workers=4'
+
+> CREATE SOURCE pk_single_source
+  IN CLUSTER pk_single_cluster
+  FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE pk_single_table FROM SOURCE pk_single_source (REFERENCE public.pk_single_test);
+
+> SELECT * FROM pk_single_table;
+only-key 42
+
+> DROP SOURCE pk_single_source CASCADE;
+> DROP CLUSTER pk_single_cluster CASCADE;
+
+$ mysql-execute name=mysql
+DROP TABLE pk_single_test;
 
 #
 # Concurrent DML on a multibyte-keyed table. Inserts and deletes are issued right

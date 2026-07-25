@@ -62,22 +62,37 @@
 //!
 //! ## Parallel PK-range snapshots
 //!
-//! For tables with a suitable primary key, the leader computes `worker_count - 1` boundary keys
-//! that split the key domain into disjoint half-open ranges, and broadcasts them. Each worker
-//! reads only its assigned range. Ranges are assigned round-robin starting from each table's
-//! legacy single-worker owner, so the open-ended ranges (which absorb any rows written past the
-//! last sampled boundary) land on a different worker per table rather than always the last worker.
-//! Tables without a suitable PK fall back to single-worker-per-table mode. The
-//! `mysql_source_snapshot_parallelism` dyncfg disables splitting entirely, putting every table in
-//! that fallback mode. Workers open their connections while the leader samples and locks, so
-//! setup briefly holds up to `2 * worker_count + 1` upstream connections per source, settling to
-//! one per ranged worker plus the leader's lock connection. To handle various charsets and
-//! collation gracefully we rely on MySQL's sort order and never attempt to compare or order
-//! strings in Rust. To handle possible races with changes to collation each worker validates in
-//! its read transaction that the boundaries are strictly increasing under the table's current
-//! collation, retrying transiently if not. The repeatable read snapshots should then succeed if
+//! For tables whose primary key is a single string-like column with a supported binary
+//! collation, the leader reads `MIN` and `MAX` of the key (two index dives, no table scan)
+//! and interpolates `worker_count - 1` boundary keys between them, splitting the key domain
+//! into disjoint half-open ranges that it broadcasts. Each worker reads only its assigned
+//! range. Ranges are assigned round-robin starting from each table's legacy single-worker
+//! owner, so the open-ended ranges (which absorb any keys outside the observed MIN/MAX)
+//! land on a different worker per table rather than always the last worker.
+//!
+//! Interpolation treats each key as a fixed-precision integer in the collation's digit
+//! space, bytes for single-byte charsets and code points for utf8mb4. That arithmetic
+//! produces boundaries in MySQL's comparison order only for binary collations, which is
+//! why support is scoped to them. Boundaries travel as hex literals with a charset
+//! introducer, so no string ever needs escaping. How evenly the ranges split the table
+//! depends on how uniformly the keys fill the space between MIN and MAX. Skew makes
+//! partitions uneven, which costs parallelism but never correctness, since the ranges
+//! partition the whole key domain regardless.
+//!
+//! Boundary order is not trusted blindly. The leader double checks with MySQL that the
+//! computed boundaries are strictly increasing under the column's collation before
+//! broadcasting, falling back to a single-worker read if not. Each worker re-validates the
+//! same property in its read transaction to catch collation changes racing snapshot setup,
+//! retrying transiently if it fails. The repeatable read snapshots should then succeed if
 //! they start reading from the table before DDL runs, or if DDL does run before one of the
-//! workers reads the table, that worker's transaction should fail with an ER_TABLE_DEF_CHANGED.
+//! workers reads the table, that worker's transaction should fail with an
+//! ER_TABLE_DEF_CHANGED.
+//!
+//! Tables without a supported PK fall back to single-worker-per-table mode. The
+//! `mysql_source_snapshot_parallelism` dyncfg disables splitting entirely, putting every
+//! table in that fallback mode. Workers open their connections while the leader probes and
+//! locks, so setup briefly holds up to `2 * worker_count + 1` upstream connections per
+//! source, settling to one per ranged worker plus the leader's lock connection.
 //!
 //! ## Rewinding the snapshot to a specific point in time.
 //!
@@ -220,86 +235,247 @@ fn worker_pk_range(
     })
 }
 
-/// Walks the primary key index in steps of about `total / worker_count`, taking the key
-/// at each step's `OFFSET`. The per-step OFFSET scans sum to a full index pass, so this
-/// is O(total). Worker count is small, so the OFFSET scans dominate. `total` is the exact
-/// row count supplied by the caller, read on the same `READ ONLY` transaction as this
-/// walk, so the partitions are exact. Returns None if the primary key column type is not
-/// supported or the table is too small to split.
-async fn compute_sampled_splits<Q>(
+/// Number of digit values once the surrogate gap `0xD800..=0xDFFF` is collapsed out of
+/// the code point space.
+const CODE_POINT_BASE: u32 = 0x110000 - 0x800;
+
+/// Digit-space encoding of primary key values under a supported binary collation.
+///
+/// Boundary interpolation treats each key as a sequence of digits in a fixed base and
+/// does integer math on them. That is only sound when MySQL's comparison order for the
+/// column equals the lexicographic order of the digit sequences, which is what restricts
+/// support to binary collations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyEncoding {
+    /// A single-byte charset compared bytewise: digits are the raw bytes. `base` is the
+    /// alphabet size (0x80 for ascii, 0x100 for latin1).
+    SingleByte { base: u32 },
+    /// utf8mb4 compared by code point: digits are Unicode code points with the
+    /// (unencodable) surrogate range collapsed out, so interpolation can never land on
+    /// an invalid character.
+    CodePoints,
+}
+
+impl KeyEncoding {
+    /// The encoding for a column's charset/collation pair, or `None` when boundary
+    /// interpolation is unsupported for it.
+    fn for_collation(charset: &str, collation: &str) -> Option<KeyEncoding> {
+        match (charset, collation) {
+            ("ascii", "ascii_bin") => Some(KeyEncoding::SingleByte { base: 0x80 }),
+            ("latin1", "latin1_bin") => Some(KeyEncoding::SingleByte { base: 0x100 }),
+            // utf8mb4_bin orders by code point and utf8mb4_0900_bin by encoded byte.
+            // The two coincide: UTF-8 byte order equals code point order.
+            ("utf8mb4", "utf8mb4_bin" | "utf8mb4_0900_bin") => Some(KeyEncoding::CodePoints),
+            _ => None,
+        }
+    }
+
+    /// The number of distinct digit values.
+    fn base(&self) -> u32 {
+        match self {
+            KeyEncoding::SingleByte { base } => *base,
+            KeyEncoding::CodePoints => CODE_POINT_BASE,
+        }
+    }
+
+    /// Decodes a key's charset-encoded bytes into digits. `None` if the bytes are not
+    /// valid for the encoding.
+    fn decode(&self, bytes: &[u8]) -> Option<Vec<u32>> {
+        match self {
+            KeyEncoding::SingleByte { base } => bytes
+                .iter()
+                .map(|&b| (u32::from(b) < *base).then_some(u32::from(b)))
+                .collect(),
+            KeyEncoding::CodePoints => {
+                let s = std::str::from_utf8(bytes).ok()?;
+                Some(
+                    s.chars()
+                        .map(|c| {
+                            let c = u32::from(c);
+                            // Collapse the surrogate gap. `char` guarantees c is outside it.
+                            if c >= 0xE000 { c - 0x800 } else { c }
+                        })
+                        .collect(),
+                )
+            }
+        }
+    }
+
+    /// Encodes digits back into the charset's bytes. Digits must be `< self.base()`.
+    fn encode(&self, digits: &[u32]) -> Vec<u8> {
+        match self {
+            KeyEncoding::SingleByte { .. } => digits
+                .iter()
+                .map(|&d| u8::try_from(d).expect("single-byte digit fits in a byte"))
+                .collect(),
+            KeyEncoding::CodePoints => {
+                let mut bytes = Vec::new();
+                let mut buf = [0u8; 4];
+                for &d in digits {
+                    // Re-expand the surrogate gap.
+                    let c = if d >= 0xD800 { d + 0x800 } else { d };
+                    let c = char::from_u32(c).expect("expanded digit is a valid code point");
+                    bytes.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+                }
+                bytes
+            }
+        }
+    }
+}
+
+/// Interpolates up to `parts - 1` boundary digit strings between `min` and `max`,
+/// strictly increasing and strictly greater than `min`.
+///
+/// The shared prefix of `min` and `max` is carried over verbatim and the remainders are
+/// read as integers of as many base-`base` digits as fit in a `u128`, so every boundary
+/// has the same digit length, `prefix + precision`. Equal lengths matter: PAD SPACE and
+/// NO PAD collations order equal-length strings identically, so the boundary order is
+/// independent of the collation's pad attribute. Returns fewer boundaries (possibly
+/// none) when the space between `min` and `max` is too narrow to subdivide at that
+/// precision.
+fn interpolate_boundaries(base: u32, min: &[u32], max: &[u32], parts: u64) -> Vec<Vec<u32>> {
+    assert!(base >= 2, "digit base must be at least 2");
+    if parts < 2 {
+        return Vec::new();
+    }
+    let prefix_len = min
+        .iter()
+        .enumerate()
+        .take_while(|(i, d)| max.get(*i) == Some(*d))
+        .count();
+    let bits_per_digit = u32::BITS - (base - 1).leading_zeros();
+    let precision = usize::cast_from(127 / bits_per_digit);
+    let base = u128::from(base);
+    let read = |digits: &[u32]| -> u128 {
+        let mut v: u128 = 0;
+        for i in 0..precision {
+            let d = digits.get(prefix_len + i).copied().unwrap_or(0);
+            v = v * base + u128::from(d);
+        }
+        v
+    };
+    let a = read(min);
+    let b = read(max);
+    if b <= a {
+        // min == max, or they differ only beyond the precision.
+        return Vec::new();
+    }
+    let parts = u128::from(parts);
+    let (q, r) = ((b - a) / parts, (b - a) % parts);
+    let mut boundaries = Vec::new();
+    let mut prev = a;
+    for i in 1..parts {
+        // Exact floor of a + (b - a) * i / parts, avoiding overflow of the product.
+        let v = a + q * i + (r * i) / parts;
+        // Skip boundaries that collide with min or an earlier boundary. Fewer partitions
+        // still partition the domain.
+        if v <= prev {
+            continue;
+        }
+        prev = v;
+        let mut digits = vec![0u32; precision];
+        let mut rem = v;
+        for d in digits.iter_mut().rev() {
+            *d = u32::try_from(rem % base).expect("remainder is below the u32 base");
+            rem /= base;
+        }
+        let mut boundary = min[..prefix_len].to_vec();
+        boundary.extend(digits);
+        boundaries.push(boundary);
+    }
+    boundaries
+}
+
+/// Renders key bytes as a SQL literal in `charset`: a hex literal with a charset
+/// introducer, so no byte ever needs escaping. In comparisons against the PK column the
+/// column's collation wins (a literal has lower coercibility), matching the order the
+/// boundaries were validated under.
+fn render_boundary_literal(charset: &str, bytes: &[u8]) -> String {
+    format!("_{charset} X'{}'", hex::encode_upper(bytes))
+}
+
+/// Computes PK-range split boundaries for `table` without scanning it: read `MIN` and
+/// `MAX` of the primary key (two index dives) and interpolate boundaries between them in
+/// the key's digit space. Supported only for a single-column string-like primary key
+/// whose collation has a [`KeyEncoding`]. Returns `None` (single-worker fallback) for
+/// anything else, for empty or single-key tables, and when the computed boundaries fail
+/// the collation-order double check.
+async fn compute_interpolated_splits<Q>(
     conn: &mut Q,
     table: &MySqlTableName,
-    pk_col: &(String, SqlScalarType),
+    raw_col: &str,
+    scalar_type: &SqlScalarType,
     worker_count: usize,
-    total: u64,
 ) -> Result<Option<PkBoundaries>, TransientError>
 where
     Q: Queryable,
 {
-    let (col, scalar_type) = pk_col;
-    // Render the PK column as text that sorts and compares the same way the range
-    // predicates do: `QUOTE()` under the column's collation for character types,
-    // `CAST(.. AS CHAR)` for integers. Any other type can't be split safely.
-    let (col_literal, integer_path) = match scalar_type {
-        SqlScalarType::Int16
-        | SqlScalarType::Int32
-        | SqlScalarType::Int64
-        | SqlScalarType::UInt16
-        | SqlScalarType::UInt32
-        | SqlScalarType::UInt64 => (format!("CAST({col} AS CHAR)"), true),
-        SqlScalarType::Char { .. } | SqlScalarType::VarChar { .. } | SqlScalarType::String => {
-            (format!("QUOTE({col})"), false)
-        }
+    match scalar_type {
+        SqlScalarType::Char { .. } | SqlScalarType::VarChar { .. } | SqlScalarType::String => {}
         _ => return Ok(None),
+    }
+    let Some((charset, collation)) = fetch_column_collation(conn, table, raw_col).await? else {
+        return Ok(None);
+    };
+    let Some(encoding) = KeyEncoding::for_collation(&charset, &collation) else {
+        return Ok(None);
     };
 
-    let partitions = std::cmp::min(u64::cast_from(worker_count), total);
-    if partitions < 2 {
+    let col = quote_identifier(raw_col);
+    // `HEX()` transports the key's bytes in the column charset unambiguously. The
+    // identifier is quoted via `quote_identifier` and `table` via Display, so this
+    // interpolation is safe; not parameterizable.
+    #[allow(clippy::disallowed_methods)]
+    let row: Option<(Option<String>, Option<String>)> = conn
+        .query_first(format!(
+            "SELECT HEX(MIN({col})), HEX(MAX({col})) FROM {table}"
+        ))
+        .await?;
+    // NULL MIN/MAX means the table is empty.
+    let Some((Some(min_hex), Some(max_hex))) = row else {
         return Ok(None);
-    }
-    let chunk = total / partitions;
+    };
+    let decode = |h: &str| {
+        hex::decode(h)
+            .ok()
+            .and_then(|bytes| encoding.decode(&bytes))
+    };
+    // A key that fails to decode (bytes invalid for the declared charset) means digit
+    // math on this column is off the table: fall back.
+    let (Some(min), Some(max)) = (decode(&min_hex), decode(&max_hex)) else {
+        return Ok(None);
+    };
 
-    let mut boundaries: Vec<String> = Vec::with_capacity(usize::cast_from(partitions) - 1);
-    for _ in 1..partitions {
-        let (predicate, offset) = match boundaries.last() {
-            Some(prev) => (format!(" WHERE {col} > {prev}"), chunk - 1),
-            None => (String::new(), chunk),
-        };
-        // The identifier is quoted via `quote_identifier`, the previous boundary is
-        // itself a value MySQL rendered as a literal, `table` via Display, and the
-        // offset is an integer, so this interpolation is safe; not parameterizable.
-        #[allow(clippy::disallowed_methods)]
-        let row: Option<MySqlRow> = conn
-            .query_first(format!(
-                "SELECT {col_literal} FROM {table}{predicate} \
-                 ORDER BY {col} LIMIT 1 OFFSET {offset}"
-            ))
-            .await?;
-        // Defensive: if a concurrent write shrank the range out from under us, stop and
-        // use the boundaries found so far. Fewer partitions is still correct.
-        let Some(mut row) = row else { break };
-        // The column is CAST/QUOTE-ed to text, so it decodes as a String that is
-        // already a valid SQL literal. A decode failure (e.g. a non-UTF-8
-        // collation) means we can't safely partition: fall back.
-        match row.take_opt::<String, usize>(0) {
-            Some(Ok(lit)) if !integer_path || is_decimal_literal(&lit) => boundaries.push(lit),
-            _ => return Ok(None),
-        }
-    }
+    let boundaries =
+        interpolate_boundaries(encoding.base(), &min, &max, u64::cast_from(worker_count));
     if boundaries.is_empty() {
         return Ok(None);
     }
+    let literals: Vec<String> = boundaries
+        .iter()
+        .map(|b| render_boundary_literal(&charset, &encoding.encode(b)))
+        .collect();
+    // Double check with MySQL that the boundaries are strictly increasing under the
+    // column's collation before trusting the digit math with snapshot correctness.
+    if !boundaries_strictly_monotonic(conn, &literals, &charset, &collation).await? {
+        tracing::warn!(
+            %table,
+            "interpolated PK boundaries not monotonic under {collation}, \
+             falling back to single-worker snapshot"
+        );
+        return Ok(None);
+    }
     Ok(Some(PkBoundaries {
-        pk_col: col.clone(),
-        boundaries,
+        pk_col: col,
+        boundaries: literals,
     }))
 }
 
-/// For every table, read the exact row count and, for a supported single-column primary
-/// key, compute the PK-range split boundaries, concurrently over at most `worker_count`
-/// connections. `None` bounds means single-worker fallback for that table. The counts are
-/// reused for both the sampling stride and the snapshot size gauge.
-async fn sample_pk_bounds(
+/// For every table, read the exact row count (for the snapshot size gauge) and, for a
+/// supported single-column primary key, compute the PK-range split boundaries,
+/// concurrently over at most `worker_count` connections. `None` bounds means
+/// single-worker fallback for that table.
+async fn probe_counts_and_pk_bounds(
     config: &RawSourceCreationConfig,
     connection_config: &mz_mysql_util::Config,
     task_name: &str,
@@ -326,9 +502,8 @@ async fn sample_pk_bounds(
         .get(config.config.config_set());
 
     let pooled_conns: Rc<RefCell<Vec<MySqlConn>>> = Rc::new(RefCell::new(Vec::new()));
-    // Counting and boundary-sampling each walk a table's index (O(rows)), so run tables
-    // concurrently, capped at worker_count, to keep the leader's setup from scaling with
-    // table count.
+    // Counting walks a table's index (O(rows)), so run tables concurrently, capped at
+    // worker_count, to keep the leader's setup from scaling with table count.
     let per_table: Vec<(MySqlTableName, u64, Option<PkBoundaries>)> = futures::stream::iter(tables)
         .map(|(table, outputs)| {
             let pool = Rc::clone(&pooled_conns);
@@ -355,9 +530,7 @@ async fn sample_pk_bounds(
                         conn
                     }
                 };
-                // Exact row count, reused for the sampling stride and the size gauge.
-                // It runs on the same `READ ONLY` transaction as the boundary walk in
-                // `compute_sampled_splits`, so both see one consistent snapshot.
+                // Exact row count, feeding the snapshot size gauge.
                 let stats = collect_table_statistics(&mut *conn, table).await?;
                 metrics.record_table_count_latency(
                     table.1.clone(),
@@ -371,9 +544,14 @@ async fn sample_pk_bounds(
                     .flatten()
                 {
                     Some((raw_col, scalar_type)) => {
-                        let pk_col = (quote_identifier(&raw_col), scalar_type);
-                        compute_sampled_splits(&mut *conn, table, &pk_col, worker_count, count)
-                            .await?
+                        compute_interpolated_splits(
+                            &mut *conn,
+                            table,
+                            &raw_col,
+                            &scalar_type,
+                            worker_count,
+                        )
+                        .await?
                     }
                     None => None,
                 };
@@ -398,7 +576,7 @@ async fn sample_pk_bounds(
     // owner. Release the probe connections now, ending their `READ ONLY` transactions
     // and the shared metadata locks they hold, before the caller takes `LOCK TABLES`.
     let probe_conns = Rc::into_inner(pooled_conns)
-        .expect("all sampling futures completed, so no Rc clones remain")
+        .expect("all probe futures completed, so no Rc clones remain")
         .into_inner();
     for conn in probe_conns {
         conn.disconnect().await?;
@@ -406,8 +584,8 @@ async fn sample_pk_bounds(
     Ok((pk_bounds, counts))
 }
 
-/// Leader-only snapshot setup: sample PK bounds, lock the tables `READ`, and read
-/// the snapshot GTID frontier. All fallible work happens here so the caller can
+/// Leader-only snapshot setup: probe counts and PK bounds, lock the tables `READ`, and
+/// read the snapshot GTID frontier. All fallible work happens here so the caller can
 /// always broadcast a result. A dropped `snapshot_cap_set` with no broadcast
 /// deadlocks the other workers waiting on the feedback loop.
 async fn lock_and_prepare_snapshot(
@@ -428,7 +606,7 @@ async fn lock_and_prepare_snapshot(
 
     let errored_outputs = verify_output_schemas(&mut *lock_conn, tables).await?;
     let errored: BTreeSet<usize> = errored_outputs.iter().map(|(idx, _)| *idx).collect();
-    let sample_tables: BTreeMap<MySqlTableName, Vec<SourceOutputInfo>> = tables
+    let probe_tables: BTreeMap<MySqlTableName, Vec<SourceOutputInfo>> = tables
         .iter()
         .map(|(table, outputs)| {
             let outputs = outputs
@@ -441,17 +619,12 @@ async fn lock_and_prepare_snapshot(
         .filter(|(_, outputs)| !outputs.is_empty())
         .collect();
 
-    // Sampling is expensive, so run it before locking writes.
-    let (pk_bounds, counts) = sample_pk_bounds(
-        config,
-        connection_config,
-        task_name,
-        &sample_tables,
-        metrics,
-    )
-    .await?;
+    // Counting is expensive, so run it before locking writes.
+    let (pk_bounds, counts) =
+        probe_counts_and_pk_bounds(config, connection_config, task_name, &probe_tables, metrics)
+            .await?;
 
-    let lock_clauses = sample_tables
+    let lock_clauses = probe_tables
         .keys()
         .map(|t| format!("{} READ", t))
         .collect::<Vec<String>>()
@@ -522,8 +695,8 @@ where
 
 /// Whether `boundaries` are strictly increasing under `collation`. The half-open PK
 /// ranges only partition the table without gaps or overlaps when this holds. The
-/// boundaries are already SQL literals (from `QUOTE()`); each is coerced to
-/// `charset`/`collation` so the comparison uses the same collation as the column,
+/// boundaries are already SQL literals (hex with a charset introducer); each is coerced
+/// to `charset`/`collation` so the comparison uses the same collation as the column,
 /// matching the read predicates. Fewer than two boundaries are trivially monotonic.
 async fn boundaries_strictly_monotonic<Q>(
     conn: &mut Q,
@@ -596,11 +769,6 @@ where
 /// gate charset/collation names before interpolating them (they can't be parameters).
 fn is_plain_ident(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-}
-
-fn is_decimal_literal(s: &str) -> bool {
-    let digits = s.strip_prefix('-').unwrap_or(s);
-    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
 }
 
 /// Returns the set of full tables/sections of tables to read.
@@ -744,8 +912,8 @@ pub(crate) fn render<'scope>(
                     .await?;
                 let task_name = format!("timely-{worker_id} MySQL snapshotter");
 
-                // Exact per-table row counts, computed once during PK sampling and reused
-                // by the leader to publish the snapshot size gauge.
+                // Exact per-table row counts, computed once during the leader's table
+                // probe and reused to publish the snapshot size gauge.
                 let mut snapshot_counts: BTreeMap<MySqlTableName, u64> = BTreeMap::new();
 
                 let mut conn = connection_config
@@ -962,7 +1130,8 @@ pub(crate) fn render<'scope>(
 
                 // Only the leader publishes the full snapshot size, so the summed
                 // worker-local gauges reflect the upstream total without double-counting.
-                // The counts were computed once during PK sampling and are reused here.
+                // The counts were computed once during the leader's table probe and are
+                // reused here.
                 if is_snapshot_leader {
                     publish_snapshot_size(
                         &snapshot_counts,
@@ -1081,7 +1250,8 @@ pub(crate) fn render<'scope>(
 }
 
 /// Publish the exact snapshot size to each table's statistics gauges, using the counts
-/// computed once during PK sampling. Called leader-only so the summed worker-local gauges
+/// computed once during the leader's table probe. Called leader-only so the summed
+/// worker-local gauges
 /// reflect the upstream total without double-counting.
 fn publish_snapshot_size(
     counts: &BTreeMap<MySqlTableName, u64>,
@@ -1381,6 +1551,159 @@ mod tests {
                 (Some("34".to_string()), Some("67".to_string())),
                 (Some("67".to_string()), None),
             ]
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_key_encoding_lookup() {
+        assert_eq!(
+            KeyEncoding::for_collation("ascii", "ascii_bin"),
+            Some(KeyEncoding::SingleByte { base: 0x80 })
+        );
+        assert_eq!(
+            KeyEncoding::for_collation("latin1", "latin1_bin"),
+            Some(KeyEncoding::SingleByte { base: 0x100 })
+        );
+        assert_eq!(
+            KeyEncoding::for_collation("utf8mb4", "utf8mb4_bin"),
+            Some(KeyEncoding::CodePoints)
+        );
+        assert_eq!(
+            KeyEncoding::for_collation("utf8mb4", "utf8mb4_0900_bin"),
+            Some(KeyEncoding::CodePoints)
+        );
+        // Non-binary collations order case-insensitively or by weights, so digit math
+        // does not match their comparison order.
+        assert_eq!(
+            KeyEncoding::for_collation("utf8mb4", "utf8mb4_0900_ai_ci"),
+            None
+        );
+        assert_eq!(
+            KeyEncoding::for_collation("latin1", "latin1_swedish_ci"),
+            None
+        );
+        // A binary collation of an unsupported charset.
+        assert_eq!(KeyEncoding::for_collation("utf16", "utf16_bin"), None);
+    }
+
+    #[mz_ore::test]
+    fn test_key_encoding_round_trip() {
+        let ascii = KeyEncoding::SingleByte { base: 0x80 };
+        assert_eq!(ascii.decode(b"abc"), Some(vec![0x61, 0x62, 0x63]));
+        assert_eq!(ascii.encode(&[0x61, 0x62, 0x63]), b"abc");
+        // A byte outside the ascii alphabet fails to decode.
+        assert_eq!(ascii.decode(&[0x61, 0x80]), None);
+
+        let latin1 = KeyEncoding::SingleByte { base: 0x100 };
+        assert_eq!(
+            latin1.decode(&[0x00, 0x7F, 0xFF]),
+            Some(vec![0x00, 0x7F, 0xFF])
+        );
+        assert_eq!(latin1.encode(&[0x00, 0x7F, 0xFF]), vec![0x00, 0x7F, 0xFF]);
+
+        let utf8 = KeyEncoding::CodePoints;
+        // Code points below the surrogate gap map to themselves.
+        assert_eq!(
+            utf8.decode("añ中".as_bytes()),
+            Some(vec![0x61, 0xF1, 0x4E2D])
+        );
+        // Code points above the gap shift down by its width, and back up on encode.
+        assert_eq!(
+            utf8.decode("\u{E000}😀".as_bytes()),
+            Some(vec![0xD800, 0x1F600 - 0x800])
+        );
+        for s in ["", "a", "añ中\u{E000}😀", "\u{D7FF}\u{E000}", "\u{10FFFF}"] {
+            let digits = utf8.decode(s.as_bytes()).expect("valid utf8");
+            assert!(digits.iter().all(|&d| d < CODE_POINT_BASE));
+            assert_eq!(utf8.encode(&digits), s.as_bytes());
+        }
+        // Invalid utf8 fails to decode.
+        assert_eq!(utf8.decode(&[0xFF, 0x61]), None);
+    }
+
+    #[mz_ore::test]
+    fn test_interpolate_boundaries() {
+        // Every boundary must lie strictly between min and max and the sequence must be
+        // strictly increasing, in lexicographic digit order.
+        let check = |base: u32, min: &[u32], max: &[u32], parts: u64| -> Vec<Vec<u32>> {
+            let boundaries = interpolate_boundaries(base, min, max, parts);
+            assert!(boundaries.len() <= usize::try_from(parts - 1).unwrap());
+            let mut prev = min.to_vec();
+            for b in &boundaries {
+                assert!(b.as_slice() > prev.as_slice(), "{b:?} !> {prev:?}");
+                assert!(b.as_slice() < max, "{b:?} !< {max:?}");
+                prev = b.clone();
+            }
+            boundaries
+        };
+
+        // Base 256: "a" to "z" splits into the full complement of partitions.
+        let bounds = check(0x100, &[0x61], &[0x7A], 4);
+        assert_eq!(bounds.len(), 3);
+        // All boundaries share the fixed digit length (no common prefix, so
+        // precision digits: 15 for base 256).
+        assert!(bounds.iter().all(|b| b.len() == 15));
+        // The first digit steps through the interpolated range.
+        assert_eq!(
+            bounds.iter().map(|b| b[0]).collect::<Vec<_>>(),
+            vec![0x67, 0x6D, 0x73]
+        );
+
+        // A shared prefix is carried over verbatim and interpolation happens beyond it.
+        let min: Vec<u32> = b"app-a".iter().map(|&b| u32::from(b)).collect();
+        let max: Vec<u32> = b"app-z".iter().map(|&b| u32::from(b)).collect();
+        let bounds = check(0x100, &min, &max, 8);
+        assert_eq!(bounds.len(), 7);
+        assert!(
+            bounds
+                .iter()
+                .all(|b| b.starts_with(&min[..4]) && b.len() == 4 + 15)
+        );
+
+        // min a strict prefix of max.
+        check(0x100, &[0x61], &[0x61, 0x00, 0x01], 4);
+        check(0x100, &[], &[0x01], 4);
+
+        // Code point base with multibyte-range digits.
+        let bounds = check(CODE_POINT_BASE, &[0xF1, 0x30], &[0x1F600 - 0x800, 0x7A], 4);
+        assert_eq!(bounds.len(), 3);
+
+        // Prefix stripping gives full resolution arbitrarily deep in the string: keys
+        // sharing a long prefix still split.
+        let mut long_min = vec![0x61; 40];
+        long_min.push(0x30);
+        let mut long_max = vec![0x61; 40];
+        long_max.push(0x7A);
+        assert_eq!(check(0x100, &long_min, &long_max, 4).len(), 3);
+
+        // Degenerate cases produce no boundaries: equal keys, a difference hidden
+        // beyond the u128 precision window (max = min plus 15 NUL digits and change,
+        // so the first 15 post-prefix digits of both are zero), and fewer than two
+        // partitions.
+        assert!(interpolate_boundaries(0x100, &[0x61], &[0x61], 4).is_empty());
+        let mut hidden_max = vec![0x61];
+        hidden_max.extend(vec![0x00; 15]);
+        hidden_max.push(0x01);
+        assert!(interpolate_boundaries(0x100, &[0x61], &hidden_max, 4).is_empty());
+        assert!(interpolate_boundaries(0x100, &[0x61], &[0x7A], 1).is_empty());
+
+        // Keys adjacent in their last digit still split: the boundaries are longer
+        // strings sorting strictly between them.
+        let min = vec![0x61; 15];
+        let mut max = min.clone();
+        max[14] = 0x62;
+        assert_eq!(check(0x100, &min, &max, 4).len(), 3);
+    }
+
+    #[mz_ore::test]
+    fn test_render_boundary_literal() {
+        assert_eq!(
+            render_boundary_literal("utf8mb4", "中z".as_bytes()),
+            "_utf8mb4 X'E4B8AD7A'"
+        );
+        assert_eq!(
+            render_boundary_literal("latin1", &[0x00, 0xFF]),
+            "_latin1 X'00FF'"
         );
     }
 

@@ -8764,6 +8764,7 @@ dependencies = [
  "differential-dataflow",
  "fail",
  "futures",
+ "hex",
  "humantime",
  "iceberg",
  "indexmap 2.11.4",
