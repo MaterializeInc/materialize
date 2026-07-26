@@ -402,6 +402,52 @@ true scale=1,workers=4
 
 > DROP CLUSTER cc_force_existing CASCADE
 
+# A folding ALTER without a WAIT clause must not touch the in-flight deadline
+# and on-timeout action. Those are the contract the ALTER that started the
+# reconfiguration set, and an unrelated config-shape ALTER (here a system-issued
+# arrangement-compression flip, the shape it can share with an in-flight
+# reconfiguration) carries no contract of its own. Overwriting them with the
+# system default would silently stretch a user's short ROLLBACK deadline to the
+# 24h default, leaving the reconfiguration parked in-progress instead of rolling
+# back on time.
+> CREATE CLUSTER cc_preserve (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
+
+> CREATE TABLE cc_preserve_t (id int)
+
+> INSERT INTO cc_preserve_t VALUES (1)
+
+# A sleeping view keeps the target from hydrating, so the reconfiguration stays
+# in-progress and only the deadline could resolve it.
+> CREATE MATERIALIZED VIEW cc_preserve_slow IN CLUSTER cc_preserve AS
+  SELECT mz_unsafe.mz_sleep(id * 3600) AS s FROM cc_preserve_t
+
+> ALTER CLUSTER cc_preserve SET (SIZE 'scale=1,workers=4') WITH (WAIT UNTIL READY (TIMEOUT '600s', ON TIMEOUT 'ROLLBACK'))
+
+> SELECT recon.status, recon.on_timeout
+  FROM mz_internal.mz_cluster_reconfigurations recon
+  JOIN mz_clusters c ON c.id = recon.cluster_id
+  WHERE c.name = 'cc_preserve'
+in-progress rollback
+
+$ set-from-sql var=cc_preserve_deadline
+SELECT recon.deadline::text
+FROM mz_internal.mz_cluster_reconfigurations recon
+JOIN mz_clusters c ON c.id = recon.cluster_id
+WHERE c.name = 'cc_preserve'
+
+# An unrelated no-WAIT ALTER folds onto the record. The size dimension it did
+# not mention keeps the in-flight target's workers=4, and the deadline and
+# on-timeout action are preserved unchanged.
+> ALTER CLUSTER cc_preserve SET (EXPERIMENTAL ARRANGEMENT COMPRESSION = true)
+
+> SELECT recon.status, recon.on_timeout, recon.deadline::text = '${cc_preserve_deadline}', recon.target->>'size'
+  FROM mz_internal.mz_cluster_reconfigurations recon
+  JOIN mz_clusters c ON c.id = recon.cluster_id
+  WHERE c.name = 'cc_preserve'
+in-progress rollback true scale=1,workers=4
+
+> DROP CLUSTER cc_preserve CASCADE
+
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET unsafe_enable_unstable_dependencies = false
 

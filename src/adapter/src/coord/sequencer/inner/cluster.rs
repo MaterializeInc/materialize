@@ -26,6 +26,7 @@ use mz_controller_types::{ClusterId, DEFAULT_REPLICA_LOGGING_INTERVAL, ReplicaId
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
+use mz_repr::Timestamp;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::role_id::RoleId;
 use mz_sql::ast::{Ident, QualifiedReplica};
@@ -724,40 +725,59 @@ impl Coordinator {
         // record the controller aborts asynchronously.
         self.validate_reconfiguration_resource_limits(cluster_id, &target)?;
 
-        // Resolve the deadline and the on-timeout action from the existing
-        // `WITH (WAIT ...)` surface. Both are written relative to the current time
-        // so they survive session disconnect and restart. Unlike the target, which
-        // folds per-dimension onto the in-flight one, the deadline and `on_timeout`
-        // are replaced wholesale by the latest `ALTER`'s `WAIT` clause (they are
-        // resolved fresh here, not merged), so re-issuing an `ALTER` with a
-        // different `ON TIMEOUT` overwrites the prior action.
-        //   - no `WAIT`         -> the system-default timeout and the implicit
-        //                          `on_timeout` default (`ROLLBACK`).
+        // Resolve the deadline and the on-timeout action, both written relative
+        // to the current time so they survive session disconnect and restart.
+        // The target folds per-dimension onto the in-flight one. The deadline
+        // and `on_timeout`, in contrast, are the contract carried by a `WAIT`
+        // clause, so how a folding `ALTER` treats them depends on whether it
+        // carries one:
+        //   - no `WAIT`, reconfiguration in flight -> keep the in-flight
+        //                          record's deadline and `on_timeout`. The
+        //                          statement carries no contract of its own, so
+        //                          an unrelated config-shape `ALTER` must not
+        //                          silently reset the deadline and action the
+        //                          user set on the reconfiguration in progress.
+        //   - no `WAIT`, nothing in flight -> the system-default timeout and the
+        //                          implicit `on_timeout` default (`ROLLBACK`).
         //   - `WAIT FOR`        -> sugar for `ON TIMEOUT COMMIT` (cut over at the
         //                          deadline regardless of hydration).
         //   - `WAIT UNTIL READY -> the explicit `TIMEOUT` / `ON TIMEOUT`, with
         //                          `ON TIMEOUT` defaulting to `ROLLBACK` when
-        //                          omitted. The safe default for the controller
-        //                          path reverts an un-hydrated reconfiguration to
-        //                          its pre-reconfiguration shape rather than
-        //                          cutting over to a not-yet-hydrated target
-        //                          (which could induce downtime). The legacy
-        //                          foreground path uses implicit `COMMIT`.
-        let (timeout, on_timeout) = match strategy {
-            AlterClusterPlanStrategy::None => (
-                DEFAULT_CLUSTER_RECONFIGURATION_TIMEOUT
-                    .get(self.catalog().system_config().dyncfgs()),
-                OnTimeoutAction::Rollback,
-            ),
-            AlterClusterPlanStrategy::For(timeout) => (*timeout, OnTimeoutAction::Commit),
+        //                          omitted.
+        // An explicit `WAIT` clause is folded onto an in-flight record wholesale,
+        // which lets a later `ALTER` steer the deadline and timeout action of a
+        // reconfiguration in progress without discarding the hydration progress
+        // its target may already have. `ROLLBACK` (the default) reverts an
+        // un-hydrated reconfiguration to its pre-reconfiguration shape rather
+        // than cutting over to a not-yet-hydrated target, which could induce
+        // downtime. The legacy foreground path uses implicit `COMMIT`.
+        let now = self.now();
+        let deadline_from = |timeout: Duration| -> Timestamp {
+            now.saturating_add(u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX))
+                .into()
+        };
+        let (deadline, on_timeout) = match strategy {
+            AlterClusterPlanStrategy::None => match &in_flight {
+                Some(record) => (record.deadline, record.on_timeout),
+                None => (
+                    deadline_from(
+                        DEFAULT_CLUSTER_RECONFIGURATION_TIMEOUT
+                            .get(self.catalog().system_config().dyncfgs()),
+                    ),
+                    OnTimeoutAction::Rollback,
+                ),
+            },
+            AlterClusterPlanStrategy::For(timeout) => {
+                (deadline_from(*timeout), OnTimeoutAction::Commit)
+            }
             AlterClusterPlanStrategy::UntilReady {
                 timeout,
                 on_timeout,
-            } => (*timeout, on_timeout.unwrap_or(OnTimeoutAction::Rollback)),
+            } => (
+                deadline_from(*timeout),
+                on_timeout.unwrap_or(OnTimeoutAction::Rollback),
+            ),
         };
-        let deadline = self
-            .now()
-            .saturating_add(u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX));
 
         // Build the durable write from `new_config`, which carries every field the
         // `ALTER` changed, then reset the config *shape* (size, replication factor,
@@ -794,7 +814,7 @@ impl Coordinator {
         };
         let record = ReconfigurationState {
             target: target.clone(),
-            deadline: deadline.into(),
+            deadline,
             on_timeout,
             status,
         };
