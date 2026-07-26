@@ -301,6 +301,26 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_CATALOG_SCHEMA,
             "mz_kafka_sources",
         ),
+        // Required because we added the `mz_compute_export_arrangements_per_worker`
+        // builtin log. Both of the MVs below inline the builtin-log set as VALUES,
+        // so adding a log changes their SQL fingerprint: `make_mz_sources` lists
+        // every log as a source, and `make_mz_indexes` lists every log's index
+        // columns to reconstruct its per-cluster introspection source index.
+        //
+        // See the NOTE above: these versions must stay at the workspace's current
+        // dev version until this change ships in a release.
+        MigrationStep::replacement(
+            "26.36.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_indexes",
+        ),
+        MigrationStep::replacement(
+            "26.36.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_sources",
+        ),
     ]
 });
 
