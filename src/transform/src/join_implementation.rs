@@ -286,7 +286,11 @@ impl JoinImplementation {
                     let derived = builder.visit(input);
 
                     let estimate = *derived.as_view().value::<Cardinality>().unwrap();
-                    // we've already accounted for the filters _in_ the term; these capture the ones above
+                    // `extract_non_errors_from_expr` stripped the input's own MFP above, so
+                    // `estimate` does not reflect the filters applied at this input. Those reach
+                    // join ordering only through `characteristics`, never through this number.
+                    // `push_down_factor` accounts for the filters from above the join that could
+                    // be pushed down to this input.
                     let scaled = estimate * push_down_factor;
                     cardinalities.push(scaled.rounded());
                 } else {
@@ -752,6 +756,15 @@ mod differential {
             // from these. First, we find the worst `Characteristics` inside each order, and then we
             // find the best one among these across all orders, which goes into
             // `max_min_characteristics`.
+            //
+            // NOTE: the maximin step discriminates far less than it appears to. Every order is a
+            // permutation of the same inputs, so an input with bad characteristics is present in
+            // all of them and is typically the minimum of all of them. The `filters` accumulation
+            // just above is what usually breaks that symmetry, because it depends on position.
+            // When maximin ties, the decision is made entirely by the `max_by_key` below, which
+            // compares whole order vectors lexicographically and therefore compares the starting
+            // inputs first. That is the path by which a starting input is chosen on its own
+            // characteristics, cardinality included.
             let max_min_characteristics = orders
                 .iter()
                 .flat_map(|order| order.iter().map(|(c, _, _)| c.clone()).min())
@@ -1007,6 +1020,18 @@ fn permute_order(
 // Computes the best join orders for each input.
 //
 // If there are N inputs, returns N orders, with the ith input starting the ith order.
+//
+// Each order is grown greedily from its starting input: at every step the highest-priority
+// candidate in the priority queue wins, where priority is the lexicographic order on
+// `JoinInputCharacteristics`. There is no lookahead and no notion of the size of the running
+// intermediate result, so the choice is local to one input at a time.
+//
+// The two callers consume the N orders very differently.
+//  - `delta_queries::plan` keeps all N. A delta join runs one path per input, so there is no
+//    starting input to choose and no order is discarded. Cardinality can only influence what
+//    each path probes after its own leading input.
+//  - `differential::plan` picks exactly one of the N. That choice fixes the starting input,
+//    which is the only place a per-input cardinality can decide which collection leads.
 fn optimize_orders(
     equivalences: &[Vec<MirScalarExpr>], // join equivalences: inside a Vec, the exprs are equivalent
     available: &[Vec<Vec<MirScalarExpr>>], // available arrangements per input
@@ -1109,6 +1134,12 @@ impl<'a> Orderer<'a> {
         }
     }
 
+    /// Greedily grows an order that begins with `start`.
+    ///
+    /// The returned vector always has the starting input at position 0. The characteristics of
+    /// that first element are not what drove the choice of `start`. They are computed at the end
+    /// of this method, from the key of whichever input ended up second, so they describe the
+    /// starting input as it will be read rather than why it leads.
     fn optimize_order_for(
         &mut self,
         start: usize,
@@ -1125,6 +1156,11 @@ impl<'a> Orderer<'a> {
         }
 
         // Introduce cross joins as a possibility.
+        //
+        // These are keyless entries, one per input, that guarantee the main loop below can always
+        // pop something even when no equivalence binds any remaining input. They rank low, since
+        // an empty key means `key_length == 0` and hence `not_cross == false`, so they only win
+        // when nothing better is available.
         for input in 0..self.inputs {
             let cardinality = self.cardinalities[input];
 

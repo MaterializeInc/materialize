@@ -3298,6 +3298,12 @@ impl JoinImplementation {
 ///
 /// This has more than one version. `new` instantiates the appropriate version based on a
 /// feature flag.
+///
+/// The derived `Ord` is the join cost model. Comparison is lexicographic in declaration order,
+/// so a field only ever decides between two candidates that tie on every field above it. Moving
+/// a field is a cost-model change, not a refactor. In particular `cardinality` sits below
+/// `arranged` and `key_length` in both versions, so an estimate can only break ties between
+/// candidates whose arrangement situation is identical.
 #[derive(
     Eq,
     PartialEq,
@@ -3399,7 +3405,11 @@ pub struct JoinInputCharacteristicsV2 {
     pub arranged: bool,
     /// A weaker signal that record count will not increase.
     pub key_length: usize,
-    /// Estimated cardinality (lower is better)
+    /// Estimated cardinality (lower is better).
+    ///
+    /// NOTE: `None` means no estimate was available, and it sorts below every `Some`, so an
+    /// input of unknown size ranks worse than one known to be huge. This matters whenever
+    /// estimates are available for some inputs but not others.
     pub cardinality: Option<std::cmp::Reverse<usize>>,
     /// Characteristics of the filter that is applied at this input.
     pub filters: FilterCharacteristics,
@@ -3472,7 +3482,11 @@ pub struct JoinInputCharacteristicsV1 {
     pub key_length: usize,
     /// Indicates that there will be no additional in-memory footprint.
     pub arranged: bool,
-    /// Estimated cardinality (lower is better)
+    /// Estimated cardinality (lower is better).
+    ///
+    /// NOTE: `None` means no estimate was available, and it sorts below every `Some`, so an
+    /// input of unknown size ranks worse than one known to be huge. This matters whenever
+    /// estimates are available for some inputs but not others.
     pub cardinality: Option<std::cmp::Reverse<usize>>,
     /// Characteristics of the filter that is applied at this input.
     pub filters: FilterCharacteristics,
