@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+* Add support for the [`AUTO SCALING STRATEGY`](https://materialize.com/docs/sql/create-cluster/#autoscaling)
+  cluster option (hydration burst), which lets a managed cluster temporarily
+  burst to a larger size while it has un-hydrated objects. The `create_cluster`
+  operation accepts a new `auto_scaling_strategy` argument, and the new
+  `alter_cluster_auto_scaling_strategy` operation sets or removes the strategy
+  on an existing cluster:
+
+  ```bash
+  dbt run-operation alter_cluster_auto_scaling_strategy --args '{cluster_name: quickstart, auto_scaling_strategy: {on_hydration: {hydration_size: "800cc", linger_duration: "15s"}}}'
+  ```
+
+  During blue/green deployments, `deploy_init` now copies the production
+  cluster's autoscaling strategy to the deployment cluster, so the deployment
+  environment bursts to the configured hydration size while it hydrates ahead
+  of the cutover.
+
 ## 1.9.10 - 2026-05-20
 
 * Support unmanaged clusters in `deploy_init`. The deployment cluster

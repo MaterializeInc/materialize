@@ -133,12 +133,17 @@
         {% set refresh_hydration_time_estimate = results[4] %}
 
         {% if managed %}
+            {# The deployment cluster inherits the production cluster's
+               autoscaling strategy, so it bursts to the hydration size while
+               the deployment environment hydrates ahead of the cutover. #}
+            {% set auto_scaling_strategy = internal_get_cluster_auto_scaling_strategy(origin_cluster) %}
             {% set deploy_cluster = create_cluster(
                 cluster_name=cluster,
                 size=size,
                 replication_factor=replication_factor,
                 schedule_type=schedule_type,
                 refresh_hydration_time_estimate=refresh_hydration_time_estimate,
+                auto_scaling_strategy=auto_scaling_strategy,
                 ignore_existing_objects=ignore_existing_objects,
                 force_deploy_suffix=True
             ) %}

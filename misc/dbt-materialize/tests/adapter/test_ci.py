@@ -25,6 +25,9 @@ class TestClusterOps:
         project.run_sql("DROP CLUSTER IF EXISTS test_cluster_dbt_deploy CASCADE")
         project.run_sql("DROP CLUSTER IF EXISTS test_manual_schedule CASCADE")
         project.run_sql("DROP CLUSTER IF EXISTS test_on_refresh_schedule CASCADE")
+        project.run_sql("DROP CLUSTER IF EXISTS test_autoscaling CASCADE")
+        project.run_sql("DROP CLUSTER IF EXISTS test_autoscaling_dbt_deploy CASCADE")
+        project.run_sql("DROP CLUSTER IF EXISTS test_autoscaling_unmanaged CASCADE")
 
     def test_create_and_drop_cluster(self, project):
         # Test creating a cluster
@@ -280,6 +283,187 @@ class TestClusterOps:
             ]
         )
 
+    def test_create_cluster_with_auto_scaling_strategy(self, project):
+        run_dbt(
+            [
+                "run-operation",
+                "create_cluster",
+                "--args",
+                '{"cluster_name": "test_autoscaling", "size": "scale=1,workers=1", "auto_scaling_strategy": {"on_hydration": {"hydration_size": "scale=1,workers=2", "linger_duration": "15s"}}, "force_deploy_suffix": false}',
+            ]
+        )
+
+        strategy = get_cluster_auto_scaling_strategy(project, "test_autoscaling")
+        assert strategy is not None, "Autoscaling strategy was not configured"
+        assert strategy[0] == "scale=1,workers=2"
+        assert strategy[1] == 15
+
+    def test_create_cluster_with_auto_scaling_strategy_no_linger(self, project):
+        run_dbt(
+            [
+                "run-operation",
+                "create_cluster",
+                "--args",
+                '{"cluster_name": "test_autoscaling", "size": "scale=1,workers=1", "auto_scaling_strategy": {"on_hydration": {"hydration_size": "scale=1,workers=2"}}, "force_deploy_suffix": false}',
+            ]
+        )
+
+        strategy = get_cluster_auto_scaling_strategy(project, "test_autoscaling")
+        assert strategy is not None, "Autoscaling strategy was not configured"
+        assert strategy[0] == "scale=1,workers=2"
+
+    def test_create_cluster_auto_scaling_strategy_validation(self, project):
+        # Hydration size equal to the cluster size is a no-op burst
+        run_dbt(
+            [
+                "run-operation",
+                "create_cluster",
+                "--args",
+                '{"cluster_name": "test_autoscaling", "size": "scale=1,workers=1", "auto_scaling_strategy": {"on_hydration": {"hydration_size": "scale=1,workers=1"}}}',
+            ],
+            expect_pass=False,
+        )
+
+        # Missing hydration_size
+        run_dbt(
+            [
+                "run-operation",
+                "create_cluster",
+                "--args",
+                '{"cluster_name": "test_autoscaling", "size": "scale=1,workers=1", "auto_scaling_strategy": {"on_hydration": {"linger_duration": "15s"}}}',
+            ],
+            expect_pass=False,
+        )
+
+        # Unknown sub-policy
+        run_dbt(
+            [
+                "run-operation",
+                "create_cluster",
+                "--args",
+                '{"cluster_name": "test_autoscaling", "size": "scale=1,workers=1", "auto_scaling_strategy": {"on_demand": {"hydration_size": "scale=1,workers=2"}}}',
+            ],
+            expect_pass=False,
+        )
+
+        # Cannot be combined with a non-manual schedule
+        run_dbt(
+            [
+                "run-operation",
+                "create_cluster",
+                "--args",
+                '{"cluster_name": "test_autoscaling", "size": "scale=1,workers=1", "schedule_type": "on-refresh", "auto_scaling_strategy": {"on_hydration": {"hydration_size": "scale=1,workers=2"}}}',
+            ],
+            expect_pass=False,
+        )
+
+    def test_alter_cluster_auto_scaling_strategy(self, project):
+        project.run_sql("CREATE CLUSTER test_autoscaling SIZE = 'scale=1,workers=1'")
+
+        # Set a strategy on an existing cluster
+        run_dbt(
+            [
+                "run-operation",
+                "alter_cluster_auto_scaling_strategy",
+                "--args",
+                '{"cluster_name": "test_autoscaling", "auto_scaling_strategy": {"on_hydration": {"hydration_size": "scale=1,workers=2", "linger_duration": "15s"}}}',
+            ]
+        )
+
+        strategy = get_cluster_auto_scaling_strategy(project, "test_autoscaling")
+        assert strategy is not None, "Autoscaling strategy was not configured"
+        assert strategy[0] == "scale=1,workers=2"
+        assert strategy[1] == 15
+
+        # Remove the strategy via RESET
+        run_dbt(
+            [
+                "run-operation",
+                "alter_cluster_auto_scaling_strategy",
+                "--args",
+                '{"cluster_name": "test_autoscaling"}',
+            ]
+        )
+
+        strategy = get_cluster_auto_scaling_strategy(project, "test_autoscaling")
+        assert strategy is None, "Autoscaling strategy was not removed"
+
+        # Disable via an empty strategy (AUTO SCALING STRATEGY = ())
+        run_dbt(
+            [
+                "run-operation",
+                "alter_cluster_auto_scaling_strategy",
+                "--args",
+                '{"cluster_name": "test_autoscaling", "auto_scaling_strategy": {"on_hydration": {"hydration_size": "scale=1,workers=2"}}}',
+            ]
+        )
+        run_dbt(
+            [
+                "run-operation",
+                "alter_cluster_auto_scaling_strategy",
+                "--args",
+                '{"cluster_name": "test_autoscaling", "auto_scaling_strategy": {}}',
+            ]
+        )
+
+        strategy = get_cluster_auto_scaling_strategy(project, "test_autoscaling")
+        assert strategy is None, "Autoscaling strategy was not disabled"
+
+    def test_alter_cluster_auto_scaling_strategy_errors(self, project):
+        # Nonexistent cluster
+        run_dbt(
+            [
+                "run-operation",
+                "alter_cluster_auto_scaling_strategy",
+                "--args",
+                '{"cluster_name": "test_autoscaling", "auto_scaling_strategy": {"on_hydration": {"hydration_size": "scale=1,workers=2"}}}',
+            ],
+            expect_pass=False,
+        )
+
+        # Unmanaged cluster
+        project.run_sql(
+            "CREATE CLUSTER test_autoscaling_unmanaged REPLICAS (r1 (SIZE 'scale=1,workers=1'))"
+        )
+        run_dbt(
+            [
+                "run-operation",
+                "alter_cluster_auto_scaling_strategy",
+                "--args",
+                '{"cluster_name": "test_autoscaling_unmanaged", "auto_scaling_strategy": {"on_hydration": {"hydration_size": "scale=1,workers=2"}}}',
+            ],
+            expect_pass=False,
+        )
+
+    def test_alter_cluster_auto_scaling_strategy_validation(self, project):
+        # Hydration size equal to the cluster's current size, validated against
+        # the size fetched from the catalog
+        project.run_sql("CREATE CLUSTER test_autoscaling SIZE = 'scale=1,workers=1'")
+        run_dbt(
+            [
+                "run-operation",
+                "alter_cluster_auto_scaling_strategy",
+                "--args",
+                '{"cluster_name": "test_autoscaling", "auto_scaling_strategy": {"on_hydration": {"hydration_size": "scale=1,workers=1"}}}',
+            ],
+            expect_pass=False,
+        )
+
+        # Cluster with a non-manual schedule, validated against the schedule
+        # fetched from the catalog
+        project.run_sql(
+            "CREATE CLUSTER test_on_refresh_schedule (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour'))"
+        )
+        run_dbt(
+            [
+                "run-operation",
+                "alter_cluster_auto_scaling_strategy",
+                "--args",
+                '{"cluster_name": "test_on_refresh_schedule", "auto_scaling_strategy": {"on_hydration": {"hydration_size": "scale=1,workers=2"}}}',
+            ],
+            expect_pass=False,
+        )
+
     def test_create_cluster_without_size_and_name(self, project):
         # Test creating a cluster without providing a size parameter
         run_dbt(
@@ -313,6 +497,25 @@ class TestClusterOps:
             ],
             expect_pass=False,
         )
+
+
+def get_cluster_auto_scaling_strategy(project, cluster_name):
+    """Return (hydration_size, linger_secs) for the cluster's configured
+    autoscaling strategy, or None when no strategy is configured."""
+    query = f"""
+    SELECT
+        s.strategy->'on_hydration'->>'hydration_size' AS hydration_size,
+        (s.strategy->'on_hydration'->'linger_duration'->>'secs')::bigint AS linger_secs
+    FROM mz_internal.mz_cluster_auto_scaling_strategies s
+    JOIN mz_clusters c ON c.id = s.cluster_id
+    WHERE c.name = '{cluster_name}'
+    """
+    result = project.run_sql(query, fetch="one")
+    # A row with a null hydration size can linger while a burst from a
+    # just-removed policy drains.
+    if result is None or result[0] is None:
+        return None
+    return result
 
 
 def get_cluster_properties(project, cluster_name):
