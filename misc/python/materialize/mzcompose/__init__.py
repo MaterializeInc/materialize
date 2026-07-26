@@ -48,7 +48,16 @@ DEFAULT_MZ_VOLUMES = [
 # a new feature causes benchmarks to become flaky, consider that this can also
 # impact customers' experience and try to find a solution other than disabling
 # the feature here!
-ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS = {}
+ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS = {
+    # Correctness suites default this on to exercise the OCC read-then-write
+    # path, but we ship it off, and the two paths have different write
+    # performance: OCC installs a subscribe dataflow per statement where the
+    # other path uses a fast-path peek. Benchmarking the path we ship keeps the
+    # numbers comparable across the rollout. Flipping the shipped default means
+    # flipping this too, and accepting the one-time change in the write
+    # benchmarks.
+    "enable_adapter_frontend_occ_read_then_write": "false",
+}
 
 
 def get_minimal_system_parameters(

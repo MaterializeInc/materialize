@@ -319,6 +319,18 @@ a larger table (the regime where OCC wins). It does not capture the small-write
 regression noted above, which is an accepted cost: high write throughput is a
 non-goal (see Non-Goals).
 
+Measured on the full implementation, with the OCC path on for every mzcompose
+suite, the small-write regression is at the bad end of that range: the feature
+benchmark `ManySmallUpdates` is 1.9x slower and `Update` 1.4x slower, and the
+scalability `UpdateWorkload` loses 36% throughput at concurrency 1 and about
+22% at 8 and 32.
+
+The performance suites therefore pin the flag off, in
+`ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS`, so that they track the path we
+ship. Flipping the shipped default means flipping that pin at the same time,
+and taking the one-time step in the write benchmarks through the ancestor
+overrides in `misc/python/materialize/version_ancestor_overrides.py`.
+
 ## Rollout
 
 The new path is controlled by a `enable_adapter_frontend_occ_read_then_write`
