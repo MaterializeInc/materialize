@@ -62,10 +62,10 @@ use crate::config::{ScopedParameters, ScopedParametersScope, SystemParameterFron
 use crate::coord::{Coordinator, ExecuteContextGuard};
 use crate::error::AdapterError;
 use crate::frontend_read_then_write::{FrontendWriteAttemptState, FrontendWriteCancellation};
-use crate::metrics::{self, Metrics};
+use crate::metrics::Metrics;
 use crate::optimize::dataflows::{EvalTime, ExprPrepOneShot};
 use crate::optimize::{self, Optimize, OptimizerError};
-use crate::peek_client::StatementLoggingGuard;
+use crate::peek_client::ExecutionLogging;
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, SessionConfig, StateRevision, TransactionId,
     TransactionStatus,
@@ -819,8 +819,32 @@ impl SessionClient {
         let execute_started = Instant::now();
         let cancel_future = cancel_future.map(|_| ()).shared();
 
-        let mut outer_ctx_extra = outer_ctx_extra;
+        // The single owner of this execution's end-of-execution obligation, and
+        // the single site that pays it. Everything below either produces an
+        // outcome for the statement or hands the obligation to the coordinator.
+        // Owning the slot in this frame is also what lets cancellation report an
+        // error: the inner future can be dropped without the obligation going
+        // with it.
+        let mut logging = ExecutionLogging::adopt(outer_ctx_extra, &self.peek_client);
 
+        let result = self
+            .execute_attempts(portal_name, &mut logging, cancel_future)
+            .await;
+
+        logging.retire(&result);
+
+        result.map(|response| (response, execute_started))
+    }
+
+    /// Runs the execution paths in order of preference: frontend peek
+    /// sequencing, frontend read-then-write sequencing, and finally the
+    /// coordinator via `Command::Execute`.
+    async fn execute_attempts(
+        &mut self,
+        portal_name: String,
+        logging: &mut ExecutionLogging,
+        cancel_future: impl Future<Output = ()> + Send + Clone,
+    ) -> Result<ExecuteResponse, AdapterError> {
         // Unroll SQL `EXECUTE <prepared> (...)` so the inner statement
         // flows through `try_frontend_peek` /
         // `try_frontend_read_then_write` below, rather than being
@@ -829,80 +853,45 @@ impl SessionClient {
         // would route differently from the same statement issued
         // directly.
         //
-        // On a successful unroll, `unroll_sql_execute` also begins
-        // EXECUTE-level statement logging on the outer portal, so that
+        // On a successful unroll, `unroll_sql_execute` also takes over
+        // statement logging on the outer portal, so that
         // `mz_statement_execution_history` records `EXECUTE foo (...)`
-        // rather than the inner SQL, and installs the resulting
-        // `ExecuteContextGuard` into `outer_ctx_extra`.
-        let portal_name = self
-            .unroll_sql_execute(portal_name, &mut outer_ctx_extra)
-            .await?;
+        // rather than the inner SQL.
+        let portal_name = self.unroll_sql_execute(portal_name, logging).await?;
 
         // Attempt peek sequencing in the session task.
         // If unsupported, fall back to the Coordinator path.
         // TODO(peek-seq): wire up cancel_future
-        let peek_result = self
-            .try_frontend_peek(&portal_name, &mut outer_ctx_extra)
-            .await?;
+        let peek_result = self.try_frontend_peek(&portal_name, logging).await?;
         if let Some(resp) = peek_result {
             debug!("frontend peek succeeded");
-            // Frontend peek handled the execution and retired outer_ctx_extra if it existed.
-            // No additional work needed here.
-            return Ok((resp, execute_started));
-        } else {
-            debug!("frontend peek did not happen, trying frontend read-then-write");
+            return Ok(resp);
         }
+        debug!("frontend peek did not happen, trying frontend read-then-write");
 
         // Attempt read-then-write sequencing in the session task.
         let rtw_result = self
-            .try_frontend_read_then_write_with_cancel(
-                &portal_name,
-                &mut outer_ctx_extra,
-                cancel_future.clone(),
-            )
-            .await;
-        let rtw_result = match rtw_result {
-            Ok(result) => result,
-            Err(err) => {
-                // If we still hold EXECUTE-level logging (it is only consumed
-                // once the frontend commits to handling the write), retire it
-                // as errored. Letting the guard drop would misrecord the
-                // statement as aborted.
-                if let Some(id) = outer_ctx_extra
-                    .take()
-                    .and_then(|guard| guard.defuse().retire())
-                {
-                    self.peek_client.log_ended_execution(
-                        id,
-                        StatementEndedExecutionReason::Errored {
-                            error: err.to_string(),
-                        },
-                    );
-                }
-                return Err(err);
-            }
-        };
+            .try_frontend_read_then_write_with_cancel(&portal_name, logging, cancel_future.clone())
+            .await?;
         if let Some(resp) = rtw_result {
             debug!("frontend read-then-write succeeded");
-            return Ok((resp, execute_started));
-        } else {
-            debug!("frontend read-then-write did not happen, falling back to `Command::Execute`");
-            // If we bailed out, outer_ctx_extra is still present (if it was originally).
-            // `Command::Execute` will handle it.
+            return Ok(resp);
         }
+        debug!("frontend read-then-write did not happen, falling back to `Command::Execute`");
 
-        let response = self
-            .send_with_cancel(
-                |tx, session| Command::Execute {
-                    portal_name,
-                    session,
-                    tx,
-                    outer_ctx_extra,
-                },
-                cancel_future.clone(),
-            )
-            .await?;
-        Ok((response, execute_started))
+        // No frontend path took the statement over, so the coordinator retires
+        // whatever entry we hold, or begins its own if we hold none.
+        let outer_ctx_extra = logging.release();
+        self.send_with_cancel(
+            |tx, session| Command::Execute {
+                portal_name,
+                session,
+                tx,
+                outer_ctx_extra,
+            },
+            cancel_future,
+        )
+        .await
     }
 
     /// If the named portal binds a SQL `EXECUTE <prepared>`, resolve the
@@ -916,12 +905,12 @@ impl SessionClient {
     /// statement is guaranteed not to be another `EXECUTE`. A failsafe below
     /// surfaces an internal error if that invariant is ever violated.
     ///
-    /// When the portal does not bind an `EXECUTE` — the common case —
-    /// returns the original portal name, costing only a portal lookup.
+    /// When the portal does not bind an `EXECUTE`, the common case, returns the
+    /// original portal name, costing only a portal lookup.
     async fn unroll_sql_execute(
         &mut self,
         portal_name: String,
-        outer_ctx_extra: &mut Option<ExecuteContextGuard>,
+        logging: &mut ExecutionLogging,
     ) -> Result<String, AdapterError> {
         let (stmt, params, outer_logging, outer_lifecycle_timestamps) = {
             let session = self.session.as_ref().expect("SessionClient invariant");
@@ -959,86 +948,30 @@ impl SessionClient {
             Coordinator::verify_portal(&catalog, session, &portal_name)?;
         }
 
-        // Bump query_total for the outer EXECUTE itself. The inner
-        // statement gets its own increment inside `try_frontend_peek_inner`
-        // (or, on bailout, in the coordinator's `handle_execute`).
-        {
-            let session = self.session.as_ref().expect("SessionClient invariant");
-            session
-                .metrics()
-                .query_total(&[
-                    metrics::session_type_label_value(session.user()),
-                    metrics::statement_type_label_value(&stmt),
-                ])
-                .inc();
-        }
+        // Take over the EXECUTE itself, so that a planning error below produces
+        // an errored end-event in `mz_statement_execution_history` rather than
+        // no entry at all. We pass the *outer* portal's `logging` and
+        // pgwire-bound `params` so the recorded entry shows the user-visible
+        // `EXECUTE foo (...)`, not the inner SQL. The inner statement gets its
+        // own `query_total` increment when a frontend path takes it over, or,
+        // on bailout, in the coordinator's `handle_execute`.
+        logging.take_over(
+            &self.peek_client,
+            self.session.as_mut().expect("SessionClient invariant"),
+            Some(&stmt),
+            &params,
+            &outer_logging,
+            &catalog,
+            outer_lifecycle_timestamps,
+        );
 
-        // Begin EXECUTE-level statement logging up front, so that planning
-        // errors below produce an `Errored` end-event in
-        // `mz_statement_execution_history` rather than no entry at all.
-        //
-        // We pass the *outer* portal's `logging` and pgwire-bound `params`
-        // so the recorded entry shows the user-visible `EXECUTE foo (...)`,
-        // not the inner SQL. On success the id moves into `outer_ctx_extra`
-        // for `try_frontend_peek` / `try_frontend_read_then_write` to retire;
-        // on planning error we explicitly retire this guard with `Errored`.
-        let mut held_guard: Option<StatementLoggingGuard> = if outer_ctx_extra.is_none() {
-            let session = self.session.as_mut().expect("SessionClient invariant");
-            let mut none_guard: Option<ExecuteContextGuard> = None;
-            Some(self.peek_client.begin_statement_logging(
-                session,
-                &params,
-                &outer_logging,
-                &catalog,
-                outer_lifecycle_timestamps,
-                &mut none_guard,
-            ))
-        } else {
-            None
-        };
-
-        let new_portal_name = match self.install_inner_portal_for_execute(&catalog, &stmt, &params)
-        {
-            Ok(name) => name,
-            Err(err) => {
-                if let Some(g) = held_guard.take() {
-                    g.retire(StatementEndedExecutionReason::Errored {
-                        error: err.to_string(),
-                    });
-                }
-                return Err(err);
-            }
-        };
-
-        // Hand off the logging id to `outer_ctx_extra`. `try_frontend_peek`
-        // / `try_frontend_read_then_write` retire it themselves once they
-        // take ownership.
-        if let Some(mut g) = held_guard.take() {
-            let id = g.id();
-            g.defuse();
-            // Soft invariant: the next caller (`try_frontend_peek` /
-            // `try_frontend_read_then_write`) takes ownership of
-            // `outer_ctx_extra` immediately, so this guard's `Drop` is
-            // unreachable on the normal flow and the dummy channel is
-            // never used. If a panic does fire `Drop` between here and
-            // that takeover, the `Aborted` end-event is silently lost
-            // — an acceptable trade given the panic implies the
-            // connection is going down anyway.
-            let (dummy_tx, _dummy_rx) = mpsc::unbounded_channel();
-            *outer_ctx_extra = Some(ExecuteContextGuard::new(id, dummy_tx));
-        }
-
-        Ok(new_portal_name)
+        self.install_inner_portal_for_execute(&catalog, &stmt, &params)
     }
 
     /// Helper for [`Self::unroll_sql_execute`]: plans the outer
     /// `Statement::Execute`, verifies the referenced prepared statement, and
     /// installs a fresh portal carrying the inner statement plus the
     /// EXECUTE's bound parameter values. Returns the new portal's name.
-    ///
-    /// Split out so [`Self::unroll_sql_execute`] can wrap the fallible work
-    /// in a single error-handling site that retires the EXECUTE-level
-    /// statement-logging guard with `Errored`.
     fn install_inner_portal_for_execute(
         &mut self,
         catalog: &Arc<Catalog>,
@@ -1075,10 +1008,10 @@ impl SessionClient {
         };
 
         // Verify and install the inner portal. The new portal carries the
-        // inner prepared statement's `logging`, but `try_frontend_peek` /
-        // `try_frontend_read_then_write` will see `outer_ctx_extra=Some(...)`
-        // and inherit the EXECUTE-level logging instead of starting fresh
-        // from this portal.
+        // inner prepared statement's `logging`, but the logging slot already
+        // holds the EXECUTE-level entry, so a frontend path taking the inner
+        // statement over inherits that entry instead of starting fresh from
+        // this portal.
         let session = self.session.as_mut().expect("SessionClient invariant");
         Coordinator::verify_prepared_statement(catalog, session, &execute_plan.name)?;
         let ps = session
@@ -1517,18 +1450,15 @@ impl SessionClient {
     ///
     /// Returns `Ok(Some(response))` if we handled the peek, or `Ok(None)` to fall back to the
     /// Coordinator's sequencing. If it returns an error, it should be returned to the user.
-    ///
-    /// `outer_ctx_extra` is Some when we are executing as part of an outer statement, e.g., a FETCH
-    /// triggering the execution of the underlying query.
     pub(crate) async fn try_frontend_peek(
         &mut self,
         portal_name: &str,
-        outer_ctx_extra: &mut Option<ExecuteContextGuard>,
+        logging: &mut ExecutionLogging,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         if self.enable_frontend_peek_sequencing {
             let session = self.session.as_mut().expect("SessionClient invariant");
             self.peek_client
-                .try_frontend_peek(portal_name, session, outer_ctx_extra)
+                .try_frontend_peek(portal_name, session, logging)
                 .await
         } else {
             Ok(None)
@@ -1540,7 +1470,7 @@ impl SessionClient {
     async fn try_frontend_read_then_write_with_cancel(
         &mut self,
         portal_name: &str,
-        outer_ctx_extra: &mut Option<ExecuteContextGuard>,
+        logging: &mut ExecutionLogging,
         cancel_future: impl Future<Output = ()> + Send,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         let conn_id = self.session().conn_id().clone();
@@ -1601,11 +1531,8 @@ impl SessionClient {
         };
         tokio::pin!(connection_cancel);
 
-        let frontend_read_then_write = self.try_frontend_read_then_write(
-            portal_name,
-            outer_ctx_extra,
-            Arc::clone(&attempt_state),
-        );
+        let frontend_read_then_write =
+            self.try_frontend_read_then_write(portal_name, logging, Arc::clone(&attempt_state));
         tokio::pin!(frontend_read_then_write);
 
         let requested = tokio::select! {
@@ -1641,7 +1568,7 @@ impl SessionClient {
     pub(crate) async fn try_frontend_read_then_write(
         &mut self,
         portal_name: &str,
-        outer_ctx_extra: &mut Option<ExecuteContextGuard>,
+        logging: &mut ExecutionLogging,
         attempt_state: Arc<FrontendWriteAttemptState>,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         use mz_expr::{CollectionPlan, RowSetFinishing};
@@ -1683,6 +1610,43 @@ impl SessionClient {
                 return Ok(None);
             }
         };
+
+        // Verify and plan against one catalog snapshot. Pairing a stale plan
+        // with a newer target generation could direct a write incorrectly.
+        // A failed verification is not logged, mirroring the coordinator: the
+        // portal is what statement logging draws its record from.
+        Coordinator::verify_portal(
+            &catalog,
+            self.session.as_mut().expect("SessionClient invariant"),
+            portal_name,
+        )?;
+
+        let (params, logging_info, lifecycle_timestamps) = {
+            let portal = self
+                .session
+                .as_ref()
+                .expect("SessionClient invariant")
+                .get_portal_unverified(portal_name)
+                .expect("verified above");
+            (
+                portal.parameters.clone(),
+                Arc::clone(&portal.logging),
+                portal.lifecycle_timestamps.clone(),
+            )
+        };
+
+        // Past this point the coordinator never sees this statement, so every
+        // exit has to produce an outcome for it. The remaining `Ok(None)`
+        // bailouts are all above.
+        logging.take_over(
+            &self.peek_client,
+            self.session.as_mut().expect("SessionClient invariant"),
+            Some(&stmt),
+            &params,
+            &logging_info,
+            &catalog,
+            lifecycle_timestamps,
+        );
 
         // Mirror the coordinator's transaction-state gate in `handle_execute`:
         // in a multi-statement transaction (an implicit batch or an explicit
@@ -1727,28 +1691,6 @@ impl SessionClient {
             return Err(AdapterError::BoundedStalenessReadOnly);
         }
 
-        // Verify and plan against one catalog snapshot. Pairing a stale plan
-        // with a newer target generation could direct a write incorrectly.
-        Coordinator::verify_portal(
-            &catalog,
-            self.session.as_mut().expect("SessionClient invariant"),
-            portal_name,
-        )?;
-
-        let (params, logging, lifecycle_timestamps) = {
-            let portal = self
-                .session
-                .as_ref()
-                .expect("SessionClient invariant")
-                .get_portal_unverified(portal_name)
-                .expect("verified above");
-            (
-                portal.parameters.clone(),
-                Arc::clone(&portal.logging),
-                portal.lifecycle_timestamps.clone(),
-            )
-        };
-
         // Reject mutations in read-only mode (e.g. during 0dt upgrades). Done
         // early, before any planning or fast-path dispatch, so every sub-path
         // (constant INSERT, OCC INSERT/UPDATE/DELETE) is covered uniformly.
@@ -1778,7 +1720,7 @@ impl SessionClient {
 
         // Cluster restrictions and RBAC, mirroring the coordinator's checks
         // in sequencer.rs. Resolution may fail if the target cluster doesn't
-        // exist — that gets reported later (with the correct error) by
+        // exist. That gets reported later (with the correct error) by
         // `validate_read_then_write`; for the purposes of these checks we
         // treat it as "no cluster known", consistent with the coordinator.
         let (target_cluster_id, target_cluster_name) = {
@@ -1788,6 +1730,16 @@ impl SessionClient {
                 Err(_) => (None, None),
             }
         };
+
+        // Record the cluster before the checks below can fail, so that their
+        // error rows carry it, as the coordinator's do.
+        if let (Some(logging_id), Some(cluster_id), Some(cluster_name)) =
+            (logging.id(), target_cluster_id, target_cluster_name.clone())
+        {
+            self.peek_client
+                .log_set_cluster(logging_id, cluster_id, cluster_name);
+        }
+
         {
             let session = self.session.as_ref().expect("SessionClient invariant");
             let conn_catalog = catalog.for_session(session);
@@ -1898,31 +1850,12 @@ impl SessionClient {
                     let inner_mir = optimized_mir.into_inner();
                     if inner_mir.as_const().is_some() && insert_plan.returning.is_empty() {
                         let session = self.session.as_mut().expect("SessionClient invariant");
-
-                        let logging_guard = self.peek_client.begin_statement_logging(
-                            session,
-                            &params,
-                            &logging,
-                            &catalog,
-                            lifecycle_timestamps,
-                            outer_ctx_extra,
-                        );
-                        if let (Some(logging_id), Some(cluster_id)) =
-                            (logging_guard.id(), target_cluster_id)
-                        {
-                            let cluster_name = catalog.get_cluster(cluster_id).name.clone();
-                            self.peek_client
-                                .log_set_cluster(logging_id, cluster_id, cluster_name);
-                        }
-
                         let result = Coordinator::insert_constant(
                             &catalog,
                             session,
                             insert_plan.id,
                             inner_mir,
                         );
-
-                        logging_guard.retire_with_result(&result);
 
                         return Ok(Some(result?));
                     }
@@ -1995,11 +1928,8 @@ impl SessionClient {
                 session,
                 rtw_plan,
                 target_cluster,
-                Arc::clone(&catalog),
-                &params,
-                &logging,
-                lifecycle_timestamps,
-                outer_ctx_extra,
+                &catalog,
+                logging.id(),
                 attempt_state,
             )
             .await

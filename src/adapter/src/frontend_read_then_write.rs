@@ -59,11 +59,10 @@ use mz_repr::{
     CatalogItemId, Diff, GlobalId, IntoRowIterator, RelationDesc, Row, RowArena, Timestamp,
 };
 use mz_sql::catalog::CatalogError;
-use mz_sql::plan::{self, MutationKind, Params, QueryWhen};
+use mz_sql::plan::{self, MutationKind, QueryWhen};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_client::client::TableData;
 use prometheus::Histogram;
-use qcell::QCell;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -73,14 +72,12 @@ use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::WriteResult;
 use crate::coord::read_then_write::validate_read_then_write_dependencies;
 use crate::coord::timestamp_selection::TimestampProvider;
-use crate::coord::{Coordinator, ExecuteContextGuard, TargetCluster};
+use crate::coord::{Coordinator, TargetCluster};
 use crate::error::AdapterError;
 use crate::optimize::Optimize;
 use crate::optimize::dataflows::{ComputeInstanceSnapshot, EvalTime, ExprPrep, ExprPrepOneShot};
-use crate::session::{LifecycleTimestamps, Session, TransactionOps, WriteOp};
-use crate::statement_logging::{
-    PreparedStatementLoggingInfo, StatementLifecycleEvent, StatementLoggingId,
-};
+use crate::session::{Session, TransactionOps, WriteOp};
+use crate::statement_logging::{StatementLifecycleEvent, StatementLoggingId};
 use crate::{PeekClient, PeekResponseUnary, TimelineContext, optimize};
 
 /// Reason a frontend write attempt is being torn down early.
@@ -213,51 +210,11 @@ impl PeekClient {
     /// Execute a read-then-write operation using frontend sequencing.
     ///
     /// Called by session code when the frontend_read_then_write dyncfg is
-    /// enabled.
+    /// enabled. The caller owns the end-of-execution logging for
+    /// `statement_logging_id` and verified and planned the portal against
+    /// `catalog`, which stays in force through optimization and write-target
+    /// generation capture.
     pub(crate) async fn frontend_read_then_write(
-        &mut self,
-        session: &mut Session,
-        plan: plan::ReadThenWritePlan,
-        target_cluster: TargetCluster,
-        catalog: Arc<Catalog>,
-        params: &Params,
-        logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
-        lifecycle_timestamps: Option<LifecycleTimestamps>,
-        outer_ctx_extra: &mut Option<ExecuteContextGuard>,
-        attempt_state: Arc<FrontendWriteAttemptState>,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        // The caller verified and planned the portal against this snapshot.
-        // Keep it through optimization and write-target generation capture.
-        // The guard's `Drop` impl emits `Aborted` if the inner future is
-        // dropped mid-flight, so the end-execution event is never skipped.
-        let logging_guard = self.begin_statement_logging(
-            session,
-            params,
-            logging,
-            &catalog,
-            lifecycle_timestamps,
-            outer_ctx_extra,
-        );
-
-        let result = self
-            .frontend_read_then_write_inner(
-                session,
-                plan,
-                target_cluster,
-                &catalog,
-                logging_guard.id(),
-                attempt_state,
-            )
-            .await;
-
-        logging_guard.retire_with_result(&result);
-
-        result
-    }
-
-    /// Separated from the outer function so the statement-logging guard always
-    /// retires on the same return path.
-    async fn frontend_read_then_write_inner(
         &mut self,
         session: &mut Session,
         mut plan: plan::ReadThenWritePlan,
@@ -291,11 +248,6 @@ impl PeekClient {
             depends_on,
             table_desc,
         } = validation_result;
-
-        if let Some(logging_id) = statement_logging_id {
-            let cluster_name = catalog.get_cluster(cluster_id).name.clone();
-            self.log_set_cluster(logging_id, cluster_id, cluster_name);
-        }
 
         // Mark this as a write transaction in the session state machine. For a
         // single statement that lets auto-commit handle the write correctly.

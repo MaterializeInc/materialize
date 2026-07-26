@@ -309,6 +309,7 @@ impl Metrics {
             row_set_finishing_seconds: self.row_set_finishing_seconds(),
             session_startup_table_writes_seconds: self.session_startup_table_writes_seconds.clone(),
             query_total: self.query_total.clone(),
+            subscribe_outputs: self.subscribe_outputs.clone(),
             determine_timestamp: self.determine_timestamp.clone(),
             timestamp_difference_for_strict_serializable_ms: self
                 .timestamp_difference_for_strict_serializable_ms
@@ -330,6 +331,7 @@ pub struct SessionMetrics {
     row_set_finishing_seconds: Histogram,
     session_startup_table_writes_seconds: Histogram,
     query_total: IntCounterVec,
+    subscribe_outputs: IntCounterVec,
     determine_timestamp: IntCounterVec,
     timestamp_difference_for_strict_serializable_ms: HistogramVec,
     timestamp_difference_for_bounded_staleness_ms: HistogramVec,
@@ -350,6 +352,10 @@ impl SessionMetrics {
 
     pub(crate) fn query_total(&self, label_values: &[&str]) -> GenericCounter<AtomicU64> {
         self.query_total.with_label_values(label_values)
+    }
+
+    pub(crate) fn subscribe_outputs(&self, label_values: &[&str]) -> GenericCounter<AtomicU64> {
+        self.subscribe_outputs.with_label_values(label_values)
     }
 
     pub(crate) fn determine_timestamp(&self, label_values: &[&str]) -> GenericCounter<AtomicU64> {

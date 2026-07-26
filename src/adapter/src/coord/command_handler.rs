@@ -87,7 +87,7 @@ use crate::webhook::{
 };
 use crate::{AppendWebhookError, ExecuteContext, catalog, metrics};
 
-use super::ExecuteContextGuard;
+use super::{ExecuteContextExtra, ExecuteContextGuard};
 
 /// The login status of a role, used by authentication handlers to check role
 /// existence and login permission before proceeding to credential verification.
@@ -1176,8 +1176,15 @@ impl Coordinator {
         // then `outer_context` should be `Some`.
         // This instructs the coordinator that the
         // outer execute should be considered finished once the inner one is.
-        outer_context: Option<ExecuteContextGuard>,
+        outer_context: Option<ExecuteContextExtra>,
     ) {
+        // Arm the obligation before anything can return: from here on, every
+        // exit either retires it or hands it to a guard whose `Drop` does.
+        // Nothing could have dropped it on the way here either, the command
+        // travels a channel that only this loop drains.
+        let outer_context = outer_context
+            .map(|extra| ExecuteContextGuard::new(extra.retire(), self.internal_cmd_tx.clone()));
+
         // A new statement is starting, so discard any cancellation that was signaled while no
         // statement was running. Such a cancellation targeted an earlier statement and must not
         // cancel the new one. (Like in PostgreSQL, a cancel request that arrives when nothing is

@@ -45,27 +45,24 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::catalog::Catalog;
 use crate::command::Command;
+use crate::coord;
 use crate::coord::peek::{FastPathPlan, PeekPlan};
 use crate::coord::sequencer::{eval_copy_to_uri, statistics_oracle};
 use crate::coord::timeline::timedomain_for;
 use crate::coord::timestamp_selection::TimestampDetermination;
-use crate::coord::{
-    Coordinator, CopyToContext, ExecuteContextGuard, ExplainContext, ExplainPlanContext,
-    TargetCluster,
-};
+use crate::coord::{Coordinator, CopyToContext, ExplainContext, ExplainPlanContext, TargetCluster};
 use crate::explain::insights::PlanInsightsContext;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::Optimize;
 use crate::optimize::dataflows::{ComputeInstanceSnapshot, DataflowBuilder};
-use crate::peek_client::StatementLoggingGuard;
+use crate::peek_client::ExecutionLogging;
 use crate::session::{Session, TransactionOps, TransactionStatus};
+use crate::statement_logging::StatementLifecycleEvent;
 use crate::statement_logging::WatchSetCreation;
-use crate::statement_logging::{StatementEndedExecutionReason, StatementLifecycleEvent};
 use crate::{
     AdapterError, AdapterNotice, CollectionIdBundle, ExecuteResponse, PeekClient, ReadHolds,
     TimelineContext, TimestampContext, TimestampProvider, optimize,
 };
-use crate::{coord, metrics};
 
 impl PeekClient {
     /// Attempt to sequence a peek from the session task.
@@ -73,13 +70,14 @@ impl PeekClient {
     /// Returns `Ok(Some(response))` if we handled the peek, or `Ok(None)` to fall back to the
     /// Coordinator's sequencing. If it returns an error, it should be returned to the user.
     ///
-    /// `outer_ctx_extra` is Some when we are executing as part of an outer statement, e.g., a FETCH
-    /// triggering the execution of the underlying query.
+    /// `logging` holds the end-of-execution obligation for this statement. The
+    /// caller retires it, this function only takes the statement over and, at
+    /// the dispatch sites that hand execution off, defuses the slot.
     pub(crate) async fn try_frontend_peek(
         &mut self,
         portal_name: &str,
         session: &mut Session,
-        outer_ctx_extra: &mut Option<ExecuteContextGuard>,
+        logging: &mut ExecutionLogging,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         // # From handle_execute
 
@@ -98,26 +96,11 @@ impl PeekClient {
 
         let catalog = self.catalog_snapshot("try_frontend_peek").await;
 
-        // Extract things from the portal.
-        let (stmt, params, logging, lifecycle_timestamps) = {
-            if let Err(err) = Coordinator::verify_portal(&*catalog, session, portal_name) {
-                // An inherited outer statement (e.g. EXECUTE) ends here and we
-                // own its end, so we log it. If we discarded the id instead,
-                // the statement would stay "running" forever in
-                // mz_statement_execution_history.
-                if let Some(id) = outer_ctx_extra
-                    .take()
-                    .and_then(|guard| guard.defuse().retire())
-                {
-                    self.log_ended_execution(
-                        id,
-                        StatementEndedExecutionReason::Errored {
-                            error: err.to_string(),
-                        },
-                    );
-                }
-                return Err(err);
-            }
+        // Extract things from the portal. A failed verification is not logged,
+        // mirroring the coordinator: the portal is what statement logging draws
+        // its record from.
+        let (stmt, params, logging_info, lifecycle_timestamps) = {
+            Coordinator::verify_portal(&*catalog, session, portal_name)?;
             let portal = session
                 .get_portal_unverified(portal_name)
                 // The portal is a session-level thing, so it couldn't have concurrently disappeared
@@ -125,9 +108,9 @@ impl PeekClient {
                 .expect("called verify_portal above");
             let params = portal.parameters.clone();
             let stmt = portal.stmt.clone();
-            let logging = Arc::clone(&portal.logging);
+            let logging_info = Arc::clone(&portal.logging);
             let lifecycle_timestamps = portal.lifecycle_timestamps.clone();
-            (stmt, params, logging, lifecycle_timestamps)
+            (stmt, params, logging_info, lifecycle_timestamps)
         };
 
         // Before planning, check if this is a statement type we can handle.
@@ -201,70 +184,38 @@ impl PeekClient {
             }
         }
 
-        // Set up statement logging, and log the beginning of execution.
-        // (But only if we're not executing in the context of another statement.)
-        let mut logging_guard = self.begin_statement_logging(
+        // Past this point the coordinator never sees this statement, so every
+        // exit has to produce an outcome for it. The `Ok(None)` bailouts are all
+        // above.
+        logging.take_over(
+            self,
             session,
+            stmt.as_deref(),
             &params,
-            &logging,
+            &logging_info,
             &catalog,
             lifecycle_timestamps,
-            outer_ctx_extra,
         );
 
-        let result = self
-            .try_frontend_peek_inner(session, catalog, stmt, params, &mut logging_guard)
-            .await;
-
-        // If we still own end-of-execution logging, retire it with the
-        // execution's outcome. We don't own it when a dispatch site in
-        // `try_frontend_peek_inner` handed it off: for streaming responses the
-        // end is logged asynchronously, by the coordinator for registered
-        // peeks and by the protocol layer for subscribes.
-        if logging_guard.id().is_some() {
-            let reason = match &result {
-                // Bailout case, which should not happen.
-                Ok(None) => {
-                    soft_panic_or_log!(
-                        "Bailed out from `try_frontend_peek_inner` after we already logged the beginning of statement execution."
-                    );
-                    // The old peek sequencing would start its own statement
-                    // logging from scratch; close out this one as errored.
-                    StatementEndedExecutionReason::Errored {
-                        error: "Internal error: bailed out from `try_frontend_peek_inner`"
-                            .to_string(),
-                    }
-                }
-                // Streaming responses cannot reach this arm: their dispatch
-                // sites hand off the guard. The `From` impl panics on them.
-                Ok(Some(resp)) => resp.into(),
-                Err(e) => StatementEndedExecutionReason::Errored {
-                    error: e.to_string(),
-                },
-            };
-
-            logging_guard.retire(reason);
-        }
-
-        result
+        self.try_frontend_peek_inner(session, catalog, stmt, params, logging)
+            .await
     }
 
     /// This is encapsulated in an inner function so that the outer function can still do statement
     /// logging after the `?` returns of the inner function.
     ///
-    /// `logging_guard` owns end-of-execution logging for this statement.
     /// Dispatch sites that hand the statement to the coordinator for
     /// asynchronous completion (registered peeks, subscribes) `defuse` the
-    /// guard at the point where the coordinator takes over. Everywhere else
-    /// the guard stays armed and the caller logs the end from the returned
-    /// result.
+    /// logging slot at the point where the coordinator takes over. Everywhere
+    /// else the slot stays armed and `SessionClient::execute` logs the end from
+    /// the returned result.
     async fn try_frontend_peek_inner(
         &mut self,
         session: &mut Session,
         catalog: Arc<Catalog>,
         stmt: Option<Arc<Statement<Raw>>>,
         params: Params,
-        logging_guard: &mut StatementLoggingGuard,
+        logging: &mut ExecutionLogging,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         let stmt = match stmt {
             Some(stmt) => stmt,
@@ -273,14 +224,6 @@ impl PeekClient {
                 return Ok(Some(ExecuteResponse::EmptyQuery));
             }
         };
-
-        session
-            .metrics()
-            .query_total(&[
-                metrics::session_type_label_value(session.user()),
-                metrics::statement_type_label_value(&stmt),
-            ])
-            .inc();
 
         // # From handle_execute_inner
 
@@ -496,7 +439,7 @@ impl PeekClient {
         };
 
         // Log cluster selection
-        if let Some(logging_id) = logging_guard.id() {
+        if let Some(logging_id) = logging.id() {
             self.log_set_cluster(logging_id, target_cluster_id, target_cluster_name.clone());
         }
 
@@ -1185,7 +1128,7 @@ impl PeekClient {
             };
 
         // Log optimization finished
-        if let Some(logging_id) = logging_guard.id() {
+        if let Some(logging_id) = logging.id() {
             self.log_lifecycle_event(logging_id, StatementLifecycleEvent::OptimizationFinished);
         }
 
@@ -1293,7 +1236,7 @@ impl PeekClient {
 
                 // # Now back to peek_finish
 
-                let watch_set = logging_guard.id().map(|logging_id| {
+                let watch_set = logging.id().map(|logging_id| {
                     WatchSetCreation::new(
                         logging_id,
                         catalog.state(),
@@ -1314,7 +1257,7 @@ impl PeekClient {
 
                 let response = match peek_plan {
                     PeekPlan::FastPath(fast_path_plan) => {
-                        if let Some(logging_id) = logging_guard.id() {
+                        if let Some(logging_id) = logging.id() {
                             // TODO(peek-seq): Actually, we should log it also for
                             // FastPathPlan::Constant. The only reason we are not doing so at the
                             // moment is to match the old peek sequencing, so that statement logging
@@ -1362,12 +1305,12 @@ impl PeekClient {
                             session.conn_id().clone(),
                             source_ids,
                             watch_set,
-                            logging_guard,
+                            logging,
                         )
                         .await?
                     }
                     PeekPlan::SlowPath(dataflow_plan) => {
-                        if let Some(logging_id) = logging_guard.id() {
+                        if let Some(logging_id) = logging.id() {
                             self.log_set_transient_index_id(logging_id, dataflow_plan.id);
                         }
 
@@ -1392,7 +1335,7 @@ impl PeekClient {
                         // coordinator logs nothing (see
                         // `implement_slow_path_peek`), so the guard stays armed
                         // and the caller logs the error.
-                        logging_guard.defuse();
+                        logging.defuse();
                         response
                     }
                 };
@@ -1454,7 +1397,7 @@ impl PeekClient {
                         session_uuid: session.uuid(),
                         read_holds,
                         plan: subscribe_plan,
-                        statement_logging_id: logging_guard.id(),
+                        statement_logging_id: logging.id(),
                         tx,
                     })
                     .await?;
@@ -1464,7 +1407,7 @@ impl PeekClient {
                 // coordinator logs nothing (see the `ExecuteSubscribe`
                 // handler), so the guard stays armed and the caller logs the
                 // error.
-                logging_guard.defuse();
+                logging.defuse();
                 Ok(Some(response))
             }
             Execution::CopyToS3 {
@@ -1511,7 +1454,7 @@ impl PeekClient {
                 .await?;
 
                 // Preflight succeeded, now execute the actual COPY TO dataflow
-                let watch_set = logging_guard.id().map(|logging_id| {
+                let watch_set = logging.id().map(|logging_id| {
                     WatchSetCreation::new(
                         logging_id,
                         catalog.state(),
