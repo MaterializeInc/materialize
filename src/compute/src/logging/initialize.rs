@@ -83,18 +83,8 @@ pub fn initialize(
         context.register_loggers();
         context.construct_dataflow()
     } else {
-        // The differential logger goes in first even here, so that the logging
-        // dataflow's own arrangements report their record counts. The remaining
-        // loggers go in afterwards, which keeps the logging dataflow out of its own
-        // operator, channel and scheduling logs, as `log_logging = false` intends.
-        //
-        // NOTE: this makes arrangement logging self-referential. Batch activity in
-        // the arrangements backing the differential logs is itself logged as batch
-        // activity. It is bounded in practice but is the reason `log_logging`
-        // exists, so it wants watching.
-        context.register_differential_logger();
         let traces = context.construct_dataflow();
-        context.register_other_loggers();
+        context.register_loggers();
         traces
     };
 
@@ -232,27 +222,8 @@ impl LoggingContext<'_> {
     ///
     /// Registers the timely, differential, compute, and reachability loggers.
     fn register_loggers(&self) {
-        self.register_differential_logger();
-        self.register_other_loggers();
-    }
-
-    /// Registers the differential arrangement logger.
-    ///
-    /// Registered separately from the others so it can be installed before the
-    /// logging dataflow is constructed while they are installed after. That makes
-    /// the logging dataflow's own arrangements report their record counts without
-    /// the dataflow appearing in the timely operator, channel and scheduling logs.
-    /// Those counts are attributable because `mz_compute_export_arrangements`
-    /// supplies the operator IDs that would otherwise have to come from
-    /// `mz_dataflow_operators`.
-    fn register_differential_logger(&self) {
-        let d_logger = self.simple_logger::<DifferentialEventBuilder>(self.d_event_queue.clone());
-        let mut register = self.worker.log_register().expect("Logging must be enabled");
-        register.insert_logger("differential/arrange", d_logger);
-    }
-
-    fn register_other_loggers(&self) {
         let t_logger = self.simple_logger::<TimelyEventBuilder>(self.t_event_queue.clone());
+        let d_logger = self.simple_logger::<DifferentialEventBuilder>(self.d_event_queue.clone());
         let c_logger = self.simple_logger::<ComputeEventBuilder>(self.c_event_queue.clone());
 
         let mut register = self.worker.log_register().expect("Logging must be enabled");
@@ -262,6 +233,7 @@ impl LoggingContext<'_> {
         self.register_reachability_logger::<Timestamp>(&mut register, 0);
         self.register_reachability_logger::<Product<Timestamp, PointStamp<u64>>>(&mut register, 1);
         self.register_reachability_logger::<(Timestamp, Subtime)>(&mut register, 2);
+        register.insert_logger("differential/arrange", d_logger);
         register.insert_logger("materialize/compute", c_logger.clone());
 
         self.shared_state.borrow_mut().compute_logger = Some(c_logger);

@@ -106,6 +106,8 @@ The `mz_compute_export_arrangements` view describes which [dataflow] operator ho
 
 An index whose plan reuses an already-arranged collection builds no arrangement of its own, and points at the operator whose arrangement it reuses. That operator can belong to another object's part of the dataflow, so this mapping cannot be derived from [`mz_lir_mapping`](#mz_lir_mapping).
 
+The indexes on introspection sources are not listed. Their arrangements live in the logging dataflow, which does not report arrangement sizes.
+
 <!-- RELATION_SPEC mz_introspection.mz_compute_export_arrangements -->
 | Field         | Type      | Meaning                                                                                                             |
 | ------------- | --------- | --------                                                                                                            |
