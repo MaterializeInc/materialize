@@ -2,3 +2,4 @@ copy.sql
 factors-sf1
 bi-sf1-composite-merged-fk
 e*.sql
+batch_*.sql
