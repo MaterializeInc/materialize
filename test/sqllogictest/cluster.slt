@@ -206,6 +206,8 @@ bar  mz_compute_dataflow_global_ids_per_worker  mz_compute_dataflow_global_ids_p
 bar  mz_compute_dataflow_global_ids_per_worker  mz_compute_dataflow_global_ids_per_worker_u7_primary_idx  3  global_id  NULL  false
 bar  mz_compute_error_counts_raw  mz_compute_error_counts_raw_u7_primary_idx  1  export_id  NULL  false
 bar  mz_compute_error_counts_raw  mz_compute_error_counts_raw_u7_primary_idx  2  worker_id  NULL  false
+bar  mz_compute_export_arrangements_per_worker  mz_compute_export_arrangements_per_worker_u7_primary_idx  1  export_id  NULL  false
+bar  mz_compute_export_arrangements_per_worker  mz_compute_export_arrangements_per_worker_u7_primary_idx  2  worker_id  NULL  false
 bar  mz_compute_exports_per_worker  mz_compute_exports_per_worker_u7_primary_idx  1  export_id  NULL  false
 bar  mz_compute_exports_per_worker  mz_compute_exports_per_worker_u7_primary_idx  2  worker_id  NULL  false
 bar  mz_compute_frontiers_per_worker  mz_compute_frontiers_per_worker_u7_primary_idx  1  export_id  NULL  false
@@ -407,7 +409,7 @@ DROP CLUSTER foo, foo2, foo3, foo4 CASCADE
 query I
 SELECT COUNT(name) FROM mz_indexes WHERE cluster_id = 'u1';
 ----
-32
+33
 
 query I
 SELECT COUNT(name) FROM mz_indexes WHERE cluster_id <> 'u1' AND cluster_id NOT LIKE 's%';
@@ -420,7 +422,7 @@ CREATE CLUSTER test REPLICAS (foo (SIZE 'scale=1,workers=1'));
 query I
 SELECT COUNT(name) FROM mz_indexes;
 ----
-304
+311
 
 statement ok
 DROP CLUSTER test CASCADE
@@ -428,7 +430,7 @@ DROP CLUSTER test CASCADE
 query T
 SELECT COUNT(name) FROM mz_indexes;
 ----
-272
+278
 
 simple conn=mz_system,user=mz_system
 ALTER CLUSTER quickstart OWNER TO materialize
