@@ -1353,6 +1353,54 @@ fn test_statement_logging_frontend_read_then_write_rbac_error() {
     );
 }
 
+// A prepared DML statement that no frontend path handles. `EXECUTE` is
+// unrolled in the session task, which takes over the EXECUTE's log entry, and
+// the inner statement then falls back to the coordinator. The coordinator has
+// to receive that entry and finish it, and the two statements have to be
+// counted once each: the EXECUTE by the session task, the inner statement by
+// the coordinator.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_statement_logging_prepared_dml_coordinator_fallback() {
+    let (server, mut client) = setup_statement_logging(1.0, 1.0, "");
+
+    client
+        .batch_execute("CREATE TABLE prepared_dml_t (x INT)")
+        .unwrap();
+    client
+        .batch_execute("PREPARE p AS INSERT INTO prepared_dml_t VALUES (1)")
+        .unwrap();
+
+    let insert_labels = [("session_type", "user"), ("statement_type", "insert")];
+    let execute_labels = [("session_type", "user"), ("statement_type", "execute")];
+    let inserts_before =
+        get_counter_value(server.metrics_registry(), "mz_query_total", &insert_labels);
+    let executes_before =
+        get_counter_value(server.metrics_registry(), "mz_query_total", &execute_labels);
+
+    client.batch_execute("EXECUTE p").unwrap();
+
+    let rows: i64 = client
+        .query_one("SELECT count(*) FROM prepared_dml_t", &[])
+        .unwrap()
+        .get(0);
+    assert_eq!(rows, 1);
+    assert_eq!(
+        get_counter_value(server.metrics_registry(), "mz_query_total", &insert_labels),
+        inserts_before + 1
+    );
+    assert_eq!(
+        get_counter_value(server.metrics_registry(), "mz_query_total", &execute_labels),
+        executes_before + 1
+    );
+
+    let mut mz_client = server.connect_internal(postgres::NoTls).unwrap();
+    let outcomes = read_statement_outcomes(&mut mz_client, "EXECUTE p");
+    assert_eq!(outcomes.len(), 1, "unexpected log rows: {outcomes:?}");
+    assert_eq!(outcomes[0].finished_status, "success", "{:?}", outcomes[0]);
+}
+
 #[allow(clippy::disallowed_methods)]
 fn run_throttling_test(use_prepared_statement: bool) {
     // The `target_data_rate` should be

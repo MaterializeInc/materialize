@@ -720,9 +720,11 @@ impl Drop for StatementLoggingGuard {
 /// everywhere.
 pub(crate) struct ExecutionLogging {
     guard: Option<StatementLoggingGuard>,
-    /// Set by [`Self::take_over`]. The session task has counted this statement
-    /// in the metrics `Coordinator::handle_execute` maintains, so handing the
-    /// statement to the coordinator afterwards would count it twice.
+    /// Whether the session task has counted the statement the coordinator would
+    /// run, in the metrics `Coordinator::handle_execute` maintains. Handing the
+    /// statement over afterwards would count it twice. Taking over a SQL
+    /// `EXECUTE` does not set this: the inner statement it unrolls to is a
+    /// statement of its own, and still uncounted.
     counted: bool,
 }
 
@@ -761,6 +763,59 @@ impl ExecutionLogging {
         catalog: &Catalog,
         lifecycle_timestamps: Option<LifecycleTimestamps>,
     ) -> Option<StatementLoggingId> {
+        self.begin_or_inherit(
+            peek_client,
+            session,
+            params,
+            logging,
+            catalog,
+            lifecycle_timestamps,
+        );
+        count_statement(session, stmt);
+        self.counted = true;
+        self.id()
+    }
+
+    /// Takes over the log entry of a SQL `EXECUTE` and counts the `EXECUTE`
+    /// itself, for the session task unrolling it into its inner statement.
+    ///
+    /// The entry stays armed, so a failure to unroll is recorded against the
+    /// `EXECUTE`. The inner statement is a statement in its own right and is
+    /// still uncounted, which is why the slot stays releasable: whichever path
+    /// ends up running the inner statement counts it there, exactly as the
+    /// coordinator does when it re-dispatches a `Plan::Execute`.
+    pub(crate) fn take_over_sql_execute(
+        &mut self,
+        peek_client: &PeekClient,
+        session: &mut Session,
+        stmt: &Statement<Raw>,
+        params: &Params,
+        logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
+        catalog: &Catalog,
+        lifecycle_timestamps: Option<LifecycleTimestamps>,
+    ) {
+        self.begin_or_inherit(
+            peek_client,
+            session,
+            params,
+            logging,
+            catalog,
+            lifecycle_timestamps,
+        );
+        count_statement(session, Some(stmt));
+    }
+
+    /// Makes sure a log entry exists for this execution, keeping an adopted one
+    /// if there is one.
+    fn begin_or_inherit(
+        &mut self,
+        peek_client: &PeekClient,
+        session: &mut Session,
+        params: &Params,
+        logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
+        catalog: &Catalog,
+        lifecycle_timestamps: Option<LifecycleTimestamps>,
+    ) {
         if self.guard.is_none() {
             self.guard = Some(peek_client.begin_statement_logging(
                 session,
@@ -770,31 +825,6 @@ impl ExecutionLogging {
                 lifecycle_timestamps,
             ));
         }
-        self.counted = true;
-
-        if let Some(stmt) = stmt {
-            let session_type = metrics::session_type_label_value(session.user());
-            session
-                .metrics()
-                .query_total(&[session_type, metrics::statement_type_label_value(stmt)])
-                .inc();
-            if let Statement::Subscribe(SubscribeStatement { output, .. })
-            | Statement::Copy(CopyStatement {
-                relation: CopyRelation::Subscribe(SubscribeStatement { output, .. }),
-                ..
-            }) = stmt
-            {
-                session
-                    .metrics()
-                    .subscribe_outputs(&[
-                        session_type,
-                        metrics::subscribe_output_label_value(output),
-                    ])
-                    .inc();
-            }
-        }
-
-        self.id()
     }
 
     /// Hands the obligation to the coordinator, which retires it once the
@@ -851,6 +881,31 @@ fn end_reason(
         }
     }
     result.into()
+}
+
+/// Bumps the per-statement counters `Coordinator::handle_execute` maintains for
+/// the statement the session task runs instead. `stmt` is `None` for an empty
+/// portal, which is logged but not counted.
+fn count_statement(session: &Session, stmt: Option<&Statement<Raw>>) {
+    let Some(stmt) = stmt else {
+        return;
+    };
+    let session_type = metrics::session_type_label_value(session.user());
+    session
+        .metrics()
+        .query_total(&[session_type, metrics::statement_type_label_value(stmt)])
+        .inc();
+    if let Statement::Subscribe(SubscribeStatement { output, .. })
+    | Statement::Copy(CopyStatement {
+        relation: CopyRelation::Subscribe(SubscribeStatement { output, .. }),
+        ..
+    }) = stmt
+    {
+        session
+            .metrics()
+            .subscribe_outputs(&[session_type, metrics::subscribe_output_label_value(output)])
+            .inc();
+    }
 }
 
 /// Whether someone else logs the end of execution for `response`: the

@@ -955,10 +955,10 @@ impl SessionClient {
         // `EXECUTE foo (...)`, not the inner SQL. The inner statement gets its
         // own `query_total` increment when a frontend path takes it over, or,
         // on bailout, in the coordinator's `handle_execute`.
-        logging.take_over(
+        logging.take_over_sql_execute(
             &self.peek_client,
             self.session.as_mut().expect("SessionClient invariant"),
-            Some(&stmt),
+            &stmt,
             &params,
             &outer_logging,
             &catalog,
