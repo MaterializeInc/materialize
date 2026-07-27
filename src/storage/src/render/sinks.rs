@@ -256,5 +256,6 @@ fn get_sink_render_for<'scope>(connection: &StorageSinkConnection) -> Box<dyn Si
     match connection {
         StorageSinkConnection::Kafka(connection) => Box::new(connection.clone()),
         StorageSinkConnection::Iceberg(connection) => Box::new(connection.clone()),
+        StorageSinkConnection::Postgres(connection) => Box::new(connection.clone()),
     }
 }
