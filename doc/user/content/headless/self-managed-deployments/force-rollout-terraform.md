@@ -23,8 +23,9 @@ module "materialize_instance" {
 {{< /tab >}}
 {{< tab "Materialize CRD v1alpha1" >}}
 
-If you have reverted to the `v1alpha1` version of the Materialize CRD, also
-set `request_rollout` to the same UUID:
+If you have reverted to the `v1alpha1` version of the Materialize CRD, set
+both the `request_rollout` and `force_rollout` inputs of the
+`materialize-instance` module to the same new UUID:
 
 ```hcl
 module "materialize_instance" {

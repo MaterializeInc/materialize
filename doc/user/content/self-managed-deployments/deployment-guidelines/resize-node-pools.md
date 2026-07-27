@@ -30,16 +30,16 @@ runs on, how to proceed depends on how the nodes are managed:
 
 ## Steps
 
-{{< tabs >}}
+{{< tabs level=3 >}}
 {{< tab "Terraform" >}}
 
 These steps apply to the [Materialize Terraform
 modules](https://github.com/MaterializeInc/materialize-terraform-self-managed).
 
-{{< tabs >}}
+{{< tabs level=4 >}}
 {{< tab "GCP" >}}
 
-### 1. Declare a second node pool with the new VM type
+##### 1. Declare a second node pool with the new VM type
 
 Add a new nodepool module instance alongside the existing one, keeping the old
 pool unchanged. Copy the existing configuration, then change:
@@ -79,7 +79,7 @@ terraform apply
 Both pools now exist. Materialize pods have not yet been scheduled on the new
 pool.
 
-### 2. Taint the old pool so no new pods schedule on it
+##### 2. Taint the old pool so no new pods schedule on it
 
 Add a decommission taint to the old pool's `node_taints`:
 
@@ -106,7 +106,7 @@ Apply:
 terraform apply
 ```
 
-### 3. Roll out the Materialize instance
+##### 3. Roll out the Materialize instance
 
 With the old pool tainted, a forced rollout lands the new generation of pods
 on the new pool.
@@ -123,7 +123,7 @@ See [Rollout behavior](#rollout-behavior) for what to expect during the
 rollout. Verify the new `environmentd` and `clusterd` pods are only scheduled
 onto the new pool.
 
-### 4. Remove the old pool
+##### 4. Remove the old pool
 
 Once the rollout has completed, the old pool's nodes have no Materialize
 workloads on them. Remove the old nodepool module instance from your Terraform
@@ -135,7 +135,7 @@ terraform apply
 
 The destroy step now succeeds because the pool has no running workloads.
 
-### 5. Optional: rename the new pool back
+##### 5. Optional: rename the new pool back
 
 If you want the pool to keep the original name (for example because other
 Terraform or kubectl tooling references it), repeat these steps with a third
@@ -145,7 +145,7 @@ any references.
 {{< /tab >}}
 {{< tab "Azure" >}}
 
-### 1. Declare a second node pool with the new VM type
+##### 1. Declare a second node pool with the new VM type
 
 Add a new nodepool module instance alongside the existing one, keeping the old
 pool unchanged. Copy the existing configuration, then change:
@@ -188,7 +188,7 @@ terraform apply
 Both pools now exist. Materialize pods have not yet been scheduled on the new
 pool.
 
-### 2. Taint the old pool so no new pods schedule on it
+##### 2. Taint the old pool so no new pods schedule on it
 
 Add a decommission taint to the old pool's `node_taints`:
 
@@ -215,7 +215,7 @@ Apply:
 terraform apply
 ```
 
-### 3. Roll out the Materialize instance
+##### 3. Roll out the Materialize instance
 
 With the old pool tainted, a forced rollout lands the new generation of pods
 on the new pool.
@@ -232,7 +232,7 @@ See [Rollout behavior](#rollout-behavior) for what to expect during the
 rollout. Verify the new `environmentd` and `clusterd` pods are only scheduled
 onto the new pool.
 
-### 4. Remove the old pool
+##### 4. Remove the old pool
 
 Once the rollout has completed, the old pool's nodes have no Materialize
 workloads on them. Remove the old nodepool module instance from your Terraform
@@ -244,7 +244,7 @@ terraform apply
 
 The destroy step now succeeds because the pool has no running workloads.
 
-### 5. Optional: rename the new pool back
+##### 5. Optional: rename the new pool back
 
 If you want the pool to keep the original name (for example because other
 Terraform or kubectl tooling references it), repeat these steps with a third
@@ -274,7 +274,7 @@ If you have disabled Karpenter and run Materialize on a static EKS node
 group, follow the blue-green pattern from the GCP and Azure tabs instead,
 changing `instance_types` on a second node group module instance.
 
-### 1. Update the instance types
+##### 1. Update the instance types
 
 Change `instance_types` on the Materialize `karpenter-ec2nodeclass` and
 `karpenter-nodepool` module instances and apply:
@@ -301,7 +301,7 @@ annotation, which blocks voluntary disruption while they run. This relies on
 the nodepool's `expire_after` being `Never`, see [Karpenter node
 expiry](/self-managed-deployments/deployment-guidelines/aws-deployment-guidelines/#karpenter-node-expiry).
 
-### 2. Cordon the drifted nodes
+##### 2. Cordon the drifted nodes
 
 Cordon the existing Materialize nodes so the rollout's new pods cannot
 schedule onto them and instead trigger Karpenter to provision nodes with the
@@ -317,7 +317,7 @@ done
 
 Nodes that Karpenter provisions after this point are not cordoned.
 
-### 3. Roll out the Materialize instance
+##### 3. Roll out the Materialize instance
 
 {{% include-headless "/headless/self-managed-deployments/force-rollout-terraform" %}}
 
@@ -332,7 +332,7 @@ generation. See [Rollout behavior](#rollout-behavior) for what to expect
 during the rollout. Verify the new `environmentd` and `clusterd` pods are
 only scheduled onto the new nodes.
 
-### 4. Verify the old nodes are removed
+##### 4. Verify the old nodes are removed
 
 Once the rollout has completed and the old generation's pods are gone, the
 cordoned nodes are empty and Karpenter consolidates them away (the modules
@@ -362,7 +362,7 @@ first, then follow the steps in the **Terraform** tab.
 
 If you manage your infrastructure without the Materialize Terraform modules:
 
-### 1. Create a second node pool with the new VM type
+##### 1. Create a second node pool with the new VM type
 
 Using your cloud provider's tooling, create a second node pool with the same
 labels and taints as the existing pool (so Materialize pods are eligible to
@@ -372,7 +372,7 @@ If your nodes are managed by Karpenter, skip this step and instead update the
 instance requirements on the Karpenter `NodePool`. Karpenter provisions
 new-spec nodes on demand once the old nodes are cordoned.
 
-### 2. Keep new pods off the old nodes
+##### 2. Keep new pods off the old nodes
 
 For a static pool, add a decommission taint, such as
 `materialize.cloud/decommissioned=true:NoSchedule`, to the old pool. Apply the
@@ -387,7 +387,7 @@ Materialize pods don't tolerate (not `materialize.cloud/workload` or
 For Karpenter-managed nodes, cordon the old nodes instead. Nodes that
 Karpenter provisions afterwards are not cordoned.
 
-### 3. Roll out the Materialize instance to land new pods on the new nodes
+##### 3. Roll out the Materialize instance to land new pods on the new nodes
 
 Use the Materialize CR's rollout machinery to have the operator create a new
 generation of `environmentd` and `clusterd` pods. Because the Materialize
@@ -425,7 +425,7 @@ kubectl patch materialize <instance-name> \
 See [Rollout behavior](#rollout-behavior) for what to expect. Verify the new
 `environmentd` and `clusterd` pods are only scheduled onto the new nodes.
 
-### 4. Remove the old pool
+##### 4. Remove the old pool
 
 Once the rollout has completed, the old nodes have no Materialize workloads
 on them. Delete the old node pool using your cloud provider's tooling. For

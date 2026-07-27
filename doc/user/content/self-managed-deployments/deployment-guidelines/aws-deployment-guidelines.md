@@ -74,10 +74,21 @@ Certificate Authority (CA) rather than self-signed certificates.
 The examples in the [Terraform
 modules](https://github.com/MaterializeInc/materialize-terraform-self-managed)
 set `expire_after` to `Never` on the Materialize nodepool. We recommend
-keeping that value. Node expiry is not a voluntary disruption: with any other
-value, Karpenter removes nodes that reach their lifetime even if they run pods
-annotated with `karpenter.sh/do-not-disrupt`, which causes downtime unless you
-gracefully roll the nodes first.
+keeping that value, since node expiry is not a voluntary disruption. With any
+other value, Karpenter removes nodes that reach their lifetime even if they
+run pods annotated with `karpenter.sh/do-not-disrupt`. This can cause
+downtime unless you gracefully roll the nodes first.
+
+## Karpenter termination grace period
+
+Prior to v6.0.0 of the Terraform modules, the Materialize nodepool set
+`termination_grace_period` to `300s`. This caused nodes to be terminated five
+minutes after any change to the nodepool configuration, ignoring the
+`karpenter.sh/do-not-disrupt` annotation on pods. In v6.0.0 and later the
+value is unset by default. We recommend keeping it unset on nodepools for
+Materialize workloads. If you are running an older version of the modules,
+upgrade following the [upgrade
+notes](https://github.com/MaterializeInc/materialize-terraform-self-managed/blob/v6.0.0/README.md#v600).
 
 ## Node pool resizing
 
