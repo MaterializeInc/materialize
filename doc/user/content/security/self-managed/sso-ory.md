@@ -111,8 +111,8 @@ This part is identical to the direct-OIDC path; see the
 | SCIM user provisioning | Supported via Polis |
 | Multiple IdPs on a single Polis tenant | Supported |
 | Group membership in the JWT | Supported via SAML attribute statement. Group names are attached to the token at login as a `groups` claim, refreshed each time the user re-authenticates. |
-| Group to SQL role mapping (auto-`GRANT`) | Not supported. The `groups` JWT claim reaches Materialize but admins still run `GRANT` manually to translate group membership into SQL privileges. |
-| Automatic role deprovisioning | Partial. SCIM-driven IdP deactivation marks the user inactive in Polis, but the Materialize SQL role isn't dropped automatically. |
+| Group to SQL role mapping (auto-`GRANT`) | Supported. With `oidc_group_role_sync_enabled` set, Materialize matches each `groups` claim entry to a SQL role of the same name and grants membership automatically at login (grantor `mz_jwt_sync`), no manual `GRANT`. Roles must be created ahead of time. See [Enable OIDC group-to-role sync](/self-managed-deployments/enterprise-sso/operations/#enable-oidc-group-to-role-sync). |
+| Automatic role deprovisioning | Partial. Removing a user from a group revokes the synced role membership on their next login. SCIM-driven IdP deactivation marks the user inactive in Polis, but the SQL role itself isn't dropped automatically. |
 | Long-lived API keys for service accounts | Not supported today. OAuth2 client credentials is the current path for machine-to-machine auth; broader API key management is tracked as future work via [Ory Talos](https://www.ory.sh/talos). |
 
 ## See also

@@ -65,24 +65,26 @@ look up each LB.
 
 ## cert-manager and a `ClusterIssuer`
 
-The example deploys cert-manager into the cluster and uses it to provision
-TLS certificates for each browser-facing hostname. Pick one of three modes:
+cert-manager is required to provision TLS certificates for each
+browser-facing hostname. The [self-managed Terraform](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/kubernetes/modules/cert-manager)
+provides a module to deploy it. cert-manager must be paired with a
+`ClusterIssuer`, which you can configure in one of three modes:
 
 ### In-Cluster Self-Signed (Demos and Air-Gapped Clusters)
 
-Default behaviour when `cert_issuer_ref` is not set. cert-manager generates
-an in-cluster CA and signs all browser-facing certs from it. Browsers will
-not trust the certs out of the box.
+The default when `cert_issuer_ref` is not set: cert-manager generates an
+in-cluster CA and signs all browser-facing certs from it. Browsers will not
+trust the certs out of the box.
 
 Suitable for offline demos or proof-of-concept clusters where no public DNS
 or ACME path is available. Production deployments should use a real issuer.
 
 ### Bring Your Own `ClusterIssuer`
 
-Set `cert_issuer_ref` in tfvars to point at an existing `ClusterIssuer`
-managed outside of the example. Typical sources: a corporate CA, an ACME
-issuer (Let's Encrypt) already configured for other workloads, or a managed
-cloud issuer.
+Set `cert_issuer_ref` in tfvars to point at an existing `ClusterIssuer` you
+manage yourself, outside the Materialize Terraform modules. Typical sources:
+a corporate CA, an ACME issuer (Let's Encrypt) already configured for other
+workloads, or a managed cloud issuer.
 
 ```hcl
 cert_issuer_ref = {
@@ -99,7 +101,7 @@ cannot sign.
 ### Let's Encrypt with cert-manager DNS-01
 
 For new deployments that want browser-trusted certs without a managed cloud
-cert service, the example supports a Let's Encrypt `ClusterIssuer` backed by
+cert service, you can configure a Let's Encrypt `ClusterIssuer` backed by
 cert-manager's DNS-01 solver. Cloudflare, Route 53, Azure DNS, and Google
 Cloud DNS are all supported by cert-manager out of the box.
 
