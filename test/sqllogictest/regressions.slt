@@ -516,3 +516,43 @@ COMPLETE 0
 # grandfathered type, returning the graceful planning error rather than panicking.
 query error custom type is too complex to resolve
 SELECT NULL::wide
+
+# Regression test for SQL-455: CREATE [MATERIALIZED] VIEW must reject a column
+# name list that names fewer columns than the query produces, matching the
+# existing rejection of lists that name more.
+
+statement error view materialize.public.too_few definition names 1 column, but view materialize.public.too_few has 2 columns
+CREATE VIEW too_few (name) AS SELECT 'jon', 12
+
+statement error materialized view materialize.public.too_few definition names 1 column, but materialized view materialize.public.too_few has 2 columns
+CREATE MATERIALIZED VIEW too_few (name) AS SELECT 'jon', 12
+
+# The check is lifted while re-planning persisted catalog items during
+# bootstrap, so a view created before the check existed keeps loading after
+# upgrade instead of crash-looping the environment.
+# `unsafe_enable_incomplete_view_column_lists` is the signal, force-enabled
+# during item parsing. With it on, the otherwise rejected view plans and only
+# a prefix of its columns is renamed.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET unsafe_enable_incomplete_view_column_lists = on
+----
+COMPLETE 0
+
+statement ok
+CREATE VIEW too_few (name) AS SELECT 'jon', 12
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET unsafe_enable_incomplete_view_column_lists
+----
+COMPLETE 0
+
+query TI colnames
+SELECT * FROM too_few
+----
+name  ?column?
+jon   12
+
+# Once the check is back in force a normal session still rejects creating such
+# a view while the grandfathered one remains queryable.
+statement error materialized view materialize.public.too_few_mv definition names 1 column, but materialized view materialize.public.too_few_mv has 2 columns
+CREATE MATERIALIZED VIEW too_few_mv (name) AS SELECT 'jon', 12
