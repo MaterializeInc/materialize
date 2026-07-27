@@ -21,8 +21,11 @@ a name.
 
 import unittest
 
-import adbc_driver_postgresql.dbapi
-import duckdb
+# `adbc-driver-postgresql` and `duckdb` are pinned in `test/adbc/requirements.txt`
+# and installed only inside this composition's test container, so they are absent
+# from the repo-wide Python virtualenv that pyright resolves against.
+import adbc_driver_postgresql.dbapi  # pyright: ignore[reportMissingImports]
+import duckdb  # pyright: ignore[reportMissingImports]
 import pyarrow as pa
 
 MATERIALIZED_URL = "postgresql://materialize@materialized:6875/materialize"
