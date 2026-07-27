@@ -10,8 +10,12 @@
 import json
 import operator
 import os
+import random
+import string
 import urllib.parse
+import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from kubernetes.client import (
     V1ConfigMap,
@@ -54,14 +58,46 @@ from materialize.mzcompose import (
     get_default_system_parameters,
 )
 
-# Self-managed tooling such as mz-debug discovers a Materialize instance's
-# Kubernetes resources through the operator-provisioned labels below. cloudtest
-# deploys environmentd directly rather than through the operator, so it stamps
-# the same labels on the environmentd Service and StatefulSet to keep that
-# discovery working.
-MZ_INSTANCE_NAME = "12345678-1234-1234-1234-123456789012"
 MZ_ORGANIZATION_NAME_LABEL = "materialize.cloud/organization-name"
 MZ_RESOURCE_ID_LABEL = "materialize.cloud/mz-resource-id"
+
+
+@dataclass(frozen=True)
+class MzInstanceIdentity:
+    """Identifies one Materialize instance to self-managed tooling.
+
+    The operator stamps an organization name and a resource ID on every
+    Kubernetes object it provisions for an instance, and tooling such as
+    mz-debug discovers an instance's objects through those labels. cloudtest
+    deploys environmentd directly rather than through the operator, so it has to
+    stamp the labels itself.
+
+    Every object of an instance must carry the same values, and no two instances
+    living in the same namespace may share them.
+    """
+
+    # Names the instance. mz-debug takes this as its `--mz-instance-name`.
+    organization_name: str
+
+    # Ties an object to its instance.
+    resource_id: str
+
+    @classmethod
+    def generate(cls) -> "MzInstanceIdentity":
+        # Resource IDs are ten characters of a lowercase alphabet, because the
+        # operator builds DNS-1035 object names out of them. DNS-1035 names are
+        # case insensitive, so mixed case would not keep them apart.
+        resource_id_alphabet = string.ascii_lowercase + string.digits
+        return cls(
+            organization_name=str(uuid.uuid4()),
+            resource_id="".join(random.choices(resource_id_alphabet, k=10)),
+        )
+
+    def labels(self) -> dict[str, str]:
+        return {
+            MZ_ORGANIZATION_NAME_LABEL: self.organization_name,
+            MZ_RESOURCE_ID_LABEL: self.resource_id,
+        }
 
 
 class EnvironmentdSecret(K8sSecret):
@@ -91,7 +127,11 @@ class ListenersConfigMap(K8sConfigMap):
 
 
 class EnvironmentdService(K8sService):
-    def __init__(self, namespace: str = DEFAULT_K8S_NAMESPACE) -> None:
+    def __init__(
+        self,
+        instance_identity: MzInstanceIdentity,
+        namespace: str = DEFAULT_K8S_NAMESPACE,
+    ) -> None:
         super().__init__(namespace)
         service_port = V1ServicePort(name="sql", port=6875)
         http_port = V1ServicePort(name="http", port=6876)
@@ -102,11 +142,7 @@ class EnvironmentdService(K8sService):
             kind="Service",
             metadata=V1ObjectMeta(
                 name="environmentd",
-                labels={
-                    "app": "environmentd",
-                    MZ_ORGANIZATION_NAME_LABEL: MZ_INSTANCE_NAME,
-                    MZ_RESOURCE_ID_LABEL: "environmentd",
-                },
+                labels={"app": "environmentd", **instance_identity.labels()},
             ),
             spec=V1ServiceSpec(
                 type="NodePort",
@@ -135,6 +171,7 @@ class MaterializedAliasService(K8sService):
 class EnvironmentdStatefulSet(K8sStatefulSet):
     def __init__(
         self,
+        instance_identity: MzInstanceIdentity,
         tag: str | None = None,
         release_mode: bool = True,
         coverage_mode: bool = False,
@@ -145,6 +182,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         cockroach_namespace: str = DEFAULT_K8S_NAMESPACE,
         apply_node_selectors: bool = False,
     ) -> None:
+        self.instance_identity = instance_identity
         self.tag = tag
         self.release_mode = release_mode
         self.coverage_mode = coverage_mode
@@ -160,10 +198,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
     def generate_stateful_set(self) -> V1StatefulSet:
         metadata = V1ObjectMeta(
             name="environmentd",
-            labels={
-                "app": "environmentd",
-                MZ_ORGANIZATION_NAME_LABEL: MZ_INSTANCE_NAME,
-            },
+            labels={"app": "environmentd", **self.instance_identity.labels()},
         )
         label_selector = V1LabelSelector(match_labels={"app": "environmentd"})
 

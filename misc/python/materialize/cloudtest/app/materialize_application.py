@@ -27,6 +27,7 @@ from materialize.cloudtest.k8s.environmentd import (
     EnvironmentdStatefulSet,
     ListenersConfigMap,
     MaterializedAliasService,
+    MzInstanceIdentity,
 )
 from materialize.cloudtest.k8s.minio import Minio
 from materialize.cloudtest.k8s.mysql import mysql_resources
@@ -52,9 +53,10 @@ class MaterializeApplication(CloudtestApplicationBase):
         apply_node_selectors: bool = False,
     ) -> None:
         self.tag = tag
+        self.instance_identity = MzInstanceIdentity.generate()
         self.secret = EnvironmentdSecret()
         self.listeners_configmap = ListenersConfigMap()
-        self.environmentd = EnvironmentdService()
+        self.environmentd = EnvironmentdService(self.instance_identity)
         self.materialized_alias = MaterializedAliasService()
         self.testdrive = TestdrivePod(
             release_mode=release_mode,
@@ -86,6 +88,7 @@ class MaterializeApplication(CloudtestApplicationBase):
             self.secret,
             self.listeners_configmap,
             EnvironmentdStatefulSet(
+                instance_identity=self.instance_identity,
                 release_mode=self.release_mode,
                 tag=self.tag,
                 log_filter=log_filter,

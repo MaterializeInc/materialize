@@ -14,7 +14,6 @@ import subprocess
 from materialize import MZ_ROOT, spawn
 from materialize.cloudtest import DEFAULT_K8S_CONTEXT_NAME, DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
-from materialize.cloudtest.k8s.environmentd import MZ_INSTANCE_NAME
 from materialize.cloudtest.util.cluster import cluster_pod_name
 from materialize.cloudtest.util.wait import wait
 
@@ -57,7 +56,7 @@ def test_successful_zip_creation(mz: MaterializeApplication) -> None:
             "--k8s-namespace",
             DEFAULT_K8S_NAMESPACE,
             "--mz-instance-name",
-            MZ_INSTANCE_NAME,
+            mz.instance_identity.organization_name,
             "--mz-connection-url",
             "postgresql://mz_system@localhost:6877/materialize",
         ],
@@ -145,7 +144,7 @@ def test_self_managed_profiles(mz: MaterializeApplication) -> None:
             "--k8s-namespace",
             DEFAULT_K8S_NAMESPACE,
             "--mz-instance-name",
-            MZ_INSTANCE_NAME,
+            mz.instance_identity.organization_name,
             "--mz-connection-url",
             "postgresql://mz_system@localhost:6877/materialize",
             "--dump-k8s=false",
