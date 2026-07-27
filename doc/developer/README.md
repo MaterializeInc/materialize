@@ -59,6 +59,10 @@ land, and then browsed as reference material as you skill up on the codebase.
   * [guide-testing.md](guide-testing.md) describes our various test suites and
     our testing philosophy.
 
+* [mzbisect.md](mzbisect.md) describes `bin/mzbisect`, which localizes data
+  corruption by probing the dependency closure of an object for consistency
+  violations.
+
 * [mzbuild.md](mzbuild.md) describes the custom build system we use to manage
   our Docker images and Docker Compose configurations.
 
