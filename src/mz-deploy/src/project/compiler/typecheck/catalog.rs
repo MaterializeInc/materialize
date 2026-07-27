@@ -2634,4 +2634,63 @@ mod tests {
             result.err()
         );
     }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    #[mz_ore::test]
+    fn test_stub_table_with_multi_dimensional_array_column() {
+        let mut runtime = CatalogRuntime::new().expect("catalog creation should succeed");
+        runtime.ensure_user_schema("test_db", "test_schema");
+        let object_id = ObjectId::new("test_db".into(), "test_schema".into(), "test_table".into());
+        let mut columns = BTreeMap::new();
+        // Dimensionality is a property of the value, not the type. `text[][]`
+        // and `int4[2][2]` denote the same types as `text[]` and `int4[]`, so
+        // both spellings have to resolve through the element type's array_id.
+        columns.insert(
+            "grid".to_string(),
+            ColumnType {
+                r#type: "text[][]".into(),
+                nullable: false,
+                position: 0,
+                comment: None,
+            },
+        );
+        columns.insert(
+            "matrix".to_string(),
+            ColumnType {
+                r#type: "int4[2][2]".into(),
+                nullable: true,
+                position: 1,
+                comment: None,
+            },
+        );
+        let result = runtime.create_stub_table(&object_id, &columns);
+        assert!(
+            result.is_ok(),
+            "stub table with multi-dimensional array column failed: {:?}",
+            result.err()
+        );
+
+        let view_id = ObjectId::new("test_db".into(), "test_schema".into(), "test_view".into());
+        let sql = r#"CREATE VIEW "test_db"."test_schema"."test_view" AS
+            SELECT "grid"[1][2] AS cell,
+                   array_length("matrix", 2) AS cols,
+                   ARRAY[ARRAY[1, 2], ARRAY[3, 4]] AS literal
+            FROM "test_db"."test_schema"."test_table""#;
+        let desc = runtime
+            .create_item(&view_id, sql)
+            .unwrap_or_else(|e| panic!("view using multi-dimensional arrays failed: {e:?}"));
+        let types: Vec<_> = desc
+            .iter()
+            .map(|(name, typ)| (name.as_str(), typ))
+            .collect();
+        assert_eq!(types[0].0, "cell");
+        assert_eq!(types[0].1.scalar_type, SqlScalarType::String);
+        assert_eq!(types[1].0, "cols");
+        assert_eq!(types[1].1.scalar_type, SqlScalarType::Int32);
+        assert_eq!(types[2].0, "literal");
+        assert_eq!(
+            types[2].1.scalar_type,
+            SqlScalarType::Array(Box::new(SqlScalarType::Int32))
+        );
+    }
 }
