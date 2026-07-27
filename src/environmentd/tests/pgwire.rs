@@ -914,6 +914,14 @@ fn test_pgtest_mz_numeric_binary_overflow() {
 }
 
 #[mz_ore::test]
+fn test_pgtest_mz_time_binary_out_of_range() {
+    pg_test_inner(
+        Path::new("../../test/pgtest-mz/time-binary-out-of-range.pt"),
+        true,
+    );
+}
+
+#[mz_ore::test]
 fn test_pgtest_mz_parse_started() {
     pg_test_inner(Path::new("../../test/pgtest-mz/parse-started.pt"), true);
 }

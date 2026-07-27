@@ -1,0 +1,51 @@
+# Regression test for SQL-473: a binary time Bind parameter of 24:00:00
+# (86_400_000_000 microseconds since midnight) silently wrapped around
+# midnight and decoded as 00:00:00. Out-of-range binary times must error
+# instead, like the text path.
+
+# 24:00:00 = 86_400_000_000 microseconds.
+send
+Parse {"query": "SELECT $1::time"}
+Bind {"param_formats": [1], "binary_values": [[0, 0, 0, 20, 29, 215, 96, 0]]}
+Execute
+Sync
+----
+
+until err_field_typs=CM
+ReadyForQuery
+----
+ParseComplete
+ErrorResponse {"fields":[{"typ":"C","value":"22023"},{"typ":"M","value":"unable to decode parameter: time out of range"}]}
+ReadyForQuery {"status":"I"}
+
+# -1 microseconds.
+send
+Parse {"query": "SELECT $1::time"}
+Bind {"param_formats": [1], "binary_values": [[255, 255, 255, 255, 255, 255, 255, 255]]}
+Execute
+Sync
+----
+
+until err_field_typs=CM
+ReadyForQuery
+----
+ParseComplete
+ErrorResponse {"fields":[{"typ":"C","value":"22023"},{"typ":"M","value":"unable to decode parameter: time out of range"}]}
+ReadyForQuery {"status":"I"}
+
+# The maximum valid value, 23:59:59.999999, still decodes.
+send
+Parse {"query": "SELECT $1::time"}
+Bind {"param_formats": [1], "binary_values": [[0, 0, 0, 20, 29, 215, 95, 255]]}
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+DataRow {"fields":["23:59:59.999999"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
