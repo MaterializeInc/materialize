@@ -999,8 +999,13 @@ const REGPROC_NULL: &str = "-";
 /// Parses the text format of a `regproc`, matching PostgreSQL's `regprocin`.
 ///
 /// A function name resolves to that function's OID, `-` is OID 0, and anything
-/// else is read as a decimal OID. Accepting names is what keeps a `COPY ... TO`
-/// rendering loadable by `COPY ... FROM`, since the text encoding emits names.
+/// else is read as a decimal OID.
+///
+/// Accepting names is what keeps a `COPY ... TO` rendering loadable by
+/// `COPY ... FROM`, since the text encoding emits names. That holds for every
+/// rendering that names exactly one function. An overloaded name renders
+/// schema-qualified and still names every one of its impls, so it does not round
+/// trip, which is true of PostgreSQL as well.
 fn parse_regproc(s: &str) -> Result<u32, Box<dyn Error + Sync + Send>> {
     if s == REGPROC_NULL {
         return Ok(0);
@@ -1138,18 +1143,21 @@ mod tests {
 
     /// A `regproc` renders as the function's name in text format and as a bare
     /// OID in binary, which is what PostgreSQL's `regprocout` and
-    /// `regprocsend` do. Every text rendering must load back through
-    /// `decode_text`.
+    /// `regprocsend` do.
     #[mz_ore::test]
     fn regproc_text_encoding_resolves_names() {
-        // 1242 is `boolin`, uniquely named. 1398 is one of six `abs`
-        // overloads, so PostgreSQL qualifies it. 99999 names no function.
-        for (oid, expected) in [
-            (0, "-"),
-            (1242, "boolin"),
-            (1398, "pg_catalog.abs"),
-            (99999, "99999"),
-            (u32::MAX, "4294967295"),
+        // 1242 is `boolin`, uniquely named. 1398 is one of six `abs` overloads,
+        // so PostgreSQL qualifies it. 99999 names no function.
+        //
+        // `round_trips` is false for the qualified overload: that rendering
+        // names all six impls, so reading it back cannot pick one. PostgreSQL
+        // does not round trip it either.
+        for (oid, expected, round_trips) in [
+            (0, "-", true),
+            (1242, "boolin", true),
+            (1398, "pg_catalog.abs", false),
+            (99999, "99999", true),
+            (u32::MAX, "4294967295", true),
         ] {
             let mut buf = BytesMut::new();
             Value::from_datum(Datum::UInt32(oid), &SqlScalarType::RegProc)
@@ -1157,10 +1165,13 @@ mod tests {
                 .encode_text(&mut buf);
             assert_eq!(str::from_utf8(&buf).unwrap(), expected, "regproc {oid}");
 
-            let Value::RegProc(decoded) = Value::decode_text(&Type::RegProc, &buf).unwrap() else {
-                panic!("decoding a regproc must yield Value::RegProc");
-            };
-            assert_eq!(decoded, oid, "text rendering {expected} did not round trip");
+            if round_trips {
+                let Value::RegProc(decoded) = Value::decode_text(&Type::RegProc, &buf).unwrap()
+                else {
+                    panic!("decoding a regproc must yield Value::RegProc");
+                };
+                assert_eq!(decoded, oid, "text rendering {expected} did not round trip");
+            }
 
             // Binary stays a 4-byte OID, so the name resolution is invisible
             // there.

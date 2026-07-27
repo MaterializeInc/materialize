@@ -30,6 +30,9 @@ mod tests {
     }
 
     #[mz_ore::test]
+    // `oid` scans the table, so covering every entry is quadratic in its 626
+    // rows. That is milliseconds natively and far too slow interpreted.
+    #[cfg_attr(miri, ignore)]
     fn lookups_round_trip() {
         for (entry_oid, entry_name) in NAMES {
             assert_eq!(name(*entry_oid), Some(*entry_name));
