@@ -156,6 +156,9 @@ describe("UsagePage", () => {
     // parent 14/19 ≈ 73.7%, child 5/19 ≈ 26.3%.
     expect(within(accountRows[0]).getByText("73.7%")).toBeVisible();
     expect(within(accountRows[1]).getByText("26.3%")).toBeVisible();
+    // With every account collapsed, the Usage column header has nothing
+    // beneath it to label, so it's hidden (SAS-169).
+    expect(ledger.queryByText("Usage")).not.toBeInTheDocument();
     // Accounts render collapsed by default (SAS-168); expand both to reveal
     // their cluster rows, region-qualified ("aws/us-east-1 / <cluster>").
     await userEvent.click(accountRows[0]);
@@ -171,9 +174,16 @@ describe("UsagePage", () => {
     const totalRow = within(await ledger.findByTestId("account-total-row"));
     expect(totalRow.getByText(formatCurrency(19))).toBeVisible();
     // A Usage column sits between "Account / cluster" and "Share of total"
-    // (SAS-145/SAS-159): each cluster row shows its usage quantity.
+    // (SAS-145/SAS-159): each cluster row shows its usage quantity. With at
+    // least one account expanded, the header is shown again (SAS-169).
     expect(await ledger.findByText("Usage")).toBeVisible();
     expect(ledger.getAllByText("0 credits")).toHaveLength(3);
+    // Collapsing every account back closed hides the header again.
+    await userEvent.click(accountRows[0]);
+    await userEvent.click(accountRows[1]);
+    await waitFor(() => {
+      expect(ledger.queryByText("Usage")).not.toBeInTheDocument();
+    });
     // The section leads with the period total (19 = 14 + 5), mirroring the
     // legacy chart panel, and a "Spend between …" range above the table,
     // mirroring the legacy "Spend between …" breakdown. oneDay()'s single
