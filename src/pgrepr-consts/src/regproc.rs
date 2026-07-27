@@ -37,6 +37,13 @@
 /// `search_path` makes those bare names resolvable, so `regprocout` would print
 /// them bare and this table still qualifies them. The SQL cast from `regproc` to
 /// `text` reads the session's search path and does render them bare.
+///
+/// NOTE: Names that are not bare identifiers are left unquoted here, so `left`
+/// renders as `left` and OID 936 as `pg_catalog.substring`. PostgreSQL's
+/// `regprocout` quotes those, rendering `"left"` and `pg_catalog."substring"`.
+/// This table matches the SQL cast from `regproc` to `text` instead, so the two
+/// Materialize paths agree with each other. The unquoted form still resolves,
+/// because `regprocin` accepts a reserved word with or without quotes.
 pub const NAMES: &[(u32, &str)] = &[
     (34, "namein"),
     (38, "int2in"),
