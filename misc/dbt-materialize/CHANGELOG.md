@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.9.11 - 2026-07-26
+
 * Add support for the [`AUTO SCALING STRATEGY`](https://materialize.com/docs/sql/create-cluster/#autoscaling)
   cluster option (hydration burst), which lets a managed cluster temporarily
   burst to a larger size while it has un-hydrated objects. The `create_cluster`
