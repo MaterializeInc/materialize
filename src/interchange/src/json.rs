@@ -117,6 +117,13 @@ impl ToJson for TypedDatum<'_> {
             SqlScalarType::Int32 => json!(datum.unwrap_int32()),
             SqlScalarType::Int64 => json!(datum.unwrap_int64()),
             SqlScalarType::UInt16 => json!(datum.unwrap_uint16()),
+            // NOTE: `regproc` stays a number here even though the pgwire text
+            // encoding resolves it to a function name. `build_row_schema_json`
+            // below declares these columns as 4-byte unsigned integers and
+            // `mz_interchange::avro` encodes them that way, so emitting a name
+            // would contradict the schema this module publishes for the same
+            // column. The HTTP SQL API shares this encoder and so also reports
+            // a number.
             SqlScalarType::UInt32
             | SqlScalarType::Oid
             | SqlScalarType::RegClass

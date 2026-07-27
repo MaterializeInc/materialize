@@ -1659,6 +1659,64 @@ mod tests {
 
     use super::*;
 
+    /// `mz_pgrepr::regproc::NAMES` is a table of every builtin function OID and
+    /// the text a `regproc` renders it as. It has to be checked in as data
+    /// because `mz-pgrepr` sits below this crate in the dependency graph and so
+    /// cannot read the registry itself. This test is what keeps it honest: it
+    /// recomputes the whole table from the registry and, on drift, prints the
+    /// corrected table to paste into `src/pgrepr-consts/src/regproc.rs`.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn test_regproc_names_match_builtin_functions() {
+        // `effective_search_path` unconditionally prepends these two, so a
+        // uniquely named function in either resolves from its bare name.
+        const IMPLICITLY_SEARCHED: &[&str] = &[MZ_CATALOG_SCHEMA, PG_CATALOG_SCHEMA];
+
+        // A bare name only identifies one OID when exactly one impl anywhere in
+        // the registry carries it, so count impls across schemas.
+        let mut impls_per_name: BTreeMap<&str, usize> = BTreeMap::new();
+        for func in BUILTINS::funcs() {
+            *impls_per_name.entry(func.name).or_default() += func.inner.func_impls().len();
+        }
+
+        let mut expected: BTreeMap<u32, String> = BTreeMap::new();
+        for func in BUILTINS::funcs() {
+            // The rule `regprocout` applies: print the bare name when it
+            // resolves back to this OID on its own, otherwise qualify it.
+            let rendered =
+                if impls_per_name[func.name] == 1 && IMPLICITLY_SEARCHED.contains(&func.schema) {
+                    func.name.to_string()
+                } else {
+                    format!("{}.{}", func.schema, func.name)
+                };
+            for details in func.inner.func_impls() {
+                let previous = expected.insert(details.oid, rendered.clone());
+                assert_eq!(
+                    previous, None,
+                    "two builtin functions share OID {}",
+                    details.oid
+                );
+            }
+        }
+
+        let actual: BTreeMap<u32, String> = mz_pgrepr::regproc::NAMES
+            .iter()
+            .map(|(oid, name)| (*oid, name.to_string()))
+            .collect();
+
+        if actual != expected {
+            let table: String = expected
+                .iter()
+                .map(|(oid, name)| format!("    ({}, \"{}\"),\n", oid, name))
+                .collect();
+            panic!(
+                "mz_pgrepr::regproc::NAMES has drifted from the builtin function registry. \
+                 Replace the entries of NAMES in src/pgrepr-consts/src/regproc.rs with:\n{}",
+                table
+            );
+        }
+    }
+
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn test_builtin_type_schema() {

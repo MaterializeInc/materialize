@@ -10,13 +10,12 @@
 """Apache Arrow ADBC PostgreSQL driver tests.
 
 The driver keys its Arrow type mapping off the *name* of each type's binary
-receive function, which it reads from `pg_catalog.pg_type.typreceive`.
-Materialize encodes a `regproc` over pgwire as a bare OID rather than as the
-function name, so every lookup misses and the driver falls back to
-`arrow.opaque` over binary. Connecting and streaming rows work. Per-column type
-fidelity does not, so the tests that require it are marked `expectedFailure`
-rather than deleted. They report an unexpected success once `regproc` renders as
-a name.
+receive function, which it reads from `pg_catalog.pg_type.typreceive`. That
+column is declared `regproc`, and Materialize resolves a `regproc` to its
+function name in the pgwire text encoding, so the driver's lookups hit and each
+column arrives as its own Arrow type. A type the driver cannot resolve degrades
+to `arrow.opaque` over binary rather than erroring, so asserting the exact Arrow
+type per column is what catches a regression here.
 """
 
 import unittest
@@ -101,9 +100,6 @@ class SmokeTest(unittest.TestCase):
                 self.assertEqual(table.num_rows, 1)
                 self.assertEqual(table.num_columns, 1)
 
-    # Materialize encodes `regproc` as an OID rather than a function name, so
-    # the driver cannot key its type map and every column resolves to binary.
-    @unittest.expectedFailure
     def test_scalar_types_resolve(self) -> None:
         """Each scalar type must arrive as its own Arrow type. A type the
         driver cannot resolve degrades to opaque binary instead of failing, so
@@ -139,10 +135,6 @@ class SmokeTest(unittest.TestCase):
         self.assertEqual(row["c_text"], "abc")
         self.assertEqual(row["c_bytea"], b"\x01\x02")
 
-    # Materialize encodes `regproc` as an OID rather than a function name, so
-    # the driver cannot key its type map and the element type resolves to
-    # binary.
-    @unittest.expectedFailure
     def test_array_type(self) -> None:
         """An array must arrive as an Arrow list, not as an opaque blob."""
         table = query_arrow("SELECT ARRAY[1, 2, 3]::int4[] AS a")
@@ -154,9 +146,6 @@ class SmokeTest(unittest.TestCase):
         )
         self.assertEqual(table.to_pylist(), [{"a": [1, 2, 3]}])
 
-    # Materialize encodes `regproc` as an OID rather than a function name, so
-    # the driver cannot key its type map and every column resolves to binary.
-    @unittest.expectedFailure
     def test_null_handling(self) -> None:
         """Nulls round-trip while keeping the column's resolved Arrow type."""
         table = query_arrow("""
@@ -175,10 +164,6 @@ class SmokeTest(unittest.TestCase):
             [{"c_int4": None, "c_text": None, "c_timestamptz": None}],
         )
 
-    # Materialize encodes `regproc` as an OID rather than a function name, so
-    # the driver cannot key its type map and DuckDB is handed blobs it
-    # cannot aggregate.
-    @unittest.expectedFailure
     def test_duckdb_handoff(self) -> None:
         """DuckDB reads the Arrow table Materialize produced directly, with no
         intermediate file or object store hop."""
@@ -207,9 +192,7 @@ class SmokeTest(unittest.TestCase):
 
     def test_fetch_many_rows(self) -> None:
         """The driver fetches results as a binary COPY stream. This covers a
-        result large enough to span multiple reads of that stream. Row and
-        column counts hold regardless of how each column's type resolves, so
-        this stays a hard assertion."""
+        result large enough to span multiple reads of that stream."""
         table = query_arrow("SELECT n FROM generate_series(1, 5000) AS g(n)")
         self.assertEqual(table.num_rows, 5000)
         self.assertEqual(table.num_columns, 1)
