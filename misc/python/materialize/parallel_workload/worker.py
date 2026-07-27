@@ -126,14 +126,16 @@ class Worker:
                 self.run_action(
                     ReconnectAction(self.rng, self.composition, random_role=False)
                 )
-                if self.exe.reconnect_next or self.exe.rollback_next:
-                    # Reconnecting failed with an ignored error. Always retry
-                    # the reconnect, never fall through to the action: the
-                    # old session may hold an aborted transaction that fails
-                    # all statements.
-                    self.exe.reconnect_next = True
+                if self.exe.reconnect_next:
+                    # The connection couldn't be re-established, retry it.
                     self.exe.rollback_next = False
                     time.sleep(1)
+                    continue
+                if self.exe.rollback_next:
+                    # Connected, but a probe hit a non-connection error (e.g. a
+                    # poisoned default cluster). Retrying the reconnect can't fix
+                    # that, so let the loop's rollback path clear the aborted
+                    # transaction instead of wedging.
                     continue
             self.run_action(action)
 

@@ -16,7 +16,7 @@ cd "$(dirname "$0")/../.."
 . misc/shlib/shlib.bash
 . test/cloudtest/config.bash
 
-if ! kind get clusters | grep -q "$K8S_CLUSTER_NAME"; then
+create_cluster() {
     CLUSTER_YAML=${CLOUDTEST_CLUSTER_DEFINITION_FILE:-"misc/kind/cluster.yaml"}
     echo "Using cluster definition specified in ${CLUSTER_YAML}"
 
@@ -25,8 +25,19 @@ if ! kind get clusters | grep -q "$K8S_CLUSTER_NAME"; then
     run kind get kubeconfig --name="$K8S_CLUSTER_NAME" > "$KUBECONFIG"
 
     run kubectl --context="$K8S_CONTEXT" taint nodes --selector=environmentd=true "environmentd=true:NoSchedule"
-else
-    run kind get kubeconfig --name="$K8S_CLUSTER_NAME" > "$KUBECONFIG"
+}
+
+if ! kind get clusters | grep -q "$K8S_CLUSTER_NAME"; then
+    create_cluster
+elif ! kind get kubeconfig --name="$K8S_CLUSTER_NAME" > "$KUBECONFIG"; then
+    # The cluster is listed but unusable: kind lists a cluster as long as any
+    # node container exists, but an interrupted cleanup of a previous CI job
+    # on this agent can leave only some of the node containers behind (e.g.
+    # missing control plane, or nodes vanishing mid-inspect). Recreate it
+    # from scratch.
+    echo "kind cluster $K8S_CLUSTER_NAME is broken, recreating it"
+    run kind delete cluster --name="$K8S_CLUSTER_NAME"
+    create_cluster
 fi
 
 for f in misc/kind/configmaps/*; do
