@@ -4004,6 +4004,7 @@ export interface MzTypePgMetadata {
   id: Generated<string>;
   typinput: Generated<number>;
   typreceive: Generated<number>;
+  typsend: Generated<number | null>;
 }
 
 export interface MzTypes {
@@ -4245,6 +4246,7 @@ export interface PgTypeAllDatabases {
   typowner: number;
   typreceive: number;
   typrelid: number;
+  typsend: string;
   typtype: string;
   typtypmod: number;
 }

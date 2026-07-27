@@ -301,6 +301,16 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_CATALOG_SCHEMA,
             "mz_kafka_sources",
         ),
+        // `mz_type_pg_metadata` gained a trailing `typsend` column. Appending a
+        // column is backward compatible, so the shard's schema can be evolved
+        // in place. See the NOTE above: this version must stay at the
+        // workspace's current dev version until the change ships.
+        MigrationStep::evolution(
+            "26.36.0-dev.0",
+            CatalogItemType::Table,
+            MZ_INTERNAL_SCHEMA,
+            "mz_type_pg_metadata",
+        ),
     ]
 });
 

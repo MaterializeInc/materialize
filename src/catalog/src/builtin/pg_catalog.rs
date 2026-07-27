@@ -52,6 +52,7 @@ pub const TYPE_BOOL: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 1242,
             typreceive_oid: 2436,
+            typsend_oid: 2437,
         }),
     },
 };
@@ -66,6 +67,7 @@ pub const TYPE_BYTEA: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 1244,
             typreceive_oid: 2412,
+            typsend_oid: 2413,
         }),
     },
 };
@@ -80,6 +82,7 @@ pub const TYPE_INT8: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 460,
             typreceive_oid: 2408,
+            typsend_oid: 2409,
         }),
     },
 };
@@ -94,6 +97,7 @@ pub const TYPE_INT4: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 42,
             typreceive_oid: 2406,
+            typsend_oid: 2407,
         }),
     },
 };
@@ -108,6 +112,7 @@ pub const TYPE_TEXT: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 46,
             typreceive_oid: 2414,
+            typsend_oid: 2415,
         }),
     },
 };
@@ -122,6 +127,7 @@ pub const TYPE_OID: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 1798,
             typreceive_oid: 2418,
+            typsend_oid: 2419,
         }),
     },
 };
@@ -136,6 +142,7 @@ pub const TYPE_FLOAT4: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 200,
             typreceive_oid: 2424,
+            typsend_oid: 2425,
         }),
     },
 };
@@ -150,6 +157,7 @@ pub const TYPE_FLOAT8: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 214,
             typreceive_oid: 2426,
+            typsend_oid: 2427,
         }),
     },
 };
@@ -166,6 +174,7 @@ pub const TYPE_BOOL_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
@@ -182,6 +191,7 @@ pub const TYPE_BYTEA_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
@@ -198,6 +208,7 @@ pub const TYPE_INT4_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
@@ -214,6 +225,7 @@ pub const TYPE_TEXT_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
@@ -230,6 +242,7 @@ pub const TYPE_INT8_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
@@ -246,6 +259,7 @@ pub const TYPE_FLOAT4_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
@@ -262,6 +276,7 @@ pub const TYPE_FLOAT8_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
@@ -278,6 +293,7 @@ pub const TYPE_OID_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
@@ -292,6 +308,7 @@ pub const TYPE_DATE: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 1084,
             typreceive_oid: 2468,
+            typsend_oid: 2469,
         }),
     },
 };
@@ -306,6 +323,7 @@ pub const TYPE_TIME: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 1143,
             typreceive_oid: 2470,
+            typsend_oid: 2471,
         }),
     },
 };
@@ -320,6 +338,7 @@ pub const TYPE_TIMESTAMP: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 1312,
             typreceive_oid: 2474,
+            typsend_oid: 2475,
         }),
     },
 };
@@ -336,6 +355,7 @@ pub const TYPE_TIMESTAMP_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
@@ -352,6 +372,7 @@ pub const TYPE_DATE_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
@@ -368,6 +389,7 @@ pub const TYPE_TIME_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
@@ -382,6 +404,7 @@ pub const TYPE_TIMESTAMPTZ: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 1150,
             typreceive_oid: 2476,
+            typsend_oid: 2477,
         }),
     },
 };
@@ -398,6 +421,7 @@ pub const TYPE_TIMESTAMPTZ_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
@@ -412,6 +436,7 @@ pub const TYPE_INTERVAL: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 1160,
             typreceive_oid: 2478,
+            typsend_oid: 2479,
         }),
     },
 };
@@ -428,6 +453,7 @@ pub const TYPE_INTERVAL_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
@@ -442,6 +468,7 @@ pub const TYPE_NAME: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 34,
             typreceive_oid: 2422,
+            typsend_oid: 2423,
         }),
     },
 };
@@ -458,6 +485,7 @@ pub const TYPE_NAME_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
@@ -472,6 +500,7 @@ pub const TYPE_NUMERIC: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 1701,
             typreceive_oid: 2460,
+            typsend_oid: 2461,
         }),
     },
 };
@@ -488,6 +517,7 @@ pub const TYPE_NUMERIC_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
@@ -502,6 +532,7 @@ pub const TYPE_RECORD: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 2290,
             typreceive_oid: 2402,
+            typsend_oid: 2403,
         }),
     },
 };
@@ -518,6 +549,7 @@ pub const TYPE_RECORD_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
@@ -532,6 +564,7 @@ pub const TYPE_UUID: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 2952,
             typreceive_oid: 2961,
+            typsend_oid: 2962,
         }),
     },
 };
@@ -548,6 +581,7 @@ pub const TYPE_UUID_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
@@ -562,6 +596,7 @@ pub const TYPE_JSONB: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 3806,
             typreceive_oid: 3805,
+            typsend_oid: 3803,
         }),
     },
 };
@@ -578,6 +613,7 @@ pub const TYPE_JSONB_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
@@ -592,6 +628,7 @@ pub const TYPE_ANY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 2294,
             typreceive_oid: 0,
+            typsend_oid: 0,
         }),
     },
 };
@@ -606,6 +643,7 @@ pub const TYPE_ANYARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 2296,
             typreceive_oid: 2502,
+            typsend_oid: 2503,
         }),
     },
 };
@@ -620,6 +658,7 @@ pub const TYPE_ANYELEMENT: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 2312,
             typreceive_oid: 0,
+            typsend_oid: 0,
         }),
     },
 };
@@ -634,6 +673,7 @@ pub const TYPE_ANYNONARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 2777,
             typreceive_oid: 0,
+            typsend_oid: 0,
         }),
     },
 };
@@ -648,6 +688,7 @@ pub const TYPE_ANYRANGE: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 3832,
             typreceive_oid: 0,
+            typsend_oid: 0,
         }),
     },
 };
@@ -662,6 +703,7 @@ pub const TYPE_CHAR: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 1245,
             typreceive_oid: 2434,
+            typsend_oid: 2435,
         }),
     },
 };
@@ -676,6 +718,7 @@ pub const TYPE_VARCHAR: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 1046,
             typreceive_oid: 2432,
+            typsend_oid: 2433,
         }),
     },
 };
@@ -690,6 +733,7 @@ pub const TYPE_INT2: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 38,
             typreceive_oid: 2404,
+            typsend_oid: 2405,
         }),
     },
 };
@@ -706,6 +750,7 @@ pub const TYPE_INT2_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
@@ -720,6 +765,7 @@ pub const TYPE_BPCHAR: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 1044,
             typreceive_oid: 2430,
+            typsend_oid: 2431,
         }),
     },
 };
@@ -736,6 +782,7 @@ pub const TYPE_CHAR_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
@@ -752,6 +799,7 @@ pub const TYPE_VARCHAR_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
@@ -768,6 +816,7 @@ pub const TYPE_BPCHAR_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
@@ -782,6 +831,7 @@ pub const TYPE_REGPROC: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 44,
             typreceive_oid: 2444,
+            typsend_oid: 2445,
         }),
     },
 };
@@ -798,6 +848,7 @@ pub const TYPE_REGPROC_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
@@ -812,6 +863,7 @@ pub const TYPE_REGTYPE: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 2220,
             typreceive_oid: 2454,
+            typsend_oid: 2455,
         }),
     },
 };
@@ -828,6 +880,7 @@ pub const TYPE_REGTYPE_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
@@ -842,6 +895,7 @@ pub const TYPE_REGCLASS: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 2218,
             typreceive_oid: 2452,
+            typsend_oid: 2453,
         }),
     },
 };
@@ -858,6 +912,7 @@ pub const TYPE_REGCLASS_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
@@ -872,6 +927,7 @@ pub const TYPE_INT2_VECTOR: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 40,
             typreceive_oid: 2410,
+            typsend_oid: 2411,
         }),
     },
 };
@@ -888,6 +944,7 @@ pub const TYPE_INT2_VECTOR_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
@@ -902,6 +959,7 @@ pub const TYPE_ANYCOMPATIBLE: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 5086,
             typreceive_oid: 0,
+            typsend_oid: 0,
         }),
     },
 };
@@ -916,6 +974,7 @@ pub const TYPE_ANYCOMPATIBLEARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 5088,
             typreceive_oid: 5090,
+            typsend_oid: 5091,
         }),
     },
 };
@@ -930,6 +989,7 @@ pub const TYPE_ANYCOMPATIBLENONARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 5092,
             typreceive_oid: 0,
+            typsend_oid: 0,
         }),
     },
 };
@@ -944,6 +1004,7 @@ pub const TYPE_ANYCOMPATIBLERANGE: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 5094,
             typreceive_oid: 0,
+            typsend_oid: 0,
         }),
     },
 };
@@ -960,6 +1021,7 @@ pub const TYPE_INT4_RANGE: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 3834,
             typreceive_oid: 3836,
+            typsend_oid: 3837,
         }),
     },
 };
@@ -976,6 +1038,7 @@ pub const TYPE_INT4_RANGE_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
@@ -992,6 +1055,7 @@ pub const TYPE_INT8_RANGE: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 3834,
             typreceive_oid: 3836,
+            typsend_oid: 3837,
         }),
     },
 };
@@ -1008,6 +1072,7 @@ pub const TYPE_INT8_RANGE_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
@@ -1024,6 +1089,7 @@ pub const TYPE_DATE_RANGE: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 3834,
             typreceive_oid: 3836,
+            typsend_oid: 3837,
         }),
     },
 };
@@ -1040,6 +1106,7 @@ pub const TYPE_DATE_RANGE_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
@@ -1056,6 +1123,7 @@ pub const TYPE_NUM_RANGE: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 3834,
             typreceive_oid: 3836,
+            typsend_oid: 3837,
         }),
     },
 };
@@ -1072,6 +1140,7 @@ pub const TYPE_NUM_RANGE_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
@@ -1088,6 +1157,7 @@ pub const TYPE_TS_RANGE: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 3834,
             typreceive_oid: 3836,
+            typsend_oid: 3837,
         }),
     },
 };
@@ -1104,6 +1174,7 @@ pub const TYPE_TS_RANGE_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
@@ -1120,6 +1191,7 @@ pub const TYPE_TSTZ_RANGE: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 3834,
             typreceive_oid: 3836,
+            typsend_oid: 3837,
         }),
     },
 };
@@ -1136,6 +1208,7 @@ pub const TYPE_TSTZ_RANGE_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
@@ -1150,6 +1223,7 @@ pub const TYPE_ACL_ITEM: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 1031,
             typreceive_oid: 0,
+            typsend_oid: 0,
         }),
     },
 };
@@ -1166,6 +1240,7 @@ pub const TYPE_ACL_ITEM_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
@@ -1180,6 +1255,7 @@ pub const TYPE_INTERNAL: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 2304,
             typreceive_oid: 0,
+            typsend_oid: 0,
         }),
     },
 };
@@ -1492,17 +1568,26 @@ pub static PG_TYPE: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
         .with_column("typelem", SqlScalarType::Oid.nullable(false))
         .with_column("typarray", SqlScalarType::Oid.nullable(false))
         .with_column("typinput", SqlScalarType::RegProc.nullable(true))
-        .with_column("typreceive", SqlScalarType::Oid.nullable(false))
+        // PostgreSQL declares `typreceive` and `typsend` as `regproc`, and clients
+        // compare the resolved function name against a known set. The underlying
+        // `mz_internal.pg_type_all_databases` keeps `typreceive` as `oid` because it
+        // backs a builtin index, and resolving a `regproc` to its name reads
+        // `current_database()`, which is unmaterializable.
+        .with_column("typreceive", SqlScalarType::RegProc.nullable(false))
         .with_column("typnotnull", SqlScalarType::Bool.nullable(false))
         .with_column("typbasetype", SqlScalarType::Oid.nullable(false))
         .with_column("typtypmod", SqlScalarType::Int32.nullable(false))
         .with_column("typcollation", SqlScalarType::Oid.nullable(false))
         .with_column("typdefault", SqlScalarType::String.nullable(true))
+        // Appended rather than placed at PostgreSQL's ordinal position, to keep the
+        // existing columns' positions stable.
+        .with_column("typsend", SqlScalarType::RegProc.nullable(false))
         .finish(),
     column_comments: BTreeMap::new(),
     sql: "SELECT
     oid, typname, typnamespace, typowner, typlen, typtype, typcategory, typdelim, typrelid, typelem,
-    typarray, typinput, typreceive, typnotnull, typbasetype, typtypmod, typcollation, typdefault
+    typarray, typinput, typreceive::pg_catalog.regproc AS typreceive, typnotnull, typbasetype,
+    typtypmod, typcollation, typdefault, typsend
 FROM mz_internal.pg_type_all_databases
 WHERE database_name IS NULL OR database_name = pg_catalog.current_database();",
     access: vec![PUBLIC_SELECT],

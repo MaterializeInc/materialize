@@ -1185,6 +1185,7 @@ impl CatalogState {
                     Datum::String(&id.to_string()),
                     Datum::UInt32(pg_metadata.typinput_oid),
                     Datum::UInt32(pg_metadata.typreceive_oid),
+                    Datum::UInt32(pg_metadata.typsend_oid),
                 ]),
                 diff,
             ));

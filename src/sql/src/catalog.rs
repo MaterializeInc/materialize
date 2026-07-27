@@ -1068,6 +1068,9 @@ pub struct CatalogTypePgMetadata {
     pub typinput_oid: u32,
     /// The OID of the `typreceive` function in PostgreSQL.
     pub typreceive_oid: u32,
+    /// The OID of the `typsend` function in PostgreSQL, or 0 for the types that
+    /// PostgreSQL gives no binary send function.
+    pub typsend_oid: u32,
 }
 
 /// Represents a reference to type in the catalog
