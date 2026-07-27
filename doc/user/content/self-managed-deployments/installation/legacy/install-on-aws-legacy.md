@@ -60,7 +60,9 @@ documentation](https://helm.sh/docs/intro/install/).
 
 ### License key
 
-{{< include-md file="shared-content/license-key-required.md" >}}
+Starting in v26.0, Self-Managed Materialize requires a license key.
+
+{{< yaml-table data="self_managed/license_key" >}}
 
 ## Set up AWS Kubernetes environment and install Materialize
 

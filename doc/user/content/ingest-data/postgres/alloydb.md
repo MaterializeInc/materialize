@@ -133,8 +133,7 @@ to assist you in setting up this proxy and generating a connection string that
 can be utilized with Materialize. Further down, we will provide you with a
 tailored approach specific to integrating Materialize.
 
-{{% include-md
-file="shared-content/self-managed/configure-network-security-intro.md" %}}
+{{% include-headless "/headless/self-managed-deployments/configure-network-security-intro" %}}
 
 {{< tabs >}}
 

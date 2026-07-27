@@ -17,7 +17,7 @@ The tutorial assumes you have installed Materialize on `kind` using the
 instructions on [Install locally on
 kind](/self-managed-deployments/installation/install-on-local-kind/).
 
-{{< include-md file="shared-content/self-managed/version-compatibility-upgrade-banner.md" >}}
+{{% include-headless "/headless/self-managed-deployments/version-compatibility-upgrade-banner" %}}
 
 ## Prerequisites
 
@@ -36,7 +36,7 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
 ### License key
 
-{{< include-md file="shared-content/self-managed/license-key-upgrades.md" >}}
+{{% include-headless "/headless/self-managed-deployments/license-key-upgrades" %}}
 
 ## Upgrade
 

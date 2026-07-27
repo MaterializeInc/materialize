@@ -19,7 +19,7 @@ aliases:
 
 Materialize bundles native connectors for the following external systems:
 
-{{< include-md file="shared-content/multilink-box-native-connectors.md" >}}
+{{% include-headless "/headless/multilink-box-native-connectors" %}}
 
 ## Sources and clusters
 

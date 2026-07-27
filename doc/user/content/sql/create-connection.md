@@ -21,7 +21,7 @@ securely store each credential in Materialize's secret management system.
 Credentials that are generally not sensitive (like usernames and SSL
 certificates) can be specified as plain `text`, or also stored as secrets.
 
-{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
+{{% include-headless "/headless/aws-privatelink-cloud-only-note" %}}
 
 ## Source and sink connections
 
@@ -341,7 +341,7 @@ SSH bastion host.
 {{< tabs >}}
 {{< tab "AWS PrivateLink (Materialize Cloud)">}}
 
-{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
+{{% include-headless "/headless/aws-privatelink-cloud-only-note" %}}
 
 Depending on the hosted service you are connecting to, you might need to specify
 a PrivateLink connection and [per-availability-zone routing rules for brokers](#kafka-privatelinks) (e.g. Confluent Cloud),
@@ -582,7 +582,7 @@ you can tunnel the connection through an AWS PrivateLink service (Materialize Cl
 {{< tabs >}}
 {{< tab "AWS PrivateLink (Materialize Cloud)">}}
 
-{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
+{{% include-headless "/headless/aws-privatelink-cloud-only-note" %}}
 
 ##### Example {#csr-privatelink-example}
 
@@ -747,7 +747,7 @@ SSH bastion host.
 {{< tabs >}}
 {{< tab "AWS PrivateLink (Materialize Cloud)">}}
 
-{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
+{{% include-headless "/headless/aws-privatelink-cloud-only-note" %}}
 
 ##### Example {#mysql-privatelink-example}
 
@@ -846,7 +846,7 @@ the connection through an AWS PrivateLink service (Materialize Cloud)or an SSH b
 {{< tabs >}}
 {{< tab "AWS PrivateLink">}}
 
-{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
+{{% include-headless "/headless/aws-privatelink-cloud-only-note" %}}
 
 ##### Example {#postgres-privatelink-example}
 
@@ -979,7 +979,7 @@ For more information about using Iceberg sinks, see the [Iceberg sink documentat
 
 ### AWS PrivateLink (Materialize Cloud) {#aws-privatelink}
 
-{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
+{{% include-headless "/headless/aws-privatelink-cloud-only-note" %}}
 
 An AWS PrivateLink connection establishes a link to an [AWS PrivateLink] service.
 You can use AWS PrivateLink connections in [Confluent Schema Registry connections](#confluent-schema-registry),

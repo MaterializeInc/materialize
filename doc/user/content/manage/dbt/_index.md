@@ -8,6 +8,9 @@ aliases:
   - /integrations/dbt/
   - /self-managed/v25.2/manage/dbt/get-started/
   - /self-managed/v25.2/manage/dbt/
+  - /self-managed/v25.2/manage/dbt/development-workflows/
+  - /self-managed/v25.2/manage/dbt/blue-green-deployments/
+  - /self-managed/v25.2/manage/dbt/slim-deployments/
 menu:
   main:
     parent: manage

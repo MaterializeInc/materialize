@@ -60,7 +60,7 @@ With the new syntax, after a SQL Server source is created, you [`CREATE TABLE
 FROM SOURCE`](/sql/create-table/) to create a corresponding table in
 Matererialize and start ingesting data.
 
-{{< include-md file="shared-content/sql-server-supported-types.md" >}}
+{{% include-headless "/headless/sql-server-supported-types" %}}
 
 For more information, including strategies for handling unsupported types,
 see [`CREATE TABLE FROM SOURCE`](/sql/create-table/).
