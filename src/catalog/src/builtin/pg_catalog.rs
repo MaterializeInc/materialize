@@ -1568,19 +1568,15 @@ pub static PG_TYPE: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
         .with_column("typelem", SqlScalarType::Oid.nullable(false))
         .with_column("typarray", SqlScalarType::Oid.nullable(false))
         .with_column("typinput", SqlScalarType::RegProc.nullable(true))
-        // PostgreSQL declares `typreceive` and `typsend` as `regproc`, and clients
-        // compare the resolved function name against a known set. The underlying
-        // `mz_internal.pg_type_all_databases` keeps `typreceive` as `oid` because it
-        // backs a builtin index, and resolving a `regproc` to its name reads
-        // `current_database()`, which is unmaterializable.
+        // The underlying `mz_internal.pg_type_all_databases` keeps `typreceive`
+        // as `oid` because it backs a builtin index, and resolving a `regproc` to
+        // a name reads `current_database()`, which is unmaterializable.
         .with_column("typreceive", SqlScalarType::RegProc.nullable(false))
         .with_column("typnotnull", SqlScalarType::Bool.nullable(false))
         .with_column("typbasetype", SqlScalarType::Oid.nullable(false))
         .with_column("typtypmod", SqlScalarType::Int32.nullable(false))
         .with_column("typcollation", SqlScalarType::Oid.nullable(false))
         .with_column("typdefault", SqlScalarType::String.nullable(true))
-        // Appended rather than placed at PostgreSQL's ordinal position, to keep the
-        // existing columns' positions stable.
         .with_column("typsend", SqlScalarType::RegProc.nullable(false))
         .finish(),
     column_comments: BTreeMap::new(),

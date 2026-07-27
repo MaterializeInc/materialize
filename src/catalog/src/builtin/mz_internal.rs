@@ -586,10 +586,9 @@ pub static MZ_TYPE_PG_METADATA: LazyLock<BuiltinTable> = LazyLock::new(|| Builti
         .with_column("id", SqlScalarType::String.nullable(false))
         .with_column("typinput", SqlScalarType::Oid.nullable(false))
         .with_column("typreceive", SqlScalarType::Oid.nullable(false))
-        // NOTE: `pg_type_all_databases` still wraps `typreceive` and `typsend`
-        // in `COALESCE`. That guards its `LEFT JOIN` against this table, which
-        // yields NULLs for types without PostgreSQL metadata, so it is required
-        // even though neither column is nullable here.
+        // NOTE: `pg_type_all_databases` still needs `COALESCE` on this column,
+        // because its `LEFT JOIN` against this table yields NULLs for types with
+        // no PostgreSQL metadata.
         .with_column("typsend", SqlScalarType::Oid.nullable(false))
         .finish(),
     column_comments: BTreeMap::new(),
@@ -4377,8 +4376,6 @@ pub static PG_TYPE_ALL_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|| {
             .with_column("typcollation", SqlScalarType::Oid.nullable(false))
             .with_column("typdefault", SqlScalarType::String.nullable(true))
             .with_column("database_name", SqlScalarType::String.nullable(true))
-            // Appended rather than placed at PostgreSQL's ordinal position, to
-            // keep the existing columns' positions stable.
             .with_column("typsend", SqlScalarType::RegProc.nullable(false))
             .finish(),
         column_comments: BTreeMap::new(),

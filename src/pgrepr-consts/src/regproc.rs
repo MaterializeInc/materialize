@@ -18,53 +18,37 @@
 //! and some encode paths run in `clusterd`, which has no catalog at all.
 //!
 //! [`NAMES`] is derived from Materialize's builtin function registry, reached
-//! through `mz_catalog::builtin::BUILTINS::funcs()`, which flattens the
-//! per-schema maps in `mz_sql::func` (`PG_CATALOG_BUILTINS`,
-//! `MZ_CATALOG_BUILTINS`, `MZ_INTERNAL_BUILTINS`, and so on). That registry is
-//! the authoritative definition of every function OID. The same registry backs
-//! `mz_catalog.mz_functions`, and `pg_catalog.pg_proc` is a view over that
-//! table, so this table cannot disagree with the catalog without also
-//! disagreeing with itself.
+//! through `mz_catalog::builtin::BUILTINS::funcs()`, which is the authoritative
+//! definition of every function OID. `mz_catalog::builtin`'s
+//! `test_regproc_names_match_builtin_functions` recomputes the whole table from
+//! that registry and fails with the corrected contents when the two have
+//! drifted, so do not hand-edit entries here. Add the function to the registry
+//! and paste in the table the test prints.
 //!
-//! `mz_catalog::builtin`'s `test_regproc_names_match_builtin_functions`
-//! recomputes the whole table from that registry and fails with the corrected
-//! contents when the two have drifted, so do not hand-edit entries here. Add
-//! the function to the registry and paste in the table the test prints.
-//!
-//! The OIDs themselves are not invented by Materialize wherever PostgreSQL
-//! already assigns one. `mz_sql::func`'s `PG_CATALOG_BUILTINS` records that its
-//! literal OIDs were read out of a PostgreSQL 13 `pg_proc`, and points at
+//! The OIDs are not invented by Materialize wherever PostgreSQL already assigns
+//! one. `mz_sql::func`'s `PG_CATALOG_BUILTINS` records that its literal OIDs
+//! were read out of a PostgreSQL 13 `pg_proc`, and points at
 //! <https://github.com/postgres/postgres/blob/master/src/include/catalog/pg_proc.dat>
-//! for the same values. Everything else draws from [`crate::oid`], which
-//! carves out two ranges: `FIRST_UNPINNED_OID` upward for functions PostgreSQL
-//! ships but does not pin an OID for, and `FIRST_MATERIALIZE_OID` upward for
-//! functions that exist only in Materialize. So for the PostgreSQL-compatible
-//! subset a client resolving an OID here sees the name PostgreSQL would give it.
-//!
-//! There is no PostgreSQL document that lists this mapping. `pg_proc.dat` is
-//! the closest thing to a canonical source, and it covers only the OIDs
-//! PostgreSQL itself defines.
+//! for the same values. Everything else draws from [`crate::oid`], which carves
+//! out `FIRST_UNPINNED_OID` upward for functions PostgreSQL ships without a
+//! pinned OID, and `FIRST_MATERIALIZE_OID` upward for functions that exist only
+//! in Materialize.
 
 /// Every builtin function OID paired with the text `regproc` renders it as,
 /// sorted by OID.
 ///
-/// The name is the full rendering, not the bare function name. It is
-/// schema-qualified whenever the bare name would not resolve back to this OID,
-/// which is the rule `regprocout` applies: a name shared by several overloads,
-/// or a name in a schema that is not searched implicitly, gets qualified.
+/// The name is schema-qualified whenever the bare name would not resolve back to
+/// this OID, which is the rule `regprocout` applies.
 ///
 /// NOTE: The rendering assumes the default search path, which is all a static
-/// table can do. A session that puts `mz_internal` or `mz_unsafe` on its
-/// `search_path` makes those bare names resolvable, so `regprocout` would print
-/// them bare and this table still qualifies them. The SQL cast from `regproc` to
-/// `text` reads the session's search path and does render them bare.
+/// table can do. A session with `mz_internal` or `mz_unsafe` on its
+/// `search_path` makes those bare names resolvable, so the SQL cast from
+/// `regproc` to `text` renders them bare where this table still qualifies them.
 ///
-/// NOTE: Names that are not bare identifiers are left unquoted here, so `left`
-/// renders as `left` and OID 936 as `pg_catalog.substring`. PostgreSQL's
-/// `regprocout` quotes those, rendering `"left"` and `pg_catalog."substring"`.
-/// This table matches the SQL cast from `regproc` to `text` instead, so the two
-/// Materialize paths agree with each other. The unquoted form still resolves,
-/// because `regprocin` accepts a reserved word with or without quotes.
+/// NOTE: Reserved words are left unquoted here, so `left` renders as `left`
+/// where PostgreSQL's `regprocout` renders `"left"`. This matches the SQL cast
+/// from `regproc` to `text`, and the unquoted form still resolves because
+/// `regprocin` accepts a reserved word either way.
 pub const NAMES: &[(u32, &str)] = &[
     (34, "namein"),
     (38, "int2in"),

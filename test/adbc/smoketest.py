@@ -10,28 +10,24 @@
 """Apache Arrow ADBC PostgreSQL driver tests.
 
 The driver keys its Arrow type mapping off the *name* of each type's binary
-receive function, which it reads from `pg_catalog.pg_type.typreceive`. That
-column is declared `regproc`, and Materialize resolves a `regproc` to its
-function name in the pgwire text encoding, so the driver's lookups hit and each
-column arrives as its own Arrow type. A type the driver cannot resolve degrades
-to `arrow.opaque` over binary rather than erroring, so asserting the exact Arrow
-type per column is what catches a regression here.
+receive function, which it reads from `pg_catalog.pg_type.typreceive`. A type it
+cannot resolve degrades to `arrow.opaque` over binary rather than erroring, so
+asserting the exact Arrow type per column is what catches a regression here.
 """
 
 import unittest
 
-# `adbc-driver-postgresql` and `duckdb` are pinned in `test/adbc/requirements.txt`
-# and installed only inside this composition's test container, so they are absent
-# from the repo-wide Python virtualenv that pyright resolves against.
+# Pinned in `test/adbc/requirements.txt` and installed only inside this
+# composition's test container, so they are absent from the repo-wide virtualenv
+# that pyright resolves against.
 import adbc_driver_postgresql.dbapi  # pyright: ignore[reportMissingImports]
 import duckdb  # pyright: ignore[reportMissingImports]
 import pyarrow as pa
 
 MATERIALIZED_URL = "postgresql://materialize@materialized:6875/materialize"
 
-# One non-null value per scalar type the driver has to resolve. Every value is
-# non-null so that a broken binary decoder shows up as a wrong value rather
-# than as a column of nulls.
+# Every value is non-null so that a broken binary decoder shows up as a wrong
+# value rather than as a column of nulls.
 SCALAR_QUERY = """
 SELECT
     true::bool AS c_bool,
@@ -53,10 +49,8 @@ SELECT
     '{"a": 1}'::jsonb AS c_jsonb
 """
 
-# The Arrow type the driver must produce for each column of SCALAR_QUERY.
-# `numeric` and `uuid` have no native Arrow type the driver maps them onto, so
-# it wraps them in an `arrow.opaque` extension type over string or binary
-# storage.
+# `numeric` and `uuid` have no native Arrow type the driver maps them onto, so it
+# wraps them in an `arrow.opaque` extension type over string or binary storage.
 EXPECTED_SCALAR_TYPES = {
     "c_bool": pa.bool_(),
     "c_int2": pa.int16(),
@@ -90,9 +84,7 @@ class SmokeTest(unittest.TestCase):
         """Connecting runs the driver's type resolver, which reads the binary
         send and receive functions of every type out of `pg_catalog.pg_type`. A
         column missing there fails every connection before any user query, so
-        connecting at all covers that catalog contract. This deliberately makes
-        no claim about the values, to stay a test of the catalog rather than of
-        Arrow type fidelity."""
+        connecting at all covers that catalog contract."""
         with adbc_driver_postgresql.dbapi.connect(MATERIALIZED_URL) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT 1")
@@ -101,9 +93,7 @@ class SmokeTest(unittest.TestCase):
                 self.assertEqual(table.num_columns, 1)
 
     def test_scalar_types_resolve(self) -> None:
-        """Each scalar type must arrive as its own Arrow type. A type the
-        driver cannot resolve degrades to opaque binary instead of failing, so
-        asserting the exact Arrow type is what catches it."""
+        """Each scalar type must arrive as its own Arrow type."""
         table = query_arrow(SCALAR_QUERY)
         self.assertEqual(table.num_rows, 1)
         self.assertEqual(
@@ -118,9 +108,8 @@ class SmokeTest(unittest.TestCase):
                 f"column {name} resolved to Arrow type {actual}, expected {expected}",
             )
 
-        # `bytea` is the only column that is legitimately Arrow binary. Any
-        # other column landing there means the driver fell back to passing
-        # bytes through untyped.
+        # `bytea` is the only column that is legitimately Arrow binary. Any other
+        # column landing there fell back to untyped bytes.
         for field in table.schema:
             if field.type == pa.binary():
                 self.assertEqual(

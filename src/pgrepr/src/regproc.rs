@@ -30,8 +30,8 @@ mod tests {
     }
 
     #[mz_ore::test]
-    // `oid` scans the table, so covering every entry is quadratic in its 626
-    // rows. That is milliseconds natively and far too slow interpreted.
+    // `oid` scans the table, so covering every entry is quadratic and far too
+    // slow interpreted.
     #[cfg_attr(miri, ignore)]
     fn lookups_round_trip() {
         for (entry_oid, entry_name) in NAMES {
@@ -47,9 +47,8 @@ mod tests {
         assert_eq!(oid("no_such_function"), Err(NameLookupError::NotFound));
     }
 
-    /// The renderings that matter to clients are the `pg_type` columns declared
-    /// `regproc`, which is what motivates resolving names at all. Spot-check a
-    /// few so a regeneration that dropped them fails loudly.
+    /// Spot-checks the `pg_type` I/O function renderings, so a regeneration that
+    /// dropped them fails loudly.
     #[mz_ore::test]
     fn type_io_functions_resolve() {
         for (func_oid, expected) in [

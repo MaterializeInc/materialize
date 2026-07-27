@@ -1659,12 +1659,10 @@ mod tests {
 
     use super::*;
 
-    /// `mz_pgrepr::regproc::NAMES` is a table of every builtin function OID and
-    /// the text a `regproc` renders it as. It has to be checked in as data
-    /// because `mz-pgrepr` sits below this crate in the dependency graph and so
-    /// cannot read the registry itself. This test is what keeps it honest: it
-    /// recomputes the whole table from the registry and, on drift, prints the
-    /// corrected table to paste into `src/pgrepr-consts/src/regproc.rs`.
+    /// Recomputes `mz_pgrepr::regproc::NAMES` from the builtin function registry
+    /// and fails with the corrected table when the checked-in copy has drifted.
+    /// It is checked in as data because `mz-pgrepr` sits below this crate in the
+    /// dependency graph and so cannot read the registry itself.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn test_regproc_names_match_builtin_functions() {
@@ -1681,8 +1679,8 @@ mod tests {
 
         let mut expected: BTreeMap<u32, String> = BTreeMap::new();
         for func in BUILTINS::funcs() {
-            // The rule `regprocout` applies: print the bare name when it
-            // resolves back to this OID on its own, otherwise qualify it.
+            // Mirrors PostgreSQL's `regprocout`, which qualifies a name that
+            // would not resolve back to this OID on its own.
             let rendered =
                 if impls_per_name[func.name] == 1 && IMPLICITLY_SEARCHED.contains(&func.schema) {
                     func.name.to_string()

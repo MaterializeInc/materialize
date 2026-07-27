@@ -192,30 +192,26 @@ true
 true
 true
 
-# The pgwire text encoding resolves a regproc to its function name, matching
-# PostgreSQL's regprocout. These have to be `simple` records: `query` records
-# read results in the binary format, where a regproc is a bare OID, so the text
-# rendering is invisible to them.
+# The pgwire text encoding resolves a regproc to its function name. These must be
+# `simple` records: `query` records read results in the binary format, where a
+# regproc is a bare OID.
 
-# 1242 is boolin and is uniquely named. 1398 is one of six abs overloads, so the
-# bare name would not identify it and it is qualified. 99999 names no function
-# and renders in decimal. OID 0 renders as `-`.
+# 1398 is one of six abs overloads, so it is qualified. 99999 names no function.
 simple
 SELECT 1242::regproc, 1398::regproc, 99999::regproc, 0::regproc
 ----
 boolin,pg_catalog.abs,99999,-
 COMPLETE 1
 
-# The motivating case: clients resolve a type's I/O function names to decide how
-# to decode its values.
+# Type I/O function names, which is what clients read to decode values
 simple
 SELECT typinput, typreceive FROM pg_type WHERE typname = 'bool'
 ----
 boolin,boolrecv
 COMPLETE 1
 
-# regclass and regtype keep rendering as digits. They can name objects a user
-# created, which the wire encoder cannot resolve.
+# regclass and regtype keep rendering as digits, since they can name objects a
+# user created
 simple
 SELECT 1082::regtype, 1242::regclass
 ----

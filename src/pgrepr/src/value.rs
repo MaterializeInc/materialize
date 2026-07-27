@@ -148,12 +148,9 @@ impl Value {
             (Datum::UInt32(oid), SqlScalarType::Oid) => Some(Value::Oid(oid)),
             (Datum::UInt32(oid), SqlScalarType::RegProc) => Some(Value::RegProc(oid)),
             // NOTE: `regclass` and `regtype` collapse into `Value::Oid`, so they
-            // render as digits where PostgreSQL renders a name. Unlike
-            // `regproc`, they can name objects a user created, which no static
-            // table can know and which the encoder cannot look up: the catalog
-            // crates depend on `mz-pgrepr`, and the Kafka sink and `COPY TO`
-            // encoders run in `clusterd`, where there is no catalog at all.
-            // Resolution for those two lives in the SQL cast to `text` instead.
+            // render as digits where PostgreSQL renders a name. Unlike `regproc`
+            // they can name objects a user created, which no static table can
+            // know. Resolution for those two lives in the SQL cast to `text`.
             (Datum::UInt32(oid), SqlScalarType::RegClass) => Some(Value::Oid(oid)),
             (Datum::UInt32(oid), SqlScalarType::RegType) => Some(Value::Oid(oid)),
             (Datum::UInt32(u), SqlScalarType::UInt32) => Some(Value::UInt4(UInt4(u))),
@@ -421,13 +418,11 @@ impl Value {
             })
             .expect("provided closure never fails"),
             Value::Oid(oid) => strconv::format_uint32(buf, *oid),
-            // Mirrors PostgreSQL's `regprocout`: OID 0 renders as `-`, an OID
-            // that names a function renders as that name, and any other OID
-            // renders in decimal.
+            // Mirrors PostgreSQL's `regprocout`.
             //
             // NOTE: The SQL cast from `regproc` to `text` renders OID 0 as `0`
-            // rather than `-`, so the two disagree on that one value. PostgreSQL
-            // routes both through `regprocout` and prints `-` for both.
+            // rather than `-`, so the two Materialize paths disagree on that one
+            // value. PostgreSQL prints `-` for both.
             Value::RegProc(oid) => match *oid {
                 0 => strconv::format_string(buf, REGPROC_NULL),
                 oid => match regproc::name(oid) {
@@ -557,8 +552,8 @@ impl Value {
                 Err("binary encoding of map types is not implemented".into())
             }
             Value::Name(s) => s.to_sql(&PgType::NAME, buf),
-            // PostgreSQL's `regprocsend` is `int4send`, so a `regproc` is
-            // indistinguishable from an `oid` on the wire in binary format.
+            // PostgreSQL's `regprocsend` is `int4send`, so binary is identical to
+            // an `oid`.
             Value::Oid(i) | Value::RegProc(i) => i.to_sql(&PgType::OID, buf),
             Value::Record(fields) => {
                 let nfields = pg_len("record field length", fields.len())?;
@@ -998,31 +993,25 @@ const REGPROC_NULL: &str = "-";
 
 /// Parses the text format of a `regproc`, matching PostgreSQL's `regprocin`.
 ///
-/// A function name resolves to that function's OID, `-` is OID 0, and anything
-/// else is read as a decimal OID.
-///
 /// Accepting names is what keeps a `COPY ... TO` rendering loadable by
-/// `COPY ... FROM`, since the text encoding emits names. That holds for every
-/// rendering that names exactly one function. An overloaded name renders
-/// schema-qualified and still names every one of its impls, so it does not round
-/// trip, which is true of PostgreSQL as well.
+/// `COPY ... FROM`, since the text encoding emits names. An overloaded name
+/// renders schema-qualified and names every one of its impls, so it does not
+/// round trip, which is true of PostgreSQL as well.
 fn parse_regproc(s: &str) -> Result<u32, Box<dyn Error + Sync + Send>> {
     if s == REGPROC_NULL {
         return Ok(0);
     }
     match regproc::oid(s) {
         Ok(oid) => Ok(oid),
-        // PostgreSQL refuses the same input, because a name shared by several
-        // overloads does not identify one of them.
+        // PostgreSQL refuses the same input rather than picking an overload.
         Err(regproc::NameLookupError::Ambiguous) => {
             Err(format!("more than one function named \"{}\"", s).into())
         }
         Err(regproc::NameLookupError::NotFound) => match strconv::parse_oid(s) {
             Ok(oid) => Ok(oid),
             // Number-shaped input keeps its numeric diagnosis, which is what
-            // reports an out of range OID. Anything else was meant as a name,
-            // so report a missing function, matching both PostgreSQL and the
-            // SQL cast from `text` to `regproc`.
+            // reports an out of range OID. Anything else was meant as a name, so
+            // report a missing function, matching PostgreSQL.
             Err(err) if is_number_shaped(s) => Err(err.into()),
             Err(_) => Err(format!("function \"{}\" does not exist", s).into()),
         },
@@ -1147,11 +1136,8 @@ mod tests {
     #[mz_ore::test]
     fn regproc_text_encoding_resolves_names() {
         // 1242 is `boolin`, uniquely named. 1398 is one of six `abs` overloads,
-        // so PostgreSQL qualifies it. 99999 names no function.
-        //
-        // `round_trips` is false for the qualified overload: that rendering
-        // names all six impls, so reading it back cannot pick one. PostgreSQL
-        // does not round trip it either.
+        // so PostgreSQL qualifies it. 99999 names no function. The qualified
+        // overload does not round trip, because its rendering names all six.
         for (oid, expected, round_trips) in [
             (0, "-", true),
             (1242, "boolin", true),
@@ -1173,8 +1159,6 @@ mod tests {
                 assert_eq!(decoded, oid, "text rendering {expected} did not round trip");
             }
 
-            // Binary stays a 4-byte OID, so the name resolution is invisible
-            // there.
             let mut binary = BytesMut::new();
             Value::RegProc(oid)
                 .encode_binary(&Type::RegProc, &mut binary)
@@ -1183,9 +1167,8 @@ mod tests {
         }
     }
 
-    /// A name shared by several overloads does not identify one of them, so
-    /// reading it back is an error rather than an arbitrary choice. PostgreSQL
-    /// rejects the same input.
+    /// An overloaded name is an error rather than an arbitrary choice, which is
+    /// what PostgreSQL does too.
     #[mz_ore::test]
     fn regproc_text_decoding_rejects_ambiguous_names() {
         assert_eq!(
@@ -1202,8 +1185,6 @@ mod tests {
                 .unwrap_err(),
             "function \"no_such_function\" does not exist",
         );
-        // Number-shaped input keeps its numeric diagnosis rather than being
-        // reported as a missing function.
         let out_of_range = Value::decode_text(&Type::RegProc, b"99999999999999")
             .map(|_| ())
             .map_err(|e| e.to_string())
