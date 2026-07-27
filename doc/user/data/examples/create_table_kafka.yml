@@ -1,0 +1,69 @@
+- name: "syntax"
+  description: |
+    To create a read-only table from a [Kafka/Redpanda
+    source](/sql/create-source/kafka-v2/) (new syntax), decode the topic with a
+    `FORMAT`, optionally exposing metadata with `INCLUDE` and choosing an
+    `ENVELOPE`:
+
+  code: |
+    CREATE TABLE [IF NOT EXISTS] <table_name>
+    FROM SOURCE <source_name>
+    [ FORMAT <format> | KEY FORMAT <format> VALUE FORMAT <format> ]
+    [INCLUDE
+        KEY [AS <name>]
+      | PARTITION [AS <name>]
+      | OFFSET [AS <name>]
+      | TIMESTAMP [AS <name>]
+      | HEADERS [AS <name>]
+      | HEADER '<key>' AS <name> [BYTES]
+      [, ...]
+    ]
+    [ENVELOPE
+        NONE
+      | DEBEZIUM
+      | UPSERT [ ( VALUE DECODING ERRORS = INLINE [AS <name>] ) ]
+    ];
+  syntax_elements:
+    - name: "**IF NOT EXISTS**"
+      description: |
+        *Optional.* If specified, do not throw an error if the table with the same
+        name already exists. Instead, issue a notice and skip the table creation.
+
+        {{< include-md file="shared-content/create-table-if-not-exists-tip.md" >}}
+    - name: "`<table_name>`"
+      description: |
+
+        The name of the table to create. Names for tables must follow the [naming
+        guidelines](/sql/identifiers/#naming-restrictions).
+
+    - name: "`<source_name>`"
+      description: |
+
+        The name of the [Kafka source](/sql/create-source/kafka-v2/) to read
+        from. Unlike other source types, a Kafka `CREATE TABLE ... FROM SOURCE`
+        does **not** take a `(REFERENCE ...)` clause: a Kafka source exposes a
+        single topic, so the table reads from it automatically.
+
+    - name: "**FORMAT** / **KEY FORMAT** / **VALUE FORMAT**"
+      description: |
+
+        The format used to decode the topic. See [supported
+        formats](/sql/create-source/kafka-v2/#syntax).
+
+    - name: "**INCLUDE** `<metadata>`"
+      description: |
+
+        *Optional.* Expose the message key, headers, and other metadata fields
+        as additional columns. See [Exposing source
+        metadata](/sql/create-source/kafka-v2/#exposing-source-metadata).
+
+    - name: "**ENVELOPE** `<envelope>`"
+      description: |
+
+        *Optional.* How to interpret records as inserts, updates, and deletes.
+        Defaults to `ENVELOPE NONE` (append-only). See
+        [envelopes](/sql/create-source/kafka-v2/#envelopes).
+
+- name: "syntax-version-requirement"
+  description: |
+    You must be on **v26+** to use the new syntax.

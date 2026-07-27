@@ -17,8 +17,9 @@ In Materialize, you can create:
 
 - Read-only tables from sources that use the new syntax:
   [PostgreSQL](/sql/create-source/postgres-v2/),
-  [MySQL](/sql/create-source/mysql-v2/), and
-  [SQL Server](/sql/create-source/sql-server-v2/). Users cannot write
+  [MySQL](/sql/create-source/mysql-v2/),
+  [SQL Server](/sql/create-source/sql-server-v2/), and
+  [Kafka/Redpanda](/sql/create-source/kafka-v2/). Users cannot write
   ([`INSERT`], [`UPDATE`], [`DELETE`]) to these tables. These tables are
   populated by [data ingestion from a
   source](/ingest-data/). {{% include-example file="examples/create_table/example_postgres_table"
@@ -89,6 +90,23 @@ example="syntax-version-requirement" %}}
 
 {{% include-syntax file="examples/create_table_sql_server"
 example="syntax" %}}
+
+{{< /tab >}}
+{{< tab "Kafka source table" >}}
+### Kafka source table
+
+{{< public-preview />}}
+
+{{< note >}}
+{{% include-example file="examples/create_table_kafka"
+example="syntax-version-requirement" %}}
+{{< /note >}}
+
+{{% include-syntax file="examples/create_table_kafka"
+example="syntax" %}}
+
+For the full catalog of formats, envelopes, and exposed metadata, see [CREATE
+SOURCE: Kafka/Redpanda (New Syntax)](/sql/create-source/kafka-v2/).
 
 {{< /tab >}}
 

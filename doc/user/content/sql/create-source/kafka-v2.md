@@ -34,51 +34,13 @@ The same syntax, supported formats and features can be used to connect to a
 [Redpanda](/integrations/redpanda/) broker.
 {{</ note >}}
 
-## Syntax
-
 With the new syntax, the `CREATE SOURCE` statement connects to the topic, and the
 decoding options (`FORMAT`, `INCLUDE`, and `ENVELOPE`) move to the [`CREATE TABLE
-... FROM SOURCE`](/sql/create-table/) statement:
-
-```mzsql
-CREATE SOURCE [IF NOT EXISTS] <src_name>
-[IN CLUSTER <cluster_name>]
-FROM KAFKA CONNECTION <connection_name> (
-  TOPIC '<topic>'
-  [, GROUP ID PREFIX '<group_id_prefix>']
-  [, START OFFSET ( <partition_offset> [, ...] ) ]
-  [, START TIMESTAMP <timestamp> ]
-)
-[EXPOSE PROGRESS AS <progress_subsource_name>];
-
-CREATE TABLE [IF NOT EXISTS] <table_name>
-FROM SOURCE <src_name>
-[ FORMAT <format> | KEY FORMAT <format> VALUE FORMAT <format> ]
-[INCLUDE
-    KEY [AS <name>]
-  | PARTITION [AS <name>]
-  | OFFSET [AS <name>]
-  | TIMESTAMP [AS <name>]
-  | HEADERS [AS <name>]
-  | HEADER '<key>' AS <name> [BYTES]
-  [, ...]
-]
-[ENVELOPE
-    NONE
-  | DEBEZIUM
-  | UPSERT [ ( VALUE DECODING ERRORS = INLINE [AS <name>] ) ]
-];
-```
+... FROM SOURCE`](/sql/create-table/) statement.
 
 Unlike other source types, `CREATE TABLE ... FROM SOURCE` does not need a
 `(REFERENCE ...)` clause. A Kafka source exposes a single topic, and the table
 reads from it automatically.
-
-The available `FORMAT`, `INCLUDE`, and `ENVELOPE` options are the same as for the
-[legacy syntax](/sql/create-source/kafka/#syntax). For the full catalog of
-formats, envelopes, and exposed metadata, along with connection setup, required
-Kafka ACLs, and source monitoring, see the [Kafka/Redpanda reference
-page](/sql/create-source/kafka/).
 
 {{< note >}}
 The `TEXT COLUMNS` and `EXCLUDE COLUMNS` options are not supported for Kafka
@@ -86,6 +48,91 @@ The `TEXT COLUMNS` and `EXCLUDE COLUMNS` options are not supported for Kafka
 by its format (for Avro, the reader schema). To exclude or recast a field,
 project or cast it in a view on top of the table.
 {{< /note >}}
+
+## Syntax
+
+{{< tabs >}}
+
+{{< tab "Format Avro" >}}
+### Format Avro
+
+Materialize can decode Avro messages by integrating with a schema registry to
+retrieve a schema, and automatically determine the columns and data types to use
+in the table.
+
+{{% include-syntax file="examples/create_source_kafka_v2" example="syntax-avro" %}}
+
+{{< include-md file="shared-content/kafka-format-avro-details.md" >}}
+
+{{< /tab >}}
+
+{{< tab "Format JSON" >}}
+### Format JSON
+
+Materialize can decode JSON messages into a single column named `data` with type
+`jsonb`. Refer to the [`jsonb` type](/sql/types/jsonb) documentation for the
+supported operations on this type.
+
+{{% include-syntax file="examples/create_source_kafka_v2" example="syntax-json" %}}
+
+{{< include-md file="shared-content/kafka-format-json-details.md" >}}
+
+{{< /tab >}}
+
+{{< tab "Format TEXT/BYTES" >}}
+### Format Text/Bytes
+
+Materialize can:
+- Parse **new-line delimited** data as plain text. Data is assumed to be **valid
+  unicode** (UTF-8), and discarded if it cannot be converted to UTF-8.
+  Text-formatted tables have a single column, by default named `text`. For details on casting, check the [`text`](/sql/types/text/) documentation.
+
+- Read raw bytes without applying any formatting or decoding. Raw byte-formatted
+tables have a single column, by default named `data`. For details on encodings
+and casting, check the [`bytea`](/sql/types/bytea/) documentation.
+
+{{% include-syntax file="examples/create_source_kafka_v2" example="syntax-text-bytes" %}}
+
+{{< /tab >}}
+
+{{< tab "Format CSV" >}}
+### Format CSV
+
+Materialize can parse CSV-formatted data. The data in CSV tables is read as
+[`text`](/sql/types/text).
+
+{{% include-syntax file="examples/create_source_kafka_v2" example="syntax-csv" %}}
+
+{{< /tab >}}
+
+{{< tab "Format Protobuf" >}}
+### Format Protobuf
+
+Materialize can decode Protobuf messages by integrating with a schema registry
+or parsing an inline schema to retrieve a `.proto` schema definition. It can
+then automatically define the columns and data types to use in the table.
+
+{{% include-syntax file="examples/create_source_kafka_v2" example="syntax-protobuf" %}}
+
+{{< include-md file="shared-content/kafka-format-protobuf-details.md" >}}
+
+{{< /tab >}}
+
+{{< tab "KEY FORMAT VALUE FORMAT" >}}
+### KEY FORMAT VALUE FORMAT
+By default, the message key is decoded using the same format as the message
+value. However, you can set the key and value encodings explicitly using the
+`KEY FORMAT ... VALUE FORMAT`.
+
+{{% include-syntax file="examples/create_source_kafka_v2" example="syntax-key-value-format" %}}
+
+{{< /tab >}}
+
+{{< /tabs >}}
+
+## Envelopes
+
+{{< include-md file="shared-content/kafka-envelopes.md" >}}
 
 ## Details
 
@@ -106,6 +153,17 @@ downstream objects, and swap them into place. See [Handle upstream schema change
 with zero downtime](/ingest-data/kafka/source-versioning/) for the full
 procedure.
 
+## Features
+
+### Exposing source metadata
+
+{{< include-md file="shared-content/kafka-include-metadata.md" >}}
+
+For spilling to disk, setting start offsets, and monitoring source progress and
+consumer lag, see the [Features section of the Kafka/Redpanda reference
+page](/sql/create-source/kafka/#features). These features are configured on the
+`CREATE SOURCE` statement and behave the same regardless of syntax.
+
 ## Examples
 
 ### Create a source and table
@@ -120,7 +178,7 @@ CREATE TABLE orders
   ENVELOPE UPSERT;
 ```
 
-For connection setup and the full set of format, envelope, and metadata options,
+For connection setup, required Kafka ACLs, and worked examples for each format,
 see the [Kafka/Redpanda reference page](/sql/create-source/kafka/).
 
 ## Related pages
