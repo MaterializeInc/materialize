@@ -630,6 +630,17 @@ impl HttpServer {
                         .allow_origin(allowed_origin.clone())
                         .allow_headers([AUTHORIZATION, CONTENT_TYPE]),
                 );
+            // On listeners with no HTTP authentication (i.e. the internal
+            // listener fronted by Teleport), trust the `x-materialize-user`
+            // header injected by the upstream proxy. This mirrors the pattern
+            // applied to `base_router` further down, and to `ws_router` at the
+            // top of this function. Without this, `/api/mcp/*` sessions
+            // silently resolve to `HTTP_DEFAULT_USER` even when Teleport
+            // injects `X-Materialize-User: mz_support`, breaking support
+            // access to `SHOW CREATE` / `EXPLAIN ANALYZE` via MCP (CLO-158).
+            if let listeners::AuthenticatorKind::None = authenticator_kind {
+                mcp_router = mcp_router.layer(middleware::from_fn(x_materialize_user_header_auth));
+            }
             router = router.merge(mcp_router);
         }
 

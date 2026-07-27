@@ -5954,9 +5954,7 @@ fn test_mcp_developer_honors_x_materialize_user_header() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     let body: serde_json::Value = res.json().unwrap();
-    let result_text = body["result"]["content"][0]["text"]
-        .as_str()
-        .unwrap_or("");
+    let result_text = body["result"]["content"][0]["text"].as_str().unwrap_or("");
     assert!(
         result_text.contains("mz_support"),
         "MCP developer on the internal listener must resolve the session to mz_support \
