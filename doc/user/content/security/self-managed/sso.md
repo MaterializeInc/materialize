@@ -498,6 +498,11 @@ discover your identity provider automatically.
 Unlike the console, which authenticates with an ID token, MCP clients present
 an OAuth **access token**. Access tokens have additional requirements:
 
+The steps below are grouped by where each change happens: in your IdP,
+in Materialize, and in your MCP client.
+
+**In your IdP**
+
 1. **Pre-register an OIDC client for MCP.** The MCP specification expects the
    IdP to support anonymous Dynamic Client Registration ([RFC
    7591](https://datatracker.ietf.org/doc/html/rfc7591)). Most enterprise
@@ -514,24 +519,15 @@ an OAuth **access token**. Access tokens have additional requirements:
    value `user.email`, included in the access token). Otherwise Materialize
    rejects the token because the authentication claim is missing.
 
-1. **Add the authorization server audience to `oidc_audience`.** The `aud`
-   claim of an access token is the authorization server's audience value, not
-   the client ID. For Okta's default authorization server this is
-   `api://default`. Materialize also validates ID tokens (browser sign-in),
-   whose `aud` claim is the console client ID, so both values must be
-   present in `oidc_audience`. Add the audience entries to the array,
-   preserving any existing values:
-
-   ```mzsql
-   ALTER SYSTEM SET oidc_audience = '["YOUR_CLIENT_ID", "api://default"]';
-   ```
-
-   If several applications share this authorization server, consider
-   creating a Materialize-dedicated custom authorization server in Okta so
-   only tokens issued for Materialize carry the `api://materialize`-style
-   audience. Otherwise any application on the same authorization server
-   receives tokens with `aud=api://default`, which Materialize would then
-   accept.
+1. **Recommended: use a Materialize-dedicated authorization server audience.**
+   Sharing one authorization server audience across multiple applications
+   means Materialize would accept any token that carries that audience,
+   regardless of which application it was issued for. Okta's own guidance is
+   to make the `aud` claim specific to each API (for example,
+   `api://materialize` rather than the shared `api://default`). Create a
+   custom authorization server whose audience identifies Materialize
+   specifically, and note that audience value for the Materialize
+   configuration step below.
 
 1. **Optional: define an `mcp.read` scope.** Materialize advertises the
    `mcp.read` scope in its resource metadata. The scope is not enforced by
@@ -547,7 +543,25 @@ an OAuth **access token**. Access tokens have additional requirements:
    fails to reconnect after the first access token expires, add
    `offline_access` to the authorization server's scopes.
 
-1. **Connect your MCP client.** For example, to connect Claude Code to the
+**In Materialize**
+
+1. **Add the authorization server audience to `oidc_audience`.** The `aud`
+   claim of an access token is the authorization server's audience value, not
+   the client ID. Use the Materialize-dedicated audience from the IdP step
+   above (recommended); Okta's default authorization server value is
+   `api://default` and works as a quick-start but is not recommended for
+   deployments that host other applications on the same IdP. Materialize
+   also validates ID tokens (browser sign-in), whose `aud` claim is the
+   console client ID, so both values must be present in `oidc_audience`. Add
+   the audience entries to the array, preserving any existing values:
+
+   ```mzsql
+   ALTER SYSTEM SET oidc_audience = '["YOUR_CLIENT_ID", "api://materialize"]';
+   ```
+
+**In your MCP client**
+
+1. **Connect.** For example, to connect Claude Code to the
    `materialize-agent` MCP server with a pre-registered client:
 
    ```shell
@@ -556,7 +570,7 @@ an OAuth **access token**. Access tokens have additional requirements:
      --client-id <YOUR_CLIENT_ID> --callback-port 8080
    ```
 
-   The `--callback-port` value must match the
+   The `--callback-port` value must match the port in the
    `http://localhost:<port>/callback` redirect URI registered on the OIDC
    client. For more information, see
    [MCP servers](/integrations/mcp-server/).

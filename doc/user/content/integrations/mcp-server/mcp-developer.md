@@ -118,6 +118,21 @@ your MCP client. The `materialize-developer` MCP server URL has the form:
      <baseURL>/api/mcp/developer
    ```
 
+   For Self-Managed deployments using OAuth with a pre-registered OIDC
+   client, add `--client-id` and `--callback-port`:
+
+   ```sh
+   claude mcp add --transport http materialize-developer \
+     <baseURL>/api/mcp/developer \
+     --client-id <YOUR_CLIENT_ID> --callback-port 8080
+   ```
+
+   The `--callback-port` value must match the port in the
+   `http://localhost:<port>/callback` redirect URI registered on the OIDC
+   client. See [Connecting MCP
+   clients](/security/self-managed/sso/#connecting-mcp-clients) for
+   the full IdP configuration.
+
    {{% include-headless "/headless/mcp-endpoint-baseurl-replacements" %}}
 
 1. Restart Claude Code. On first connection, your browser opens to complete

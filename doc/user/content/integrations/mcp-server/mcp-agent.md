@@ -372,7 +372,7 @@ In the following, replace `<baseURL>` with the MCP server URL from [Step
      --client-id <YOUR_CLIENT_ID> --callback-port 8080
    ```
 
-   The `--callback-port` value must match the
+   The `--callback-port` value must match the port in the
    `http://localhost:<port>/callback` redirect URI registered on the OIDC
    client. See [Connecting MCP
    clients](/security/self-managed/sso/#connecting-mcp-clients) for
