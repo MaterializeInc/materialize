@@ -10,6 +10,9 @@
 import glob
 import os
 import subprocess
+import time
+
+import pytest
 
 from materialize import MZ_ROOT, spawn
 from materialize.cloudtest import DEFAULT_K8S_CONTEXT_NAME, DEFAULT_K8S_NAMESPACE
@@ -78,26 +81,43 @@ def _newest_dump_dir() -> str:
     return max(dump_dirs, key=os.path.getmtime)
 
 
-def _profile_names(profiles_dir: str, kind: str) -> list[str]:
-    """Basenames of the `<pod>.<kind>.pprof.gz` profiles mz-debug wrote, where
-    `kind` is `cpuprof` or `memprof`."""
+def _profile_names(profiles_dir: str, kind: str, written_after: float) -> list[str]:
+    """Basenames of the `<pod>.<kind>.pprof.gz` profiles written after
+    `written_after`, a `time.time()` timestamp taken before the mz-debug run
+    under test. `kind` is `cpuprof` or `memprof`.
+
+    mz-debug names its output directory after the current minute, so runs a few
+    seconds apart share one and a run overwrites what an earlier run captured for
+    the same pod. Ignoring profiles older than the run keeps a failure to capture
+    from being masked by an earlier run's leftovers."""
     return sorted(
         os.path.basename(p)
         for p in glob.glob(os.path.join(profiles_dir, f"*.{kind}.pprof.gz"))
+        if os.path.getmtime(p) >= written_after
     )
 
 
-def test_self_managed_profiles(mz: MaterializeApplication) -> None:
+@pytest.mark.parametrize(
+    "scale,replication_factor",
+    [
+        # A single service fronting one pod per process.
+        (2, 1),
+        # One service per replica, each fronting a single pod.
+        (1, 2),
+    ],
+)
+def test_self_managed_profiles(
+    mz: MaterializeApplication, scale: int, replication_factor: int
+) -> None:
     """
     mz-debug must capture both a CPU and a heap profile from environmentd and
-    from every clusterd pod, including each pod of a scaled (`scale > 1`)
-    replica.
+    from every clusterd pod of a cluster.
 
-    A `scale=2` replica is a single Kubernetes service with two processes,
-    but contains one pod per process.
+    A `scale=N` replica is a single Kubernetes service with N processes, but
+    contains one pod per process. A cluster of replication factor N is N such
+    services. Both dimensions have to be walked to reach every pod.
     """
-    SCALE = 2
-    CLUSTER_NAME = "scaled_dbg"
+    cluster_name = f"dbg_scale{scale}_rf{replication_factor}"
 
     # Wait until the default cluster is ready, so environmentd is serving SQL.
     wait(
@@ -106,30 +126,38 @@ def test_self_managed_profiles(mz: MaterializeApplication) -> None:
         label="cluster.environmentd.materialize.cloud/cluster-id=u1",
     )
 
-    # `REPLICATION FACTOR 1` pins the cluster to exactly one replica, so the
-    # `scale=2` size yields exactly two clusterd pods behind one service.
     mz.environmentd.sql(
-        f"CREATE CLUSTER {CLUSTER_NAME} SIZE 'scale={SCALE},workers=1', REPLICATION FACTOR 1"
+        f"CREATE CLUSTER {cluster_name} SIZE 'scale={scale},workers=1', "
+        f"REPLICATION FACTOR {replication_factor}"
     )
     rows = mz.environmentd.sql_query(
         "SELECT c.id, r.id "
         "FROM mz_cluster_replicas r "
         "JOIN mz_clusters c ON r.cluster_id = c.id "
-        f"WHERE c.name = '{CLUSTER_NAME}'"
+        f"WHERE c.name = '{cluster_name}'"
     )
-    assert len(rows) == 1, f"expected exactly one replica, got {rows}"
-    cluster_id, replica_id = rows[0]
+    assert (
+        len(rows) == replication_factor
+    ), f"expected {replication_factor} replica(s), got {rows}"
+    cluster_id = rows[0][0]
+    replica_ids = [replica_id for _, replica_id in rows]
 
-    # A scale=2 replica is served by one clusterd pod per process, ordinals
-    # 0..SCALE, all behind a single service. `cluster_pod_name` returns the
-    # `pod/...` resource string `kubectl wait` expects.
+    # Each replica is served by one clusterd pod per process, ordinals 0..scale,
+    # all behind a single service. `cluster_pod_name` returns the `pod/...`
+    # resource string `kubectl wait` expects.
     pod_resources = [
-        cluster_pod_name(cluster_id, replica_id, process) for process in range(SCALE)
+        cluster_pod_name(cluster_id, replica_id, process)
+        for replica_id in replica_ids
+        for process in range(scale)
     ]
     for pod_resource in pod_resources:
         wait(condition="condition=Ready", resource=pod_resource)
 
     print("-- Running mz-debug (CPU and heap profiles)")
+    # Filesystems can store modification times at a coarser resolution than
+    # `time.time()` reports, so leave a second of slack for a profile written
+    # right after the run starts.
+    run_started = time.time() - 1
     # Capture only profiles to keep the run focused.
     spawn.runv(
         [
@@ -158,29 +186,25 @@ def test_self_managed_profiles(mz: MaterializeApplication) -> None:
     )
 
     # mz-debug writes `<pod>.cpuprof.pprof.gz` and `<pod>.memprof.pprof.gz` under
-    # the run's `profiles/` directory. Assert both profile kinds are present for
-    # environmentd and for every clusterd pod of the scaled replica. The scaled
-    # replica's pods are matched by its unique cluster/replica id, which appears
-    # in every one of its pod names.
+    # the run's `profiles/` directory. Both kinds must be there for environmentd
+    # and for every clusterd pod of every replica, each named after the pod it
+    # came from.
     profiles_dir = os.path.join(_newest_dump_dir(), "profiles")
-    replica_marker = f"cluster-{cluster_id}-replica-{replica_id}"
+    expected_pods = [ENVIRONMENTD_POD] + [
+        pod_resource.removeprefix("pod/") for pod_resource in pod_resources
+    ]
 
     for kind in ("cpuprof", "memprof"):
-        names = _profile_names(profiles_dir, kind)
+        names = _profile_names(profiles_dir, kind, run_started)
         print(f"{kind} profiles: {names}")
 
-        assert f"{ENVIRONMENTD_POD}.{kind}.pprof.gz" in names, (
-            f"mz-debug captured no {kind} profile for environmentd. "
-            f"{kind} profiles: {names}"
+        missing = [
+            pod for pod in expected_pods if f"{pod}.{kind}.pprof.gz" not in names
+        ]
+        assert not missing, (
+            f"mz-debug captured no {kind} profile for {missing}. Every pod of "
+            f"every replica must be profiled, under a name that identifies the "
+            f"pod. {kind} profiles: {names}"
         )
 
-        replica_profiles = [name for name in names if replica_marker in name]
-        assert len(replica_profiles) == SCALE, (
-            f"mz-debug captured {len(replica_profiles)} {kind} profile(s) "
-            f"({replica_profiles}) for the scale-{SCALE} replica, but it has "
-            f"{SCALE} clusterd pods ({pod_resources}). Every pod behind the "
-            "service must be profiled, with the pod ordinal in the filename. "
-            f"All {kind} profiles: {names}"
-        )
-
-    mz.environmentd.sql(f"DROP CLUSTER {CLUSTER_NAME} CASCADE")
+    mz.environmentd.sql(f"DROP CLUSTER {cluster_name} CASCADE")
