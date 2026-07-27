@@ -154,7 +154,7 @@ export async function getCostsBreakdownDaily(
   requestOptions: OpenApiRequestOptions = {},
 ) {
   const { headers, ...options } = requestOptions;
-  const { data, response } = await getClient().GET(
+  const { data, error, response } = await getClient().GET(
     "/api/costs/breakdown/daily",
     {
       params: {
@@ -173,7 +173,7 @@ export async function getCostsBreakdownDaily(
       ...options,
     },
   );
-  return handleOpenApiResponseWithBody(data, response);
+  return handleOpenApiResponseWithBody(data, response, error);
 }
 
 export async function createStripeSetupIntent(

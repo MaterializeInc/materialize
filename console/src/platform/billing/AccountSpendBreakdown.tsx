@@ -27,6 +27,7 @@ import {
   CostBreakdownCluster,
   CostBreakdownDay,
 } from "~/api/cloudGlobalApi";
+import { getApiError } from "~/api/openApiUtils";
 import ErrorBox from "~/components/ErrorBox";
 import { GraphEventOverlay, GraphTooltip } from "~/components/graphComponents";
 import { LoadingContainer } from "~/components/LoadingContainer";
@@ -625,6 +626,7 @@ const AccountSpendBreakdown = ({
   days,
   isLoading,
   isError,
+  error,
   regionFilter,
   setRegionFilter,
   timeRange,
@@ -634,6 +636,7 @@ const AccountSpendBreakdown = ({
     days,
     regionFilter,
   );
+  const apiError = getApiError(error);
 
   return (
     <Box data-testid="account-spend-breakdown">
@@ -650,7 +653,22 @@ const AccountSpendBreakdown = ({
         // data lands.
         <LoadingContainer minHeight={`${chartHeightPx}px`} />
       ) : isError ? (
-        <ErrorBox message={ACCOUNT_SPEND_FETCH_ERROR_MESSAGE} />
+        <ErrorBox
+          message={apiError?.message ?? ACCOUNT_SPEND_FETCH_ERROR_MESSAGE}
+        >
+          {/* A validation error describes the caller's own request (e.g. an
+              out-of-range date), so there's nothing for support to look up;
+              every other reason gets a reference for support correlation. */}
+          {apiError && apiError.reason !== "validation" && (
+            <Text
+              fontSize="sm"
+              color="gray.500"
+              data-testid="api-error-request-id"
+            >
+              Reference: {apiError.requestId}
+            </Text>
+          )}
+        </ErrorBox>
       ) : !days || accountIds.length === 0 ? (
         <EmptyState />
       ) : (
