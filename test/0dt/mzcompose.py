@@ -3112,3 +3112,119 @@ def workflow_ddl_detection_with_id_pool(c: Composition) -> None:
             > SELECT * FROM pool_mv;
             1
             """))
+
+
+def workflow_ddl_detection_ephemeral_items(c: Composition) -> None:
+    """Verify that temporary items do not count as reactable DDL in preflight.
+
+    Temporary items are durable catalog items tagged with their owning
+    session's UUID and draw ids from the normal user-id allocator.
+    Ensure that creation of them during 0dt preflight does not halt the
+    read-only environment.
+    """
+    c.down(destroy_volumes=True)
+    c.up("mz_old")
+
+    PREFLIGHT_STARTED = "waiting for deployment to be caught up"
+
+    def count_preflight_starts() -> int:
+        """Count mz_new boots via the preflight start line in its log."""
+        logs = c.invoke("logs", "mz_new", capture=True).stdout
+        return sum(PREFLIGHT_STARTED in line for line in logs.splitlines())
+
+    def await_preflight_start() -> None:
+        deadline = time.time() + 120
+        while time.time() < deadline:
+            if count_preflight_starts() >= 1:
+                return
+            time.sleep(0.5)
+        raise RuntimeError("timed out waiting for mz_new preflight to start")
+
+    # The DDL check defaults to every 5 minutes plus once right before
+    # ready-to-promote. Tighten it so the temporary items below sit through
+    # many checks. Read at mz_new's boot from the catalog.
+    c.sql(
+        """
+        ALTER SYSTEM SET with_0dt_deployment_ddl_check_interval = '1s';
+        ALTER SYSTEM SET cluster = quickstart;
+        """,
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+
+    # Start mz_new in read-only mode (deploy_generation=1) and wait for it
+    # to start the preflight process.
+    c.up("mz_new")
+    await_preflight_start()
+
+    # A session on the leader creates the temporary items. The connection
+    # stays open so the items stay durable.
+    conn = c.sql_connection(service="mz_old")
+    cur = conn.cursor()
+    cur.execute("CREATE TEMPORARY TABLE temp_t (a int)")
+    cur.execute("CREATE TEMPORARY VIEW temp_v AS SELECT * FROM temp_t")
+    cur.execute("INSERT INTO temp_t VALUES (1)")
+
+    # Prove the temporary items are durable catalog rows on the leader while
+    # mz_new's checks tick
+    ephemeral = c.sql_query(
+        """SELECT count(*) FROM mz_internal.mz_catalog_raw
+           WHERE data->>'kind' = 'Item'
+             AND data->'value'->>'ephemeral_owner_session' IS NOT NULL""",
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+    assert ephemeral == [(2,)], f"temporary items are not durable: {ephemeral}"
+
+    # the temporary items must exist while mz_new is still checking for DDL
+    # i.e. before it announces ready. if we're caught up before we've created
+    # temporary items, fail loudly.
+    deadline = time.time() + 120
+    status = None
+    while time.time() < deadline:
+        try:
+            status = _leader_status(c, "mz_new")
+            break
+        except Exception:
+            time.sleep(1)
+    assert (
+        status == DeploymentStatus.INITIALIZING.value
+    ), f"mz_new reached status {status} before the temporary items were created"
+
+    # Sit through several 1s-interval DDL checks with the temporary items in
+    # the catalog, then let mz_new run the final check on its way to
+    # ready-to-promote. Assert we only see one preflight start throughout
+    # promotion which means we never halted.
+    time.sleep(5)
+    assert (
+        count_preflight_starts() == 1
+    ), "mz_new rebooted with only temporary items created"
+    c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+    assert (
+        count_preflight_starts() == 1
+    ), "mz_new rebooted on the final DDL check with only temporary items created"
+
+    c.promote_mz("mz_new")
+    c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
+
+    # The takeover opened the catalog with write intent, which fences the old
+    # leader (killing the session that owned the temporary items) and
+    # reclaims every ephemeral item. Only mz_catalog_raw shows whether the
+    # durable rows themselves are gone.
+    ephemeral = c.sql_query(
+        """SELECT count(*) FROM mz_internal.mz_catalog_raw
+           WHERE data->>'kind' = 'Item'
+             AND data->'value'->>'ephemeral_owner_session' IS NOT NULL""",
+        service="mz_new",
+        port=6877,
+        user="mz_system",
+    )
+    assert ephemeral == [(0,)], f"ephemeral items survived promotion: {ephemeral}"
+
+    # The old leader died with the session's socket; closing is bookkeeping.
+    try:
+        conn.close()
+    except Exception:
+        pass
