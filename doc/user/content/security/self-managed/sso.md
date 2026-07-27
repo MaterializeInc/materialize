@@ -89,6 +89,8 @@ additional applications in the [Service accounts](#service-accounts) section.
 
    **Custom domains:** When the authorization server **Issuer** is set to **Dynamic (based on Request Domain)**, Okta issues tokens whose `iss` claim uses your custom domain (for example, `https://sso.your-org.com/oauth2/default`) instead of the default Okta URL. Configure the `oidc_issuer` system parameter in Materialize to match that issuer value exactly.
 
+   {{% include-headless "/headless/okta-custom-authorization-server-warning" %}}
+
 1. Go to the **Assignments** tab and assign the users or groups that should have
    access to Materialize.
 
@@ -324,7 +326,7 @@ for details on rollout configuration.
 Configure the OIDC system parameters to connect Materialize to your identity
 provider. You can use either a
 [ConfigMap](/self-managed-deployments/configuration-system-parameters/#configure-system-parameters-via-configmap)
-or SQL commands, but it is strongly recommended to use a ConfigMap. See [Configure via Configmap](#configure-via-configmap) for more details.
+or SQL commands, but it is strongly recommended to use a ConfigMap. See [Configure via ConfigMap](#configure-via-configmap) for more details.
 
 ### OIDC system parameters
 
@@ -359,9 +361,9 @@ data:
   system-params.json: |
     {
       "oidc_issuer": "YOUR_OIDC_ISSUER",
-      "oidc_audience": "[\"YOUR_CLIENT_ID\"]",
+      "oidc_audience": "[\"CONSOLE_CLIENT_ID\"]",
       "oidc_authentication_claim": "email",
-      "console_oidc_client_id": "YOUR_CLIENT_ID",
+      "console_oidc_client_id": "CONSOLE_CLIENT_ID",
       "console_oidc_scopes": "openid email"
     }
 ```
@@ -386,9 +388,9 @@ even when OIDC is enabled.
 
 ```mzsql
 ALTER SYSTEM SET oidc_issuer = 'https://your-org.okta.com/oauth2/default';
-ALTER SYSTEM SET oidc_audience = '["YOUR_CLIENT_ID"]';
+ALTER SYSTEM SET oidc_audience = '["CONSOLE_CLIENT_ID"]';
 ALTER SYSTEM SET oidc_authentication_claim = 'email';
-ALTER SYSTEM SET console_oidc_client_id = 'YOUR_CLIENT_ID';
+ALTER SYSTEM SET console_oidc_client_id = 'CONSOLE_CLIENT_ID';
 ALTER SYSTEM SET console_oidc_scopes = 'openid email';
 ```
 
@@ -422,7 +424,7 @@ ID token from the command line using [`oauth2c`](https://github.com/cloudentity/
 This is useful when configuring a non-interactive client like dbt or Terraform.
 
 1. **Confirm `http://localhost:9876/callback` is registered as a redirect URI**
-   on the console OIDC client (added in
+   on the Materialize Console OIDC client (added in
    [Step 1](#step-1-configure-your-identity-provider)). `oauth2c` listens on
    this URL during the auth code exchange.
 
@@ -457,7 +459,7 @@ your token expires.
 
 ### Get a token from the Materialize console
 
-Clicking "Connect" in the Materialize console will provide you with an ID token that you can use to connect.
+Clicking "Connect" in the Materialize Console will provide you with an ID token that you can use to connect.
 
 ![Materialize Console connect instructions for OIDC](/images/console/console-connect-oidc.png "Materialize Console connect screen for OIDC")
 
@@ -479,6 +481,98 @@ Materialize validates the token at **connection time only**. Once a connection
 is established, it persists until disconnected, regardless of token expiry.
 {{</ note >}}
 
+
+## Connecting MCP clients
+
+*OAuth sign-in for MCP clients is available starting in v26.31.*
+
+Materialize provides built-in [MCP servers](/integrations/mcp-server/) at
+`/api/mcp/agent` and `/api/mcp/developer`. When SSO is enabled, MCP clients
+can authenticate with OAuth instead of an [MCP
+token](/integrations/mcp-server/mcp-agent/#method-2-token-based-authentication).
+Materialize publishes OAuth 2.0 Protected Resource Metadata ([RFC
+9728](https://datatracker.ietf.org/doc/html/rfc9728)) at
+`/.well-known/oauth-protected-resource`, which MCP-aware clients use to
+discover your identity provider automatically.
+
+Unlike the Console, which authenticates with an ID token, MCP clients present an
+OAuth **access token**. Access tokens have additional configuration
+requirements:
+
+### Configure your IdP
+
+1. **Pre-register an OIDC client for MCP.** The MCP specification expects the
+   IdP to support anonymous Dynamic Client Registration ([RFC
+   7591](https://datatracker.ietf.org/doc/html/rfc7591)). Most enterprise IdPs,
+   including Okta, do not allow anonymous registration, causing MCP clients to
+   fail during registration (in Okta, with HTTP 403 `E0000005`). Instead, create
+   or reuse a public OIDC client with PKCE, add
+   `http://localhost:<port>/callback` as a sign-in redirect URI, and configure
+   the MCP client with the client ID explicitly.
+
+1. **Include the authentication claim in access tokens.** IdPs typically include
+   claims like `email` only in ID tokens. If `oidc_authentication_claim` is set
+   to `email`, configure your authorization server to add an `email` claim to
+   access tokens (in Okta, a claim with value `user.email` included in the
+   access token). Otherwise, Materialize rejects the token because it does not
+   contain the configured authentication claim.
+
+1. **Use a Materialize-dedicated audience.** Configure your IdP so that the
+   access tokens carry an `aud` value specifically for Materialize (e.g., in
+   Okta, create a custom authorization server; in Entra ID, an exposed-API
+   Application ID URI). Note the audience value for the Materialize
+   configuration step below.
+
+1. **Optional. Define an `mcp.read` scope.** Materialize advertises the
+   `mcp.read` scope in its resource metadata. Although Materialize does not
+   enforce the scope (authorization happens through
+   [RBAC](/security/self-managed/access-control/)), clients that request
+   advertised scopes fail against IdPs (such as Okta) that reject unknown scopes
+   unless the scope exists on the authorization server.
+
+1. **Optional. Add the `offline_access` scope for refresh tokens.** MCP
+   clients typically request `offline_access` so they can refresh access
+   tokens without a new browser sign-in. Okta and most enterprise IdPs
+   require this scope to exist on the authorization server. If the client
+   fails to reconnect after the first access token expires, add
+   `offline_access` to the authorization server's scopes.
+
+### Configure Materialize
+
+1. **Add the authorization server's audience value to `oidc_audience`.** For
+   access tokens, the `aud` claim is the authorization server's configured
+   audience. Use the Materialize-dedicated audience from the IdP step above.
+
+   Materialize also validates ID tokens (browser sign-in), whose `aud` is the
+   Console client ID, so both values must be present in `oidc_audience`. Add
+   the audience values to the existing array, preserving any entries already
+   present. For example:
+
+   ```mzsql
+   ALTER SYSTEM SET oidc_audience = '["<CONSOLE_CLIENT_ID>", "<MZ_SPECIFIC_AUDIENCE>"]';
+   ```
+
+### Configure your MCP client
+
+1. **Connect.** For example, to connect Claude Code to the
+   `materialize-agent` MCP server with a pre-registered client:
+
+   ```shell
+   claude mcp add --transport http materialize-agent \
+     https://<host>:6876/api/mcp/agent \
+     --client-id <YOUR_CLIENT_ID> --callback-port 8080
+   ```
+
+   The `--callback-port` value must match the port in the
+   `http://localhost:<port>/callback` redirect URI registered on the OIDC
+   client. For more information, see
+   [MCP servers](/integrations/mcp-server/).
+
+{{< note >}}
+Deployments behind a load balancer or proxy that rewrites the `Host` header
+must set the `http_host_name` configuration so that the URLs Materialize
+publishes in its resource metadata are correct.
+{{</ note >}}
 
 ## Provisioning roles
 
@@ -725,7 +819,7 @@ for automated systems that do not have a user context.
 `oidc_audience` is an array of values. Before running the `ALTER SYSTEM SET
 oidc_audience` examples below, check the current value with `SHOW oidc_audience;`
 and **append** the new audience rather than overwriting it. Otherwise you may
-remove the console's audience or other configured values.
+remove the Materialize Console's audience or other configured values.
 {{</ note >}}
 
 {{< tabs >}}
@@ -806,15 +900,14 @@ remove the console's audience or other configured values.
      --data-urlencode "client_secret=YOUR_SERVICE_CLIENT_SECRET"
    ```
 
-1. Ensure `oidc_audience` includes the expected audience value for tokens
-   from your authorization server. In Okta, the `aud` claim is set to the
-   authorization server's audience (configured in **Security** > **API** >
-   your auth server > **Settings**), not the client ID. For the default
-   authorization server, this is typically `api://default`:
+1. Ensure `oidc_audience` includes the expected audience value for tokens from
+   your authorization server. In Okta, the `aud` claim is set to the
+   authorization server's audience (configured in **Security** > **API** > your
+   auth server > **Settings**), not the client ID:
 
    ```mzsql
    -- Make sure to add to the array if already set
-   ALTER SYSTEM SET oidc_audience = '["api://default"]';
+   ALTER SYSTEM SET oidc_audience = '["<CONSOLE_CLIENT_ID>", "<YOUR_AUDIENCE_VALUE>"]';
    ```
 
 1. Extract the `access_token` from the JSON response and use it to connect:
@@ -863,7 +956,7 @@ remove the console's audience or other configured values.
 
    ```mzsql
    -- Make sure to add to the array if already set
-   ALTER SYSTEM SET oidc_audience = '["YOUR_SERVICE_CLIENT_ID"]';
+   ALTER SYSTEM SET oidc_audience = '["<CONSOLE_CLIENT_ID>","<YOUR_SERVICE_CLIENT_ID>"]';
    ```
 
 1. Extract the `access_token` from the JSON response and use it to connect:
@@ -901,7 +994,7 @@ remove the console's audience or other configured values.
 
    ```mzsql
    -- Make sure to add to the array if already set
-   ALTER SYSTEM SET oidc_audience = '["YOUR_AUDIENCE_VALUE"]';
+   ALTER SYSTEM SET oidc_audience = '["<CONSOLE_CLIENT_ID>", "<YOUR_AUDIENCE_VALUE>"]';
    ```
 
 1. Extract the `access_token` from the JSON response and use it to connect:
@@ -939,11 +1032,14 @@ DROP ROLE <username>;
 |---------|---------------|------------|
 | Console does not show SSO login option | `console_oidc_client_id` and `console_oidc_scopes` are not set | Set `console_oidc_client_id` to your OIDC client ID |
 | SSO login redirects fail | Incorrect IdP configuration | Verify the redirect URI is set to `https://<your-console-domain>/auth/callback` and the IdP application type is set as a Single Page Application |
-| SSO login redirects to login page | Materialize database is rejecting the token | Verify that the token generated by your IdP includes the required claims.
+| SSO login redirects to login page | Materialize database is rejecting the token | Verify that the token generated by your IdP includes the required claims. |
 | environmentd fails to upgrade | external_login_password_mz_system not set | Ensure the external_login_password_mz_system is configured |
 | "Invalid token" error on psql connection | Wrong or expired JWT token | Obtain a fresh token; verify `oidc_issuer` matches the token's `iss` claim |
 | "Audience validation failed" | Client ID not in `oidc_audience` | Add the client ID to `oidc_audience`: `ALTER SYSTEM SET oidc_audience = '["your-client-id"]'` |
 | User gets wrong role name | `oidc_authentication_claim` set to wrong claim | Verify the claim name and check the JWT contents (e.g., using [jwt.io](https://jwt.io)) |
+| MCP client fails during registration with the IdP (HTTP 403) | The IdP does not support anonymous Dynamic Client Registration | Pre-register an OIDC client and configure the MCP client with its client ID. See [Connecting MCP clients](#connecting-mcp-clients) |
+| MCP client login fails with `invalid_scope` | The client requested the advertised `mcp.read` scope, which does not exist on the authorization server | Add an `mcp.read` scope to the authorization server, or configure the client to request only standard scopes |
+| MCP client completes login but the connection is rejected | Access token `aud` is not in `oidc_audience`, or the authentication claim is missing from access tokens | See [Connecting MCP clients](#connecting-mcp-clients) |
 
 To inspect the current OIDC configuration, login as `mz_system` and run the following SQL:
 
