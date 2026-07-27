@@ -1780,7 +1780,7 @@ def workflow_builtin_schema_migrations_replacement(c: Composition) -> None:
     )
 
     mz_tables_gid = c.sql_query(
-        "SELECT id FROM mz_tables WHERE name = 'mz_tables'",
+        "SELECT id FROM mz_materialized_views WHERE name = 'mz_tables'",
         service="mz_old",
     )[0][0]
     mv_gid = c.sql_query(
@@ -1810,7 +1810,7 @@ def workflow_builtin_schema_migrations_replacement(c: Composition) -> None:
         c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
 
         new_mz_tables_gid = c.sql_query(
-            "SELECT id FROM mz_tables WHERE name = 'mz_tables'",
+            "SELECT id FROM mz_materialized_views WHERE name = 'mz_tables'",
             service="mz_new",
             reuse_connection=False,
         )[0][0]
@@ -1863,7 +1863,7 @@ def workflow_builtin_schema_migrations_evolution(c: Composition) -> None:
     )
 
     mz_tables_gid = c.sql_query(
-        "SELECT id FROM mz_tables WHERE name = 'mz_tables'",
+        "SELECT id FROM mz_materialized_views WHERE name = 'mz_tables'",
         service="mz_old",
     )[0][0]
     mv_gid = c.sql_query(
@@ -1894,7 +1894,7 @@ def workflow_builtin_schema_migrations_evolution(c: Composition) -> None:
         c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
 
         new_mz_tables_gid = c.sql_query(
-            "SELECT id FROM mz_tables WHERE name = 'mz_tables'",
+            "SELECT id FROM mz_materialized_views WHERE name = 'mz_tables'",
             service="mz_new",
             reuse_connection=False,
         )[0][0]

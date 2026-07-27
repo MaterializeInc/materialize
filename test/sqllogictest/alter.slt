@@ -24,7 +24,7 @@ ALTER SYSTEM SET enable_rbac_checks TO false;
 ----
 COMPLETE 0
 
-query error must be owner of TABLE mz_catalog.mz_tables
+query error mz_tables is a materialized view not a table
 ALTER TABLE mz_tables RENAME TO foo;
 
 query error must be owner of SOURCE mz_internal.mz_storage_shards
@@ -33,7 +33,7 @@ ALTER SOURCE mz_internal.mz_storage_shards RENAME TO foo;
 simple conn=mz_system,user=mz_system
 ALTER TABLE mz_tables RENAME TO foo;
 ----
-db error: ERROR: system item 'mz_catalog.mz_tables' cannot be modified
+db error: ERROR: mz_tables is a materialized view not a table
 
 simple conn=mz_system,user=mz_system
 ALTER SOURCE mz_internal.mz_storage_shards RENAME TO foo;
