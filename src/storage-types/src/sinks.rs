@@ -137,6 +137,7 @@ pub enum SinkEnvelope {
 pub enum StorageSinkConnection<C: ConnectionAccess = InlinedConnection> {
     Kafka(KafkaSinkConnection<C>),
     Iceberg(IcebergSinkConnection<C>),
+    Postgres(PostgresSinkConnection<C>),
 }
 
 impl<C: ConnectionAccess> StorageSinkConnection<C> {
@@ -157,6 +158,9 @@ impl<C: ConnectionAccess> StorageSinkConnection<C> {
                 s.alter_compatible(id, o)?
             }
             (StorageSinkConnection::Iceberg(s), StorageSinkConnection::Iceberg(o)) => {
+                s.alter_compatible(id, o)?
+            }
+            (StorageSinkConnection::Postgres(s), StorageSinkConnection::Postgres(o)) => {
                 s.alter_compatible(id, o)?
             }
             _ => {
@@ -180,6 +184,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<StorageSinkConnection, R>
         match self {
             Self::Kafka(conn) => StorageSinkConnection::Kafka(conn.into_inline_connection(r)),
             Self::Iceberg(conn) => StorageSinkConnection::Iceberg(conn.into_inline_connection(r)),
+            Self::Postgres(conn) => StorageSinkConnection::Postgres(conn.into_inline_connection(r)),
         }
     }
 }
@@ -197,6 +202,7 @@ impl<C: ConnectionAccess> StorageSinkConnection<C> {
                 catalog_connection_id: connection_id,
                 ..
             }) => Some(*connection_id),
+            Postgres(PostgresSinkConnection { connection_id, .. }) => Some(*connection_id),
         }
     }
 
@@ -209,6 +215,7 @@ impl<C: ConnectionAccess> StorageSinkConnection<C> {
         match self {
             Kafka(_) => "kafka",
             Iceberg(_) => "iceberg",
+            Postgres(_) => "postgres",
         }
     }
 }
@@ -832,6 +839,87 @@ impl<R: ConnectionResolver> IntoInlineConnection<IcebergSinkConnection, R>
             key_desc_and_indices,
             namespace,
             table,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct PostgresSinkConnection<C: ConnectionAccess = InlinedConnection> {
+    pub connection_id: CatalogItemId,
+    pub connection: C::Pg,
+    pub relation_key_indices: Option<Vec<usize>>,
+    pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
+}
+
+impl PostgresSinkConnection {
+    pub fn progress_table_name(&self, sink_id: GlobalId) -> String {
+        format!("materialize_progress_{}_{}", self.connection_id, sink_id)
+    }
+}
+
+impl<C: ConnectionAccess> PostgresSinkConnection<C> {
+    pub fn alter_compatible(
+        &self,
+        id: GlobalId,
+        other: &PostgresSinkConnection<C>,
+    ) -> Result<(), AlterError> {
+        if self == other {
+            return Ok(());
+        }
+        let PostgresSinkConnection {
+            connection_id,
+            connection,
+            relation_key_indices,
+            key_desc_and_indices,
+        } = self;
+
+        let compatibility_checks = [
+            (connection_id == &other.connection_id, "connection_id"),
+            (
+                connection.alter_compatible(id, &other.connection).is_ok(),
+                "connection",
+            ),
+            (
+                relation_key_indices == &other.relation_key_indices,
+                "relation_key_indices",
+            ),
+            (
+                key_desc_and_indices == &other.key_desc_and_indices,
+                "key_desc_and_indices",
+            ),
+        ];
+        for (compatible, field) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "PostgresSinkConnection incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(AlterError { id });
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<PostgresSinkConnection, R>
+    for PostgresSinkConnection<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> PostgresSinkConnection {
+        let PostgresSinkConnection {
+            connection_id,
+            connection,
+            relation_key_indices,
+            key_desc_and_indices,
+        } = self;
+        PostgresSinkConnection {
+            connection_id,
+            connection: r.resolve_connection(connection).unwrap_pg(),
+            relation_key_indices,
+            key_desc_and_indices,
         }
     }
 }
