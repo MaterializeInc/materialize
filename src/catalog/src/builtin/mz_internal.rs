@@ -586,8 +586,13 @@ pub static MZ_TYPE_PG_METADATA: LazyLock<BuiltinTable> = LazyLock::new(|| Builti
         .with_column("id", SqlScalarType::String.nullable(false))
         .with_column("typinput", SqlScalarType::Oid.nullable(false))
         .with_column("typreceive", SqlScalarType::Oid.nullable(false))
-        // Always populated, but declared nullable because persist schema
-        // evolution only accepts an appended field if it is nullable.
+        // `pack_type_update` always writes an OID here, so this declaration is
+        // wider than the data requires. Downstream `COALESCE`s on this column
+        // are there for the `LEFT JOIN` against this table, not for this.
+        //
+        // TODO: Tighten to `nullable(false)` to match `typinput` and
+        // `typreceive`. That also changes the descs of the views projecting the
+        // column.
         .with_column("typsend", SqlScalarType::Oid.nullable(true))
         .finish(),
     column_comments: BTreeMap::new(),
