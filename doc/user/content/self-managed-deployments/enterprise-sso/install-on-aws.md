@@ -19,7 +19,9 @@ the Ory-based enterprise SSO stack on EKS.
 {{% self-managed/materialize-components-sentence %}} This example layers the
 Ory stack (Kratos, Hydra, the selfservice UI, and optional Polis) on top so
 that the Materialize console authenticates users through OIDC, with SAML and
-SCIM available when Polis is enabled.
+SCIM available when Polis is enabled. The example wires these modules
+together as a reference; the individual modules are designed to be composed
+into your own Terraform rather than used only through the example.
 
 {{< note >}}
 
@@ -70,7 +72,7 @@ single shared instance.)
 |----------|-------------|
 | Materialize Instance | Configured for OIDC sign-in against the Hydra issuer URL. The browser-facing console hostname is registered as the OAuth2 redirect URI. |
 
-## AWS-specific requirements
+## AWS-Specific Requirements
 
 Cross-cutting requirements (license key with the `ory` entitlement, DNS
 hostnames, cert-manager strategy, required tools) are covered on the shared

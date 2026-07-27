@@ -200,8 +200,8 @@ claim.
 
 ## SCIM via Polis
 
-Adds automatic user provisioning and deactivation from your IdP to
-Materialize. Build on top of the SAML setup above.
+Adds automatic user and group provisioning and deactivation from your IdP to
+Materialize. Builds on the SAML setup above.
 
 ### Step 1. Create a SCIM directory in Polis
 
