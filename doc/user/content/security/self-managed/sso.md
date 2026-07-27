@@ -361,9 +361,9 @@ data:
   system-params.json: |
     {
       "oidc_issuer": "YOUR_OIDC_ISSUER",
-      "oidc_audience": "[\"YOUR_CLIENT_ID\"]",
+      "oidc_audience": "[\"CONSOLE_CLIENT_ID\"]",
       "oidc_authentication_claim": "email",
-      "console_oidc_client_id": "YOUR_CLIENT_ID",
+      "console_oidc_client_id": "CONSOLE_CLIENT_ID",
       "console_oidc_scopes": "openid email"
     }
 ```
@@ -388,9 +388,9 @@ even when OIDC is enabled.
 
 ```mzsql
 ALTER SYSTEM SET oidc_issuer = 'https://your-org.okta.com/oauth2/default';
-ALTER SYSTEM SET oidc_audience = '["YOUR_CLIENT_ID"]';
+ALTER SYSTEM SET oidc_audience = '["CONSOLE_CLIENT_ID"]';
 ALTER SYSTEM SET oidc_authentication_claim = 'email';
-ALTER SYSTEM SET console_oidc_client_id = 'YOUR_CLIENT_ID';
+ALTER SYSTEM SET console_oidc_client_id = 'CONSOLE_CLIENT_ID';
 ALTER SYSTEM SET console_oidc_scopes = 'openid email';
 ```
 
@@ -545,18 +545,20 @@ in Materialize, and in your MCP client.
 
 **In Materialize**
 
-1. **Add the authorization server audience to `oidc_audience`.** The `aud`
-   claim of an access token is the authorization server's audience value, not
-   the client ID. Use the Materialize-dedicated audience from the IdP step
-   above (recommended); Okta's default authorization server value is
-   `api://default` and works as a quick-start but is not recommended for
-   deployments that host other applications on the same IdP. Materialize
-   also validates ID tokens (browser sign-in), whose `aud` claim is the
+1. **Add the authorization server's audience value to `oidc_audience`.** For
+   access tokens, the `aud` claim is the authorization server's configured
+   audience. Use the Materialize-dedicated audience from the IdP step above
+   (recommended). Okta's default authorization server value is `api://default`
+   and works as a quick-start, but is not recommended for deployments that
+   host other applications on the same IdP.
+
+   Materialize also validates ID tokens (browser sign-in), whose `aud` is the
    console client ID, so both values must be present in `oidc_audience`. Add
-   the audience entries to the array, preserving any existing values:
+   the audience values to the existing array, preserving any entries already
+   present. For example:
 
    ```mzsql
-   ALTER SYSTEM SET oidc_audience = '["YOUR_CLIENT_ID", "api://materialize"]';
+   ALTER SYSTEM SET oidc_audience = '["CONSOLE_CLIENT_ID", "api://materialize"]';
    ```
 
 **In your MCP client**
