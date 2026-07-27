@@ -586,14 +586,11 @@ pub static MZ_TYPE_PG_METADATA: LazyLock<BuiltinTable> = LazyLock::new(|| Builti
         .with_column("id", SqlScalarType::String.nullable(false))
         .with_column("typinput", SqlScalarType::Oid.nullable(false))
         .with_column("typreceive", SqlScalarType::Oid.nullable(false))
-        // `pack_type_update` always writes an OID here, so this declaration is
-        // wider than the data requires. Downstream `COALESCE`s on this column
-        // are there for the `LEFT JOIN` against this table, not for this.
-        //
-        // TODO: Tighten to `nullable(false)` to match `typinput` and
-        // `typreceive`. That also changes the descs of the views projecting the
-        // column.
-        .with_column("typsend", SqlScalarType::Oid.nullable(true))
+        // NOTE: `pg_type_all_databases` still wraps `typreceive` and `typsend`
+        // in `COALESCE`. That guards its `LEFT JOIN` against this table, which
+        // yields NULLs for types without PostgreSQL metadata, so it is required
+        // even though neither column is nullable here.
+        .with_column("typsend", SqlScalarType::Oid.nullable(false))
         .finish(),
     column_comments: BTreeMap::new(),
     is_retained_metrics_object: false,

@@ -303,16 +303,26 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
         ),
         // `mz_type_pg_metadata` gained a trailing `typsend` column. Appending a
         // column would be backward compatible enough for `Evolution`, but
-        // `Replacement` is the right mechanism for a builtin table anyway.
-        // `Coordinator::bootstrap_tables` retracts every system table's persist
-        // snapshot and re-derives the rows from the catalog on each boot, so a
-        // fresh shard loses nothing. More importantly, only `Replacement`
-        // reports the item in `MigrationResult::replaced_items`, which is what
-        // makes the read-only coordinator back-fill the new shard so dependent
-        // dataflows such as `pg_type_all_databases_ind` can hydrate. Under
-        // `Evolution` a read-only replica would instead have to read the old
-        // parts through the schema-migration path, which no builtin table has
-        // ever exercised.
+        // `Replacement` costs nothing here and buys the read-only back-fill.
+        // `Coordinator::bootstrap_tables` retracts each system table's persist
+        // snapshot and re-derives its rows from the catalog on every boot,
+        // except for the two it holds back through
+        // `is_retained_across_restarts`, `mz_storage_usage_by_shard` and
+        // `mz_object_arrangement_size_history`, whose contents live nowhere
+        // else. `validate_migration_steps` refuses to migrate those two for the
+        // same reason. `mz_type_pg_metadata` is not one of them, so a fresh
+        // shard for it loses nothing.
+        //
+        // Only `Replacement` puts the item in `MigrationResult::replaced_items`,
+        // because that set is derived from `MigrationRunResult::new_shards`,
+        // which only `migrate_replace` populates. `replaced_items` reaches the
+        // coordinator as `migrated_storage_collections_0dt`, which is what makes
+        // a read-only coordinator back-fill the new shard so dependent dataflows
+        // such as `pg_type_all_databases_ind` can hydrate. Under `Evolution` the
+        // read-only path only checks backward compatibility and leaves the new
+        // schema unregistered, so readers would take the old parts through
+        // persist's schema migration instead. The only `Evolution` step in this
+        // list targets a source, so that path is untried for tables.
         //
         // See the NOTE above: this version must stay at the workspace's current
         // dev version until the change ships.

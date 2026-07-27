@@ -4004,7 +4004,7 @@ export interface MzTypePgMetadata {
   id: Generated<string>;
   typinput: Generated<number>;
   typreceive: Generated<number>;
-  typsend: Generated<number | null>;
+  typsend: Generated<number>;
 }
 
 export interface MzTypes {
