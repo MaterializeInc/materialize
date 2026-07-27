@@ -2343,6 +2343,17 @@ fn plan_select_from_where(
     let pre_table_funcs_arity = from_scope.len();
     let mut pre_table_funcs_relation = None;
     let mut table_funcs_deferred = false;
+    // `DISTINCT ON` picks its rows before the SELECT list table functions
+    // expand them, so Step 10 may have to replant this join above the top-k it
+    // plans. Only keep the pieces around when that can happen, so that other
+    // queries don't pay for the clones.
+    //
+    // PostgreSQL only postpones the expansion when the query sorts. Without an
+    // `ORDER BY` it leaves the expansion below the distinct, which collapses
+    // it to one row per group, and we match that.
+    let mut postponable_table_funcs = None;
+    let track_postponable_table_funcs =
+        matches!(s.distinct, Some(Distinct::On(_))) && !order_by_exprs.is_empty();
     if !table_funcs.is_empty() {
         let (expr, scope) = plan_scalar_table_funcs(
             qcx,
@@ -2353,6 +2364,14 @@ fn plan_select_from_where(
         )?;
         if !aggregates.is_empty() || !s.group_by.is_empty() || s.having.is_some() {
             pre_table_funcs_relation = Some(relation_expr.clone());
+        }
+        if track_postponable_table_funcs {
+            postponable_table_funcs = Some(PostponableTableFuncs {
+                input: relation_expr.clone(),
+                funcs: expr.clone(),
+                input_arity: pre_table_funcs_arity,
+                funcs_arity: scope.len(),
+            });
         }
         relation_expr = relation_expr.join(expr, HirScalarExpr::literal_true(), JoinKind::Inner);
         from_scope = from_scope.product(scope)?;
@@ -2514,6 +2533,10 @@ fn plan_select_from_where(
                 }
             }
 
+            // Either the reduce consumes the Step 3 join, which pins it below
+            // the reduce, or the join is dropped and Step 8.5 replans it.
+            postponable_table_funcs = None;
+
             // apply GROUP BY / aggregates
             relation_expr = relation_expr.map(group_hir_exprs).reduce(
                 group_key,
@@ -2593,6 +2616,11 @@ fn plan_select_from_where(
         }
         visitor.into_result()
     };
+    if !window_funcs.is_empty() {
+        // A window function runs over the expanded rows, so the join that
+        // produced them cannot move above the `DISTINCT ON`.
+        postponable_table_funcs = None;
+    }
     for window_func in window_funcs {
         let ecx = &ExprContext {
             qcx,
@@ -2614,6 +2642,9 @@ fn plan_select_from_where(
 
     // Step 8. Handle QUALIFY clause. (very similar to HAVING)
     if let Some(ref qualify) = s.qualify {
+        // The filter discards expanded rows, so the join that produced them
+        // cannot move above the `DISTINCT ON`.
+        postponable_table_funcs = None;
         let ecx = &ExprContext {
             qcx,
             name: "QUALIFY clause",
@@ -2639,6 +2670,14 @@ fn plan_select_from_where(
             &relation_expr,
             &group_scope,
         )?;
+        if track_postponable_table_funcs {
+            postponable_table_funcs = Some(PostponableTableFuncs {
+                input: relation_expr.clone(),
+                funcs: expr.clone(),
+                input_arity: group_scope.len(),
+                funcs_arity: scope.len(),
+            });
+        }
         relation_expr = relation_expr.join(expr, HirScalarExpr::literal_true(), JoinKind::Inner);
         // `product` resets `ungrouped_columns`, but the ungrouped column
         // errors from the reduce must survive for the SELECT list.
@@ -2648,6 +2687,7 @@ fn plan_select_from_where(
     }
 
     // Step 9. Handle SELECT clause.
+    let mut select_map_exprs = vec![];
     let output_columns = {
         let mut new_exprs = vec![];
         let mut new_type = qcx.relation_type(&relation_expr);
@@ -2691,6 +2731,9 @@ fn plan_select_from_where(
                     .items
                     .push(ScopeItem::from_expr(select_item.as_expr().cloned()));
             }
+        }
+        if postponable_table_funcs.is_some() {
+            select_map_exprs.clone_from(&new_exprs);
         }
         relation_expr = relation_expr.map(new_exprs);
         output_columns
@@ -2803,17 +2846,36 @@ fn plan_select_from_where(
                 // if there are any, determine the ordering within each group,
                 // per PostgreSQL semantics.
                 let distinct_len = distinct_key.len();
-                relation_expr = HirRelationExpr::top_k(
-                    relation_expr.map(map_exprs),
-                    distinct_key,
-                    order_by.iter().skip(distinct_len).cloned().collect(),
-                    Some(HirScalarExpr::literal(
-                        Datum::Int64(1),
-                        SqlScalarType::Int64,
-                    )),
-                    HirScalarExpr::literal(Datum::Int64(0), SqlScalarType::Int64),
-                    group_size_hints.distinct_on_input_group_size,
-                );
+                let top_k_order_by: Vec<_> = order_by.iter().skip(distinct_len).cloned().collect();
+
+                // The top-k belongs below a SELECT list table function join
+                // whenever it does not need what the functions produce, so
+                // that the functions expand the rows the top-k picked instead
+                // of being collapsed by it.
+                let postponed = postponable_table_funcs.take().and_then(|table_funcs| {
+                    let maps = select_map_exprs.iter().chain(map_exprs.iter());
+                    plan_distinct_on_below_table_funcs(
+                        table_funcs,
+                        maps.cloned().collect(),
+                        &distinct_key,
+                        &top_k_order_by,
+                        group_size_hints.distinct_on_input_group_size,
+                    )
+                });
+                relation_expr = match postponed {
+                    Some(postponed) => postponed,
+                    None => HirRelationExpr::top_k(
+                        relation_expr.map(map_exprs),
+                        distinct_key,
+                        top_k_order_by,
+                        Some(HirScalarExpr::literal(
+                            Datum::Int64(1),
+                            SqlScalarType::Int64,
+                        )),
+                        HirScalarExpr::literal(Datum::Int64(0), SqlScalarType::Int64),
+                        group_size_hints.distinct_on_input_group_size,
+                    ),
+                };
             }
         }
 
@@ -2832,6 +2894,141 @@ fn plan_select_from_where(
         order_by,
         project: project_key,
     })
+}
+
+/// The pieces of a `SELECT` list table function join, kept so that a
+/// `DISTINCT ON` can be planned below the join rather than above it.
+struct PostponableTableFuncs {
+    /// The relation the functions are joined onto.
+    input: HirRelationExpr,
+    /// The functions' relation. Correlated to `input` at level 1, so it stays
+    /// valid as long as `input`'s columns keep their positions.
+    funcs: HirRelationExpr,
+    /// Arity of `input`, i.e. the first column the functions contribute.
+    input_arity: usize,
+    /// Number of columns the functions contribute.
+    funcs_arity: usize,
+}
+
+/// Plans a `DISTINCT ON` below a `SELECT` list table function join instead of
+/// above it, so that the functions expand the rows the top-k picked rather
+/// than being collapsed by it. This is what PostgreSQL does whenever the
+/// distinct key and its ordering can be evaluated without the functions'
+/// output.
+///
+/// `maps` are the scalar expressions mapped onto the join, in column order, so
+/// `distinct_key` and `order_by` index the join's columns followed by `maps`.
+///
+/// Returns `None` when a distinct or ordering column needs a column the
+/// functions produce. PostgreSQL keeps the expansion below the distinct in
+/// that case too, which is what the caller has already planned.
+fn plan_distinct_on_below_table_funcs(
+    table_funcs: PostponableTableFuncs,
+    maps: Vec<HirScalarExpr>,
+    distinct_key: &[usize],
+    order_by: &[ColumnOrder],
+    expected_group_size: Option<u64>,
+) -> Option<HirRelationExpr> {
+    let PostponableTableFuncs {
+        input,
+        funcs,
+        input_arity,
+        funcs_arity,
+    } = table_funcs;
+    let join_arity = input_arity + funcs_arity;
+
+    // Which maps can be evaluated on `input` alone. A map that reads a
+    // function column, directly or through an earlier map, cannot. Maps are in
+    // dependency order, so one forward pass settles all of them.
+    let mut on_input = vec![false; maps.len()];
+    for (i, expr) in maps.iter().enumerate() {
+        let mut evaluable = true;
+        expr.visit_columns_referring_to_root_level(&mut |column| {
+            if column >= input_arity {
+                evaluable &= column >= join_arity && on_input[column - join_arity];
+            }
+        });
+        on_input[i] = evaluable;
+    }
+
+    // The top-k's own columns have to be among those, or the functions' output
+    // decides which rows survive and the join has to stay below.
+    let mut needed = vec![false; maps.len()];
+    for column in distinct_key
+        .iter()
+        .chain(order_by.iter().map(|o| &o.column))
+    {
+        if *column < input_arity {
+            continue;
+        }
+        if *column < join_arity || !on_input[*column - join_arity] {
+            return None;
+        }
+        needed[*column - join_arity] = true;
+    }
+    // Pull in what those maps read. Dependencies come earlier, so one backward
+    // pass reaches all of them.
+    for i in (0..maps.len()).rev() {
+        if needed[i] {
+            maps[i].visit_columns_referring_to_root_level(&mut |column| {
+                if column >= join_arity {
+                    needed[column - join_arity] = true;
+                }
+            });
+        }
+    }
+
+    // Re-map the needed expressions onto `input`, then project them away again
+    // so that the join sees `input` exactly as it did before.
+    let mut mapped = vec![];
+    let mut input_column = vec![None; maps.len()];
+    for (i, expr) in maps.iter().enumerate() {
+        if !needed[i] {
+            continue;
+        }
+        let mut expr = expr.clone();
+        expr.visit_columns_referring_to_root_level_mut(&mut |column| {
+            if *column >= join_arity {
+                *column = input_column[*column - join_arity]
+                    .expect("dependencies of a needed map are needed and come earlier");
+            }
+        });
+        input_column[i] = Some(input_arity + mapped.len());
+        mapped.push(expr);
+    }
+    let on_input_column = |column: usize| {
+        if column < input_arity {
+            column
+        } else {
+            input_column[column - join_arity].expect("checked above")
+        }
+    };
+
+    let top_k = input
+        .map(mapped)
+        .top_k(
+            distinct_key.iter().map(|c| on_input_column(*c)).collect(),
+            order_by
+                .iter()
+                .map(|o| ColumnOrder {
+                    column: on_input_column(o.column),
+                    desc: o.desc,
+                    nulls_last: o.nulls_last,
+                })
+                .collect(),
+            Some(HirScalarExpr::literal(
+                Datum::Int64(1),
+                SqlScalarType::Int64,
+            )),
+            HirScalarExpr::literal(Datum::Int64(0), SqlScalarType::Int64),
+            expected_group_size,
+        )
+        .project((0..input_arity).collect());
+    Some(
+        top_k
+            .join(funcs, HirScalarExpr::literal_true(), JoinKind::Inner)
+            .map(maps),
+    )
 }
 
 fn plan_scalar_table_funcs(
