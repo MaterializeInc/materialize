@@ -72,7 +72,7 @@ most workloads. We recommend using cc sizes unless your workload specifically
 requires the additional disk capacity that M.1 sizes provide.
 {{< /note >}}
 
-{{< include-md file="shared-content/cluster-size-disclaimer.md" >}}
+{{% include-headless "/headless/cluster-size-disclaimer" %}}
 
 {{< yaml-table data="m1_cluster_sizing" >}}
 

@@ -14,7 +14,7 @@ menu:
 
 - To upgrade to `v26.0` using Materialize-provided Terraforms, upgrade your
 Terraform version to `v0.6.1` or higher, {{< include-md
-file="shared-content/self-managed/gcp-terraform-v0.6.1-upgrade-notes.md" >}}.
+file="content/headless/self-managed-deployments/gcp-terraform-v0.6.1-upgrade-notes.md" >}}.
 
 - To upgrade to `v26.0` if <red>**not**</red> using a Materialize-provided
 Terraforms, you must prepare your nodes by adding the required labels. For
@@ -33,7 +33,7 @@ or the root).
 
 ## Version compatibility
 
-{{< include-md file="shared-content/self-managed/version-compatibility-upgrade-banner.md" >}}
+{{% include-headless "/headless/self-managed-deployments/version-compatibility-upgrade-banner" %}}
 
 {{< tabs >}}
 
@@ -112,7 +112,7 @@ If you want to use `jq` and do not have `jq` installed, install.
 
 ### License key
 
-{{< include-md file="shared-content/self-managed/license-key-upgrades.md" >}}
+{{% include-headless "/headless/self-managed-deployments/license-key-upgrades" %}}
 
 ## Procedure
 

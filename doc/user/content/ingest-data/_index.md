@@ -16,7 +16,7 @@ aliases:
 
 You can ingest data into Materialize from various external systems:
 
-{{< include-md file="shared-content/multilink-box-native-connectors.md" >}}
+{{% include-headless "/headless/multilink-box-native-connectors" %}}
 
 ## Sources and clusters
 
@@ -189,7 +189,7 @@ If the cluster hosting the source restarts during snapshotting (e.g., because it
 ran out of memory), you can scale up to a [larger
 size](/sql/alter-cluster/#alter-cluster-size) to complete the operation.
 
-{{< include-md file="shared-content/resize-cluster-for-snapshotting.md" >}}
+{{% include-headless "/headless/resize-cluster-for-snapshotting" %}}
 
 #### Right-size the cluster for steady-state
 

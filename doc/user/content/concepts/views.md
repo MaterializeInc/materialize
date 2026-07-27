@@ -165,7 +165,7 @@ See also:
 
 {{% include-from-yaml data="index_view_details" name="table-usage-pattern" %}}
 
-{{% include-md file="shared-content/mat-view-use-cases.md" %}}
+{{% include-md file="content/headless/mat-view-use-cases.md" %}}
 
 ## General information
 

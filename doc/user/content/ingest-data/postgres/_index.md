@@ -46,7 +46,7 @@ common PostgreSQL hosted services.
 
 To help you get started, the following integration guides are available:
 
-{{% include-md file="shared-content/postgresql-ingest-data-guides.md" %}}
+{{% include-headless "/headless/postgresql-ingest-data-guides" %}}
 
 ## Considerations
 

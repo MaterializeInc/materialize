@@ -66,8 +66,7 @@ Certificate Authority (CA) rather than self-signed certificates.
 
 ## Upgrading guideline
 
-{{< include-md file="shared-content/self-managed/general-rules-for-upgrades.md"
->}}
+{{% include-headless "/headless/self-managed-deployments/general-rules-for-upgrades" %}}
 
 ## Node pool resizing
 

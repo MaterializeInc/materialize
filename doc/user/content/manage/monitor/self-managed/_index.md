@@ -3,6 +3,11 @@ title: "Self-Managed"
 description: "Monitor the performance of your Self-Managed Materialize region with Datadog and Grafana."
 disable_toc: true
 disable_list: true
+aliases:
+  - /self-managed/v25.2/manage/monitor/
+  - /self-managed/v25.2/manage/monitor/prometheus/
+  - /self-managed/v25.2/manage/monitor/datadog/
+  - /self-managed/v25.2/manage/monitor/alerting/
 menu:
   main:
     parent: "monitor"

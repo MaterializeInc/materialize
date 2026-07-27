@@ -1604,7 +1604,8 @@ Materialize v26.1.0 includes improved support for SQLServer, including the abili
 
 ### Upgrade notes for v26.1.0
 
-{{< include-md file="shared-content/self-managed/upgrade-notes/v26.1.md" >}}
+{{% include-headless "/headless/self-managed-deployments/upgrade-notes/v26.1"
+%}}
 
 ## Self-Managed v26.0.0
 
@@ -1623,11 +1624,11 @@ the node selectors for `clusterd` pods:
 - To upgrade using Materialize-provided Terraforms, upgrade your Terraform
   version to `v0.6.1`:
   - {{< include-md
-file="shared-content/self-managed/aws-terraform-v0.6.1-upgrade-notes.md" >}}.
+file="content/headless/self-managed-deployments/aws-terraform-v0.6.1-upgrade-notes.md" >}}.
   - {{< include-md
-file="shared-content/self-managed/gcp-terraform-v0.6.1-upgrade-notes.md" >}}.
+file="content/headless/self-managed-deployments/gcp-terraform-v0.6.1-upgrade-notes.md" >}}.
   - {{< include-md
-  file="shared-content/self-managed/azure-terraform-v0.6.1-upgrade-notes.md"
+  file="content/headless/self-managed-deployments/azure-terraform-v0.6.1-upgrade-notes.md"
   >}}.
 
 - To upgrade if <red>**not**</red> using a Materialize-provided Terraforms,  you

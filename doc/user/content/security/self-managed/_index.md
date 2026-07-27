@@ -16,6 +16,7 @@ aliases:
   - /self-managed/v25.2/manage/access-control/appendix-built-in-roles/
   - /self-managed/v25.2/manage/access-control/rbac-terraform-tutorial/
   - /self-managed/v25.2/manage/appendix-alternative-cluster-architectures/
+  - /self-managed/v25.2/manage/authentication/
 ---
 
 This section covers security for Self-Managed Materialize.

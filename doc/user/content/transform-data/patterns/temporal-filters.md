@@ -66,14 +66,14 @@ When creating a temporal filter using
 [`mz_now()`](/sql/functions/now_and_mz_now) in a `WHERE` or `HAVING` clause, the
 clause has the following shape:
 
-{{< include-md file="shared-content/mz_now_clause_requirements.md" >}}
+{{< include-md file="content/headless/mz_now_clause_requirements.md" >}}
 
 ### `mz_now()` restrictions
 
 The [`mz_now()`](/sql/functions/now_and_mz_now) clause has the following
 restrictions:
 
-- {{< include-md file="shared-content/mz_now_clause_disjunction_restrictions.md" >}}
+- {{< include-md file="content/headless/mz_now_clause_disjunction_restrictions.md" >}}
 
   To rewrite the query, see [Disjunction (OR)
   alternatives](http://localhost:1313/docs/transform-data/idiomatic-materialize-sql/mz_now/#disjunctions-or).

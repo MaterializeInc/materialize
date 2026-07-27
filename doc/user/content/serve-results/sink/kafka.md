@@ -159,4 +159,4 @@ partioning](/sql/create-sink/kafka#custom-partitioning).
 
 ### Kafka transaction markers
 
-{{< include-md file="shared-content/kafka-transaction-markers.md" >}}
+{{% include-headless "/headless/kafka-transaction-markers" %}}
