@@ -419,10 +419,6 @@ impl Value {
             .expect("provided closure never fails"),
             Value::Oid(oid) => strconv::format_uint32(buf, *oid),
             // Mirrors PostgreSQL's `regprocout`.
-            //
-            // NOTE: The SQL cast from `regproc` to `text` renders OID 0 as `0`
-            // rather than `-`, so the two Materialize paths disagree on that one
-            // value. PostgreSQL prints `-` for both.
             Value::RegProc(oid) => match *oid {
                 0 => strconv::format_string(buf, REGPROC_NULL),
                 oid => match regproc::name(oid) {

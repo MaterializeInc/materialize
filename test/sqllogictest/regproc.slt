@@ -85,6 +85,18 @@ SELECT NULL::regproc::text
 ----
 NULL
 
+# OID 0 is the absent reference, rendered as `-` like PostgreSQL's `regprocout`.
+# A nonzero OID that names no function keeps its digits.
+query T
+SELECT 0::regproc::text
+----
+-
+
+query T
+SELECT 99999::regproc::text
+----
+99999
+
 query error more than one function named "max"
 SELECT 'max'::regproc
 
