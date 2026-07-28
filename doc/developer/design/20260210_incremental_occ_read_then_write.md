@@ -358,10 +358,16 @@ regression noted above, which is an accepted cost: high write throughput is a
 non-goal (see Non-Goals).
 
 Measured on the full implementation, with the OCC path on for every mzcompose
-suite, the small-write regression is at the bad end of that range: the feature
-benchmark `ManySmallUpdates` is 1.9x slower and `Update` 1.4x slower, and the
-scalability `UpdateWorkload` loses 36% throughput at concurrency 1 and about
-22% at 8 and 32.
+suite, the small-write regression is at the bad end of that range. Across nightly
+runs the feature benchmark `ManySmallUpdates` is 1.7-1.9x slower and `Update`
+1.4x slower, and the scalability `UpdateWorkload` loses 36-39% throughput at
+concurrency 1 and about 22% at 8 and 32.
+
+`ManySmallUpdates` also steps `memory_clusterd` up by about 56%, from 57 MB to
+88 MB. Same cause as the wallclock step, from the other side: the subscribe
+dataflow each operation installs is arranged on the cluster, where the fast-path
+peek it replaces holds nothing. The absolute figures stay small because the
+dataflow lives only as long as the operation.
 
 The performance suites run the OCC path, because that is the configuration we
 intend to ship. The write benchmarks therefore record a one-time step, which we
