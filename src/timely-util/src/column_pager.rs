@@ -35,6 +35,7 @@
 pub mod metrics;
 pub mod policy;
 
+use std::cell::RefCell;
 use std::io::{self, Read};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, RwLock};
@@ -46,6 +47,65 @@ use timely::bytes::arc::BytesMut;
 use timely::dataflow::channels::ContainerBytes;
 
 use crate::columnar::Column;
+
+thread_local! {
+    /// Per-worker pool of warm `Vec<u64>` read buffers for file-backed
+    /// [`ColumnPager::take`]. Reading a paged column back from the file backend
+    /// otherwise lands in a freshly allocated buffer, so the kernel faults in
+    /// and zeroes cold anonymous pages on the read's `copy_to_user` — the
+    /// dominant non-I/O cost on the page-in path. Reusing a buffer whose pages
+    /// are already resident sidesteps that. Consumed [`Column::Align`] chunks
+    /// are returned here via [`recycle_body`]; the next file-backed `take`
+    /// reads into one. Like the merge batcher's chunk stash it is a small
+    /// hot-buffer cache, not a hoard, and its parked bytes are resident but not
+    /// tracked by the pager's [`ResidentTicket`] budget.
+    static BODY_POOL: RefCell<Vec<Vec<u64>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Maximum warm read buffers parked per worker. Bounds resident pool bytes at
+/// `BODY_POOL_CAP * BODY_POOL_MAX_BYTES`. A 2-way merge has only a handful of
+/// `Align` heads live at once, so a tight cap captures steady-state reuse.
+const BODY_POOL_CAP: usize = 4;
+
+/// Don't park a buffer whose capacity exceeds this (bytes). A transiently
+/// oversize read buffer kept warm would pin more pool memory than the avoided
+/// faulting is worth, so it goes back to the allocator and a fresh default
+/// regrows. Shares [`crate::columnar::OVERSIZE_RECYCLE_BYTES`] with the merge
+/// batcher's column recycler — both park ship-chunk-sized payloads, so they
+/// track one ship-derived bound rather than separate literals.
+const BODY_POOL_MAX_BYTES: usize = crate::columnar::OVERSIZE_RECYCLE_BYTES;
+
+/// Takes a (possibly warm) read buffer from the pool, or a fresh empty one.
+/// `pager::take` clears and resizes it before reading, so its contents are
+/// irrelevant — only its resident capacity matters.
+fn take_body_buffer() -> Vec<u64> {
+    BODY_POOL.with(|p| p.borrow_mut().pop()).unwrap_or_default()
+}
+
+/// Returns `buf` to the warm-buffer pool for reuse, dropping it if the pool is
+/// full or the buffer is oversize. Public so the merge batcher can hand back
+/// the backing of a consumed [`Column::Align`] chunk.
+pub fn recycle_body(buf: Vec<u64>) {
+    if buf.capacity().saturating_mul(8) > BODY_POOL_MAX_BYTES {
+        return;
+    }
+    BODY_POOL.with(|p| {
+        let mut pool = p.borrow_mut();
+        if pool.len() < BODY_POOL_CAP {
+            pool.push(buf);
+        }
+    });
+}
+
+#[cfg(test)]
+fn clear_body_pool() {
+    BODY_POOL.with(|p| p.borrow_mut().clear());
+}
+
+#[cfg(test)]
+fn body_pool_len() -> usize {
+    BODY_POOL.with(|p| p.borrow().len())
+}
 
 /// Compression codec applied to a paged-out column.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -510,7 +570,14 @@ impl ColumnPager {
             // `_ticket` drops here and fires `PageEvent::ResidentReleased`.
             PagedColumn::Resident(c, _ticket) => c,
             PagedColumn::Paged { handle, meta } => {
-                let mut body: Vec<u64> = Vec::with_capacity(handle.len());
+                // File-backed reads fault a cold destination buffer; pull a warm
+                // one from the pool. The swap backend fills from resident memory
+                // and keeps its own path.
+                let mut body: Vec<u64> = if handle.is_file() {
+                    take_body_buffer()
+                } else {
+                    Vec::with_capacity(handle.len())
+                };
                 pager::take(handle, &mut body);
                 debug_assert_eq!(body.len() * 8, meta.len_bytes);
                 metrics::observe_pagein(meta.len_bytes);
@@ -528,12 +595,18 @@ impl ColumnPager {
                             .expect("lz4 decode from memory");
                     }
                     CompressedInner::Paged(h) => {
-                        let mut padded = Vec::with_capacity(h.len());
+                        // Compressed-file payloads are always file-backed, so a
+                        // warm buffer applies here too. `padded` is transient —
+                        // return it to the pool once decoding has copied out.
+                        let mut padded = take_body_buffer();
                         pager::take(h, &mut padded);
-                        let src: &[u8] = bytemuck::cast_slice(&padded);
-                        FrameDecoder::new(src)
-                            .read_to_end(&mut decoded)
-                            .expect("lz4 decode from pager");
+                        {
+                            let src: &[u8] = bytemuck::cast_slice(&padded);
+                            FrameDecoder::new(src)
+                                .read_to_end(&mut decoded)
+                                .expect("lz4 decode from pager");
+                        }
+                        recycle_body(padded);
                     }
                 }
                 debug_assert_eq!(decoded.len(), meta.len_bytes);
@@ -642,6 +715,40 @@ mod tests {
     /// Drains a column into a `Vec<i64>` for comparison via `borrow`.
     fn collect_i64(col: &Column<i64>) -> Vec<i64> {
         col.borrow().into_index_iter().copied().collect()
+    }
+
+    #[mz_ore::test]
+    fn body_pool_recycles_and_reuses() {
+        clear_body_pool();
+        let buf = Vec::<u64>::with_capacity(128);
+        let cap = buf.capacity();
+        recycle_body(buf);
+        assert_eq!(body_pool_len(), 1);
+        let got = take_body_buffer();
+        assert!(
+            got.capacity() >= cap,
+            "take should reuse the parked buffer's capacity"
+        );
+        assert_eq!(body_pool_len(), 0);
+        // Empty pool yields a fresh, zero-capacity buffer.
+        assert_eq!(take_body_buffer().capacity(), 0);
+    }
+
+    #[mz_ore::test]
+    fn body_pool_caps_count_and_rejects_oversize() {
+        clear_body_pool();
+        for _ in 0..(BODY_POOL_CAP + 2) {
+            recycle_body(Vec::with_capacity(16));
+        }
+        assert_eq!(
+            body_pool_len(),
+            BODY_POOL_CAP,
+            "pool must not grow past its cap"
+        );
+
+        clear_body_pool();
+        recycle_body(vec![0u64; (BODY_POOL_MAX_BYTES / 8) + 1]);
+        assert_eq!(body_pool_len(), 0, "oversize buffers are not parked");
     }
 
     #[mz_ore::test]

@@ -174,6 +174,15 @@ where
 /// merger and chunks shipped from the builder are sized comparably.
 const SHIP_WORDS: usize = 1 << 18;
 
+/// Size above which a transient buffer is treated as pathologically oversize and
+/// dropped rather than parked for reuse: the merge batcher's column free-list
+/// and the column pager's warm read-buffer pool both bound their parked
+/// payloads by this. Two ship chunks' worth (~4 MiB), so ordinary ship-sized
+/// payloads stay poolable while post-explosion outliers go back to the
+/// allocator. Derived from [`SHIP_WORDS`] so both recyclers track the ship
+/// granularity instead of drifting from a hand-copied literal.
+pub(crate) const OVERSIZE_RECYCLE_BYTES: usize = 2 * SHIP_WORDS * size_of::<u64>();
+
 /// Returns true once the serialized size of `borrow` is within 10% of the next
 /// `SHIP_WORDS` boundary.
 ///
