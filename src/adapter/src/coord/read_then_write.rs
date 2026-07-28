@@ -104,10 +104,29 @@ impl Coordinator {
         };
         active_subscribe.initialize();
 
-        let write_notify_fut =
-            self.add_active_compute_sink(sink_id, ActiveComputeSink::Subscribe(active_subscribe));
-        let ship_dataflow_fut = self.ship_dataflow(df_desc, cluster_id, replica_id);
-        let ((), ()) = futures::future::join(write_notify_fut, ship_dataflow_fut).await;
+        // Ship the dataflow before registering the sink, so a failure has
+        // nothing to unwind. Sequencing them costs nothing here: an internal
+        // subscribe writes no introspection row, so its registration notify is
+        // already resolved.
+        //
+        // Creation can fail because the plan was optimized against a catalog
+        // snapshot on the session task, and a DROP of one of its dependencies
+        // can land before this message is handled. The coordinator's own
+        // read-then-write path has no such window, which is why `ship_dataflow`
+        // is free to treat creation failure as unreachable and abort. Here it is
+        // reachable, and it is a conflict for the session to report.
+        if let Err(err) = self
+            .try_ship_dataflow(df_desc, cluster_id, replica_id)
+            .await
+        {
+            let _ = response_tx.send(Err(
+                AdapterError::concurrent_dependency_drop_from_dataflow_creation_error(err),
+            ));
+            return;
+        }
+
+        self.add_active_compute_sink(sink_id, ActiveComputeSink::Subscribe(active_subscribe))
+            .await;
 
         let _ = response_tx.send(Ok(rx));
 
