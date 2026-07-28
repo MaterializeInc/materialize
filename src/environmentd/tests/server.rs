@@ -867,6 +867,15 @@ const DML_LOGGING_PARITY_CASES: &[DmlLoggingCase] = &[
         after: &[],
         frontend_only_execution_timestamp: true,
     },
+    // A RETURNING insert that matches no rows. Both paths report a row count
+    // rather than an empty result set, so this pins the response kind (and with
+    // it `rows_returned` and `result_size`) of the zero-row case.
+    DmlLoggingCase {
+        before: &[],
+        sql: "INSERT INTO parity_t SELECT 101 WHERE false RETURNING x",
+        after: &[],
+        frontend_only_execution_timestamp: false,
+    },
     // Rejected while describing the portal, before either path begins an
     // execution, so neither logs one.
     DmlLoggingCase {

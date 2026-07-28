@@ -57,9 +57,7 @@ use mz_expr::{CollectionPlan, Id, LocalId, MirRelationExpr, MirScalarExpr, RowSe
 use mz_ore::cast::CastFrom;
 use mz_ore::soft_panic_or_log;
 use mz_repr::optimize::OverrideFrom;
-use mz_repr::{
-    CatalogItemId, Diff, GlobalId, IntoRowIterator, RelationDesc, Row, RowArena, Timestamp,
-};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
 use mz_sql::catalog::CatalogError;
 use mz_sql::plan::{self, MutationKind, QueryWhen};
 use mz_sql::session::metadata::SessionMetadata;
@@ -875,11 +873,9 @@ impl PeekClient {
                     // flatten to `Timestamp::MIN` for `consolidate_updates`.
                     state.consolidate(Timestamp::MIN);
                     if state.all_diffs.is_empty() {
-                        break build_no_rows_response(&kind, &returning).map(|response| {
-                            OccOutcome::Committed {
-                                response,
-                                write_ts: None,
-                            }
+                        break Ok(OccOutcome::Committed {
+                            response: build_no_rows_response(&kind),
+                            write_ts: None,
                         });
                     }
                     let success_response = match self.build_success_response(
@@ -925,12 +921,10 @@ impl PeekClient {
                                 ) {
                                     ProcessResult::Continue { .. } => {}
                                     ProcessResult::NoRowsMatched => {
-                                        break Some(build_no_rows_response(&kind, &returning).map(
-                                            |response| OccOutcome::Committed {
-                                                response,
-                                                write_ts: None,
-                                            },
-                                        ));
+                                        break Some(Ok(OccOutcome::Committed {
+                                            response: build_no_rows_response(&kind),
+                                            write_ts: None,
+                                        }));
                                     }
                                     ProcessResult::Error(e) => {
                                         break Some(Err(e));
@@ -1053,11 +1047,9 @@ impl PeekClient {
                     }
                 }
                 ProcessResult::NoRowsMatched => {
-                    break build_no_rows_response(&kind, &returning).map(|response| {
-                        OccOutcome::Committed {
-                            response,
-                            write_ts: None,
-                        }
+                    break Ok(OccOutcome::Committed {
+                        response: build_no_rows_response(&kind),
+                        write_ts: None,
                     });
                 }
                 ProcessResult::Error(e) => {
@@ -1418,21 +1410,17 @@ fn process_message(
 }
 
 /// Build the response returned when no rows matched the selection.
-fn build_no_rows_response(
-    kind: &MutationKind,
-    returning: &[MirScalarExpr],
-) -> Result<ExecuteResponse, AdapterError> {
-    if !returning.is_empty() {
-        let rows: Vec<Row> = vec![];
-        return Ok(ExecuteResponse::SendingRowsImmediate {
-            rows: Box::new(rows.into_row_iter()),
-        });
-    }
-    Ok(match kind {
+///
+/// Bug-compatible with the coordinator path, which evaluates RETURNING over the
+/// diffs and so reports a plain row count when there are none. Postgres returns
+/// an empty result set for a zero-row `INSERT ... RETURNING` instead, but
+/// changing that is a change to the path that ships today, not to this one.
+fn build_no_rows_response(kind: &MutationKind) -> ExecuteResponse {
+    match kind {
         MutationKind::Delete => ExecuteResponse::Deleted(0),
         MutationKind::Update => ExecuteResponse::Updated(0),
         MutationKind::Insert => ExecuteResponse::Inserted(0),
-    })
+    }
 }
 
 /// Transform a MIR expression to produce the appropriate diffs for a mutation.
