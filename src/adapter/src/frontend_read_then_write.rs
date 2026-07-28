@@ -948,6 +948,28 @@ impl PeekClient {
                         .current_upper
                         .expect("must have seen progress to be ready to write");
 
+                    // Invariant: every diff we are about to write comes from a
+                    // time strictly below `write_ts`. `consolidate` below
+                    // rewrites all diff timestamps to `write_ts`, so a diff from
+                    // at or after `write_ts` would durably record rows that
+                    // reflect state from after the timestamp they were written
+                    // at.
+                    //
+                    // The drain can get ahead of the frontier: a subscribe sends
+                    // a batch's data and the following progress as two separate
+                    // channel messages, so `try_recv` can pick up data from the
+                    // next batch and then see `Empty`, leaving `current_upper`
+                    // at the older progress. When that happens we do not write.
+                    // Waiting for the next progress message re-establishes the
+                    // invariant, and it is bounded by `statement_timeout` like
+                    // every other wait in this loop.
+                    if state
+                        .max_data_ts
+                        .is_some_and(|max_data_ts| max_data_ts >= write_ts)
+                    {
+                        continue;
+                    }
+
                     // Consolidate any rows received during the drain
                     // (the bulk was already consolidated on the last progress).
                     state.consolidate(write_ts);
@@ -1229,6 +1251,11 @@ struct ValidationResult {
 struct OccState {
     all_diffs: Vec<(Row, Timestamp, Diff)>,
     current_upper: Option<Timestamp>,
+    /// The largest timestamp among the data rows accumulated since the last
+    /// [`Self::consolidate`], which is where the diffs' own timestamps are
+    /// erased. `None` means every accumulated diff is already known to be from
+    /// before `current_upper`.
+    max_data_ts: Option<Timestamp>,
     retry_count: usize,
     byte_size: u64,
 }
@@ -1238,6 +1265,7 @@ impl OccState {
         Self {
             all_diffs: Vec::new(),
             current_upper: None,
+            max_data_ts: None,
             retry_count: 0,
             byte_size: 0,
         }
@@ -1249,6 +1277,10 @@ impl OccState {
     /// query as of `target_ts`. Rows that were retracted by newer updates
     /// cancel out, and `byte_size` is recomputed to reflect the
     /// consolidated data.
+    ///
+    /// The caller must have established that every diff comes from a time at or
+    /// before `target_ts`, otherwise the consolidated set claims to describe
+    /// `target_ts` while reflecting state from after it.
     fn consolidate(&mut self, target_ts: Timestamp) {
         for (_, ts, _) in self.all_diffs.iter_mut() {
             *ts = target_ts;
@@ -1259,6 +1291,7 @@ impl OccState {
             .iter()
             .map(|(row, _, _)| u64::cast_from(row.byte_len()))
             .sum();
+        self.max_data_ts = None;
     }
 }
 
@@ -1386,6 +1419,10 @@ fn process_message(
                             max_result_size
                         )));
                     }
+                    state.max_data_ts = Some(match state.max_data_ts {
+                        Some(max_ts) => std::cmp::max(max_ts, ts),
+                        None => ts,
+                    });
                     state.all_diffs.push((data_row, ts, diff));
                 }
             }
