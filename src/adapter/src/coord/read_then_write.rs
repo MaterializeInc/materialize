@@ -122,6 +122,15 @@ impl Coordinator {
     }
 
     /// Enqueues a write attempt from the frontend OCC loop.
+    ///
+    /// The two paths key the append on different ids, and that asymmetry is why
+    /// the blind path needs a second target check later. A write with a
+    /// requested timestamp goes straight to the committer, so it names the
+    /// `GlobalId` it validated here. A blind write sits in `pending_writes`
+    /// until the next group commit, which resolves the `CatalogItemId` to
+    /// whatever generation is current then, so commit staging re-checks the
+    /// pinned generation. A write buffered into a session transaction gets no
+    /// such re-check, see the `NOTE` in `frontend_read_then_write`.
     pub(crate) fn handle_attempt_write(
         &mut self,
         conn_id: mz_adapter_types::connection::ConnectionId,
@@ -133,14 +142,14 @@ impl Coordinator {
     ) {
         use crate::coord::appends::{
             InternalWriteResponder, PendingWriteTxn, TableWriteCmd, TimestampedWriteRequest,
-            UserWriteResponder,
+            UserWriteResponder, WriteTarget,
         };
         use mz_storage_client::client::TableData;
         use smallvec::smallvec;
         use std::collections::BTreeMap;
         use tracing::Span;
 
-        let result = InternalWriteResponder::new(result_tx, target_global_id);
+        let result = InternalWriteResponder::new(result_tx);
         if !self.active_conns.contains_key(&conn_id) {
             result.send(WriteResult::Canceled);
             return;
@@ -182,7 +191,14 @@ impl Coordinator {
                     span: Span::current(),
                     writes,
                     write_locks: None,
-                    responder: UserWriteResponder::Internal { conn_id, result },
+                    responder: UserWriteResponder::Internal {
+                        conn_id,
+                        target: WriteTarget {
+                            item_id: target_id,
+                            global_id: target_global_id,
+                        },
+                        result,
+                    },
                 });
                 self.trigger_group_commit();
             }

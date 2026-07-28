@@ -50,7 +50,6 @@ use mz_ore::assert_none;
 use mz_ore::halt;
 use mz_ore::instrument;
 use mz_ore::now::NowFn;
-use mz_ore::soft_panic_or_log;
 use mz_ore::task;
 use mz_repr::{CatalogItemId, GlobalId, Timestamp};
 use mz_sql::names::ResolvedIds;
@@ -186,21 +185,20 @@ pub enum WriteResult {
 }
 
 /// Delivers an internal write result, including on task shutdown.
+///
+/// The `Drop` impl is load-bearing. The session task waiting on the other end
+/// `expect`s a reply, so a `oneshot::Sender` that is dropped silently would
+/// panic that session on coordinator shutdown or on a dead group-committer
+/// task. Reporting [`WriteResult::Indeterminate`] instead lets the session
+/// report an error.
 #[derive(Debug)]
 pub struct InternalWriteResponder {
     tx: Option<oneshot::Sender<WriteResult>>,
-    expected_target_global_id: GlobalId,
 }
 
 impl InternalWriteResponder {
-    pub(crate) fn new(
-        tx: oneshot::Sender<WriteResult>,
-        expected_target_global_id: GlobalId,
-    ) -> Self {
-        Self {
-            tx: Some(tx),
-            expected_target_global_id,
-        }
+    pub(crate) fn new(tx: oneshot::Sender<WriteResult>) -> Self {
+        Self { tx: Some(tx) }
     }
 
     pub(crate) fn send(mut self, result: WriteResult) {
@@ -227,8 +225,19 @@ pub(crate) enum UserWriteResponder {
     /// Frontend-sequenced blind write.
     Internal {
         conn_id: ConnectionId,
+        /// The table the diffs were computed against, item id and the generation
+        /// current at that time. Group commit refuses the write if the table's
+        /// latest generation has moved on.
+        target: WriteTarget,
         result: InternalWriteResponder,
     },
+}
+
+/// A write's target table, pinned to one generation of it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct WriteTarget {
+    pub(crate) item_id: CatalogItemId,
+    pub(crate) global_id: GlobalId,
 }
 
 impl UserWriteResponder {
@@ -350,6 +359,17 @@ pub(crate) struct GroupCommitter {
     max_attempts: ConfigValHandle<usize>,
 }
 
+/// Outcome of one txns-shard write attempt.
+enum TxnsWriteAttempt {
+    /// The write landed and the oracle has applied its timestamp.
+    Applied,
+    /// Another writer holds the upper at or past the attempted timestamp. The
+    /// write did not land.
+    UpperConflict,
+    /// The table write worker is gone, so the outcome is unknown.
+    WorkerGone,
+}
+
 impl GroupCommitter {
     async fn run(mut self) {
         while let Some(cmd) = self.rx.recv().await {
@@ -367,7 +387,12 @@ impl GroupCommitter {
                     }
                     TableWriteCmd::TimestampedWrite(request) => {
                         let span = request.span.clone();
-                        if !self.commit_timestamped(request).instrument(span).await {
+                        if self
+                            .commit_timestamped(request)
+                            .instrument(span)
+                            .await
+                            .is_break()
+                        {
                             return;
                         }
                     }
@@ -403,7 +428,24 @@ impl GroupCommitter {
     /// Unlike blind writes, an `InvalidUppers` conflict must return to the
     /// subscribe loop. Retrying the same diffs at a fresh timestamp would apply
     /// a mutation to state it was not computed from.
-    async fn commit_timestamped(&self, request: TimestampedWriteRequest) -> bool {
+    ///
+    /// The four things [`Self::commit`] does that this deliberately skips:
+    ///
+    /// * The wall-clock throttle. The timestamp comes from a frontier observed
+    ///   on a running subscribe, whose `as_of` the caller linearized against
+    ///   the oracle before subscribing, so it does not run the write timeline
+    ///   ahead of the clock.
+    /// * Merging queued commits. There is nothing to merge into: these diffs
+    ///   are valid at this one timestamp, so they cannot share a timestamp with
+    ///   another write.
+    /// * A [`GroupCommitPermit`]. The OCC semaphore on the frontend bounds how
+    ///   many of these are in flight, and that is the backpressure for this
+    ///   path.
+    /// * Write locks. The point of OCC is to detect a conflicting write after
+    ///   the fact, through the timestamp, rather than to exclude it.
+    ///
+    /// `Break` means the table worker shut down.
+    async fn commit_timestamped(&self, request: TimestampedWriteRequest) -> ControlFlow<(), ()> {
         let TimestampedWriteRequest {
             appends,
             target_timestamp,
@@ -417,50 +459,34 @@ impl GroupCommitter {
                 target_timestamp,
                 next_eligible_timestamp: oracle_write_ts.step_forward(),
             });
-            return true;
+            return ControlFlow::Continue(());
         }
 
-        let advance_to = target_timestamp.step_forward();
-        let catalog_upper_start = Instant::now();
-        self.catalog_upper
-            .advance_upper(advance_to)
+        let write_ts = WriteTimestamp {
+            timestamp: target_timestamp,
+            advance_to: target_timestamp.step_forward(),
+        };
+        match self
+            .attempt_write_to_txns(
+                &write_ts,
+                Some(&self.metrics.append_table_duration_seconds),
+                |ts, advance_to| self.table_write_handle.append(ts, advance_to, appends),
+            )
             .await
-            .unwrap_or_terminate("unable to advance catalog upper");
-        self.metrics
-            .group_commit_catalog_upper_seconds
-            .observe(catalog_upper_start.elapsed().as_secs_f64());
-
-        let append_start = Instant::now();
-        let append_result = self
-            .table_write_handle
-            .append(target_timestamp, advance_to, appends)
-            .await;
-        self.metrics
-            .append_table_duration_seconds
-            .observe(append_start.elapsed().as_secs_f64());
-
-        match append_result {
-            Ok(Ok(())) => {}
-            Ok(Err(StorageError::InvalidUppers(_))) => {
+        {
+            TxnsWriteAttempt::Applied => {}
+            TxnsWriteAttempt::UpperConflict => {
                 result.send(WriteResult::TimestampPassed {
                     target_timestamp,
-                    next_eligible_timestamp: advance_to,
+                    next_eligible_timestamp: write_ts.advance_to,
                 });
-                return true;
+                return ControlFlow::Continue(());
             }
-            Ok(Err(other)) => {
-                Err::<(), _>(other).unwrap_or_terminate("cannot fail to write to txns shard");
-                unreachable!("unwrap_or_terminate does not return on Err");
-            }
-            Err(_recv) => {
+            TxnsWriteAttempt::WorkerGone => {
                 warn!("table write worker gone with a timestamped write outstanding");
-                return false;
+                return ControlFlow::Break(());
             }
         }
-
-        let now: Timestamp = (self.now)().into();
-        crate::coord::timeline::check_runaway_write_ts(&now, target_timestamp);
-        self.oracle.apply_write(target_timestamp).await;
 
         if self
             .internal_cmd_tx
@@ -474,10 +500,11 @@ impl GroupCommitter {
         {
             warn!("coordinator shut down before a timestamped write could be finalized");
         }
-        true
+        ControlFlow::Continue(())
     }
 
-    /// Writes at a fresh oracle timestamp and applies a successful write to the oracle.
+    /// Writes at a fresh oracle timestamp, retrying an upper conflict at a new
+    /// timestamp.
     ///
     /// Returns `None` when the table write worker shuts down.
     async fn write_to_txns(
@@ -487,7 +514,7 @@ impl GroupCommitter {
     ) -> Option<WriteTimestamp> {
         // Persistent conflicts indicate an unexpected writer. Halt instead of spinning forever.
         let mut attempt = 0;
-        let write_ts = loop {
+        loop {
             let max_attempts = self.max_attempts.get().max(1);
             if attempt >= max_attempts {
                 halt!(
@@ -497,26 +524,16 @@ impl GroupCommitter {
             attempt += 1;
             let write_ts = self.oracle.write_ts().await;
 
-            // A post-fence retry has an advance frontier above this handle's stale upper, so this
-            // reaches Persist and observes the fence.
-            let catalog_upper_start = Instant::now();
-            self.catalog_upper
-                .advance_upper(write_ts.advance_to)
+            // A post-fence retry has an advance frontier above this handle's stale upper, so the
+            // advance inside reaches Persist and observes the fence.
+            match self
+                .attempt_write_to_txns(&write_ts, op_duration_metric, |ts, advance_to| {
+                    op(ts, advance_to)
+                })
                 .await
-                .unwrap_or_terminate("unable to advance catalog upper");
-            self.metrics
-                .group_commit_catalog_upper_seconds
-                .observe(catalog_upper_start.elapsed().as_secs_f64());
-
-            let op_start = Instant::now();
-            let op_res = op(write_ts.timestamp, write_ts.advance_to).await;
-            if let Some(metric) = op_duration_metric {
-                metric.observe(op_start.elapsed().as_secs_f64());
-            }
-
-            match op_res {
-                Ok(Ok(())) => break write_ts,
-                Ok(Err(StorageError::InvalidUppers(_))) => {
+            {
+                TxnsWriteAttempt::Applied => return Some(write_ts),
+                TxnsWriteAttempt::UpperConflict => {
                     warn!(
                         write_ts = %write_ts.timestamp,
                         attempt,
@@ -524,24 +541,57 @@ impl GroupCommitter {
                     );
                     continue;
                 }
-                Ok(Err(other)) => {
-                    Err::<(), _>(other).unwrap_or_terminate("cannot fail to write to txns shard");
-                    unreachable!("unwrap_or_terminate does not return on Err");
-                }
-                Err(_recv) => {
+                TxnsWriteAttempt::WorkerGone => {
                     // The outcome is indeterminate. Stop before processing more writes.
                     warn!("table write worker gone (process shutting down), winding down");
                     return None;
                 }
             }
-        };
+        }
+    }
+
+    /// Runs `op` against the txns shard once, at `write_ts`.
+    ///
+    /// Advancing the catalog upper first keeps the catalog readable at the
+    /// oracle read timestamp. A write that lands is applied to the oracle
+    /// before this returns.
+    async fn attempt_write_to_txns(
+        &self,
+        write_ts: &WriteTimestamp,
+        op_duration_metric: Option<&prometheus::Histogram>,
+        op: impl FnOnce(Timestamp, Timestamp) -> oneshot::Receiver<Result<(), StorageError>>,
+    ) -> TxnsWriteAttempt {
+        let catalog_upper_start = Instant::now();
+        self.catalog_upper
+            .advance_upper(write_ts.advance_to)
+            .await
+            .unwrap_or_terminate("unable to advance catalog upper");
+        self.metrics
+            .group_commit_catalog_upper_seconds
+            .observe(catalog_upper_start.elapsed().as_secs_f64());
+
+        let op_start = Instant::now();
+        let op_res = op(write_ts.timestamp, write_ts.advance_to).await;
+        if let Some(metric) = op_duration_metric {
+            metric.observe(op_start.elapsed().as_secs_f64());
+        }
+
+        match op_res {
+            Ok(Ok(())) => {}
+            Ok(Err(StorageError::InvalidUppers(_))) => return TxnsWriteAttempt::UpperConflict,
+            Ok(Err(other)) => {
+                Err::<(), _>(other).unwrap_or_terminate("cannot fail to write to txns shard");
+                unreachable!("unwrap_or_terminate does not return on Err");
+            }
+            Err(_recv) => return TxnsWriteAttempt::WorkerGone,
+        }
 
         let now: Timestamp = (self.now)().into();
         crate::coord::timeline::check_runaway_write_ts(&now, write_ts.timestamp);
 
         self.oracle.apply_write(write_ts.timestamp).await;
 
-        Some(write_ts)
+        TxnsWriteAttempt::Applied
     }
 
     /// Applies a staged group commit.
@@ -884,7 +934,11 @@ impl Coordinator {
                                 }
                             }
                         }
-                        UserWriteResponder::Internal { conn_id, result } => {
+                        UserWriteResponder::Internal {
+                            conn_id,
+                            target,
+                            result,
+                        } => {
                             let acquired = missing
                                 .into_iter()
                                 .map(|id| {
@@ -899,7 +953,11 @@ impl Coordinator {
                                     span,
                                     writes,
                                     write_locks: None,
-                                    responder: UserWriteResponder::Internal { conn_id, result },
+                                    responder: UserWriteResponder::Internal {
+                                        conn_id,
+                                        target,
+                                        result,
+                                    },
                                 });
                             } else {
                                 // Retry by riding the next group commit
@@ -915,7 +973,11 @@ impl Coordinator {
                                     span,
                                     writes,
                                     write_locks: None,
-                                    responder: UserWriteResponder::Internal { conn_id, result },
+                                    responder: UserWriteResponder::Internal {
+                                        conn_id,
+                                        target,
+                                        result,
+                                    },
                                 });
                             }
                         }
@@ -973,29 +1035,24 @@ impl Coordinator {
                     span: _,
                     writes,
                     write_locks,
-                    responder: UserWriteResponder::Internal { result, .. },
+                    responder: UserWriteResponder::Internal { target, result, .. },
                 } => {
                     assert_none!(write_locks, "should have merged together all locks above");
-                    // Frontend internal writes target exactly one table,
-                    // enforced at enqueue time in `handle_attempt_write`.
-                    let mut writes = writes.into_iter();
-                    let (target_id, table_data) = match (writes.next(), writes.next()) {
-                        (Some(write), None) => write,
-                        _ => {
-                            soft_panic_or_log!("internal write must target exactly one table");
-                            result.send(WriteResult::TargetChanged);
-                            continue;
-                        }
-                    };
                     let current_global_id = self
                         .catalog()
-                        .try_get_entry(&target_id)
+                        .try_get_entry(&target.item_id)
                         .map(|entry| entry.latest_global_id());
-                    if current_global_id != Some(result.expected_target_global_id) {
+                    if current_global_id != Some(target.global_id) {
                         result.send(WriteResult::TargetChanged);
                         continue;
                     }
-                    appends.entry(target_id).or_default().extend(table_data);
+                    // A frontend write's data all belongs to `target`, which
+                    // `handle_attempt_write` enforces by building `writes` with
+                    // that single key.
+                    appends
+                        .entry(target.item_id)
+                        .or_default()
+                        .extend(writes.into_values().flatten());
                     internal_results.push(result);
                 }
                 PendingWriteTxn::System { updates, source } => {
