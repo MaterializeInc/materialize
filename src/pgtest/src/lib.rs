@@ -43,6 +43,11 @@
 //! The default is `CMS` (code, message, severity). For example: `until
 //! err_field_typs=SC` would return the severity and code fields in any
 //! ErrorResponse message.
+//! - `ignore` specifies message types to ignore. For example: `until
+//! ignore=NoticeResponse`.
+//! - `keep` specifies message types that are ignored by default but should be
+//! kept. Only `ParameterStatus` is ignored by default. For example: `until
+//! keep=ParameterStatus`.
 //!
 //! For example, to execute a simple prepared statement:
 //! ```pgtest
@@ -296,7 +301,13 @@ impl PgConn {
                             parameters: body.parameters().collect().unwrap(),
                         })?,
                     ),
-                    Message::ParameterStatus(_) => continue,
+                    Message::ParameterStatus(body) => (
+                        "ParameterStatus",
+                        serde_json::to_string(&ParameterStatus {
+                            name: body.name()?.to_string(),
+                            value: body.value()?.to_string(),
+                        })?,
+                    ),
                     Message::NoData => ("NoData", "".to_string()),
                     Message::EmptyQueryResponse => ("EmptyQueryResponse", "".to_string()),
                     _ => ("UNKNOWN", format!("'{}'", ch)),
@@ -451,6 +462,12 @@ pub struct CopyOut {
 #[derive(Serialize)]
 pub struct ParameterDescription {
     parameters: Vec<u32>,
+}
+
+#[derive(Serialize)]
+pub struct ParameterStatus {
+    pub name: String,
+    pub value: String,
 }
 
 #[derive(Serialize)]
@@ -617,6 +634,17 @@ pub fn run_test(tf: &mut datadriven::TestFile, addr: String, user: String, timeo
                     for v in values {
                         ignore.insert(v);
                     }
+                }
+                // ParameterStatus messages are noise for most tests, so they
+                // are ignored unless the test opts in with `keep=...`.
+                let mut keep = BTreeSet::new();
+                if let Some(values) = args.remove("keep") {
+                    for v in values {
+                        keep.insert(v);
+                    }
+                }
+                if !keep.contains("ParameterStatus") {
+                    ignore.insert("ParameterStatus".to_string());
                 }
                 if !args.is_empty() {
                     panic!("extra until arguments: {:?}", args);

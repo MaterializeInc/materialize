@@ -1590,14 +1590,17 @@ async fn execute_stmt<S: ResultSender>(
         }
         ExecuteResponse::SetVariable { name, .. } => {
             let mut params = Vec::with_capacity(1);
+            // The find is case-insensitive because the plan name is lowercase
+            // while some canonical var names are mixed-case (e.g. `TimeZone`).
+            // The reported name is the canonical one, matching pgwire.
             if let Some(var) = client
                 .session()
                 .vars()
                 .notify_set()
-                .find(|v| v.name() == &name)
+                .find(|v| v.name().eq_ignore_ascii_case(&name))
             {
                 params.push(ParameterStatus {
-                    name,
+                    name: var.name().to_string(),
                     value: var.value(),
                 });
             };

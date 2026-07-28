@@ -4663,7 +4663,7 @@ fn plan_role_variable(
 ) -> Result<PlannedRoleVariable, PlanError> {
     let plan = match variable {
         SetRoleVar::Set { name, value } => {
-            let name = name.to_string();
+            let name = scl::plan_variable_name(name);
             let value = scl::plan_set_variable_to(value)?;
             // Gate feature-flagged isolation levels, matching the `SET` and
             // connection-option paths in `SessionVars::set`.
@@ -4677,7 +4677,7 @@ fn plan_role_variable(
             PlannedRoleVariable::Set { name, value }
         }
         SetRoleVar::Reset { name } => PlannedRoleVariable::Reset {
-            name: name.to_string(),
+            name: scl::plan_variable_name(name),
         },
     };
     Ok(plan)
@@ -7904,7 +7904,7 @@ pub fn plan_alter_system_set(
     _: &StatementContext,
     AlterSystemSetStatement { name, to }: AlterSystemSetStatement,
 ) -> Result<Plan, PlanError> {
-    let name = name.to_string();
+    let name = scl::plan_variable_name(name);
     Ok(Plan::AlterSystemSet(AlterSystemSetPlan {
         name,
         value: scl::plan_set_variable_to(to)?,
@@ -7922,7 +7922,7 @@ pub fn plan_alter_system_reset(
     _: &StatementContext,
     AlterSystemResetStatement { name }: AlterSystemResetStatement,
 ) -> Result<Plan, PlanError> {
-    let name = name.to_string();
+    let name = scl::plan_variable_name(name);
     Ok(Plan::AlterSystemReset(AlterSystemResetPlan { name }))
 }
 

@@ -226,3 +226,52 @@ rp_join  cluster  quickstart
 
 statement ok
 DROP ROLE rp_join
+
+# --- Quoted, non-lowercase variable names -------------------------------------
+#
+# The planner lowercases variable-name identifiers, so a quoted spelling like
+# "TRANSACTION_ISOLATION" stores the same `parameter_name` key as the unquoted
+# spelling. This table shows the stored map verbatim, so it directly asserts
+# the stored key. In particular, mixed spellings across SET and RESET must not
+# desync: RESET must remove the row that SET stored.
+
+statement ok
+CREATE ROLE rp_case
+
+statement ok
+ALTER ROLE rp_case SET "TRANSACTION_ISOLATION" = serializable
+
+query TT
+SELECT parameter_name, parameter_value
+FROM mz_role_parameters
+WHERE role_id = (SELECT id FROM mz_roles WHERE name = 'rp_case')
+----
+transaction_isolation  serializable
+
+statement ok
+ALTER ROLE rp_case RESET transaction_isolation
+
+query I
+SELECT count(*)
+FROM mz_role_parameters
+WHERE role_id = (SELECT id FROM mz_roles WHERE name = 'rp_case')
+----
+0
+
+# The reverse mixing: unquoted SET, quoted RESET.
+
+statement ok
+ALTER ROLE rp_case SET cluster TO 'quickstart'
+
+statement ok
+ALTER ROLE rp_case RESET "CLUSTER"
+
+query I
+SELECT count(*)
+FROM mz_role_parameters
+WHERE role_id = (SELECT id FROM mz_roles WHERE name = 'rp_case')
+----
+0
+
+statement ok
+DROP ROLE rp_case

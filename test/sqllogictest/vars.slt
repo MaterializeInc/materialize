@@ -806,3 +806,118 @@ simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET emit_trace_id_notice TO true
 ----
 db error: ERROR: unrecognized configuration parameter "emit_trace_id_notice"
+
+# --- Quoted variable names -----------------------------------------------------
+#
+# Variable names are resolved case-insensitively and may be written as quoted
+# identifiers, matching PostgreSQL. The planner lowercases the name identifier
+# the same way the lexer lowercases unquoted identifiers, so all spellings
+# below address the same variable.
+
+statement ok
+RESET extra_float_digits
+
+query T colnames
+SHOW "EXTRA_FLOAT_DIGITS"
+----
+extra_float_digits
+3
+
+statement ok
+SET "EXTRA_FLOAT_DIGITS" = 2
+
+query T
+SHOW extra_float_digits
+----
+2
+
+statement ok
+SET "Extra_Float_Digits" = 1
+
+query T
+SHOW extra_float_digits
+----
+1
+
+statement ok
+RESET "EXTRA_FLOAT_DIGITS"
+
+query T
+SHOW extra_float_digits
+----
+3
+
+# `TimeZone` has a mixed-case canonical name and must be addressable by any
+# spelling all the same.
+
+statement ok
+SET "TIMEZONE" = 'UTC'
+
+query T colnames
+SHOW "TimeZone"
+----
+timezone
+UTC
+
+statement ok
+RESET "TimeZone"
+
+# Unknown variables report the normalized (lowercased) name.
+
+statement error unrecognized configuration parameter "no_such_parameter"
+SET "NO_SUCH_PARAMETER" = 1
+
+# ALTER SYSTEM SET/RESET accept quoted spellings, and deliberately mixed
+# spellings across SET and RESET address the same underlying entry.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET "MAX_KAFKA_CONNECTIONS" = 471;
+----
+COMPLETE 0
+
+query T
+SHOW max_kafka_connections
+----
+471
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET "max_kafka_CONNECTIONS";
+----
+COMPLETE 0
+
+query T
+SHOW max_kafka_connections
+----
+1000
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET "NO_SUCH_PARAMETER" = 1;
+----
+db error: ERROR: unrecognized configuration parameter "no_such_parameter"
+
+# The mid-transaction validations for `transaction_isolation` and `cluster`
+# must also fire for quoted, non-lowercase spellings.
+
+simple conn=quoted_txn
+BEGIN;
+SELECT 1;
+SET "TRANSACTION_ISOLATION" = 'serializable';
+----
+db error: ERROR: SET TRANSACTION ISOLATION LEVEL must be called before any query
+
+simple conn=quoted_txn
+ROLLBACK;
+----
+COMPLETE 0
+
+simple conn=quoted_txn
+BEGIN;
+SELECT 1;
+SET "CLUSTER" = quickstart;
+----
+db error: ERROR: SET cluster cannot be called in an active transaction
+
+simple conn=quoted_txn
+ROLLBACK;
+----
+COMPLETE 0
