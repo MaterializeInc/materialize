@@ -104,7 +104,7 @@ export const UserList = ({ users }: { users: User[] }) => {
 
 This is the most common bug when working with TanStack Table. **Don't put dynamic data in the `columns` `useMemo` dependency array.** Doing so causes the entire table to remount on every change, which breaks tooltips, popovers, and other interactive elements inside cells.
 
-
+```tsx
 // columns are static. Read dynamic data inside the cell renderer.
 const columns = React.useMemo(
   () => [
