@@ -28,6 +28,15 @@ runs on, how to proceed depends on how the nodes are managed:
   template change on the Karpenter `NodePool`, followed by a Materialize
   rollout to move the pods onto new-spec nodes.
 
+{{< note >}}
+
+The default rollout strategy (`WaitUntilReady`) used in the outlined steps
+temporarily runs the old and new generations of Materialize simultaneously. Make
+sure the new node pool has enough capacity to accommodate both generations
+during the rollout.
+
+{{< /note >}}
+
 ## Steps
 
 {{< tabs level=3 >}}

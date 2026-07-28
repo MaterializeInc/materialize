@@ -71,24 +71,28 @@ Certificate Authority (CA) rather than self-signed certificates.
 
 ## Karpenter node expiry
 
-The examples in the [Terraform
+We recommend setting `expire_after` to `Never` on the Materialize nodepool
+since node expiry is not a voluntary disruption. With any other value,
+Karpenter removes nodes that reach their configured lifetime even if they run
+pods annotated with `karpenter.sh/do-not-disrupt`. This can cause downtime
+unless you gracefully roll the nodes first. The [Materialize Terraform
 modules](https://github.com/MaterializeInc/materialize-terraform-self-managed)
-set `expire_after` to `Never` on the Materialize nodepool. We recommend
-keeping that value, since node expiry is not a voluntary disruption. With any
-other value, Karpenter removes nodes that reach their lifetime even if they
-run pods annotated with `karpenter.sh/do-not-disrupt`. This can cause
-downtime unless you gracefully roll the nodes first.
+default `expire_after` to `Never`.
 
 ## Karpenter termination grace period
 
-Prior to v6.0.0 of the Terraform modules, the Materialize nodepool set
-`termination_grace_period` to `300s`. This caused nodes to be terminated five
-minutes after any change to the nodepool configuration, ignoring the
-`karpenter.sh/do-not-disrupt` annotation on pods. In v6.0.0 and later the
-value is unset by default. We recommend keeping it unset on nodepools for
-Materialize workloads. If you are running an older version of the modules,
-upgrade following the [upgrade
+We recommend leaving `termination_grace_period` unset on nodepools that run
+Materialize workloads. When this value is set, Karpenter terminates nodes after
+the configured grace period following any change to the nodepool
+configuration, even if they run pods annotated with
+`karpenter.sh/do-not-disrupt`.
+
+Before v6.0.0, the modules set `termination_grace_period` to `300s`. If you are
+using a version earlier than v6.0.0, upgrade to v6.0.0 using the [v6.0.0
+upgrade
 notes](https://github.com/MaterializeInc/materialize-terraform-self-managed/blob/v6.0.0/README.md#v600).
+Starting in v6.0.0, the Materialize Terraform modules leave
+`termination_grace_period` unset by default.
 
 ## Node pool resizing
 
