@@ -280,7 +280,13 @@ impl Coordinator {
 
         let ret_fut: BuiltinTableAppendNotify = match &active_sink {
             ActiveComputeSink::Subscribe(active_subscribe) => {
-                let table_update_fut = if !active_subscribe.internal {
+                if active_subscribe.internal {
+                    // An internal subscribe is invisible: no `mz_subscriptions`
+                    // row and no `mz_active_subscribes` observation. Bumping the
+                    // gauge would report user subscribes that introspection
+                    // correctly shows nothing of.
+                    Box::pin(std::future::ready(()))
+                } else {
                     let update = self.catalog().state().pack_subscribe_update(
                         id,
                         active_subscribe,
@@ -288,23 +294,18 @@ impl Coordinator {
                     );
                     let update = self.catalog().state().resolve_builtin_table_update(update);
 
+                    self.metrics
+                        .active_subscribes
+                        .with_label_values(&[session_type])
+                        .inc();
+
                     // Defer the introspection-row write to a group commit instead of
                     // committing it inline. An inline `execute` would block the coordinator
                     // loop on a timestamp-oracle round trip and stall every other session.
                     // `implement_subscribe` waits for this write before returning the
                     // `SUBSCRIBE` response to the subscribing session.
                     self.builtin_table_update().defer(vec![update])
-                } else {
-                    // Internal subscribes skip the builtin table update.
-                    Box::pin(std::future::ready(()))
-                };
-
-                self.metrics
-                    .active_subscribes
-                    .with_label_values(&[session_type])
-                    .inc();
-
-                table_update_fut
+                }
             }
             ActiveComputeSink::CopyTo(_) => {
                 self.metrics
@@ -348,30 +349,30 @@ impl Coordinator {
 
             let write_notify: BuiltinTableAppendNotify = match &sink {
                 ActiveComputeSink::Subscribe(active_subscribe) => {
-                    // Internal subscribes write no introspection row.
-                    let notify = if !active_subscribe.internal {
+                    if active_subscribe.internal {
+                        // Nothing to retract and nothing to decrement, see
+                        // `add_active_compute_sink`.
+                        Box::pin(std::future::ready(()))
+                    } else {
                         let update = self.catalog().state().pack_subscribe_update(
                             id,
                             active_subscribe,
                             Diff::MINUS_ONE,
                         );
                         let update = self.catalog().state().resolve_builtin_table_update(update);
+
+                        self.metrics
+                            .active_subscribes
+                            .with_label_values(&[session_type])
+                            .dec();
+
                         // Defer the retraction to a group commit, for the same reason we
                         // defer the insert (see `add_active_compute_sink`): committing inline
                         // would block the coordinator loop. Callers that expose the
                         // retirement wait on the notify off the coordinator loop
                         // before responding.
                         self.builtin_table_update().defer(vec![update])
-                    } else {
-                        Box::pin(std::future::ready(()))
-                    };
-
-                    self.metrics
-                        .active_subscribes
-                        .with_label_values(&[session_type])
-                        .dec();
-
-                    notify
+                    }
                 }
                 ActiveComputeSink::CopyTo(_) => {
                     self.metrics

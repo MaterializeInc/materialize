@@ -105,7 +105,7 @@ impl Coordinator {
             depends_on,
             start_time,
             output: SubscribeOutput::Diffs,
-            internal: true, // skip builtin table updates and metrics
+            internal: true, // no mz_subscriptions row and no active-subscribes metric
         };
         active_subscribe.initialize();
 
