@@ -560,6 +560,26 @@ async fn test_discard_all_resets_over_extended_protocol() {
         client.execute("DISCARD ALL", &[]).await.unwrap();
         assert_eq!(show(&client, "application_name").await, "startup_app");
     }
+
+    // A role-supplied default (ALTER ROLE ... SET) survives DISCARD ALL rather
+    // than reverting to the compiled-in default.
+    {
+        let client = server.connect().await.unwrap();
+        client
+            .execute("ALTER ROLE materialize SET database = role_db", &[])
+            .await
+            .unwrap();
+
+        let client = server.connect().await.unwrap();
+        assert_eq!(show(&client, "database").await, "role_db");
+        client
+            .execute("SET database = other_db", &[])
+            .await
+            .unwrap();
+        assert_eq!(show(&client, "database").await, "other_db");
+        client.execute("DISCARD ALL", &[]).await.unwrap();
+        assert_eq!(show(&client, "database").await, "role_db");
+    }
 }
 
 #[mz_ore::test]
