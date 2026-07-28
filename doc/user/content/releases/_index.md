@@ -55,34 +55,6 @@ For more information, see the `AUTO SCALING STRATEGY` option on
 [`CREATE CLUSTER`](/sql/create-cluster/#autoscaling) and
 [`ALTER CLUSTER`](/sql/alter-cluster/#speed-up-hydration-by-autoscaling-to-a-larger-size).
 
-### Graceful Cluster Reconfiguration {#v26.34-background-cluster-reconfiguration}
-`ALTER CLUSTER` for configuration changes (such as resizing) now returns immediately and runs in the background, rather than blocking until the new replica set is ready.
-
-Because the command is now asynchronous, you can monitor the
-progress of an in-flight reconfiguration using `SHOW CLUSTERS`.
-
-```mzsql
-SHOW CLUSTERS;
-```
-```nofmt
-    name    | replicas   |           activity           | comment
-------------+------------+------------------------------+---------
- my_cluster | r1 (400cc) | reconfiguring size to 1600cc |
-```
-
-For detailed status, query
-[`mz_internal.mz_cluster_reconfigurations`](/reference/system-catalog/mz_internal/#mz_cluster_reconfigurations),
-which reports the target shape, the deadline, and the reconfiguration's
-lifecycle `status` (`in-progress`, then a terminal `finalized`, `timed-out`,
-`cancelled`, or `resource-exhausted`):
-
-```mzsql
-SELECT cluster_id, status, deadline, on_timeout, target, changes
-FROM mz_internal.mz_cluster_reconfigurations;
-```
-
-For more information, see [`ALTER CLUSTER`: Resizing process](/sql/alter-cluster/#resizing-process).
-
 ### AWS Glue Schema Registry Support for Sinks {#v26.34-aws-glue-schema-registry-support-sinks}
 
 {{< public-preview />}}
@@ -1604,7 +1576,8 @@ Materialize v26.1.0 includes improved support for SQLServer, including the abili
 
 ### Upgrade notes for v26.1.0
 
-{{< include-md file="shared-content/self-managed/upgrade-notes/v26.1.md" >}}
+{{% include-headless "/headless/self-managed-deployments/upgrade-notes/v26.1"
+%}}
 
 ## Self-Managed v26.0.0
 
@@ -1623,11 +1596,11 @@ the node selectors for `clusterd` pods:
 - To upgrade using Materialize-provided Terraforms, upgrade your Terraform
   version to `v0.6.1`:
   - {{< include-md
-file="shared-content/self-managed/aws-terraform-v0.6.1-upgrade-notes.md" >}}.
+file="content/headless/self-managed-deployments/aws-terraform-v0.6.1-upgrade-notes.md" >}}.
   - {{< include-md
-file="shared-content/self-managed/gcp-terraform-v0.6.1-upgrade-notes.md" >}}.
+file="content/headless/self-managed-deployments/gcp-terraform-v0.6.1-upgrade-notes.md" >}}.
   - {{< include-md
-  file="shared-content/self-managed/azure-terraform-v0.6.1-upgrade-notes.md"
+  file="content/headless/self-managed-deployments/azure-terraform-v0.6.1-upgrade-notes.md"
   >}}.
 
 - To upgrade if <red>**not**</red> using a Materialize-provided Terraforms,  you

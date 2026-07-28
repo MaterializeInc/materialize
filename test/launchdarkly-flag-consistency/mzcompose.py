@@ -407,6 +407,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     storage_upsert_prevent_snapshot_buffering
     superuser_reserved_connections
     txn_wal_apply_ensure_schema_match
+    unsafe_enable_incomplete_view_column_lists
     unsafe_enable_table_check_constraint
     unsafe_enable_table_foreign_key
     unsafe_enable_table_keys

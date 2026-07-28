@@ -1969,8 +1969,21 @@ fn plan_set_expr(
                 }
                 SetOperator::Except => Hir::except(all, lhs, rhs),
                 SetOperator::Intersect => {
+                    // Planning below duplicates whichever input ends up on the left, so a
+                    // left-deep chain of INTERSECTs doubles the plan at every level, i.e. would be
+                    // exponential. INTERSECT is commutative, so put the cheaper input on the left.
+                    // A subtree is then only duplicated when it is the smaller of the two, so plan
+                    // size obeys T(a + b) <= 2*T(a) + T(b) for input sizes a <= b. The worst case
+                    // is balanced trees, where this solves to O(n^log2(3)) instead of O(2^n).
+                    let (lhs, rhs) = if lhs.relation_node_count() > rhs.relation_node_count() {
+                        (rhs, lhs)
+                    } else {
+                        (lhs, rhs)
+                    };
                     // TODO: Let's not duplicate the left-hand expression into TWO dataflows!
-                    // Though we believe that render() does The Right Thing (TM)
+                    // The optimizer de-duplicates at some point, but it would be good to already
+                    // not duplicate here.
+                    //
                     // Also note that we do *not* need another threshold() at the end of the method chain
                     // because the right-hand side of the outer union only produces existing records,
                     // i.e., the record counts for differential data flow definitely remain non-negative.

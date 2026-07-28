@@ -84,8 +84,7 @@ and [self-managed Kafka clusters](https://github.com/MaterializeInc/terraform-aw
 
 {{< tab "Public cluster">}}
 
-{{< include-md file="shared-content/kafka-amazon-msk-public-cluster-section.md"
->}}
+{{% include-headless "/headless/kafka-amazon-msk-public-cluster-section" %}}
 
 {{< /tab >}}
 {{< /tabs >}}
@@ -116,8 +115,7 @@ Configure your Kafka network to allow Materialize to connect:
 
 {{< tab "Public cluster">}}
 
-{{< include-md file="shared-content/kafka-amazon-msk-public-cluster-section.md"
->}}
+{{% include-headless "/headless/kafka-amazon-msk-public-cluster-section" %}}
 
 {{< /tab >}}
 {{< /tabs >}}

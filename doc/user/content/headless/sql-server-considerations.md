@@ -44,7 +44,7 @@ table.
 
 ### Supported types
 
-{{< include-md file="shared-content/sql-server-supported-types.md" >}}
+{{% include-headless "/headless/sql-server-supported-types" %}}
 
 {{% include-headless "/headless/sql-server-unsupported-type-handling" %}}
 

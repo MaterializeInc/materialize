@@ -104,7 +104,7 @@ most workloads. We recommend using cc sizes unless your workload specifically
 requires the additional disk capacity that M.1 sizes provide.
 {{< /note >}}
 
-{{< include-md file="shared-content/cluster-size-disclaimer.md" >}}
+{{% include-headless "/headless/cluster-size-disclaimer" %}}
 
 {{< yaml-table data="m1_cluster_sizing" >}}
 
@@ -162,12 +162,12 @@ See also:
 You can change the size of a cluster to respond to changes in your workload
 using [`ALTER CLUSTER`](/sql/alter-cluster).
 
-As of **v26.34**, resizing is graceful and incurs **no downtime**: Materialize
+As of **v26.35**, resizing is graceful and incurs **no downtime**: Materialize
 provisions new replicas at the target size, waits for them to hydrate, then
 retires the old ones. See [Monitoring a
 resize](/sql/alter-cluster/#monitoring-a-resize).
 
-In versions before v26.34, resizing could incur downtime, and zero-downtime
+In versions before v26.35, resizing could incur downtime, and zero-downtime
 resizing required the `WAIT UNTIL READY` option.
 
 See the reference documentation for [`ALTER

@@ -8,16 +8,6 @@ menu:
     weight: 50
 aliases:
   - /self-managed/v25.2/manage/
-  - /self-managed/v25.2/manage/authentication/
-  - /self-managed/v25.2/manage/monitor/
-  - /self-managed/v25.2/manage/monitor/prometheus/
-  - /self-managed/v25.2/manage/monitor/datadog/
-  - /self-managed/v25.2/manage/monitor/alerting/
-  - /self-managed/v25.2/manage/dbt/
-  - /self-managed/v25.2/manage/dbt/get-started/
-  - /self-managed/v25.2/manage/dbt/development-workflows/
-  - /self-managed/v25.2/manage/dbt/blue-green-deployments/
-  - /self-managed/v25.2/manage/dbt/slim-deployments/
   - /self-managed/v25.2/manage/operational-guidelines/
   - /self-managed/v25.2/manage/terraform/
   - /self-managed/v25.2/manage/terraform/get-started/

@@ -2670,7 +2670,8 @@ pub fn plan_view(
         scx.allocate_qualified_name(normalize::unresolved_item_name(name.to_owned())?)?
     };
 
-    plan_utils::maybe_rename_columns(
+    plan_utils::maybe_rename_columns_exact(
+        scx.catalog,
         format!("view {}", scx.catalog.resolve_full_name(&name)),
         &mut desc,
         columns,
@@ -2869,7 +2870,8 @@ pub fn plan_create_materialized_view(
         ));
     }
 
-    plan_utils::maybe_rename_columns(
+    plan_utils::maybe_rename_columns_exact(
+        scx.catalog,
         format!("materialized view {}", scx.catalog.resolve_full_name(&name)),
         &mut desc,
         &stmt.columns,

@@ -1941,6 +1941,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: unsafe_enable_incomplete_view_column_lists,
+        desc: "declaring a view with fewer column names than columns",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: unsafe_enable_table_check_constraint,
         desc: "CREATE TABLE with a check constraint",
         default: false,

@@ -133,7 +133,7 @@ The privileges required to execute `CREATE SOURCE` are:
 
 The following guides step you through setting up sources:
 
-{{< include-md file="shared-content/multilink-box-native-connectors.md" >}}
+{{% include-headless "/headless/multilink-box-native-connectors" %}}
 
 ## Best practices
 

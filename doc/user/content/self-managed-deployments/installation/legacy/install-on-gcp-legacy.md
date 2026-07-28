@@ -92,7 +92,9 @@ If you want to use `jq` and do not have `jq` installed, install.
 
 ### License key
 
-{{< include-md file="shared-content/license-key-required.md" >}}
+Starting in v26.0, Self-Managed Materialize requires a license key.
+
+{{< yaml-table data="self_managed/license_key" >}}
 
 ## A. Configure GCP project and service account
 

@@ -22,7 +22,7 @@ enable [GTID-based binary log (binlog) replication](#change-data-capture), and
 then [create a connection](#creating-a-connection) in Materialize that specifies
 access and authentication parameters.
 
-{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
+{{% include-headless "/headless/aws-privatelink-cloud-only-note" %}}
 
 ## Syntax
 
@@ -223,7 +223,7 @@ PrivateLink service (Materialize Cloud) or an SSH bastion host SSH bastion host.
 {{< tabs tabID="1" >}}
 {{< tab "AWS PrivateLink (Materialize Cloud)">}}
 
-{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
+{{% include-headless "/headless/aws-privatelink-cloud-only-note" %}}
 
 ```mzsql
 CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (

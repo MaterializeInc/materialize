@@ -9,7 +9,9 @@
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check
+from materialize.checks.checks import Check, externally_idempotent
+from materialize.checks.executors import Executor
+from materialize.mz_version import MzVersion
 
 
 class CreateCluster(Check):
@@ -129,6 +131,123 @@ class AlterCluster(Check):
                 > SELECT name, introspection_debugging, introspection_interval FROM mz_catalog.mz_clusters WHERE name = 'alter_cluster1';
                 alter_cluster1 true "00:00:45"
            """))
+
+
+@externally_idempotent(False)
+class AlterClusterGracefulReconfiguration(Check):
+    """Graceful reconfiguration (WAIT UNTIL READY) of a cluster hosting a
+    single-replica Postgres source. Readiness must not wait for the source,
+    which never hydrates on the target replicas, and the settled
+    reconfiguration must survive restarts and upgrades. Regression coverage
+    for SQL-530.
+    """
+
+    def _can_run(self, e: Executor) -> bool:
+        # Graceful reconfiguration of a cluster hosting a single-replica
+        # source wedges until its deadline rolls it back on versions without
+        # the SQL-530 fix, so no phase may run on an older version. The fix
+        # predates the v26.35.0-rc.1 cut, so every published v26.35 artifact
+        # has it and the -dev gate includes the release candidates.
+        return self.base_version >= MzVersion.parse_mz("v26.35.0-dev")
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(dedent("""
+            $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+            ALTER SYSTEM SET enable_zero_downtime_cluster_reconfiguration = true
+
+            $ postgres-execute connection=postgres://postgres:postgres@postgres
+            CREATE USER graceful_reconfig WITH SUPERUSER PASSWORD 'postgres';
+            ALTER USER graceful_reconfig WITH replication;
+            DROP PUBLICATION IF EXISTS graceful_reconfig_pub;
+            DROP TABLE IF EXISTS graceful_reconfig_table;
+            CREATE TABLE graceful_reconfig_table (f1 INTEGER PRIMARY KEY);
+            ALTER TABLE graceful_reconfig_table REPLICA IDENTITY FULL;
+            INSERT INTO graceful_reconfig_table SELECT generate_series(1, 100);
+            CREATE PUBLICATION graceful_reconfig_pub FOR TABLE graceful_reconfig_table;
+
+            > CREATE CLUSTER graceful_reconfig_cluster (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
+
+            > CREATE SECRET graceful_reconfig_pass AS 'postgres'
+
+            > CREATE CONNECTION graceful_reconfig_conn FOR POSTGRES
+              HOST 'postgres',
+              DATABASE postgres,
+              USER graceful_reconfig,
+              PASSWORD SECRET graceful_reconfig_pass
+
+            > CREATE SOURCE graceful_reconfig_source
+              IN CLUSTER graceful_reconfig_cluster
+              FROM POSTGRES CONNECTION graceful_reconfig_conn
+              (PUBLICATION 'graceful_reconfig_pub')
+
+            > CREATE TABLE graceful_reconfig_t FROM SOURCE graceful_reconfig_source (REFERENCE graceful_reconfig_table)
+
+            > SELECT count(*) FROM graceful_reconfig_t
+            100
+        """))
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
+                $ set-sql-timeout duration=240s
+
+                > ALTER CLUSTER graceful_reconfig_cluster SET (SIZE 'scale=1,workers=2') WITH (WAIT UNTIL READY (TIMEOUT '300s', ON TIMEOUT ROLLBACK))
+
+                # A background ALTER returns immediately, so wait for the
+                # realized config to cut over to the target.
+                > SELECT size FROM mz_clusters WHERE name = 'graceful_reconfig_cluster'
+                "scale=1,workers=2"
+
+                # The source keeps ingesting on the promoted replica set.
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
+                INSERT INTO graceful_reconfig_table SELECT generate_series(101, 200);
+
+                > SELECT count(*) FROM graceful_reconfig_t
+                200
+
+                $ set-sql-timeout duration=default
+                """,
+                """
+                $ set-sql-timeout duration=240s
+
+                > ALTER CLUSTER graceful_reconfig_cluster SET (SIZE 'scale=2,workers=2') WITH (WAIT UNTIL READY (TIMEOUT '300s', ON TIMEOUT ROLLBACK))
+
+                > SELECT size FROM mz_clusters WHERE name = 'graceful_reconfig_cluster'
+                "scale=2,workers=2"
+
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
+                INSERT INTO graceful_reconfig_table SELECT generate_series(201, 300);
+
+                > SELECT count(*) FROM graceful_reconfig_t
+                300
+
+                $ set-sql-timeout duration=default
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(dedent("""
+            $ set-sql-timeout duration=240s
+
+            > SELECT size FROM mz_clusters WHERE name = 'graceful_reconfig_cluster'
+            "scale=2,workers=2"
+
+            # The settled reconfiguration record is retained across restarts
+            # and upgrades.
+            > SELECT recon.status
+              FROM mz_internal.mz_cluster_reconfigurations recon
+              JOIN mz_clusters c ON c.id = recon.cluster_id
+              WHERE c.name = 'graceful_reconfig_cluster'
+            finalized
+
+            > SELECT count(*) FROM graceful_reconfig_t
+            300
+
+            $ set-sql-timeout duration=default
+        """))
 
 
 class DropCluster(Check):

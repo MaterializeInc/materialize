@@ -51,7 +51,7 @@ and serve queries.
 
 {{< note >}}
 
-{{< include-md file="shared-content/cluster-replica-cost-capacity-notes.md" >}}
+{{% include-headless "/headless/cluster-replica-cost-capacity-notes" %}}
 
 {{< /note >}}
 
@@ -63,7 +63,7 @@ system catalog.
 
 When provisioning replicas,
 
-{{< include-md file="shared-content/multi-replica-az.md" >}}
+{{% include-headless "/headless/multi-replica-az" %}}
 
 <a name="sizing-your-clusters"></a>
 

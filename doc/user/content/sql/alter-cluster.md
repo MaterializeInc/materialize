@@ -122,7 +122,7 @@ most workloads. We recommend using cc sizes unless your workload specifically
 requires the additional disk capacity that M.1 sizes provide.
 {{< /note >}}
 
-{{< include-md file="shared-content/cluster-size-disclaimer.md" >}}
+{{% include-headless "/headless/cluster-size-disclaimer" %}}
 
 {{< yaml-table data="m1_cluster_sizing" >}}
 
@@ -150,8 +150,8 @@ The values in the `mz_cluster_replica_sizes` table may change at any
 time. You should not rely on them for any kind of capacity planning.
 {{< /warning >}}
 
-#### Downtime considerations for v26.34 or after
-Starting in v26.34, ALTER CLUSTER <name> SET (SIZE = ...) by default resizes
+#### Downtime considerations for v26.35 or after
+Starting in v26.35, ALTER CLUSTER <name> SET (SIZE = ...) by default resizes
 the cluster gracefully and without downtime. For example:
 
 ```mzsql
@@ -224,7 +224,7 @@ To **cancel** an in-flight resize, reissue `ALTER CLUSTER` with the cluster's
 current size. Materialize drops the pending replicas and keeps the current
 configuration.
 
-#### Downtime considerations for v26.33 or before
+#### Downtime considerations for v26.34 or before
 {{< private-preview />}}
 
 You can use the `WAIT UNTIL READY` option to perform a zero-downtime resizing,

@@ -60,7 +60,7 @@ filters**](/sql/patterns/temporal-filters/), and
 
 Materialize provides **native connectors** that allow ingesting data from various external systems:
 
-{{< include-md file="shared-content/multilink-box-native-connectors.md" >}}
+{{% include-headless "/headless/multilink-box-native-connectors" %}}
 
 For more information, see [Ingest Data](/ingest-data/) and
 [Integrations](/integrations/).

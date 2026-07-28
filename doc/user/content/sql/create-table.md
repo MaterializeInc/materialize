@@ -131,7 +131,7 @@ guidelines](/sql/identifiers/#naming-restrictions).
 
 ### Read-only tables
 
-{{< include-md file="shared-content/create-table-from-source-readonly.md" >}}
+{{% include-headless "/headless/create-table-from-source-readonly" %}}
 
 ### DDL transaction block
 
@@ -141,8 +141,7 @@ use within a [transaction block](/sql/begin/#ddl-only-transactions).
 
 ### Source-populated tables and snapshotting
 
-{{< include-md file="shared-content/create-table-from-source-snapshotting.md"
->}}
+{{% include-headless "/headless/create-table-from-source-snapshotting" %}}
 
 ### Supported data types
 
@@ -166,7 +165,7 @@ use within a [transaction block](/sql/begin/#ddl-only-transactions).
 {{< tab "SQL Server" >}}
 #### SQL Server types
 
-{{< include-md file="shared-content/sql-server-supported-types.md" >}}
+{{% include-headless "/headless/sql-server-supported-types" %}}
 
 {{% include-headless "/headless/sql-server-unsupported-type-handling" %}}
 
@@ -251,7 +250,7 @@ integration guides](/ingest-data/postgres/#supported-versions-and-services).
 {{% include-example file="examples/create_table_postgres"
  example="create-table" %}}
 
-{{< include-md file="shared-content/create-table-from-source-readonly.md" >}}
+{{% include-headless "/headless/create-table-from-source-readonly" %}}
 
 
 {{% include-example file="examples/create_table_postgres"

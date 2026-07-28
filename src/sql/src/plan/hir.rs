@@ -1763,6 +1763,18 @@ impl HirRelationExpr {
         }
     }
 
+    /// The number of relation nodes in this expression.
+    ///
+    /// Relations reached through scalar subqueries are included. The scalar
+    /// nodes themselves are not, so a large predicate over a small input still
+    /// counts as small. This is a structural size for comparing two
+    /// expressions against each other, not a cost estimate.
+    pub fn relation_node_count(&self) -> usize {
+        let mut count = 0;
+        self.visit_post(&mut |_| count += 1);
+        count
+    }
+
     /// If self is a constant, return the value and the type, otherwise `None`.
     pub fn as_const(&self) -> Option<(&Vec<Row>, &SqlRelationType)> {
         match self {

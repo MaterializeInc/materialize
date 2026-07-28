@@ -107,6 +107,25 @@ bk job log <JOB_ID> -p <PIPELINE> -b <BUILD_NUMBER> --no-timestamps --no-pager 2
 
 Fetch multiple job logs in parallel when they are independent (e.g., clippy + lint at the same time).
 
+### Shard contents
+
+Sharded jobs (SLT, testdrive, platform checks, feature benchmark, ...) record
+the workflows/files/scenarios they ran in build meta-data. `bin/ci-shards`
+shows it:
+
+```bash
+# Mapping of every sharded job to what it ran, with a link per job whose
+# `#` fragment is the `<JOB_ID>` for `bk job log` (omit links with --no-url)
+bin/ci-shards https://buildkite.com/materialize/<PIPELINE>/builds/<BUILD_NUMBER>
+
+# What a single job ran (job link as copied from the Buildkite UI)
+bin/ci-shards 'https://buildkite.com/materialize/<PIPELINE>/builds/<BUILD_NUMBER>#<JOB_ID>'
+
+# Which job(s) ran a specific item (test file, scenario, or workflow,
+# `workflow_foo_bar` function names are matched as `foo-bar`)
+bin/ci-shards https://buildkite.com/materialize/<PIPELINE>/builds/<BUILD_NUMBER> numeric.td
+```
+
 ## Step 5: Categorize failures
 
 Use these Materialize-specific patterns to diagnose:

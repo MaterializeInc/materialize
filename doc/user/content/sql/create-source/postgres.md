@@ -36,7 +36,7 @@ your PostgreSQL service: [AlloyDB](/ingest-data/postgres-alloydb/),
 [Self-hosted](/ingest-data/postgres-self-hosted/).
 {{< /warning >}}
 
-{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
+{{% include-headless "/headless/aws-privatelink-cloud-only-note" %}}
 
 ## Syntax
 
@@ -256,7 +256,7 @@ through an AWS PrivateLink service (Materialize Cloud) or an SSH bastion host.
 {{< tabs tabID="1" >}}
 {{< tab "AWS PrivateLink">}}
 
-{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
+{{% include-headless "/headless/aws-privatelink-cloud-only-note" %}}
 
 ```mzsql
 CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
