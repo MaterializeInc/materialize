@@ -41,8 +41,8 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::num::{NonZeroI64, NonZeroUsize};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytesize::ByteSize;
@@ -89,9 +89,14 @@ pub(crate) enum FrontendWriteCancellation {
     StatementTimeout,
 }
 
-const CANCELLATION_NONE: u8 = 0;
-const CANCELLATION_CANCELED: u8 = 1;
-const CANCELLATION_STATEMENT_TIMEOUT: u8 = 2;
+impl From<FrontendWriteCancellation> for AdapterError {
+    fn from(cancellation: FrontendWriteCancellation) -> Self {
+        match cancellation {
+            FrontendWriteCancellation::Canceled => AdapterError::Canceled,
+            FrontendWriteCancellation::StatementTimeout => AdapterError::StatementTimeout,
+        }
+    }
+}
 
 /// State shared between an in-flight frontend write attempt and its
 /// cancellation wrapper,
@@ -102,17 +107,21 @@ const CANCELLATION_STATEMENT_TIMEOUT: u8 = 2;
 /// not committed. While it is true, cancellation and statement timeout must
 /// not synthesize an error but await the definitive write result instead,
 /// because the write may already be durable.
+///
+/// The wrapper and the attempt it wraps are polled by the same task, so the
+/// mutex and the atomic are here to satisfy `Send`, not to arbitrate between
+/// concurrent writers. There is one writer for each field.
 pub(crate) struct FrontendWriteAttemptState {
     write_submitted: AtomicBool,
-    /// One of the `CANCELLATION_*` codes, set at most once.
-    cancellation: AtomicU8,
+    /// Set at most once, by the cancellation wrapper.
+    cancellation: Mutex<Option<FrontendWriteCancellation>>,
 }
 
 impl FrontendWriteAttemptState {
     pub(crate) fn new() -> Self {
         Self {
             write_submitted: AtomicBool::new(false),
-            cancellation: AtomicU8::new(CANCELLATION_NONE),
+            cancellation: Mutex::new(None),
         }
     }
 
@@ -134,25 +143,20 @@ impl FrontendWriteAttemptState {
         self.write_submitted.load(Ordering::Acquire)
     }
 
+    /// Records why the attempt is being torn down. The first reason recorded
+    /// is the one the attempt reports.
     pub(crate) fn request(&self, cancellation: FrontendWriteCancellation) {
-        let code = match cancellation {
-            FrontendWriteCancellation::Canceled => CANCELLATION_CANCELED,
-            FrontendWriteCancellation::StatementTimeout => CANCELLATION_STATEMENT_TIMEOUT,
-        };
-        let _ = self.cancellation.compare_exchange(
-            CANCELLATION_NONE,
-            code,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        );
+        self.cancellation
+            .lock()
+            .expect("cancellation lock poisoned")
+            .get_or_insert(cancellation);
     }
 
     fn requested_error(&self) -> Option<AdapterError> {
-        match self.cancellation.load(Ordering::Acquire) {
-            CANCELLATION_CANCELED => Some(AdapterError::Canceled),
-            CANCELLATION_STATEMENT_TIMEOUT => Some(AdapterError::StatementTimeout),
-            _ => None,
-        }
+        self.cancellation
+            .lock()
+            .expect("cancellation lock poisoned")
+            .map(AdapterError::from)
     }
 }
 
@@ -1022,6 +1026,9 @@ impl PeekClient {
                             // on a conflict we wait for the subscribe to
                             // progress and retry using that observed frontier.
                             state.retry_count += 1;
+                            // Cancellation wins over the retry budget: if both
+                            // apply, the user asked us to stop and that is the
+                            // more truthful answer.
                             if let Some(error) = attempt_state.requested_error() {
                                 break Err(error);
                             }

@@ -1548,10 +1548,7 @@ impl SessionClient {
         });
 
         if !attempt_state.write_submitted() {
-            return Err(match requested {
-                FrontendWriteCancellation::Canceled => AdapterError::Canceled,
-                FrontendWriteCancellation::StatementTimeout => AdapterError::StatementTimeout,
-            });
+            return Err(requested.into());
         }
 
         // A submitted write can already be durable. Await its definitive result
