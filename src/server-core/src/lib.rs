@@ -29,7 +29,7 @@ use mz_ore::error::ErrorExt;
 use mz_ore::netio::AsyncReady;
 use mz_ore::option::OptionExt;
 use mz_ore::task::JoinSetExt;
-use openssl::ssl::{SslAcceptor, SslContext, SslFiletype, SslMethod};
+use openssl::ssl::{AlpnError, SslAcceptor, SslContext, SslFiletype, SslMethod, select_next_proto};
 use proxy_header::{ParseConfig, ProxiedAddress, ProxyHeader};
 use schemars::JsonSchema;
 use scopeguard::ScopeGuard;
@@ -492,6 +492,13 @@ impl TlsCertConfig {
         // ciphers. We once tried to use the modern preset, but it was
         // incompatible with Fivetran, and presumably other JDBC-based tools.
         let mut builder = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls())?;
+        // Negotiate HTTP/2 or HTTP/1.1 via ALPN for clients that request it.
+        // This context is shared with pgwire listeners, but pgwire clients do
+        // not send the ALPN extension, in which case `NOACK` omits ALPN from
+        // the handshake entirely rather than rejecting the connection.
+        builder.set_alpn_select_callback(|_ssl, client_protos| {
+            select_next_proto(b"\x02h2\x08http/1.1", client_protos).ok_or(AlpnError::NOACK)
+        });
         builder.set_certificate_chain_file(&self.cert)?;
         builder.set_private_key_file(&self.key, SslFiletype::PEM)?;
         Ok(builder.build().into_context())

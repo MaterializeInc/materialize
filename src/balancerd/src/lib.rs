@@ -31,7 +31,6 @@ use anyhow::Context;
 use axum::response::IntoResponse;
 use axum::{Router, routing};
 use bytes::BytesMut;
-use futures::TryFutureExt;
 use futures::stream::BoxStream;
 use hickory_resolver::config::LookupIpStrategy;
 use hickory_resolver::lookup_ip::LookupIp;
@@ -40,7 +39,7 @@ use hickory_resolver::proto::rr::{RData, RecordType};
 use hickory_resolver::system_conf::read_system_conf;
 use hickory_resolver::{Resolver, TokioResolver};
 use hyper::StatusCode;
-use hyper_util::rt::TokioIo;
+use hyper_util::rt::{TokioExecutor, TokioIo};
 use launchdarkly_server_sdk as ld;
 use mz_build_info::{BuildInfo, build_info};
 use mz_dyncfg::ConfigSet;
@@ -478,8 +477,11 @@ impl mz_server_core::Server for InternalHttpServer {
         let conn = TokioIo::new(conn);
 
         Box::pin(async {
-            let http = hyper::server::conn::http1::Builder::new();
-            http.serve_connection(conn, service).err_into().await
+            // Serve HTTP/1.1 or HTTP/2 (h2c via preface sniffing).
+            let http = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new());
+            http.serve_connection(conn, service)
+                .await
+                .map_err(|e| anyhow::anyhow!(e))
         })
     }
 }
@@ -1352,18 +1354,26 @@ async fn cancel_request(
 /// Writes an HTTP error response to a client and closes the connection.
 ///
 /// The proxied connections are raw TCP streams, so the HTTP framing has to be written by hand.
-/// Errors are ignored: the connection is going away regardless.
-async fn send_http_error(client_stream: &mut Box<dyn ClientStream>, status: &str, body: &str) {
-    let response = format!(
-        "HTTP/1.1 {status}\r\n\
-         Content-Type: text/plain\r\n\
-         Content-Length: {}\r\n\
-         Connection: close\r\n\
-         \r\n\
-         {body}",
-        body.len(),
-    );
-    let _ = client_stream.write_all(response.as_bytes()).await;
+/// Errors are ignored: the connection is going away regardless. A client that negotiated HTTP/2
+/// via ALPN cannot parse an HTTP/1.1 response, so for it the connection is only closed.
+async fn send_http_error(
+    client_stream: &mut Box<dyn ClientStream>,
+    client_h2: bool,
+    status: &str,
+    body: &str,
+) {
+    if !client_h2 {
+        let response = format!(
+            "HTTP/1.1 {status}\r\n\
+             Content-Type: text/plain\r\n\
+             Content-Length: {}\r\n\
+             Connection: close\r\n\
+             \r\n\
+             {body}",
+            body.len(),
+        );
+        let _ = client_stream.write_all(response.as_bytes()).await;
+    }
     let _ = client_stream.shutdown().await;
 }
 
@@ -1380,38 +1390,41 @@ struct HttpsBalancer {
 
 impl HttpsBalancer {
     /// Negotiates TLS and resolves a backend using the client's SNI hostname.
+    /// Also reports whether the client negotiated HTTP/2 via ALPN.
     async fn pre_resolve(
         conn: Connection,
         tls_context: Option<ReloadingSslContext>,
         resolver: &TenantDnsResolver,
         resolve_template: &str,
         port: u16,
-    ) -> Result<(Box<dyn ClientStream>, ResolvedAddr, SocketAddr), anyhow::Error> {
+    ) -> Result<(Box<dyn ClientStream>, ResolvedAddr, SocketAddr, bool), anyhow::Error> {
         let peer_addr = conn.peer_addr().context("fetching peer addr")?;
-        let (client_stream, servername): (Box<dyn ClientStream>, Option<String>) = match tls_context
-        {
-            Some(tls_context) => {
-                let mut ssl_stream = SslStream::new(Ssl::new(&tls_context.get())?, conn)?;
-                if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
-                    let _ = ssl_stream.get_mut().shutdown().await;
-                    return Err(e.into());
+        let (client_stream, servername, client_h2): (Box<dyn ClientStream>, Option<String>, bool) =
+            match tls_context {
+                Some(tls_context) => {
+                    let mut ssl_stream = SslStream::new(Ssl::new(&tls_context.get())?, conn)?;
+                    if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
+                        let _ = ssl_stream.get_mut().shutdown().await;
+                        return Err(e.into());
+                    }
+                    let servername: Option<String> =
+                        ssl_stream.ssl().servername(NameType::HOST_NAME).map(|sn| {
+                            match sn.split_once('.') {
+                                Some((left, _right)) => left,
+                                None => sn,
+                            }
+                            .into()
+                        });
+                    debug!("Found sni servername: {servername:?} (https)");
+                    let client_h2 =
+                        ssl_stream.ssl().selected_alpn_protocol() == Some(b"h2".as_slice());
+                    (Box::new(ssl_stream), servername, client_h2)
                 }
-                let servername: Option<String> =
-                    ssl_stream.ssl().servername(NameType::HOST_NAME).map(|sn| {
-                        match sn.split_once('.') {
-                            Some((left, _right)) => left,
-                            None => sn,
-                        }
-                        .into()
-                    });
-                debug!("Found sni servername: {servername:?} (https)");
-                (Box::new(ssl_stream), servername)
-            }
-            _ => (Box::new(conn), None),
-        };
+                _ => (Box::new(conn), None, false),
+            };
         let resolved =
             Self::resolve(resolver, resolve_template, port, servername.as_deref()).await?;
-        Ok((client_stream, resolved, peer_addr))
+        Ok((client_stream, resolved, peer_addr, client_h2))
     }
 
     async fn resolve(
@@ -1510,12 +1523,13 @@ impl mz_server_core::Server for HttpsBalancer {
                 };
                 let pre_resolved = inner_metrics.pre_resolved_connections();
 
-                let (mut client_stream, resolved, peer_addr) = under_pre_resolved_timeout(
-                    pre_resolved_timeout,
-                    &inner_metrics,
-                    Self::pre_resolve(conn, tls_context, &resolver, &resolve_template, port),
-                )
-                .await?;
+                let (mut client_stream, resolved, peer_addr, client_h2) =
+                    under_pre_resolved_timeout(
+                        pre_resolved_timeout,
+                        &inner_metrics,
+                        Self::pre_resolve(conn, tls_context, &resolver, &resolve_template, port),
+                    )
+                    .await?;
                 drop(pre_resolved);
                 let inner_active_guard = resolved
                     .tenant
@@ -1527,6 +1541,7 @@ impl mz_server_core::Server for HttpsBalancer {
                         error!("failed to connect to upstream server: {e}");
                         send_http_error(
                             &mut client_stream,
+                            client_h2,
                             "502 Bad Gateway",
                             "upstream server not available",
                         )
