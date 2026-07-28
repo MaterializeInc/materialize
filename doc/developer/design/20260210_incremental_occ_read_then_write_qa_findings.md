@@ -71,14 +71,24 @@ setting it, `ALTER SYSTEM SET` and `system_parameter_default`.
 sampled once at boot and the running process cannot observe a later change. The
 statement warns that the change only takes effect when `environmentd` restarts.
 
-## The coordinator path hangs on a far-future read
+## The coordinator path blocks on a far-future read until its own timeout
 
 `INSERT INTO dst SELECT a FROM mv`, where `mv` is a `REFRESH AT '3000-01-01'`
-materialized view, never returns on the lock-based coordinator path. That path
-has no equivalent of the central deadline, so only client cancellation or a
-disconnect frees the session. The hang is pre-existing and out of scope for the
-OCC work, which is why it is recorded here rather than as a permanently ignored
-test. Its blast radius is the target table, per the argument above.
+materialized view, blocks on the lock-based coordinator path while holding the
+target table's write lock. It does not block forever. That path arms
+`statement_timeout` around the row stream it reads the selection from, in
+`sequencer::inner`, with zero mapped to `Duration::MAX`, so the statement fails
+after the deadline and only `statement_timeout = 0` makes the block permanent.
+
+The blast radius is the target table rather than the whole process, per the
+argument above, which is the one respect in which the coordinator path is better
+behaved here.
+
+This was first recorded as an unconditional hang. If you see one with a non-zero
+`statement_timeout`, the cause is not a missing deadline and the note above is
+where to stop looking. The check is cheap: with the OCC flag off,
+`SET statement_timeout = '5s'` and then the INSERT above should fail in about
+five seconds.
 
 ## `RETURNING` is only parsed for `INSERT`
 

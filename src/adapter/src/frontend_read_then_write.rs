@@ -31,10 +31,13 @@
 //! right after it or, inside a multi-statement transaction, buffers them as
 //! session write ops that land at COMMIT.
 //!
-//! If the syntactic predicate were ever laxer than the dynamic one, a
-//! read-dependent write would reach the OCC loop inside a transaction, where
-//! refusing it is no longer possible. `frontend_read_then_write` soft-panics on
-//! that.
+//! Disagreement is caught on both sides, and only one side can still refuse.
+//! `frontend_read_then_write` re-checks the syntactic predicate before running a
+//! dataflow, which catches a caller that skipped the gate. If the syntactic
+//! predicate were laxer than the dynamic one, that check would pass and the
+//! write would commit mid-transaction, so the loop's `Committed` arm soft-panics
+//! when it has a write timestamp to apply inside a transaction. By then the
+//! write is durable, so all that arm can do is make the disagreement loud.
 //!
 //! ## Rollout note
 //!
@@ -64,7 +67,7 @@ use mz_expr::Eval;
 use mz_expr::row::RowCollection;
 use mz_expr::{CollectionPlan, Id, LocalId, MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::cast::CastFrom;
-use mz_ore::soft_panic_or_log;
+use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
 use mz_sql::catalog::CatalogError;
@@ -499,6 +502,16 @@ impl PeekClient {
         let response = match result {
             Ok(OccOutcome::Committed { response, write_ts }) => {
                 if let Some(write_ts) = write_ts {
+                    // A committed write timestamp inside a transaction means the
+                    // two predicates disagreed: the syntactic one let us defer,
+                    // the subscribe then read persisted state. The write is
+                    // already durable, so there is nothing to refuse, and
+                    // `apply_write` still has to run to keep the session's read
+                    // timestamps ahead of it.
+                    soft_assert_or_log!(
+                        !defer_write,
+                        "read-then-write committed a write inside a transaction"
+                    );
                     session.apply_write(write_ts);
                 }
                 Ok(response)

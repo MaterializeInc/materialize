@@ -873,6 +873,10 @@ fn end_reason(
 }
 
 /// Bumps the per-statement counters `Coordinator::handle_execute` maintains.
+///
+/// `stmt` is `None` for an empty portal, which is logged but not counted. The
+/// coordinator skips it the same way, and matching that is the point of this
+/// function.
 fn count_statement(session: &Session, stmt: Option<&Statement<Raw>>) {
     let Some(stmt) = stmt else {
         return;

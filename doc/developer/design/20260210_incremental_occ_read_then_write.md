@@ -363,8 +363,8 @@ runs the feature benchmark `ManySmallUpdates` is 1.7-1.9x slower and `Update`
 1.4x slower, and the scalability `UpdateWorkload` loses 36-39% throughput at
 concurrency 1 and about 22% at 8 and 32.
 
-`ManySmallUpdates` also steps `memory_clusterd` up by about 56%, from 57 MB to
-88 MB. Same cause as the wallclock step, from the other side: the subscribe
+`ManySmallUpdates` also steps `memory_clusterd` up by about 56%, from 56.8 MB to
+88.5 MB. Same cause as the wallclock step, from the other side: the subscribe
 dataflow each operation installs is arranged on the cluster, where the fast-path
 peek it replaces holds nothing. The absolute figures stay small because the
 dataflow lives only as long as the operation.
