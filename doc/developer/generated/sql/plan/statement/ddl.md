@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/statement/ddl.rs
-revision: 6eeaca032b
+revision: 42a4392d36
 ---
 
 # mz-sql::plan::statement::ddl
@@ -8,6 +8,7 @@ revision: 6eeaca032b
 The largest statement-planning file: implements `describe_*` and `plan_*` for all DDL statements — `CREATE`/`ALTER`/`DROP` for sources, sinks, views, materialized views, tables, indexes, connections, secrets, clusters, roles, schemas, databases, types, network policies, and more.
 Delegates connection-specific logic to the `connection` submodule.
 Exports `PgConfigOptionExtracted` and `PlannedRoleAttributes` for use by other modules.
+`plan_view` and `plan_create_materialized_view` call `plan_utils::maybe_rename_columns_exact` instead of `maybe_rename_columns`, so a column-name list shorter than the query's arity is rejected unless `unsafe_enable_incomplete_view_column_lists` is active (force-enabled during bootstrap).
 `plan_create_connection` dispatches on `CreateConnectionType::GlueSchemaRegistry` to plan `CREATE CONNECTION ... FOR AWS GLUE SCHEMA REGISTRY`, guarded by the `ENABLE_GLUE_SCHEMA_REGISTRY` feature flag.
 `plan_alter_connection` maps `Connection::Gcp(_)` to `CreateConnectionType::Gcp`.
 Iceberg sink planning validates that key columns are primitive, non-floating-point types using an allow-list; columns outside the list produce a `PlanError::IcebergSinkUnsupportedKeyType`. Iceberg type overrides are applied via `iceberg_type_overrides` from `mz-storage-types`. Range types are permitted as Iceberg sink key columns.
