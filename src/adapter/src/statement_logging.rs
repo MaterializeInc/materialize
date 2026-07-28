@@ -243,7 +243,7 @@ impl From<&ExecuteResponse> for StatementEndedExecutionReason {
             | ExecuteResponse::DeclaredCursor
             | ExecuteResponse::Deleted(_)
             | ExecuteResponse::DiscardedTemp
-            | ExecuteResponse::DiscardedAll
+            | ExecuteResponse::DiscardedAll { .. }
             | ExecuteResponse::DroppedObject(_)
             | ExecuteResponse::DroppedOwned
             | ExecuteResponse::EmptyQuery

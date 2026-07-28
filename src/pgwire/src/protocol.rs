@@ -2365,7 +2365,8 @@ where
                     .await
             }
             ExecuteResponse::TransactionCommitted { params }
-            | ExecuteResponse::TransactionRolledBack { params } => {
+            | ExecuteResponse::TransactionRolledBack { params }
+            | ExecuteResponse::DiscardedAll { params } => {
                 let notify_set: mz_ore::collections::HashSet<String> = self
                     .adapter_client
                     .session()
@@ -2409,7 +2410,6 @@ where
             | ExecuteResponse::Comment
             | ExecuteResponse::Deallocate { .. }
             | ExecuteResponse::Deleted(..)
-            | ExecuteResponse::DiscardedAll
             | ExecuteResponse::DiscardedTemp
             | ExecuteResponse::DroppedObject(_)
             | ExecuteResponse::DroppedOwned

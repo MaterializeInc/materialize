@@ -1,0 +1,70 @@
+# DISCARD ALL resets session variables and must send a ParameterStatus
+# message for every parameter in the notify set whose value changed, just
+# like RESET does. Connection poolers (e.g. pgbouncer with
+# server_reset_query) rely on this to keep their tracked parameters in sync.
+#
+# Note that Materialize sends ParameterStatus before CommandComplete, while
+# PostgreSQL sends it after, which is why this test lives in pgtest-mz.
+
+send
+Query {"query": "SET application_name = 'foo'"}
+----
+
+until
+ParameterStatus
+CommandComplete
+ReadyForQuery
+----
+ParameterStatus {"name":"application_name","value":"foo"}
+CommandComplete {"tag":"SET"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "DISCARD ALL"}
+----
+
+until
+ParameterStatus
+CommandComplete
+ReadyForQuery
+----
+ParameterStatus {"name":"application_name","value":""}
+CommandComplete {"tag":"DISCARD ALL"}
+ReadyForQuery {"status":"I"}
+
+# Multiple changed parameters are all reported, in one batch.
+
+send
+Query {"query": "SET application_name = 'bar'"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"SET"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "SET timezone = 'GMT'"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"SET"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "DISCARD ALL"}
+----
+
+until
+ParameterStatus
+ParameterStatus
+CommandComplete
+ReadyForQuery
+----
+ParameterStatus {"name":"TimeZone","value":"UTC"}
+ParameterStatus {"name":"application_name","value":""}
+CommandComplete {"tag":"DISCARD ALL"}
+ReadyForQuery {"status":"I"}

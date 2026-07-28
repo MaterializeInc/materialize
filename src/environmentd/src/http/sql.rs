@@ -1539,7 +1539,6 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::Comment
         | ExecuteResponse::Deleted(_)
         | ExecuteResponse::DiscardedTemp
-        | ExecuteResponse::DiscardedAll
         | ExecuteResponse::DroppedObject(_)
         | ExecuteResponse::DroppedOwned
         | ExecuteResponse::EmptyQuery
@@ -1566,7 +1565,8 @@ async fn execute_stmt<S: ResultSender>(
         )
         .into(),
         ExecuteResponse::TransactionCommitted { params }
-        | ExecuteResponse::TransactionRolledBack { params } => {
+        | ExecuteResponse::TransactionRolledBack { params }
+        | ExecuteResponse::DiscardedAll { params } => {
             let notify_set: mz_ore::collections::HashSet<_> = client
                 .session()
                 .vars()
