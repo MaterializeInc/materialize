@@ -2052,6 +2052,10 @@ impl SystemVars {
         *self.expect_value(&SCRAM_ITERATIONS)
     }
 
+    /// Computes an update for every dyncfg from its configured value.
+    ///
+    /// This does not touch our own [`ConfigSet`]. Callers that need this
+    /// process's dyncfgs to reflect the result want [`Self::sync_dyncfgs`].
     pub fn dyncfg_updates(&self) -> ConfigUpdates {
         let mut updates = ConfigUpdates::default();
         for entry in self.dyncfgs.entries() {
@@ -2079,6 +2083,18 @@ impl SystemVars {
             };
             updates.add_dynamic(entry.name(), val);
         }
+        updates
+    }
+
+    /// Applies the configured dyncfg values to our own [`ConfigSet`], and
+    /// returns them.
+    ///
+    /// Two callers own keeping this process's dyncfgs in step with the
+    /// catalog: catalog open, and every durable system-config change. Everyone
+    /// else only forwards the updates elsewhere and wants
+    /// [`Self::dyncfg_updates`] instead.
+    pub fn sync_dyncfgs(&self) -> ConfigUpdates {
+        let updates = self.dyncfg_updates();
         updates.apply(&self.dyncfgs);
         updates
     }
