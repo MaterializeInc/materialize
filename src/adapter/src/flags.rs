@@ -48,6 +48,7 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
         mysql_source_timeouts: mz_mysql_util::TimeoutConfig::build(
             config.mysql_source_snapshot_max_execution_time(),
             config.mysql_source_snapshot_lock_wait_timeout(),
+            config.mysql_source_snapshot_wait_timeout(),
             config.mysql_source_tcp_keepalive(),
             config.mysql_source_connect_timeout(),
         ),
