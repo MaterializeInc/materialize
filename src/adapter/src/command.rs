@@ -428,11 +428,13 @@ pub enum Command {
     /// Submits a write attempt. Carries the accumulated diffs to write.
     ///
     /// `write_ts` selects between two modes:
-    /// - `Some(ts)`: timestamped write at a specific timestamp, fails when the
-    /// table timestamp is already past that.
-    /// - `None`: blind write where the coordinator picks the timestamp via the
-    ///   oracle during group commit. This does not fail and will be retried
-    ///   until the write succeeds.
+    /// - `Some(ts)`: the write must land at exactly `ts`, and reports
+    ///   `WriteResult::TimestampPassed` if the table's timestamp is already past
+    ///   it. The caller decides whether to recompute the diffs and try again.
+    /// - `None`: the coordinator picks the timestamp from the oracle during
+    ///   group commit, so the timestamp cannot be passed. Every other outcome,
+    ///   including read-only, a changed target and cancellation, is reported the
+    ///   same way in both modes.
     AttemptWrite {
         /// Connection originating the write. Used so the coordinator can
         /// cancel this pending write if the connection is cancelled before

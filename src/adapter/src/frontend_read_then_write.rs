@@ -1118,7 +1118,10 @@ impl PeekClient {
         }
     }
 
-    /// Build the success response after a successful write.
+    /// Builds the response for a write that is about to be submitted.
+    ///
+    /// This runs before the write, so the result-size checks in here reject the
+    /// statement without having written anything.
     fn build_success_response(
         &self,
         kind: &MutationKind,
