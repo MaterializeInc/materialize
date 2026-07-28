@@ -165,9 +165,6 @@ pub(crate) enum BuiltinTableUpdateSource {
 }
 
 /// Result of a write submitted by frontend sequencing.
-// The read-then-write path that submits these writes lands later in this
-// stack, this attribute goes away with it.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum WriteResult {
     /// The write committed at this timestamp.
@@ -200,9 +197,6 @@ pub struct InternalWriteResponder {
 }
 
 impl InternalWriteResponder {
-    // The read-then-write path that uses this lands later in this stack, this
-    // attribute goes away with it.
-    #[allow(dead_code)]
     pub(crate) fn new(tx: oneshot::Sender<WriteResult>) -> Self {
         Self { tx: Some(tx) }
     }
@@ -229,9 +223,6 @@ pub(crate) enum UserWriteResponder {
     /// `ExecuteContext` once the write commits.
     Session(PendingTxn),
     /// Frontend-sequenced blind write.
-    // The read-then-write path that uses this lands later in this stack, this
-    // attribute goes away with it.
-    #[allow(dead_code)]
     Internal {
         conn_id: ConnectionId,
         /// The table the diffs were computed against, item id and the generation
@@ -295,9 +286,6 @@ impl PendingWriteTxn {
 
 pub(crate) enum TableWriteCmd {
     GroupCommit(GroupCommitRequest),
-    // The read-then-write path that uses this lands later in this stack, this
-    // attribute goes away with it.
-    #[allow(dead_code)]
     TimestampedWrite(TimestampedWriteRequest),
     Register {
         tables: Vec<TableRegistration>,

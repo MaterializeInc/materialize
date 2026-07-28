@@ -2713,6 +2713,17 @@ impl Coordinator {
             return;
         }
 
+        // The lock-based and OCC paths do not synchronize with each other, so
+        // reaching this path while frontend sequencing is enabled is a routing
+        // bug that could corrupt data.
+        if self.frontend_read_then_write_enabled {
+            ctx.retire(Err(AdapterError::Internal(
+                "coordinator read-then-write reached while frontend OCC sequencing is enabled"
+                    .into(),
+            )));
+            return;
+        }
+
         let mut source_ids: BTreeSet<_> = plan
             .selection
             .depends_on()
