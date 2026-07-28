@@ -2185,6 +2185,11 @@ fn test_cancel_frontend_read_then_write_long_running_query() {
         rows, 1,
         "cancelled statement should not have committed writes"
     );
+
+    // The read-then-write ran its selection through an internal subscribe, so a
+    // `SubscribeHandle` whose drop never reached the coordinator would leave
+    // that dataflow installed.
+    wait_for_no_dataflows(&mut client, "after cancelling a read-then-write");
 }
 
 #[mz_ore::test]
@@ -9455,25 +9460,27 @@ fn qa_occ_far_future_rtw_starves_permit_pool() {
     }
 }
 
-/// A cancelled or timed-out read-then-write must give back its OCC permit and
-/// drop its internal subscribe.
+/// A cancelled or timed-out read-then-write must give back its OCC permit.
 ///
 /// The permit pool is sized to one here, so a permit that leaks wedges every
-/// later read-then-write in the process. The oracle is the follow-up UPDATE:
+/// later read-then-write in the process, and the follow-up UPDATE is the oracle:
 /// it needs the permit the abandoned statement held, and its own
-/// `statement_timeout` turns a wedge into a failure instead of a hang. The
-/// cycle repeats so that leaking one permit per iteration is fatal rather than
-/// tolerable, and each pass also checks that no subscribe dataflow outlives its
-/// statement.
+/// `statement_timeout` turns a wedge into a failure instead of a hang. The cycle
+/// repeats so that leaking one permit per iteration is fatal rather than
+/// tolerable.
+///
+/// The abandoned statement parks in `ensure_read_linearized`, waiting on a
+/// far-future REFRESH materialized view. That holds a permit while occupying no
+/// cluster worker, which the oracle depends on: a statement that blocks by
+/// sleeping inside its dataflow keeps the worker busy after it is cancelled, so
+/// the follow-up would be measuring cluster occupancy rather than permit
+/// availability.
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn qa_occ_cancel_and_timeout_release_permit() {
-    // The write's selection sleeps this long in the subscribe dataflow, which
-    // is the window the cancel and the statement timeout have to land in.
-    const SLEEP_SECS: i32 = 3;
     const ITERATIONS: i32 = 5;
-    // Bounds the follow-up write: a leaked permit must surface as this error
-    // rather than as a hang, and it must not be mistaken for slowness.
+    // Bounds the follow-up write, so a leaked permit surfaces as this error
+    // rather than as a hang.
     const FOLLOW_UP_TIMEOUT: &str = "30s";
 
     let server = test_util::TestHarness::default()
@@ -9482,72 +9489,57 @@ fn qa_occ_cancel_and_timeout_release_permit() {
             "enable_adapter_frontend_occ_read_then_write".to_string(),
             "true".to_string(),
         )
-        .with_system_parameter_default(
-            "unsafe_enable_unsafe_functions".to_string(),
-            "true".to_string(),
-        )
+        .with_system_parameter_default("enable_refresh_every_mvs".to_string(), "true".to_string())
         // One permit: a single leak starves every read-then-write.
         .with_system_parameter_default("max_concurrent_occ_writes".to_string(), "1".to_string())
         .start_blocking();
 
     let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("CREATE TABLE src (a INT)").unwrap();
+    client.batch_execute("INSERT INTO src VALUES (1)").unwrap();
     client
-        .batch_execute("CREATE TABLE t (a TEXT, ts INT, n INT)")
+        .batch_execute(
+            "CREATE MATERIALIZED VIEW mv \
+             WITH (REFRESH AT '3000-01-01 00:00:00') AS SELECT a FROM src",
+        )
         .unwrap();
-    client
-        .batch_execute(&format!("INSERT INTO t VALUES ('hello', {SLEEP_SECS}, 0)"))
-        .unwrap();
+    client.batch_execute("CREATE TABLE dst (a INT)").unwrap();
+    client.batch_execute("CREATE TABLE t (n INT)").unwrap();
+    client.batch_execute("INSERT INTO t VALUES (0)").unwrap();
     client
         .batch_execute(&format!("SET statement_timeout = '{FOLLOW_UP_TIMEOUT}'"))
         .unwrap();
-    wait_for_no_dataflows(&mut client, "at the start of the test");
 
-    // Sleeping in the projection keeps every row in the selection, so the
-    // statement really is a read-then-write over the table's contents.
-    let blocking_insert = "INSERT INTO t \
-         SELECT a, CASE WHEN mz_unsafe.mz_sleep(ts) > 0 THEN 0 END, n FROM t";
+    // The read cannot be linearized until the year 3000, so the statement parks
+    // holding the sole permit.
+    let parking_insert = "INSERT INTO dst SELECT a FROM mv";
 
     for iteration in 1..=ITERATIONS {
-        let mut victim = server.connect(postgres::NoTls).unwrap();
-        let cancel_token = victim.cancel_token();
-        let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel();
-        let cancel_thread = thread::spawn(move || {
-            // The first cancel lands after the statement registered its
-            // cancellation watch and took a permit. Cancelling before that
-            // would exercise a different exit, one that never held a permit.
-            thread::sleep(Duration::from_millis(800));
-            loop {
-                match shutdown_rx.try_recv() {
-                    Ok(()) | Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
-                    Err(std::sync::mpsc::TryRecvError::Empty) => {
-                        let _ = cancel_token.cancel_query(postgres::NoTls);
-                    }
-                }
-                thread::sleep(Duration::from_millis(300));
-            }
-        });
-        let err = victim
-            .batch_execute(blocking_insert)
-            .expect_err("the blocking INSERT should have been cancelled");
-        shutdown_tx.send(()).unwrap();
-        cancel_thread.join().unwrap();
+        let mut parked = server.connect(postgres::NoTls).unwrap();
+        let cancel_token = parked.cancel_token();
+        let parked_handle = thread::spawn(move || parked.batch_execute(parking_insert));
+        wait_for_parked_read_then_write(&server, iteration);
+        cancel_token.cancel_query(postgres::NoTls).unwrap();
+        let err = parked_handle
+            .join()
+            .unwrap()
+            .expect_err("the parked INSERT should have been cancelled");
         assert_eq!(
             err.code(),
             Some(&SqlState::QUERY_CANCELED),
             "iteration {iteration}: cancelled INSERT reported {}",
             server_error_message(&err)
         );
-        drop(victim);
 
         follow_up_write_gets_a_permit(&mut client, iteration, "a cancelled");
 
-        let mut victim = server.connect(postgres::NoTls).unwrap();
-        victim
+        let mut parked = server.connect(postgres::NoTls).unwrap();
+        parked
             .batch_execute("SET statement_timeout = '1s'")
             .unwrap();
-        let err = victim
-            .batch_execute(blocking_insert)
-            .expect_err("the blocking INSERT should have timed out");
+        let err = parked
+            .batch_execute(parking_insert)
+            .expect_err("the parked INSERT should have timed out");
         let message = server_error_message(&err);
         assert_eq!(
             err.code(),
@@ -9558,38 +9550,54 @@ fn qa_occ_cancel_and_timeout_release_permit() {
             message.to_lowercase().contains("timeout"),
             "iteration {iteration}: expected a statement-timeout error, got {message}"
         );
-        drop(victim);
+        drop(parked);
 
         follow_up_write_gets_a_permit(&mut client, iteration, "a timed-out");
-
-        wait_for_no_dataflows(
-            &mut client,
-            &format!("after iteration {iteration} of cancel-then-timeout"),
-        );
     }
 
     // Two follow-up writes per iteration, each of them a single-row UPDATE.
-    let n: i32 = client
-        .query_one("SELECT n FROM t WHERE a = 'hello'", &[])
-        .unwrap()
-        .get(0);
+    let n: i32 = client.query_one("SELECT n FROM t", &[]).unwrap().get(0);
     assert_eq!(n, 2 * ITERATIONS, "a follow-up write did not commit");
     let count: i64 = client
-        .query_one("SELECT count(*) FROM t", &[])
+        .query_one("SELECT count(*) FROM dst", &[])
         .unwrap()
         .get(0);
     assert_eq!(
-        count, 1,
+        count, 0,
         "a cancelled or timed-out INSERT committed its rows"
     );
+}
+
+/// Waits until the statement under test has been taken over by its session task,
+/// which is the last observable point before it acquires an OCC permit.
+///
+/// Polling this instead of sleeping keeps a loaded machine from cancelling the
+/// statement while it is still connecting or planning, which would exercise an
+/// exit that never held a permit and prove nothing.
+fn wait_for_parked_read_then_write(server: &test_util::TestServerWithRuntime, iteration: i32) {
+    let labels = [("session_type", "user"), ("statement_type", "insert")];
+    let target = u64::try_from(iteration).expect("iteration count fits");
+    Retry::default()
+        .max_duration(Duration::from_secs(60))
+        .clamp_backoff(Duration::from_millis(50))
+        .retry(|_| {
+            let inserts = get_counter_value(server.metrics_registry(), "mz_query_total", &labels);
+            if inserts >= target {
+                Ok(())
+            } else {
+                Err(inserts)
+            }
+        })
+        .unwrap_or_else(|inserts| {
+            panic!("iteration {iteration}: only {inserts} INSERTs reached their session task")
+        });
 }
 
 /// Helper for `qa_occ_cancel_and_timeout_release_permit`: runs a read-then-write
 /// that can only make progress if the abandoned statement released its permit.
 fn follow_up_write_gets_a_permit(client: &mut postgres::Client, iteration: i32, predecessor: &str) {
-    let started = Instant::now();
     let affected = client
-        .execute("UPDATE t SET n = n + 1 WHERE a = 'hello'", &[])
+        .execute("UPDATE t SET n = n + 1", &[])
         .unwrap_or_else(|err| {
             panic!(
                 "iteration {iteration}: the read-then-write following {predecessor} one failed \
@@ -9600,13 +9608,6 @@ fn follow_up_write_gets_a_permit(client: &mut postgres::Client, iteration: i32, 
     assert_eq!(
         affected, 1,
         "iteration {iteration}: follow-up UPDATE after {predecessor} one affected {affected} rows"
-    );
-    // Generous: the abandoned statement's dataflow may still be sleeping on the
-    // cluster's only worker, which delays this write without wedging it.
-    assert!(
-        started.elapsed() < Duration::from_secs(25),
-        "iteration {iteration}: the read-then-write following {predecessor} one took {:?}",
-        started.elapsed()
     );
 }
 
