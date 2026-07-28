@@ -863,9 +863,14 @@ impl PeekClient {
                         }
                         WriteResult::ReadOnly => break Err(AdapterError::ReadOnly),
                         WriteResult::TargetChanged => {
-                            break Err(AdapterError::Unstructured(anyhow::anyhow!(
-                                "target table changed while read-then-write was executing",
-                            )));
+                            // A concurrent DDL gave the table a new generation
+                            // after we computed these diffs against the old
+                            // one. The same error the coordinator raises when a
+                            // dependency changes underneath a statement, so
+                            // clients see one retryable outcome for both.
+                            break Err(AdapterError::ConcurrentDependencyMutation {
+                                dependency_id: target_id.to_string(),
+                            });
                         }
                         WriteResult::Indeterminate => break Err(AdapterError::Internal(
                             "write outcome is indeterminate because the group committer shut down"
@@ -1039,9 +1044,14 @@ impl PeekClient {
                         }
                         WriteResult::ReadOnly => break Err(AdapterError::ReadOnly),
                         WriteResult::TargetChanged => {
-                            break Err(AdapterError::Unstructured(anyhow::anyhow!(
-                                "target table changed while read-then-write was executing",
-                            )));
+                            // A concurrent DDL gave the table a new generation
+                            // after we computed these diffs against the old
+                            // one. The same error the coordinator raises when a
+                            // dependency changes underneath a statement, so
+                            // clients see one retryable outcome for both.
+                            break Err(AdapterError::ConcurrentDependencyMutation {
+                                dependency_id: target_id.to_string(),
+                            });
                         }
                         WriteResult::Indeterminate => break Err(AdapterError::Internal(
                             "write outcome is indeterminate because the group committer shut down"

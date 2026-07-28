@@ -36,8 +36,8 @@ a subscribe that continually tracks the current state of the data.
 ## Non-Goals
 
 - High-performance writes under heavy contention. The current implementation
-  serializes writes behind a global lock; the new implementation serializes
-  them via OCC retries. Neither is designed for high write throughput.
+  serializes writes behind a global lock. The OCC implementation serializes
+  them via retries. Neither is designed for high write throughput.
 - Removing the in-process locks immediately. During rollout, the old lock-based
   path and the new OCC path coexist behind a feature flag. The locks can be
   removed once the OCC path is fully rolled out.

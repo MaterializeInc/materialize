@@ -904,7 +904,9 @@ OCC_COUNTER_NAME = "materialize.public.pw_occ_counter"
 # The first two come from the frontend OCC path, and only for an attempt the
 # group committer rejected before appending anything: the retry budget is
 # checked right after a rejected attempt, and a changed write target is detected
-# before the append is enqueued. The third is a cluster-resolution failure
+# before the append is enqueued. A concurrently modified dependency is also what
+# the coordinator path reports when it revalidates a plan before sequencing it,
+# which is likewise before any write. The last is a cluster-resolution failure
 # during planning, which the workload provokes on purpose by pointing the
 # default cluster at a nonexistent one, so the statement never reaches a write
 # path at all. The trailing quote keeps it from matching "unknown cluster
@@ -918,7 +920,7 @@ OCC_COUNTER_NAME = "materialize.public.pw_occ_counter"
 # fail, an unnecessary unknown only widens the upper bound.
 DEFINITELY_NOT_COMMITTED_ERRORS = (
     "read-then-write exceeded maximum retry attempts under contention",
-    "target table changed while read-then-write was executing",
+    "was concurrently modified",
     "unknown cluster '",
 )
 
