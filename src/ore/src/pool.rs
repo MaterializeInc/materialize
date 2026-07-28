@@ -523,20 +523,20 @@ pub struct ChunkHandle {
     meta: Arc<ChunkMeta>,
 }
 
-// Test seam fired inside `PoolInner::enforce_budget`, between a pass's final
+// Test hook fired inside `PoolInner::enforce_budget`, between a pass's final
 // counter read and the release of the `enforcing` guard. A test arms it on the
 // thread whose pass it wants to freeze, to interleave a concurrent over-budget
 // insert. One-shot: the hook is taken before it runs, so a re-enforcing pass
 // does not re-arm.
 #[cfg(test)]
 thread_local! {
-    static ENFORCE_BUDGET_SEAM: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+    static ENFORCE_BUDGET_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]
-fn run_enforce_budget_seam() {
-    let hook = ENFORCE_BUDGET_SEAM.with(|cell| cell.borrow_mut().take());
+fn run_enforce_budget_hook() {
+    let hook = ENFORCE_BUDGET_HOOK.with(|cell| cell.borrow_mut().take());
     if let Some(hook) = hook {
         hook();
     }
@@ -999,7 +999,6 @@ impl PoolInner {
     }
 
     fn enforce_budget(&self) {
-        use std::sync::atomic::Ordering;
         // Single-flight: enforcement runs synchronously on whichever thread
         // trips it (every insert), and concurrent passes would
         // convoy on the queue mutex doing redundant scans of the same
@@ -1019,13 +1018,16 @@ impl PoolInner {
             Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
         };
         loop {
-            self.enforce_pending.store(false, Ordering::Relaxed);
             self.enforce_budget_inner();
             #[cfg(test)]
-            run_enforce_budget_seam();
+            run_enforce_budget_hook();
             // A caller turned away since this pass's counter reads may have
             // left bytes unenforced. Re-run rather than drop them. The Acquire
             // pairs with the turned-away Release so the re-read sees the bump.
+            //
+            // This swap is the only place the flag is cleared, so no set can be
+            // lost. The cost is that a flag left over from an earlier call's
+            // residual window buys one extra pass here, which is harmless.
             //
             // NOTE: a caller turned away between this swap and `drop(guard)`
             // sets the flag but finds no re-reader. That residual window is a
@@ -3202,7 +3204,7 @@ mod tests {
     /// bailer, and no later insert re-trips enforcement, so the pool stays over
     /// budget. The fix re-runs the pass while any caller was turned away.
     ///
-    /// The seam freezes the holder's pass in that window to make the race
+    /// The test hook freezes the holder's pass in that window to make the race
     /// deterministic: the holder parks having found the budget satisfied, the
     /// main thread inserts over budget and is turned away, then the holder
     /// resumes. The `gate` is used for both rendezvous.
@@ -3217,13 +3219,13 @@ mod tests {
             let pool = pool.clone();
             let gate = std::sync::Arc::clone(&gate);
             std::thread::spawn(move || -> ChunkHandle {
-                ENFORCE_BUDGET_SEAM.with(|cell| {
+                ENFORCE_BUDGET_HOOK.with(|cell| {
                     *cell.borrow_mut() = Some(Box::new(move || {
                         gate.wait(); // parked, holding the guard
                         gate.wait(); // resume once the race is done
                     }));
                 });
-                // At budget: the pass finds it satisfied and parks at the seam.
+                // At budget: the pass finds it satisfied and parks at the hook.
                 insert(&pool, &mut payload(SMALL, 1))
             })
         };
