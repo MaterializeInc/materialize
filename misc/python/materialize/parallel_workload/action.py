@@ -2216,20 +2216,10 @@ class FlipFlagsAction(Action):
         conn = None
 
         try:
+            conn = self.create_system_connection(exe)
             if cluster is not None:
-                # Serialize with ReconfigureClusterAction: any managed-to-
-                # managed ALTER CLUSTER folds onto an in-flight graceful
-                # reconfiguration record and, lacking a WAIT clause, replaces
-                # its deadline with the 24h default (SQL-568), which strands
-                # the reconfiguration that action is polling on.
-                # TODO: Reenable running without the lock when SQL-568 is fixed
-                with cluster.lock:
-                    if cluster not in exe.db.clusters:
-                        return False
-                    conn = self.create_system_connection(exe)
-                    self.set_cluster_compression(conn, cluster)
+                self.set_cluster_compression(conn, cluster)
             else:
-                conn = self.create_system_connection(exe)
                 self.flip_flag(conn, flag_name, flag_value)
                 exe.db.flags[flag_name] = flag_value
             return True
