@@ -758,10 +758,9 @@ ORDER BY mseh.began_at DESC",
 }
 
 // Regression test: the frontend OCC read-then-write path must set
-// `execution_timestamp` on the statement's log entry. The old, coordinator
-// path does this through `set_statement_execution_timestamp` during group
-// commit; the frontend path needs to emit the equivalent signal once its
-// write commits.
+// `execution_timestamp` on the statement's log entry. The coordinator path does
+// this through `set_statement_execution_timestamp` during group commit, so the
+// frontend path has to emit the equivalent signal once its write commits.
 #[mz_ore::test]
 fn test_statement_logging_frontend_read_then_write_sets_execution_timestamp() {
     let harness = test_util::TestHarness::default().with_system_parameter_default(
@@ -2632,9 +2631,9 @@ fn test_frontend_read_then_write_returning_error_does_not_commit_write() {
 //
 // `ActiveSubscribe::initialize` emits a progress message at `as_of` before
 // any data batch is processed, so the OCC loop must not conclude
-// `NoRowsMatched` on that first progress — the snapshot hasn't been
+// `NoRowsMatched` on that first progress, the snapshot hasn't been
 // delivered yet. The check that distinguishes "initial progress" from
-// "snapshot complete and empty" is `ts > as_of`; this test exercises both
+// "snapshot complete and empty" is `ts > as_of`. This test exercises both
 // empty-match cases and asserts the operations return zero without
 // hanging or writing.
 #[mz_ore::test]
@@ -2685,7 +2684,7 @@ fn test_frontend_read_then_write_empty_snapshot_returns_zero() {
 // N concurrent connections each issue M `UPDATE counter SET v = v + 1`
 // statements against the same single-row table. Without a working
 // `TimestampPassed` retry loop this would lose updates (two writers reading
-// `v = k` and both committing `v = k + 1`); the final value pinning down at
+// `v = k` and both committing `v = k + 1`). The final value pinning down at
 // `N * M` proves retries actually re-read fresh state and re-apply the diff.
 //
 // Also asserts the `mz_occ_read_then_write_retry_count` histogram observes
@@ -9213,16 +9212,15 @@ fn qa_occ_concurrent_mixed_dml_no_internal_error() {
     );
 }
 
-/// FIX VERIFICATION: A read-then-write whose read resolves to a far-future
-/// timestamp (here, a `REFRESH AT <far future>` materialized view) used to hang
-/// in `ensure_read_linearized`'s sleep loop, ignoring `statement_timeout`. The
-/// fix bounds the *entire* OCC read-then-write operation by `statement_timeout`
-/// centrally, in `SessionClient::try_frontend_read_then_write_with_cancel`'s
-/// `select!`, so the parked far-future op now hits the timeout and returns
-/// promptly with a statement-timeout error.
+/// A read-then-write whose read resolves to a far-future timestamp (here, a
+/// `REFRESH AT <far future>` materialized view) parks in
+/// `ensure_read_linearized`'s sleep loop. `statement_timeout` has to end that
+/// park, which it does because
+/// `SessionClient::try_frontend_read_then_write_with_cancel` bounds the
+/// *entire* operation, not just the OCC loop.
 ///
-/// NOTE: the fix is OCC-path-only. The legacy coordinator path still hangs on
-/// the same scenario, which is pre-existing behavior recorded in
+/// NOTE: This holds for the OCC path only. The coordinator path hangs on the
+/// same scenario, a pre-existing behavior recorded in
 /// `doc/developer/design/20260210_incremental_occ_read_then_write_qa_findings.md`.
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
@@ -9261,8 +9259,8 @@ fn qa_occ_far_future_refresh_mv_respects_statement_timeout() {
             .unwrap();
         let started = Instant::now();
         let res = worker.batch_execute("INSERT INTO dst SELECT a FROM mv");
-        // `tokio_postgres::Error::to_string()` is just "db error"; preserve the
-        // SqlState code and server message so the assertion can inspect them.
+        // `tokio_postgres::Error::to_string()` is just "db error", so preserve
+        // the SqlState code and server message for the assertion to inspect.
         let res = res.map_err(|e| {
             (
                 e.code().cloned(),
@@ -9281,9 +9279,9 @@ fn qa_occ_far_future_refresh_mv_respects_statement_timeout() {
 
     match outcome {
         Ok((elapsed, res)) => {
-            // The fix bounds the whole operation by `statement_timeout`, so the
-            // far-future op must error out (not silently succeed) and do so
-            // promptly — well within the 45s recv budget.
+            // `statement_timeout` bounds the whole operation, so the far-future
+            // op must error out rather than silently succeed, and do so well
+            // within the 45s recv budget.
             let (code, message) = res.expect_err(
                 "far-future RTW should have failed with a statement-timeout error, \
                  but it returned successfully",
@@ -9317,17 +9315,15 @@ fn qa_occ_far_future_refresh_mv_respects_statement_timeout() {
     }
 }
 
-/// FIX VERIFICATION: a far-future RTW parked in `ensure_read_linearized` holds
-/// an OCC semaphore permit while parked. With a bounded permit pool, a single
-/// such op used to starve *all* other read-then-writes — even on unrelated
-/// tables — because those victims block on permit acquisition *before* the OCC
-/// loop, and `statement_timeout` was only enforced inside the loop.
+/// A far-future RTW parked in `ensure_read_linearized` holds its OCC semaphore
+/// permit for as long as it is parked. With a bounded permit pool, one such op
+/// therefore starves every other read-then-write in the process, including ones
+/// on unrelated tables, because a victim blocks on permit acquisition *before*
+/// the OCC loop.
 ///
-/// The fix moves `statement_timeout` enforcement up into
-/// `try_frontend_read_then_write_with_cancel`'s `select!`, which bounds the
-/// *whole* operation — including the permit-acquisition wait. So a victim
-/// blocked behind the starved pool now honors its own `statement_timeout` and
-/// returns promptly with a statement-timeout error instead of hanging.
+/// The victim must still honor its own `statement_timeout`, which it does
+/// because `try_frontend_read_then_write_with_cancel`'s `select!` bounds the
+/// *whole* operation, permit-acquisition wait included.
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn qa_occ_far_future_rtw_starves_permit_pool() {
@@ -9358,14 +9354,15 @@ fn qa_occ_far_future_rtw_starves_permit_pool() {
         .batch_execute("INSERT INTO other VALUES (1, 0)")
         .unwrap();
 
-    // Launch the hung far-future RTW; it will grab the single OCC permit and
-    // park in ensure_read_linearized.
+    // Launch the hung far-future RTW. It grabs the single OCC permit and parks
+    // in ensure_read_linearized.
     //
     // `mz_query_total` is bumped when the session task takes the statement
     // over, which is the last observable point before it acquires the permit.
     // Polling for that instead of sleeping for a fixed span keeps a loaded
     // machine from starting the victim while the parked op is still connecting
-    // or planning, which would make the test fail as if the fix regressed.
+    // or planning, which would fail the test without the permit pool ever being
+    // starved.
     let insert_labels = [("session_type", "user"), ("statement_type", "insert")];
     let inserts_before =
         get_counter_value(server.metrics_registry(), "mz_query_total", &insert_labels);
@@ -9422,10 +9419,9 @@ fn qa_occ_far_future_rtw_starves_permit_pool() {
     match outcome {
         Ok((elapsed, res)) => {
             // The far-future op holds the sole permit for its (default 60s)
-            // lifetime, so the victim cannot acquire a permit. With the fix,
-            // the victim's own `statement_timeout = '3s'` now bounds the
-            // permit-acquisition wait, so it returns a timeout error rather
-            // than hanging. (Before the fix this never returned within 25s.)
+            // lifetime, so the victim cannot acquire a permit. Its own
+            // `statement_timeout = '3s'` bounds the permit-acquisition wait, so
+            // it returns a timeout error rather than hanging.
             let (code, message) = res.expect_err(
                 "victim UPDATE should have timed out waiting on the starved permit pool, \
                  but it returned successfully",

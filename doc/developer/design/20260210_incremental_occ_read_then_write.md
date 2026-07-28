@@ -151,7 +151,7 @@ Session Task                         Coordinator
 ### Timestamped writes
 
 A timestamped write is a write that must be committed at a specific timestamp.
-The group commit machinery has to be extended to supports this by:
+The group commit machinery has to be extended to support this by:
 
 1. Checking if the target timestamp is still valid (hasn't been passed by the
    oracle)
@@ -245,7 +245,7 @@ oracle read timestamp. However, actually applying the write bumps the oracle
 read timestamp to at least the write timestamp, so at write time it holds that
 `write_ts <= oracle_read_ts`. The linearization invariant is maintained.
 
-### Single timestamped write write per group commit round
+### Single timestamped write per group commit round
 
 Only one timestamped write is processed per group commit round. This is correct
 because:
@@ -260,15 +260,22 @@ because:
 
 ### Timeouts
 
-We have to be careful about bounding the lifetime of the occ loop, both in
-wallclock time and number of retries. With the old approach, a read-then-write
-could take arbitrarily long, and block the rest of the system. With the new
-approach, the occ loop might try arbitrarily long, without ever succeeding. It
-will not block the rest of the system, though, which is a big benefit.
+The lifetime of the OCC loop has to be bounded, both in wallclock time and in
+number of retries. With the lock-based approach, a read-then-write could take
+arbitrarily long and block the rest of the system. With OCC it can retry
+arbitrarily long without ever succeeding, but it does not block the rest of the
+system, which is a big benefit.
 
-As a safety net, we should bound the lifetime of the occ loop with our existing
-statement timeout, and potentially add a hard upper limit on the number of
-attempts per occ loop.
+`statement_timeout` provides the wallclock bound. It is enforced in the session
+task, around the whole operation rather than around the loop alone, so it also
+covers planning, OCC permit acquisition, timestamp determination, and read
+linearization. Any of those can park indefinitely, and a parked operation holds
+an OCC permit, so a bound on the loop alone would leave the permit pool
+starvable.
+
+`max_occ_retries` provides the retry bound. A statement that keeps losing the
+race for its write timestamp fails with a contention error instead of retrying
+forever.
 
 ### Comparison with the old approach
 

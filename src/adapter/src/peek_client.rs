@@ -216,8 +216,7 @@ impl PeekClient {
             .expect("if the coordinator is still alive, it shouldn't have dropped our call")
     }
 
-    /// Returns a clone of the coordinator client, for use in cleanup guards
-    /// that need to send fire-and-forget commands.
+    /// The client for sending commands to the coordinator.
     pub(crate) fn coordinator_client(&self) -> &crate::Client {
         &self.coordinator_client
     }
@@ -873,9 +872,7 @@ fn end_reason(
     result.into()
 }
 
-/// Bumps the per-statement counters `Coordinator::handle_execute` maintains for
-/// the statement the session task runs instead. `stmt` is `None` for an empty
-/// portal, which is logged but not counted.
+/// Bumps the per-statement counters `Coordinator::handle_execute` maintains.
 fn count_statement(session: &Session, stmt: Option<&Statement<Raw>>) {
     let Some(stmt) = stmt else {
         return;

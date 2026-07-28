@@ -408,8 +408,8 @@ pub enum Command {
     },
 
     /// Creates an internal subscribe (not visible in introspection) and returns
-    /// the response channel. Initially used for frontend-sequenced
-    /// read-then-write (DELETE/UPDATE/INSERT...SELECT) operations via OCC.
+    /// the response channel. Used by frontend-sequenced read-then-write
+    /// (DELETE/UPDATE/INSERT...SELECT) operations via OCC.
     CreateInternalSubscribe {
         df_desc: Box<LirDataflowDescription>,
         cluster_id: ComputeInstanceId,
@@ -447,10 +447,8 @@ pub enum Command {
         tx: oneshot::Sender<WriteResult>,
     },
 
-    /// Drops an internal subscribe.
-    ///
-    /// Used for cleanup after the subscribe's purpose is fulfilled or on error.
-    /// Fire-and-forget — the caller doesn't wait for completion.
+    /// Drops an internal subscribe. Fire-and-forget, the caller does not wait
+    /// for completion.
     DropInternalSubscribe {
         sink_id: GlobalId,
     },

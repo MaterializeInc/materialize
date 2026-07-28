@@ -314,14 +314,15 @@ impl Catalog {
         builtin_table_updates.extend(builtin_table_update);
 
         // Both the `system_parameter_defaults` set above and the durable
-        // `SystemConfiguration` values just applied via `pre_item_updates` now
-        // live in the `SystemVars` value map. Mirror their effective values into
-        // the dyncfg `ConfigSet` so startup-only reads — the
-        // `ENABLE_EXPRESSION_CACHE` read just below and `FRONTEND_READ_THEN_WRITE`
-        // in coord bootstrap — observe configured values, not compile-time
-        // defaults. `apply_updates` only syncs the `ConfigSet` when a
-        // `SystemConfiguration` update is present; deployments configured purely
-        // via `system_parameter_default` have none, so sync explicitly here.
+        // `SystemConfiguration` values applied via `pre_item_updates` live in
+        // the `SystemVars` value map by now. Mirror their effective values into
+        // the dyncfg `ConfigSet`, so that startup-only reads observe configured
+        // values rather than compile-time defaults. Those reads are the
+        // `ENABLE_EXPRESSION_CACHE` read just below and
+        // `FRONTEND_READ_THEN_WRITE` in coord bootstrap. `apply_updates` only
+        // syncs the `ConfigSet` when a `SystemConfiguration` update is present,
+        // and a deployment configured purely via `system_parameter_default` has
+        // none, so sync explicitly here.
         state.system_config().dyncfg_updates();
 
         // Ensure mz_system has a password if configured to have one.

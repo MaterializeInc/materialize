@@ -4265,6 +4265,11 @@ impl Coordinator {
     /// lock-based and the OCC read-then-write path. Both are never live in one
     /// process, so the choice is fixed at boot and every session inherits it.
     /// `max_concurrent_occ_writes` sizes the OCC semaphore at boot.
+    ///
+    /// `ALTER SYSTEM` on one of these is allowed to go through. The catalog
+    /// value is what the next process start reads, and the running process
+    /// cannot observe it, so there is no window where two code paths are live at
+    /// once.
     fn startup_only_vars() -> [&'static str; 2] {
         [
             FRONTEND_READ_THEN_WRITE.name(),
@@ -4272,17 +4277,8 @@ impl Coordinator {
         ]
     }
 
-    /// Warns that the parameter an `ALTER SYSTEM SET`/`RESET` names is only
-    /// read at startup, so the running process keeps its sampled value.
-    ///
-    /// We let the change through: the catalog value is what the next process
-    /// start reads, and the running process cannot observe it, so there is no
-    /// window where two code paths are live at once.
-    ///
-    /// The operator named the parameter, so restating the restart requirement
-    /// is appropriate whether or not the value actually changed.
-    /// `startup_only_vars_changed_by_reset_all` is value-based instead, because
-    /// `RESET ALL` names every parameter.
+    /// Warns that `name` is only read at startup, so the running process keeps
+    /// the value it sampled at boot.
     fn notice_if_startup_only(session: &Session, name: &str) {
         if Self::startup_only_vars()
             .iter()
@@ -4298,6 +4294,9 @@ impl Coordinator {
     /// change. Parameters already at their effective default are untouched, so
     /// they are not reported.
     fn startup_only_vars_changed_by_reset_all(&self) -> Vec<&'static str> {
+        // Value-based, unlike `notice_if_startup_only`, which warns whenever an
+        // operator names one of these parameters. `RESET ALL` names every
+        // parameter, so only a value that actually moves is worth a warning.
         let config = self.catalog().system_config();
         let defaults = config.defaults();
         Self::startup_only_vars()

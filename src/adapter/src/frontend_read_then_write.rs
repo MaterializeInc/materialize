@@ -14,25 +14,34 @@
 //! sequenced from the session task rather than the Coordinator. This reduces
 //! coordinator bottlenecking.
 //!
-//! The approach is:
-//! 1. Validate and optimize MIR locally
-//! 2. Determine timestamp via coordinator
-//! 3. Optimize LIR locally
-//! 4. Acquire OCC semaphore
-//! 5. Create subscribe via Coordinator Command
-//! 6. Run OCC loop (receive diffs, attempt write, retry on conflict)
-//! 7. Return the result. A write whose diffs depend on an observed read
-//!    frontier commits inside the loop. Diffs from a selection that reads no
-//!    persisted state are frontier-independent, so the caller of the loop
-//!    either submits them right after it or, inside a multi-statement
-//!    transaction, buffers them as session write ops that land at COMMIT
+//! ## Whether the write reads persisted state
+//!
+//! Two predicates answer that one question, and they have to agree. Before
+//! anything runs, `SessionClient::try_frontend_read_then_write` decides it
+//! syntactically, from `depends_on()` on the planned selection, because inside
+//! a transaction a read-dependent write has to be refused while refusing is
+//! still possible. Once the dataflow runs, the subscribe answers it
+//! dynamically: a subscribe over a persisted collection never ends, so a
+//! channel that closes on its own means the selection read nothing.
+//!
+//! The answer decides where the diffs go. Diffs from a selection that reads
+//! persisted state are only correct at the frontier they were observed at, so
+//! they commit inside the OCC loop. Diffs from a selection that reads nothing
+//! are frontier-independent, so the caller of the loop either submits them
+//! right after it or, inside a multi-statement transaction, buffers them as
+//! session write ops that land at COMMIT.
+//!
+//! If the syntactic predicate were ever laxer than the dynamic one, a
+//! read-dependent write would reach the OCC loop inside a transaction, where
+//! refusing it is no longer possible. `frontend_read_then_write` soft-panics on
+//! that.
 //!
 //! ## Rollout note
 //!
 //! The `FRONTEND_READ_THEN_WRITE` dyncfg is read once at process startup and
 //! fixed for the lifetime of the `environmentd` process. This avoids a
 //! mixed-mode window where both the lock-based coordinator path and this OCC
-//! path are active concurrently — the coordinator path acquires write locks to
+//! path are active concurrently. The coordinator path acquires write locks to
 //! prevent concurrent writes between its read and write phases, but this OCC
 //! path does not use write locks, so concurrent operation of both paths could
 //! allow an OCC write to slip between a coordinator-path reader's read and
@@ -307,10 +316,8 @@ impl PeekClient {
         // write ops once we know them.
         session.add_transaction_ops(TransactionOps::Writes(vec![]))?;
 
-        // A write that reads persisted state commits at the frontier it
-        // observed, which cannot be deferred to COMMIT, so inside a
-        // transaction only writes that read nothing get here. See the
-        // read-dependency check in
+        // Inside a transaction only a write that reads nothing gets here, see
+        // the module docs. The syntactic check lives in
         // `SessionClient::try_frontend_read_then_write`.
         let defer_write = session.transaction().is_in_multi_statement_transaction();
         if defer_write && !depends_on.is_empty() {
@@ -348,8 +355,8 @@ impl PeekClient {
         // otherwise sit on read holds on the RTW's read dependencies for the
         // entire time they are queued, pinning compaction on those
         // collections. Waiting on the permit first keeps queued operations
-        // hold-free; once we have a permit we proceed to acquire the read
-        // holds needed for the rest of the operation.
+        // hold-free. Once we have a permit we proceed to acquire the read holds
+        // needed for the rest of the operation.
         //
         // The semaphore is owned by the coordinator and outlives every
         // session task, so `acquire_owned` cannot return `Err` in practice.
@@ -441,7 +448,7 @@ impl PeekClient {
         // stalling every subsequent write on the `EpochMilliseconds`
         // timeline until then. So a pathological far-future RTW must park
         // here without ever touching the oracle. This park is unbounded on
-        // its own; the caller bounds it by `statement_timeout`.
+        // its own, the caller bounds it by `statement_timeout`.
         self.ensure_read_linearized(&timeline, as_of).await?;
 
         let subscribe_handle = self
@@ -486,7 +493,7 @@ impl PeekClient {
 
         // Finish the operation, including a blind write's submission, before
         // releasing the OCC permit. Holding it for the entire operation is what
-        // bounds concurrency; an early drop would let a waiter start its
+        // bounds concurrency. An early drop would let a waiter start its
         // subscribe while we are still consolidating diffs, retrying, or
         // waiting for our write to commit.
         let response = match result {
@@ -558,7 +565,7 @@ impl PeekClient {
         }
 
         // Validate read dependencies. The plan was built against an earlier
-        // catalog snapshot; an item it depends on may have been dropped by
+        // catalog snapshot, so an item it depends on may have been dropped by
         // concurrent DDL before we got here.
         let dependency_ids = plan
             .selection
@@ -752,20 +759,18 @@ impl PeekClient {
         timeline: &TimelineContext,
         as_of: Timestamp,
     ) -> Result<(), AdapterError> {
-        // Pick the oracle this RTW operates against. `timeline` is derived
-        // from the read side (`plan.selection.depends_on()`), so an
-        // MV-only read produces `TimestampDependent` — an MV itself
-        // doesn't pin the query to any source timeline. The write target,
-        // however, is always a Table living on `EpochMilliseconds`, and
-        // future readers of that table will consult the
-        // `EpochMilliseconds` oracle, so linearization must target
+        // Pick the oracle this RTW operates against. `timeline` is derived from
+        // the read side (`plan.selection.depends_on()`), so an MV-only read
+        // produces `TimestampDependent`, an MV itself does not pin the query to
+        // any source timeline. The write target, however, is always a Table
+        // living on `EpochMilliseconds`, and future readers of that table will
+        // consult the `EpochMilliseconds` oracle, so linearization must target
         // `EpochMilliseconds` regardless of the read side.
         //
         // `get_timeline` encodes that defaulting (`TimestampDependent` →
-        // `Some(EpochMilliseconds)`). `TimelineContext::timeline()`
-        // answers a different question ("is there a source-forced
-        // timeline?") and would return `None` for MV-only reads,
-        // silently skipping linearization.
+        // `Some(EpochMilliseconds)`). `TimelineContext::timeline()` answers a
+        // different question ("is there a source-forced timeline?") and would
+        // return `None` for MV-only reads, silently skipping linearization.
         let tl = match <Coordinator as TimestampProvider>::get_timeline(timeline) {
             Some(tl) => tl,
             None => return Ok(()),
@@ -836,7 +841,7 @@ impl PeekClient {
     /// Semantically this is a SELECT at `as_of` followed by an INSERT.
     /// Because we hold no write lock, a concurrent writer may bump the
     /// target table's upper past our chosen write timestamp, in which
-    /// case the coordinator returns `WriteResult::TimestampPassed`; we
+    /// case the coordinator returns `WriteResult::TimestampPassed`. We
     /// then wait for the subscribe to advance and retry, up to
     /// `max_occ_retries` times.
     ///
@@ -876,7 +881,7 @@ impl PeekClient {
         // timestamp) followed by incremental updates. We consolidate on every
         // progress message (flattening timestamps to MIN first), so after
         // consolidation `all_diffs` always represents "what the query returns
-        // as of the latest progress timestamp" — old snapshot rows that were
+        // as of the latest progress timestamp". Old snapshot rows that were
         // retracted by newer updates cancel out, and new rows appear. This is
         // exactly the set of diffs we want to write.
         //
@@ -959,7 +964,7 @@ impl PeekClient {
                             // The subscribe can finish (coordinator drops the
                             // sender after `process_response` returns true)
                             // between our last recv() and this drain. This is
-                            // benign — all buffered messages have already been
+                            // benign, all buffered messages have already been
                             // consumed via the Ok(msg) arm above.
                             Err(mpsc::error::TryRecvError::Disconnected) => break None,
                         }
@@ -1012,12 +1017,9 @@ impl PeekClient {
 
                     // Submit write.
                     //
-                    // perf: clones every row on each attempt. Under contention
-                    // we retry up to `max_occ_retries` times (default 1000),
-                    // so a large DELETE/UPDATE under heavy contention can do a
-                    // lot of row-cloning work. If this shows up in profiles,
-                    // consider storing `Arc<Row>` in `all_diffs` to make the
-                    // per-attempt copy cheap.
+                    // TODO(aljoscha): Store `Arc<Row>` in `all_diffs` if this
+                    // shows up in profiles. Every attempt clones every row, and
+                    // we retry up to `max_occ_retries` times (default 1000).
                     attempt_state.mark_write_submitted();
                     let result = self
                         .call_coordinator(|tx| Command::AttemptWrite {
@@ -1193,8 +1195,8 @@ impl PeekClient {
         // unbounded data unless we bail mid-loop. The post-loop
         // `RowSetFinishing::finish` below would also reject this, but only
         // after we've materialized everything. The early-bail caps the
-        // temporary allocation. We pick the lower of the two configured
-        // caps — whichever fires first wins.
+        // temporary allocation. We pick the lower of the two configured caps,
+        // whichever fires first wins.
         let mut projected_byte_size: u64 = 0;
         let early_cap = std::cmp::min(max_result_size, max_query_result_size);
 
@@ -1372,7 +1374,6 @@ fn process_message(
                     }
                 };
 
-                // Extract mz_progressed
                 let Some(progressed_datum) = datums.next() else {
                     return ProcessResult::Error(AdapterError::Internal(
                         "missing mz_progressed in subscribe output".into(),
@@ -1504,7 +1505,7 @@ fn apply_mutation_to_mir(
             // Find a fresh LocalId that won't conflict with any in the expression.
             //
             // Invariant: `Let` and `LetRec` are the only MIR nodes that *bind*
-            // LocalIds; `Get` references them but does not introduce new ones.
+            // LocalIds. `Get` references them but does not introduce new ones.
             // So scanning just those two node kinds and picking `max + 1` is
             // guaranteed to produce an id unused by the subtree.
             let mut max_id = 0_u64;
@@ -1527,7 +1528,6 @@ fn apply_mutation_to_mir(
                 access_strategy: mz_expr::AccessStrategy::UnknownOrLocal,
             };
 
-            // Build map expressions
             let map_scalars: Vec<MirScalarExpr> = (0..arity)
                 .map(|i| {
                     assignments
@@ -1554,7 +1554,8 @@ fn apply_mutation_to_mir(
                 body: Box::new(body),
             }
         }
-        // INSERT: rows pass through unchanged; the subscribe emits them with diff +1.
+        // INSERT: rows pass through unchanged, the subscribe emits them with
+        // diff +1.
         MutationKind::Insert => expr,
     }
 }

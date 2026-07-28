@@ -865,6 +865,9 @@ impl Coordinator {
                     responder,
                 } => match write_locks.validate(writes.keys().copied()) {
                     Ok(validated_locks) => {
+                        // Locks from different sessions can be merged into one
+                        // group because every write in the group commits at the
+                        // same timestamp.
                         group_write_locks.merge(validated_locks);
                         validated_writes.push(PendingWriteTxn::User {
                             span,
@@ -873,6 +876,9 @@ impl Coordinator {
                             responder,
                         });
                     }
+                    // Callers validate before they get here, so a partial set is
+                    // a bug. We must not let the write proceed: without the
+                    // right locks it can violate serializability.
                     Err(missing) => {
                         let writes: Vec<_> = writes.keys().collect();
                         panic!(
@@ -939,6 +945,12 @@ impl Coordinator {
                             target,
                             result,
                         } => {
+                            // All-or-nothing, like `WriteLocks::all_or_nothing`
+                            // for session writes: `collect` into an `Option`
+                            // drops every lock it did acquire as soon as one is
+                            // unavailable. Holding a partial set across the
+                            // re-queue below could deadlock against another
+                            // writer holding the complement.
                             let acquired = missing
                                 .into_iter()
                                 .map(|id| {

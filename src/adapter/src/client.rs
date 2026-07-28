@@ -800,12 +800,9 @@ impl SessionClient {
         let execute_started = Instant::now();
         let cancel_future = cancel_future.map(|_| ()).shared();
 
-        // The single owner of this execution's end-of-execution obligation, and
-        // the single site that pays it. Everything below either produces an
-        // outcome for the statement or hands the obligation to the coordinator.
-        // Owning the slot in this frame is also what lets cancellation report an
-        // error: the inner future can be dropped without the obligation going
-        // with it.
+        // Owning the end-of-execution obligation in this frame is what lets
+        // cancellation report an error: the inner future can be dropped without
+        // the obligation going with it. See `ExecutionLogging`.
         let mut logging = ExecutionLogging::adopt(outer_ctx_extra, &self.peek_client);
 
         let result = self
@@ -1006,8 +1003,8 @@ impl SessionClient {
 
         // Failsafe: `PREPARE foo AS EXECUTE bar` is rejected by the parser,
         // so the resolved inner statement must not be another `EXECUTE`. If
-        // that ever changes, we'd silently skip OCC routing for the deeper
-        // EXECUTEs — surface it as an internal error instead.
+        // that ever changes, we'd silently skip frontend sequencing for the
+        // deeper EXECUTEs. Surface it as an internal error instead.
         if let Some(inner) = inner_stmt.as_ref() {
             if matches!(inner, Statement::Execute(_)) {
                 return Err(AdapterError::Internal(format!(
@@ -1579,10 +1576,9 @@ impl SessionClient {
         use mz_sql::plan::{MutationKind, Plan, ReadThenWritePlan};
         use mz_sql_parser::ast::{InsertStatement, Statement};
 
-        // Re-checked here rather than relying on the caller's gate. The flag is
-        // determined once at process startup to avoid a mixed-mode window where
-        // both the old lock-based path and this OCC path are active
-        // concurrently.
+        // Re-checked here rather than relying on the caller's gate. See the
+        // module-level docs on `frontend_read_then_write` for why the flag is
+        // fixed for the lifetime of the process.
         if !self.peek_client.frontend_read_then_write_enabled {
             return Ok(None);
         }
@@ -1711,7 +1707,7 @@ impl SessionClient {
         // Cluster restrictions and RBAC, mirroring the coordinator's checks
         // in sequencer.rs. Resolution may fail if the target cluster doesn't
         // exist. That gets reported later (with the correct error) by
-        // `validate_read_then_write`; for the purposes of these checks we
+        // `validate_read_then_write`. For the purposes of these checks we
         // treat it as "no cluster known", consistent with the coordinator.
         let (target_cluster_id, target_cluster_name) = {
             let session = self.session.as_ref().expect("SessionClient invariant");
@@ -1755,7 +1751,7 @@ impl SessionClient {
 
         // Wait for any in-flight startup builtin-table appends that this plan
         // depends on. Mirrors the frontend_peek and coordinator sequencer
-        // paths; no-op for plans that don't depend on builtin tables.
+        // paths, and is a no-op for plans that don't depend on builtin tables.
         {
             let session = self.session.as_mut().expect("SessionClient invariant");
             if let Some((_, wait_future)) =
@@ -1796,29 +1792,25 @@ impl SessionClient {
         let rtw_plan = match plan {
             Plan::ReadThenWrite(rtw_plan) => rtw_plan,
             Plan::Insert(insert_plan) => {
-                // For INSERT, we need to check if it's a constant insert
-                // without RETURNING. Constant inserts use a fast path in the
-                // coordinator, so we fall back.
+                // A constant INSERT without RETURNING is a blind write, handled
+                // here through the coordinator's `insert_constant` helper, which
+                // buffers the rows as session write ops.
                 //
-                // We need to lower HIR to MIR to check for constants because
-                // VALUES statements are planned as Wrap calls at the HIR level.
+                // Deciding that needs HIR lowered to MIR, because a VALUES list
+                // is planned as a `Wrap` call at the HIR level.
                 //
-                // Only take the constant-INSERT fast path when the HIR
-                // names no persisted collections (no Get nodes on tables
-                // or MVs). The MIR optimizer can fold an MV reference
-                // into a literal when the MV's plan happens to be
-                // constant, but "plan is constant" is NOT the same as
-                // "content is visible at the current oracle_ts". A
-                // `REFRESH AT year 30000` MV has a constant plan but no
-                // durable content until the refresh fires; folding it
-                // and blind-writing the literal would skip timestamp
-                // selection and linearization, producing data that was
-                // never observable.
-                //
-                // Preserving HIR-level Get nodes routes the INSERT
-                // through the RTW path, where timestamp selection
-                // handles REFRESH and other time-dependent reads
-                // correctly.
+                // Only take that path when the HIR names no persisted
+                // collections (no `Get` nodes on tables or MVs). The MIR
+                // optimizer can fold an MV reference into a literal when the
+                // MV's plan happens to be constant, but "plan is constant" is
+                // NOT the same as "content is visible at the current
+                // oracle_ts". A `REFRESH AT year 30000` MV has a constant plan
+                // but no durable content until the refresh fires. Folding it
+                // and blind-writing the literal would skip timestamp selection
+                // and linearization, producing data that was never observable.
+                // Preserving the HIR-level `Get` nodes routes the INSERT through
+                // the RTW path, where timestamp selection handles REFRESH and
+                // other time-dependent reads correctly.
                 let has_read_deps = !insert_plan.values.depends_on().is_empty();
 
                 if !has_read_deps {
@@ -1862,8 +1854,6 @@ impl SessionClient {
                         }
                     };
 
-                    // Constant INSERT without RETURNING are blind-writes. Add to
-                    // the transaction and let those code paths handle it.
                     let inner_mir = optimized_mir.into_inner();
                     if inner_mir.as_const().is_some() && insert_plan.returning.is_empty() {
                         let session = self.session.as_mut().expect("SessionClient invariant");
@@ -1919,10 +1909,9 @@ impl SessionClient {
             }
         };
 
-        // Inside a transaction, only a write that reads no persisted state can
-        // run on this path: its diffs are frontier-independent, so they can sit
-        // in the session's write ops until COMMIT. A write that reads persisted
-        // state commits at the frontier it observed and cannot wait.
+        // The syntactic predicate for "reads persisted state", see the module
+        // docs on `frontend_read_then_write`. Inside a transaction, only a write
+        // that reads nothing can run on this path.
         //
         // The AST gate above is not enough to establish this. It admits
         // INSERTs whose source is constant in the AST, and such a statement can

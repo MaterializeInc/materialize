@@ -9,9 +9,9 @@
 
 //! Coordinator-side support machinery for (frontend) read-then write.
 //!
-//! N.B. It's a bit annoying that we still have the write submission go through
-//! the coordinator. We can imagine in the long run we want a group-commit task
-//! that runs independently, and we can directly submit write requests there.
+//! TODO(aljoscha): Write submission still goes through the coordinator. In the
+//! long run we want a group-commit task that runs independently, so that
+//! session tasks can submit write requests to it directly.
 
 use std::collections::BTreeSet;
 
@@ -55,19 +55,14 @@ fn enqueue(
 impl Coordinator {
     /// Handle a Command to create an internal subscribe.
     ///
-    /// Internal subscribes are not visible in introspection collections. They
-    /// are initially used for frontend-sequenced read-then-write
-    /// (DELETE/UPDATE/INSERT ...SELECT) via OCC.
+    /// Internal subscribes do not appear in introspection collections. They
+    /// serve frontend-sequenced read-then-write (DELETE/UPDATE/INSERT ...
+    /// SELECT) via OCC, which calls this once it holds a semaphore permit.
     ///
-    /// This is called from the frontend OCC implementation after it has
-    /// acquired the semaphore permit. We create the subscribe here (on the
-    /// coordinator) and return the channel to the caller.
-    ///
-    /// The `read_holds` parameter contains the read holds for this specific
-    /// operation. They are passed directly through the stages (not via the
-    /// connection-keyed txn_read_holds map) to avoid issues where multiple
-    /// operations on the same connection could interfere with each other's
-    /// holds.
+    /// `read_holds` are the holds for this one operation, passed through the
+    /// stages rather than kept in the connection-keyed `txn_read_holds` map, so
+    /// that concurrent operations on one connection cannot interfere with each
+    /// other's holds.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn handle_create_internal_subscribe(
         &mut self,

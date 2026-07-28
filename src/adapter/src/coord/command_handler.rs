@@ -1976,7 +1976,7 @@ impl Coordinator {
         let mut maybe_ctx = None;
 
         // Cancel all pending writes for this connection:
-        // - At most one session-bound write (`UserWriteResponder::Session`);
+        // - At most one session-bound write (`UserWriteResponder::Session`),
         //   retired via its `ExecuteContext` below.
         // - Any frontend blind write that has not entered the committer. The
         //   waiter receives `WriteResult::Canceled`. Timestamped writes already
