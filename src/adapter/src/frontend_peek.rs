@@ -321,15 +321,17 @@ impl PeekClient {
                     }
                     _ => {
                         // This shouldn't happen because we already checked for this at the AST
-                        // level before calling `try_frontend_peek_inner`.
+                        // level before calling `try_frontend_peek_inner`. The logging takeover
+                        // has already happened, so falling back to the coordinator would count
+                        // the statement twice. Report the inconsistency instead.
                         soft_panic_or_log!(
                             "unexpected EXPLAIN FILTER PUSHDOWN plan kind in frontend peek sequencing: {:?}",
                             explainee
                         );
-                        debug!(
-                            "Bailing out from try_frontend_peek_inner, because EXPLAIN FILTER PUSHDOWN is not for a SELECT query or is EXPLAIN BROKEN"
-                        );
-                        return Ok(None);
+                        return Err(AdapterError::Internal(
+                            "unexpected EXPLAIN FILTER PUSHDOWN plan kind in frontend peek sequencing"
+                                .into(),
+                        ));
                     }
                 }
             }
@@ -389,15 +391,16 @@ impl PeekClient {
             Plan::Subscribe(subscribe) => (QueryPlan::Subscribe(subscribe), ExplainContext::None),
             _ => {
                 // This shouldn't happen because we already checked for this at the AST
-                // level before calling `try_frontend_peek_inner`.
+                // level before calling `try_frontend_peek_inner`. The logging takeover has
+                // already happened, so falling back to the coordinator would count the
+                // statement twice. Report the inconsistency instead.
                 soft_panic_or_log!(
                     "Unexpected plan kind in frontend peek sequencing: {:?}",
                     plan
                 );
-                debug!(
-                    "Bailing out from try_frontend_peek_inner, because the Plan is not a SELECT, side-effecting SELECT, EXPLAIN SELECT, EXPLAIN FILTER PUSHDOWN, or COPY TO S3"
-                );
-                return Ok(None);
+                return Err(AdapterError::Internal(
+                    "unexpected plan kind in frontend peek sequencing".into(),
+                ));
             }
         };
 
