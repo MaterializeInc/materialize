@@ -5650,16 +5650,8 @@ fn test_mcp_developer_search_path_defense() {
     );
 }
 
-/// Pins that the developer MCP endpoint is a pass-through for RBAC: every
-/// permission check is enforced by the pgwire session's role, with no
-/// MCP-side gating or elevation on top. Prompted by a support-role scenario
-/// where the same statement failed via MCP but succeeded via psql, which
-/// turned out to be two different roles behind the two paths.
-///
-/// For each statement, the same role runs it once through MCP `query` and
-/// once through pgwire. The two results must match at every step: both
-/// denied without USAGE, both denied without SELECT after USAGE is granted,
-/// both succeeding once both privileges are in place.
+/// Pins that the developer MCP endpoint is an RBAC pass-through: the same
+/// statement run by the same role returns the same result via MCP or pgwire.
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_mcp_developer_rbac_passthrough() {
@@ -5891,19 +5883,8 @@ fn test_mcp_developer_rbac_passthrough() {
 }
 
 /// Regression pin for CLO-158: `/api/mcp/developer` on the internal HTTP
-/// listener must honor an `x-materialize-user` header injected by a trusted
-/// upstream proxy (Teleport), matching the behavior of `/api/sql` on the same
-/// listener. Today it does not: `x_materialize_user_header_auth` is layered
-/// onto `base_router` at `http.rs:667` but not onto `mcp_router`, so MCP
-/// sessions on port 6878 always resolve to `anonymous_http_user` regardless of
-/// the injected header. That makes the endpoint unusable for support in Cloud,
-/// where Teleport injects `X-Materialize-User: mz_support` via the app rewrite
-/// (`cloud/src/environment-controller/src/controller/teleport.rs:302-310`).
-///
-/// This test is intentionally left un-ignored so it fails until the middleware
-/// is wired to `mcp_router` in the same pattern `ws_router` uses at
-/// `http.rs:336-339`. Once fixed, it becomes the regression pin that keeps
-/// this working going forward.
+/// listener honors an `x-materialize-user` header injected by a trusted
+/// upstream proxy, matching `/api/sql` on the same listener.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)]
 #[allow(clippy::disallowed_methods)]
