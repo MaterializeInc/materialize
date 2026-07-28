@@ -35,7 +35,7 @@ use prometheus::Histogram;
 use qcell::QCell;
 use thiserror::Error;
 use timely::progress::Antichain;
-use tokio::sync::oneshot;
+use tokio::sync::{Semaphore, oneshot};
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
@@ -79,6 +79,12 @@ pub struct PeekClient {
     persist_client: PersistClient,
     /// Statement logging state for frontend peek sequencing.
     pub statement_logging_frontend: StatementLoggingFrontend,
+    /// Semaphore for limiting concurrent OCC (optimistic concurrency control) write operations.
+    pub occ_write_semaphore: Arc<Semaphore>,
+    /// Whether frontend OCC read-then-write is enabled (determined once at process startup).
+    pub frontend_read_then_write_enabled: bool,
+    /// Whether the coordinator is in read-only mode. Mutations must be rejected.
+    pub read_only: bool,
 }
 
 impl PeekClient {
@@ -94,6 +100,9 @@ impl PeekClient {
         optimizer_metrics: OptimizerMetrics,
         persist_client: PersistClient,
         statement_logging_frontend: StatementLoggingFrontend,
+        occ_write_semaphore: Arc<Semaphore>,
+        frontend_read_then_write_enabled: bool,
+        read_only: bool,
     ) -> Self {
         Self {
             coordinator_client,
@@ -105,6 +114,9 @@ impl PeekClient {
             statement_logging_frontend,
             oracles: Default::default(), // lazily populated
             persist_client,
+            occ_write_semaphore,
+            frontend_read_then_write_enabled,
+            read_only,
         }
     }
 
@@ -202,6 +214,11 @@ impl PeekClient {
         self.coordinator_client.send(f(tx));
         rx.await
             .expect("if the coordinator is still alive, it shouldn't have dropped our call")
+    }
+
+    /// The client for sending commands to the coordinator.
+    pub(crate) fn coordinator_client(&self) -> &crate::Client {
+        &self.coordinator_client
     }
 
     /// Acquire read holds on the given compute/storage collections, and

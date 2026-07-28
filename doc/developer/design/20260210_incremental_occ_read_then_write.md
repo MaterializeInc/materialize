@@ -36,15 +36,14 @@ a subscribe that continually tracks the current state of the data.
 ## Non-Goals
 
 - High-performance writes under heavy contention. The current implementation
-  serializes writes behind a global lock; the new implementation serializes
-  them via OCC retries. Neither is designed for high write throughput.
+  serializes writes behind a global lock. The OCC implementation serializes
+  them via retries. Neither is designed for high write throughput.
 - Removing the in-process locks immediately. During rollout, the old lock-based
   path and the new OCC path coexist behind a feature flag. The locks can be
   removed once the OCC path is fully rolled out.
-- Multi-statement transactions. The OCC approach as described here applies to
-  single-statement implicit transactions. Explicit multi-statement write
-  transactions continue to use the existing path. And there are not plans to
-  support mixed read/write transactions.
+- Mixed read/write transactions. A write on this path commits at the frontier it
+  observed, which it cannot postpone until COMMIT, so it runs only as a single
+  statement.
 
 ## Overview
 
@@ -128,7 +127,7 @@ Session Task                         Coordinator
   |                                      |
   |-- acquire OCC semaphore              |
   |                                      |
-  |-- CreateReadThenWriteSubscribe ----> |
+  |-- CreateInternalSubscribe ---------> |
   | <------------ subscribe channel -----|
   |                                      |
   |   +-- OCC Loop ------------------+   |
@@ -141,14 +140,14 @@ Session Task                         Coordinator
   |   |   if Success: break          |   |
   |   +------------------------------+   |
   |                                      |
-  |-- DropReadThenWriteSubscribe ------> |
+  |-- DropInternalSubscribe -----------> |
   |                                      |
 ```
 
 ### Timestamped writes
 
 A timestamped write is a write that must be committed at a specific timestamp.
-The group commit machinery has to be extended to supports this by:
+The group commit machinery has to be extended to support this by:
 
 1. Checking if the target timestamp is still valid (hasn't been passed by the
    oracle)
@@ -193,7 +192,7 @@ subscribe.
 The subscribes created for read-then-write are internal: they do not appear in
 `mz_subscriptions` or other introspection tables, and they don't increment the
 active subscribes metric. They are created and dropped via dedicated `Command`
-variants (`CreateReadThenWriteSubscribe`, `DropReadThenWriteSubscribe`).
+variants (`CreateInternalSubscribe`, `DropInternalSubscribe`).
 
 ## Correctness
 
@@ -242,7 +241,7 @@ oracle read timestamp. However, actually applying the write bumps the oracle
 read timestamp to at least the write timestamp, so at write time it holds that
 `write_ts <= oracle_read_ts`. The linearization invariant is maintained.
 
-### Single timestamped write write per group commit round
+### Single timestamped write per group commit round
 
 Only one timestamped write is processed per group commit round. This is correct
 because:
@@ -257,15 +256,22 @@ because:
 
 ### Timeouts
 
-We have to be careful about bounding the lifetime of the occ loop, both in
-wallclock time and number of retries. With the old approach, a read-then-write
-could take arbitrarily long, and block the rest of the system. With the new
-approach, the occ loop might try arbitrarily long, without ever succeeding. It
-will not block the rest of the system, though, which is a big benefit.
+The lifetime of the OCC loop has to be bounded, both in wallclock time and in
+number of retries. With the lock-based approach, a read-then-write could take
+arbitrarily long and block the rest of the system. With OCC it can retry
+arbitrarily long without ever succeeding, but it does not block the rest of the
+system, which is a big benefit.
 
-As a safety net, we should bound the lifetime of the occ loop with our existing
-statement timeout, and potentially add a hard upper limit on the number of
-attempts per occ loop.
+`statement_timeout` provides the wallclock bound. It is enforced in the session
+task, around the whole operation rather than around the loop alone, so it also
+covers planning, OCC permit acquisition, timestamp determination, and read
+linearization. Any of those can park indefinitely, and a parked operation holds
+an OCC permit, so a bound on the loop alone would leave the permit pool
+starvable.
+
+`max_occ_retries` provides the retry bound. A statement that keeps losing the
+race for its write timestamp fails with a contention error instead of retrying
+forever.
 
 ### Comparison with the old approach
 
@@ -284,6 +290,37 @@ The new approach is arguably easier to reason about: there is no global lock
 state to consider, no deferred operations, no lock merging. The correctness
 argument is local to the OCC loop and the group commit mechanism.
 
+## Deliberate differences from the lock-based path
+
+A user must not be able to tell which path sequenced their statement. These are
+the places where the two paths do differ, on purpose. They are listed here so
+that the next reader does not take them for bugs.
+
+- **Statement lifecycle events.** The frontend path records an
+  `optimization-finished` event for a DML, the coordinator path does not,
+  because it hands the read-then-write's inner peek a trivial logging context
+  and so logs nothing for it. We keep the extra event, it is real information
+  about a statement the user did run.
+- **`max_result_size` accounting.** The coordinator sums one row length per diff
+  entry before consolidation. The frontend recomputes the total from the
+  consolidated set, which counts one row length per distinct row and ignores
+  multiplicity. So a `DELETE` of a million copies of one row can exceed the
+  limit on the coordinator path and succeed on the frontend path. We keep the
+  frontend's accounting: it matches what the write actually appends, one entry
+  with a large diff.
+- **The write-timeline throttle.** A timestamped write does not go through the
+  throttle that a blind write's group commit applies, because its timestamp
+  comes from an observed subscribe frontier rather than from the clock. See the
+  doc comment on `GroupCommitter::commit_timestamped` for the full list of what
+  that path skips and why.
+- **Zero-row `INSERT ... RETURNING`.** Both paths report `INSERT 0 0` with no
+  result set when no rows match, because the coordinator decides the response
+  kind from the evaluated RETURNING rows and there are none. Postgres returns an
+  empty result set here, with a row description. The frontend path is
+  deliberately bug-compatible with the coordinator rather than correct on its
+  own: fixing it changes the behavior of the path that ships today, which is a
+  separate decision from this change.
+
 ## Performance
 
 The goal is not to make writes faster, but to not regress significantly.
@@ -295,16 +332,48 @@ Benchmarking a PoC-level implementation of the OCC approach against `main` for
 The benchmark varies concurrency (number of workers) on the x-axis and shows
 throughput (left) and latency (right). Key observations:
 
-- At low concurrency (1-7 workers), the OCC approach is comparable or _better_
-  than `main`. This is because the OCC path begins preparing the write (opening
-  the subscribe, receiving the snapshot) before the write timestamp is claimed,
-  whereas the old path only starts the peek after acquiring the lock.
+- At low concurrency (1-7 workers), the result depends on write size. A single
+  large `UPDATE`/`DELETE` is comparable or _better_ than `main`, because the
+  subscribe streams the mutation diffs directly whereas the old path peeks every
+  matched row and then recomputes the diffs. Small writes, however, _regress_:
+  every operation installs a subscribe dataflow, waits for its snapshot, and
+  tears it down, where the old path uses a cheap fast-path peek. This
+  per-operation subscribe overhead makes tiny `UPDATE`s roughly 1.5-2x slower at
+  low/no concurrency (observed in the nightly feature benchmark
+  `ManySmallUpdates` and the scalability `UpdateWorkload`).
 - At higher concurrency, performance degrades as expected due to the O(N^2)
   retry behavior: with more concurrent writers, more retries are needed. The
   concurrency semaphore (default 4 permits) bounds this in practice.
 - The benchmark is for a worst-case workload (all writers updating the same
   table). Real workloads with writes to different tables won't experience the
   contention.
+
+The chart above is from the PoC, which benchmarked `UPDATE t SET x = x + 1` over
+a larger table (the regime where OCC wins). It does not capture the small-write
+regression noted above, which is an accepted cost: high write throughput is a
+non-goal (see Non-Goals).
+
+Measured on the full implementation, with the OCC path on for every mzcompose
+suite, the small-write regression is at the bad end of that range. Across nightly
+runs the feature benchmark `ManySmallUpdates` is 1.7-1.9x slower and `Update`
+1.4x slower, and the scalability `UpdateWorkload` loses 36-39% throughput at
+concurrency 1 and about 22% at 8 and 32.
+
+`ManySmallUpdates` also steps `memory_clusterd` up by about 56%, from 56.8 MB to
+88.5 MB. Same cause as the wallclock step, from the other side: the subscribe
+dataflow each operation installs is arranged on the cluster, where the fast-path
+peek it replaces holds nothing. The absolute figures stay small because the
+dataflow lives only as long as the operation.
+
+The performance suites run the OCC path, because that is the configuration we
+intend to ship. The write benchmarks therefore record a one-time step, which we
+accept for the reasons above. Registering it is a follow-up once the change has
+landed and has a commit hash: `ManySmallUpdates` and `Update` go in
+`get_ancestor_overrides_for_performance_regressions` and `UpdateWorkload` in
+`ANCESTOR_OVERRIDES_FOR_SCALABILITY_REGRESSIONS`, both in
+`misc/python/materialize/version_ancestor_overrides.py`. That justification only
+applies when the comparison is against a released version, so until the step is
+inside the baseline these scenarios report a regression against `main`.
 
 ## Rollout
 
@@ -317,6 +386,12 @@ phases without the old path detecting it (since the OCC path doesn't acquire
 write locks). We therefore must make the flag sticky per `environmentd` process
 lifetime (check on bootstrap only) to avoid this, and keep the current
 `confirm_leadership` checks.
+
+In CI the flag defaults to enabled for versions that carry it, so the mzcompose
+suites exercise the OCC path even though production keeps it off. The version
+gate leaves it disabled for the older versions an upgrade test runs, and
+`CI_SYSTEM_PARAMETERS=random` can pick either value, which is how both paths
+stay covered.
 
 Once the OCC path is fully rolled out and validated:
 

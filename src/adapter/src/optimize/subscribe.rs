@@ -116,6 +116,22 @@ impl Optimizer {
         self.sink_id
     }
 
+    /// Optimizes a subscribe over an already-lowered MIR expression, for
+    /// callers that build their own MIR (such as the frontend read-then-write
+    /// path, which applies the mutation in MIR).
+    ///
+    /// `output` is the sink's row ordering, as produced by
+    /// [`mz_sql::plan::SubscribeOutput::row_order`]. Empty means the sink emits
+    /// raw diffs.
+    pub fn optimize_query(
+        &mut self,
+        expr: MirRelationExpr,
+        from_desc: RelationDesc,
+        output: Vec<ColumnOrder>,
+    ) -> Result<GlobalMirPlan<Unresolved>, OptimizerError> {
+        self.optimize_inner(SubscribeSource::Query { expr, from_desc }, output)
+    }
+
     /// The single subscribe optimization pipeline. Every subscribe, whatever it
     /// reads from, goes through here, so a prep or metainfo step added here
     /// applies to all of them.

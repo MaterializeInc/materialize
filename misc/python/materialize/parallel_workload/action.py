@@ -78,6 +78,7 @@ from materialize.parallel_workload.database import (
     MAX_TYPES,
     MAX_VIEWS,
     MAX_WEBHOOK_SOURCES,
+    OCC_CONTENTION_EXHAUSTED_ERROR,
     Cluster,
     ClusterReplica,
     Column,
@@ -1115,7 +1116,6 @@ class InsertAction(Action):
             )
         all_column_values = ", ".join(f"({v})" for v in column_values)
         query = f"INSERT INTO {table} ({column_names}) VALUES {all_column_values}"
-        # TODO: Use INSERT INTO {} SELECT {} (only works for tables)
         if self.rng.choice([True, False]):
             self.stmt_id += 1
             self.exe_prepared(query, f"insert{self.stmt_id}", exe)
@@ -1138,6 +1138,7 @@ class InsertSelectAction(Action):
         result.extend(
             [
                 "canceling statement due to statement timeout",
+                OCC_CONTENTION_EXHAUSTED_ERROR,
                 # A random expression can evaluate to NULL (e.g. a map-key
                 # miss) even for a NOT NULL column, which is a legitimate
                 # rejection. The base list only ignores it for DDL complexity.
@@ -1257,6 +1258,9 @@ class CopyFromStdinAction(Action):
 class InsertReturningAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = super().errors_to_ignore(exe)
+        # A constant INSERT is a blind write, but RETURNING takes it off that
+        # fast path and makes it a read-then-write.
+        result.append(OCC_CONTENTION_EXHAUSTED_ERROR)
         # The RETURNING expressions re-render the fully-qualified table and
         # column names, so a concurrent schema or table rename landing between
         # the INSERT target and the RETURNING clause leaves the two referring to
@@ -1306,7 +1310,6 @@ class InsertReturningAction(Action):
             )
         all_column_values = ", ".join(f"({v})" for v in column_values)
         query = f"INSERT INTO {table} ({column_names}) VALUES {all_column_values}"
-        # TODO: Use INSERT INTO {} SELECT {} (only works for tables)
         returning_exprs = []
         if self.rng.random() < 0.5:
             returning_exprs += [
@@ -1410,6 +1413,7 @@ class UpdateAction(Action):
         result.extend(
             [
                 "canceling statement due to statement timeout",
+                OCC_CONTENTION_EXHAUSTED_ERROR,
                 # A random SET expression can evaluate to NULL (e.g. a map-key
                 # miss) even for a NOT NULL column. That is a legitimate
                 # rejection, not a bug, and the column type can't be coerced
@@ -1474,6 +1478,9 @@ class ReadThenWriteCounterUpdateAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
             "canceling statement due to statement timeout",
+            # Extreme contention on one row is what this action creates, so
+            # exhausting the retry budget is an expected outcome here.
+            OCC_CONTENTION_EXHAUSTED_ERROR,
         ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> bool:
@@ -1500,6 +1507,7 @@ class DeleteAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         errors = [
             "canceling statement due to statement timeout",
+            OCC_CONTENTION_EXHAUSTED_ERROR,
         ] + super().errors_to_ignore(exe)
         if exe.db.scenario == Scenario.Rename:
             errors += ["does not exist"]
@@ -3073,6 +3081,10 @@ class FlipFlagsAction(Action):
         # behavior, you should add it. Feature flags which turn on/off
         # externally visible features should not be flipped.
         self.uninteresting_flags: list[str] = [
+            # Read once at environmentd startup, so an ALTER SYSTEM SET only
+            # takes effect after a restart. Flipping it here would be a no-op
+            # for the running process.
+            "enable_adapter_frontend_occ_read_then_write",
             "enable_compute_half_join2",
             "enable_mz_join_core",
             "enable_compute_correction_v2",
