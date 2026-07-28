@@ -400,22 +400,11 @@ pub enum Command {
     /// Registers a connection-scoped cancellation watch and returns a receiver
     /// that becomes `true` when cancellation is requested for the connection.
     ///
-    /// This is shared by coordinator staged sequencing and frontend
-    /// read-then-write execution. `operation_id` identifies the registering
-    /// operation, a matching unregister only removes a watch registered with
-    /// the same id.
+    /// Registration always installs a fresh channel, so the caller cannot
+    /// observe a cancellation aimed at an earlier statement.
     RegisterConnectionCancelWatch {
         conn_id: ConnectionId,
-        operation_id: Uuid,
         tx: oneshot::Sender<watch::Receiver<bool>>,
-    },
-
-    /// Unregisters the connection-scoped cancellation watch registered with
-    /// the same `operation_id`. A no-op if a newer operation has since
-    /// registered its own watch.
-    UnregisterConnectionCancelWatch {
-        conn_id: ConnectionId,
-        operation_id: Uuid,
     },
 
     /// Creates an internal subscribe (not visible in introspection) and returns
@@ -505,7 +494,6 @@ impl Command {
             | Command::FrontendStatementLogging(..)
             | Command::InjectAuditEvents { .. }
             | Command::RegisterConnectionCancelWatch { .. }
-            | Command::UnregisterConnectionCancelWatch { .. }
             | Command::CreateInternalSubscribe { .. }
             | Command::AttemptWrite { .. }
             | Command::DropInternalSubscribe { .. } => None,
@@ -551,7 +539,6 @@ impl Command {
             | Command::FrontendStatementLogging(..)
             | Command::InjectAuditEvents { .. }
             | Command::RegisterConnectionCancelWatch { .. }
-            | Command::UnregisterConnectionCancelWatch { .. }
             | Command::CreateInternalSubscribe { .. }
             | Command::AttemptWrite { .. }
             | Command::DropInternalSubscribe { .. } => None,

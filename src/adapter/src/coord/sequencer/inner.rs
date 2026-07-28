@@ -212,12 +212,9 @@ impl Coordinator {
                 if cancel_enabled {
                     // Channel to await cancellation. Insert a new channel, but check if the previous one
                     // was already canceled.
-                    if let Some((_prev_operation_id, _prev_tx, prev_rx)) = self
+                    if let Some((_prev_tx, prev_rx)) = self
                         .connection_cancel_watches
-                        .insert(session.conn_id().clone(), {
-                            let (tx, rx) = watch::channel(false);
-                            (None, tx, rx)
-                        })
+                        .insert(session.conn_id().clone(), watch::channel(false))
                     {
                         let was_canceled = *prev_rx.borrow();
                         if was_canceled {
@@ -274,7 +271,7 @@ impl Coordinator {
         T: Send + 'static,
         F: FnOnce(C, T) + Send + 'static,
     {
-        let rx: BoxFuture<()> = if let Some((_operation_id, _tx, rx)) = ctx
+        let rx: BoxFuture<()> = if let Some((_tx, rx)) = ctx
             .session()
             .and_then(|session| self.connection_cancel_watches.get(session.conn_id()))
         {

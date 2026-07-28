@@ -649,25 +649,6 @@ pub struct SessionClient {
     pub enable_frontend_peek_sequencing: bool,
 }
 
-/// Keeps a connection cancel watch installed in the coordinator for the
-/// duration of a frontend read-then-write attempt.
-struct FrontendConnectionCancelWatchGuard {
-    conn_id: ConnectionId,
-    operation_id: Uuid,
-    client: Option<Client>,
-}
-
-impl Drop for FrontendConnectionCancelWatchGuard {
-    fn drop(&mut self) {
-        if let Some(client) = self.client.take() {
-            client.try_send(Command::UnregisterConnectionCancelWatch {
-                conn_id: self.conn_id.clone(),
-                operation_id: self.operation_id,
-            });
-        }
-    }
-}
-
 impl SessionClient {
     /// Parses a SQL expression, reporting failures as a telemetry event if
     /// possible.
@@ -1370,7 +1351,6 @@ impl SessionClient {
                 | Command::FrontendStatementLogging(..)
                 | Command::InjectAuditEvents { .. }
                 | Command::RegisterConnectionCancelWatch { .. }
-                | Command::UnregisterConnectionCancelWatch { .. }
                 | Command::CreateInternalSubscribe { .. }
                 | Command::AttemptWrite { .. }
                 | Command::DropInternalSubscribe { .. } => {}
@@ -1476,13 +1456,7 @@ impl SessionClient {
         let conn_id = self.session().conn_id().clone();
         let statement_timeout = *self.session().vars().statement_timeout();
         let inner_client = self.inner().clone();
-        let operation_id = Uuid::new_v4();
         let attempt_state = Arc::new(FrontendWriteAttemptState::new());
-        let _connection_cancel_guard = FrontendConnectionCancelWatchGuard {
-            conn_id: conn_id.clone(),
-            operation_id,
-            client: Some(inner_client.clone()),
-        };
 
         let mut cancel_future = pin::pin!(cancel_future);
         let statement_timeout = async move {
@@ -1494,14 +1468,16 @@ impl SessionClient {
         };
         tokio::pin!(statement_timeout);
 
-        // Registration is part of the statement lifetime. The operation ID
-        // prevents this guard from removing a newer operation's watch.
+        // Registering installs a fresh channel, so this cannot observe a
+        // cancellation aimed at an earlier statement. The entry it leaves behind
+        // is replaced by the next registration and removed when a statement
+        // reaches the coordinator or the connection's state is cleared, so there
+        // is nothing to unregister here.
         let mut connection_cancel_rx = {
             let register =
                 self.peek_client
                     .call_coordinator(|tx| Command::RegisterConnectionCancelWatch {
                         conn_id: conn_id.clone(),
-                        operation_id,
                         tx,
                     });
             tokio::pin!(register);

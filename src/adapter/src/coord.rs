@@ -510,9 +510,6 @@ impl Message {
                 Command::StartCopyFromStdin { .. } => "start-copy-from-stdin",
                 Command::InjectAuditEvents { .. } => "inject-audit-events",
                 Command::RegisterConnectionCancelWatch { .. } => "register-connection-cancel-watch",
-                Command::UnregisterConnectionCancelWatch { .. } => {
-                    "unregister-connection-cancel-watch"
-                }
                 Command::CreateInternalSubscribe { .. } => "create-internal-subscribe",
                 Command::AttemptWrite { .. } => "attempt-write",
                 Command::DropInternalSubscribe { .. } => "drop-internal-subscribe",
@@ -2068,13 +2065,12 @@ pub struct Coordinator {
     /// Each entry is a watch channel whose value is `false` until cancellation
     /// is requested for that connection, at which point it is set to `true`.
     ///
-    /// Consumers install/remove these watches while they have cancellable work
-    /// in flight. The `Option<Uuid>` scopes removal: frontend operations
-    /// register with a fresh operation id and unregister with that same id, so
-    /// a late unregister cannot remove a newer registration. Coordinator
-    /// staged sequencing registers with `None` and removes its watch itself.
-    connection_cancel_watches:
-        BTreeMap<ConnectionId, (Option<Uuid>, watch::Sender<bool>, watch::Receiver<bool>)>,
+    /// Consumers install these watches while they have cancellable work in
+    /// flight, always as a fresh channel, so nobody can observe a cancellation
+    /// aimed at an earlier statement. An entry is removed when a statement
+    /// starts, when a stage runs uncancelable, and when the connection's state
+    /// is cleared.
+    connection_cancel_watches: BTreeMap<ConnectionId, (watch::Sender<bool>, watch::Receiver<bool>)>,
     /// Active introspection subscribes.
     introspection_subscribes: BTreeMap<GlobalId, IntrospectionSubscribe>,
 
