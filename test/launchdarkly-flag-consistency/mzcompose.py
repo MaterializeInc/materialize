@@ -313,6 +313,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     mysql_source_connect_timeout
     mysql_source_snapshot_lock_wait_timeout
     mysql_source_snapshot_max_execution_time
+    mysql_source_snapshot_wait_timeout
     mysql_source_tcp_keepalive
     network_policy
     oidc_audience

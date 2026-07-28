@@ -181,6 +181,24 @@ running
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET mysql_source_snapshot_lock_wait_timeout = 3600
 
+# Validate mysql_source_snapshot_wait_timeout
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET mysql_source_snapshot_wait_timeout = '60s'
+
+> CREATE SOURCE "test_slot_source"
+  IN CLUSTER cdc_cluster
+  FROM MYSQL CONNECTION mysql_conn;
+
+> CREATE TABLE pk_table FROM SOURCE test_slot_source (REFERENCE public.pk_table);
+
+> SELECT COUNT(*) > 0 FROM pk_table;
+true
+
+> DROP SOURCE test_slot_source CASCADE;
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET mysql_source_snapshot_wait_timeout
+
 
 #
 # Error checking
