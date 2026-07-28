@@ -132,6 +132,12 @@ pub enum AdapterNotice {
         role: Option<String>,
         var_name: Option<String>,
     },
+    /// An `ALTER SYSTEM` statement named a system parameter that
+    /// `environmentd` only reads at startup, so the running process keeps the
+    /// value it sampled at boot.
+    StartupOnlyVarUpdated {
+        var_name: String,
+    },
     Welcome(String),
     PlanInsights(String),
     IntrospectionClusterUsage,
@@ -217,6 +223,7 @@ impl AdapterNotice {
             AdapterNotice::DroppedInUseIndex { .. } => Severity::Notice,
             AdapterNotice::PerReplicaLogRead { .. } => Severity::Notice,
             AdapterNotice::VarDefaultUpdated { .. } => Severity::Notice,
+            AdapterNotice::StartupOnlyVarUpdated { .. } => Severity::Warning,
             AdapterNotice::Welcome(_) => Severity::Notice,
             AdapterNotice::PlanInsights(_) => Severity::Notice,
             AdapterNotice::IntrospectionClusterUsage => Severity::Warning,
@@ -340,6 +347,7 @@ impl AdapterNotice {
             AdapterNotice::WebhookSourceCreated { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::PerReplicaLogRead { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::VarDefaultUpdated { .. } => SqlState::SUCCESSFUL_COMPLETION,
+            AdapterNotice::StartupOnlyVarUpdated { .. } => SqlState::WARNING,
             AdapterNotice::Welcome(_) => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::PlanInsights(_) => SqlState::from_code("MZ001"),
             AdapterNotice::IntrospectionClusterUsage => SqlState::WARNING,
@@ -526,6 +534,11 @@ impl fmt::Display for AdapterNotice {
                     "{vars} updated for {target}, this will have no effect on the current session"
                 )
             }
+            AdapterNotice::StartupOnlyVarUpdated { var_name } => write!(
+                f,
+                "changes to {} only take effect when environmentd restarts",
+                var_name.quoted()
+            ),
             AdapterNotice::Welcome(message) => message.fmt(f),
             AdapterNotice::PlanInsights(message) => message.fmt(f),
             AdapterNotice::IntrospectionClusterUsage => write!(

@@ -1721,3 +1721,164 @@ fn test_zero_row_write_does_not_wait_for_keepalive() {
          interval rather than a nudged group commit (total {elapsed:?})"
     );
 }
+
+/// An INSERT whose values read no persisted state may run in a transaction,
+/// even when the values are too large to fold into a literal. The rows are
+/// buffered as session write ops, so they commit with the transaction and
+/// disappear if it does not commit.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_nonconstant_insert_in_transaction() {
+    // Above `FOLD_CONSTANTS_LIMIT`, so the planned values stay a dataflow
+    // instead of folding into a constant.
+    const BIG_INSERT: &str = "INSERT INTO t SELECT generate_series(1, 20000)";
+
+    let server = frontend_occ_harness().unsafe_mode().start_blocking();
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("CREATE TABLE t (a int)").unwrap();
+
+    let count = |client: &mut postgres::Client| {
+        client
+            .query_one("SELECT count(*)::int4 FROM t", &[])
+            .unwrap()
+            .get::<_, i32>(0)
+    };
+
+    client
+        .batch_execute(&format!("BEGIN; {BIG_INSERT}; COMMIT;"))
+        .unwrap();
+    assert_eq!(count(&mut client), 20000);
+
+    client
+        .batch_execute(&format!("BEGIN; {BIG_INSERT}; ROLLBACK;"))
+        .unwrap();
+    assert_eq!(count(&mut client), 20000, "rolled back write must not land");
+
+    // A later error in the same implicit batch aborts the transaction, so the
+    // write must not be visible.
+    let err = client
+        .batch_execute(&format!("{BIG_INSERT}; SELECT 1/0;"))
+        .unwrap_err();
+    let db_err = err.as_db_error().expect("expected db error");
+    assert!(
+        db_err.message().contains("division by zero"),
+        "unexpected error: {err:?}"
+    );
+    let _ = client.batch_execute("ROLLBACK");
+    assert_eq!(count(&mut client), 20000, "aborted write must not land");
+
+    // Outside a transaction the same statement commits on its own.
+    client.batch_execute(BIG_INSERT).unwrap();
+    assert_eq!(count(&mut client), 40000);
+
+    // The command tag counts diffs, not distinct rows: 20000 copies of the
+    // same row consolidate into one row with diff 20000.
+    client.batch_execute("BEGIN").unwrap();
+    let inserted = client
+        .execute("INSERT INTO t SELECT 1 FROM generate_series(1, 20000)", &[])
+        .unwrap();
+    assert_eq!(inserted, 20000);
+    client.batch_execute("COMMIT").unwrap();
+    assert_eq!(count(&mut client), 60000);
+
+    // Deferred and constant writes mix freely in one transaction and all land
+    // at COMMIT.
+    client.batch_execute("BEGIN").unwrap();
+    assert_eq!(client.execute(BIG_INSERT, &[]).unwrap(), 20000);
+    assert_eq!(client.execute(BIG_INSERT, &[]).unwrap(), 20000);
+    assert_eq!(client.execute("INSERT INTO t VALUES (1)", &[]).unwrap(), 1);
+    client.batch_execute("COMMIT").unwrap();
+    assert_eq!(count(&mut client), 100001);
+
+    // Constraint violations are caught while the diffs are being collected, so
+    // the statement fails and the transaction buffers nothing.
+    client
+        .batch_execute("CREATE TABLE nn (a int NOT NULL)")
+        .unwrap();
+    client.batch_execute("BEGIN").unwrap();
+    let err = client
+        .execute(
+            "INSERT INTO nn SELECT CASE WHEN g = 5 THEN NULL ELSE g END \
+             FROM generate_series(1, 20000) g",
+            &[],
+        )
+        .unwrap_err();
+    let db_err = err.as_db_error().expect("expected db error");
+    assert!(
+        db_err.message().contains("violates not-null constraint"),
+        "unexpected error: {err:?}"
+    );
+    let _ = client.batch_execute("ROLLBACK");
+    let nn_count = client
+        .query_one("SELECT count(*)::int4 FROM nn", &[])
+        .unwrap()
+        .get::<_, i32>(0);
+    assert_eq!(nn_count, 0, "failed write must not land");
+
+    // RETURNING needs the rows to be visible now, so it cannot wait for
+    // COMMIT. The transaction gate rejects it whether or not the values fold.
+    client.batch_execute("BEGIN").unwrap();
+    let err = client
+        .query(&format!("{BIG_INSERT} RETURNING a"), &[])
+        .unwrap_err();
+    let db_err = err.as_db_error().expect("expected db error");
+    assert!(
+        db_err
+            .message()
+            .contains("cannot be run inside a transaction block"),
+        "unexpected error: {err:?}"
+    );
+    let _ = client.batch_execute("ROLLBACK");
+}
+
+/// A transaction that has committed itself to DDL or to a subscribe cannot
+/// take a write. The reported error must be the one the coordinator reports,
+/// not whatever the write-op merge in the session state machine happens to
+/// produce.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_rejected_in_non_writable_transaction() {
+    const BIG_INSERT: &str = "INSERT INTO t SELECT generate_series(1, 20000)";
+
+    let server = frontend_occ_harness().unsafe_mode().start_blocking();
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("CREATE TABLE t (a int)").unwrap();
+    client.batch_execute("CREATE TABLE z (a int)").unwrap();
+    client.batch_execute("CREATE TABLE u (a int)").unwrap();
+    client.batch_execute("INSERT INTO u VALUES (1)").unwrap();
+
+    let assert_read_only = |client: &mut postgres::Client, setup: &[&str]| {
+        client.batch_execute("BEGIN").unwrap();
+        for stmt in setup {
+            client.batch_execute(stmt).unwrap();
+        }
+        let err = client.execute(BIG_INSERT, &[]).unwrap_err();
+        let db_err = err.as_db_error().expect("expected db error");
+        assert!(
+            db_err.message().contains("transaction in read-only mode"),
+            "after {setup:?}, unexpected error: {err:?}"
+        );
+        // The failed statement aborts the transaction, so the rollback is what
+        // hands the session back in a usable state for the next case.
+        let _ = client.batch_execute("ROLLBACK");
+    };
+
+    // Each case rolls back, so the catalog changes never apply and the next
+    // case starts from the same state.
+    assert_read_only(&mut client, &["ALTER TABLE z RENAME TO z2"]);
+    assert_read_only(&mut client, &["CREATE TABLE zz (i int)"]);
+    // The FETCH is what pins the transaction to the subscribe, the DECLARE
+    // alone leaves it undecided.
+    assert_read_only(
+        &mut client,
+        &["DECLARE c CURSOR FOR SUBSCRIBE u", "FETCH 1 c"],
+    );
+
+    let count = client
+        .query_one("SELECT count(*)::int4 FROM t", &[])
+        .unwrap()
+        .get::<_, i32>(0);
+    assert_eq!(count, 0, "no rejected write may have landed");
+}
