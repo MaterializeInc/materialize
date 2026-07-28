@@ -11,6 +11,7 @@
 E2E tests for mz-debug
 """
 
+import shutil
 import urllib.request
 from pathlib import Path
 
@@ -137,12 +138,21 @@ def _assert_cpu_capture_preserves_heap_profile(
     )
 
 
-def _newest_dump_dir() -> Path:
-    """Returns the most recently written `mz_debug_<timestamp>` directory in the
-    working directory, where `mz-debug` writes its output."""
-    dump_dirs = [p for p in Path.cwd().glob("mz_debug_*") if p.is_dir()]
-    assert dump_dirs, "mz-debug did not create an mz_debug_* output directory"
-    return max(dump_dirs, key=lambda p: p.stat().st_mtime)
+def _sole_dump_dir(run_dir: Path) -> Path:
+    """Returns the single `mz_debug_<timestamp>` directory that an `mz-debug` run
+    wrote into `run_dir`.
+
+    `mz-debug` names its output directory with minute precision, so consecutive
+    runs share a directory and a later run happily inherits an earlier run's
+    artifacts. Asserting on one run's output therefore requires giving it an
+    otherwise empty working directory, and finding more than one directory in
+    there means the isolation broke.
+    """
+    dump_dirs = sorted(p for p in run_dir.glob("mz_debug_*") if p.is_dir())
+    assert (
+        len(dump_dirs) == 1
+    ), f"expected exactly one mz_debug_* output directory in {run_dir}, found {dump_dirs}"
+    return dump_dirs[0]
 
 
 def _assert_default_dump_files(dump_dir: Path, container_id: str) -> None:
@@ -197,15 +207,23 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     _assert_cpu_capture_preserves_heap_profile(c, container_id)
 
     # Smoke test: a full `mz-debug` run against the emulator completes without
-    # error and produces the complete set of default output files.
+    # error and produces the complete set of default output files. It runs in an
+    # empty directory of its own so that it cannot inherit the artifacts of the
+    # explicitly flagged run above, which enabled CPU profiling and would
+    # otherwise leave a CPU profile behind in the shared, minute-granular output
+    # directory.
+    run_dir = Path("default-run").absolute()
+    shutil.rmtree(run_dir, ignore_errors=True)
+    run_dir.mkdir()
     spawn.runv(
         [
-            "./mz-debug",
+            Path("mz-debug").absolute(),
             "emulator",
             "--docker-container-id",
             container_id,
             "--mz-connection-url",
             "postgres://mz_system@127.0.0.1:6877/materialize",
-        ]
+        ],
+        cwd=run_dir,
     )
-    _assert_default_dump_files(_newest_dump_dir(), container_id)
+    _assert_default_dump_files(_sole_dump_dir(run_dir), container_id)
