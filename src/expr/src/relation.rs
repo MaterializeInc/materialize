@@ -70,6 +70,16 @@ pub mod join_input_mapper;
 /// Until we fix those, we need to stick with the larger recursion limit.
 pub const RECURSION_LIMIT: usize = 2048;
 
+/// The upper bound on the number of inferred unique keys reported for a relation.
+///
+/// Key inference can otherwise multiply key sets combinatorially. A filter whose
+/// predicates equate columns can double the keys per equated pair, and a join
+/// crosses the key sets of its inputs. Reporting only some of the keys is always
+/// sound because consumers use keys as optimization hints. Truncation keeps the
+/// lexicographically least keys of a sorted key set, so key inference stays
+/// deterministic.
+pub const MAX_INFERRED_UNIQUE_KEYS: usize = 16;
+
 /// A trait for types that describe how to build a collection.
 pub trait CollectionPlan {
     /// Collects the set of global identifiers from dataflows referenced in Get.
@@ -778,8 +788,9 @@ impl MirRelationExpr {
 
                     // Expand out each key to each of its equivalent forms.
                     // Each instance of `col` can be replaced by any equivalent column.
-                    // This has the potential to result in exponentially sized number of unique keys,
-                    // and in the future we should probably maintain unique keys modulo equivalence.
+                    // Each equated column pair can double the number of keys, so we stop
+                    // expanding once we have `MAX_INFERRED_UNIQUE_KEYS` keys. The keys we
+                    // keep remain valid, we only omit equivalent variants of them.
 
                     // First, compute an inverse map from each representative
                     // column `sub` to all other equivalent columns `col`.
@@ -795,13 +806,16 @@ impl MirRelationExpr {
                     }
                     // For each column, substitute for it in each occurrence.
                     let mut to_add = Vec::new();
-                    for (col, subs) in subs.iter().enumerate() {
+                    'expansion: for (col, subs) in subs.iter().enumerate() {
                         if !subs.is_empty() {
                             for key_set in input.iter() {
                                 if key_set.contains(&col) {
                                     let mut to_extend = key_set.clone();
                                     to_extend.retain(|c| c != &col);
                                     for sub in subs {
+                                        if input.len() + to_add.len() >= MAX_INFERRED_UNIQUE_KEYS {
+                                            break 'expansion;
+                                        }
                                         to_extend.push(*sub);
                                         to_add.push(to_extend.clone());
                                         to_extend.pop();
@@ -812,6 +826,8 @@ impl MirRelationExpr {
                         // No deduplication, as we cannot introduce duplicates.
                         input.append(&mut to_add);
                     }
+                    // Absorb any variants created before expansion hit the bound.
+                    input.append(&mut to_add);
                     for key_set in input.iter_mut() {
                         key_set.sort();
                         key_set.dedup();
@@ -946,6 +962,9 @@ impl MirRelationExpr {
         };
         keys.sort();
         keys.dedup();
+        // Operators like `Join` can produce combinatorially many keys. Reporting
+        // only a deterministic subset is sound, see `MAX_INFERRED_UNIQUE_KEYS`.
+        keys.truncate(MAX_INFERRED_UNIQUE_KEYS);
         keys
     }
 
@@ -4175,6 +4194,34 @@ mod tests {
 
         let r = finishing.finish_incremental_inner(batch, max_result_size);
         assert!(r.unwrap_err().contains("total result exceeds max size"));
+    }
+
+    /// Key inference on a filter with column equality predicates must not expand
+    /// the input keys into all equivalent variants. With a 128 column unique key
+    /// and 24 disjoint column equalities the unbounded expansion produces 2^24
+    /// keys, which exhausts memory.
+    #[mz_ore::test]
+    fn test_filter_key_inference_bounded_under_column_equalities() {
+        use crate::func::Eq;
+
+        let arity = 128;
+        let equalities = 24;
+        let typ = ReprRelationType::new(vec![ReprScalarType::Int32.nullable(true); arity])
+            .with_key((0..arity).collect());
+        let get = MirRelationExpr::global_get(GlobalId::User(1), typ);
+        let predicates = (0..equalities).map(|i| {
+            MirScalarExpr::column(i).call_binary(MirScalarExpr::column(i + equalities), Eq)
+        });
+        let keys = get.filter(predicates).typ().keys;
+
+        assert!(!keys.is_empty());
+        assert!(keys.len() <= MAX_INFERRED_UNIQUE_KEYS);
+        // The canonical key, with each equated column remapped to its
+        // representative, must survive the truncation.
+        let canonical: Vec<usize> = (0..arity)
+            .filter(|c| !(equalities..2 * equalities).contains(c))
+            .collect();
+        assert!(keys.contains(&canonical));
     }
 }
 
