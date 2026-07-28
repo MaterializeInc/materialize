@@ -21,9 +21,11 @@
 //! 4. Acquire OCC semaphore
 //! 5. Create subscribe via Coordinator Command
 //! 6. Run OCC loop (receive diffs, attempt write, retry on conflict)
-//! 7. Return the result. The write either went through the coordinator during
-//!    the loop, or, for a selection that reads no persisted state inside a
-//!    transaction, we buffer the diffs as session write ops that land at COMMIT
+//! 7. Return the result. A write whose diffs depend on an observed read
+//!    frontier commits inside the loop. Diffs from a selection that reads no
+//!    persisted state are frontier-independent, so the caller of the loop
+//!    either submits them right after it or, inside a multi-statement
+//!    transaction, buffers them as session write ops that land at COMMIT
 //!
 //! ## Rollout note
 //!
@@ -161,15 +163,62 @@ enum OccOutcome {
         response: ExecuteResponse,
         write_ts: Option<Timestamp>,
     },
-    /// These diffs are a blind write: the subscribe ran to completion, which
-    /// only a dataflow over no persisted inputs does, so the diffs do not
-    /// depend on any read frontier. They belong to the session's transaction
-    /// and must not become visible before it commits, so the caller buffers
-    /// them as write ops.
-    Deferred {
+    /// Diffs from a selection that reads no persisted state. The subscribe ran
+    /// to completion, so they are frontier-independent and the caller chooses
+    /// whether to submit them now or buffer them into the transaction.
+    Blind {
         response: ExecuteResponse,
         diffs: Vec<(Row, Diff)>,
     },
+}
+
+/// What the coordinator's answer to a submitted write means for the statement.
+enum WriteOutcome {
+    /// The write is durable at this timestamp.
+    Committed(Timestamp),
+    /// The write did not land, and resubmitting these diffs cannot change
+    /// that. This is the error to report.
+    Failed(AdapterError),
+    /// Another writer advanced the target's upper past the timestamp we asked
+    /// for. The diffs still describe the mutation, so the OCC loop can
+    /// resubmit them once the subscribe has caught up.
+    Conflict { next_eligible_timestamp: Timestamp },
+}
+
+/// Maps a [`WriteResult`] to the outcome the statement reports, or to the one
+/// conflict the OCC loop can retry.
+fn classify_write_result(
+    result: WriteResult,
+    target_id: CatalogItemId,
+    attempt_state: &FrontendWriteAttemptState,
+) -> WriteOutcome {
+    match result {
+        WriteResult::Success { timestamp } => WriteOutcome::Committed(timestamp),
+        WriteResult::TimestampPassed {
+            next_eligible_timestamp,
+            ..
+        } => WriteOutcome::Conflict {
+            next_eligible_timestamp,
+        },
+        WriteResult::Canceled => WriteOutcome::Failed(
+            attempt_state
+                .requested_error()
+                .unwrap_or(AdapterError::Canceled),
+        ),
+        WriteResult::ReadOnly => WriteOutcome::Failed(AdapterError::ReadOnly),
+        WriteResult::TargetChanged => {
+            // A concurrent DDL gave the table a new generation after we
+            // computed these diffs against the old one. The same error the
+            // coordinator raises when a dependency changes underneath a
+            // statement, so clients see one retryable outcome for both.
+            WriteOutcome::Failed(AdapterError::ConcurrentDependencyMutation {
+                dependency_id: target_id.to_string(),
+            })
+        }
+        WriteResult::Indeterminate => WriteOutcome::Failed(AdapterError::Internal(
+            "write outcome is indeterminate because the group committer shut down".into(),
+        )),
+    }
 }
 
 /// A handle to an internal subscribe (not visible in introspection collections
@@ -262,6 +311,17 @@ impl PeekClient {
         // read-dependency check in
         // `SessionClient::try_frontend_read_then_write`.
         let defer_write = session.transaction().is_in_multi_statement_transaction();
+        if defer_write && !depends_on.is_empty() {
+            // Defense in depth for the check named above. Rejecting here, before
+            // we run a dataflow, is the only place left where refusing is still
+            // possible: past the OCC loop the write may already be durable.
+            soft_panic_or_log!(
+                "read-dependent read-then-write reached the OCC path inside a transaction"
+            );
+            return Err(AdapterError::Internal(
+                "read-then-write cannot be run inside a transaction block".into(),
+            ));
+        }
 
         // Prepare expressions (resolve unmaterializable functions like
         // current_user())
@@ -386,11 +446,10 @@ impl PeekClient {
                 row_set_finishing_seconds,
                 max_occ_retries,
                 table_desc,
-                conn_id,
+                conn_id.clone(),
                 statement_logging_id,
                 as_of,
-                attempt_state,
-                defer_write,
+                &attempt_state,
             )
             .await;
 
@@ -399,21 +458,19 @@ impl PeekClient {
             .occ_retry_count
             .observe(f64::from(u32::try_from(retry_count).unwrap_or(u32::MAX)));
 
-        // Release the OCC permit only after the OCC loop has fully completed
-        // (success, failure, or timeout). Holding it for the entire operation
-        // is what bounds concurrency; an early drop would let a waiter start
-        // its subscribe while we are still consolidating diffs and retrying.
-        drop(permit);
-
-        let outcome = result?;
-        match outcome {
-            OccOutcome::Committed { response, write_ts } => {
+        // Finish the operation, including a blind write's submission, before
+        // releasing the OCC permit. Holding it for the entire operation is what
+        // bounds concurrency; an early drop would let a waiter start its
+        // subscribe while we are still consolidating diffs, retrying, or
+        // waiting for our write to commit.
+        let response = match result {
+            Ok(OccOutcome::Committed { response, write_ts }) => {
                 if let Some(write_ts) = write_ts {
                     session.apply_write(write_ts);
                 }
                 Ok(response)
             }
-            OccOutcome::Deferred { response, diffs } => {
+            Ok(OccOutcome::Blind { response, diffs }) if defer_write => {
                 // NOTE: A buffered session write carries no target-generation
                 // guard. The immediate path pins `target_global_id` and group
                 // commit re-validates it, but a `WriteOp` only names the
@@ -422,13 +479,38 @@ impl PeekClient {
                 // lands between here and COMMIT appends rows of the old arity
                 // under the new schema. This holds for every buffered write,
                 // not just ours.
-                session.add_transaction_ops(TransactionOps::Writes(vec![WriteOp {
-                    id: target_id,
-                    rows: TableData::Rows(diffs),
-                }]))?;
-                Ok(response)
+                session
+                    .add_transaction_ops(TransactionOps::Writes(vec![WriteOp {
+                        id: target_id,
+                        rows: TableData::Rows(diffs),
+                    }]))
+                    .map(|()| response)
             }
-        }
+            Ok(OccOutcome::Blind { response, diffs }) => {
+                match self
+                    .submit_blind_write(
+                        conn_id,
+                        target_id,
+                        target_global_id,
+                        diffs,
+                        statement_logging_id,
+                        &attempt_state,
+                    )
+                    .await
+                {
+                    Ok(write_ts) => {
+                        session.apply_write(write_ts);
+                        Ok(response)
+                    }
+                    Err(err) => Err(err),
+                }
+            }
+            Err(err) => Err(err),
+        };
+
+        drop(permit);
+
+        response
     }
 
     /// Validate a read-then-write operation.
@@ -732,6 +814,10 @@ impl PeekClient {
     /// then wait for the subscribe to advance and retry, up to
     /// `max_occ_retries` times.
     ///
+    /// A subscribe that ends on its own reads no persisted state, so its diffs
+    /// are frontier-independent. Those are returned as [`OccOutcome::Blind`]
+    /// for the caller to submit or buffer, and this never writes them.
+    ///
     /// Read linearization is the caller's responsibility: `as_of` must
     /// already be linearized (oracle read_ts >= `as_of`) on entry. See
     /// `ensure_read_linearized` at the call site.
@@ -753,8 +839,7 @@ impl PeekClient {
         conn_id: mz_adapter_types::connection::ConnectionId,
         statement_logging_id: Option<StatementLoggingId>,
         as_of: Timestamp,
-        attempt_state: Arc<FrontendWriteAttemptState>,
-        defer_write: bool,
+        attempt_state: &FrontendWriteAttemptState,
     ) -> (usize, Result<OccOutcome, AdapterError>) {
         let mut state = OccState::new();
 
@@ -781,10 +866,9 @@ impl PeekClient {
                 Some(msg) => msg,
                 None => {
                     // Channel closed cleanly: the SELECT is constant (no
-                    // table dependency). Submit the accumulated diffs as a
-                    // blind write — the oracle picks the timestamp at group
-                    // commit, so we just flatten to `Timestamp::MIN` for
-                    // `consolidate_updates`.
+                    // table dependency), so the diffs do not depend on any
+                    // read frontier. The caller decides where they go, so we
+                    // flatten to `Timestamp::MIN` for `consolidate_updates`.
                     state.consolidate(Timestamp::MIN);
                     if state.all_diffs.is_empty() {
                         break build_no_rows_response(&kind, &returning).map(|response| {
@@ -811,73 +895,10 @@ impl PeekClient {
                         .map(|(row, _ts, diff)| (row.clone(), *diff))
                         .collect_vec();
 
-                    // Inside a transaction the rows must not become visible
-                    // before COMMIT, and they have to disappear on ROLLBACK,
-                    // so we hand them back to the caller to buffer as session
-                    // write ops. The transaction's commit submits them to
-                    // group commit like any other buffered write.
-                    if defer_write {
-                        break Ok(OccOutcome::Deferred {
-                            response: success_response,
-                            diffs,
-                        });
-                    }
-
-                    attempt_state.mark_write_submitted();
-                    let result = self
-                        .call_coordinator(|tx| Command::AttemptWrite {
-                            conn_id: conn_id.clone(),
-                            target_id,
-                            target_global_id,
-                            diffs,
-                            write_ts: None,
-                            tx,
-                        })
-                        .await;
-                    // All arms below terminate the attempt, so `write_submitted`
-                    // stays set per its contract.
-                    match result {
-                        WriteResult::Success { timestamp } => {
-                            if let Some(id) = statement_logging_id {
-                                self.log_set_timestamp(id, timestamp);
-                            }
-                            break Ok(OccOutcome::Committed {
-                                response: success_response,
-                                write_ts: Some(timestamp),
-                            });
-                        }
-                        WriteResult::TimestampPassed { .. } => {
-                            // Unreachable: blind writes use
-                            // `UserWriteResponder::Internal`, which group
-                            // commit never resolves to `TimestampPassed`.
-                            soft_panic_or_log!(
-                                "blind read-then-write unexpectedly got TimestampPassed"
-                            );
-                            break Err(AdapterError::Internal(
-                                "blind write unexpectedly got TimestampPassed".into(),
-                            ));
-                        }
-                        WriteResult::Canceled => {
-                            break Err(attempt_state
-                                .requested_error()
-                                .unwrap_or(AdapterError::Canceled));
-                        }
-                        WriteResult::ReadOnly => break Err(AdapterError::ReadOnly),
-                        WriteResult::TargetChanged => {
-                            // A concurrent DDL gave the table a new generation
-                            // after we computed these diffs against the old
-                            // one. The same error the coordinator raises when a
-                            // dependency changes underneath a statement, so
-                            // clients see one retryable outcome for both.
-                            break Err(AdapterError::ConcurrentDependencyMutation {
-                                dependency_id: target_id.to_string(),
-                            });
-                        }
-                        WriteResult::Indeterminate => break Err(AdapterError::Internal(
-                            "write outcome is indeterminate because the group committer shut down"
-                                .into(),
-                        )),
-                    }
+                    break Ok(OccOutcome::Blind {
+                        response: success_response,
+                        diffs,
+                    });
                 }
             };
 
@@ -925,22 +946,6 @@ impl PeekClient {
                         break result;
                     }
 
-                    // A write that reads persisted state cannot be deferred:
-                    // its diffs are only valid at the frontier we observed.
-                    // Inside a transaction such statements are rejected before
-                    // we execute anything, by the read-dependency check in
-                    // `SessionClient::try_frontend_read_then_write`, so this is
-                    // defense in depth.
-                    if defer_write {
-                        soft_panic_or_log!(
-                            "read-dependent read-then-write reached the OCC write path \
-                             inside a transaction"
-                        );
-                        break Err(AdapterError::Internal(
-                            "read-then-write cannot be run inside a transaction block".into(),
-                        ));
-                    }
-
                     let write_ts = state
                         .current_upper
                         .expect("must have seen progress to be ready to write");
@@ -985,8 +990,8 @@ impl PeekClient {
                         })
                         .await;
 
-                    match result {
-                        WriteResult::Success { timestamp } => {
+                    match classify_write_result(result, target_id, attempt_state) {
+                        WriteOutcome::Committed(timestamp) => {
                             if let Some(id) = statement_logging_id {
                                 self.log_set_timestamp(id, timestamp);
                             }
@@ -997,9 +1002,9 @@ impl PeekClient {
                                 write_ts: Some(timestamp),
                             });
                         }
-                        WriteResult::TimestampPassed {
+                        WriteOutcome::Failed(err) => break Err(err),
+                        WriteOutcome::Conflict {
                             next_eligible_timestamp,
-                            ..
                         } => {
                             // The write definitively did not land, so the
                             // attempt is resolved. Clearing `write_submitted`
@@ -1014,7 +1019,7 @@ impl PeekClient {
                             // observed. Retrying at a newer oracle timestamp
                             // before subscribe progress catches up would risk
                             // applying stale diffs at the wrong timestamp. So
-                            // on `TimestampPassed` we wait for the subscribe to
+                            // on a conflict we wait for the subscribe to
                             // progress and retry using that observed frontier.
                             state.retry_count += 1;
                             if let Some(error) = attempt_state.requested_error() {
@@ -1038,26 +1043,6 @@ impl PeekClient {
                             );
                             continue;
                         }
-                        WriteResult::Canceled => {
-                            break Err(attempt_state
-                                .requested_error()
-                                .unwrap_or(AdapterError::Canceled));
-                        }
-                        WriteResult::ReadOnly => break Err(AdapterError::ReadOnly),
-                        WriteResult::TargetChanged => {
-                            // A concurrent DDL gave the table a new generation
-                            // after we computed these diffs against the old
-                            // one. The same error the coordinator raises when a
-                            // dependency changes underneath a statement, so
-                            // clients see one retryable outcome for both.
-                            break Err(AdapterError::ConcurrentDependencyMutation {
-                                dependency_id: target_id.to_string(),
-                            });
-                        }
-                        WriteResult::Indeterminate => break Err(AdapterError::Internal(
-                            "write outcome is indeterminate because the group committer shut down"
-                                .into(),
-                        )),
                     }
                 }
                 ProcessResult::NoRowsMatched => {
@@ -1075,6 +1060,55 @@ impl PeekClient {
         };
 
         (state.retry_count, result)
+    }
+
+    /// Submits frontier-independent diffs to group commit, which picks the
+    /// write timestamp, and returns the timestamp the write committed at.
+    ///
+    /// Only valid for diffs that do not depend on an observed read frontier:
+    /// the write lands at a timestamp this caller does not choose.
+    async fn submit_blind_write(
+        &self,
+        conn_id: mz_adapter_types::connection::ConnectionId,
+        target_id: CatalogItemId,
+        target_global_id: GlobalId,
+        diffs: Vec<(Row, Diff)>,
+        statement_logging_id: Option<StatementLoggingId>,
+        attempt_state: &FrontendWriteAttemptState,
+    ) -> Result<Timestamp, AdapterError> {
+        attempt_state.mark_write_submitted();
+        let result = self
+            .call_coordinator(|tx| Command::AttemptWrite {
+                conn_id,
+                target_id,
+                target_global_id,
+                diffs,
+                write_ts: None,
+                tx,
+            })
+            .await;
+
+        // Every outcome here terminates the attempt, so `write_submitted`
+        // stays set per its contract.
+        match classify_write_result(result, target_id, attempt_state) {
+            WriteOutcome::Committed(timestamp) => {
+                if let Some(id) = statement_logging_id {
+                    self.log_set_timestamp(id, timestamp);
+                }
+                Ok(timestamp)
+            }
+            WriteOutcome::Failed(err) => Err(err),
+            WriteOutcome::Conflict { .. } => {
+                // Unreachable: a write that requests no timestamp cannot have
+                // one pass. Group commit resolves it through
+                // `UserWriteResponder::Internal`, which only reports a conflict
+                // to a write that asked for a specific timestamp.
+                soft_panic_or_log!("blind read-then-write unexpectedly got TimestampPassed");
+                Err(AdapterError::Internal(
+                    "blind write unexpectedly got TimestampPassed".into(),
+                ))
+            }
+        }
     }
 
     /// Build the success response after a successful write.
