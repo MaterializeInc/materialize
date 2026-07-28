@@ -9513,8 +9513,9 @@ fn qa_occ_cancel_and_timeout_release_permit() {
     for iteration in 1..=ITERATIONS {
         let mut parked = server.connect(postgres::NoTls).unwrap();
         let cancel_token = parked.cancel_token();
+        let baseline = user_insert_count(&server);
         let parked_handle = thread::spawn(move || parked.batch_execute(parking_insert));
-        wait_until_parked_holding_a_permit(&server, iteration, "the cancel half");
+        wait_until_parked_holding_a_permit(&server, baseline, iteration, "the cancel half");
         cancel_token.cancel_query(postgres::NoTls).unwrap();
         let err = parked_handle
             .join()
@@ -9542,8 +9543,9 @@ fn qa_occ_cancel_and_timeout_release_permit() {
         parked
             .batch_execute("SET statement_timeout = '5s'")
             .unwrap();
+        let baseline = user_insert_count(&server);
         let parked_handle = thread::spawn(move || parked.batch_execute(parking_insert));
-        wait_until_parked_holding_a_permit(&server, iteration, "the timeout half");
+        wait_until_parked_holding_a_permit(&server, baseline, iteration, "the timeout half");
         let err = parked_handle
             .join()
             .unwrap()
@@ -9575,6 +9577,13 @@ fn qa_occ_cancel_and_timeout_release_permit() {
     );
 }
 
+/// Counts user INSERTs the process has executed, the observable that
+/// [`wait_until_parked_holding_a_permit`] watches.
+fn user_insert_count(server: &test_util::TestServerWithRuntime) -> u64 {
+    const LABELS: [(&str, &str); 2] = [("session_type", "user"), ("statement_type", "insert")];
+    get_counter_value(server.metrics_registry(), "mz_query_total", &LABELS)
+}
+
 /// Waits until the INSERT under test holds an OCC permit.
 ///
 /// Without this, a loaded machine can let the cancel or the deadline land while
@@ -9585,23 +9594,25 @@ fn qa_occ_cancel_and_timeout_release_permit() {
 /// There is no metric for permit acquisition, so this polls the closest
 /// observable, the `mz_query_total` bump in `ExecutionLogging::take_over`, and
 /// then settles. The bump happens a few steps before `acquire_owned`, hence the
-/// settle. Every user INSERT in the process bumps that counter, including the
-/// ones setting up the test, so the baseline has to be read here rather than
-/// derived from the iteration number.
+/// settle.
+///
+/// `baseline` must be read with [`user_insert_count`] before the statement is
+/// started. Every user INSERT in the process shares that counter, so a baseline
+/// read afterwards can already include the statement we are waiting for, and
+/// then no bump ever arrives.
 fn wait_until_parked_holding_a_permit(
     server: &test_util::TestServerWithRuntime,
+    baseline: u64,
     iteration: i32,
     half: &str,
 ) {
-    const LABELS: [(&str, &str); 2] = [("session_type", "user"), ("statement_type", "insert")];
     const SETTLE: Duration = Duration::from_secs(1);
 
-    let baseline = get_counter_value(server.metrics_registry(), "mz_query_total", &LABELS);
     Retry::default()
         .max_duration(Duration::from_secs(60))
         .clamp_backoff(Duration::from_millis(50))
         .retry(|_| {
-            let inserts = get_counter_value(server.metrics_registry(), "mz_query_total", &LABELS);
+            let inserts = user_insert_count(server);
             if inserts > baseline {
                 Ok(())
             } else {
