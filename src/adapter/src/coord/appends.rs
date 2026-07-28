@@ -976,8 +976,17 @@ impl Coordinator {
                                 // initiate, at the latest the periodic
                                 // timeline advancement tick. Internal writes
                                 // have no `ExecuteContext`, so they can't use
-                                // `defer_op` like session writes. Lock hold
-                                // times are short while frontend OCC
+                                // `defer_op` like session writes.
+                                //
+                                // Deliberately without `trigger_group_commit`.
+                                // The lock is held by a writer that is not
+                                // waiting on us, so an immediate retry would
+                                // find it held, re-queue, and trigger again,
+                                // spinning for as long as the holder keeps it.
+                                // Waiting for a trigger someone else raises
+                                // costs at most one tick and no CPU.
+                                //
+                                // Lock hold times are short while frontend OCC
                                 // sequencing is enabled because the
                                 // coordinator's lock-based read-then-write
                                 // path is disabled.

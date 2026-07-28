@@ -47,6 +47,19 @@ that table.
 That asymmetry is why the deadline above has to cover the permit wait. It bounds
 the victims of a starved pool, not just the operation that starves it.
 
+`statement_timeout = 0` removes that bound, so the starvation becomes permanent:
+four sessions with no deadline, each reading a far-future `REFRESH` materialized
+view, park in `ensure_read_linearized` holding the whole pool, and every
+read-then-write in the process fails or hangs until one of them is cancelled.
+
+Moving permit acquisition after linearization would fix that case, and we do not
+do it, because the permit is deliberately acquired before the read holds. A
+waiter that queued while holding read holds would pin compaction on its read
+dependencies for as long as it waits, which is what happens under ordinary write
+contention rather than only in the far-future case. So the ordering trades a
+rare unbounded case against a common bounded one. Sequencing it as read holds,
+then linearize, then permit would swap those, not remove the trade.
+
 ## `max_concurrent_occ_writes` must be at least 1
 
 A value of 0 sizes the semaphore to zero permits, so every read-then-write in
