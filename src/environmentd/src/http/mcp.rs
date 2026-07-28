@@ -1016,7 +1016,7 @@ fn call_status<T>(result: &Result<T, McpRequestError>) -> McpCallStatus {
 async fn execute_sql(
     client: &mut AuthedClient,
     query: &str,
-) -> Result<Vec<Vec<serde_json::Value>>, McpRequestError> {
+) -> Result<Vec<Box<serde_json::value::RawValue>>, McpRequestError> {
     let mut response = SqlResponse::new();
 
     execute_request(
@@ -1039,7 +1039,7 @@ async fn execute_sql(
 /// row-returning statement is an error rather than a dropped result.
 fn select_single_rows(
     results: Vec<SqlResult>,
-) -> Result<Vec<Vec<serde_json::Value>>, McpRequestError> {
+) -> Result<Vec<Box<serde_json::value::RawValue>>, McpRequestError> {
     let mut rows = None;
     for result in results {
         match result {
@@ -1070,9 +1070,11 @@ fn select_single_rows(
 /// endpoint handles `max_result_size` in sql.rs — fail cleanly rather
 /// than silently truncating.
 fn format_rows_response(
-    rows: Vec<Vec<serde_json::Value>>,
+    rows: Vec<Box<serde_json::value::RawValue>>,
     max_size: usize,
 ) -> Result<McpResult, McpRequestError> {
+    // Each row is already-serialized compact JSON. `RawValue` re-serializes
+    // verbatim, so the outer array is pretty-printed while rows stay compact.
     let text =
         serde_json::to_string_pretty(&rows).map_err(|e| McpRequestError::Internal(anyhow!(e)))?;
 
@@ -1200,17 +1202,20 @@ async fn read_data_product(
     if lookup_rows.is_empty() {
         return Err(McpRequestError::DataProductNotFound(name.to_string()));
     }
-    let catalog_cluster: Option<&str> = lookup_rows
+    // Rows are stored as pre-serialized JSON arrays, so parse the single-cell
+    // lookup row to read `dp.cluster`.
+    let catalog_cluster: Option<String> = lookup_rows
         .first()
-        .and_then(|row| row.first())
-        .and_then(|v| v.as_str());
+        .and_then(|row| serde_json::from_str::<Vec<serde_json::Value>>(row.get()).ok())
+        .and_then(|row| row.into_iter().next())
+        .and_then(|v| v.as_str().map(|s| s.to_string()));
 
     // An override wins. Otherwise route to the catalog cluster when the role
     // can use it (non-null); when it is null the role lacks USAGE on the
     // object's cluster, so leave the cluster unset and read on the session's
     // default (serving) cluster. That still works: materialized views serve
     // from persist and views recompute, just without index benefit.
-    let target_cluster: Option<&str> = cluster_override.or(catalog_cluster);
+    let target_cluster: Option<&str> = cluster_override.or(catalog_cluster.as_deref());
 
     // No row cap is applied here: the response is bounded by the size cap
     // enforced in format_rows_response (MCP_MAX_RESPONSE_SIZE), and by
@@ -1514,10 +1519,18 @@ mod tests {
     use super::*;
     use crate::http::sql::{Description, SqlError};
 
+    /// Serializes each row to a compact JSON array, matching how the HTTP SQL
+    /// layer stores rows.
+    fn raw_rows(rows: Vec<Vec<serde_json::Value>>) -> Vec<Box<serde_json::value::RawValue>> {
+        rows.iter()
+            .map(|r| serde_json::value::to_raw_value(r).unwrap())
+            .collect()
+    }
+
     fn rows_result(rows: Vec<Vec<serde_json::Value>>) -> SqlResult {
         SqlResult::Rows {
             tag: String::new(),
-            rows,
+            rows: raw_rows(rows),
             desc: Description { columns: vec![] },
             notices: vec![],
         }
@@ -1555,7 +1568,9 @@ mod tests {
             rows_result(rows.clone()),
             ok_result(),
         ];
-        assert_eq!(select_single_rows(results).unwrap(), rows);
+        let got = select_single_rows(results).unwrap();
+        let got: Vec<&str> = got.iter().map(|r| r.get()).collect();
+        assert_eq!(got, vec!["[1]"]);
     }
 
     /// A response with no row-returning statement is an error.
@@ -2245,7 +2260,7 @@ mod tests {
     #[mz_ore::test]
     fn test_format_rows_response_within_limit() {
         let rows = vec![vec![json!("a"), json!(1)], vec![json!("b"), json!(2)]];
-        let result = format_rows_response(rows, 1_000_000).unwrap();
+        let result = format_rows_response(raw_rows(rows), 1_000_000).unwrap();
         let McpResult::ToolContent(content) = result else {
             panic!("Expected ToolContent");
         };
@@ -2259,7 +2274,7 @@ mod tests {
         let rows: Vec<Vec<serde_json::Value>> = (0..100)
             .map(|i| vec![json!(format!("row_{}", i)), json!(i)])
             .collect();
-        let err = format_rows_response(rows, 500).unwrap_err();
+        let err = format_rows_response(raw_rows(rows), 500).unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("exceeds the 500 byte limit"),
@@ -2274,7 +2289,7 @@ mod tests {
     #[mz_ore::test]
     fn test_format_rows_response_empty_rows() {
         let rows: Vec<Vec<serde_json::Value>> = vec![];
-        let result = format_rows_response(rows, 1000).unwrap();
+        let result = format_rows_response(raw_rows(rows), 1000).unwrap();
         let McpResult::ToolContent(content) = result else {
             panic!("Expected ToolContent");
         };

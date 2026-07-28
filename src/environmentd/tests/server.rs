@@ -2279,6 +2279,103 @@ fn test_ws_notifies_for_bad_options() {
     };
 }
 
+/// Regression test for SQL-428: a `SELECT` over `/api/ws` streams one `Row`
+/// message per row before `CommandComplete`, rather than buffering the whole
+/// result first. This is the non-buffering path for large results over HTTP.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_ws_select_streams_rows() {
+    let server = test_util::TestHarness::default().start_blocking();
+    let ws_url = server.ws_addr();
+    let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
+    test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
+
+    let query = "SELECT * FROM generate_series(1, 1000)";
+    let json = serde_json::json!({ "query": query });
+    ws.send(Message::Text(json.to_string().into())).unwrap();
+
+    let mut read_msg = || -> WebSocketResponse {
+        let msg = ws.read().unwrap();
+        let msg = msg.into_text().expect("response should be text");
+        serde_json::from_str(&msg).unwrap()
+    };
+
+    match read_msg() {
+        WebSocketResponse::CommandStarting(_) => {}
+        other => panic!("expected CommandStarting, got {other:?}"),
+    }
+    match read_msg() {
+        WebSocketResponse::Rows(desc) => assert_eq!(desc.columns.len(), 1),
+        other => panic!("expected Rows description, got {other:?}"),
+    }
+
+    // Every row arrives as its own `Row` message before `CommandComplete`.
+    let mut rows_seen = 0;
+    loop {
+        match read_msg() {
+            WebSocketResponse::Row(_) => rows_seen += 1,
+            WebSocketResponse::Notice(_) => continue,
+            WebSocketResponse::CommandComplete(tag) => {
+                assert_eq!(tag, "SELECT 1000");
+                break;
+            }
+            other => panic!("unexpected message before CommandComplete: {other:?}"),
+        }
+    }
+    assert_eq!(rows_seen, 1000);
+}
+
+/// Regression test for SQL-428: the JSON `/api/sql` endpoint enforces
+/// `max_result_size` on the real serialized footprint. A result that exceeds
+/// the cap fails cleanly with a result-size error rather than being buffered
+/// whole, while a result under the cap succeeds.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_http_sql_result_size_limit() {
+    let server = test_util::TestHarness::default().start_blocking();
+
+    // Lower the cap to its minimum. `max_result_size` is a system parameter, so
+    // set it via the internal (system) port. A normal session cannot.
+    let mut system = server.connect_internal(postgres::NoTls).unwrap();
+    system
+        .batch_execute("ALTER SYSTEM SET max_result_size = '1MB'")
+        .unwrap();
+
+    let http_url = Url::parse(&format!("http://{}/api/sql", server.http_local_addr())).unwrap();
+    let post = |query: &str| -> serde_json::Value {
+        let json = serde_json::json!({ "query": query });
+        let res = Client::new()
+            .post(http_url.clone())
+            .json(&json)
+            .send()
+            .unwrap();
+        res.json().unwrap()
+    };
+
+    // A result whose serialized JSON exceeds the cap fails cleanly.
+    let body = post("SELECT * FROM generate_series(1, 500000)");
+    let results = body.get("results").unwrap().as_array().unwrap();
+    let err = results[0]
+        .get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(|m| m.as_str());
+    assert!(
+        err.map_or(false, |m| m.contains("result exceeds max size")),
+        "expected a result-size error, got: {body}"
+    );
+
+    // A result that fits under the cap succeeds.
+    let body = post("SELECT * FROM generate_series(1, 3)");
+    let results = body.get("results").unwrap().as_array().unwrap();
+    assert!(
+        results[0].get("error").is_none(),
+        "expected success, got: {body}"
+    );
+    let rows = results[0].get("rows").unwrap().as_array().unwrap();
+    assert_eq!(rows.len(), 3);
+}
+
 #[derive(Debug, Deserialize)]
 struct HttpResponse<R> {
     results: Vec<R>,
