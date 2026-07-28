@@ -589,10 +589,11 @@ impl PeekClient {
             .collect();
         let relation_desc = RelationDesc::new(sql_typ, column_names.iter().map(|s| s.as_str()));
 
-        // MIR => MIR optimization (global). We use optimize_mir because the
-        // mutation has already been applied in MIR, so we bypass the normal
-        // SubscribePlan path which expects HIR.
-        let global_mir_plan = optimizer.optimize_mir(expr, relation_desc)?;
+        // MIR ⇒ MIR optimization (global). The mutation is already applied in
+        // MIR, so we hand the expression to the subscribe optimizer directly
+        // instead of going through the `SubscribePlan` path, which expects HIR.
+        // An empty `output` makes the sink emit raw diffs.
+        let global_mir_plan = optimizer.optimize_query(expr, relation_desc, vec![])?;
 
         Ok((optimizer, global_mir_plan))
     }

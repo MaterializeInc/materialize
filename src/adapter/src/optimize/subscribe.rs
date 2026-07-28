@@ -17,7 +17,7 @@ use differential_dataflow::lattice::Lattice;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::plan::LirRelationExpr;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection};
-use mz_expr::MirRelationExpr;
+use mz_expr::{ColumnOrder, MirRelationExpr};
 use mz_ore::soft_assert_or_log;
 use mz_repr::{GlobalId, RelationDesc, Timestamp};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
@@ -116,13 +116,29 @@ impl Optimizer {
         self.sink_id
     }
 
-    /// Optimize a subscribe dataflow starting from a pre-lowered MIR
-    /// expression. Used by the frontend read-then-write path which applies
-    /// mutation transformations in MIR before optimization.
-    pub fn optimize_mir(
+    /// Optimizes a subscribe over an already-lowered MIR expression, for
+    /// callers that build their own MIR (such as the frontend read-then-write
+    /// path, which applies the mutation in MIR).
+    ///
+    /// `output` is the sink's row ordering, as produced by
+    /// [`mz_sql::plan::SubscribeOutput::row_order`]. Empty means the sink emits
+    /// raw diffs.
+    pub fn optimize_query(
         &mut self,
         expr: MirRelationExpr,
-        desc: RelationDesc,
+        from_desc: RelationDesc,
+        output: Vec<ColumnOrder>,
+    ) -> Result<GlobalMirPlan<Unresolved>, OptimizerError> {
+        self.optimize_source(SubscribeSource::Query { expr, from_desc }, output)
+    }
+
+    /// The single subscribe optimization pipeline. Every subscribe, whatever it
+    /// reads from, goes through here, so a prep or metainfo step added here
+    /// applies to all of them.
+    fn optimize_source(
+        &mut self,
+        source: SubscribeSource,
+        output: Vec<ColumnOrder>,
     ) -> Result<GlobalMirPlan<Unresolved>, OptimizerError> {
         let time = Instant::now();
 
@@ -133,34 +149,52 @@ impl Optimizer {
         let mut df_desc = MirDataflowDescription::new(self.debug_name.clone());
         let mut df_meta = DataflowMetainfo::default();
 
-        // MIR ⇒ MIR optimization (local)
-        let mut transform_ctx = TransformCtx::local(
-            &self.config.features,
-            &self.typecheck_ctx,
-            &mut df_meta,
-            Some(&mut self.metrics),
-            Some(self.view_id),
-        );
-        let expr = optimize_mir_local(expr, &mut transform_ctx)?;
+        let (from, from_desc) = match source {
+            SubscribeSource::Id(from_id) => {
+                let from_desc = self
+                    .catalog
+                    .get_entry(&from_id)
+                    .relation_desc()
+                    .expect("subscribes can only be run on items with descs")
+                    .into_owned();
 
-        df_builder.import_view_into_dataflow(
-            &self.view_id,
-            &expr,
-            &mut df_desc,
-            &self.config.features,
-        )?;
+                df_builder.import_into_dataflow(&from_id, &mut df_desc, &self.config.features)?;
+
+                (from_id, from_desc)
+            }
+            SubscribeSource::Query { expr, from_desc } => {
+                // MIR ⇒ MIR optimization (local)
+                let mut transform_ctx = TransformCtx::local(
+                    &self.config.features,
+                    &self.typecheck_ctx,
+                    &mut df_meta,
+                    Some(&mut self.metrics),
+                    Some(self.view_id),
+                );
+                let expr = optimize_mir_local(expr, &mut transform_ctx)?;
+
+                df_builder.import_view_into_dataflow(
+                    &self.view_id,
+                    &expr,
+                    &mut df_desc,
+                    &self.config.features,
+                )?;
+
+                (self.view_id, from_desc)
+            }
+        };
         df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
 
+        // Make SinkDesc
         let sink_description = ComputeSinkDesc {
-            from: self.view_id,
-            from_desc: desc,
-            connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection {
-                // Read-then-write subscribes use raw diffs.
-                output: vec![],
-            }),
+            from,
+            from_desc,
+            connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection { output }),
             with_snapshot: self.with_snapshot,
             up_to: self.up_to.map(Antichain::from_elem).unwrap_or_default(),
+            // No `FORCE NOT NULL` for subscribes
             non_null_assertions: vec![],
+            // No `REFRESH` for subscribes
             refresh_schedule: None,
         };
         df_desc.export_sink(self.sink_id, sink_description);
@@ -175,26 +209,40 @@ impl Optimizer {
         // Construct TransformCtx for global optimization.
         let mut transform_ctx = TransformCtx::global(
             &df_builder,
-            &mz_transform::EmptyStatisticsOracle,
+            &mz_transform::EmptyStatisticsOracle, // TODO: wire proper stats
             &self.config.features,
             &self.typecheck_ctx,
             &mut df_meta,
             Some(&mut self.metrics),
         );
+        // Run global optimization.
         mz_transform::optimize_dataflow(&mut df_desc, &mut transform_ctx, false)?;
 
         if self.config.mode == OptimizeMode::Explain {
+            // Collect the list of indexes used by the dataflow at this point.
             trace_plan!(at: "global", &df_meta.used_indexes(&df_desc));
         }
 
         self.duration += time.elapsed();
 
+        // Return the (sealed) plan at the end of this optimization step.
         Ok(GlobalMirPlan {
             df_desc,
             df_meta,
             phantom: PhantomData::<Unresolved>,
         })
     }
+}
+
+/// What a subscribe reads from, with any HIR ⇒ MIR lowering already done.
+enum SubscribeSource {
+    /// An existing collection, imported by id.
+    Id(GlobalId),
+    /// A query, imported into the dataflow as a view under `view_id`.
+    Query {
+        expr: MirRelationExpr,
+        from_desc: RelationDesc,
+    },
 }
 
 /// The (sealed intermediate) result after:
@@ -252,43 +300,11 @@ impl Optimize<SubscribePlan> for Optimizer {
     type To = GlobalMirPlan<Unresolved>;
 
     fn optimize(&mut self, plan: SubscribePlan) -> Result<Self::To, OptimizerError> {
-        let output = plan.output;
-        let plan = plan.from;
-        let time = Instant::now();
+        let output = plan.output.row_order().to_vec();
 
-        let mut df_builder = {
-            let compute = self.compute_instance.clone();
-            DataflowBuilder::new(&*self.catalog, compute).with_config(&self.config)
-        };
-        let mut df_desc = MirDataflowDescription::new(self.debug_name.clone());
-        let mut df_meta = DataflowMetainfo::default();
-
-        match plan {
+        match plan.from {
             SubscribeFrom::Id(from_id) => {
-                let from = self.catalog.get_entry(&from_id);
-                let from_desc = from
-                    .relation_desc()
-                    .expect("subscribes can only be run on items with descs")
-                    .into_owned();
-
-                df_builder.import_into_dataflow(&from_id, &mut df_desc, &self.config.features)?;
-                df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
-
-                // Make SinkDesc
-                let sink_description = ComputeSinkDesc {
-                    from: from_id,
-                    from_desc,
-                    connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection {
-                        output: output.row_order().to_vec(),
-                    }),
-                    with_snapshot: self.with_snapshot,
-                    up_to: self.up_to.map(Antichain::from_elem).unwrap_or_default(),
-                    // No `FORCE NOT NULL` for subscribes
-                    non_null_assertions: vec![],
-                    // No `REFRESH` for subscribes
-                    refresh_schedule: None,
-                };
-                df_desc.export_sink(self.sink_id, sink_description);
+                self.optimize_source(SubscribeSource::Id(from_id), output)
             }
             SubscribeFrom::Query { expr, desc } => {
                 // TODO: Change the `expr` type to be `HirRelationExpr` and run
@@ -296,78 +312,22 @@ impl Optimize<SubscribePlan> for Optimizer {
                 // us implement something like `EXPLAIN RAW PLAN FOR SUBSCRIBE.`
                 //
                 // let typ = expr.top_level_typ();
-                // let expr = expr.lower(&self.config)?;
 
-                // MIR ⇒ MIR optimization (local)
-                let mut transform_ctx = TransformCtx::local(
-                    &self.config.features,
-                    &self.typecheck_ctx,
-                    &mut df_meta,
-                    Some(&mut self.metrics),
-                    Some(self.view_id),
-                );
-
+                // Lowering counts towards the reported optimization time, so we
+                // time it here and `optimize_source` times the rest.
+                let time = Instant::now();
                 let expr = expr.lower(HirToMirConfig::from(&self.config), None)?;
-                let expr = optimize_mir_local(expr, &mut transform_ctx)?;
+                self.duration += time.elapsed();
 
-                df_builder.import_view_into_dataflow(
-                    &self.view_id,
-                    &expr,
-                    &mut df_desc,
-                    &self.config.features,
-                )?;
-                df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
-
-                // Make SinkDesc
-                let sink_description = ComputeSinkDesc {
-                    from: self.view_id,
-                    from_desc: desc.clone(),
-                    connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection {
-                        output: output.row_order().to_vec(),
-                    }),
-                    with_snapshot: self.with_snapshot,
-                    up_to: self.up_to.map(Antichain::from_elem).unwrap_or_default(),
-                    // No `FORCE NOT NULL` for subscribes
-                    non_null_assertions: vec![],
-                    // No `REFRESH` for subscribes
-                    refresh_schedule: None,
-                };
-                df_desc.export_sink(self.sink_id, sink_description);
+                self.optimize_source(
+                    SubscribeSource::Query {
+                        expr,
+                        from_desc: desc,
+                    },
+                    output,
+                )
             }
-        };
-
-        // Prepare expressions in the assembled dataflow.
-        let style = ExprPrepMaintained;
-        df_desc.visit_children(
-            |r| style.prep_relation_expr(r),
-            |s| style.prep_scalar_expr(s),
-        )?;
-
-        // Construct TransformCtx for global optimization.
-        let mut transform_ctx = TransformCtx::global(
-            &df_builder,
-            &mz_transform::EmptyStatisticsOracle, // TODO: wire proper stats
-            &self.config.features,
-            &self.typecheck_ctx,
-            &mut df_meta,
-            Some(&mut self.metrics),
-        );
-        // Run global optimization.
-        mz_transform::optimize_dataflow(&mut df_desc, &mut transform_ctx, false)?;
-
-        if self.config.mode == OptimizeMode::Explain {
-            // Collect the list of indexes used by the dataflow at this point.
-            trace_plan!(at: "global", &df_meta.used_indexes(&df_desc));
         }
-
-        self.duration += time.elapsed();
-
-        // Return the (sealed) plan at the end of this optimization step.
-        Ok(GlobalMirPlan {
-            df_desc,
-            df_meta,
-            phantom: PhantomData::<Unresolved>,
-        })
     }
 }
 
