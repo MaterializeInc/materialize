@@ -884,6 +884,15 @@ const DML_LOGGING_PARITY_CASES: &[DmlLoggingCase] = &[
         after: &[],
         frontend_only_execution_timestamp: false,
     },
+    // Bounded staleness forbids writes. Both paths reject the statement after
+    // they have planned it and recorded its cluster, so the error row carries a
+    // cluster on both.
+    DmlLoggingCase {
+        before: &["SET transaction_isolation = 'bounded staleness 5s'"],
+        sql: "DELETE FROM parity_t WHERE x > 1000",
+        after: &["SET transaction_isolation = 'strict serializable'"],
+        frontend_only_execution_timestamp: false,
+    },
     DmlLoggingCase {
         before: &["BEGIN"],
         sql: "DELETE FROM parity_t",

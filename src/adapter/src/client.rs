@@ -1678,24 +1678,6 @@ impl SessionClient {
             }
         }
 
-        if self
-            .session
-            .as_ref()
-            .expect("SessionClient invariant")
-            .vars()
-            .transaction_isolation()
-            .is_bounded_staleness()
-        {
-            return Err(AdapterError::BoundedStalenessReadOnly);
-        }
-
-        // Reject mutations in read-only mode (e.g. during 0dt upgrades). Done
-        // early, before any planning or fast-path dispatch, so every sub-path
-        // (constant INSERT, OCC INSERT/UPDATE/DELETE) is covered uniformly.
-        if self.peek_client.read_only {
-            return Err(AdapterError::ReadOnly);
-        }
-
         let (plan, target_cluster, resolved_ids, sql_impl_ids) = {
             let session = self.session.as_mut().expect("SessionClient invariant");
             let conn_catalog = catalog.for_session(session);
@@ -1715,6 +1697,16 @@ impl SessionClient {
 
             (plan, target_cluster, resolved_ids, sql_impl_ids)
         };
+
+        // Reject mutations in read-only mode (e.g. during 0dt upgrades). Placed
+        // where the coordinator has it, in `sequence_plan`: after planning, so a
+        // statement that does not plan reports the planning error, and before
+        // the cluster and RBAC checks below, which the coordinator also reports
+        // second. Every sub-path from here on writes (constant INSERT and the
+        // OCC INSERT/UPDATE/DELETE), so one check covers them all.
+        if self.peek_client.read_only {
+            return Err(AdapterError::ReadOnly);
+        }
 
         // Cluster restrictions and RBAC, mirroring the coordinator's checks
         // in sequencer.rs. Resolution may fail if the target cluster doesn't
@@ -1770,6 +1762,33 @@ impl SessionClient {
                 crate::coord::appends::waiting_on_startup_appends(&catalog, session, &plan)
             {
                 wait_future.await;
+            }
+        }
+
+        // The coordinator's per-plan checks, in the order it applies them:
+        // `sequence_insert` rejects a transaction that cannot take a write
+        // before it rejects the isolation level, and both it and
+        // `sequence_read_then_write` reject bounded staleness before dispatching
+        // on the plan. So both checks sit here, above the constant-INSERT
+        // dispatch as well as the read-then-write path.
+        //
+        // `allows_writes` is only defined inside a transaction, which is also
+        // the only place it can be false: outside one the session task opens a
+        // fresh transaction with no ops. Autocommit statements therefore rely on
+        // the check in `PeekClient::frontend_read_then_write` instead.
+        {
+            let session = self.session.as_ref().expect("SessionClient invariant");
+            if session.transaction().is_in_multi_statement_transaction()
+                && !session.transaction().allows_writes()
+            {
+                return Err(AdapterError::ReadOnlyTransaction);
+            }
+            if session
+                .vars()
+                .transaction_isolation()
+                .is_bounded_staleness()
+            {
+                return Err(AdapterError::BoundedStalenessReadOnly);
             }
         }
 
