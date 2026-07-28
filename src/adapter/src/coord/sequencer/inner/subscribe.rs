@@ -7,8 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use futures::StreamExt;
 use maplit::btreemap;
 use mz_adapter_types::connection::ConnectionId;
+use mz_adapter_types::dyncfgs::SUBSCRIBE_MAX_BUFFERED_BYTES;
 use mz_cluster_client::ReplicaId;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
@@ -22,14 +24,17 @@ use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_sql::plan::{self, QueryWhen, SubscribeFrom};
 use mz_sql::session::metadata::SessionMetadata;
 use std::collections::BTreeSet;
+use std::sync::{Arc, Mutex};
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{Instrument, Span};
 use uuid::Uuid;
 
-use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribe};
+use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribe, SubscribeBufferAccounting};
 use crate::command::ExecuteResponse;
 use crate::coord::appends::BuiltinTableAppendNotify;
+use crate::coord::peek::PeekResponseUnary;
 use crate::coord::sequencer::inner::{return_if_err, spawn_linearized_read_ts};
 use crate::coord::sequencer::{check_log_reads, emit_optimizer_notices};
 use crate::coord::{
@@ -547,11 +552,16 @@ impl Coordinator {
     ) -> Result<(ExecuteResponse, BuiltinTableAppendNotify), AdapterError> {
         let sink_id = df_desc.sink_id();
 
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::unbounded_channel::<PeekResponseUnary>();
+        let buffer = Arc::new(Mutex::new(SubscribeBufferAccounting::default()));
+        let max_buffered_bytes =
+            SUBSCRIBE_MAX_BUFFERED_BYTES.get(self.catalog().system_config().dyncfgs());
         let active_subscribe = ActiveSubscribe {
             conn_id: conn_id.clone(),
             session_uuid,
             channel: tx,
+            buffer: Arc::clone(&buffer),
+            max_buffered_bytes,
             emit_progress: plan.emit_progress,
             as_of: df_desc
                 .as_of
@@ -602,8 +612,20 @@ impl Coordinator {
         // Explicitly drop read holds, just to make it obvious what's happening.
         drop(read_holds);
 
+        // Wrap the receiver so draining a message releases its footprint from the
+        // shared accounting. FIFO delivery keeps the queue aligned with the
+        // channel, so popping the oldest footprint matches the message just
+        // drained. This keeps the accounting equal to the currently buffered
+        // depth, which the coordinator watches to bound this subscribe.
+        let rx = UnboundedReceiverStream::new(rx).map(move |response| {
+            buffer
+                .lock()
+                .expect("subscribe buffer accounting poisoned")
+                .pop();
+            response
+        });
         let resp = ExecuteResponse::Subscribing {
-            rx,
+            rx: Box::new(rx),
             ctx_extra: std::mem::take(ctx_extra),
             instance_id: cluster_id,
         };

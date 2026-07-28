@@ -276,6 +276,26 @@ pub const WEBHOOK_MAX_REQUEST_SIZE_BYTES: Config<usize> = Config::new(
     "The maximum size in bytes of a webhook request body, measured after decompression.",
 );
 
+/// Budget for the backlog a `SUBSCRIBE` (or `COPY (SUBSCRIBE ...) TO STDOUT`)
+/// may accumulate in environmentd while waiting for a slow client to read.
+///
+/// The subscribe producer runs on the non-blockable coordinator loop, so it
+/// cannot apply backpressure to a slow client. Instead the coordinator retires
+/// the subscribe once its buffered backlog exceeds this budget, bounding the
+/// memory a slow client can make the shared process hold.
+///
+/// The backlog excludes the oldest in-flight message, so this bounds accumulated
+/// backlog, not the size of any single batch. A batch larger than this budget is
+/// still delivered, because the subscribe ships each frontier advance (and the
+/// initial snapshot) as one batch. So a client that keeps up never accumulates
+/// backlog and never approaches this cap, and a large snapshot to a keeping-up
+/// client is not retired.
+pub const SUBSCRIBE_MAX_BUFFERED_BYTES: Config<usize> = Config::new(
+    "subscribe_max_buffered_bytes",
+    128 * 1024 * 1024,
+    "Maximum bytes a SUBSCRIBE may buffer in environmentd for a slow client before it is retired with an error.",
+);
+
 /// Number of user IDs to pre-allocate in a batch. Pre-allocating IDs avoids
 /// a persist write + oracle call per DDL statement.
 pub const USER_ID_POOL_BATCH_SIZE: Config<u32> = Config::new(
@@ -465,6 +485,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&MCP_MAX_RESPONSE_SIZE)
         .add(&MCP_REQUEST_TIMEOUT)
         .add(&WEBHOOK_MAX_REQUEST_SIZE_BYTES)
+        .add(&SUBSCRIBE_MAX_BUFFERED_BYTES)
         .add(&USER_ID_POOL_BATCH_SIZE)
         .add(&GROUP_COMMIT_MAX_ATTEMPTS)
         .add(&CONSOLE_OIDC_CLIENT_ID)

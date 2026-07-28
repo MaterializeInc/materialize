@@ -51,7 +51,6 @@ use prometheus::core::{AtomicF64, GenericGaugeVec};
 use serde::{Deserialize, Serialize};
 use tokio::{select, time};
 use tokio_postgres::error::SqlState;
-use tokio_stream::wrappers::UnboundedReceiverStream;
 use tower_sessions::Session as TowerSession;
 use tracing::{debug, info};
 use tungstenite::protocol::frame::coding::CloseCode;
@@ -1856,13 +1855,7 @@ async fn execute_stmt<S: ResultSender>(
         } => StatementResult::Subscribe {
             tag: "SUBSCRIBE".into(),
             desc: desc.relation_desc.unwrap(),
-            rx: RecordFirstRowStream::new(
-                Box::new(UnboundedReceiverStream::new(rx)),
-                execute_started,
-                client,
-                Some(instance_id),
-                None,
-            ),
+            rx: RecordFirstRowStream::new(rx, execute_started, client, Some(instance_id), None),
             ctx_extra,
         },
         res @ (ExecuteResponse::Fetch { .. }

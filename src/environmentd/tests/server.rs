@@ -2376,6 +2376,90 @@ fn test_http_sql_result_size_limit() {
     assert_eq!(rows.len(), 3);
 }
 
+/// Regression test for SQL-423: a SUBSCRIBE whose client stops reading is
+/// retired once its coordinator-side buffer exceeds
+/// `subscribe_max_buffered_bytes`, rather than growing environmentd's memory
+/// without bound. The client sees a clean "fell behind" error.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_subscribe_buffer_bound() {
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
+            "subscribe_max_buffered_bytes".to_string(),
+            "1024".to_string(),
+        )
+        .start_blocking();
+
+    let mut writer = server.connect(postgres::NoTls).unwrap();
+    writer.batch_execute("CREATE TABLE t (a bigint)").unwrap();
+
+    // Open a SUBSCRIBE over COPY but never read from it, so the coordinator-side
+    // buffer fills once the socket backs up.
+    let mut reader_client = server.connect(postgres::NoTls).unwrap();
+    let mut copy = reader_client
+        .copy_out("COPY (SUBSCRIBE t) TO STDOUT")
+        .unwrap();
+
+    // Drive far more than the 1 KiB budget through the subscribe while the
+    // reader is not draining.
+    for _ in 0..200 {
+        writer
+            .batch_execute("INSERT INTO t SELECT generate_series(1, 1000)")
+            .unwrap();
+    }
+
+    // Draining now surfaces the terminal "fell behind" error rather than an
+    // unbounded backlog. The COPY read fails with the underlying DB error, whose
+    // message lives in the error's source chain (the top-level display is just
+    // "db error").
+    let mut buf = Vec::new();
+    let io_err = std::io::Read::read_to_end(&mut copy, &mut buf).unwrap_err();
+    let mut chain = io_err.to_string();
+    let mut source = std::error::Error::source(&io_err);
+    while let Some(err) = source {
+        chain.push_str(" | ");
+        chain.push_str(&err.to_string());
+        source = err.source();
+    }
+    assert!(
+        chain.contains("fell behind"),
+        "expected a fell-behind error, got: {chain}"
+    );
+}
+
+/// Regression test for SQL-423: a SUBSCRIBE whose snapshot is a single batch
+/// larger than `subscribe_max_buffered_bytes` completes when the client reads it
+/// promptly. The budget bounds accumulated backlog, not the size of any single
+/// batch.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_subscribe_single_large_batch_not_retired() {
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
+            "subscribe_max_buffered_bytes".to_string(),
+            "1024".to_string(),
+        )
+        .start_blocking();
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    // Subscribe to a finite collection whose snapshot is a single batch far
+    // larger than the 1 KiB budget. The subscribe finishes once the snapshot is
+    // delivered, and a client reading it promptly (via `query`) keeps the
+    // backlog at that single batch, so it must stream to completion rather than
+    // be retired with a "fell behind" error.
+    let rows: usize = 10_000;
+    let returned = client
+        .query(
+            &format!("SUBSCRIBE TO (SELECT * FROM generate_series(1, {rows}))"),
+            &[],
+        )
+        .expect("single large snapshot batch should stream, not be retired");
+    assert_eq!(returned.len(), rows);
+}
+
 #[derive(Debug, Deserialize)]
 struct HttpResponse<R> {
     results: Vec<R>,
