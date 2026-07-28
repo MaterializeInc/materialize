@@ -50,3 +50,38 @@ Explained Query:
 Target cluster: quickstart
 
 EOF
+
+# Key inference through a Filter whose predicates equate columns is bounded.
+# The DISTINCT provides a wide unique key, the LIMIT keeps the predicates from
+# being pushed below it, and each equated column pair could then double the
+# number of inferred keys. See MAX_INFERRED_UNIQUE_KEYS in mz-expr.
+
+statement ok
+CREATE TABLE kt10 (c0 int, c1 int, c2 int, c3 int, c4 int, c5 int, c6 int, c7 int, c8 int, c9 int)
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(keys, no fast path, humanized expressions) AS VERBOSE TEXT FOR
+SELECT * FROM (SELECT DISTINCT * FROM kt10 LIMIT 9999999999) s WHERE c0 = c5 AND c1 = c6 AND c2 = c7 AND c3 = c8 AND c4 = c9
+----
+Explained Query:
+  Filter (#0{c0} = #5{c5}) AND (#1{c1} = #6{c6}) AND (#2{c2} = #7{c7}) AND (#3{c3} = #8{c8}) AND (#4{c4} = #9{c9}) // { keys: "([0, 1, 2, 3, 4], [0, 1, 2, 4, 8], [0, 1, 3, 4, 7], [0, 1, 4, 7, 8], [0, 2, 3, 4, 6], [0, 2, 4, 6, 8], [0, 3, 4, 6, 7], [0, 4, 6, 7, 8], [1, 2, 3, 4, 5], [1, 2, 4, 5, 8], [1, 3, 4, 5, 7], [1, 4, 5, 7, 8], [2, 3, 4, 5, 6], [2, 4, 5, 6, 8], [3, 4, 5, 6, 7], [4, 5, 6, 7, 8])" }
+    TopK limit=9999999999 // { keys: "([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])" }
+      Distinct project=[#0{c0}..=#9{c9}] // { keys: "([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])" }
+        ReadStorage materialize.public.kt10 // { keys: "()" }
+
+Source materialize.public.kt10
+
+Target cluster: quickstart
+
+EOF
+
+# The full-size version of the pattern above. With unbounded key expansion,
+# planning this query materializes 2^24 keys and ~15GB of memory.
+
+statement ok
+CREATE TABLE kt48 (c0 int, c1 int, c2 int, c3 int, c4 int, c5 int, c6 int, c7 int, c8 int, c9 int, c10 int, c11 int, c12 int, c13 int, c14 int, c15 int, c16 int, c17 int, c18 int, c19 int, c20 int, c21 int, c22 int, c23 int, c24 int, c25 int, c26 int, c27 int, c28 int, c29 int, c30 int, c31 int, c32 int, c33 int, c34 int, c35 int, c36 int, c37 int, c38 int, c39 int, c40 int, c41 int, c42 int, c43 int, c44 int, c45 int, c46 int, c47 int)
+
+query I
+SELECT count(*) FROM (SELECT * FROM (SELECT DISTINCT * FROM kt48 LIMIT 9999999999) s WHERE c0 = c24 AND c1 = c25 AND c2 = c26 AND c3 = c27 AND c4 = c28 AND c5 = c29 AND c6 = c30 AND c7 = c31 AND c8 = c32 AND c9 = c33 AND c10 = c34 AND c11 = c35 AND c12 = c36 AND c13 = c37 AND c14 = c38 AND c15 = c39 AND c16 = c40 AND c17 = c41 AND c18 = c42 AND c19 = c43 AND c20 = c44 AND c21 = c45 AND c22 = c46 AND c23 = c47) z
+----
+0

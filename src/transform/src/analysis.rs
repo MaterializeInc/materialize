@@ -676,7 +676,7 @@ mod unique_keys {
 
     use super::arity::Arity;
     use super::{Analysis, Derived, DerivedBuilder, Lattice};
-    use mz_expr::MirRelationExpr;
+    use mz_expr::{MAX_INFERRED_UNIQUE_KEYS, MirRelationExpr};
 
     /// Analysis that determines the unique keys of relation expressions.
     ///
@@ -762,9 +762,18 @@ mod unique_keys {
         fn top(&self) -> Vec<Vec<usize>> {
             vec![vec![]]
         }
-        fn meet_assign(&self, a: &mut Vec<Vec<usize>>, b: Vec<Vec<usize>>) -> bool {
+        fn meet_assign(&self, a: &mut Vec<Vec<usize>>, mut b: Vec<Vec<usize>>) -> bool {
+            // Bound both sides of the pairwise union below, as well as its result.
+            // Key sets can otherwise grow multiplicatively across fixpoint rounds.
+            // Dropping keys weakens the value, which is sound and keeps the meet
+            // sequence decreasing, and truncating in sorted order stays
+            // deterministic.
             a.sort();
             a.dedup();
+            a.truncate(MAX_INFERRED_UNIQUE_KEYS);
+            b.sort();
+            b.dedup();
+            b.truncate(MAX_INFERRED_UNIQUE_KEYS);
             let mut c = Vec::new();
             for cols_a in a.iter_mut() {
                 cols_a.sort();
@@ -778,6 +787,7 @@ mod unique_keys {
             }
             c.sort();
             c.dedup();
+            c.truncate(MAX_INFERRED_UNIQUE_KEYS);
             std::mem::swap(a, &mut c);
             a != &mut c
         }
