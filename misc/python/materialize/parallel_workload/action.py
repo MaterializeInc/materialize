@@ -99,6 +99,17 @@ if TYPE_CHECKING:
     from materialize.parallel_workload.worker import Worker
 
 
+# The frontend read-then-write path gives up after its OCC retry budget when a
+# statement keeps losing the race for the write timestamp. That is a
+# user-visible consequence of contention, not a bug, so every action whose
+# statement is a read-then-write (DELETE, UPDATE, INSERT ... SELECT,
+# INSERT ... RETURNING) has to tolerate it. It is still counted in the error
+# statistics.
+OCC_CONTENTION_EXHAUSTED_ERROR = (
+    "read-then-write exceeded maximum retry attempts under contention"
+)
+
+
 def ws_connect(ws: websocket.WebSocket, host, port, user: str) -> tuple[int, int]:
     thread_name = threading.current_thread().getName()
     ws.connect(f"ws://{host}:{port}/api/experimental/sql", origin=thread_name)
@@ -795,6 +806,7 @@ class InsertSelectAction(Action):
         result.extend(
             [
                 "canceling statement due to statement timeout",
+                OCC_CONTENTION_EXHAUSTED_ERROR,
                 # A random expression can evaluate to NULL (e.g. a map-key
                 # miss) even for a NOT NULL column, which is a legitimate
                 # rejection. The base list only ignores it for DDL complexity.
@@ -908,6 +920,11 @@ class CopyFromStdinAction(Action):
 
 
 class InsertReturningAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        # A constant INSERT is a blind write, but RETURNING takes it off that
+        # fast path and makes it a read-then-write.
+        return [OCC_CONTENTION_EXHAUSTED_ERROR] + super().errors_to_ignore(exe)
+
     def run(self, exe: Executor) -> bool:
         table = None
         if exe.insert_table is not None:
@@ -1010,6 +1027,7 @@ class UpdateAction(Action):
         result.extend(
             [
                 "canceling statement due to statement timeout",
+                OCC_CONTENTION_EXHAUSTED_ERROR,
                 # A random SET expression can evaluate to NULL (e.g. a map-key
                 # miss) even for a NOT NULL column. That is a legitimate
                 # rejection, not a bug, and the column type can't be coerced
@@ -1067,10 +1085,9 @@ class OccCounterUpdateAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
             "canceling statement due to statement timeout",
-            # Extreme contention on one row is what this action creates, and
-            # giving up after the retry budget is a user-visible outcome rather
-            # than a bug. It is still counted in the error statistics.
-            "read-then-write exceeded maximum retry attempts under contention",
+            # Extreme contention on one row is what this action creates, so
+            # exhausting the retry budget is an expected outcome here.
+            OCC_CONTENTION_EXHAUSTED_ERROR,
         ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> bool:
@@ -1097,6 +1114,7 @@ class DeleteAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         errors = [
             "canceling statement due to statement timeout",
+            OCC_CONTENTION_EXHAUSTED_ERROR,
         ] + super().errors_to_ignore(exe)
         if exe.db.scenario == Scenario.Rename:
             errors += ["does not exist"]
