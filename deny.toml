@@ -159,6 +159,10 @@ skip = [
     { name = "rand_core", version = "0.10.1" },
     { name = "getrandom", version = "0.4.2" },
     { name = "cpufeatures", version = "0.3.0" },
+    # Held back by kube-client; axum 0.8.9 uses tungstenite 0.29 for
+    # WebSockets.
+    { name = "tungstenite", version = "0.28.0" },
+    { name = "tokio-tungstenite", version = "0.28.0" },
 ]
 
 [[bans.deny]]
