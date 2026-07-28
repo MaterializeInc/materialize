@@ -1446,6 +1446,27 @@ impl SessionClient {
         }
     }
 
+    /// Whether the frontend read-then-write path could take this portal over.
+    ///
+    /// The gate is deliberately cheap, a flag read and a portal lookup, because
+    /// every statement that reaches `execute_attempts` without being handled by
+    /// the peek path is tested against it. Everything expensive, including the
+    /// coordinator round-trip that registers the connection cancel watch, sits
+    /// behind it.
+    fn frontend_read_then_write_applies(&self, portal_name: &str) -> bool {
+        if !self.peek_client.frontend_read_then_write_enabled {
+            return false;
+        }
+        let session = self.session.as_ref().expect("SessionClient invariant");
+        match session.get_portal_unverified(portal_name) {
+            Some(portal) => portal
+                .stmt
+                .as_deref()
+                .is_some_and(is_read_then_write_statement),
+            None => false,
+        }
+    }
+
     /// Runs frontend read-then-write while reacting to both local/session
     /// cancellation and coordinator-issued connection cancellation.
     async fn try_frontend_read_then_write_with_cancel(
@@ -1454,6 +1475,14 @@ impl SessionClient {
         logging: &mut ExecutionLogging,
         cancel_future: impl Future<Output = ()> + Send,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
+        // Bail out before the cancel-watch registration below, which is a
+        // synchronous round-trip through the coordinator's command loop. A
+        // statement this path will not take over must not pay for it, and must
+        // not add queueing latency for other sessions either.
+        if !self.frontend_read_then_write_applies(portal_name) {
+            return Ok(None);
+        }
+
         let conn_id = self.session().conn_id().clone();
         let statement_timeout = *self.session().vars().statement_timeout();
         let inner_client = self.inner().clone();
@@ -1550,9 +1579,10 @@ impl SessionClient {
         use mz_sql::plan::{MutationKind, Plan, ReadThenWritePlan};
         use mz_sql_parser::ast::{InsertStatement, Statement};
 
-        // Check if frontend read-then-write is enabled (determined once at process startup
-        // to avoid a mixed-mode window where both the old lock-based path and the new OCC
-        // path are active concurrently).
+        // Re-checked here rather than relying on the caller's gate. The flag is
+        // determined once at process startup to avoid a mixed-mode window where
+        // both the old lock-based path and this OCC path are active
+        // concurrently.
         if !self.peek_client.frontend_read_then_write_enabled {
             return Ok(None);
         }
@@ -1569,14 +1599,7 @@ impl SessionClient {
         };
 
         let stmt = match stmt {
-            Some(stmt)
-                if matches!(
-                    &*stmt,
-                    Statement::Delete(_) | Statement::Update(_) | Statement::Insert(_)
-                ) =>
-            {
-                stmt
-            }
+            Some(stmt) if is_read_then_write_statement(&stmt) => stmt,
             Some(_stmt) => {
                 return Ok(None);
             }
@@ -1910,6 +1933,18 @@ impl SessionClient {
             .await
             .map(Some)
     }
+}
+
+/// Whether a statement is one the frontend read-then-write path sequences.
+///
+/// These are the statement kinds that plan to a `ReadThenWrite` or an `Insert`.
+/// Note that not every one of them ends up on the OCC path: an `INSERT` whose
+/// source folds to a constant is dispatched as a blind write instead.
+fn is_read_then_write_statement(stmt: &Statement<Raw>) -> bool {
+    matches!(
+        stmt,
+        Statement::Delete(_) | Statement::Update(_) | Statement::Insert(_)
+    )
 }
 
 /// Builds the error for DML that cannot run in a transaction block, mirroring
