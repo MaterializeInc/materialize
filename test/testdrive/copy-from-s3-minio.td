@@ -245,3 +245,46 @@ data,value
 
 > SELECT COUNT(*) FROM t_pagination;
 1001
+
+# Test atomicity across multiple files.
+#
+# A single COPY that spans multiple files must be all-or-nothing: if any one
+# file fails, none of the other files in the same COPY may be committed to the
+# target table, even the ones that would have imported cleanly on their own.
+
+> CREATE TABLE t_atomic (a text, b text);
+
+# Three well-formed files, under their own prefix so we can also COPY them on
+# their own as a positive control below. Each file has 10 rows, 30 in total.
+$ s3-file-upload bucket=copytos3 key=atomic/good/good1.csv repeat=10
+foo,100
+
+$ s3-file-upload bucket=copytos3 key=atomic/good/good2.csv repeat=10
+bar,200
+
+$ s3-file-upload bucket=copytos3 key=atomic/good/good3.csv repeat=10
+baz,300
+
+# One malformed file, sitting alongside the good ones under the atomic/ prefix.
+# Its rows have three columns instead of the expected two, which the CSV
+# decoder rejects.
+$ s3-file-upload bucket=copytos3 key=atomic/bad.csv repeat=100
+qux,400,extra
+
+# The COPY reads all four files under atomic/ and must fail on the malformed
+# file. The order in which the files are processed does not matter: atomicity
+# requires that the whole COPY roll back.
+! COPY INTO t_atomic FROM 's3://copytos3' (FORMAT CSV, AWS CONNECTION = aws_conn, PATTERN = "atomic/**");
+contains:wrong number of columns
+
+# Atomicity: none of the good files' rows may have been committed.
+> SELECT COUNT(*) FROM t_atomic;
+0
+
+# Positive control: the three good files, copied on their own (without the
+# malformed file), do import cleanly. This proves the 0 count above is due to
+# the rollback and not because the good files were themselves unreadable.
+> COPY INTO t_atomic FROM 's3://copytos3' (FORMAT CSV, AWS CONNECTION = aws_conn, PATTERN = "atomic/good/**");
+
+> SELECT COUNT(*) FROM t_atomic;
+30
