@@ -630,6 +630,12 @@ impl HttpServer {
                         .allow_origin(allowed_origin.clone())
                         .allow_headers([AUTHORIZATION, CONTENT_TYPE]),
                 );
+            // Trust `x-materialize-user` injected by an upstream proxy on
+            // listeners without HTTP auth, matching `base_router` and
+            // `ws_router` (CLO-158).
+            if let listeners::AuthenticatorKind::None = authenticator_kind {
+                mcp_router = mcp_router.layer(middleware::from_fn(x_materialize_user_header_auth));
+            }
             router = router.merge(mcp_router);
         }
 
