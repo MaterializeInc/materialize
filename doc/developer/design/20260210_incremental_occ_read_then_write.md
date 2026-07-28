@@ -41,9 +41,13 @@ a subscribe that continually tracks the current state of the data.
 - Removing the in-process locks immediately. During rollout, the old lock-based
   path and the new OCC path coexist behind a feature flag. The locks can be
   removed once the OCC path is fully rolled out.
-- Mixed read/write transactions. A write on this path commits at the frontier it
-  observed, which it cannot postpone until COMMIT, so it runs only as a single
-  statement.
+- Mixed read/write transactions. A write that reads persisted state commits at
+  the frontier it observed, which it cannot postpone until COMMIT, so it runs
+  only as a single statement. A write that reads nothing does compose with
+  transactions: its diffs are frontier-independent, so they are buffered as
+  session write ops and land when the transaction commits. That covers, for
+  example, `INSERT INTO t SELECT generate_series(1, 20000)`, whose values are
+  constant but too large to fold into a literal.
 
 ## Overview
 

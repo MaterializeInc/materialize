@@ -67,12 +67,13 @@ use mz_expr::Eval;
 use mz_expr::row::RowCollection;
 use mz_expr::{CollectionPlan, Id, LocalId, MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::cast::CastFrom;
-use mz_ore::soft_panic_or_log;
+use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
 use mz_sql::catalog::CatalogError;
 use mz_sql::plan::{self, MutationKind, QueryWhen};
 use mz_sql::session::metadata::SessionMetadata;
+use mz_storage_client::client::TableData;
 use prometheus::Histogram;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
@@ -87,7 +88,7 @@ use crate::coord::{Coordinator, TargetCluster};
 use crate::error::AdapterError;
 use crate::optimize::Optimize;
 use crate::optimize::dataflows::{ComputeInstanceSnapshot, EvalTime, ExprPrep, ExprPrepOneShot};
-use crate::session::{Session, TransactionOps};
+use crate::session::{Session, TransactionOps, WriteOp};
 use crate::statement_logging::{StatementLifecycleEvent, StatementLoggingId};
 use crate::{PeekClient, PeekResponseUnary, TimelineContext, optimize};
 
@@ -330,13 +331,17 @@ impl PeekClient {
         // write ops once we know them.
         session.add_transaction_ops(TransactionOps::Writes(vec![]))?;
 
-        // A write on this path commits immediately and cannot be rolled back at
-        // transaction end, so only a single-statement transaction may reach it.
-        // The check lives in `SessionClient::try_frontend_read_then_write`, and
-        // this is defense in depth for it: rejecting here, before we run a
-        // dataflow, is the last point where refusing is still possible.
-        if session.transaction().is_in_multi_statement_transaction() {
-            soft_panic_or_log!("read-then-write reached the OCC path inside a transaction");
+        // Inside a transaction only a write that reads nothing gets here, see
+        // the module docs. The syntactic check lives in
+        // `SessionClient::try_frontend_read_then_write`.
+        let defer_write = session.transaction().is_in_multi_statement_transaction();
+        if defer_write && !depends_on.is_empty() {
+            // Defense in depth for the check named above. Rejecting here, before
+            // we run a dataflow, is the only place left where refusing is still
+            // possible: past the OCC loop the write may already be durable.
+            soft_panic_or_log!(
+                "read-dependent read-then-write reached the OCC path inside a transaction"
+            );
             return Err(AdapterError::Internal(
                 "read-then-write cannot be run inside a transaction block".into(),
             ));
@@ -517,6 +522,16 @@ impl PeekClient {
         // waiting for our write to commit.
         let response = match result {
             Ok(OccOutcome::Committed { response, write_ts }) => {
+                // A committed write timestamp inside a transaction means the
+                // two predicates disagreed: the syntactic one let us defer,
+                // the subscribe then read persisted state. The write is
+                // already durable, so there is nothing to refuse, and
+                // `apply_write` still has to run to keep the session's read
+                // timestamps ahead of it.
+                soft_assert_or_log!(
+                    !defer_write,
+                    "read-then-write committed a write inside a transaction"
+                );
                 session.apply_write(write_ts);
                 Ok(response)
             }
@@ -537,6 +552,22 @@ impl PeekClient {
                         .map(|()| response),
                     None => Ok(response),
                 }
+            }
+            Ok(OccOutcome::Blind { response, diffs }) if defer_write => {
+                // NOTE: A buffered session write carries no target-generation
+                // guard. The immediate path pins `target_global_id` and group
+                // commit re-validates it, but a `WriteOp` only names the
+                // `CatalogItemId` and commit staging resolves whatever global
+                // id is current then. So an `ALTER TABLE ... ADD COLUMN` that
+                // lands between here and COMMIT appends rows of the old arity
+                // under the new schema. This holds for every buffered write,
+                // not just ours.
+                session
+                    .add_transaction_ops(TransactionOps::Writes(vec![WriteOp {
+                        id: target_id,
+                        rows: TableData::Rows(diffs),
+                    }]))
+                    .map(|()| response)
             }
             Ok(OccOutcome::Blind { response, diffs }) => {
                 match self

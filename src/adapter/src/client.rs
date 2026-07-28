@@ -1926,27 +1926,21 @@ impl SessionClient {
             }
         };
 
-        // Only single-statement (`Started`) transactions may enter the OCC
-        // loop, its writes commit immediately and cannot be rolled back at
-        // transaction end. Multi-statement transactions reach this point only
-        // for AST-constant INSERTs whose planned expression turned out
-        // non-constant. Match the coordinator's error precedence: `mz_now()`
-        // gets its dedicated error, everything else is prohibited in a
-        // transaction block. The coordinator's lock-based path additionally
-        // supports INSERTs of volatile constants (for example `random()`) in
-        // transaction blocks by buffering the diffs until commit, which the
-        // OCC path cannot do.
+        // The syntactic predicate for "reads persisted state", see the module
+        // docs on `frontend_read_then_write`. Inside a transaction, only a write
+        // that reads nothing can run on this path.
+        //
+        // The AST gate above is not enough to establish this. It admits
+        // INSERTs whose source is constant in the AST, and such a statement can
+        // still plan to a selection with `Get` nodes, because SQL-implemented
+        // builtins (`pg_get_viewdef`, `text` to `reg*` casts, ...) read system
+        // relations. So decide on the planned selection, and do it before we
+        // execute a dataflow for a statement we would then refuse.
         {
             let session = self.session.as_ref().expect("SessionClient invariant");
-            if !matches!(session.transaction(), TransactionStatus::Started(_)) {
-                let contains_temporal = rtw_plan.selection.contains_temporal()
-                    || rtw_plan.assignments.values().any(|e| e.contains_temporal())
-                    || rtw_plan.returning.iter().any(|e| e.contains_temporal());
-                if contains_temporal {
-                    return Err(AdapterError::Unsupported(
-                        "calls to mz_now in write statements",
-                    ));
-                }
+            if session.transaction().is_in_multi_statement_transaction()
+                && !rtw_plan.selection.depends_on().is_empty()
+            {
                 return Err(prohibited_in_transaction(&stmt));
             }
         }
