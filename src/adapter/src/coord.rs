@@ -4305,7 +4305,8 @@ impl Coordinator {
         ctx_extra: ExecuteContextExtra,
     ) {
         if let Some(uuid) = ctx_extra.retire() {
-            self.end_statement_execution(uuid, reason);
+            let ended_at = self.now();
+            self.end_statement_execution(uuid, reason, ended_at);
         }
     }
 
