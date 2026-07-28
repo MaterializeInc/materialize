@@ -619,13 +619,19 @@ impl Coordinator {
                     match self.sequence_execute(ctx.session_mut(), plan) {
                         Ok(portal_name) => {
                             let (tx, _, session, extra, response_barriers) = ctx.into_parts();
+                            // The obligation travels as data and
+                            // `handle_execute` arms it again. It cannot be
+                            // dropped in between: the command goes to the
+                            // channel this loop drains, and a spawned barrier
+                            // task is only dropped when the process is going
+                            // down, at which point nothing records anything.
                             let command = Message::Command(
                                 OpenTelemetryContext::obtain(),
                                 Command::Execute {
                                     portal_name,
                                     session,
                                     tx: tx.take(),
-                                    outer_ctx_extra: Some(extra),
+                                    outer_ctx_extra: Some(extra.defuse()),
                                 },
                             );
                             if response_barriers.is_empty() {

@@ -170,6 +170,7 @@ impl Coordinator {
                 self.end_statement_execution(
                     StatementLoggingId(ended_record.id),
                     ended_record.reason,
+                    ended_record.ended_at,
                 );
             }
             FrontendStatementLoggingEvent::SetCluster {
@@ -394,17 +395,22 @@ impl Coordinator {
     /// Record the end of statement execution for a statement whose beginning
     /// was logged. Ends are idempotent: the first end wins and later ends for
     /// the same statement are ignored.
+    ///
+    /// `ended_at` is when execution finished, which is not the same as when this
+    /// runs. A statement sequenced off the coordinator loop finishes in its
+    /// session task and reports the end as a message, so taking the clock here
+    /// would charge it for however long that message sat in the queue.
     pub(crate) fn end_statement_execution(
         &mut self,
         id: StatementLoggingId,
         reason: StatementEndedExecutionReason,
+        ended_at: EpochMillis,
     ) {
         let StatementLoggingId(uuid) = id;
-        let now = self.now();
         let ended_record = StatementEndedExecutionRecord {
             id: uuid,
             reason,
-            ended_at: now,
+            ended_at,
         };
 
         let Some(began_record) = self.statement_logging.executions_begun.remove(&uuid) else {
@@ -439,7 +445,7 @@ impl Coordinator {
         self.record_statement_lifecycle_event(
             &id,
             &StatementLifecycleEvent::ExecutionFinished,
-            now,
+            ended_at,
         );
     }
 
