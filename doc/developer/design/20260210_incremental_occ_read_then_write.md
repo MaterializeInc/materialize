@@ -287,6 +287,37 @@ The new approach is arguably easier to reason about: there is no global lock
 state to consider, no deferred operations, no lock merging. The correctness
 argument is local to the OCC loop and the group commit mechanism.
 
+## Deliberate differences from the lock-based path
+
+A user must not be able to tell which path sequenced their statement. These are
+the places where the two paths do differ, on purpose. They are listed here so
+that the next reader does not take them for bugs.
+
+- **Statement lifecycle events.** The frontend path records an
+  `optimization-finished` event for a DML, the coordinator path does not,
+  because it hands the read-then-write's inner peek a trivial logging context
+  and so logs nothing for it. We keep the extra event, it is real information
+  about a statement the user did run.
+- **`max_result_size` accounting.** The coordinator sums one row length per diff
+  entry before consolidation. The frontend recomputes the total from the
+  consolidated set, which counts one row length per distinct row and ignores
+  multiplicity. So a `DELETE` of a million copies of one row can exceed the
+  limit on the coordinator path and succeed on the frontend path. We keep the
+  frontend's accounting: it matches what the write actually appends, one entry
+  with a large diff.
+- **The write-timeline throttle.** A timestamped write does not go through the
+  throttle that a blind write's group commit applies, because its timestamp
+  comes from an observed subscribe frontier rather than from the clock. See the
+  doc comment on `GroupCommitter::commit_timestamped` for the full list of what
+  that path skips and why.
+- **Zero-row `INSERT ... RETURNING`.** Both paths report `INSERT 0 0` with no
+  result set when no rows match, because the coordinator decides the response
+  kind from the evaluated RETURNING rows and there are none. Postgres returns an
+  empty result set here, with a row description. The frontend path is
+  deliberately bug-compatible with the coordinator rather than correct on its
+  own: fixing it changes the behavior of the path that ships today, which is a
+  separate decision from this change.
+
 ## Performance
 
 The goal is not to make writes faster, but to not regress significantly.
