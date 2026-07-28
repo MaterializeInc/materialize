@@ -56,5 +56,5 @@ all tools rather than just this directory.
 
 ## Related Pages
 
-- [MCP Server](/integrations/llm/)
+- [MCP Server](/integrations/mcp-server/)
 - [GitHub: Materialize Agent Skills](https://github.com/MaterializeInc/agent-skills)
