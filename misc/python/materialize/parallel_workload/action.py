@@ -773,7 +773,6 @@ class InsertAction(Action):
             )
         all_column_values = ", ".join(f"({v})" for v in column_values)
         query = f"INSERT INTO {table} ({column_names}) VALUES {all_column_values}"
-        # TODO: Use INSERT INTO {} SELECT {} (only works for tables)
         if self.rng.choice([True, False]):
             self.stmt_id += 1
             self.exe_prepared(query, f"insert{self.stmt_id}", exe)
@@ -781,6 +780,80 @@ class InsertAction(Action):
             exe.execute(query, http=Http.RANDOM)
         table.num_rows += len(column_values)
         exe.insert_table = table.table_id
+        return True
+
+
+class InsertSelectAction(Action):
+    """INSERT INTO ... SELECT ... FROM ... WHERE ..., the read-dependent INSERT.
+
+    A constant VALUES list is a blind write. Only a source query over a
+    persisted collection makes the statement a read-then-write, which is the
+    branch this action exists to cover."""
+
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        result = super().errors_to_ignore(exe)
+        result.extend(
+            [
+                "canceling statement due to statement timeout",
+                # A random expression can evaluate to NULL (e.g. a map-key
+                # miss) even for a NOT NULL column, which is a legitimate
+                # rejection. The base list only ignores it for DDL complexity.
+                "violates not-null constraint",
+            ]
+        )
+        if exe.db.complexity == Complexity.DDL or exe.db.scenario == Scenario.Rename:
+            result.extend(
+                [
+                    "does not exist",
+                ]
+            )
+        return result
+
+    def run(self, exe: Executor) -> bool:
+        # Temp tables can only be read and written by their creating session
+        tables = [
+            table
+            for table in exe.db.tables
+            if table.num_rows < MAX_ROWS
+            and (not table.temp or table in exe.temp_objects)
+        ]
+        if not tables:
+            return False
+        table = self.rng.choice(tables)
+        # Reading the insert target itself makes the target a read dependency
+        # too, the most contended shape for the OCC retry loop.
+        source = table if self.rng.choice([True, False]) else self.rng.choice(tables)
+
+        column_names = ", ".join(column.name(True) for column in table.columns)
+        # The cast is an identity cast: `expression` returns the requested type
+        # and `Column.create` declares the column with the same type name. It is
+        # there so an expression that degenerates to a bare literal projects the
+        # column's type rather than an untyped literal the INSERT would have to
+        # coerce.
+        expressions = ", ".join(
+            f"({expression(column.data_type, source.columns, self.rng, kind=ExprKind.WRITE)})::{column.data_type.name()}"
+            for column in table.columns
+        )
+        # `num_rows` can be stale, so clamp instead of trusting the filter
+        # above. The LIMIT keeps a self-insert from doubling the table on every
+        # attempt.
+        limit = self.rng.randint(1, max(1, min(100, MAX_ROWS - table.num_rows)))
+        query = (
+            f"INSERT INTO {table} ({column_names}) SELECT {expressions} FROM {source}"
+            f" WHERE {expression(Boolean, source.columns, self.rng, kind=ExprKind.WRITE)}"
+            f" LIMIT {limit}"
+        )
+        if self.rng.choice([True, False]):
+            self.stmt_id += 1
+            self.exe_prepared(query, f"insert_select{self.stmt_id}", exe)
+        else:
+            exe.execute(query, http=Http.RANDOM)
+        # The source query decides how many rows landed, and the statement may
+        # have run as a prepared statement or over HTTP/WS, where the cursor's
+        # rowcount is meaningless. Resync the estimate from the table. It only
+        # gates insert-type actions, so races with concurrent writers are fine.
+        exe.execute(f"SELECT count(*) FROM {table}", http=Http.NO)
+        table.num_rows = exe.cur.fetchall()[0][0]
         return True
 
 
@@ -872,7 +945,6 @@ class InsertReturningAction(Action):
             )
         all_column_values = ", ".join(f"({v})" for v in column_values)
         query = f"INSERT INTO {table} ({column_names}) VALUES {all_column_values}"
-        # TODO: Use INSERT INTO {} SELECT {} (only works for tables)
         returning_exprs = []
         if self.rng.random() < 0.5:
             returning_exprs += [
@@ -982,6 +1054,42 @@ class UpdateAction(Action):
         else:
             exe.execute(query, http=Http.RANDOM)
         exe.insert_table = table.table_id
+        return True
+
+
+class OccCounterUpdateAction(Action):
+    """Increment the dedicated single-row counter with a read-then-write UPDATE.
+
+    Every worker aims at the same row, so these statements contend with each
+    other and drive the OCC retry loop. Each attempt's outcome is recorded so
+    that the end-of-run check can bound the counter's value, see `OccCounter`."""
+
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            "canceling statement due to statement timeout",
+            # Extreme contention on one row is what this action creates, and
+            # giving up after the retry budget is a user-visible outcome rather
+            # than a bug. It is still counted in the error statistics.
+            "read-then-write exceeded maximum retry attempts under contention",
+        ] + super().errors_to_ignore(exe)
+
+    def run(self, exe: Executor) -> bool:
+        counter = exe.db.occ_counter
+        # pg wire only (http=Http.NO): the oracle needs an unambiguous outcome
+        # per attempt, and on the HTTP and WS paths a client-side timeout or a
+        # dropped response leaves it undecided far more often.
+        try:
+            exe.execute(f"UPDATE {counter} SET v = v + 1 WHERE id = 1", http=Http.NO)
+        except QueryError as e:
+            counter.record_failure(e.msg)
+            raise
+        except Exception:
+            # Not a query error, so there is no error text to classify. Recording
+            # it as undecided keeps the tally complete: an unrecorded attempt
+            # that did commit would break the upper bound.
+            counter.record_unknown()
+            raise
+        counter.record_committed()
         return True
 
 
@@ -3873,6 +3981,11 @@ dml_nontrans_action_list = ActionList(
         (DeleteAction, 10),
         (UpdateAction, 10),
         (InsertReturningAction, 10),
+        (InsertSelectAction, 5),
+        # Same weight as the other read-then-write actions: about a sixth of
+        # this list, often enough that every worker on it contends on the one
+        # counter row, not often enough to starve the rest of the workload.
+        (OccCounterUpdateAction, 10),
         # COPY FROM is oneshot ingestion, it can't run inside a transaction
         (CopyFromS3Action, 10),
         (CommentAction, 5),

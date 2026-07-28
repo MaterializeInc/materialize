@@ -416,9 +416,15 @@ def run(
     conn.autocommit = True
 
     with conn.cursor() as cur:
+        exe = Executor(rng, cur, None, database)
+
+        # Before the drop, and only now that every worker has joined, so that no
+        # increment can still be in flight.
+        database.occ_counter.validate(exe)
+
         # Dropping the database also releases the long running connections
         # used by database objects.
-        database.drop(Executor(rng, cur, None, database))
+        database.drop(exe)
 
         # Make sure all unreachable connections are closed too
         gc.collect()

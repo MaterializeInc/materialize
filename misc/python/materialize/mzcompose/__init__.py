@@ -251,7 +251,7 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter(
             "enable_adapter_frontend_occ_read_then_write",
-            "true",
+            "true" if version >= MzVersion.parse_mz("v26.36.0-dev") else "false",
             ["true", "false"],
         ),
         VariableSystemParameter(
