@@ -159,6 +159,7 @@ const LargestReplicaLoader = (props: LargestMaintainedQueriesProps) => {
 };
 
 const LargestMaintainedQueriesInner = ({
+  clusterId,
   clusterName,
   replicaName,
   replicaHeapLimit,
@@ -171,6 +172,7 @@ const LargestMaintainedQueriesInner = ({
   const workflowGraphPath = useBuildWorkflowGraphPath();
 
   const { data: largestMaintainedQueries } = useLargestMaintainedQueries({
+    clusterId,
     clusterName,
     replicaName,
     replicaHeapLimit,
