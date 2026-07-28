@@ -14,7 +14,7 @@ anyhow.workspace = true
 async-trait.workspace = true
 axum.workspace = true
 axum-server.workspace = true
-clap.workspace = true
+clap = { workspace = true, features = ["env"] }
 futures.workspace = true
 gcp_auth.workspace = true
 http.workspace = true
