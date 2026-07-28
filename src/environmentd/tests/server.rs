@@ -9514,27 +9514,39 @@ fn qa_occ_cancel_and_timeout_release_permit() {
         let mut parked = server.connect(postgres::NoTls).unwrap();
         let cancel_token = parked.cancel_token();
         let parked_handle = thread::spawn(move || parked.batch_execute(parking_insert));
-        wait_for_parked_read_then_write(&server, iteration);
+        wait_until_parked_holding_a_permit(&server, iteration, "the cancel half");
         cancel_token.cancel_query(postgres::NoTls).unwrap();
         let err = parked_handle
             .join()
             .unwrap()
             .expect_err("the parked INSERT should have been cancelled");
+        let message = server_error_message(&err);
         assert_eq!(
             err.code(),
             Some(&SqlState::QUERY_CANCELED),
-            "iteration {iteration}: cancelled INSERT reported {}",
-            server_error_message(&err)
+            "iteration {iteration}: cancelled INSERT reported {message}"
+        );
+        // A statement timeout reports this same SQLSTATE, so without the message
+        // check a cancel that never arrived would look like a pass: the victim
+        // would sit on the default 60s timeout and fail with QUERY_CANCELED too.
+        assert!(
+            message.contains("user request"),
+            "iteration {iteration}: expected a cancellation, got {message}"
         );
 
         follow_up_write_gets_a_permit(&mut client, iteration, "a cancelled");
 
+        // Long enough that the deadline cannot fire before the permit is taken,
+        // short enough to keep the test quick.
         let mut parked = server.connect(postgres::NoTls).unwrap();
         parked
-            .batch_execute("SET statement_timeout = '1s'")
+            .batch_execute("SET statement_timeout = '5s'")
             .unwrap();
-        let err = parked
-            .batch_execute(parking_insert)
+        let parked_handle = thread::spawn(move || parked.batch_execute(parking_insert));
+        wait_until_parked_holding_a_permit(&server, iteration, "the timeout half");
+        let err = parked_handle
+            .join()
+            .unwrap()
             .expect_err("the parked INSERT should have timed out");
         let message = server_error_message(&err);
         assert_eq!(
@@ -9543,10 +9555,9 @@ fn qa_occ_cancel_and_timeout_release_permit() {
             "iteration {iteration}: timed-out INSERT reported {message}"
         );
         assert!(
-            message.to_lowercase().contains("timeout"),
+            message.contains("statement timeout"),
             "iteration {iteration}: expected a statement-timeout error, got {message}"
         );
-        drop(parked);
 
         follow_up_write_gets_a_permit(&mut client, iteration, "a timed-out");
     }
@@ -9564,29 +9575,46 @@ fn qa_occ_cancel_and_timeout_release_permit() {
     );
 }
 
-/// Waits until the statement under test has been taken over by its session task,
-/// which is the last observable point before it acquires an OCC permit.
+/// Waits until the INSERT under test holds an OCC permit.
 ///
-/// Polling this instead of sleeping keeps a loaded machine from cancelling the
-/// statement while it is still connecting or planning, which would exercise an
-/// exit that never held a permit and prove nothing.
-fn wait_for_parked_read_then_write(server: &test_util::TestServerWithRuntime, iteration: i32) {
-    let labels = [("session_type", "user"), ("statement_type", "insert")];
-    let target = u64::try_from(iteration).expect("iteration count fits");
+/// Without this, a loaded machine can let the cancel or the deadline land while
+/// the statement is still connecting or planning. That exercises an exit which
+/// never held a permit, so it proves nothing about releasing one, and it passes
+/// anyway.
+///
+/// There is no metric for permit acquisition, so this polls the closest
+/// observable, the `mz_query_total` bump in `ExecutionLogging::take_over`, and
+/// then settles. The bump happens a few steps before `acquire_owned`, hence the
+/// settle. Every user INSERT in the process bumps that counter, including the
+/// ones setting up the test, so the baseline has to be read here rather than
+/// derived from the iteration number.
+fn wait_until_parked_holding_a_permit(
+    server: &test_util::TestServerWithRuntime,
+    iteration: i32,
+    half: &str,
+) {
+    const LABELS: [(&str, &str); 2] = [("session_type", "user"), ("statement_type", "insert")];
+    const SETTLE: Duration = Duration::from_secs(1);
+
+    let baseline = get_counter_value(server.metrics_registry(), "mz_query_total", &LABELS);
     Retry::default()
         .max_duration(Duration::from_secs(60))
         .clamp_backoff(Duration::from_millis(50))
         .retry(|_| {
-            let inserts = get_counter_value(server.metrics_registry(), "mz_query_total", &labels);
-            if inserts >= target {
+            let inserts = get_counter_value(server.metrics_registry(), "mz_query_total", &LABELS);
+            if inserts > baseline {
                 Ok(())
             } else {
                 Err(inserts)
             }
         })
         .unwrap_or_else(|inserts| {
-            panic!("iteration {iteration}: only {inserts} INSERTs reached their session task")
+            panic!(
+                "iteration {iteration}, {half}: the parked INSERT never reached its session task, \
+                 mz_query_total stuck at {inserts}"
+            )
         });
+    thread::sleep(SETTLE);
 }
 
 /// Helper for `qa_occ_cancel_and_timeout_release_permit`: runs a read-then-write
