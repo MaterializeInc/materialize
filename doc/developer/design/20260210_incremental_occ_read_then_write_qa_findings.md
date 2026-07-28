@@ -4,21 +4,18 @@ Adversarial QA pass over the `adapter-read-then-write-occ-incremental` branch
 (frontend OCC sequencing for DELETE / UPDATE / INSERT...SELECT, gated by
 `enable_adapter_frontend_occ_read_then_write`).
 
-Tests live in `src/environmentd/tests/server.rs`, prefixed `qa_occ_` /
-`qa_legacy_`. Run them with the OCC binary already built:
+Tests live in `src/environmentd/tests/server.rs`, prefixed `qa_occ_`. Run them
+with the OCC binary already built:
 
 ```
 METADATA_BACKEND_URL=postgres://root@localhost:26257/materialize \
   cargo nextest run -p mz-environmentd -E 'test(/qa_occ_/)'
 ```
 
-All `qa_occ_` tests — including the two former bug repros
+All `qa_occ_` tests, including the two former bug repros
 (`qa_occ_far_future_refresh_mv_respects_statement_timeout` and
-`qa_occ_far_future_rtw_starves_permit_pool`) — are now active and passing; they
-verify the fix described below. The only `#[ignore]`d test is
-`qa_legacy_far_future_refresh_mv_statement_timeout`, which documents the
-pre-existing far-future hang on the legacy coordinator path (out of scope for
-this OCC-only fix).
+`qa_occ_far_future_rtw_starves_permit_pool`), are active and passing. None of
+them is `#[ignore]`d.
 
 ## What was verified correct (passing tests)
 
@@ -26,7 +23,9 @@ These exercise behaviors the design must preserve; all pass under OCC:
 
 - `qa_occ_concurrent_delete_no_overdelete` — N concurrent `DELETE`s of a
   multiset row of multiplicity M sum to exactly M deleted, table ends empty,
-  multiplicity never goes negative. OCC retry prevents over-delete.
+  multiplicity never goes negative. OCC retry prevents over-delete. The workers
+  are connected up front and released by a barrier, and the OCC retry histogram
+  must show a retry, so the test cannot pass by running the deleters serially.
 - `qa_occ_duplicate_row_multiplicity_counts` — DELETE/UPDATE/INSERT...SELECT
   affected-row counts respect multiset multiplicity.
 - `qa_occ_not_null_constraint_enforced` — `NOT NULL` violations via UPDATE and
@@ -40,8 +39,18 @@ These exercise behaviors the design must preserve; all pass under OCC:
   Let/Negate/map MIR transform and consolidation.
 - `qa_occ_insert_select_from_mv` — INSERT...SELECT reading a materialized view
   (TimestampDependent timeline; linearization defaults to EpochMilliseconds).
-- `qa_occ_concurrent_mixed_dml_no_internal_error` — concurrent
-  UPDATE/DELETE/INSERT mix produces no internal errors / coordinator panics.
+- `qa_occ_concurrent_mixed_dml_no_internal_error` — a concurrent
+  UPDATE/DELETE/INSERT mix conserves exactly the writes it reported (`sum(v)`
+  equals the affected-row counts of the one mutating arm, `count(*)` does not
+  move) and returns no error outside an explicit allow-list of contention
+  exhaustion.
+- `qa_occ_cancel_and_timeout_release_permit` — with a single-permit pool, a
+  cancelled and a timed-out read-then-write each release their permit and their
+  internal subscribe's dataflow, so the next read-then-write still commits.
+- `qa_occ_write_racing_alter_table_add_column` — a write racing a concurrent
+  `ALTER TABLE ... ADD COLUMN` either commits in full or fails with
+  `ConcurrentDependencyMutation` (SQLSTATE 40001, "was concurrently modified"),
+  and the table stays consistent either way.
 
 The core OCC retry/consolidation logic, the timestamped-write/oracle
 interaction, and the snapshot/progress `NoRowsMatched` reasoning were also
@@ -98,10 +107,15 @@ Both are now active (no longer `#[ignore]`d) and passing.
 
 ### Out of scope / unchanged
 
-- **Legacy path.** The legacy (lock-based) coordinator path also hangs on a
-  far-future read past `statement_timeout`
-  (`qa_legacy_far_future_refresh_mv_statement_timeout`, still `#[ignore]`d).
-  This pre-existing hang is intentionally left unchanged; the fix is OCC-only.
+- **Legacy path.** The legacy (lock-based) coordinator path also hangs past
+  `statement_timeout` on a far-future read: an `INSERT INTO dst SELECT a FROM
+  mv` where `mv` is a `REFRESH AT '3000-01-01'` materialized view never returns,
+  because that path has no equivalent of the central deadline and only
+  client cancellation or disconnect frees the session. This hang predates the
+  OCC work and is intentionally left unchanged, so it is recorded here rather
+  than as a permanently `#[ignore]`d test. The blast radius is narrower than the
+  OCC one was: the legacy path takes a per-table write lock, so it blocks writes
+  to the target table only, not every read-then-write in the process.
 
 ### Corollary: `max_concurrent_occ_writes` is constrained to `>= 1`
 

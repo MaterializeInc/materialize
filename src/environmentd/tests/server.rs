@@ -18,7 +18,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Barrier, Mutex};
 use std::time::{Duration, Instant};
 use std::{iter, thread};
 
@@ -2115,8 +2115,12 @@ fn test_cancel_frontend_read_then_write_long_running_query() {
     shutdown_tx.send(()).unwrap();
     cancel_thread.join().unwrap();
 
-    let rows = client
-        .query_one("SELECT count(*) FROM t", &[])
+    // The last cancel request the thread sent is processed asynchronously, so
+    // it can still land on this read-back. Retry it in that case.
+    let rows = Retry::default()
+        .max_tries(5)
+        .clamp_backoff(Duration::from_millis(100))
+        .retry(|_| client.query_one("SELECT count(*) FROM t", &[]))
         .unwrap()
         .get::<_, i64>(0);
     assert_eq!(
@@ -2153,8 +2157,10 @@ fn test_cancel_frontend_read_then_write_long_running_query() {
     shutdown_tx.send(()).unwrap();
     cancel_thread.join().unwrap();
 
-    let rows = client
-        .query_one("SELECT count(*) FROM t", &[])
+    let rows = Retry::default()
+        .max_tries(5)
+        .clamp_backoff(Duration::from_millis(100))
+        .retry(|_| client.query_one("SELECT count(*) FROM t", &[]))
         .unwrap()
         .get::<_, i64>(0);
     assert_eq!(
@@ -8747,21 +8753,38 @@ fn qa_occ_server() -> test_util::TestServerWithRuntime {
         .start_blocking()
 }
 
+/// The server's message for a client error, or the client-side rendering when
+/// the error never reached the server. `postgres::Error::to_string` is only "db
+/// error" for a server error, so matching on it tells us nothing.
+fn server_error_message(err: &postgres::Error) -> String {
+    match err.as_db_error() {
+        Some(db_error) => db_error.message().to_string(),
+        None => err.to_string(),
+    }
+}
+
 /// Concurrent DELETEs of the same multiset rows must not over-delete.
 /// With a row of multiplicity M and N concurrent deleters, exactly the
 /// committed deletes should sum to M, the table must end empty, and the
 /// stored multiplicity must never go negative.
+///
+/// The sum oracle alone cannot distinguish "no over-deletion under concurrency"
+/// from "there was no concurrency": workers running one after another satisfy it
+/// too. So the clients are connected before any worker starts, released
+/// together by a barrier, and the OCC retry histogram must show at least one
+/// attempt that saw its read timestamp move.
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn qa_occ_concurrent_delete_no_overdelete() {
     const MULTIPLICITY: i32 = 7;
     const NUM_WORKERS: usize = 6;
+    const ROUNDS: usize = 10;
 
     let server = qa_occ_server();
     let mut setup = server.connect(postgres::NoTls).unwrap();
     setup.batch_execute("CREATE TABLE t (id INT)").unwrap();
 
-    for _round in 0..10 {
+    for _round in 0..ROUNDS {
         setup.batch_execute("DELETE FROM t").unwrap();
         setup
             .execute(
@@ -8770,12 +8793,20 @@ fn qa_occ_concurrent_delete_no_overdelete() {
             )
             .unwrap();
 
+        // Connecting inside the spawn loop would let the first worker finish
+        // its DELETE before the last client even exists.
+        let clients: Vec<_> = (0..NUM_WORKERS)
+            .map(|_| server.connect(postgres::NoTls).unwrap())
+            .collect();
+
+        let barrier = Arc::new(Barrier::new(NUM_WORKERS));
         let total_deleted = Arc::new(AtomicUsize::new(0));
         let mut handles = Vec::new();
-        for _ in 0..NUM_WORKERS {
-            let mut client = server.connect(postgres::NoTls).unwrap();
+        for mut client in clients {
+            let barrier = Arc::clone(&barrier);
             let total_deleted = Arc::clone(&total_deleted);
             handles.push(thread::spawn(move || {
+                barrier.wait();
                 let n = client
                     .execute("DELETE FROM t WHERE id = 1", &[])
                     .expect("DELETE under contention should succeed via OCC");
@@ -8800,6 +8831,30 @@ fn qa_occ_concurrent_delete_no_overdelete() {
             "sum of reported deletes must equal initial multiplicity (no over/under-delete)",
         );
     }
+
+    // Proof that the deletes actually raced: with all workers deleting the same
+    // rows at once, at least one attempt must have found its read timestamp
+    // passed and retried against fresh state.
+    let metrics = server.metrics_registry().gather();
+    let retry_metric = metrics
+        .iter()
+        .find(|m| m.name() == "mz_occ_read_then_write_retry_count")
+        .expect("mz_occ_read_then_write_retry_count metric should be registered");
+    let metric = retry_metric.get_metric();
+    assert_eq!(metric.len(), 1, "expected a single histogram series");
+    let histogram = metric[0].get_histogram();
+    let zero_retry_bucket = histogram
+        .get_bucket()
+        .iter()
+        .find(|b| b.upper_bound() == 0.0)
+        .expect("histogram should have a 0-retry bucket");
+    assert!(
+        zero_retry_bucket.cumulative_count() < histogram.get_sample_count(),
+        "expected at least one DELETE to retry under contention; \
+         all {} observations landed in the 0-retry bucket, so the workers \
+         did not actually run concurrently",
+        histogram.get_sample_count(),
+    );
 }
 
 /// Multiset multiplicity must be reflected in affected-row counts for
@@ -9034,13 +9089,29 @@ fn qa_occ_insert_select_from_mv() {
 }
 
 /// Concurrent mixed DML (UPDATE / DELETE / INSERT...SELECT) on one table must
-/// not panic the coordinator or produce internal errors, and the server must
-/// remain responsive afterward.
+/// conserve exactly the writes it reported, and may only fail with errors a
+/// correct implementation is allowed to return.
+///
+/// Only one of the four statement arms mutates anything, which is what makes an
+/// exact oracle available: `v` never goes negative so `WHERE v < 0` matches
+/// nothing, no row is ever deleted so the `NOT EXISTS` guard never fires, and
+/// `SET v = v` consolidates to no diffs. So `sum(v)` must equal the affected-row
+/// counts the `v = v + 1` arm reported, and `count(*)` must not move. A write
+/// that committed while reporting an error, reported an affected row without
+/// committing, or applied its diffs twice across a retry all break that
+/// equality.
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn qa_occ_concurrent_mixed_dml_no_internal_error() {
     const NUM_WORKERS: usize = 8;
     const ITERS: usize = 30;
+    const NUM_ROWS: usize = 20;
+    // The only failure a correct implementation may return here. An internal
+    // error, a concurrently modified write target, or an indeterminate write
+    // are all bugs, so the error set is checked against this list instead of
+    // against a handful of bad-news substrings.
+    const ALLOWED_ERRORS: &[&str] =
+        &["read-then-write exceeded maximum retry attempts under contention"];
 
     let server = qa_occ_server();
     let mut setup = server.connect(postgres::NoTls).unwrap();
@@ -9048,32 +9119,38 @@ fn qa_occ_concurrent_mixed_dml_no_internal_error() {
         .batch_execute("CREATE TABLE t (id INT, v INT)")
         .unwrap();
     setup
-        .execute("INSERT INTO t SELECT generate_series(1, 20), 0", &[])
+        .execute(
+            &format!("INSERT INTO t SELECT generate_series(1, {NUM_ROWS}), 0"),
+            &[],
+        )
         .unwrap();
 
-    let internal_errors = Arc::new(Mutex::new(Vec::<String>::new()));
+    let reported_increments = Arc::new(AtomicUsize::new(0));
+    let errors = Arc::new(Mutex::new(Vec::<String>::new()));
     let mut handles = Vec::new();
     for w in 0..NUM_WORKERS {
         let mut client = server.connect(postgres::NoTls).unwrap();
-        let internal_errors = Arc::clone(&internal_errors);
+        let reported_increments = Arc::clone(&reported_increments);
+        let errors = Arc::clone(&errors);
         handles.push(thread::spawn(move || {
             for i in 0..ITERS {
-                let id = (w * 7 + i) % 20 + 1;
+                let id = (w * 7 + i) % NUM_ROWS + 1;
                 let stmt = match i % 4 {
                     0 => format!("UPDATE t SET v = v + 1 WHERE id = {id}"),
                     1 => format!("DELETE FROM t WHERE id = {id} AND v < 0"),
                     2 => format!("INSERT INTO t SELECT {id}, 0 WHERE NOT EXISTS (SELECT 1 FROM t WHERE id = {id})"),
                     _ => format!("UPDATE t SET v = v WHERE id = {id}"),
                 };
-                if let Err(e) = client.execute(stmt.as_str(), &[]) {
-                    let msg = e.to_string();
-                    // Contention exhaustion is acceptable; internal errors are not.
-                    if msg.contains("internal error")
-                        || msg.contains("reached the coordinator")
-                        || msg.contains("unexpectedly got")
-                    {
-                        internal_errors.lock().unwrap().push(msg);
+                match client.execute(stmt.as_str(), &[]) {
+                    Ok(affected) if i % 4 == 0 => {
+                        reported_increments
+                            .fetch_add(usize::try_from(affected).unwrap(), Ordering::SeqCst);
                     }
+                    Ok(_) => {}
+                    Err(e) => errors
+                        .lock()
+                        .unwrap()
+                        .push(format!("`{stmt}`: {}", server_error_message(&e))),
                 }
             }
         }));
@@ -9082,15 +9159,35 @@ fn qa_occ_concurrent_mixed_dml_no_internal_error() {
         h.join().expect("worker panicked");
     }
 
-    let errs = internal_errors.lock().unwrap();
-    assert!(errs.is_empty(), "internal errors observed: {:?}", *errs);
+    let errors = errors.lock().unwrap();
+    let unexpected: Vec<&String> = errors
+        .iter()
+        .filter(|error| !ALLOWED_ERRORS.iter().any(|allowed| error.contains(allowed)))
+        .collect();
+    assert!(
+        unexpected.is_empty(),
+        "concurrent mixed DML returned errors outside the allow-list: {unexpected:#?}"
+    );
 
-    // Server still responsive.
-    let cnt: i64 = setup
+    let sum: i64 = setup
+        .query_one("SELECT coalesce(sum(v), 0)::bigint FROM t", &[])
+        .unwrap()
+        .get(0);
+    let expected = i64::try_from(reported_increments.load(Ordering::SeqCst)).unwrap();
+    assert_eq!(
+        sum, expected,
+        "sum(v) must equal the number of rows the incrementing UPDATEs reported"
+    );
+
+    let count: i64 = setup
         .query_one("SELECT count(*) FROM t", &[])
         .unwrap()
         .get(0);
-    assert!(cnt >= 0);
+    assert_eq!(
+        count,
+        i64::try_from(NUM_ROWS).unwrap(),
+        "no arm of this workload may add or remove a row"
+    );
 }
 
 /// FIX VERIFICATION: A read-then-write whose read resolves to a far-future
@@ -9101,8 +9198,9 @@ fn qa_occ_concurrent_mixed_dml_no_internal_error() {
 /// `select!`, so the parked far-future op now hits the timeout and returns
 /// promptly with a statement-timeout error.
 ///
-/// NOTE: the fix is OCC-path-only. The legacy path still hangs on the same
-/// scenario — see `qa_legacy_far_future_refresh_mv_statement_timeout`.
+/// NOTE: the fix is OCC-path-only. The legacy coordinator path still hangs on
+/// the same scenario, which is pre-existing behavior recorded in
+/// `doc/developer/design/20260210_incremental_occ_read_then_write_qa_findings.md`.
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn qa_occ_far_future_refresh_mv_respects_statement_timeout() {
@@ -9196,71 +9294,6 @@ fn qa_occ_far_future_refresh_mv_respects_statement_timeout() {
     }
 }
 
-/// CONTEXT (ignored): the same far-future scenario on the LEGACY (non-OCC)
-/// path also hangs past `statement_timeout`. This documents that the
-/// indefinite hang is pre-existing behavior, not a regression introduced by
-/// the OCC path.
-///
-/// Stays `#[ignore]`d: the statement-timeout fix is OCC-path-only (it lives in
-/// `try_frontend_read_then_write_with_cancel`). The legacy coordinator path is
-/// intentionally left unchanged and out of scope for this fix, so this would
-/// still hang in CI.
-#[mz_ore::test]
-#[ignore = "legacy path far-future hang is out of scope for the OCC statement_timeout fix"]
-#[allow(clippy::disallowed_methods)]
-fn qa_legacy_far_future_refresh_mv_statement_timeout() {
-    let server = test_util::TestHarness::default()
-        .unsafe_mode()
-        .with_system_parameter_default("enable_refresh_every_mvs".to_string(), "true".to_string())
-        .start_blocking();
-    let mut client = server.connect(postgres::NoTls).unwrap();
-    client.batch_execute("CREATE TABLE src (a INT)").unwrap();
-    client
-        .batch_execute("INSERT INTO src VALUES (1), (2), (3)")
-        .unwrap();
-    client
-        .batch_execute(
-            "CREATE MATERIALIZED VIEW mv \
-             WITH (REFRESH AT '3000-01-01 00:00:00') AS SELECT a FROM src",
-        )
-        .unwrap();
-    client.batch_execute("CREATE TABLE dst (a INT)").unwrap();
-
-    let mut worker = server.connect(postgres::NoTls).unwrap();
-    let cancel = worker.cancel_token();
-    let (tx, rx) = std::sync::mpsc::channel();
-    let handle = thread::spawn(move || {
-        worker
-            .batch_execute("SET statement_timeout = '3s'")
-            .unwrap();
-        let started = Instant::now();
-        let res = worker.batch_execute("INSERT INTO dst SELECT a FROM mv");
-        let _ = tx.send((started.elapsed(), res.map_err(|e| e.to_string())));
-    });
-
-    let outcome = rx.recv_timeout(Duration::from_secs(45));
-    // Cancel the parked statement (if any) for a clean teardown, then join.
-    let _ = cancel.cancel_query(postgres::NoTls);
-    let _ = handle.join();
-
-    match outcome {
-        Ok((elapsed, res)) => {
-            eprintln!("LEGACY far-future RTW returned in {elapsed:?} with result {res:?}");
-            assert!(
-                elapsed < Duration::from_secs(40),
-                "legacy far-future RTW also appears to hang ({elapsed:?})"
-            );
-        }
-        Err(recv_err) => {
-            panic!(
-                "LEGACY INSERT...SELECT from a far-future REFRESH AT MV also did not \
-                 return within 45s; the far-future hang is pre-existing, not an OCC \
-                 regression ({recv_err})."
-            );
-        }
-    }
-}
-
 /// FIX VERIFICATION: a far-future RTW parked in `ensure_read_linearized` holds
 /// an OCC semaphore permit while parked. With a bounded permit pool, a single
 /// such op used to starve *all* other read-then-writes — even on unrelated
@@ -9304,13 +9337,35 @@ fn qa_occ_far_future_rtw_starves_permit_pool() {
 
     // Launch the hung far-future RTW; it will grab the single OCC permit and
     // park in ensure_read_linearized.
+    //
+    // `mz_query_total` is bumped when the session task takes the statement
+    // over, which is the last observable point before it acquires the permit.
+    // Polling for that instead of sleeping for a fixed span keeps a loaded
+    // machine from starting the victim while the parked op is still connecting
+    // or planning, which would make the test fail as if the fix regressed.
+    let insert_labels = [("session_type", "user"), ("statement_type", "insert")];
+    let inserts_before =
+        get_counter_value(server.metrics_registry(), "mz_query_total", &insert_labels);
     let mut hung = server.connect(postgres::NoTls).unwrap();
     let hung_cancel = hung.cancel_token();
     let hung_handle = thread::spawn(move || {
         let _ = hung.batch_execute("INSERT INTO dst SELECT a FROM mv");
     });
-    // Give it time to acquire the permit and reach the linearize loop.
-    thread::sleep(Duration::from_secs(3));
+    Retry::default()
+        .max_duration(Duration::from_secs(60))
+        .clamp_backoff(Duration::from_millis(100))
+        .retry(|_| {
+            let inserts_now =
+                get_counter_value(server.metrics_registry(), "mz_query_total", &insert_labels);
+            if inserts_now > inserts_before {
+                Ok(())
+            } else {
+                Err("far-future INSERT has not started executing")
+            }
+        })
+        .expect("far-future INSERT never started executing");
+    // The counter moves a few planning steps before the permit is taken.
+    thread::sleep(Duration::from_secs(1));
 
     // A completely unrelated UPDATE, with a short statement_timeout, should be
     // able to make progress. Run it on a worker thread with a wall-clock guard.
@@ -9379,5 +9434,309 @@ fn qa_occ_far_future_rtw_starves_permit_pool() {
                  within ~3s instead of hanging ({recv_err})."
             );
         }
+    }
+}
+
+/// A cancelled or timed-out read-then-write must give back its OCC permit and
+/// drop its internal subscribe.
+///
+/// The permit pool is sized to one here, so a permit that leaks wedges every
+/// later read-then-write in the process. The oracle is the follow-up UPDATE:
+/// it needs the permit the abandoned statement held, and its own
+/// `statement_timeout` turns a wedge into a failure instead of a hang. The
+/// cycle repeats so that leaking one permit per iteration is fatal rather than
+/// tolerable, and each pass also checks that no subscribe dataflow outlives its
+/// statement.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn qa_occ_cancel_and_timeout_release_permit() {
+    // The write's selection sleeps this long in the subscribe dataflow, which
+    // is the window the cancel and the statement timeout have to land in.
+    const SLEEP_SECS: i32 = 3;
+    const ITERATIONS: i32 = 5;
+    // Bounds the follow-up write: a leaked permit must surface as this error
+    // rather than as a hang, and it must not be mistaken for slowness.
+    const FOLLOW_UP_TIMEOUT: &str = "30s";
+
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .with_system_parameter_default(
+            "enable_adapter_frontend_occ_read_then_write".to_string(),
+            "true".to_string(),
+        )
+        .with_system_parameter_default(
+            "unsafe_enable_unsafe_functions".to_string(),
+            "true".to_string(),
+        )
+        // One permit: a single leak starves every read-then-write.
+        .with_system_parameter_default("max_concurrent_occ_writes".to_string(), "1".to_string())
+        .start_blocking();
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client
+        .batch_execute("CREATE TABLE t (a TEXT, ts INT, n INT)")
+        .unwrap();
+    client
+        .batch_execute(&format!("INSERT INTO t VALUES ('hello', {SLEEP_SECS}, 0)"))
+        .unwrap();
+    client
+        .batch_execute(&format!("SET statement_timeout = '{FOLLOW_UP_TIMEOUT}'"))
+        .unwrap();
+    wait_for_no_dataflows(&mut client, "at the start of the test");
+
+    // Sleeping in the projection keeps every row in the selection, so the
+    // statement really is a read-then-write over the table's contents.
+    let blocking_insert = "INSERT INTO t \
+         SELECT a, CASE WHEN mz_unsafe.mz_sleep(ts) > 0 THEN 0 END, n FROM t";
+
+    for iteration in 1..=ITERATIONS {
+        let mut victim = server.connect(postgres::NoTls).unwrap();
+        let cancel_token = victim.cancel_token();
+        let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel();
+        let cancel_thread = thread::spawn(move || {
+            // The first cancel lands after the statement registered its
+            // cancellation watch and took a permit. Cancelling before that
+            // would exercise a different exit, one that never held a permit.
+            thread::sleep(Duration::from_millis(800));
+            loop {
+                match shutdown_rx.try_recv() {
+                    Ok(()) | Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        let _ = cancel_token.cancel_query(postgres::NoTls);
+                    }
+                }
+                thread::sleep(Duration::from_millis(300));
+            }
+        });
+        let err = victim
+            .batch_execute(blocking_insert)
+            .expect_err("the blocking INSERT should have been cancelled");
+        shutdown_tx.send(()).unwrap();
+        cancel_thread.join().unwrap();
+        assert_eq!(
+            err.code(),
+            Some(&SqlState::QUERY_CANCELED),
+            "iteration {iteration}: cancelled INSERT reported {}",
+            server_error_message(&err)
+        );
+        drop(victim);
+
+        follow_up_write_gets_a_permit(&mut client, iteration, "a cancelled");
+
+        let mut victim = server.connect(postgres::NoTls).unwrap();
+        victim
+            .batch_execute("SET statement_timeout = '1s'")
+            .unwrap();
+        let err = victim
+            .batch_execute(blocking_insert)
+            .expect_err("the blocking INSERT should have timed out");
+        let message = server_error_message(&err);
+        assert_eq!(
+            err.code(),
+            Some(&SqlState::QUERY_CANCELED),
+            "iteration {iteration}: timed-out INSERT reported {message}"
+        );
+        assert!(
+            message.to_lowercase().contains("timeout"),
+            "iteration {iteration}: expected a statement-timeout error, got {message}"
+        );
+        drop(victim);
+
+        follow_up_write_gets_a_permit(&mut client, iteration, "a timed-out");
+
+        wait_for_no_dataflows(
+            &mut client,
+            &format!("after iteration {iteration} of cancel-then-timeout"),
+        );
+    }
+
+    // Two follow-up writes per iteration, each of them a single-row UPDATE.
+    let n: i32 = client
+        .query_one("SELECT n FROM t WHERE a = 'hello'", &[])
+        .unwrap()
+        .get(0);
+    assert_eq!(n, 2 * ITERATIONS, "a follow-up write did not commit");
+    let count: i64 = client
+        .query_one("SELECT count(*) FROM t", &[])
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        count, 1,
+        "a cancelled or timed-out INSERT committed its rows"
+    );
+}
+
+/// Helper for `qa_occ_cancel_and_timeout_release_permit`: runs a read-then-write
+/// that can only make progress if the abandoned statement released its permit.
+fn follow_up_write_gets_a_permit(client: &mut postgres::Client, iteration: i32, predecessor: &str) {
+    let started = Instant::now();
+    let affected = client
+        .execute("UPDATE t SET n = n + 1 WHERE a = 'hello'", &[])
+        .unwrap_or_else(|err| {
+            panic!(
+                "iteration {iteration}: the read-then-write following {predecessor} one failed \
+                 with `{}`, which is what a leaked OCC permit looks like",
+                server_error_message(&err)
+            )
+        });
+    assert_eq!(
+        affected, 1,
+        "iteration {iteration}: follow-up UPDATE after {predecessor} one affected {affected} rows"
+    );
+    // Generous: the abandoned statement's dataflow may still be sleeping on the
+    // cluster's only worker, which delays this write without wedging it.
+    assert!(
+        started.elapsed() < Duration::from_secs(25),
+        "iteration {iteration}: the read-then-write following {predecessor} one took {:?}",
+        started.elapsed()
+    );
+}
+
+/// Waits until the cluster runs no dataflows other than the ones introspection
+/// installs for itself. An OCC read-then-write's internal subscribe is a
+/// dataflow, so this catches a `SubscribeHandle` whose drop never tore it down.
+fn wait_for_no_dataflows(client: &mut postgres::Client, context: &str) {
+    // Storage operators have their IDs offset by STORAGE_ID_OFFSET (1 << 48),
+    // so they are excluded by id.
+    const DATAFLOW_QUERY: &str = "SELECT count(*) \
+        FROM mz_introspection.mz_dataflows \
+        WHERE name NOT LIKE '%introspection-subscribe%' \
+        AND id < 281474976710656";
+
+    Retry::default()
+        .max_duration(Duration::from_secs(60))
+        .clamp_backoff(Duration::from_millis(500))
+        .retry(|_| {
+            let count: i64 = client.query_one(DATAFLOW_QUERY, &[]).unwrap().get(0);
+            if count == 0 { Ok(()) } else { Err(count) }
+        })
+        .unwrap_or_else(|count| panic!("{count} dataflows still installed {context}"));
+}
+
+/// A read-then-write computed against one generation of its write target must
+/// not commit once a concurrent `ALTER TABLE ... ADD COLUMN` has given the
+/// target a new one. Either the write wins the race and commits in full, or the
+/// group committer rejects it as a concurrent dependency mutation, which is a
+/// retryable serialization failure. Both outcomes leave the table consistent
+/// and neither may panic the coordinator.
+///
+/// Which of the two happens depends on where the ALTER lands relative to the
+/// generation the write captured, so the test accepts either. The sleep in the
+/// selection makes the write slow enough that the ALTER usually lands inside
+/// the window.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn qa_occ_write_racing_alter_table_add_column() {
+    const SLEEP_SECS: i32 = 3;
+    const ROUNDS: usize = 3;
+
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .with_system_parameter_default(
+            "enable_adapter_frontend_occ_read_then_write".to_string(),
+            "true".to_string(),
+        )
+        .with_system_parameter_default(
+            "unsafe_enable_unsafe_functions".to_string(),
+            "true".to_string(),
+        )
+        .with_system_parameter_default(
+            "enable_alter_table_add_column".to_string(),
+            "true".to_string(),
+        )
+        .start_blocking();
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client
+        .batch_execute("CREATE TABLE t (n INT, ts INT)")
+        .unwrap();
+    client
+        .batch_execute(&format!("INSERT INTO t VALUES (0, {SLEEP_SECS})"))
+        .unwrap();
+
+    let update_labels = [("session_type", "user"), ("statement_type", "update")];
+    let mut committed = 0;
+    for round in 0..ROUNDS {
+        let updates_before =
+            get_counter_value(server.metrics_registry(), "mz_query_total", &update_labels);
+        let mut writer = server.connect(postgres::NoTls).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let handle = thread::spawn(move || {
+            // The CASE always takes its ELSE branch (`mz_sleep` returns NULL),
+            // so every row matches and the sleep runs in the subscribe
+            // dataflow, which is what keeps the write in flight.
+            let result = writer.execute(
+                "UPDATE t SET n = n + 1 \
+                 WHERE ts >= CASE WHEN mz_unsafe.mz_sleep(ts) > 0 THEN 1 ELSE 0 END",
+                &[],
+            );
+            // Preserve the SqlState and server message: `to_string()` on a
+            // server error is only "db error".
+            let result = result.map_err(|err| {
+                (
+                    err.code().cloned(),
+                    err.as_db_error().map(|db| db.message().to_string()),
+                )
+            });
+            let _ = tx.send(result);
+        });
+
+        // Land the ALTER after the UPDATE started executing, so it has a chance
+        // to invalidate the generation the UPDATE is writing against.
+        Retry::default()
+            .max_duration(Duration::from_secs(60))
+            .clamp_backoff(Duration::from_millis(100))
+            .retry(|_| {
+                let updates_now =
+                    get_counter_value(server.metrics_registry(), "mz_query_total", &update_labels);
+                if updates_now > updates_before {
+                    Ok(())
+                } else {
+                    Err("racing UPDATE has not started executing")
+                }
+            })
+            .expect("racing UPDATE never started executing");
+        client
+            .batch_execute(&format!("ALTER TABLE t ADD COLUMN c{round} INT"))
+            .unwrap();
+
+        let outcome = rx
+            .recv_timeout(Duration::from_secs(120))
+            .expect("UPDATE racing ALTER TABLE never returned");
+        handle.join().expect("writer thread panicked");
+        match outcome {
+            Ok(affected) => {
+                assert_eq!(
+                    affected, 1,
+                    "round {round}: the UPDATE committed but reported {affected} rows"
+                );
+                committed += 1;
+            }
+            Err((code, message)) => {
+                assert_eq!(
+                    code.as_ref(),
+                    Some(&SqlState::T_R_SERIALIZATION_FAILURE),
+                    "round {round}: the UPDATE failed with SqlState {code:?} \
+                     (message: {message:?}) rather than as a retryable conflict"
+                );
+                assert!(
+                    message
+                        .as_deref()
+                        .is_some_and(|m| m.contains("was concurrently modified")),
+                    "round {round}: unexpected serialization-failure message {message:?}"
+                );
+            }
+        }
+
+        // Whichever way the race went, the table holds one row whose counter
+        // matches the number of UPDATEs that committed.
+        let rows = client.query("SELECT n FROM t", &[]).unwrap();
+        assert_eq!(rows.len(), 1, "round {round}: unexpected row count");
+        assert_eq!(
+            rows[0].get::<_, i32>(0),
+            committed,
+            "round {round}: a rejected UPDATE left its write behind, or a \
+             committed one applied twice"
+        );
     }
 }

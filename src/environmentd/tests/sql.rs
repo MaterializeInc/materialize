@@ -1804,6 +1804,56 @@ fn test_read_then_write_serializability_inner(frontend_occ: bool) {
     }
 }
 
+// A read-then-write the frontend OCC path committed must be visible to a
+// strict serializable read that starts afterwards, on any session. The write
+// commits at a timestamp it chose itself, so if it reported success before that
+// timestamp was reflected in the timeline's oracle, a later linearized read
+// could pick an earlier timestamp and miss the write.
+//
+// The reader connects fresh every iteration, so it cannot inherit the writer
+// session's timestamp bookkeeping: the only thing that can carry the write
+// forward is the global oracle. Iterating is what gives the race a chance to
+// show up. A single pass could pass by luck.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_frontend_occ_write_visible_to_linearizable_read() {
+    const ITERATIONS: i32 = 50;
+
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
+            "enable_adapter_frontend_occ_read_then_write".to_string(),
+            "true".to_string(),
+        )
+        .start_blocking();
+
+    let mut writer = server.connect(postgres::NoTls).unwrap();
+    writer
+        .batch_execute("CREATE TABLE t (id INT, v INT)")
+        .unwrap();
+    writer.batch_execute("INSERT INTO t VALUES (1, 0)").unwrap();
+
+    for iteration in 1..=ITERATIONS {
+        let affected = writer
+            .execute("UPDATE t SET v = v + 1 WHERE id = 1", &[])
+            .unwrap();
+        assert_eq!(affected, 1, "iteration {iteration}: UPDATE lost its row");
+
+        let mut reader = server.connect(postgres::NoTls).unwrap();
+        reader
+            .batch_execute("SET transaction_isolation = 'strict serializable'")
+            .unwrap();
+        let v: i32 = reader
+            .query_one("SELECT v FROM t WHERE id = 1", &[])
+            .unwrap()
+            .get(0);
+        assert_eq!(
+            v, iteration,
+            "a strict serializable read on a fresh session did not observe the \
+             committed UPDATE"
+        );
+    }
+}
+
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[allow(clippy::disallowed_methods)]
 async fn test_timestamp_recovery() {
