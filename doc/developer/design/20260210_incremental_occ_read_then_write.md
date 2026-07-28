@@ -325,11 +325,15 @@ benchmark `ManySmallUpdates` is 1.9x slower and `Update` 1.4x slower, and the
 scalability `UpdateWorkload` loses 36% throughput at concurrency 1 and about
 22% at 8 and 32.
 
-The performance suites therefore pin the flag off, in
-`ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS`, so that they track the path we
-ship. Flipping the shipped default means flipping that pin at the same time,
-and taking the one-time step in the write benchmarks through the ancestor
-overrides in `misc/python/materialize/version_ancestor_overrides.py`.
+The performance suites run the OCC path, because that is the configuration we
+intend to ship. The write benchmarks therefore record a one-time step, which we
+accept for the reasons above. Registering it is a follow-up once the change has
+landed and has a commit hash: `ManySmallUpdates` and `Update` go in
+`get_ancestor_overrides_for_performance_regressions` and `UpdateWorkload` in
+`ANCESTOR_OVERRIDES_FOR_SCALABILITY_REGRESSIONS`, both in
+`misc/python/materialize/version_ancestor_overrides.py`. That justification only
+applies when the comparison is against a released version, so until the step is
+inside the baseline these scenarios report a regression against `main`.
 
 ## Rollout
 

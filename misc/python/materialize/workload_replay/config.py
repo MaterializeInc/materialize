@@ -12,7 +12,6 @@ Configuration constants for workload replay.
 """
 
 from materialize import MZ_ROOT
-from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 
 LOCATION = MZ_ROOT / "test" / "workload-replay" / "captured-workloads"
 WORKLOAD_REPLAY_VERSION = "1.0.0"  # Used for uploading test analytics results
@@ -45,8 +44,6 @@ additional_system_parameter_defaults = {
     "max_tables": "1000000",
     # TODO: Reenable when CLU-125 is fixed
     "ore_overflowing_behavior": "ignore",
-    # Replay reports timings against a baseline, so it measures what we ship.
-    **ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS,
 }
 
 cluster_replica_sizes = {
