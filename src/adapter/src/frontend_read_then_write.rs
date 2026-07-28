@@ -389,7 +389,31 @@ impl PeekClient {
         let kind = plan.kind.clone();
         let returning = plan.returning.clone();
 
-        let (df_desc, _df_meta) = global_lir_plan.unapply();
+        let (df_desc, df_meta) = global_lir_plan.unapply();
+
+        // The coordinator sequences this statement's read as a real peek, so the
+        // optimizer's notices and the timestamp notice reach the session there.
+        // Emit both here for the same statement to look the same on either path.
+        crate::coord::sequencer::emit_optimizer_notices(
+            &**catalog,
+            session,
+            &df_meta.optimizer_notices,
+        );
+        if session.vars().emit_timestamp_notice() {
+            let conn_id = session.conn_id().clone();
+            let session_wall_time = session.pcx().wall_time;
+            let explanation = self
+                .call_coordinator(|tx| Command::ExplainTimestamp {
+                    conn_id,
+                    session_wall_time,
+                    cluster_id,
+                    id_bundle: bundle,
+                    determination,
+                    tx,
+                })
+                .await;
+            session.add_notice(crate::AdapterNotice::QueryTimestamp { explanation });
+        }
 
         let arity = df_desc
             .sink_exports
