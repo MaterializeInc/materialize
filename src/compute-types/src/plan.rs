@@ -39,6 +39,7 @@ use crate::plan::transform::{Transform, TransformConfig};
 
 mod lowering;
 
+pub mod arrangement_count;
 pub mod interpret;
 pub mod join;
 pub mod reduce;
