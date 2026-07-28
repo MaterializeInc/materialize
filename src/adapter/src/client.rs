@@ -65,7 +65,7 @@ use crate::frontend_read_then_write::{FrontendWriteAttemptState, FrontendWriteCa
 use crate::metrics::Metrics;
 use crate::optimize::dataflows::{EvalTime, ExprPrepOneShot};
 use crate::optimize::{self, Optimize, OptimizerError};
-use crate::peek_client::ExecutionLogging;
+use crate::peek_client::{ExecutionLogging, TakeOver};
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, SessionConfig, StateRevision, TransactionId,
     TransactionStatus,
@@ -936,14 +936,15 @@ impl SessionClient {
         // `EXECUTE foo (...)`, not the inner SQL. The inner statement gets its
         // own `query_total` increment when a frontend path takes it over, or,
         // on bailout, in the coordinator's `handle_execute`.
-        logging.take_over_sql_execute(
+        logging.take_over(
             &self.peek_client,
             self.session.as_mut().expect("SessionClient invariant"),
-            &stmt,
+            Some(&stmt),
             &params,
             &outer_logging,
             &catalog,
             outer_lifecycle_timestamps,
+            TakeOver::UnrolledExecute,
         );
 
         self.install_inner_portal_for_execute(&catalog, &stmt, &params)
@@ -1619,6 +1620,7 @@ impl SessionClient {
             &logging_info,
             &catalog,
             lifecycle_timestamps,
+            TakeOver::StatementToRun,
         );
 
         // Mirror the coordinator's transaction-state gate in `handle_execute`:

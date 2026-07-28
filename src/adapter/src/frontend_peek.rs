@@ -55,7 +55,7 @@ use crate::explain::insights::PlanInsightsContext;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::Optimize;
 use crate::optimize::dataflows::{ComputeInstanceSnapshot, DataflowBuilder};
-use crate::peek_client::ExecutionLogging;
+use crate::peek_client::{ExecutionLogging, TakeOver};
 use crate::session::{Session, TransactionOps, TransactionStatus};
 use crate::statement_logging::StatementLifecycleEvent;
 use crate::statement_logging::WatchSetCreation;
@@ -195,6 +195,7 @@ impl PeekClient {
             &logging_info,
             &catalog,
             lifecycle_timestamps,
+            TakeOver::StatementToRun,
         );
 
         self.try_frontend_peek_inner(session, catalog, stmt, params, logging)

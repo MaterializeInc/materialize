@@ -720,12 +720,25 @@ impl Drop for StatementLoggingGuard {
 /// everywhere.
 pub(crate) struct ExecutionLogging {
     guard: Option<StatementLoggingGuard>,
-    /// Whether the session task has counted the statement the coordinator would
-    /// run, in the metrics `Coordinator::handle_execute` maintains. Handing the
-    /// statement over afterwards would count it twice. Taking over a SQL
-    /// `EXECUTE` does not set this: the inner statement it unrolls to is a
-    /// statement of its own, and still uncounted.
-    counted: bool,
+    /// Whether the coordinator must not run this statement, because the session
+    /// task has already counted it in the metrics `Coordinator::handle_execute`
+    /// maintains. Handing it over afterwards would count it twice.
+    coordinator_must_not_run: bool,
+}
+
+/// Which statement the session task is taking the log entry over for.
+pub(crate) enum TakeOver {
+    /// The statement that will run here, so the coordinator must not run it.
+    StatementToRun,
+    /// A SQL `EXECUTE` that unrolls into an inner statement, for a session task
+    /// that will go on to run that inner statement.
+    ///
+    /// The entry stays armed, so a failure to unroll is recorded against the
+    /// `EXECUTE`. Only the `EXECUTE` itself is counted here. The inner
+    /// statement is a statement in its own right and is counted wherever it
+    /// ends up running, exactly as the coordinator does when it re-dispatches a
+    /// `Plan::Execute`, which is why the slot stays releasable.
+    UnrolledExecute,
 }
 
 impl ExecutionLogging {
@@ -735,7 +748,7 @@ impl ExecutionLogging {
     pub(crate) fn adopt(outer: Option<ExecuteContextGuard>, peek_client: &PeekClient) -> Self {
         Self {
             guard: outer.map(|outer| StatementLoggingGuard::adopt(outer, peek_client)),
-            counted: false,
+            coordinator_must_not_run: false,
         }
     }
 
@@ -751,8 +764,8 @@ impl ExecutionLogging {
     /// one. `stmt` is `None` for an empty portal, which is logged but not
     /// counted.
     ///
-    /// Every exit after this call must produce an outcome for the statement:
-    /// the coordinator will not see it.
+    /// For [`TakeOver::StatementToRun`], every exit after this call must produce
+    /// an outcome for the statement: the coordinator will not see it.
     pub(crate) fn take_over(
         &mut self,
         peek_client: &PeekClient,
@@ -762,6 +775,7 @@ impl ExecutionLogging {
         logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
         catalog: &Catalog,
         lifecycle_timestamps: Option<LifecycleTimestamps>,
+        taking_over: TakeOver,
     ) -> Option<StatementLoggingId> {
         self.begin_or_inherit(
             peek_client,
@@ -772,37 +786,10 @@ impl ExecutionLogging {
             lifecycle_timestamps,
         );
         count_statement(session, stmt);
-        self.counted = true;
+        if matches!(taking_over, TakeOver::StatementToRun) {
+            self.coordinator_must_not_run = true;
+        }
         self.id()
-    }
-
-    /// Takes over the log entry of a SQL `EXECUTE` and counts the `EXECUTE`
-    /// itself, for the session task unrolling it into its inner statement.
-    ///
-    /// The entry stays armed, so a failure to unroll is recorded against the
-    /// `EXECUTE`. The inner statement is a statement in its own right and is
-    /// still uncounted, which is why the slot stays releasable: whichever path
-    /// ends up running the inner statement counts it there, exactly as the
-    /// coordinator does when it re-dispatches a `Plan::Execute`.
-    pub(crate) fn take_over_sql_execute(
-        &mut self,
-        peek_client: &PeekClient,
-        session: &mut Session,
-        stmt: &Statement<Raw>,
-        params: &Params,
-        logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
-        catalog: &Catalog,
-        lifecycle_timestamps: Option<LifecycleTimestamps>,
-    ) {
-        self.begin_or_inherit(
-            peek_client,
-            session,
-            params,
-            logging,
-            catalog,
-            lifecycle_timestamps,
-        );
-        count_statement(session, Some(stmt));
     }
 
     /// Makes sure a log entry exists for this execution, keeping an adopted one
@@ -833,7 +820,7 @@ impl ExecutionLogging {
     /// exists or that sampling declined.
     #[must_use]
     pub(crate) fn release(&mut self) -> Option<ExecuteContextExtra> {
-        if self.counted {
+        if self.coordinator_must_not_run {
             soft_panic_or_log!(
                 "statement handed to the coordinator after the session task took it over: \
                  its per-statement metrics are counted twice"
@@ -847,6 +834,9 @@ impl ExecutionLogging {
         let Some(guard) = self.guard else {
             return;
         };
+        // A defused or released slot owes no end event. Bail before mapping
+        // `result` to an end reason, which soft-panics for the responses whose
+        // end is logged elsewhere.
         if guard.id().is_none() {
             return;
         }
