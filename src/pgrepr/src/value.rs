@@ -16,6 +16,7 @@ use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use dec::OrderedDecimal;
 use itertools::Itertools;
 use mz_ore::cast::ReinterpretCast;
+use mz_ore::fmt::FormatBuffer;
 use mz_pgrepr_consts::oid::TYPE_INT2_OID;
 use mz_pgwire_common::Format;
 use mz_repr::adt::array::ArrayDimension;
@@ -359,10 +360,18 @@ impl Value {
     }
 
     /// Serializes this value to `buf` in the specified `format`.
-    pub fn encode(&self, ty: &Type, format: Format, buf: &mut BytesMut) -> Result<(), io::Error> {
+    ///
+    /// `settings` affects only the text encoding.
+    pub fn encode(
+        &self,
+        ty: &Type,
+        format: Format,
+        buf: &mut BytesMut,
+        settings: TextEncodeSettings,
+    ) -> Result<(), io::Error> {
         match format {
             Format::Text => {
-                self.encode_text(buf);
+                self.encode_text(buf, settings);
                 Ok(())
             }
             Format::Binary => self.encode_binary(ty, buf),
@@ -371,12 +380,13 @@ impl Value {
 
     /// Serializes this value to `buf` using the [text encoding
     /// format](Format::Text).
-    pub fn encode_text(&self, buf: &mut BytesMut) -> Nestable {
+    pub fn encode_text(&self, buf: &mut BytesMut, settings: TextEncodeSettings) -> Nestable {
+        let extra_float_digits = settings.extra_float_digits;
         match self {
             Value::Array { dims, elements } => {
                 strconv::format_array(buf, dims, elements, |buf, elem| match elem {
                     None => Ok::<_, ()>(buf.write_null()),
-                    Some(elem) => Ok(elem.encode_text(buf.nonnull_buffer())),
+                    Some(elem) => Ok(elem.encode_text(buf.nonnull_buffer(), settings)),
                 })
                 .expect("provided closure never fails")
             }
@@ -385,7 +395,7 @@ impl Value {
                     Ok::<_, ()>(
                         elem.as_ref()
                             .expect("Int2Vector does not support NULL values")
-                            .encode_text(buf.nonnull_buffer()),
+                            .encode_text(buf.nonnull_buffer(), settings),
                     )
                 })
                 .expect("provided closure never fails")
@@ -404,17 +414,21 @@ impl Value {
             Value::UInt4(u) => strconv::format_uint32(buf, u.0),
             Value::UInt8(u) => strconv::format_uint64(buf, u.0),
             Value::Interval(iv) => strconv::format_interval(buf, iv.0),
-            Value::Float4(f) => strconv::format_float32(buf, *f),
-            Value::Float8(f) => strconv::format_float64(buf, *f),
+            Value::Float4(f) if extra_float_digits > 0 => strconv::format_float32(buf, *f),
+            Value::Float4(f) => {
+                format_float_limited(buf, f64::from(*f), FLOAT4_DIGITS + extra_float_digits)
+            }
+            Value::Float8(f) if extra_float_digits > 0 => strconv::format_float64(buf, *f),
+            Value::Float8(f) => format_float_limited(buf, *f, FLOAT8_DIGITS + extra_float_digits),
             Value::Jsonb(js) => strconv::format_jsonb(buf, js.0.as_ref()),
             Value::List(elems) => strconv::format_list(buf, elems, |buf, elem| match elem {
                 None => Ok::<_, ()>(buf.write_null()),
-                Some(elem) => Ok(elem.encode_text(buf.nonnull_buffer())),
+                Some(elem) => Ok(elem.encode_text(buf.nonnull_buffer(), settings)),
             })
             .expect("provided closure never fails"),
             Value::Map(elems) => strconv::format_map(buf, elems, |buf, value| match value {
                 None => Ok::<_, ()>(buf.write_null()),
-                Some(elem) => Ok(elem.encode_text(buf.nonnull_buffer())),
+                Some(elem) => Ok(elem.encode_text(buf.nonnull_buffer(), settings)),
             })
             .expect("provided closure never fails"),
             Value::Oid(oid) => strconv::format_uint32(buf, *oid),
@@ -428,7 +442,7 @@ impl Value {
             },
             Value::Record(elems) => strconv::format_record(buf, elems, |buf, elem| match elem {
                 None => Ok::<_, ()>(buf.write_null()),
-                Some(elem) => Ok(elem.encode_text(buf.nonnull_buffer())),
+                Some(elem) => Ok(elem.encode_text(buf.nonnull_buffer(), settings)),
             })
             .expect("provided closure never fails"),
             Value::Text(s) | Value::VarChar(s) | Value::BpChar(s) | Value::Name(s) => {
@@ -441,7 +455,7 @@ impl Value {
             Value::Numeric(d) => strconv::format_numeric(buf, &d.0),
             Value::MzTimestamp(t) => strconv::format_mz_timestamp(buf, *t),
             Value::Range(range) => strconv::format_range(buf, range, |buf, elem| match elem {
-                Some(elem) => Ok(elem.encode_text(buf.nonnull_buffer())),
+                Some(elem) => Ok(elem.encode_text(buf.nonnull_buffer(), settings)),
                 None => Ok::<_, ()>(buf.write_null()),
             })
             .expect("provided closure never fails"),
@@ -1021,6 +1035,73 @@ fn is_number_shaped(s: &str) -> bool {
     !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
 }
 
+/// Session settings that affect how values are encoded as text.
+///
+/// PostgreSQL's text output for some types depends on session state. Encoders
+/// whose output must not depend on the session, such as everything evaluated
+/// in the dataflow layer, use [`TextEncodeSettings::STABLE`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextEncodeSettings {
+    /// PostgreSQL's `extra_float_digits`: positive values select the shortest
+    /// round-trippable encoding for `float4` and `float8`, while zero and
+    /// negative values limit output to `FLOAT4_DIGITS` or `FLOAT8_DIGITS` plus
+    /// this value significant digits.
+    pub extra_float_digits: i32,
+}
+
+impl TextEncodeSettings {
+    /// Settings that do not depend on session state.
+    pub const STABLE: TextEncodeSettings = TextEncodeSettings {
+        extra_float_digits: 1,
+    };
+}
+
+/// The number of significant decimal digits that survive a round trip through
+/// `f32` and `f64` respectively.
+const FLOAT4_DIGITS: i32 = 6;
+const FLOAT8_DIGITS: i32 = 15;
+
+/// Formats `f` with `ndig` significant digits like C's `%.*g`, mirroring
+/// PostgreSQL's `float4out`/`float8out` when `extra_float_digits` is zero or
+/// negative. Like PostgreSQL, `ndig` values below 1 are clamped to 1, and
+/// non-finite values are spelled `NaN`, `Infinity`, and `-Infinity`.
+fn format_float_limited(buf: &mut BytesMut, f: f64, ndig: i32) -> Nestable {
+    if f.is_nan() {
+        buf.write_str("NaN");
+        return Nestable::Yes;
+    }
+    if f.is_infinite() {
+        buf.write_str(if f < 0.0 { "-Infinity" } else { "Infinity" });
+        return Nestable::Yes;
+    }
+    let ndig = ndig.max(1);
+    // The exponent decides between the two notations, and it must be taken
+    // after rounding to `ndig` digits, as rounding can carry into the next
+    // exponent. `sci` has the shape `d[.ddd]e<exp>`.
+    let prec = usize::try_from(ndig - 1).expect("ndig is at least 1");
+    let sci = format!("{:.prec$e}", f);
+    let (mantissa, exp) = sci.split_once('e').expect("e format has an exponent");
+    let exp: i32 = exp.parse().expect("valid exponent");
+    if exp < -4 || exp >= ndig {
+        // Scientific notation. `%g` strips the fraction's trailing zeros and
+        // pads the exponent to at least two digits.
+        let mantissa = mantissa.trim_end_matches('0').trim_end_matches('.');
+        write!(buf, "{mantissa}e{exp:+03}");
+    } else {
+        // Fixed-point notation. Rounding to `ndig - 1 - exp` decimal places
+        // leaves exactly `ndig` significant digits. Trailing zeros are
+        // stripped.
+        let decimals = usize::try_from(ndig - 1 - exp).expect("exp is less than ndig");
+        let fixed = format!("{f:.decimals$}");
+        let fixed = match fixed.contains('.') {
+            true => fixed.trim_end_matches('0').trim_end_matches('.'),
+            false => &fixed,
+        };
+        buf.write_str(fixed);
+    }
+    Nestable::Yes
+}
+
 /// Returns an error if `s` contains a NUL character, which PostgreSQL rejects
 /// in text values.
 fn reject_nul(s: &str) -> Result<(), Box<dyn Error + Sync + Send>> {
@@ -1144,7 +1225,7 @@ mod tests {
             let mut buf = BytesMut::new();
             Value::from_datum(Datum::UInt32(oid), &SqlScalarType::RegProc)
                 .expect("a non-null datum encodes")
-                .encode_text(&mut buf);
+                .encode_text(&mut buf, TextEncodeSettings::STABLE);
             assert_eq!(str::from_utf8(&buf).unwrap(), expected, "regproc {oid}");
 
             if round_trips {
@@ -1191,6 +1272,41 @@ mod tests {
         );
     }
 
+    /// [`format_float_limited`] must match C's `%.*g`, which PostgreSQL's
+    /// `float4out`/`float8out` use when `extra_float_digits` is zero or
+    /// negative.
+    #[mz_ore::test]
+    fn format_float_limited_matches_printf_g() {
+        for (f, ndig, expected) in [
+            (0.1_f64 + 0.2_f64, 15, "0.3"),
+            (0.1_f64 + 0.2_f64, 1, "0.3"),
+            (f64::from(123.45679_f32), 6, "123.457"),
+            (f64::from(123.45679_f32), 3, "123"),
+            (1e15, 15, "1e+15"),
+            (-123456.0, 3, "-1.23e+05"),
+            (999.999, 3, "1e+03"),
+            (0.0001, 15, "0.0001"),
+            (-0.00001, 15, "-1e-05"),
+            (0.0, 15, "0"),
+            (-0.0, 15, "-0"),
+            (100.0, 15, "100"),
+            (1.23456789012345, 12, "1.23456789012"),
+            (f64::NAN, 15, "NaN"),
+            (f64::INFINITY, 15, "Infinity"),
+            (f64::NEG_INFINITY, -100, "-Infinity"),
+            // `ndig` values below 1 clamp to 1.
+            (0.1_f64 + 0.2_f64, -5, "0.3"),
+        ] {
+            let mut buf = BytesMut::new();
+            format_float_limited(&mut buf, f, ndig);
+            assert_eq!(
+                str::from_utf8(&buf).unwrap(),
+                expected,
+                "{f} with {ndig} digits"
+            );
+        }
+    }
+
     /// Verifies that we correctly print the chain of parsing errors, all the way through the stack.
     #[mz_ore::test]
     fn decode_text_error_smoke_test() {
@@ -1203,7 +1319,7 @@ mod tests {
         };
 
         let mut buf = BytesMut::new();
-        bool_array.encode_text(&mut buf);
+        bool_array.encode_text(&mut buf, TextEncodeSettings::STABLE);
         let buf = buf.to_vec();
 
         let int_array_tpe = Type::Array(Box::new(Type::Int4));

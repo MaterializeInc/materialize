@@ -767,7 +767,7 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode) -> String {
         // like arrays, tuples, and strings that need to be quoted.
         (Type::Text, d) => {
             let mut buf = BytesMut::new();
-            d.encode_text(&mut buf);
+            d.encode_text(&mut buf, mz_pgrepr::TextEncodeSettings::STABLE);
             String::from_utf8_lossy(&buf).into_owned()
         }
 
@@ -779,7 +779,7 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode) -> String {
         // the entire run.
         (_, d) => {
             let mut buf = BytesMut::new();
-            d.encode_text(&mut buf);
+            d.encode_text(&mut buf, mz_pgrepr::TextEncodeSettings::STABLE);
             String::from_utf8_lossy(&buf).into_owned()
         }
     }

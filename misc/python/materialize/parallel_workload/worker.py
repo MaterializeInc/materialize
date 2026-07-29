@@ -86,8 +86,16 @@ class Worker:
                 ws = websocket.WebSocket()
                 ws_conn_id, ws_secret_key = ws_connect(ws, host, http_port, user)
                 self.exe = Executor(self.rng, cur, ws, database, user=user)
+                # The session settings have to be applied in autocommit mode: a
+                # value set inside a transaction is only staged, and Materialize
+                # discards staged values when that transaction rolls back, which
+                # CommitRollbackAction does. The Executor is constructed before
+                # this, it picks up the worker's autocommit mode from the
+                # connection.
+                self.conn.autocommit = True
                 self.exe.set_isolation("SERIALIZABLE")
                 cur.execute("SET auto_route_catalog_queries TO false")
+                self.conn.autocommit = self.autocommit
                 if self.exe.use_ws:
                     self.exe.pg_pid = ws_conn_id
                 else:

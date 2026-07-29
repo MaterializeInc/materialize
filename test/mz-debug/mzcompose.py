@@ -11,7 +11,9 @@
 E2E tests for mz-debug
 """
 
+import shutil
 import urllib.request
+from pathlib import Path
 
 from materialize import spawn
 from materialize.mzcompose.composition import (
@@ -136,6 +138,64 @@ def _assert_cpu_capture_preserves_heap_profile(
     )
 
 
+def _sole_dump_dir(run_dir: Path) -> Path:
+    """Returns the single `mz_debug_<timestamp>` directory that an `mz-debug` run
+    wrote into `run_dir`.
+
+    `mz-debug` names its output directory with minute precision, so consecutive
+    runs share a directory and a later run happily inherits an earlier run's
+    artifacts. Asserting on one run's output therefore requires giving it an
+    otherwise empty working directory, and finding more than one directory in
+    there means the isolation broke.
+    """
+    dump_dirs = sorted(p for p in run_dir.glob("mz_debug_*") if p.is_dir())
+    assert (
+        len(dump_dirs) == 1
+    ), f"expected exactly one mz_debug_* output directory in {run_dir}, found {dump_dirs}"
+    return dump_dirs[0]
+
+
+def _assert_default_dump_files(dump_dir: Path, container_id: str) -> None:
+    """Asserts that a default `mz-debug emulator` run wrote every artifact it is
+    meant to.
+
+    A default run enables every collector, so `dump_dir` must contain the docker
+    dumps, the heap and CPU profiles, the prometheus metrics, the tool's own log,
+    and a non-empty system catalog dump. A sibling `.zip` archive of the whole
+    directory must also exist.
+    """
+    expected_files = [
+        dump_dir / "tracing.log",
+        dump_dir / "profiles" / "environmentd.memprof.pprof.gz",
+        dump_dir / "profiles" / "environmentd.cpuprof.pprof.gz",
+        dump_dir / "prom_metrics" / "environmentd.metrics.txt",
+        dump_dir / "docker" / container_id / "logs-stdout.txt",
+        dump_dir / "docker" / container_id / "logs-stderr.txt",
+        dump_dir / "docker" / container_id / "inspect.txt",
+        dump_dir / "docker" / container_id / "stats.txt",
+        dump_dir / "docker" / container_id / "top.txt",
+    ]
+    missing = [str(p) for p in expected_files if not p.is_file()]
+
+    # The system catalog is dumped as one CSV per relation. The exact set is
+    # large and partly depends on live replicas, so require at least one CSV
+    # rather than enumerating relations.
+    catalog_dir = dump_dir / "system_catalog"
+    if not any(catalog_dir.rglob("*.csv")):
+        missing.append(f"{catalog_dir}/**/*.csv (system catalog dump is empty)")
+
+    # The whole directory is also archived as a sibling zip.
+    zip_path = dump_dir.with_name(f"{dump_dir.name}.zip")
+    if not zip_path.is_file():
+        missing.append(str(zip_path))
+
+    assert (
+        not missing
+    ), "mz-debug default run did not produce all expected files:\n" + "\n".join(
+        f"  - {m}" for m in missing
+    )
+
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.up("materialized", Service("mz-debug", idle=True))
     c.invoke("cp", "mz-debug:/usr/local/bin/mz-debug", ".")
@@ -147,14 +207,23 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     _assert_cpu_capture_preserves_heap_profile(c, container_id)
 
     # Smoke test: a full `mz-debug` run against the emulator completes without
-    # error.
+    # error and produces the complete set of default output files. It runs in an
+    # empty directory of its own so that it cannot inherit the artifacts of the
+    # explicitly flagged run above, which enabled CPU profiling and would
+    # otherwise leave a CPU profile behind in the shared, minute-granular output
+    # directory.
+    run_dir = Path("default-run").absolute()
+    shutil.rmtree(run_dir, ignore_errors=True)
+    run_dir.mkdir()
     spawn.runv(
         [
-            "./mz-debug",
+            Path("mz-debug").absolute(),
             "emulator",
             "--docker-container-id",
             container_id,
             "--mz-connection-url",
-            "postgres://mz_system@localhost:6877/materialize",
-        ]
+            "postgres://mz_system@127.0.0.1:6877/materialize",
+        ],
+        cwd=run_dir,
     )
+    _assert_default_dump_files(_sole_dump_dir(run_dir), container_id)

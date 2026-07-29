@@ -356,10 +356,12 @@ fn build_timezone_offset_second(
 
                     return match Tz::from_str_insensitive(val) {
                         Ok(tz) => Ok(Timezone::Tz(tz)),
-                        Err(err) => Err(format!(
-                            "Invalid timezone string ({}): {}. \
-                            Failed to parse {} at token index {}",
-                            value, err, val, i
+                        // Preserves the error text this message has always
+                        // had, independent of the timezone library's own
+                        // error messages.
+                        Err(_) => Err(format!(
+                            "Invalid timezone string ({value}): '{val}' is not a valid timezone. \
+                            Failed to parse {val} at token index {i}"
                         )),
                     };
                 }

@@ -39,6 +39,7 @@ fi
 
 : "${CI_DRY_RUN:=0}"
 : "${CI_NO_TERRAFORM_BUMP:=0}"
+: "${CI_NO_DOCS_BUMP:=0}"
 
 cat > ~/.netrc <<EOF
 machine github.com
@@ -175,8 +176,9 @@ if ! is_truthy "$CI_DRY_RUN"; then
   HIGHEST_HELM_CHART_VERSION=$(echo "$YAML" | yq '.entries["materialize-operator"][].version' | grep -v beta | grep -v -- '-rc\.' | sort -V | tail -n 1)
 
   if [ "$HIGHEST_HELM_CHART_VERSION" != "$BUILDKITE_TAG" ]; then
-    echo "--- Higher helm-chart version $HIGHEST_HELM_CHART_VERSION > $BUILDKITE_TAG has already been released, not bumping terraform versions"
+    echo "--- Higher helm-chart version $HIGHEST_HELM_CHART_VERSION > $BUILDKITE_TAG has already been released, not bumping terraform or documentation versions"
     CI_NO_TERRAFORM_BUMP=1
+    CI_NO_DOCS_BUMP=1
   fi
 else
   echo "[DRY RUN] Nothing to verify"
@@ -255,7 +257,9 @@ else
   cd ..
 fi
 
-if [[ "$BUILDKITE_TAG" != *"-rc."* ]]; then
+if is_truthy "$CI_NO_DOCS_BUMP"; then
+  echo "--- Not bumping versions in Self-Managed Materialize documentation"
+elif [[ "$BUILDKITE_TAG" != *"-rc."* ]]; then
   echo "--- Bumping versions in Self-Managed Materialize documentation"
   ORCHESTRATORD_VERSION=$(yq -r '.operator.image.tag' misc/helm-charts/operator/values.yaml)
   git fetch origin main

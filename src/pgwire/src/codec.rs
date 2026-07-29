@@ -141,8 +141,11 @@ where
     pub fn set_encode_state(
         &mut self,
         encode_state: Vec<(mz_pgrepr::Type, mz_pgwire_common::Format)>,
+        text_settings: mz_pgrepr::TextEncodeSettings,
     ) {
-        self.inner.get_mut().codec_mut().encode_state = encode_state;
+        let codec = self.inner.get_mut().codec_mut();
+        codec.encode_state = encode_state;
+        codec.text_settings = text_settings;
     }
 
     /// Enables or disables copy mode on the codec.
@@ -217,6 +220,8 @@ where
 pub struct Codec {
     decode_state: DecodeState,
     encode_state: Vec<(mz_pgrepr::Type, mz_pgwire_common::Format)>,
+    /// The session's text encoding settings when `encode_state` was installed.
+    text_settings: mz_pgrepr::TextEncodeSettings,
     /// When true, skip the aggregate buffer size check in `decode()`.
     /// During COPY FROM STDIN, many small CopyData frames accumulate in the
     /// TCP read buffer and can exceed MAX_REQUEST_SIZE even though individual
@@ -231,6 +236,7 @@ impl Codec {
         Codec {
             decode_state: DecodeState::Head,
             encode_state: vec![],
+            text_settings: mz_pgrepr::TextEncodeSettings::STABLE,
             in_copy_mode: false,
         }
     }
@@ -405,7 +411,7 @@ impl Codec {
                     if let Some(f) = f {
                         let base = dst.len();
                         dst.put_u32(0);
-                        f.encode(ty, *format, dst)?;
+                        f.encode(ty, *format, dst, self.text_settings)?;
                         let len = dst.len() - base - 4;
                         let len = i32::try_from(len).map_err(|_| {
                             io::Error::new(

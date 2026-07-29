@@ -154,7 +154,11 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.cloudProvider.providers.aws.enabled` |  | ``false`` |
 | `operator.cloudProvider.providers.aws.iam.roles.connection` | ARN for CREATE CONNECTION feature | ``""`` |
 | `operator.cloudProvider.providers.aws.iam.roles.environment` | ARN of the IAM role for environmentd | ``""`` |
-| `operator.cloudProvider.providers.gcp` | GCP Configuration (placeholder for future use) | ``{"enabled":false}`` |
+| `operator.cloudProvider.providers.gcp` | GCP Configuration | ``{"enabled":false,"nodeUpgradeRolloutTrigger":{"clusterLocation":"","clusterName":"","enabled":false,"notificationSubscription":"","watchedNodePools":[]}}`` |
+| `operator.cloudProvider.providers.gcp.nodeUpgradeRolloutTrigger.clusterLocation` | The location (region or zone) of the GKE cluster. | ``""`` |
+| `operator.cloudProvider.providers.gcp.nodeUpgradeRolloutTrigger.clusterName` | The name of the GKE cluster. | ``""`` |
+| `operator.cloudProvider.providers.gcp.nodeUpgradeRolloutTrigger.notificationSubscription` | The Pub/Sub subscription receiving GKE cluster notifications for this cluster, in `projects/{project}/subscriptions/{subscription}` form. The cluster must be configured to publish upgrade notifications to the corresponding topic, and the operator's service account must be able to subscribe to it and to read the cluster's node pools. | ``""`` |
+| `operator.cloudProvider.providers.gcp.nodeUpgradeRolloutTrigger.watchedNodePools` | The node pools to watch. An empty list watches all node pools. | ``[]`` |
 | `operator.cloudProvider.region` | Common cloud provider settings | ``"kind"`` |
 | `operator.cloudProvider.type` | Specifies cloud provider. Valid values are 'aws', 'gcp', 'azure' , 'generic', or 'local' | ``"local"`` |
 | `operator.clusters.defaultReplicationFactor.analytics` |  | ``0`` |
@@ -178,6 +182,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.tolerations` | Tolerations to use for the operator pod | ``{}`` |
 | `rbac.create` | Whether to create necessary RBAC roles and bindings | ``true`` |
 | `schedulerName` | Optionally use a non-default kubernetes scheduler. | ``nil`` |
+| `serviceAccount.annotations` | Annotations to add to the service account, e.g. `iam.gke.io/gcp-service-account` to link it to a GCP service account via workload identity. | ``{}`` |
 | `serviceAccount.create` | Whether to create a new service account for the operator | ``true`` |
 | `serviceAccount.name` | The name of the service account to be created | ``"orchestratord"`` |
 | `storage.storageClass.allowVolumeExpansion` |  | ``false`` |

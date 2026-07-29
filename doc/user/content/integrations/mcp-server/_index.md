@@ -8,6 +8,9 @@ menu:
     name: "MCP Server and skills"
     identifier: mcp-server
     weight: 6
+aliases:
+  - /integrations/mcp-server/llm/
+  - /integrations/llm/
 ---
 
 
@@ -36,5 +39,3 @@ and support the MCP `initialize`, `tools/list`, and `tools/call` methods.
   multi-table SQL.
 - [MCP Server
   Troubleshooting](/integrations/mcp-server/mcp-server-troubleshooting/)
-- [Appendix: MCP Server (Python)](/integrations/mcp-server/llm) for locally-run,
-  separate MCP Server.

@@ -16,6 +16,7 @@ axum.workspace = true
 axum-server.workspace = true
 clap.workspace = true
 futures.workspace = true
+gcp_auth.workspace = true
 http.workspace = true
 humantime.workspace = true
 k8s-controller.workspace = true

@@ -82,6 +82,7 @@ use mz_persist_client::cfg::{
     CRDB_CONNECT_TIMEOUT, CRDB_KEEPALIVES_IDLE, CRDB_KEEPALIVES_INTERVAL, CRDB_KEEPALIVES_RETRIES,
     CRDB_TCP_USER_TIMEOUT,
 };
+use mz_pgrepr::TextEncodeSettings;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::bytes::ByteSize;
@@ -312,6 +313,20 @@ impl SessionVar {
         }
     }
 
+    /// Resets the variable to its default, discarding any session, staged, or
+    /// local override. Unlike [`SessionVar::reset`], which stages the reset for
+    /// the current transaction, this takes effect immediately and does not
+    /// depend on a later [`SessionVar::end_transaction`] commit.
+    ///
+    /// `DISCARD ALL` requires this: it ends the transaction before resetting, so
+    /// there is no commit left to promote a staged value. `default_value` (the
+    /// system/role/startup default) is deliberately preserved.
+    pub fn reset_durable(&mut self) {
+        self.local_value = None;
+        self.staged_value = None;
+        self.session_value = None;
+    }
+
     /// Returns a possibly new SessionVar if this needs to mutate at transaction end.
     #[must_use]
     pub fn end_transaction(&self, action: EndTransactionAction) -> Option<Self> {
@@ -520,11 +535,16 @@ impl SessionVars {
         .chain(std::iter::once(self.mz_version.as_var()))
     }
 
-    /// Resets all variables to their default value.
+    /// Durably resets all variables to their default value.
+    ///
+    /// Unlike a staged [`SessionVar::reset`], this takes effect immediately and
+    /// does not depend on a later transaction commit. Used by `DISCARD ALL`,
+    /// which ends the transaction before resetting, so there is no commit left
+    /// to promote a staged value. System/role/startup defaults are preserved.
     pub fn reset_all(&mut self) {
         let names: Vec<_> = self.vars.keys().copied().collect();
         for name in names {
-            self.vars[name].reset(false);
+            self.vars[name].reset_durable();
         }
     }
 
@@ -780,6 +800,14 @@ impl SessionVars {
     /// Returns the value of the `extra_float_digits` configuration parameter.
     pub fn extra_float_digits(&self) -> i32 {
         *self.expect_value(&EXTRA_FLOAT_DIGITS)
+    }
+
+    /// Returns the settings that govern how this session encodes values as
+    /// text.
+    pub fn text_encode_settings(&self) -> TextEncodeSettings {
+        TextEncodeSettings {
+            extra_float_digits: self.extra_float_digits(),
+        }
     }
 
     /// Returns the value of the `integer_datetimes` configuration parameter.
@@ -1236,6 +1264,7 @@ impl SystemVars {
             &MYSQL_SOURCE_TCP_KEEPALIVE,
             &MYSQL_SOURCE_SNAPSHOT_MAX_EXECUTION_TIME,
             &MYSQL_SOURCE_SNAPSHOT_LOCK_WAIT_TIMEOUT,
+            &MYSQL_SOURCE_SNAPSHOT_WAIT_TIMEOUT,
             &MYSQL_SOURCE_CONNECT_TIMEOUT,
             &SSH_CHECK_INTERVAL,
             &SSH_CONNECT_TIMEOUT,
@@ -1887,6 +1916,11 @@ impl SystemVars {
         *self.expect_value(&MYSQL_SOURCE_SNAPSHOT_LOCK_WAIT_TIMEOUT)
     }
 
+    /// Returns the `mysql_source_snapshot_wait_timeout` configuration parameter.
+    pub fn mysql_source_snapshot_wait_timeout(&self) -> Duration {
+        *self.expect_value(&MYSQL_SOURCE_SNAPSHOT_WAIT_TIMEOUT)
+    }
+
     /// Returns the `mysql_source_connect_timeout` configuration parameter.
     pub fn mysql_source_connect_timeout(&self) -> Duration {
         *self.expect_value(&MYSQL_SOURCE_CONNECT_TIMEOUT)
@@ -2331,6 +2365,7 @@ impl SystemVars {
             || name == MYSQL_SOURCE_TCP_KEEPALIVE.name()
             || name == MYSQL_SOURCE_SNAPSHOT_MAX_EXECUTION_TIME.name()
             || name == MYSQL_SOURCE_SNAPSHOT_LOCK_WAIT_TIMEOUT.name()
+            || name == MYSQL_SOURCE_SNAPSHOT_WAIT_TIMEOUT.name()
             || name == MYSQL_SOURCE_CONNECT_TIMEOUT.name()
             || name == ENABLE_STORAGE_SHARD_FINALIZATION.name()
             || name == SSH_CHECK_INTERVAL.name()
@@ -2575,5 +2610,83 @@ mod isolation_feature_flag_tests {
             &system_vars,
         )
         .expect("unrelated var ignored");
+    }
+}
+
+#[cfg(test)]
+mod reset_all_tests {
+    use super::*;
+    use crate::session::user::SYSTEM_USER;
+
+    fn test_vars() -> SessionVars {
+        SessionVars::new_unchecked(&mz_build_info::DUMMY_BUILD_INFO, SYSTEM_USER.clone(), None)
+    }
+
+    // `reset_all` (used by `DISCARD ALL`) must clear a committed session
+    // override durably, without depending on a later transaction commit to
+    // promote the reset. Regression coverage for SQL-529.
+    #[mz_ore::test]
+    fn reset_all_clears_committed_session_value() {
+        let system_vars = SystemVars::new();
+        let mut vars = test_vars();
+        let default = vars.application_name().to_string();
+
+        // Set non-locally and commit, so the override lives in `session_value`.
+        vars.set(
+            &system_vars,
+            "application_name",
+            VarInput::Flat("custom"),
+            false,
+        )
+        .expect("set");
+        vars.end_transaction(EndTransactionAction::Commit);
+        assert_eq!(vars.application_name(), "custom");
+        assert_eq!(
+            vars.inspect("application_name")
+                .unwrap()
+                .inspect_session_value()
+                .map(|v| v.format()),
+            Some("custom".to_string())
+        );
+
+        vars.reset_all();
+
+        // The value falls back to the default, the var is unset, and it will
+        // not mutate at a later transaction end.
+        let var = vars.inspect("application_name").unwrap();
+        assert_eq!(vars.application_name(), default);
+        assert_eq!(var.inspect_session_value(), None);
+        assert!(!var.is_mutating());
+    }
+
+    // `reset_all` must fall back to a system/role/startup default installed via
+    // `set_default`, not the compiled-in default. Guards the "startup/role
+    // defaults survive DISCARD ALL" contract.
+    #[mz_ore::test]
+    fn reset_all_preserves_installed_default() {
+        let system_vars = SystemVars::new();
+        let mut vars = test_vars();
+
+        vars.set_default("application_name", VarInput::Flat("startup_default"))
+            .expect("set_default");
+        vars.set(
+            &system_vars,
+            "application_name",
+            VarInput::Flat("custom"),
+            false,
+        )
+        .expect("set");
+        vars.end_transaction(EndTransactionAction::Commit);
+        assert_eq!(vars.application_name(), "custom");
+
+        vars.reset_all();
+
+        assert_eq!(vars.application_name(), "startup_default");
+        assert_eq!(
+            vars.inspect("application_name")
+                .unwrap()
+                .inspect_session_value(),
+            None
+        );
     }
 }

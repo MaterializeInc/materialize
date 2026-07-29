@@ -340,7 +340,7 @@ pub static DEFAULT_CLUSTER_REPLICATION_FACTOR: VarDefinition = VarDefinition::ne
 
 pub static EXTRA_FLOAT_DIGITS: VarDefinition = VarDefinition::new(
     "extra_float_digits",
-    value!(i32; 3),
+    value!(i32; 1),
     "Adjusts the number of digits displayed for floating-point values (PostgreSQL).",
     true,
 );
@@ -1044,6 +1044,15 @@ pub static MYSQL_SOURCE_SNAPSHOT_LOCK_WAIT_TIMEOUT: VarDefinition = VarDefinitio
     "mysql_source_snapshot_lock_wait_timeout",
     value!(Duration; mz_mysql_util::DEFAULT_SNAPSHOT_LOCK_WAIT_TIMEOUT),
     "Sets the `lock_wait_timeout` value to use during the snapshotting phase of MySQL sources (Materialize)",
+    false,
+);
+
+/// Sets the `wait_timeout` session value on connections used during the
+/// snapshotting phase of MySQL sources.
+pub static MYSQL_SOURCE_SNAPSHOT_WAIT_TIMEOUT: VarDefinition = VarDefinition::new(
+    "mysql_source_snapshot_wait_timeout",
+    value!(Duration; mz_mysql_util::DEFAULT_SNAPSHOT_WAIT_TIMEOUT),
+    "Sets the `wait_timeout` value to use on connections during the snapshotting phase of MySQL sources (Materialize)",
     false,
 );
 

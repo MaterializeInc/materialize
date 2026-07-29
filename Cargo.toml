@@ -328,7 +328,7 @@ bytesize = "2.3.1"
 cc = "1.2.62"
 cfg-if = "1.0.4"
 chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "std"] }
-chrono-tz = { version = "0.8.1", features = ["case-insensitive", "serde"] }
+chrono-tz = { version = "0.10.4", features = ["case-insensitive", "serde"] }
 clap = { version = "4.6.1", features = ["derive"] }
 clap_complete = "4.6.2"
 columnar = "0.13.0"
