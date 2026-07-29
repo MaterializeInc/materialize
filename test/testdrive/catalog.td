@@ -744,6 +744,7 @@ mz_arrangement_batcher_capacity_raw          log   <null>    ""
 mz_arrangement_batcher_records_raw           log   <null>    ""
 mz_arrangement_batcher_size_raw              log   <null>    ""
 mz_arrangement_batches_raw                   log   <null>    ""
+mz_arrangement_distinct_keys_raw             log   <null>    ""
 mz_arrangement_heap_allocations_raw          log   <null>    ""
 mz_arrangement_heap_capacity_raw             log   <null>    ""
 mz_arrangement_heap_size_raw                 log   <null>    ""
@@ -775,6 +776,7 @@ mz_scheduling_parks_histogram_raw            log   <null>    ""
 
 > SHOW VIEWS FROM mz_introspection
 mz_active_peeks ""
+mz_arrangement_distinct_keys_per_worker ""
 mz_arrangement_sharing ""
 mz_arrangement_sharing_per_worker ""
 mz_arrangement_sizes ""
@@ -834,7 +836,7 @@ test_table ""
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-272
+278
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2
