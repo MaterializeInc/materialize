@@ -4584,9 +4584,9 @@ mz_catalog.mz_cluster_replicas:
                       →Unarranged Raw Stream
                         →Arranged l4
           →Fused with Child Map/Filter/Project
-            Project: #0..=#6, #8
-            Filter: ((#7) IS NULL OR (false = (#7 > 0)))
-            Map: jsonb_array_length((((((#0{data} -> "value") -> "config") -> "location") -> "Managed") -> "availability_zones")), null
+            Project: #0..=#7
+            Filter: ((jsonb_array_length((((((#0{data} -> "value") -> "config") -> "location") -> "Managed") -> "availability_zones"))) IS NULL OR (false = (jsonb_array_length((((((#0{data} -> "value") -> "config") -> "location") -> "Managed") -> "availability_zones")) > 0)))
+            Map: null
               →Read l2
 
 Source mz_internal.mz_catalog_raw
@@ -4686,9 +4686,9 @@ mz_catalog.mz_clusters:
                       →Unarranged Raw Stream
                         →Arranged l4
           →Fused with Child Map/Filter/Project
-            Project: #0..=#8, #10
-            Filter: ((#9) IS NULL OR (false = (#9 > 0)))
-            Map: jsonb_array_length((((((#0{data} -> "value") -> "config") -> "variant") -> "Managed") -> "availability_zones")), null
+            Project: #0..=#9
+            Filter: ((jsonb_array_length((((((#0{data} -> "value") -> "config") -> "variant") -> "Managed") -> "availability_zones"))) IS NULL OR (false = (jsonb_array_length((((((#0{data} -> "value") -> "config") -> "variant") -> "Managed") -> "availability_zones")) > 0)))
+            Map: null
               →Read l2
 
 Source mz_internal.mz_catalog_raw
@@ -5083,8 +5083,8 @@ mz_catalog.mz_sources:
     cte l0 =
       →Fused with Child Map/Filter/Project
         Project: #0, #2
-        Filter: ("Item" = #1) AND ((#3 = "source") OR (#3 = "subsource"))
-        Map: parse_catalog_create_sql(((((#0{data} -> "value") -> "definition") -> "V1") ->> "create_sql")), (#2 ->> "type")
+        Filter: (("source" = (parse_catalog_create_sql(((((#0{data} -> "value") -> "definition") -> "V1") ->> "create_sql")) ->> "type")) OR ("subsource" = (parse_catalog_create_sql(((((#0{data} -> "value") -> "definition") -> "V1") ->> "create_sql")) ->> "type"))) AND ("Item" = #1)
+        Map: parse_catalog_create_sql(((((#0{data} -> "value") -> "definition") -> "V1") ->> "create_sql"))
           →Read mz_internal.mz_catalog_raw
     cte l1 =
       →Distinct GroupAggregate
@@ -7620,11 +7620,10 @@ Explained Query:
       Group By #1
       Order By #0 desc nulls_first
       →Map/Filter/Project
-        Project: #5, #3, #4
-        Map: record_get[1](#1), record_get[1](#2), record_get[2](#2), record_get[0](#2)
+        Project: #4, #3, #5
+        Map: record_get[1](#1), record_get[1](#2), record_get[0](#2), record_get[2](#2)
           →Fused with Child Map/Filter/Project
-            Filter: (record_get[1](#2)) IS NOT NULL AND ((#3) IS NULL OR (#3 != record_get[2](#2)))
-            Map: record_get[1](#1), record_get[0](#1)
+            Filter: ((record_get[0](#1)) IS NULL OR (record_get[0](#1) != record_get[2](record_get[1](#1)))) AND (record_get[1](record_get[1](#1))) IS NOT NULL
               →Fused with Child Table Function unnest_list
                 →Non-incremental GroupAggregate
                   Aggregation: lag[order_by=[#0 asc nulls_last]](row(row(row(#0, #1, #2), row(#2{status}, 1, null)), #0{occurred_at}))
@@ -13220,18 +13219,18 @@ Explained Query:
           Project: #0..=#7, #12, #13, #8..=#11, #14
           Map: case when (#13) IS NULL then null else #12 end
         after %6:
-          Project: #0..=#9, #15, #16, #10, #12..=#14, #18, #19
-          Map: case when (#16) IS NULL then null else #15 end, ((#11) IS NULL AND (#17) IS NULL), case when #18 then null else (coalesce(#11, 0) + coalesce(#17, 0)) end
+          Project: #0..=#9, #15, #16, #10, #12..=#14, #18
+          Map: case when (#16) IS NULL then null else #15 end, case when ((#11{records}) IS NULL AND (#17{records}) IS NULL) then null else (coalesce(#11, 0) + coalesce(#17, 0)) end
         after %7:
-          Project: #0..=#11, #18, #19, #12, #14..=#17, #21, #22
-          Map: case when (#19) IS NULL then null else #18 end, ((#13) IS NULL AND (#20) IS NULL), case when #21 then null else (coalesce(#13, 0) + coalesce(#20, 0)) end
+          Project: #0..=#11, #17, #18, #12, #14..=#16, #20
+          Map: case when (#18) IS NULL then null else #17 end, case when ((#13{size}) IS NULL AND (#19{size}) IS NULL) then null else (coalesce(#13, 0) + coalesce(#19, 0)) end
         after %8:
-          Project: #0..=#13, #21, #22, #14, #16..=#20, #24, #25
-          Map: case when (#22) IS NULL then null else #21 end, ((#15) IS NULL AND (#23) IS NULL), case when #24 then null else (coalesce(#15, 0) + coalesce(#23, 0)) end
+          Project: #0..=#13, #19, #20, #14, #16..=#18, #22
+          Map: case when (#20) IS NULL then null else #19 end, case when ((#15{capacity}) IS NULL AND (#21{capacity}) IS NULL) then null else (coalesce(#15, 0) + coalesce(#21, 0)) end
         after %9:
-          Project: #0, #1, #19, #16, #21, #23, #28
-          Filter: ((#16) IS NOT NULL OR (case when #18 then null else (case when (#3) IS NULL then 0 else coalesce(#2, 0) end + case when (#11) IS NULL then 0 else coalesce(#10, 0) end) end) IS NOT NULL OR (case when #20 then null else (case when (#5) IS NULL then 0 else coalesce(#4, 0) end + case when (#13) IS NULL then 0 else coalesce(#12, 0) end) end) IS NOT NULL OR (case when #22 then null else (case when (#7) IS NULL then 0 else coalesce(#6, 0) end + case when (#15) IS NULL then 0 else coalesce(#14, 0) end) end) IS NOT NULL OR (case when #27 then null else (case when (#9) IS NULL then 0 else coalesce(#8, 0) end + case when (#25) IS NULL then 0 else coalesce(#24, 0) end) end) IS NOT NULL)
-          Map: case when (#25) IS NULL then null else #24 end, ((#17) IS NULL AND (#26) IS NULL), case when #27 then null else (coalesce(#17, 0) + coalesce(#26, 0)) end
+          Project: #0, #1, #18, #16, #19, #20, #24
+          Filter: ((#16) IS NOT NULL OR (case when ((case when (#3) IS NULL then null else #2 end) IS NULL AND (case when (#11) IS NULL then null else #10 end) IS NULL) then null else (case when (#3) IS NULL then 0 else coalesce(#2, 0) end + case when (#11) IS NULL then 0 else coalesce(#10, 0) end) end) IS NOT NULL OR (case when ((case when (#5) IS NULL then null else #4 end) IS NULL AND (case when (#13) IS NULL then null else #12 end) IS NULL) then null else (case when (#5) IS NULL then 0 else coalesce(#4, 0) end + case when (#13) IS NULL then 0 else coalesce(#12, 0) end) end) IS NOT NULL OR (case when ((case when (#7) IS NULL then null else #6 end) IS NULL AND (case when (#15) IS NULL then null else #14 end) IS NULL) then null else (case when (#7) IS NULL then 0 else coalesce(#6, 0) end + case when (#15) IS NULL then 0 else coalesce(#14, 0) end) end) IS NOT NULL OR (case when ((case when (#9) IS NULL then null else #8 end) IS NULL AND (case when (#22) IS NULL then null else #21 end) IS NULL) then null else (case when (#9) IS NULL then 0 else coalesce(#8, 0) end + case when (#22) IS NULL then 0 else coalesce(#21, 0) end) end) IS NOT NULL)
+          Map: case when (#22) IS NULL then null else #21 end, case when ((#17{allocations}) IS NULL AND (#23{allocations}) IS NULL) then null else (coalesce(#17, 0) + coalesce(#23, 0)) end
       →Arranged mz_introspection.mz_dataflow_operators_per_worker
       →Arrange (#0, #1)
         →Union
@@ -15151,18 +15150,18 @@ Explained Query:
             Project: #0..=#8, #13, #14, #9..=#12, #15
             Map: case when (#14) IS NULL then null else #13 end
           after %6:
-            Project: #0..=#10, #16, #17, #11, #13..=#15, #19, #20
-            Map: case when (#17) IS NULL then null else #16 end, ((#12) IS NULL AND (#18) IS NULL), case when #19 then null else (coalesce(#12, 0) + coalesce(#18, 0)) end
+            Project: #0..=#10, #16, #17, #11, #13..=#15, #19
+            Map: case when (#17) IS NULL then null else #16 end, case when ((#12{records}) IS NULL AND (#18{records}) IS NULL) then null else (coalesce(#12, 0) + coalesce(#18, 0)) end
           after %7:
-            Project: #0..=#12, #19, #20, #13, #15..=#18, #22, #23
-            Map: case when (#20) IS NULL then null else #19 end, ((#14) IS NULL AND (#21) IS NULL), case when #22 then null else (coalesce(#14, 0) + coalesce(#21, 0)) end
+            Project: #0..=#12, #18, #19, #13, #15..=#17, #21
+            Map: case when (#19) IS NULL then null else #18 end, case when ((#14{size}) IS NULL AND (#20{size}) IS NULL) then null else (coalesce(#14, 0) + coalesce(#20, 0)) end
           after %8:
-            Project: #0..=#14, #22, #23, #15, #17..=#21, #25, #26
-            Map: case when (#23) IS NULL then null else #22 end, ((#16) IS NULL AND (#24) IS NULL), case when #25 then null else (coalesce(#16, 0) + coalesce(#24, 0)) end
+            Project: #0..=#14, #20, #21, #15, #17..=#19, #23
+            Map: case when (#21) IS NULL then null else #20 end, case when ((#16{capacity}) IS NULL AND (#22{capacity}) IS NULL) then null else (coalesce(#16, 0) + coalesce(#22, 0)) end
           after %9:
-            Project: #0..=#2, #17, #20, #22, #24, #29
-            Filter: ((#17) IS NOT NULL OR (case when #19 then null else (case when (#4) IS NULL then 0 else coalesce(#3, 0) end + case when (#12) IS NULL then 0 else coalesce(#11, 0) end) end) IS NOT NULL OR (case when #21 then null else (case when (#6) IS NULL then 0 else coalesce(#5, 0) end + case when (#14) IS NULL then 0 else coalesce(#13, 0) end) end) IS NOT NULL OR (case when #23 then null else (case when (#8) IS NULL then 0 else coalesce(#7, 0) end + case when (#16) IS NULL then 0 else coalesce(#15, 0) end) end) IS NOT NULL OR (case when #28 then null else (case when (#10) IS NULL then 0 else coalesce(#9, 0) end + case when (#26) IS NULL then 0 else coalesce(#25, 0) end) end) IS NOT NULL)
-            Map: case when (#26) IS NULL then null else #25 end, ((#18) IS NULL AND (#27) IS NULL), case when #28 then null else (coalesce(#18, 0) + coalesce(#27, 0)) end
+            Project: #0..=#2, #17, #19..=#21, #25
+            Filter: ((#17) IS NOT NULL OR (case when ((case when (#4) IS NULL then null else #3 end) IS NULL AND (case when (#12) IS NULL then null else #11 end) IS NULL) then null else (case when (#4) IS NULL then 0 else coalesce(#3, 0) end + case when (#12) IS NULL then 0 else coalesce(#11, 0) end) end) IS NOT NULL OR (case when ((case when (#6) IS NULL then null else #5 end) IS NULL AND (case when (#14) IS NULL then null else #13 end) IS NULL) then null else (case when (#6) IS NULL then 0 else coalesce(#5, 0) end + case when (#14) IS NULL then 0 else coalesce(#13, 0) end) end) IS NOT NULL OR (case when ((case when (#8) IS NULL then null else #7 end) IS NULL AND (case when (#16) IS NULL then null else #15 end) IS NULL) then null else (case when (#8) IS NULL then 0 else coalesce(#7, 0) end + case when (#16) IS NULL then 0 else coalesce(#15, 0) end) end) IS NOT NULL OR (case when ((case when (#10) IS NULL then null else #9 end) IS NULL AND (case when (#23) IS NULL then null else #22 end) IS NULL) then null else (case when (#10) IS NULL then 0 else coalesce(#9, 0) end + case when (#23) IS NULL then 0 else coalesce(#22, 0) end) end) IS NOT NULL)
+            Map: case when (#23) IS NULL then null else #22 end, case when ((#18{allocations}) IS NULL AND (#24{allocations}) IS NULL) then null else (coalesce(#18, 0) + coalesce(#24, 0)) end
         →Arranged l12
         →Arrange (#0, #1)
           →Union
@@ -15477,18 +15476,18 @@ Explained Query:
             Project: #0..=#9, #14, #15, #10..=#13, #16
             Map: case when (#15) IS NULL then null else #14 end
           after %6:
-            Project: #0..=#11, #17, #18, #12, #14..=#16, #20, #21
-            Map: case when (#18) IS NULL then null else #17 end, ((#13) IS NULL AND (#19) IS NULL), case when #20 then null else (coalesce(#13, 0) + coalesce(#19, 0)) end
+            Project: #0..=#11, #17, #18, #12, #14..=#16, #20
+            Map: case when (#18) IS NULL then null else #17 end, case when ((#13{records}) IS NULL AND (#19{records}) IS NULL) then null else (coalesce(#13, 0) + coalesce(#19, 0)) end
           after %7:
-            Project: #0..=#13, #20, #21, #14, #16..=#19, #23, #24
-            Map: case when (#21) IS NULL then null else #20 end, ((#15) IS NULL AND (#22) IS NULL), case when #23 then null else (coalesce(#15, 0) + coalesce(#22, 0)) end
+            Project: #0..=#13, #19, #20, #14, #16..=#18, #22
+            Map: case when (#20) IS NULL then null else #19 end, case when ((#15{size}) IS NULL AND (#21{size}) IS NULL) then null else (coalesce(#15, 0) + coalesce(#21, 0)) end
           after %8:
-            Project: #0..=#15, #23, #24, #16, #18..=#22, #26, #27
-            Map: case when (#24) IS NULL then null else #23 end, ((#17) IS NULL AND (#25) IS NULL), case when #26 then null else (coalesce(#17, 0) + coalesce(#25, 0)) end
+            Project: #0..=#15, #21, #22, #16, #18..=#20, #24
+            Map: case when (#22) IS NULL then null else #21 end, case when ((#17{capacity}) IS NULL AND (#23{capacity}) IS NULL) then null else (coalesce(#17, 0) + coalesce(#23, 0)) end
           after %9:
-            Project: #0..=#3, #18, #21, #23, #25, #30
-            Filter: ((#18) IS NOT NULL OR (case when #20 then null else (case when (#5) IS NULL then 0 else coalesce(#4, 0) end + case when (#13) IS NULL then 0 else coalesce(#12, 0) end) end) IS NOT NULL OR (case when #22 then null else (case when (#7) IS NULL then 0 else coalesce(#6, 0) end + case when (#15) IS NULL then 0 else coalesce(#14, 0) end) end) IS NOT NULL OR (case when #24 then null else (case when (#9) IS NULL then 0 else coalesce(#8, 0) end + case when (#17) IS NULL then 0 else coalesce(#16, 0) end) end) IS NOT NULL OR (case when #29 then null else (case when (#11) IS NULL then 0 else coalesce(#10, 0) end + case when (#27) IS NULL then 0 else coalesce(#26, 0) end) end) IS NOT NULL)
-            Map: case when (#27) IS NULL then null else #26 end, ((#19) IS NULL AND (#28) IS NULL), case when #29 then null else (coalesce(#19, 0) + coalesce(#28, 0)) end
+            Project: #0..=#3, #18, #20..=#22, #26
+            Filter: ((#18) IS NOT NULL OR (case when ((case when (#5) IS NULL then null else #4 end) IS NULL AND (case when (#13) IS NULL then null else #12 end) IS NULL) then null else (case when (#5) IS NULL then 0 else coalesce(#4, 0) end + case when (#13) IS NULL then 0 else coalesce(#12, 0) end) end) IS NOT NULL OR (case when ((case when (#7) IS NULL then null else #6 end) IS NULL AND (case when (#15) IS NULL then null else #14 end) IS NULL) then null else (case when (#7) IS NULL then 0 else coalesce(#6, 0) end + case when (#15) IS NULL then 0 else coalesce(#14, 0) end) end) IS NOT NULL OR (case when ((case when (#9) IS NULL then null else #8 end) IS NULL AND (case when (#17) IS NULL then null else #16 end) IS NULL) then null else (case when (#9) IS NULL then 0 else coalesce(#8, 0) end + case when (#17) IS NULL then 0 else coalesce(#16, 0) end) end) IS NOT NULL OR (case when ((case when (#11) IS NULL then null else #10 end) IS NULL AND (case when (#24) IS NULL then null else #23 end) IS NULL) then null else (case when (#11) IS NULL then 0 else coalesce(#10, 0) end + case when (#24) IS NULL then 0 else coalesce(#23, 0) end) end) IS NOT NULL)
+            Map: case when (#24) IS NULL then null else #23 end, case when ((#19{allocations}) IS NULL AND (#25{allocations}) IS NULL) then null else (coalesce(#19, 0) + coalesce(#25, 0)) end
         →Arranged l11
         →Arrange (#0, #1)
           →Union
@@ -15793,18 +15792,18 @@ Explained Query:
             Project: #0..=#9, #14, #15, #10..=#13, #16
             Map: case when (#15) IS NULL then null else #14 end
           after %6:
-            Project: #0..=#11, #17, #18, #12, #14..=#16, #20, #21
-            Map: case when (#18) IS NULL then null else #17 end, ((#13) IS NULL AND (#19) IS NULL), case when #20 then null else (coalesce(#13, 0) + coalesce(#19, 0)) end
+            Project: #0..=#11, #17, #18, #12, #14..=#16, #20
+            Map: case when (#18) IS NULL then null else #17 end, case when ((#13{records}) IS NULL AND (#19{records}) IS NULL) then null else (coalesce(#13, 0) + coalesce(#19, 0)) end
           after %7:
-            Project: #0..=#13, #20, #21, #14, #16..=#19, #23, #24
-            Map: case when (#21) IS NULL then null else #20 end, ((#15) IS NULL AND (#22) IS NULL), case when #23 then null else (coalesce(#15, 0) + coalesce(#22, 0)) end
+            Project: #0..=#13, #19, #20, #14, #16..=#18, #22
+            Map: case when (#20) IS NULL then null else #19 end, case when ((#15{size}) IS NULL AND (#21{size}) IS NULL) then null else (coalesce(#15, 0) + coalesce(#21, 0)) end
           after %8:
-            Project: #0..=#15, #23, #24, #16, #18..=#22, #26, #27
-            Map: case when (#24) IS NULL then null else #23 end, ((#17) IS NULL AND (#25) IS NULL), case when #26 then null else (coalesce(#17, 0) + coalesce(#25, 0)) end
+            Project: #0..=#15, #21, #22, #16, #18..=#20, #24
+            Map: case when (#22) IS NULL then null else #21 end, case when ((#17{capacity}) IS NULL AND (#23{capacity}) IS NULL) then null else (coalesce(#17, 0) + coalesce(#23, 0)) end
           after %9:
-            Project: #0..=#3, #18, #21, #23, #25, #30
-            Filter: ((#18) IS NOT NULL OR (case when #20 then null else (case when (#5) IS NULL then 0 else coalesce(#4, 0) end + case when (#13) IS NULL then 0 else coalesce(#12, 0) end) end) IS NOT NULL OR (case when #22 then null else (case when (#7) IS NULL then 0 else coalesce(#6, 0) end + case when (#15) IS NULL then 0 else coalesce(#14, 0) end) end) IS NOT NULL OR (case when #24 then null else (case when (#9) IS NULL then 0 else coalesce(#8, 0) end + case when (#17) IS NULL then 0 else coalesce(#16, 0) end) end) IS NOT NULL OR (case when #29 then null else (case when (#11) IS NULL then 0 else coalesce(#10, 0) end + case when (#27) IS NULL then 0 else coalesce(#26, 0) end) end) IS NOT NULL)
-            Map: case when (#27) IS NULL then null else #26 end, ((#19) IS NULL AND (#28) IS NULL), case when #29 then null else (coalesce(#19, 0) + coalesce(#28, 0)) end
+            Project: #0..=#3, #18, #20..=#22, #26
+            Filter: ((#18) IS NOT NULL OR (case when ((case when (#5) IS NULL then null else #4 end) IS NULL AND (case when (#13) IS NULL then null else #12 end) IS NULL) then null else (case when (#5) IS NULL then 0 else coalesce(#4, 0) end + case when (#13) IS NULL then 0 else coalesce(#12, 0) end) end) IS NOT NULL OR (case when ((case when (#7) IS NULL then null else #6 end) IS NULL AND (case when (#15) IS NULL then null else #14 end) IS NULL) then null else (case when (#7) IS NULL then 0 else coalesce(#6, 0) end + case when (#15) IS NULL then 0 else coalesce(#14, 0) end) end) IS NOT NULL OR (case when ((case when (#9) IS NULL then null else #8 end) IS NULL AND (case when (#17) IS NULL then null else #16 end) IS NULL) then null else (case when (#9) IS NULL then 0 else coalesce(#8, 0) end + case when (#17) IS NULL then 0 else coalesce(#16, 0) end) end) IS NOT NULL OR (case when ((case when (#11) IS NULL then null else #10 end) IS NULL AND (case when (#24) IS NULL then null else #23 end) IS NULL) then null else (case when (#11) IS NULL then 0 else coalesce(#10, 0) end + case when (#24) IS NULL then 0 else coalesce(#23, 0) end) end) IS NOT NULL)
+            Map: case when (#24) IS NULL then null else #23 end, case when ((#19{allocations}) IS NULL AND (#25{allocations}) IS NULL) then null else (coalesce(#19, 0) + coalesce(#25, 0)) end
         →Arranged l11
         →Arrange (#0, #1)
           →Union
@@ -16104,18 +16103,18 @@ Explained Query:
             Project: #0..=#8, #13, #14, #9..=#12, #15
             Map: case when (#14) IS NULL then null else #13 end
           after %6:
-            Project: #0..=#10, #16, #17, #11, #13..=#15, #19, #20
-            Map: case when (#17) IS NULL then null else #16 end, ((#12) IS NULL AND (#18) IS NULL), case when #19 then null else (coalesce(#12, 0) + coalesce(#18, 0)) end
+            Project: #0..=#10, #16, #17, #11, #13..=#15, #19
+            Map: case when (#17) IS NULL then null else #16 end, case when ((#12{records}) IS NULL AND (#18{records}) IS NULL) then null else (coalesce(#12, 0) + coalesce(#18, 0)) end
           after %7:
-            Project: #0..=#12, #19, #20, #13, #15..=#18, #22, #23
-            Map: case when (#20) IS NULL then null else #19 end, ((#14) IS NULL AND (#21) IS NULL), case when #22 then null else (coalesce(#14, 0) + coalesce(#21, 0)) end
+            Project: #0..=#12, #18, #19, #13, #15..=#17, #21
+            Map: case when (#19) IS NULL then null else #18 end, case when ((#14{size}) IS NULL AND (#20{size}) IS NULL) then null else (coalesce(#14, 0) + coalesce(#20, 0)) end
           after %8:
-            Project: #0..=#14, #22, #23, #15, #17..=#21, #25, #26
-            Map: case when (#23) IS NULL then null else #22 end, ((#16) IS NULL AND (#24) IS NULL), case when #25 then null else (coalesce(#16, 0) + coalesce(#24, 0)) end
+            Project: #0..=#14, #20, #21, #15, #17..=#19, #23
+            Map: case when (#21) IS NULL then null else #20 end, case when ((#16{capacity}) IS NULL AND (#22{capacity}) IS NULL) then null else (coalesce(#16, 0) + coalesce(#22, 0)) end
           after %9:
-            Project: #0..=#2, #17, #20, #22, #24, #29
-            Filter: ((#17) IS NOT NULL OR (case when #19 then null else (case when (#4) IS NULL then 0 else coalesce(#3, 0) end + case when (#12) IS NULL then 0 else coalesce(#11, 0) end) end) IS NOT NULL OR (case when #21 then null else (case when (#6) IS NULL then 0 else coalesce(#5, 0) end + case when (#14) IS NULL then 0 else coalesce(#13, 0) end) end) IS NOT NULL OR (case when #23 then null else (case when (#8) IS NULL then 0 else coalesce(#7, 0) end + case when (#16) IS NULL then 0 else coalesce(#15, 0) end) end) IS NOT NULL OR (case when #28 then null else (case when (#10) IS NULL then 0 else coalesce(#9, 0) end + case when (#26) IS NULL then 0 else coalesce(#25, 0) end) end) IS NOT NULL)
-            Map: case when (#26) IS NULL then null else #25 end, ((#18) IS NULL AND (#27) IS NULL), case when #28 then null else (coalesce(#18, 0) + coalesce(#27, 0)) end
+            Project: #0..=#2, #17, #19..=#21, #25
+            Filter: ((#17) IS NOT NULL OR (case when ((case when (#4) IS NULL then null else #3 end) IS NULL AND (case when (#12) IS NULL then null else #11 end) IS NULL) then null else (case when (#4) IS NULL then 0 else coalesce(#3, 0) end + case when (#12) IS NULL then 0 else coalesce(#11, 0) end) end) IS NOT NULL OR (case when ((case when (#6) IS NULL then null else #5 end) IS NULL AND (case when (#14) IS NULL then null else #13 end) IS NULL) then null else (case when (#6) IS NULL then 0 else coalesce(#5, 0) end + case when (#14) IS NULL then 0 else coalesce(#13, 0) end) end) IS NOT NULL OR (case when ((case when (#8) IS NULL then null else #7 end) IS NULL AND (case when (#16) IS NULL then null else #15 end) IS NULL) then null else (case when (#8) IS NULL then 0 else coalesce(#7, 0) end + case when (#16) IS NULL then 0 else coalesce(#15, 0) end) end) IS NOT NULL OR (case when ((case when (#10) IS NULL then null else #9 end) IS NULL AND (case when (#23) IS NULL then null else #22 end) IS NULL) then null else (case when (#10) IS NULL then 0 else coalesce(#9, 0) end + case when (#23) IS NULL then 0 else coalesce(#22, 0) end) end) IS NOT NULL)
+            Map: case when (#23) IS NULL then null else #22 end, case when ((#18{allocations}) IS NULL AND (#24{allocations}) IS NULL) then null else (coalesce(#18, 0) + coalesce(#24, 0)) end
         →Arranged l12
         →Arrange (#0, #1)
           →Union

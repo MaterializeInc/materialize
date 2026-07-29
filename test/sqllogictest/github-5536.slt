@@ -33,21 +33,20 @@ WHERE (t3.c1) IN (CAST(((t3.c1)LIKE(v0.c0)) AS VARCHAR));
 ----
 Explained Query:
   Project (#0{c0}, #1{c1}, #3{c3}, #2{c2})
-    Filter (((integer_to_numeric(#5) <= 0.15850659265367217) AND (integer_to_real(#5) >= #2{c2}))) IS NOT NULL
-      Map (-(#4{c0}))
-        CrossJoin type=delta
-          ArrangeBy keys=[[]]
-            Project ()
-              ReadStorage materialize.public.t0
-          ArrangeBy keys=[[]]
-            Project ()
-              Filter (#0{c0} <= #0{c0}) AND (#0{c0} >= #0{c0})
-                ReadStorage materialize.public.t5
-          ArrangeBy keys=[[]]
-            Filter (#1{c1} = text_to_char[len=unbounded](boolean_to_text(like["0.31161855206970124"](padchar(#1{c1})))))
-              ReadStorage materialize.public.t3
-          ArrangeBy keys=[[]]
-            ReadStorage materialize.public.t5
+    Filter (((integer_to_numeric(-(#4{c0})) <= 0.15850659265367217) AND (integer_to_real(-(#4{c0})) >= #2{c2}))) IS NOT NULL
+      CrossJoin type=delta
+        ArrangeBy keys=[[]]
+          Project ()
+            ReadStorage materialize.public.t0
+        ArrangeBy keys=[[]]
+          Project ()
+            Filter (#0{c0} <= #0{c0}) AND (#0{c0} >= #0{c0})
+              ReadStorage materialize.public.t5
+        ArrangeBy keys=[[]]
+          Filter (#1{c1} = text_to_char[len=unbounded](boolean_to_text(like["0.31161855206970124"](padchar(#1{c1})))))
+            ReadStorage materialize.public.t3
+        ArrangeBy keys=[[]]
+          ReadStorage materialize.public.t5
 
 Source materialize.public.t0
 Source materialize.public.t3

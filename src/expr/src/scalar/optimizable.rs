@@ -18,6 +18,7 @@ use std::hash::Hash;
 use serde::Serialize;
 
 use crate::scalar::columns::Columns;
+use crate::scalar::eval::Eval;
 use crate::scalar::func::{BinaryFunc, UnaryFunc, VariadicFunc};
 use crate::visit::VisitChildren;
 use crate::{MirScalarExpr, func};
@@ -45,6 +46,11 @@ pub trait OptimizableExpr:
     /// Returns `None` to visit all children (the common case).
     /// Returns `Some(children)` for selective descent — e.g., for `If`, only the
     /// condition should be eagerly memoized (branches may not be taken).
+    ///
+    /// A memoized child becomes its own mapped column, which the plan evaluates
+    /// unconditionally. So a child may only be listed here if the expression
+    /// itself would evaluate it *and* observe its error. Anything a parent may
+    /// skip, or whose error a parent may swallow, must be withheld.
     fn eager_children(&mut self) -> Option<Vec<&mut Self>>;
 
     /// If `predicate` is `col = expr` (or `expr = col`) where `col` is a column
@@ -87,6 +93,36 @@ impl OptimizableExpr for MirScalarExpr {
         // evaluate to NULL.
         if let MirScalarExpr::CallVariadic {
             func: VariadicFunc::Coalesce(_),
+            exprs,
+        } = self
+        {
+            return Some(exprs.iter_mut().take(1).collect());
+        }
+
+        // `AND`/`OR` swallow an operand's error once another operand fixes the
+        // result (`false` for `AND`, `true` for `OR`), and no operand is
+        // privileged that way. So a *fallible* operand must stay where the
+        // swallowing still applies to it. An infallible one has nothing to
+        // swallow, and hoisting it is what keeps the shared comparisons of a
+        // null-safe join predicate in one column each.
+        if let MirScalarExpr::CallVariadic {
+            func: VariadicFunc::And(_) | VariadicFunc::Or(_),
+            exprs,
+        } = self
+        {
+            return Some(
+                exprs
+                    .iter_mut()
+                    .filter(|e| !e.could_error())
+                    .collect::<Vec<_>>(),
+            );
+        }
+
+        // `error_if_null` only evaluates its message operand when the first
+        // operand is NULL, so the message is conditional the same way a
+        // `COALESCE` tail is.
+        if let MirScalarExpr::CallVariadic {
+            func: VariadicFunc::ErrorIfNull(_),
             exprs,
         } = self
         {

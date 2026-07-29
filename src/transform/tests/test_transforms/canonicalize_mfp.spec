@@ -104,7 +104,10 @@ Project (#0)
       Get t1
       Get t2
 
-# same test as above, but with predicates that are equivalent only after considering the innermost map-project
+# same test as above, but with predicates that are equivalent only after considering the innermost map-project.
+# The two OR predicates are equivalent, but recognizing that would mean memoizing `#0 + #1` out of an OR
+# operand. `+` can overflow, and OR swallows an operand's error, so memoization leaves it in place and the
+# redundant predicate survives. See `OptimizableExpr::eager_children`.
 apply pipeline=CanonicalizeMfp
 Project (#0)
   Filter not(((#0) IS NULL)) AND ((add_int64(#0, #2) = 5::integer) OR (add_int64(#0, #1) = 9::integer)) AND ((#3 = 5::integer) OR (#3 = 9::integer))
@@ -115,7 +118,7 @@ Project (#0)
           Get t2
 ----
 Project (#0)
-  Filter (#0) IS NOT NULL AND ((#4 = 5) OR (#4 = 9))
+  Filter (#0) IS NOT NULL AND ((#4 = 5) OR (#4 = 9)) AND ((5 = (#0 + #1)) OR (9 = (#0 + #1)))
     Map ((#0 + #1))
       Join on=(#0 = #2)
         Get t1

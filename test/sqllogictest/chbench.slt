@@ -1618,50 +1618,46 @@ Explained Query:
   Finish order_by=[#0 asc nulls_last] output=[#0..=#2]
     With
       cte l0 =
-        Project (#0{c_id}..=#2{c_w_id}, #9{c_state}, #16{c_balance}, #22) // { arity: 6 }
-          Map (substr(#11{c_phone}, 1, 1)) // { arity: 23 }
-            ReadIndex on=customer fk_customer_district=[*** full scan ***] // { arity: 22 }
-      cte l1 =
         Project (#0{c_id}..=#4{c_balance}) // { arity: 5 }
           Filter (#4{c_balance} > (#5{sum_c_balance} / bigint_to_numeric(case when (#6{count} = 0) then null else #6{count} end))) // { arity: 7 }
             CrossJoin type=differential // { arity: 7 }
               implementation
-                %1[×]UA » %0:l0[×]ef
+                %1[×]UA » %0:customer[×]ef
               ArrangeBy keys=[[]] // { arity: 5 }
-                Project (#0{c_id}..=#4{c_balance}) // { arity: 5 }
-                  Filter ((#5 = "1") OR (#5 = "2") OR (#5 = "3") OR (#5 = "4") OR (#5 = "5") OR (#5 = "6") OR (#5 = "7")) // { arity: 6 }
-                    Get l0 // { arity: 6 }
+                Project (#0{c_id}..=#2{c_w_id}, #9{c_state}, #16{c_balance}) // { arity: 5 }
+                  Filter (("1" = substr(#11{c_phone}, 1, 1)) OR ("2" = substr(#11{c_phone}, 1, 1)) OR ("3" = substr(#11{c_phone}, 1, 1)) OR ("4" = substr(#11{c_phone}, 1, 1)) OR ("5" = substr(#11{c_phone}, 1, 1)) OR ("6" = substr(#11{c_phone}, 1, 1)) OR ("7" = substr(#11{c_phone}, 1, 1))) // { arity: 22 }
+                    ReadIndex on=customer fk_customer_district=[*** full scan ***] // { arity: 22 }
               ArrangeBy keys=[[]] // { arity: 2 }
                 Reduce aggregates=[sum(#0{c_balance}), count(*)] // { arity: 2 }
-                  Project (#4{c_balance}) // { arity: 1 }
-                    Filter (#4{c_balance} > 0) AND ((#5 = "1") OR (#5 = "2") OR (#5 = "3") OR (#5 = "4") OR (#5 = "5") OR (#5 = "6") OR (#5 = "7")) // { arity: 6 }
-                      Get l0 // { arity: 6 }
-      cte l2 =
+                  Project (#16{c_balance}) // { arity: 1 }
+                    Filter (#16{c_balance} > 0) AND (("1" = substr(#11{c_phone}, 1, 1)) OR ("2" = substr(#11{c_phone}, 1, 1)) OR ("3" = substr(#11{c_phone}, 1, 1)) OR ("4" = substr(#11{c_phone}, 1, 1)) OR ("5" = substr(#11{c_phone}, 1, 1)) OR ("6" = substr(#11{c_phone}, 1, 1)) OR ("7" = substr(#11{c_phone}, 1, 1))) // { arity: 22 }
+                      ReadIndex on=customer fk_customer_district=[*** full scan ***] // { arity: 22 }
+      cte l1 =
         Project (#0{c_id}..=#2{c_w_id}) // { arity: 3 }
-          Get l1 // { arity: 5 }
+          Get l0 // { arity: 5 }
     Return // { arity: 3 }
       Reduce group_by=[substr(#0{c_state}, 1, 1)] aggregates=[count(*), sum(#1{c_balance})] // { arity: 3 }
         Project (#3{c_state}, #4{c_balance}) // { arity: 2 }
           Join on=(#0{c_id} = #5{c_id} AND #1{c_d_id} = #6{c_d_id} AND #2{c_w_id} = #7{c_w_id}) type=differential // { arity: 8 }
             implementation
-              %0:l1[#0..=#2]UKKK » %1[#0..=#2]KKK
+              %0:l0[#0..=#2]UKKK » %1[#0..=#2]KKK
             ArrangeBy keys=[[#0{c_id}..=#2{c_w_id}]] // { arity: 5 }
-              Get l1 // { arity: 5 }
+              Get l0 // { arity: 5 }
             ArrangeBy keys=[[#0{c_id}..=#2{c_w_id}]] // { arity: 3 }
               Union // { arity: 3 }
                 Negate // { arity: 3 }
                   Project (#0{c_id}..=#2{c_w_id}) // { arity: 3 }
                     Join on=(#0{c_id} = #3{o_c_id} AND #1{c_d_id} = #4{o_d_id} AND #2{c_w_id} = #5{o_w_id}) type=differential // { arity: 6 }
                       implementation
-                        %1[#0..=#2]UKKKA » %0:l2[#0..=#2]UKKK
+                        %1[#0..=#2]UKKKA » %0:l1[#0..=#2]UKKK
                       ArrangeBy keys=[[#0{c_id}..=#2{c_w_id}]] // { arity: 3 }
-                        Get l2 // { arity: 3 }
+                        Get l1 // { arity: 3 }
                       ArrangeBy keys=[[#0{o_c_id}..=#2{o_w_id}]] // { arity: 3 }
                         Distinct project=[#2{o_c_id}, #0{o_d_id}, #1{o_w_id}] // { arity: 3 }
                           Project (#1{o_d_id}..=#3{o_c_id}) // { arity: 3 }
                             Filter (#3{o_c_id}) IS NOT NULL // { arity: 8 }
                               ReadIndex on=order fk_order_customer=[*** full scan ***] // { arity: 8 }
-                Get l2 // { arity: 3 }
+                Get l1 // { arity: 3 }
 
 Used Indexes:
   - materialize.public.fk_customer_district (*** full scan ***)

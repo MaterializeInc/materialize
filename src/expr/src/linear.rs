@@ -2019,3 +2019,57 @@ pub mod plan {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use mz_repr::{Datum, Row, RowArena};
+
+    use super::MapFilterProject;
+    use crate::{MirScalarExpr, func};
+
+    /// `optimize` must not turn a row the plan accepts into an evaluation error.
+    ///
+    /// `AND`/`OR` swallow an operand's error once another operand fixes the
+    /// result, so an erroring subexpression under one is not observable. Hoisting
+    /// it into a mapped column would evaluate it unconditionally and surface the
+    /// error, which is why `eager_children` withholds their operands. A *shared*
+    /// subexpression is what makes this reachable: a singly-referenced one is
+    /// inlined back by `inline_expressions`.
+    #[mz_ore::test]
+    fn optimize_preserves_and_or_error_suppression() {
+        // `(#2 * #2) <= (#2 * #2) IS NULL OR #4 IS NULL`, over
+        // (int4, int4, int8, bool, bool).
+        let square =
+            || MirScalarExpr::column(2).call_binary(MirScalarExpr::column(2), func::MulInt64);
+        let predicate = square()
+            .call_binary(square(), func::Lte)
+            .call_is_null()
+            .or(MirScalarExpr::column(4).call_is_null());
+        let mfp = MapFilterProject::new(5).filter(vec![predicate]);
+
+        // `#2 * #2` overflows int8, and `#4` is NULL so the second disjunct is
+        // true and the row passes.
+        let row = Row::pack_slice(&[
+            Datum::Null,
+            Datum::Null,
+            Datum::Int64(4252434432),
+            Datum::Null,
+            Datum::Null,
+        ]);
+
+        let mut optimized = mfp.clone();
+        optimized.optimize();
+
+        for (label, mfp) in [("raw", &mfp), ("optimized", &optimized)] {
+            let plan = super::plan::SafeMfpPlan::from_mfp(mfp.clone());
+            let arena = RowArena::new();
+            let mut datums: Vec<Datum> = row.iter().collect();
+            let mut buf = Row::default();
+            let result = plan.evaluate_into(&mut datums, &arena, &mut buf);
+            assert!(
+                matches!(result, Ok(Some(_))),
+                "{label} MFP should pass the row, got {result:?}"
+            );
+        }
+    }
+}
