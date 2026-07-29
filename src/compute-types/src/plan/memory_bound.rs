@@ -36,10 +36,22 @@ use std::collections::BTreeMap;
 use mz_repr::{ReprRelationType, max_datum_size};
 
 use crate::plan::arrangement_count::{Caveat, predict_arrangement_counts};
+use crate::plan::reduce::ReducePlan;
 use crate::plan::{LirId, LirRelationExpr, LirRelationNode};
 
 /// Bytes a batch spends on the difference accumulated for one update.
 pub const DIFF_BYTES: usize = 8;
+
+/// Widest accumulator an accumulable reduce can carry in the difference position.
+///
+/// An accumulable reduce does not accumulate a plain difference. It threads one accumulator per
+/// aggregate through the difference, and the widest of those holds an arbitrary-precision decimal.
+/// The renderer static-asserts that its accumulator fits here, since this crate cannot name the
+/// type.
+pub const MAX_ACCUM_BYTES: usize = 112;
+
+/// Bytes the accumulator vector's own allocation costs, once per update.
+pub const ACCUM_VEC_HEADER_BYTES: usize = 3 * 8;
 
 /// Bytes a batch spends on the timestamp of one update, outside a recursive scope.
 pub const TIMESTAMP_BYTES: usize = 8;
@@ -66,12 +78,32 @@ pub const VALUE_RANGE_BYTES: usize = 8;
 /// next. Charging a full range per update is the worst case, reached when every key has exactly
 /// one value and every value exactly one update.
 pub fn overhead_bytes(depth: usize) -> usize {
+    overhead_bytes_with_diff(depth, DIFF_BYTES)
+}
+
+/// As [`overhead_bytes`], for a batch whose difference is wider than a plain `Diff`.
+pub fn overhead_bytes_with_diff(depth: usize, diff_bytes: usize) -> usize {
     let timestamp = if depth == 0 {
         TIMESTAMP_BYTES
     } else {
         TIMESTAMP_BYTES + POINT_STAMP_HEADER_BYTES + depth * RECURSION_TIMESTAMP_BYTES_PER_LEVEL
     };
-    DIFF_BYTES + timestamp + KEY_RANGE_BYTES + VALUE_RANGE_BYTES
+    diff_bytes + timestamp + KEY_RANGE_BYTES + VALUE_RANGE_BYTES
+}
+
+/// Width of the difference an update of `node` carries.
+///
+/// Only an accumulable reduce departs from a plain `Diff`. Its accumulators are charged to every
+/// arrangement the node builds, which over-charges the output arrangement, whose difference is an
+/// ordinary one. That is the safe direction.
+fn diff_bytes(node: &LirRelationNode) -> usize {
+    match node {
+        LirRelationNode::Reduce {
+            plan: ReducePlan::Accumulable(plan),
+            ..
+        } => ACCUM_VEC_HEADER_BYTES + plan.full_aggrs.len() * MAX_ACCUM_BYTES + DIFF_BYTES,
+        _ => DIFF_BYTES,
+    }
 }
 
 /// The per-row memory a node's arrangements occupy, where it can be determined.
@@ -119,12 +151,19 @@ pub fn bytes_per_row(
 ) -> BTreeMap<LirId, BytesPerRow> {
     let counts = predict_arrangement_counts(expr);
     let depths = recursion_depths(expr);
+    let nodes = nodes_by_id(expr);
 
     counts
         .into_iter()
         .map(|(lir_id, prediction)| {
             let row_width = node_types.get(&lir_id).and_then(max_row_width);
-            let overhead = overhead_bytes(depths.get(&lir_id).copied().unwrap_or(0));
+            let depth = depths.get(&lir_id).copied().unwrap_or(0);
+            let overhead = overhead_bytes_with_diff(
+                depth,
+                nodes
+                    .get(&lir_id)
+                    .map_or(DIFF_BYTES, |node| diff_bytes(node)),
+            );
             // A node that arranges nothing costs nothing, even where the width is unknown.
             let bytes_per_row = if prediction.data == 0 {
                 Some(0)
@@ -141,6 +180,17 @@ pub fn bytes_per_row(
             (lir_id, entry)
         })
         .collect()
+}
+
+/// Indexes the plan's nodes so per-node properties can be looked up alongside the counts.
+fn nodes_by_id(expr: &LirRelationExpr) -> BTreeMap<LirId, &LirRelationNode> {
+    let mut out = BTreeMap::new();
+    let mut stack = vec![expr];
+    while let Some(expr) = stack.pop() {
+        out.insert(expr.lir_id, &expr.node);
+        stack.extend(expr.node.children());
+    }
+    out
 }
 
 /// How many `LetRec` scopes enclose each node.
@@ -229,6 +279,20 @@ mod tests {
         );
         // The point stamp allocation is paid once, not once per level.
         assert!(overhead_bytes(1) - overhead_bytes(0) > RECURSION_TIMESTAMP_BYTES_PER_LEVEL);
+    }
+
+    /// An accumulable reduce threads accumulators through the difference, so its updates are far
+    /// wider than a plain `Diff` suggests. Measured at 274 bytes per record for two aggregates.
+    #[mz_ore::test]
+    fn accumulable_charges_for_its_accumulators() {
+        let two_aggregates = 24 + 2 * MAX_ACCUM_BYTES + 8;
+        let bound = 5 + overhead_bytes_with_diff(0, two_aggregates);
+        assert!(
+            bound >= 274,
+            "bound {bound} below the 274 bytes per record measured for a two-aggregate reduce"
+        );
+        // A plain difference would badly under-count it.
+        assert!(5 + overhead_bytes(0) < 274);
     }
 
     /// Measured against a live insert-only workload: every bound here exceeded the observed
