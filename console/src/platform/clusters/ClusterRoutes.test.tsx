@@ -22,7 +22,6 @@ import { allClusters } from "~/store/allClusters";
 import {
   clustersFetchColumns,
   emptyClustersResponse,
-  validClustersResponse,
 } from "~/test/clusterQueryBuilders";
 import { mockSubscribeState } from "~/test/mockSubscribe";
 import { renderComponent, RenderWithPathname } from "~/test/utils";
@@ -30,13 +29,10 @@ import { renderComponent, RenderWithPathname } from "~/test/utils";
 import ClusterRoutes from "./ClusterRoutes";
 import { buildClusterServerResponse } from "./clustersTestUtils";
 import { CLUSTERS_FETCH_ERROR_MESSAGE } from "./constants";
-import { clusterQueryKeys, useClusters } from "./queries";
+import { clusterQueryKeys } from "./queries";
 
 vi.mock("~/platform/clusters/ClusterDetail", () => ({
   default: function () {
-    // Given we're mocking the default export, we don't need to capitalize the function name
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    useClusters();
     return <div>ClusterDetail component</div>;
   },
 }));
@@ -55,6 +51,7 @@ const validCluster: Cluster = {
   name: "default",
   size: "50cc",
   managed: true,
+  ownerId: "u1",
   replicas: [
     {
       id: "u678",
@@ -161,7 +158,6 @@ describe("ClusterRoutes", () => {
   });
 
   it("shows cluster details", async () => {
-    server.use(validClustersResponse);
     renderComponent(<ClusterRoutes />, {
       initialRouterEntries: ["/u1/default"],
     });
@@ -170,7 +166,6 @@ describe("ClusterRoutes", () => {
   });
 
   it("updates the path when the name has changed", async () => {
-    server.use(validClustersResponse);
     renderComponent(
       <RenderWithPathname>
         <ClusterRoutes />
@@ -185,7 +180,6 @@ describe("ClusterRoutes", () => {
   });
 
   it("updates the path when the id has changed", async () => {
-    server.use(validClustersResponse);
     renderComponent(
       <RenderWithPathname>
         <ClusterRoutes />
@@ -199,12 +193,23 @@ describe("ClusterRoutes", () => {
     expect(screen.getByText("ClusterDetail component")).toBeVisible();
   });
 
-  it("shows an error state when clusters fail to load on the details page", async () => {
-    server.use(errorClustersResponse);
+  it("still renders the details page when the clusters subscribe errors", async () => {
+    const store = getStore();
+    store.set(
+      allClusters,
+      mockSubscribeState<Cluster>({
+        data: [],
+        snapshotComplete: false,
+        error: {
+          code: ErrorCode.INTERNAL_ERROR,
+          message: "Something went wrong",
+        },
+      }),
+    );
     renderComponent(<ClusterRoutes />, {
       initialRouterEntries: ["/u1/default"],
     });
 
-    expect(await screen.findByText(CLUSTERS_FETCH_ERROR_MESSAGE)).toBeVisible();
+    expect(await screen.findByText("ClusterDetail component")).toBeVisible();
   });
 });
