@@ -502,203 +502,6 @@ mod tests {
             heap(&poisoned),
         );
     }
-
-    #[mz_ore::test]
-    fn test_misra_gries_exact_distinct_count() {
-        use crate::row_codec::MisraGries;
-
-        // A default (empty) summary has seen zero distinct elements, exactly.
-        let empty = MisraGries::<u64>::default();
-        assert_eq!(empty.exact_distinct_count(), Some(0));
-
-        // 100 distinct elements, never tidied: exact.
-        let mut mg = MisraGries::default();
-        for i in 0..100u64 {
-            mg.insert(i);
-        }
-        assert_eq!(mg.exact_distinct_count(), Some(100));
-
-        // The same element observed 100 times is still 1 distinct element.
-        let mut mg = MisraGries::default();
-        for _ in 0..100 {
-            mg.insert(0u64);
-        }
-        assert_eq!(mg.exact_distinct_count(), Some(1));
-
-        // `tidy` triggers on `len() > 2 * k` (k = 512), so exactly 1024 distinct
-        // elements never tidies: still exact.
-        let mut mg = MisraGries::default();
-        for i in 0..1024u64 {
-            mg.insert(i);
-        }
-        assert_eq!(mg.exact_distinct_count(), Some(1024));
-
-        // 2000 distinct elements forces at least one `tidy`, discarding entries:
-        // the length is no longer an exact count.
-        let mut mg = MisraGries::default();
-        for i in 0..2000u64 {
-            mg.insert(i);
-        }
-        assert_eq!(mg.exact_distinct_count(), None);
-    }
-
-    // `tidy`'s guard (`sub_weight > 0`) only sets `tidied`, and only removes
-    // entries, on the branch that actually discards something. We can't cheaply
-    // construct a call where `sub_weight == 0`: `tidy` only runs from `update`
-    // once `inner.len() > 2 * k`, i.e. once there are at least `2 * k + 1`
-    // entries, so the (k+1)-th largest count (`counts[k]`, the value `sub_weight`
-    // reads) always exists and, since every entry has count >= 1, is always >= 1.
-    // The `unwrap_or(0)` fallback is unreachable from `tidy`'s only call site.
-    // So instead we check the guard's two reachable outcomes directly.
-    #[mz_ore::test]
-    fn test_misra_gries_tidy_guard() {
-        use crate::row_codec::MisraGries;
-
-        // 513 elements with count 2 and 512 elements with count 1 (1025 distinct
-        // total) push `inner.len()` past `2 * k` (1024) and trigger `tidy`. The
-        // (k+1)-th largest count is 2 (from the last count-2 entry), so
-        // `sub_weight = 2 > 0`: the guard's discarding branch runs, `tidied` is
-        // set, and the count no longer reflects the number of distinct elements
-        // observed.
-        let mut mg = MisraGries::default();
-        for i in 0..513u64 {
-            mg.update(i, 2);
-        }
-        for i in 513..1025u64 {
-            mg.insert(i);
-        }
-        assert_eq!(mg.exact_distinct_count(), None);
-
-        // A summary that never exceeds 1024 distinct elements never calls `tidy`
-        // at all, so the guard's discarding branch never runs and the count
-        // stays exact.
-        let mut mg = MisraGries::default();
-        for i in 0..1024u64 {
-            mg.insert(i);
-        }
-        assert_eq!(mg.exact_distinct_count(), Some(1024));
-    }
-
-    // `AddAssign` merges one summary into another via `rhs.done()` (which drops
-    // `rhs`'s `tidied` flag along with the rest of its structure) followed by
-    // `self.update(..)`. If `self.tidied` were left untouched by the merge, a
-    // summary that had already discarded elements could be folded into one that
-    // had not, and the merged result would wrongly report an exact count.
-    #[mz_ore::test]
-    fn test_misra_gries_add_assign_propagates_tidied() {
-        use crate::row_codec::MisraGries;
-
-        // `rhs` alone exceeds 2 * k and discards, so it is non-exact.
-        let mut tidied = MisraGries::default();
-        for i in 0..2000u64 {
-            tidied.insert(i);
-        }
-        assert_eq!(tidied.exact_distinct_count(), None);
-
-        // Merging it into an untidied, far-smaller summary must not "launder"
-        // the discard: the merged summary is still non-exact.
-        let mut merged = MisraGries::default();
-        merged.insert(0u64);
-        merged += tidied;
-        assert_eq!(merged.exact_distinct_count(), None);
-
-        // Two summaries that never discarded merge into one that still hasn't.
-        let mut a = MisraGries::default();
-        for i in 0..100u64 {
-            a.insert(i);
-        }
-        let mut b = MisraGries::default();
-        for i in 100..200u64 {
-            b.insert(i);
-        }
-        a += b;
-        assert_eq!(a.exact_distinct_count(), Some(200));
-    }
-
-    /// With dictionary compression disabled, a container never gathers statistics,
-    /// so `exact_distinct_counts` must report `None` regardless of what it is pushed.
-    ///
-    /// This is also the only test that pins down that `with_capacity` (and `clear`,
-    /// which rebuilds `stats` the same way) actually wires `DICTIONARY_COMPRESSION`
-    /// into `stats` at all: every other test in this file that touches the flag sets
-    /// it `true`, so a regression that gathered statistics unconditionally, ignoring
-    /// the flag, would otherwise go undetected.
-    #[mz_ore::test]
-    fn test_exact_distinct_counts_disabled() {
-        use timely::container::PushInto;
-
-        let _guard = with_dictionary_compression(false);
-
-        let mut container = DatumContainer::with_capacity(0);
-        for i in 0..10i64 {
-            container.push_into(Row::pack_slice(&[Datum::Int64(i % 3)]));
-        }
-        assert_eq!(container.exact_distinct_counts(), None);
-    }
-
-    /// With dictionary compression enabled and few rows pushed, every column's
-    /// summary is exact. Two columns with different distinct counts (3 vs 7) so a
-    /// transposed or shared per-column result would fail.
-    #[mz_ore::test]
-    fn test_exact_distinct_counts_enabled() {
-        use timely::container::PushInto;
-
-        let _guard = with_dictionary_compression(true);
-
-        let mut container = DatumContainer::with_capacity(0);
-        for i in 0..50i64 {
-            container.push_into(Row::pack_slice(&[Datum::Int64(i % 3), Datum::Int64(i % 7)]));
-        }
-        assert_eq!(
-            container.exact_distinct_counts(),
-            Some(vec![Some(3), Some(7)]),
-        );
-    }
-
-    /// Once the container has installed a codec, its statistics summary is gone and
-    /// `exact_distinct_counts` must report `None`, since the container has by then
-    /// observed records the summary never saw.
-    ///
-    /// The production path to that state pushes `STATS_THRESHOLD` (64Ki) records,
-    /// which is too slow for a unit test. `promote_stats_to_codec` (exercised by
-    /// `push_done_promotion_avoids_merge_poison` above) reaches the identical
-    /// container state without pushing anywhere near that many rows. It takes
-    /// `stats` and moves it into `codec`, so we drive it directly instead.
-    #[mz_ore::test]
-    fn test_exact_distinct_counts_after_codec_install() {
-        use timely::container::PushInto;
-
-        let _guard = with_dictionary_compression(true);
-
-        let mut container = DatumContainer::with_capacity(0);
-        for i in 0..10i64 {
-            container.push_into(Row::pack_slice(&[Datum::Int64(i % 3)]));
-        }
-        container.promote_stats_to_codec();
-
-        assert_eq!(container.exact_distinct_counts(), None);
-    }
-
-    /// Confirms the statistic against the motivating case: a column with a fixed
-    /// small number of distinct values (100) in a much larger container (20000 rows)
-    /// reports that exact count, while a column with a distinct value per row
-    /// reports `None` once past the summary's `2 * k` (= 1024) tidy threshold.
-    #[mz_ore::test]
-    fn test_exact_distinct_counts_matches_reality() {
-        use timely::container::PushInto;
-
-        let _guard = with_dictionary_compression(true);
-
-        let mut container = DatumContainer::with_capacity(0);
-        for i in 0..20_000i64 {
-            container.push_into(Row::pack_slice(&[Datum::Int64(i % 100), Datum::Int64(i)]));
-        }
-        let counts = container
-            .exact_distinct_counts()
-            .expect("stats still present under STATS_THRESHOLD");
-        assert_eq!(counts[0], Some(100), "column with 100 distinct values");
-        assert_eq!(counts[1], None, "column with a distinct value per row");
-    }
 }
 
 /// A `[u8]`-specialized container.
@@ -1709,19 +1512,6 @@ mod dictionary {
                 self.codec = self.stats.take();
             }
         }
-
-        /// The exact number of distinct values in each column, where that is known.
-        ///
-        /// Element `i` is the count for column `i`, and `None` where no exact count is available.
-        /// A count is available only while this container still holds its statistics summary and
-        /// that summary never discarded an element. Once a codec is installed the summary is gone
-        /// and the container has observed records it never recorded, so nothing exact survives.
-        ///
-        /// Returns `None` when the container has no statistics at all, which is the case whenever
-        /// dictionary compression is disabled.
-        pub fn exact_distinct_counts(&self) -> Option<Vec<Option<usize>>> {
-            self.stats.as_ref().map(ColumnsCodec::exact_distinct_counts)
-        }
     }
 
     use timely::container::PushInto;
@@ -2106,19 +1896,6 @@ mod row_codec {
         }
 
         impl ColumnsCodec {
-            /// The exact number of distinct values observed in each column, where known.
-            ///
-            /// Element `i` is the count for column `i`, from that column's own summary; see
-            /// [`DictionaryCodec::exact_distinct_count`].
-            pub(crate) fn exact_distinct_counts(&self) -> Vec<Option<usize>> {
-                self.columns
-                    .iter()
-                    .map(DictionaryCodec::exact_distinct_count)
-                    .collect()
-            }
-        }
-
-        impl ColumnsCodec {
             /// Construct a codec using only structurally safe tags.
             ///
             /// Consumes `self`: this is only ever called on stats that have just been
@@ -2288,13 +2065,9 @@ mod row_codec {
                 let mut mg = MisraGries::default();
                 let mut tags: [u64; 4] = [0; 4];
                 for stat in stats.into_iter() {
-                    // `+=` (not a manual `done()`-then-`update()` loop) so a source
-                    // that already discarded elements carries its `tidied` flag into
-                    // `mg` too. `mg` is discarded at the end of this function (the
-                    // returned codec's own summary starts fresh, see below), so this
-                    // has no observable effect today, but keeps the merge correct if
-                    // that ever changes.
-                    mg += stat.stats.0.clone();
+                    for (thing, count) in stat.stats.0.clone().done() {
+                        mg.update(thing, count);
+                    }
                     tags[0] |= stat.stats.1[0];
                     tags[1] |= stat.stats.1[1];
                     tags[2] |= stat.stats.1[2];
@@ -2381,12 +2154,6 @@ mod row_codec {
                 let tag_idx: usize = (tag % 4).into();
                 self.stats.1[tag_idx] |= 1 << (tag >> 2);
                 self.stats.0.insert_ref(bytes);
-            }
-
-            /// The exact number of distinct values this codec's summary has observed, when
-            /// that is known. See [`MisraGries::exact_distinct_count`].
-            pub fn exact_distinct_count(&self) -> Option<usize> {
-                self.stats.0.exact_distinct_count()
             }
 
             /// Construct a codec using only structurally safe tags (>= SAFE_TAG_BASE).
@@ -2506,9 +2273,6 @@ mod row_codec {
         pub struct MisraGries<T: Ord + Hash> {
             inner: HashMap<T, usize, ahash::RandomState>,
             k: usize,
-            // Whether `tidy` has ever discarded an entry. Once true, `inner.len()` no
-            // longer bounds the number of distinct elements observed.
-            tidied: bool,
         }
 
         impl<T: Ord + Hash> Default for MisraGries<T> {
@@ -2517,7 +2281,6 @@ mod row_codec {
                 Self {
                     inner: HashMap::with_hasher(fixed_state()),
                     k: 512,
-                    tidied: false,
                 }
             }
         }
@@ -2527,15 +2290,6 @@ mod row_codec {
             #[inline(always)]
             pub fn insert(&mut self, element: T) {
                 self.update(element, 1);
-            }
-
-            /// The exact number of distinct elements observed, when that is known.
-            ///
-            /// Returns `None` once the summary has discarded an element, after which its length no
-            /// longer relates to the number of distinct elements observed. A summary that never
-            /// discarded holds every element it saw, so its length is exact.
-            pub fn exact_distinct_count(&self) -> Option<usize> {
-                (!self.tidied).then_some(self.inner.len())
             }
             /// Inserts multiple copies of an element to the summary.
             #[inline]
@@ -2564,7 +2318,6 @@ mod row_codec {
                 // The (k+1)-th largest count, or 0 if fewer than k+1 entries.
                 let sub_weight = counts.get(self.k).copied().unwrap_or(0);
                 if sub_weight > 0 {
-                    self.tidied = true;
                     self.inner.retain(|_, count| {
                         *count = count.saturating_sub(sub_weight);
                         *count > 0
@@ -2600,18 +2353,9 @@ mod row_codec {
 
         impl<T: Ord + Hash> std::ops::AddAssign for MisraGries<T> {
             fn add_assign(&mut self, rhs: Self) {
-                // `rhs.done()` consumes `rhs` into a plain `Vec`, dropping its `tidied`
-                // flag along with the rest of its structure. Read it first: if `rhs` had
-                // already discarded elements, the merged summary must report the same,
-                // even if `self` alone never has.
-                let rhs_tidied = rhs.tidied;
                 for (element, count) in rhs.done() {
                     self.update(element, count);
                 }
-                // Plain assignment, not `|=`: clippy's `suspicious_op_assign_impl`
-                // flags compound-assignment operators on `self` fields inside an
-                // `AddAssign` impl as likely copy-paste mistakes.
-                self.tidied = self.tidied || rhs_tidied;
             }
         }
     }
