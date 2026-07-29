@@ -5721,6 +5721,15 @@ impl<'a> Parser<'a> {
     fn parse_option_map(
         &mut self,
     ) -> Result<Option<BTreeMap<String, WithOptionValue<Raw>>>, ParserError> {
+        // `MAP` only begins a map literal when a `[` follows it. Committing on
+        // the keyword alone makes a bare `map` in an option-value position a hard
+        // error on the missing bracket, rather than falling through to the item
+        // name it is: `TOPIC CONFIG = "map"` prints as `TOPIC CONFIG = map`,
+        // since `map` is a legal bare identifier everywhere else, and that output
+        // then failed to reparse.
+        if !(self.peek_keyword(MAP) && self.peek_nth_token(1) == Some(Token::LBracket)) {
+            return Ok(None);
+        }
         Ok(if self.parse_keyword(MAP) {
             self.expect_token(&Token::LBracket)?;
             let mut map = BTreeMap::new();

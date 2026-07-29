@@ -3781,3 +3781,13 @@ CREATE SINK snk FROM t INTO KAFKA CONNECTION conn1 (TOPIC 'topic') FORMAT AVRO U
 CREATE SINK snk FROM t INTO KAFKA CONNECTION conn1 (TOPIC = 'topic') FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (KEY SCHEMA NAME = 'k', VALUE SCHEMA NAME = 'v', KEY COMPATIBILITY LEVEL = 'BACKWARD', VALUE COMPATIBILITY LEVEL = 'FULL') ENVELOPE UPSERT
 =>
 CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("snk")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("t")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None, headers: None }, format: Some(Bare(Avro(Glue { connection: Name(UnresolvedItemName([Ident("glue_conn")])), with_options: [GlueAvroOption { name: KeySchemaName, value: Some(Value(String("k"))) }, GlueAvroOption { name: ValueSchemaName, value: Some(Value(String("v"))) }, GlueAvroOption { name: KeyCompatibilityLevel, value: Some(Value(String("BACKWARD"))) }, GlueAvroOption { name: ValueCompatibilityLevel, value: Some(Value(String("FULL"))) }], seed: None }))), envelope: Some(Upsert), mode: None, with_options: [] })
+
+# An option value that is the bare identifier `map`. `MAP` only starts a map
+# literal when a `[` follows, so this is the item name `map`, which is what
+# `AstDisplay` prints for a quoted `"map"`.
+parse-statement
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC CONFIG = "map")
+----
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC CONFIG = map)
+=>
+CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: TopicConfig, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("map")]))) }], key: None, headers: None }, format: None, envelope: None, mode: None, with_options: [] })
