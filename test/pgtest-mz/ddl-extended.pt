@@ -1,4 +1,6 @@
-# Test that multiple DDL statements in the same extended request are supported
+# Test that multiple DDL statements in the same extended request are supported.
+# Unlike PostgreSQL, our DDL commits as it executes, so it survives a later
+# failure in the same pipeline. The pipeline's writes do not.
 
 send
 Query {"query": "DROP TABLE IF EXISTS a"}
@@ -49,12 +51,15 @@ BindComplete
 ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"22012"},{"typ":"M","value":"division by zero"}]}
 ReadyForQuery {"status":"I"}
 RowDescription {"fields":[{"name":"a"}]}
-DataRow {"fields":["1"]}
-CommandComplete {"tag":"SELECT 1"}
+CommandComplete {"tag":"SELECT 0"}
 ReadyForQuery {"status":"I"}
 
+# Both tables exist, but the row the failed pipeline inserted does not.
 send
 Parse {"query": "SELECT * FROM a"}
+Bind
+Execute
+Parse {"query": "SELECT * FROM b"}
 Bind
 Execute
 Sync
@@ -65,6 +70,8 @@ ReadyForQuery
 ----
 ParseComplete
 BindComplete
-DataRow {"fields":["1"]}
-CommandComplete {"tag":"SELECT 1"}
+CommandComplete {"tag":"SELECT 0"}
+ParseComplete
+BindComplete
+CommandComplete {"tag":"SELECT 0"}
 ReadyForQuery {"status":"I"}

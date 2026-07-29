@@ -1128,6 +1128,16 @@ impl SessionClient {
         catalog.system_config().enable_statement_arrival_logging()
     }
 
+    /// Reports whether `enable_extended_protocol_implicit_transaction` is on.
+    pub async fn extended_protocol_implicit_transaction_enabled(&mut self) -> bool {
+        let catalog = self
+            .catalog_snapshot("extended_protocol_implicit_transaction")
+            .await;
+        catalog
+            .system_config()
+            .enable_extended_protocol_implicit_transaction()
+    }
+
     /// Dumps the catalog to a JSON string.
     ///
     /// No authorization is performed, so access to this function must be limited to internal
