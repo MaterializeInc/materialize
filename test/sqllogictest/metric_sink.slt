@@ -1,0 +1,226 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+reset-server
+
+# `CREATE METRIC SINK` only writes a catalog item. No dataflow is installed, so
+# nothing here actually publishes metrics.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_metric_sink = true
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE raw (metric_name text, metric_type text, labels map[text=>text], value double, help text)
+
+statement ok
+CREATE VIEW shaped AS SELECT * FROM raw
+
+# All five columns present with the right types, so this plans.
+
+statement ok
+CREATE METRIC SINK ms FROM shaped
+
+statement ok
+DROP METRIC SINK ms
+
+# Order doesn't matter.
+
+statement ok
+CREATE VIEW reordered AS SELECT help, value, labels, metric_type, metric_name FROM raw
+
+statement ok
+CREATE METRIC SINK ms_reordered FROM reordered
+
+statement ok
+DROP METRIC SINK ms_reordered
+
+# Extra columns are ignored rather than rejected.
+
+statement ok
+CREATE VIEW extra AS SELECT *, 1 AS unrelated FROM raw
+
+statement ok
+CREATE METRIC SINK ms_extra FROM extra
+
+statement ok
+DROP METRIC SINK ms_extra
+
+# A missing column is not.
+
+statement ok
+CREATE VIEW missing_help AS SELECT metric_name, metric_type, labels, value FROM raw
+
+statement error metric sink source must expose column "help"
+CREATE METRIC SINK bad FROM missing_help
+
+# Neither is one of the wrong type.
+
+statement ok
+CREATE VIEW wrong_value_type AS
+SELECT metric_name, metric_type, labels, value::text AS value, help FROM raw
+
+statement error metric sink source column "value" is not of the required type
+CREATE METRIC SINK bad FROM wrong_value_type
+
+# `labels` has to be a text=>text map, not just any map.
+
+statement ok
+CREATE VIEW wrong_labels_type AS
+SELECT metric_name, metric_type, '{a=>1}'::map[text=>int] AS labels, value, help FROM raw
+
+statement error metric sink source column "labels" is not of the required type
+CREATE METRIC SINK bad FROM wrong_labels_type
+
+# You can't read from something that has no rows to read.
+
+statement ok
+CREATE SECRET s AS 'x'
+
+statement error cannot create metric sink from s because it is a secret
+CREATE METRIC SINK bad FROM s
+
+# An index is in the same boat, and the error should say so instead of being
+# vague about it.
+
+statement ok
+CREATE INDEX raw_idx ON raw (metric_name)
+
+statement error cannot create metric sink from raw_idx because it is a index
+CREATE METRIC SINK bad FROM raw_idx
+
+# IF NOT EXISTS on a taken name is a no-op.
+
+statement ok
+CREATE METRIC SINK ms FROM shaped
+
+statement ok
+CREATE METRIC SINK IF NOT EXISTS ms FROM shaped
+
+statement error metric sink "materialize.public.ms" already exists
+CREATE METRIC SINK ms FROM shaped
+
+# A metric sink can't be indexed.
+
+statement error index cannot be created on materialize.public.ms because it is a metric sink
+CREATE INDEX ms_idx ON ms (metric_name)
+
+# ...or read from.
+
+statement error metric sink
+CREATE VIEW from_ms AS SELECT * FROM ms
+
+# Regression guard. These views run `parse_catalog_create_sql` over every item
+# row before the type filter gets a chance to drop the ones they don't want, so
+# an item type it can't classify takes all of them out at once. With a metric
+# sink sitting in the catalog, they all still need to answer.
+
+query I
+SELECT count(*) >= 0::int FROM mz_catalog.mz_indexes
+----
+1
+
+query I
+SELECT count(*) >= 0::int FROM mz_catalog.mz_objects
+----
+1
+
+query I
+SELECT count(*) >= 0::int FROM mz_internal.mz_show_all_objects
+----
+1
+
+query I
+SELECT count(*) >= 0::int FROM mz_catalog.mz_sources
+----
+1
+
+query I
+SELECT count(*) >= 0::int FROM mz_catalog.mz_materialized_views
+----
+1
+
+query I
+SELECT count(*) >= 0::int FROM mz_catalog.mz_connections
+----
+1
+
+query I
+SELECT count(*) >= 0::int FROM mz_catalog.mz_secrets
+----
+1
+
+query I
+SELECT count(*) >= 0::int FROM mz_catalog.mz_kafka_sources
+----
+1
+
+query I
+SELECT count(*) >= 0::int FROM mz_internal.mz_postgres_sources
+----
+1
+
+# And it classifies as `metric-sink`, which is what boot relies on.
+
+simple conn=mz_system,user=mz_system
+SELECT mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'type'
+FROM mz_internal.mz_catalog_raw
+WHERE data->>'kind' = 'Item' AND data->'value'->>'name' = 'ms';
+----
+metric-sink
+COMPLETE 1
+
+# It isn't in mz_objects yet, since nothing packs a builtin-table row for it.
+
+query I
+SELECT count(*) FROM mz_catalog.mz_objects WHERE name = 'ms'
+----
+0
+
+# Things that deliberately don't work. `COMMENT ON` has no metric-sink variant
+# in the grammar at all.
+
+statement error Expected one of TABLE or VIEW or COLUMN or MATERIALIZED or SOURCE or SINK or INDEX or FUNCTION or CONNECTION or TYPE or SECRET or ROLE or DATABASE or SCHEMA or CLUSTER or NETWORK, found METRIC
+COMMENT ON METRIC SINK ms IS 'nope'
+
+# Default privileges never reach the planner: the grammar has no METRIC SINKS
+# here, so `plan_alter_default_privileges` rejecting them is belt-and-braces.
+# That is also why no durably stored default-privilege key can name one.
+
+simple conn=mz_system,user=mz_system
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL ON METRIC SINKS TO PUBLIC
+----
+db error: ERROR: Expected one of TABLES or TYPES or SECRETS or CONNECTIONS or SCHEMAS or DATABASES or CLUSTERS, found METRIC
+
+# The FROM relation is a tracked dependency, so it can't be pulled out from
+# under a live sink without CASCADE.
+
+statement error cannot drop view "shaped": still depended upon by metric sink "ms"
+DROP VIEW shaped
+
+statement ok
+DROP VIEW shaped CASCADE
+
+query I
+SELECT count(*) FROM mz_internal.mz_show_all_objects WHERE name = 'ms'
+----
+0
+
+# With the flag off the statement is refused, and the error says which flag.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_metric_sink = false
+----
+COMPLETE 0
+
+statement error CREATE METRIC SINK is not available
+CREATE METRIC SINK gated FROM raw
