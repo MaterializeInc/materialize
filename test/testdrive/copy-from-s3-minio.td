@@ -252,28 +252,33 @@ data,value
 # file fails, none of the other files in the same COPY may be committed to the
 # target table, even the ones that would have imported cleanly on their own.
 
+> CREATE CLUSTER copy_from_atomic SIZE 'scale=1,workers=2';
+
+> SET CLUSTER = copy_from_atomic;
+
 > CREATE TABLE t_atomic (a text, b text);
 
 # Three well-formed files, under their own prefix so we can also COPY them on
-# their own as a positive control below. Each file has 10 rows, 30 in total.
-$ s3-file-upload bucket=copytos3 key=atomic/good/good1.csv repeat=10
+# their own as a positive control below. Each file has 3,000 rows, 9,000 in
+# total. This exceeds the maximum record capacity of a pipeline container.
+$ s3-file-upload bucket=copytos3 key=atomic/good/good1.csv repeat=3000
 foo,100
 
-$ s3-file-upload bucket=copytos3 key=atomic/good/good2.csv repeat=10
+$ s3-file-upload bucket=copytos3 key=atomic/good/good2.csv repeat=3000
 bar,200
 
-$ s3-file-upload bucket=copytos3 key=atomic/good/good3.csv repeat=10
+$ s3-file-upload bucket=copytos3 key=atomic/good/good3.csv repeat=3000
 baz,300
 
 # One malformed file, sitting alongside the good ones under the atomic/ prefix.
-# Its rows have three columns instead of the expected two, which the CSV
-# decoder rejects.
-$ s3-file-upload bucket=copytos3 key=atomic/bad.csv repeat=100
+# Its name sorts after the good files, so a successful batch reaches staging
+# before its three-column rows are rejected by the CSV decoder.
+$ s3-file-upload bucket=copytos3 key=atomic/zz-bad.csv repeat=100
 qux,400,extra
 
 # The COPY reads all four files under atomic/ and must fail on the malformed
-# file. The order in which the files are processed does not matter: atomicity
-# requires that the whole COPY roll back.
+# file after staging valid rows. Atomicity requires that the whole COPY roll
+# back.
 ! COPY INTO t_atomic FROM 's3://copytos3' (FORMAT CSV, AWS CONNECTION = aws_conn, PATTERN = "atomic/**");
 contains:wrong number of columns
 
@@ -287,4 +292,8 @@ contains:wrong number of columns
 > COPY INTO t_atomic FROM 's3://copytos3' (FORMAT CSV, AWS CONNECTION = aws_conn, PATTERN = "atomic/good/**");
 
 > SELECT COUNT(*) FROM t_atomic;
-30
+9000
+
+> RESET CLUSTER;
+
+> DROP CLUSTER copy_from_atomic;
