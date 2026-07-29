@@ -282,7 +282,7 @@ impl Metrics {
             )),
             catalog_transact_phase_seconds: registry.register(metric!(
                 name: "mz_catalog_transact_phase_seconds",
-                help: "Wall time of the individual phases of a coordinator catalog transaction, to attribute where transact time is spent.",
+                help: "Wall time of the individual phases of a coordinator catalog transaction, to attribute where transact time is spent. Phases overlap and do not sum to mz_catalog_transact_seconds. The transact phase includes the durable catalog sync and commit.",
                 var_labels: ["phase"],
                 buckets: histogram_seconds_buckets(0.000_128, 32.0),
             )),

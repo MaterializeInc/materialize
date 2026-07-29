@@ -394,20 +394,20 @@ metrics:
   source: src/catalog/src/durable/metrics.rs
   visibility: internal
 - name: mz_catalog_transact_phase_seconds_bucket
-  help: Wall time of the individual phases of a coordinator catalog transaction, to attribute where transact time is spent.
+  help: Wall time of the individual phases of a coordinator catalog transaction, to attribute where transact time is spent. Phases overlap and do not sum to mz_catalog_transact_seconds. The transact phase includes the durable catalog sync and commit.
   labels:
   - le
   - phase
   source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_catalog_transact_phase_seconds_count
-  help: Wall time of the individual phases of a coordinator catalog transaction, to attribute where transact time is spent.
+  help: Wall time of the individual phases of a coordinator catalog transaction, to attribute where transact time is spent. Phases overlap and do not sum to mz_catalog_transact_seconds. The transact phase includes the durable catalog sync and commit.
   labels:
   - phase
   source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_catalog_transact_phase_seconds_sum
-  help: Wall time of the individual phases of a coordinator catalog transaction, to attribute where transact time is spent.
+  help: Wall time of the individual phases of a coordinator catalog transaction, to attribute where transact time is spent. Phases overlap and do not sum to mz_catalog_transact_seconds. The transact phase includes the durable catalog sync and commit.
   labels:
   - phase
   source: src/adapter/src/metrics.rs
