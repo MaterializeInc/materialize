@@ -305,6 +305,15 @@ impl Coordinator {
                     dataflow_metainfo,
                 )?
             }
+            ExplainStage::MemoryBound => {
+                let Some(plan) = self.catalog().try_get_physical_plan(&gid).cloned() else {
+                    tracing::error!("cannot find {stage} for materialized view {id} in catalog");
+                    coord_bail!("cannot find {stage} for materialized view in catalog");
+                };
+                return Ok(Self::send_immediate_rows(
+                    crate::explain::memory_bound_rows(&plan),
+                ));
+            }
             _ => {
                 coord_bail!("cannot EXPLAIN {} FOR MATERIALIZED VIEW", stage);
             }

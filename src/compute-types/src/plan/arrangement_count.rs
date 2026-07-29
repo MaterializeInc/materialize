@@ -125,7 +125,12 @@ pub fn predict_node(node: &LirRelationNode) -> Prediction {
 
         LirRelationNode::ArrangeBy { forms, .. } => {
             let forms = forms.arranged.len();
-            Prediction::caveated(forms, forms, Caveat::ArrangeByMayReuse)
+            // Nothing to reuse when nothing is built, so a caveat there would be noise.
+            if forms == 0 {
+                Prediction::default()
+            } else {
+                Prediction::caveated(forms, forms, Caveat::ArrangeByMayReuse)
+            }
         }
 
         LirRelationNode::Threshold { .. } => {

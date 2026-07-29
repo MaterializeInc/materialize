@@ -327,6 +327,17 @@ pub fn describe_explain_plan(
             let name = "Plan Insights";
             relation_desc = relation_desc.with_column(name, SqlScalarType::String.nullable(false));
         }
+        ExplainStage::MemoryBound => {
+            // Width and bytes are not reported yet: they need the per-node output types, which
+            // the explain path does not carry. Adding empty columns now would read as "no
+            // answer" rather than "not implemented".
+            relation_desc = relation_desc
+                .with_column("Node Id", SqlScalarType::UInt64.nullable(false))
+                .with_column("Operator", SqlScalarType::String.nullable(false))
+                .with_column("Arrangements", SqlScalarType::UInt64.nullable(false))
+                .with_column("Error Arrangements", SqlScalarType::UInt64.nullable(false))
+                .with_column("Note", SqlScalarType::String.nullable(true));
+        }
     };
     let relation_desc = relation_desc.finish();
 

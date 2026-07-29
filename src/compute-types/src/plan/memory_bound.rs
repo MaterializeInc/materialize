@@ -182,8 +182,67 @@ pub fn bytes_per_row(
         .collect()
 }
 
+/// A short name for a node, for reporting the bound.
+///
+/// Deliberately coarser than the `EXPLAIN PHYSICAL PLAN` rendering: this names the operator kind
+/// that determines the arrangement count, not the expressions it evaluates.
+pub fn node_label(node: &LirRelationNode) -> String {
+    use crate::plan::join::JoinPlan;
+    use crate::plan::reduce::{BasicPlan, HierarchicalPlan};
+    use crate::plan::top_k::TopKPlan;
+
+    match node {
+        LirRelationNode::Constant { .. } => "Constant".into(),
+        LirRelationNode::Get { .. } => "Get".into(),
+        LirRelationNode::Let { .. } => "Let".into(),
+        LirRelationNode::LetRec { .. } => "LetRec".into(),
+        LirRelationNode::Mfp { .. } => "Map/Filter/Project".into(),
+        LirRelationNode::FlatMap { .. } => "FlatMap".into(),
+        LirRelationNode::Negate { .. } => "Negate".into(),
+        LirRelationNode::Union { .. } => "Union".into(),
+        LirRelationNode::Threshold { .. } => "Threshold".into(),
+        LirRelationNode::ArrangeBy { forms, .. } => {
+            format!("ArrangeBy ({} forms)", forms.arranged.len())
+        }
+        LirRelationNode::Join { plan, .. } => match plan {
+            JoinPlan::Delta(_) => "Delta Join".into(),
+            JoinPlan::Linear(plan) => {
+                format!("Differential Join ({} stages)", plan.stage_plans.len())
+            }
+        },
+        LirRelationNode::Reduce { plan, .. } => match plan {
+            ReducePlan::Distinct => "Reduce (distinct)".into(),
+            ReducePlan::Accumulable(plan) => {
+                format!("Reduce (accumulable, {} aggregates)", plan.full_aggrs.len())
+            }
+            ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(_)) => {
+                "Reduce (hierarchical, monotonic)".into()
+            }
+            ReducePlan::Hierarchical(HierarchicalPlan::Bucketed(plan)) => {
+                format!("Reduce (hierarchical, {} levels)", plan.buckets.len())
+            }
+            ReducePlan::Basic(BasicPlan::Single(_)) => "Reduce (basic)".into(),
+            ReducePlan::Basic(BasicPlan::Multiple(aggrs)) => {
+                format!("Reduce (basic, {} aggregates)", aggrs.len())
+            }
+        },
+        LirRelationNode::TopK { top_k_plan, .. } => match top_k_plan {
+            TopKPlan::MonotonicTop1(_) => "TopK (monotonic top1)".into(),
+            TopKPlan::MonotonicTopK(_) => "TopK (monotonic)".into(),
+            TopKPlan::Basic(plan) => {
+                let levels = if plan.limit.is_some() {
+                    plan.buckets.len()
+                } else {
+                    0
+                };
+                format!("TopK ({levels} levels)")
+            }
+        },
+    }
+}
+
 /// Indexes the plan's nodes so per-node properties can be looked up alongside the counts.
-fn nodes_by_id(expr: &LirRelationExpr) -> BTreeMap<LirId, &LirRelationNode> {
+pub fn nodes_by_id(expr: &LirRelationExpr) -> BTreeMap<LirId, &LirRelationNode> {
     let mut out = BTreeMap::new();
     let mut stack = vec![expr];
     while let Some(expr) = stack.pop() {

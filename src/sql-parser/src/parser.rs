@@ -9201,6 +9201,7 @@ impl<'a> Parser<'a> {
             PHYSICAL,
             OPTIMIZER,
             PLAN,
+            MEMORY,
         ]) {
             Some(RAW) => {
                 self.expect_keyword(PLAN)?;
@@ -9225,6 +9226,10 @@ impl<'a> Parser<'a> {
             Some(OPTIMIZER) => {
                 self.expect_keyword(TRACE)?;
                 (true, Some(ExplainStage::Trace))
+            }
+            Some(MEMORY) => {
+                self.expect_keyword(BOUND)?;
+                (true, Some(ExplainStage::MemoryBound))
             }
             Some(PLAN) => {
                 if self.parse_keyword(INSIGHTS) {
