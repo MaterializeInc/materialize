@@ -120,10 +120,10 @@ skip = [
     { name = "typed-builder", version = "0.20.1" },
     { name = "typed-builder-macro", version = "0.20.1" },
     # chrono-tz
-    { name = "phf", version = "0.11.3" },
-    { name = "phf_shared", version = "0.11.3" },
-    { name = "phf_generator", version = "0.11.2" },
-    { name = "phf_codegen", version = "0.11.3" },
+    { name = "phf", version = "0.12.1" },
+    { name = "phf_shared", version = "0.12.1" },
+    { name = "phf_generator", version = "0.12.1" },
+    { name = "phf_codegen", version = "0.12.1" },
     # duckdb
     { name = "fallible-iterator", version = "0.3.0" },
     # arrow

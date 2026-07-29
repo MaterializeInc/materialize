@@ -2216,20 +2216,10 @@ class FlipFlagsAction(Action):
         conn = None
 
         try:
+            conn = self.create_system_connection(exe)
             if cluster is not None:
-                # Serialize with ReconfigureClusterAction: any managed-to-
-                # managed ALTER CLUSTER folds onto an in-flight graceful
-                # reconfiguration record and, lacking a WAIT clause, replaces
-                # its deadline with the 24h default (SQL-568), which strands
-                # the reconfiguration that action is polling on.
-                # TODO: Reenable running without the lock when SQL-568 is fixed
-                with cluster.lock:
-                    if cluster not in exe.db.clusters:
-                        return False
-                    conn = self.create_system_connection(exe)
-                    self.set_cluster_compression(conn, cluster)
+                self.set_cluster_compression(conn, cluster)
             else:
-                conn = self.create_system_connection(exe)
                 self.flip_flag(conn, flag_name, flag_value)
                 exe.db.flags[flag_name] = flag_value
             return True
@@ -2866,13 +2856,17 @@ class ReconnectAction(Action):
                 conn = psycopg.connect(
                     host=host, port=pg_port(), user=user, dbname="materialize"
                 )
-                conn.autocommit = exe.autocommit
                 cur = conn.cursor()
                 exe.cur = cur
-                exe.set_isolation("SERIALIZABLE")
                 # Reapply the session settings from Worker.run, they don't
-                # survive the reconnect.
+                # survive the reconnect. They must be applied in autocommit
+                # mode: a value set inside a transaction is only staged, and
+                # Materialize discards staged values when that transaction
+                # rolls back, which the poisoned-cluster recovery below does.
+                conn.autocommit = True
+                exe.set_isolation("SERIALIZABLE")
                 cur.execute("SET auto_route_catalog_queries TO false")
+                conn.autocommit = exe.autocommit
                 try:
                     cur.execute("SELECT pg_backend_pid()")
                 except Exception as e:

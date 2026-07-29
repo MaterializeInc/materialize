@@ -555,6 +555,11 @@ impl Coordinator {
                         let (_, retire_notify) = self.clear_transaction(ctx.session_mut()).await;
                         ctx.delay_response_until(retire_notify);
                         self.drop_temp_items(ctx.session().conn_id()).await;
+                        // NOTE: `reset()` resets session variables durably (see
+                        // `SessionVars::reset_all`). This must stay durable and
+                        // must not be reordered to depend on a transaction
+                        // commit: the transaction was just cleared above, so
+                        // there is no commit left to promote a staged reset.
                         ctx.session_mut().reset();
                         Ok(ExecuteResponse::DiscardedAll)
                     } else {
