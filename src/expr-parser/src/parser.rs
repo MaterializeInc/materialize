@@ -1972,6 +1972,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
     fn parse_scalar_typed_literals() {
         let actual = try_parse_scalar(r#""{\"a\": 1}"::jsonb"#).unwrap();
         let MirScalarExpr::Literal(Ok(_), typ) = &actual else {
