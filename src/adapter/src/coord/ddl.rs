@@ -26,6 +26,7 @@ use mz_cluster_client::ReplicaId;
 use mz_controller::clusters::ReplicaLocation;
 use mz_controller_types::ClusterId;
 use mz_ore::instrument;
+use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::now::to_datetime;
 use mz_ore::retry::Retry;
 use mz_ore::task;
@@ -125,16 +126,30 @@ impl Coordinator {
             "coordinator inconsistency detected"
         );
 
+        let side_effects_seconds = self
+            .metrics
+            .catalog_transact_phase_seconds
+            .with_label_values(&["side_effects"]);
+        let table_updates_wait = self
+            .metrics
+            .catalog_transact_phase_seconds
+            .with_label_values(&["table_updates_wait"]);
         let side_effects_fut = side_effect(self, ctx);
 
         // Run our side effects concurrently with the table updates.
         let ((), ()) = futures::future::join(
-            side_effects_fut.instrument(info_span!(
-                "coord::catalog_transact_with_side_effects::side_effects_fut"
-            )),
-            table_updates.instrument(info_span!(
-                "coord::catalog_transact_with_side_effects::table_updates"
-            )),
+            side_effects_fut
+                .wall_time()
+                .observe(side_effects_seconds)
+                .instrument(info_span!(
+                    "coord::catalog_transact_with_side_effects::side_effects_fut"
+                )),
+            table_updates
+                .wall_time()
+                .observe(table_updates_wait)
+                .instrument(info_span!(
+                    "coord::catalog_transact_with_side_effects::table_updates"
+                )),
         )
         .await;
 
@@ -166,6 +181,10 @@ impl Coordinator {
 
         let (table_updates, catalog_updates) = self.catalog_transact_inner(conn_id, ops).await?;
 
+        let table_updates_wait = self
+            .metrics
+            .catalog_transact_phase_seconds
+            .with_label_values(&["table_updates_wait"]);
         let apply_catalog_implications_fut = self.apply_catalog_implications(ctx, catalog_updates);
 
         // Apply catalog implications concurrently with the table updates.
@@ -173,9 +192,12 @@ impl Coordinator {
             apply_catalog_implications_fut.instrument(info_span!(
                 "coord::catalog_transact_with_context::side_effects_fut"
             )),
-            table_updates.instrument(info_span!(
-                "coord::catalog_transact_with_context::table_updates"
-            )),
+            table_updates
+                .wall_time()
+                .observe(table_updates_wait)
+                .instrument(info_span!(
+                    "coord::catalog_transact_with_context::table_updates"
+                )),
         )
         .await;
 
@@ -319,6 +341,9 @@ impl Coordinator {
 
         event!(Level::TRACE, ops = format!("{:?}", ops));
 
+        let phase_seconds = self.metrics.catalog_transact_phase_seconds.clone();
+        let phase_start = Instant::now();
+
         let mut webhook_sources_to_restart = BTreeSet::new();
         let mut clusters_to_drop = vec![];
         let mut cluster_replicas_to_drop = vec![];
@@ -459,6 +484,10 @@ impl Coordinator {
 
         self.validate_resource_limits(&ops, conn_id.unwrap_or(&SYSTEM_CONN_ID))?;
 
+        phase_seconds
+            .with_label_values(&["prep"])
+            .observe(phase_start.elapsed().as_secs_f64());
+
         // This will produce timestamps that are guaranteed to increase on each
         // call, and also never be behind the system clock. If the system clock
         // hasn't advanced (or has gone backward), it will increment by 1. For
@@ -467,7 +496,11 @@ impl Coordinator {
         // always going up, and believe we will always be close to the system
         // clock because it is well configured (chrony) and so may only rarely
         // regress or pause for 10s.
-        let oracle_write_ts = self.get_catalog_write_ts().await;
+        let oracle_write_ts = self
+            .get_catalog_write_ts()
+            .wall_time()
+            .observe(phase_seconds.with_label_values(&["write_ts"]))
+            .await;
 
         let Coordinator {
             catalog,
@@ -490,6 +523,8 @@ impl Coordinator {
                 conn,
                 ops,
             )
+            .wall_time()
+            .observe(phase_seconds.with_label_values(&["transact"]))
             .await?;
 
         for (cluster_id, replica_id) in &cluster_replicas_to_drop {
@@ -517,7 +552,13 @@ impl Coordinator {
 
         // Append our builtin table updates, then return the notify so we can run other tasks in
         // parallel.
+        let stage_start = Instant::now();
         let builtin_update_notify = self.builtin_table_update().execute(builtin_table_updates);
+        phase_seconds
+            .with_label_values(&["stage_builtin"])
+            .observe(stage_start.elapsed().as_secs_f64());
+
+        let finalize_start = Instant::now();
 
         // No error returns are allowed after this point. Enforce this at compile time
         // by using this odd structure so we don't accidentally add a stray `?`.
@@ -596,6 +637,10 @@ impl Coordinator {
                 );
             }
         }
+
+        phase_seconds
+            .with_label_values(&["finalize"])
+            .observe(finalize_start.elapsed().as_secs_f64());
 
         Ok((builtin_update_notify, catalog_updates))
     }

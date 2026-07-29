@@ -57,6 +57,7 @@ pub struct Metrics {
     pub catalog_arc_weak_count: UIntGauge,
     pub pgwire_recv_scheduling_delay_ms: HistogramVec,
     pub catalog_transact_seconds: HistogramVec,
+    pub catalog_transact_phase_seconds: HistogramVec,
     pub apply_catalog_implications_seconds: Histogram,
     pub group_commit_catalog_upper_seconds: Histogram,
 }
@@ -278,6 +279,12 @@ impl Metrics {
                 help: "The time it takes to run various catalog transact methods.",
                 var_labels: ["method"],
                 buckets: histogram_seconds_buckets(0.001, 32.0),
+            )),
+            catalog_transact_phase_seconds: registry.register(metric!(
+                name: "mz_catalog_transact_phase_seconds",
+                help: "Wall time of the individual phases of a coordinator catalog transaction, to attribute where transact time is spent.",
+                var_labels: ["phase"],
+                buckets: histogram_seconds_buckets(0.000_128, 32.0),
             )),
             apply_catalog_implications_seconds: registry.register(metric!(
                 name: "mz_apply_catalog_implications_seconds",
