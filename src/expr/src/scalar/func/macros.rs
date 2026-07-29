@@ -143,17 +143,32 @@ mod test {
 /// variants that use the old definitions.
 ///
 /// Once everything is handled by this macro we can remove it and replace it with `enum_dispatch`
+///
+/// Variants marked `(E)` have payload structs generic over the stored expression type. The
+/// marker must be the literal ident `E`, matching the generic parameter the macro declares.
 macro_rules! derive_unary {
-    ($($name:ident),*) => {
+    // Internal rules that rebuild one variant payload during expression
+    // conversion. Payloads without a marker are expression free and clone.
+    (@try_map_payload $f:ident) => { $f.clone() };
+    (@try_map_payload $f:ident $marker:ident) => { $f.try_map_expr()? };
+    (@map_payload $f:ident) => { $f.clone() };
+    (@map_payload $f:ident $marker:ident) => { $f.map_expr() };
+    // Internal rules that name a payload type at the MIR instantiation, for
+    // use in the impl block where `E` is not in scope.
+    (@mir_ty $name:ident) => { $name };
+    (@mir_ty $name:ident $marker:ident) => { $name<crate::MirScalarExpr> };
+    ($($name:ident $(($marker:ident))?),* $(,)?) => {
         #[derive(
             Ord, PartialOrd, Clone, Debug, Eq, PartialEq,
             serde::Serialize, serde::Deserialize, Hash,
                 )]
-        pub enum UnaryFunc {
-            $($name($name),)*
+        pub enum UnaryFunc<E = crate::MirScalarExpr> {
+            $($name($name $(<$marker>)?),)*
         }
 
-        impl UnaryFunc {
+        // The `Eval` bound is required by the expression bearing payloads'
+        // `LazyUnaryFunc` impls, even for methods that never evaluate.
+        impl<E: Eval> UnaryFunc<E> {
             pub fn eval<'a>(
                 &'a self,
                 datums: &[Datum<'a>],
@@ -190,11 +205,6 @@ macro_rules! derive_unary {
                     $(Self::$name(f) => LazyUnaryFunc::preserves_uniqueness(f),)*
                 }
             }
-            pub fn inverse(&self) -> Option<UnaryFunc> {
-                match self {
-                    $(Self::$name(f) => LazyUnaryFunc::inverse(f),)*
-                }
-            }
             pub fn is_monotone(&self) -> bool {
                 match self {
                     $(Self::$name(f) => LazyUnaryFunc::is_monotone(f),)*
@@ -210,12 +220,49 @@ macro_rules! derive_unary {
                     $(Self::$name(f) => LazyUnaryFunc::is_eliminable_cast(f),)*
                 }
             }
+        }
 
+        impl<E> UnaryFunc<E> {
             /// The canonical name of this variant, as declared by its
             /// [`FuncName`](crate::func::FuncName) impl.
             pub fn variant_name(&self) -> &'static str {
                 match self {
-                    $(Self::$name(_) => <$name as crate::func::FuncName>::NAME,)*
+                    $(Self::$name(_) =>
+                        <$name $(<$marker>)? as crate::func::FuncName>::NAME,)*
+                }
+            }
+
+            /// Rebuilds this function with any stored expressions converted to
+            /// `E2`. Fails if any expression conversion fails, reporting the
+            /// first failure.
+            pub fn try_map_expr<'a, E2: TryFrom<&'a E>>(
+                &'a self,
+            ) -> Result<UnaryFunc<E2>, E2::Error> {
+                Ok(match self {
+                    $(Self::$name(f) => UnaryFunc::$name(
+                        derive_unary!(@try_map_payload f $($marker)?),
+                    ),)*
+                })
+            }
+
+            /// Rebuilds this function with any stored expressions converted to
+            /// `E2`.
+            pub fn map_expr<'a, E2: From<&'a E>>(&'a self) -> UnaryFunc<E2> {
+                match self {
+                    $(Self::$name(f) => UnaryFunc::$name(
+                        derive_unary!(@map_payload f $($marker)?),
+                    ),)*
+                }
+            }
+        }
+
+        // Methods that only exist at the MIR instantiation. `inverse` is an
+        // optimizer concept and the name lookup helpers serve MIR test
+        // tooling.
+        impl UnaryFunc {
+            pub fn inverse(&self) -> Option<UnaryFunc> {
+                match self {
+                    $(Self::$name(f) => LazyUnaryFunc::inverse(f),)*
                 }
             }
 
@@ -228,10 +275,12 @@ macro_rules! derive_unary {
             /// variants. Only variants whose inner function deserializes from
             /// no data (unit functions and functions all of whose parameters
             /// may default to `None`) are constructible. Returns `None` for
-            /// other variants and for unknown names.
+            /// other variants and for unknown names. Returns the MIR
+            /// instantiation.
             pub fn from_variant_name(name: &str) -> Option<Self> {
+                use crate::func::FuncName;
                 $(
-                    if name == <$name as crate::func::FuncName>::NAME {
+                    if name == <derive_unary!(@mir_ty $name $($marker)?) as FuncName>::NAME {
                         return serde_json::from_value(
                             serde_json::json!({ stringify!($name): null }),
                         )
@@ -243,11 +292,15 @@ macro_rules! derive_unary {
 
             /// The canonical names of all variants, in declaration order.
             pub fn variant_names() -> impl Iterator<Item = &'static str> {
-                [$(<$name as crate::func::FuncName>::NAME,)*].into_iter()
+                use crate::func::FuncName;
+                [$(
+                    <derive_unary!(@mir_ty $name $($marker)?) as FuncName>::NAME,
+                )*]
+                .into_iter()
             }
         }
 
-        impl fmt::Display for UnaryFunc {
+        impl<E> fmt::Display for UnaryFunc<E> {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 match self {
                     $(Self::$name(func) => func.fmt(f),)*
@@ -256,8 +309,8 @@ macro_rules! derive_unary {
         }
 
         $(
-            impl From<$name> for crate::UnaryFunc {
-                fn from(variant: $name) -> Self {
+            impl<E> From<$name $(<$marker>)?> for crate::UnaryFunc<E> {
+                fn from(variant: $name $(<$marker>)?) -> Self {
                     Self::$name(variant)
                 }
             }
