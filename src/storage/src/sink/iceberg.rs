@@ -1625,10 +1625,10 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
 
                                     if let Some((prev_lower, prev_upper)) = last_batch_desc.as_ref()
                                     {
-                                        if !PartialOrder::less_equal(prev_upper, lower) {
+                                        if prev_upper != lower {
                                             anyhow::bail!(
-                                                "batch descriptions must arrive in order and \
-                                                non-overlapping: previous [{}, {}), new [{}, {})",
+                                                "batch descriptions must arrive in order, non-overlapping, \
+                                                and without gaps: previous [{}, {}), new [{}, {})",
                                                 prev_lower.pretty(),
                                                 prev_upper.pretty(),
                                                 lower.pretty(),
@@ -1666,6 +1666,9 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
                                     if let Some((prev_lower, prev_upper)) =
                                         last_input_bounds.as_ref()
                                     {
+                                        // If the collection doesn't change and the frontier advances,
+                                        // we can (correctly) observe gaps between input batches.
+                                        // This differs from output batch descriptions, which are constructed without gaps.
                                         if !PartialOrder::less_equal(prev_upper, rows.lower()) {
                                             anyhow::bail!(
                                                 "input batches must arrive in order and \
