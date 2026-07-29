@@ -1986,22 +1986,36 @@ fn test_default_cluster_sizes() {
 }
 
 #[mz_ore::test]
-#[ignore] // TODO: Reenable when https://linear.app/materializeinc/issue/SQL-411 is fixed
+#[cfg_attr(miri, ignore)] // too slow
 #[allow(clippy::disallowed_methods)]
 fn test_max_request_size() {
     let statement = "SELECT $1::text";
     let statement_size = statement.bytes().count();
     let server = test_util::TestHarness::default().start_blocking();
 
-    // pgwire
+    // pgwire. A request past the size that used to be rejected at the frame
+    // layer must keep the connection usable. Oversized SQL text still errors,
+    // but from the parser's statement batch limit, and an oversized parameter
+    // is simply accepted, as PostgreSQL accepts it.
     {
-        let param_size = mz_pgwire_common::MAX_REQUEST_SIZE - statement_size + 1;
-        let param = std::iter::repeat("1").take(param_size).join("");
+        let big = std::iter::repeat("1")
+            .take(mz_pgwire_common::MAX_REQUEST_SIZE + 1024)
+            .join("");
         let mut client = server.connect(postgres::NoTls).unwrap();
 
-        let err = client.query(statement, &[&param]).unwrap_db_error();
-        assert_contains!(err.message(), "request larger than");
-        assert_err!(client.is_valid(Duration::from_secs(2)));
+        let returned: String = client.query_one(statement, &[&big]).unwrap().get(0);
+        assert_eq!(returned.len(), big.len());
+
+        let err = client
+            .batch_execute(&format!("SELECT '{big}'"))
+            .unwrap_db_error();
+        assert_eq!(&SqlState::PROGRAM_LIMIT_EXCEEDED, err.code());
+        assert_contains!(err.message(), "statement batch size cannot exceed");
+
+        // Neither request may take the connection down with it.
+        client.is_valid(Duration::from_secs(2)).unwrap();
+        let one: i32 = client.query_one("SELECT 1", &[]).unwrap().get(0);
+        assert_eq!(one, 1);
     }
 
     // http

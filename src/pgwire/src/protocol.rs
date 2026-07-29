@@ -644,7 +644,7 @@ where
 
     select! {
         r = machine.run() => {
-            // Errors produced internally (like MAX_REQUEST_SIZE being exceeded) should send an
+            // Errors produced internally (like a malformed frame header) should send an
             // error to the client informing them why the connection was closed. We still want to
             // return the original error up the stack, though, so we skip error checking during conn
             // operations.
@@ -2986,9 +2986,6 @@ where
             }
         };
 
-        // Enable copy mode on the codec to skip aggregate buffer size checks.
-        self.conn.set_copy_mode(true);
-
         // Batch size for splitting raw data across parallel workers (~32MB).
         const BATCH_SIZE: usize = 32 * 1024 * 1024;
         let max_copy_from_row_size = self
@@ -3079,7 +3076,6 @@ where
                     );
                     // Drop the writer to signal cancellation to the background tasks.
                     drop(writer);
-                    self.conn.set_copy_mode(false);
                     return self
                         .send_error_and_get_state(ErrorResponse::error(
                             SqlState::QUERY_CANCELED,
@@ -3097,7 +3093,6 @@ where
                         },
                     );
                     drop(writer);
-                    self.conn.set_copy_mode(false);
                     return self
                         .send_error_and_get_state(ErrorResponse::error(
                             SqlState::PROTOCOL_VIOLATION,
@@ -3107,7 +3102,6 @@ where
                 }
                 None => {
                     drop(writer);
-                    self.conn.set_copy_mode(false);
                     return Ok(State::Done);
                 }
             }
@@ -3133,7 +3127,6 @@ where
                             },
                         );
                         drop(writer);
-                        self.conn.set_copy_mode(false);
                         return self
                             .send_error_and_get_state(ErrorResponse::error(
                                 SqlState::PROTOCOL_VIOLATION,
@@ -3143,7 +3136,6 @@ where
                     }
                     None => {
                         drop(writer);
-                        self.conn.set_copy_mode(false);
                         return Ok(State::Done);
                     }
                 }
@@ -3156,13 +3148,10 @@ where
                 StatementEndedExecutionReason::Errored { error: msg.clone() },
             );
             drop(writer);
-            self.conn.set_copy_mode(false);
             return self
                 .send_error_and_get_state(ErrorResponse::error(code, msg))
                 .await;
         }
-
-        self.conn.set_copy_mode(false);
 
         // Drop all senders to signal EOF to the background batch builders.
         // If copy_err is set, a worker already failed — dropping the senders
