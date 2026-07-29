@@ -29,8 +29,8 @@ use timely::dataflow::operators::Operator;
 use timely::progress::Timestamp;
 
 use crate::logging::compute::{
-    ArrangementHeapAllocations, ArrangementHeapCapacity, ArrangementHeapSize,
-    ArrangementHeapSizeOperator, ComputeEvent, ComputeEventBuilder,
+    ArrangementDistinctKeys, ArrangementHeapAllocations, ArrangementHeapCapacity,
+    ArrangementHeapSize, ArrangementHeapSizeOperator, ComputeEvent, ComputeEventBuilder,
 };
 use crate::typedefs::{
     KeyAgent, KeyValAgent, MzArrangeData, MzData, MzTimestamp, RowAgent, RowRowAgent, RowValAgent,
@@ -264,7 +264,8 @@ where
     let operator_id = arranged.trace.operator().global_id;
     let trace = Rc::downgrade(&arranged.trace.trace_box_unstable());
 
-    let (mut old_size, mut old_capacity, mut old_allocations) = (0isize, 0isize, 0isize);
+    let (mut old_size, mut old_capacity, mut old_allocations, mut old_keys) =
+        (0isize, 0isize, 0isize, 0isize);
 
     let stream = arranged
         .stream
@@ -319,8 +320,7 @@ where
                 // one live batch is counted once per batch, which happens normally across the
                 // spine's batch pyramid and while a `MergeState::Double` merge is in progress, so
                 // this sum is an upper bound on the arrangement's distinct-key count, not the
-                // exact count. Currently unconsumed: nothing here reads or logs it. Over-counting
-                // is safe. Under-counting is not.
+                // exact count. Over-counting is safe. Under-counting is not.
 
                 let size = size.try_into().expect("must fit");
                 if size != old_size {
@@ -350,9 +350,20 @@ where
                     ));
                 }
 
+                let keys = keys.try_into().expect("must fit");
+                if keys != old_keys {
+                    logger.log(&ComputeEvent::ArrangementDistinctKeys(
+                        ArrangementDistinctKeys {
+                            operator_id,
+                            delta_keys: keys - old_keys,
+                        },
+                    ));
+                }
+
                 old_size = size;
                 old_capacity = capacity;
                 old_allocations = allocations;
+                old_keys = keys;
             }
         });
     Arranged {

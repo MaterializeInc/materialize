@@ -172,6 +172,8 @@ pub enum ComputeLog {
     ArrangementHeapCapacity,
     /// Arrangement heap allocations.
     ArrangementHeapAllocations,
+    /// Upper-bound distinct-key counts per arrangement.
+    ArrangementDistinctKeys,
     /// Counts of errors in exported collections.
     ErrorCount,
     /// Hydration times of exported collections.
@@ -303,12 +305,11 @@ impl LogVariant {
             | LogVariant::Differential(DifferentialLog::BatcherAllocations)
             | LogVariant::Compute(ComputeLog::ArrangementHeapSize)
             | LogVariant::Compute(ComputeLog::ArrangementHeapCapacity)
-            | LogVariant::Compute(ComputeLog::ArrangementHeapAllocations) => {
-                RelationDesc::builder()
-                    .with_column("operator_id", SqlScalarType::UInt64.nullable(false))
-                    .with_column("worker_id", SqlScalarType::UInt64.nullable(false))
-                    .finish()
-            }
+            | LogVariant::Compute(ComputeLog::ArrangementHeapAllocations)
+            | LogVariant::Compute(ComputeLog::ArrangementDistinctKeys) => RelationDesc::builder()
+                .with_column("operator_id", SqlScalarType::UInt64.nullable(false))
+                .with_column("worker_id", SqlScalarType::UInt64.nullable(false))
+                .finish(),
 
             LogVariant::Compute(ComputeLog::DataflowCurrent) => RelationDesc::builder()
                 .with_column("export_id", SqlScalarType::String.nullable(false))

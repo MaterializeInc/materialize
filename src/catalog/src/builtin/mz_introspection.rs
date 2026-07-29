@@ -456,6 +456,15 @@ pub static MZ_ARRANGEMENT_HEAP_ALLOCATIONS_RAW: LazyLock<BuiltinLog> =
         ontology: None,
     });
 
+pub static MZ_ARRANGEMENT_DISTINCT_KEYS_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
+    name: "mz_arrangement_distinct_keys_raw",
+    schema: MZ_INTROSPECTION_SCHEMA,
+    oid: oid::LOG_MZ_ARRANGEMENT_DISTINCT_KEYS_RAW_OID,
+    variant: LogVariant::Compute(ComputeLog::ArrangementDistinctKeys),
+    access: vec![PUBLIC_SELECT],
+    ontology: None,
+});
+
 pub static MZ_MESSAGE_BATCH_COUNTS_RECEIVED_RAW: LazyLock<BuiltinLog> =
     LazyLock::new(|| BuiltinLog {
         name: "mz_message_batch_counts_received_raw",
@@ -2229,6 +2238,43 @@ GROUP BY operator_id",
         },
         column_semantic_types: &[],
     }),
+});
+
+pub static MZ_ARRANGEMENT_DISTINCT_KEYS_PER_WORKER: LazyLock<BuiltinView> = LazyLock::new(|| {
+    BuiltinView {
+        name: "mz_arrangement_distinct_keys_per_worker",
+        schema: MZ_INTROSPECTION_SCHEMA,
+        oid: oid::VIEW_MZ_ARRANGEMENT_DISTINCT_KEYS_PER_WORKER_OID,
+        desc: RelationDesc::builder()
+            .with_column("operator_id", SqlScalarType::UInt64.nullable(false))
+            .with_column("worker_id", SqlScalarType::UInt64.nullable(false))
+            .with_column("distinct_keys", SqlScalarType::Int64.nullable(false))
+            .with_key(vec![0, 1])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "operator_id",
+                "The ID of the operator that created the arrangement. Corresponds to `mz_dataflow_operators.id`.",
+            ),
+            ("worker_id", "The worker hosting the arrangement."),
+            (
+                "distinct_keys",
+                "An upper bound on the number of distinct keys in the arrangement, not the exact \
+                 count: a key present in more than one live batch is counted once per batch, which \
+                 happens normally across the spine's batch pyramid and during in-progress merges. \
+                 Treating this value as exact would understate memory usage.",
+            ),
+        ]),
+        sql: "
+SELECT
+    operator_id,
+    worker_id,
+    COUNT(*) AS distinct_keys
+FROM mz_introspection.mz_arrangement_distinct_keys_raw
+GROUP BY operator_id, worker_id",
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    }
 });
 
 pub static MZ_ARRANGEMENT_SHARING_PER_WORKER: LazyLock<BuiltinView> =
