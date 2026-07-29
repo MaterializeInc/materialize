@@ -42,6 +42,7 @@ mod lowering;
 pub mod arrangement_count;
 pub mod interpret;
 pub mod join;
+pub mod memory_bound;
 pub mod reduce;
 pub mod render_plan;
 pub mod scalar;
