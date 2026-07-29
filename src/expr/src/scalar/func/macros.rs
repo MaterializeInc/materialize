@@ -212,6 +212,14 @@ macro_rules! derive_unary {
                 }
             }
 
+            /// The canonical name of this variant, as declared by its
+            /// [`FuncName`](crate::func::FuncName) impl.
+            pub fn variant_name(&self) -> &'static str {
+                match self {
+                    $(Self::$name(_) => <$name as crate::func::FuncName>::NAME,)*
+                }
+            }
+
             /// Attempts to construct a `UnaryFunc` from the canonical name of
             /// one of its variants, as declared by the variant's
             /// [`FuncName`](crate::func::FuncName) impl (the name of the
@@ -332,6 +340,14 @@ macro_rules! derive_variadic {
             pub fn is_infix_op(&self) -> bool {
                 match self {
                     $(Self::$name(f) => LazyVariadicFunc::is_infix_op(f),)*
+                }
+            }
+
+            /// The canonical name of this variant, as declared by its
+            /// [`FuncName`](crate::func::FuncName) impl.
+            pub fn variant_name(&self) -> &'static str {
+                match self {
+                    $(Self::$name(_) => <$variant as crate::func::FuncName>::NAME,)*
                 }
             }
 
@@ -462,6 +478,14 @@ macro_rules! derive_binary {
             pub fn is_infinity_monotone(&self) -> bool {
                 match self {
                     $(Self::$name(f) => LazyBinaryFunc::is_infinity_monotone(f),)*
+                }
+            }
+
+            /// The canonical name of this variant, as declared by its
+            /// [`FuncName`](crate::func::FuncName) impl.
+            pub fn variant_name(&self) -> &'static str {
+                match self {
+                    $(Self::$name(_) => <$variant as crate::func::FuncName>::NAME,)*
                 }
             }
 

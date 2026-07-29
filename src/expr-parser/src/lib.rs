@@ -10,8 +10,12 @@
 mod catalog;
 mod command;
 mod parser;
+mod printer;
 
 pub use catalog::TestCatalog;
 pub use command::handle_define;
 pub use command::handle_roundtrip;
-pub use parser::{Def, try_parse_column_types, try_parse_def, try_parse_mir, try_parse_scalar};
+pub use parser::{
+    Def, try_parse_column_types, try_parse_def, try_parse_mir, try_parse_scalar, try_parse_scalars,
+};
+pub use printer::print_scalar;

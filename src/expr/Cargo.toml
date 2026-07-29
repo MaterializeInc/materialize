@@ -78,6 +78,7 @@ datadriven.workspace = true
 insta.workspace = true
 mz-expr = { path = ".", features = ["proptest"] }
 mz-expr-derive-impl = { path = "../expr-derive-impl", features = ["test"] }
+mz-expr-parser = { path = "../expr-parser" }
 mz-expr-test-util = { path = "../expr-test-util" }
 mz-ore = { path = "../ore" }
 mz-transform = { path = "../transform" }

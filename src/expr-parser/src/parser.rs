@@ -67,6 +67,24 @@ pub fn try_parse_scalar(s: &str) -> Result<mz_expr::MirScalarExpr, String> {
     })
 }
 
+/// Builds a comma-separated list of [mz_expr::MirScalarExpr]s from a string.
+pub fn try_parse_scalars(s: &str) -> Result<Vec<mz_expr::MirScalarExpr>, String> {
+    let parser = |input: syn::parse::ParseStream| {
+        let exprs = scalar::parse_exprs(input)?;
+        if !input.is_empty() {
+            Err(Error::new(
+                input.span(),
+                "unexpected input after expressions",
+            ))?
+        }
+        Ok(exprs)
+    };
+    parser.parse_str(s).map_err(|err| {
+        let (line, column) = (err.span().start().line, err.span().start().column);
+        format!("parse error at {line}:{column}:\n{err}\n")
+    })
+}
+
 /// Parses a parenthesized, comma-separated column type list, for example
 /// `(bigint, text?)`. A trailing `?` marks a column as nullable.
 pub fn try_parse_column_types(s: &str) -> Result<Vec<mz_repr::SqlColumnType>, String> {
@@ -1271,6 +1289,10 @@ mod scalar {
             // Supported variadic functions:
             "greatest" => parse_variadic(VariadicFunc::Greatest(func::variadic::Greatest)),
             "coalesce" => parse_variadic(VariadicFunc::Coalesce(func::variadic::Coalesce)),
+            // Supported unmaterializable functions:
+            "mz_now" => Ok(MirScalarExpr::CallUnmaterializable(
+                mz_expr::UnmaterializableFunc::MzNow,
+            )),
             // Exact function variants by their canonical name, dispatched on
             // the argument count (unary and binary win over variadic).
             name => {

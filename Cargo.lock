@@ -7219,6 +7219,7 @@ dependencies = [
  "mz-expr",
  "mz-expr-derive",
  "mz-expr-derive-impl",
+ "mz-expr-parser",
  "mz-expr-test-util",
  "mz-lowertest",
  "mz-ore",
