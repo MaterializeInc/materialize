@@ -1968,7 +1968,13 @@ impl fmt::Display for EvalError {
                     (Exclusive(lo), Inclusive(hi)) => {
                         write!(f, "between {lo} exclusive and {hi} inclusive")
                     }
-                    (None, None) => panic!("invalid domain error"),
+                    // No caller constructs an unbounded domain, but a corrupted or
+                    // forged `ProtoEvalError` decodes into one. Render it instead of
+                    // panicking: `DataflowErrorSer::Display` decodes errors straight
+                    // out of a persist shard and Displays them on the index peek
+                    // path, so a panicking arm here wedges the dataflow on every
+                    // retry rather than producing a bad error message once.
+                    (None, None) => write!(f, "in an unspecified range"),
                 }
             }
             EvalError::ComplexOutOfRange(s) => {
@@ -2460,6 +2466,19 @@ impl RustType<ProtoDims> for (usize, usize) {
 mod tests {
     use super::*;
     use crate::scalar::func::variadic::Coalesce;
+
+    /// An `OutOfDomain` with both limits unset is not constructible by any
+    /// caller, but it decodes out of corrupted or forged `ProtoEvalError` bytes,
+    /// and `DataflowErrorSer::Display` renders decoded errors on the peek path.
+    /// Rendering it must not panic.
+    #[mz_ore::test]
+    fn test_unbounded_out_of_domain_renders() {
+        let err = EvalError::OutOfDomain(DomainLimit::None, DomainLimit::None, "f".into());
+        assert_eq!(
+            err.to_string(),
+            "function f is defined for numbers in an unspecified range"
+        );
+    }
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
