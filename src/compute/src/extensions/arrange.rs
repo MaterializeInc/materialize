@@ -320,7 +320,7 @@ where
                 // spine's batch pyramid and while a `MergeState::Double` merge is in progress, so
                 // this sum is an upper bound on the arrangement's distinct-key count, not the
                 // exact count. Currently unconsumed: nothing here reads or logs it. Over-counting
-                // is safe; under-counting is not.
+                // is safe. Under-counting is not.
 
                 let size = size.try_into().expect("must fit");
                 if size != old_size {
@@ -518,9 +518,8 @@ mod tests {
     /// test is the real `DatumContainer` that ships in `RowRowAgent` arrangements, whose `len()`
     /// is a hand-maintained counter, rather than differential's plain `Vec`-backed container
     /// whose `len()` would be trivially correct regardless of what the read under test does. The
-    /// test calls `row_row_batch_stats` itself instead of duplicating its logic, so a regression
-    /// that swaps the key read for a value-count or a constant zero is caught here rather than
-    /// only in the eventual memory-bound estimate that consumes it.
+    /// test calls `row_row_batch_stats` itself instead of duplicating its logic, ensuring that a
+    /// regression that swaps the key read for a value-count or a constant zero is caught directly.
     #[mz_ore::test]
     fn distinct_key_count_is_per_key_not_per_row() {
         let key = Row::pack_slice(&[Datum::Int64(1)]);
