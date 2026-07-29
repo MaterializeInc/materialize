@@ -579,6 +579,99 @@ mod tests {
         a += b;
         assert_eq!(a.exact_distinct_count(), Some(200));
     }
+
+    /// With dictionary compression disabled, a container never gathers statistics,
+    /// so `exact_distinct_counts` must report `None` regardless of what it is pushed.
+    ///
+    /// This explicitly stores `false` rather than relying on the flag's initial
+    /// value, mirroring how `push_done_promotion_avoids_merge_poison` explicitly
+    /// stores `true`. `DICTIONARY_COMPRESSION` is a process-wide `AtomicBool` with
+    /// no serialization primitive guarding it, and `push_done_promotion_avoids_merge_poison`
+    /// sets it on and never restores it. Under `cargo nextest` (this project's
+    /// preferred runner, see the `mz-test` skill), each test runs in its own process,
+    /// so this store cannot race that one. Under a shared-process harness (plain
+    /// `cargo test`'s default thread-per-test-within-one-process model) the two
+    /// stores could still interleave; there is nothing in this crate preventing that.
+    #[mz_ore::test]
+    fn test_exact_distinct_counts_disabled() {
+        use std::sync::atomic::Ordering;
+        use timely::container::PushInto;
+
+        crate::DICTIONARY_COMPRESSION.store(false, Ordering::Relaxed);
+
+        let mut container = DatumContainer::with_capacity(0);
+        for i in 0..10i64 {
+            container.push_into(Row::pack_slice(&[Datum::Int64(i % 3)]));
+        }
+        assert_eq!(container.exact_distinct_counts(), None);
+    }
+
+    /// With dictionary compression enabled and few rows pushed, every column's
+    /// summary is exact. Two columns with different distinct counts (3 vs 7) so a
+    /// transposed or shared per-column result would fail.
+    #[mz_ore::test]
+    fn test_exact_distinct_counts_enabled() {
+        use std::sync::atomic::Ordering;
+        use timely::container::PushInto;
+
+        crate::DICTIONARY_COMPRESSION.store(true, Ordering::Relaxed);
+
+        let mut container = DatumContainer::with_capacity(0);
+        for i in 0..50i64 {
+            container.push_into(Row::pack_slice(&[Datum::Int64(i % 3), Datum::Int64(i % 7)]));
+        }
+        assert_eq!(
+            container.exact_distinct_counts(),
+            Some(vec![Some(3), Some(7)]),
+        );
+    }
+
+    /// Once the container has installed a codec, its statistics summary is gone and
+    /// `exact_distinct_counts` must report `None`, since the container has by then
+    /// observed records the summary never saw.
+    ///
+    /// The production path to that state pushes `STATS_THRESHOLD` (64Ki) records,
+    /// which is too slow for a unit test. `promote_stats_to_codec` (exercised by
+    /// `push_done_promotion_avoids_merge_poison` above) reaches the identical
+    /// container state — `stats` taken and moved into `codec` — without pushing
+    /// anywhere near that many rows, so we drive it directly instead.
+    #[mz_ore::test]
+    fn test_exact_distinct_counts_after_codec_install() {
+        use std::sync::atomic::Ordering;
+        use timely::container::PushInto;
+
+        crate::DICTIONARY_COMPRESSION.store(true, Ordering::Relaxed);
+
+        let mut container = DatumContainer::with_capacity(0);
+        for i in 0..10i64 {
+            container.push_into(Row::pack_slice(&[Datum::Int64(i % 3)]));
+        }
+        container.promote_stats_to_codec();
+
+        assert_eq!(container.exact_distinct_counts(), None);
+    }
+
+    /// Confirms the statistic against the motivating case: a column with a fixed
+    /// small number of distinct values (100) in a much larger container (20000 rows)
+    /// reports that exact count, while a column with a distinct value per row
+    /// reports `None` once past the summary's `2 * k` (= 1024) tidy threshold.
+    #[mz_ore::test]
+    fn test_exact_distinct_counts_matches_reality() {
+        use std::sync::atomic::Ordering;
+        use timely::container::PushInto;
+
+        crate::DICTIONARY_COMPRESSION.store(true, Ordering::Relaxed);
+
+        let mut container = DatumContainer::with_capacity(0);
+        for i in 0..20_000i64 {
+            container.push_into(Row::pack_slice(&[Datum::Int64(i % 100), Datum::Int64(i)]));
+        }
+        let counts = container
+            .exact_distinct_counts()
+            .expect("stats still present under STATS_THRESHOLD");
+        assert_eq!(counts[0], Some(100), "column with 100 distinct values");
+        assert_eq!(counts[1], None, "column with a distinct value per row");
+    }
 }
 
 /// A `[u8]`-specialized container.
@@ -1589,6 +1682,19 @@ mod dictionary {
                 self.codec = self.stats.take();
             }
         }
+
+        /// The exact number of distinct values in each column, where that is known.
+        ///
+        /// Element `i` is the count for column `i`, and `None` where no exact count is available.
+        /// A count is available only while this container still holds its statistics summary and
+        /// that summary never discarded an element. Once a codec is installed the summary is gone
+        /// and the container has observed records it never recorded, so nothing exact survives.
+        ///
+        /// Returns `None` when the container has no statistics at all, which is the case whenever
+        /// dictionary compression is disabled.
+        pub fn exact_distinct_counts(&self) -> Option<Vec<Option<usize>>> {
+            self.stats.as_ref().map(ColumnsCodec::exact_distinct_counts)
+        }
     }
 
     use timely::container::PushInto;
@@ -1973,6 +2079,19 @@ mod row_codec {
         }
 
         impl ColumnsCodec {
+            /// The exact number of distinct values observed in each column, where known.
+            ///
+            /// Element `i` is the count for column `i`, from that column's own summary; see
+            /// [`DictionaryCodec::exact_distinct_count`].
+            pub(crate) fn exact_distinct_counts(&self) -> Vec<Option<usize>> {
+                self.columns
+                    .iter()
+                    .map(DictionaryCodec::exact_distinct_count)
+                    .collect()
+            }
+        }
+
+        impl ColumnsCodec {
             /// Construct a codec using only structurally safe tags.
             ///
             /// Consumes `self`: this is only ever called on stats that have just been
@@ -2237,6 +2356,12 @@ mod row_codec {
                 self.stats.0.insert_ref(bytes);
             }
 
+            /// The exact number of distinct values this codec's summary has observed, when
+            /// that is known. See [`MisraGries::exact_distinct_count`].
+            pub fn exact_distinct_count(&self) -> Option<usize> {
+                self.stats.0.exact_distinct_count()
+            }
+
             /// Construct a codec using only structurally safe tags (>= SAFE_TAG_BASE).
             /// These tags never collide with datum first-bytes, so the codec can be
             /// installed without observing all data first.
@@ -2382,10 +2507,6 @@ mod row_codec {
             /// Returns `None` once the summary has discarded an element, after which its length no
             /// longer relates to the number of distinct elements observed. A summary that never
             /// discarded holds every element it saw, so its length is exact.
-            //
-            // Exposed for callers that need a sound upper bound on the number of
-            // distinct values in a column. No such caller exists in this crate yet.
-            #[allow(dead_code)]
             pub fn exact_distinct_count(&self) -> Option<usize> {
                 (!self.tidied).then_some(self.inner.len())
             }
