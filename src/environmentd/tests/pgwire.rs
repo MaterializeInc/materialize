@@ -889,6 +889,11 @@ fn test_pgtest_empty() {
 }
 
 #[mz_ore::test]
+fn test_pgtest_extra_float_digits() {
+    pg_test_inner(Path::new("../../test/pgtest/extra-float-digits.pt"), false);
+}
+
+#[mz_ore::test]
 fn test_pgtest_notice() {
     pg_test_inner(Path::new("../../test/pgtest/notice.pt"), false);
 }

@@ -15,6 +15,7 @@ use mz_aws_util::s3_uploader::{
 use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
 use mz_pgcopy::{CopyFormatParams, encode_copy_format, encode_copy_format_header};
+use mz_pgrepr::TextEncodeSettings;
 use mz_repr::{GlobalId, RelationDesc, Row};
 use mz_storage_types::sinks::s3_oneshot_sink::S3KeyManager;
 use mz_storage_types::sinks::{S3SinkFormat, S3UploadInfo};
@@ -99,8 +100,14 @@ impl CopyToS3Uploader for PgCopyUploader {
     async fn append_row(&mut self, row: &Row) -> Result<(), anyhow::Error> {
         let mut buf: Vec<u8> = vec![];
         // encode the row and write to temp buffer.
-        encode_copy_format(&self.format, row, self.desc.typ(), &mut buf)
-            .map_err(|_| anyhow!("error encoding row"))?;
+        encode_copy_format(
+            &self.format,
+            row,
+            self.desc.typ(),
+            &mut buf,
+            TextEncodeSettings::STABLE,
+        )
+        .map_err(|_| anyhow!("error encoding row"))?;
 
         if self.current_file_uploader.is_none() {
             self.start_new_file_upload().await?;

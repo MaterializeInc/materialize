@@ -82,6 +82,7 @@ use mz_persist_client::cfg::{
     CRDB_CONNECT_TIMEOUT, CRDB_KEEPALIVES_IDLE, CRDB_KEEPALIVES_INTERVAL, CRDB_KEEPALIVES_RETRIES,
     CRDB_TCP_USER_TIMEOUT,
 };
+use mz_pgrepr::TextEncodeSettings;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::bytes::ByteSize;
@@ -799,6 +800,14 @@ impl SessionVars {
     /// Returns the value of the `extra_float_digits` configuration parameter.
     pub fn extra_float_digits(&self) -> i32 {
         *self.expect_value(&EXTRA_FLOAT_DIGITS)
+    }
+
+    /// Returns the settings that govern how this session encodes values as
+    /// text.
+    pub fn text_encode_settings(&self) -> TextEncodeSettings {
+        TextEncodeSettings {
+            extra_float_digits: self.extra_float_digits(),
+        }
     }
 
     /// Returns the value of the `integer_datetimes` configuration parameter.

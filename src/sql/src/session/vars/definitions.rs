@@ -340,7 +340,7 @@ pub static DEFAULT_CLUSTER_REPLICATION_FACTOR: VarDefinition = VarDefinition::ne
 
 pub static EXTRA_FLOAT_DIGITS: VarDefinition = VarDefinition::new(
     "extra_float_digits",
-    value!(i32; 3),
+    value!(i32; 1),
     "Adjusts the number of digits displayed for floating-point values (PostgreSQL).",
     true,
 );
