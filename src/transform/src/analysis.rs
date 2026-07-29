@@ -18,6 +18,7 @@ pub use arity::Arity;
 pub use cardinality::Cardinality;
 pub use column_names::{ColumnName, ColumnNames};
 pub use common::{Derived, DerivedBuilder, DerivedView};
+pub use distinct_count::ColumnDistinctCount;
 pub use explain::annotate_plan;
 pub use non_negative::NonNegative;
 pub use repr_types::ReprRelationType;
@@ -72,6 +73,220 @@ pub trait Lattice<T> {
     fn top(&self) -> T;
     /// Set `a` to the greatest lower bound of `a` and `b`, and indicate if `a` changed as a result.
     fn meet_assign(&self, a: &mut T, b: T) -> bool;
+}
+
+/// Upper bounds on the number of distinct values in each column.
+mod distinct_count {
+
+    use mz_expr::{Id, MirRelationExpr, MirScalarExpr};
+    use mz_ore::cast::CastFrom;
+    use mz_repr::{ReprColumnType, ReprScalarType};
+
+    use super::{Analysis, Arity, Derived};
+
+    /// An upper bound on the distinct values each column can take, or `None` where none is known.
+    ///
+    /// Exists to tighten `Reduce`, whose output is one row per distinct group key. Without this the
+    /// only sound bound is the input itself, which assumes every row forms its own group.
+    ///
+    /// Every rule may only over-state. A bound that is too small would make the memory bound built
+    /// on it unsound, which is the direction that matters.
+    /// Carries no statistics, so a leaf column is unbounded unless its type is small. Seeding
+    /// leaves from cardinality statistics would additionally bound a group key drawn from a small
+    /// relation, but `Cardinality` already depends on this analysis and cannot hand it a map
+    /// through `announce_dependencies`, which takes no receiver.
+    #[derive(Debug)]
+    pub struct ColumnDistinctCount;
+
+    /// The tighter of two bounds, where `None` is no bound at all.
+    fn tighten(a: Option<u64>, b: Option<u64>) -> Option<u64> {
+        match (a, b) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (Some(a), None) | (None, Some(a)) => Some(a),
+            (None, None) => None,
+        }
+    }
+
+    /// How many values a column's type can hold, where that is few enough to be worth knowing.
+    ///
+    /// Only the types small enough to bind in practice. An `int4` domain never constrains anything
+    /// a real query groups by, so pretending to know it would only cost cycles.
+    fn domain_bound(typ: &ReprColumnType) -> Option<u64> {
+        let values = match typ.scalar_type {
+            ReprScalarType::Bool => 2,
+            ReprScalarType::UInt8 => 1 << 8,
+            ReprScalarType::Int16 | ReprScalarType::UInt16 => 1 << 16,
+            _ => return None,
+        };
+        Some(values + u64::from(typ.nullable))
+    }
+
+    /// An upper bound on the distinct values `expr` can take over rows described by `input`.
+    ///
+    /// A function of one column takes at most as many values as that column, and a function of
+    /// several takes at most their product.
+    pub fn expr_distinct_count(expr: &MirScalarExpr, input: &[Option<u64>]) -> Option<u64> {
+        mz_ore::stack::maybe_grow(|| match expr {
+            MirScalarExpr::Column(col, _) => input.get(*col).copied().flatten(),
+            MirScalarExpr::Literal(..) => Some(1),
+            MirScalarExpr::CallUnmaterializable(_) => None,
+            MirScalarExpr::CallUnary { expr, .. } => expr_distinct_count(expr, input),
+            MirScalarExpr::CallBinary { expr1, expr2, .. } => {
+                let a = expr_distinct_count(expr1, input)?;
+                let b = expr_distinct_count(expr2, input)?;
+                a.checked_mul(b)
+            }
+            MirScalarExpr::CallVariadic { exprs, .. } => exprs.iter().try_fold(1u64, |acc, e| {
+                acc.checked_mul(expr_distinct_count(e, input)?)
+            }),
+            // The result comes from one branch or the other, so at most their sum.
+            MirScalarExpr::If { cond: _, then, els } => {
+                let a = expr_distinct_count(then, input)?;
+                let b = expr_distinct_count(els, input)?;
+                a.checked_add(b)
+            }
+        })
+    }
+
+    impl Analysis for ColumnDistinctCount {
+        type Value = Vec<Option<u64>>;
+
+        fn announce_dependencies(builder: &mut crate::analysis::DerivedBuilder) {
+            builder.require(Arity);
+            builder.require(super::ReprRelationType);
+        }
+
+        fn derive(
+            &self,
+            expr: &MirRelationExpr,
+            index: usize,
+            results: &[Self::Value],
+            depends: &Derived,
+        ) -> Self::Value {
+            use MirRelationExpr::*;
+
+            let arity = depends.as_view().results::<Arity>()[index];
+            let unknown = vec![None; arity];
+
+            let mut out = match expr {
+                Constant { rows, .. } => {
+                    let rows = rows.as_ref().map_or(0, |rows| u64::cast_from(rows.len()));
+                    vec![Some(rows); arity]
+                }
+                Get { id, typ, .. } => match id {
+                    Id::Global(_) => vec![None; typ.arity()],
+                    // A forward or self reference inside a `LetRec` has no result yet, which
+                    // `get` reports as absent rather than as a bound.
+                    Id::Local(id) => {
+                        let binding = depends.bindings().get(id).copied();
+                        match binding.and_then(|index| results.get(index)) {
+                            Some(bound) => bound.clone(),
+                            None => vec![None; typ.arity()],
+                        }
+                    }
+                },
+                // Structurally transparent: the rows are unchanged, or only removed.
+                Let { .. }
+                | Filter { .. }
+                | Negate { .. }
+                | Threshold { .. }
+                | ArrangeBy { .. }
+                | TopK { .. } => results[index - 1].clone(),
+                Project { outputs, .. } => {
+                    let input = &results[index - 1];
+                    outputs.iter().map(|col| input[*col]).collect()
+                }
+                Map { scalars, .. } => {
+                    let mut out = results[index - 1].clone();
+                    for scalar in scalars {
+                        // Each scalar may refer to columns this `Map` already added.
+                        out.push(expr_distinct_count(scalar, &out));
+                    }
+                    out
+                }
+                FlatMap { .. } => {
+                    // The input columns survive, but the table function's own columns do not
+                    // relate to them in any way this analysis can bound.
+                    let input = &results[index - 1];
+                    let mut out = input.clone();
+                    out.resize(arity, None);
+                    out
+                }
+                Union { .. } => {
+                    let mut out = vec![Some(0u64); arity];
+                    for child in depends.children_of_rev(index, expr.children().count()) {
+                        // Indexed rather than zipped: a `LetRec` binding can be visited before
+                        // its value is known, so the lengths need not agree.
+                        let child = &results[child];
+                        for (col, slot) in out.iter_mut().enumerate() {
+                            *slot = match (*slot, child.get(col).copied().flatten()) {
+                                (Some(a), Some(b)) => a.checked_add(b),
+                                _ => None,
+                            };
+                        }
+                    }
+                    out
+                }
+                Join { equivalences, .. } => {
+                    let mut out = Vec::with_capacity(arity);
+                    let mut children = depends
+                        .children_of_rev(index, expr.children().count())
+                        .collect::<Vec<_>>();
+                    children.reverse();
+                    for child in children {
+                        out.extend(results[child].iter().copied());
+                    }
+                    out.resize(arity, None);
+                    // An equi-join keeps only values present on every side, so each member of an
+                    // equivalence class is bounded by the tightest bound in that class.
+                    for equivalence in equivalences {
+                        let mut bound = None;
+                        for member in equivalence {
+                            bound = tighten(bound, expr_distinct_count(member, &out));
+                        }
+                        for member in equivalence {
+                            if let MirScalarExpr::Column(col, _) = member {
+                                if let Some(slot) = out.get_mut(*col) {
+                                    *slot = tighten(*slot, bound);
+                                }
+                            }
+                        }
+                    }
+                    out
+                }
+                Reduce {
+                    group_key,
+                    aggregates,
+                    ..
+                } => {
+                    let input = &results[index - 1];
+                    let mut out = group_key
+                        .iter()
+                        .map(|key| expr_distinct_count(key, input))
+                        .collect::<Vec<_>>();
+                    // An aggregate's value is not bounded by anything this analysis tracks.
+                    out.extend(std::iter::repeat(None).take(aggregates.len()));
+                    out
+                }
+                // A binding may be revisited before its value is known.
+                LetRec { .. } => unknown.clone(),
+            };
+
+            out.resize(arity, None);
+
+            // A column can never hold more distinct values than its type admits, whatever the
+            // structural rules concluded.
+            let types = depends.as_view().results::<super::ReprRelationType>();
+            if let Some(Some(types)) = types.get(index) {
+                for (col, slot) in out.iter_mut().enumerate() {
+                    if let Some(typ) = types.get(col) {
+                        *slot = tighten(*slot, domain_bound(typ));
+                    }
+                }
+            }
+            out
+        }
+    }
 }
 
 /// Types common across multiple analyses
@@ -1413,7 +1628,8 @@ mod cardinality {
     use ordered_float::OrderedFloat;
     use tracing::{error, warn};
 
-    use super::{Analysis, Arity, SubtreeSize, UniqueKeys};
+    use super::distinct_count::expr_distinct_count;
+    use super::{Analysis, Arity, ColumnDistinctCount, SubtreeSize, UniqueKeys};
 
     /// Which semantics the estimator produces.
     #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -1868,6 +2084,7 @@ mod cardinality {
             &self,
             group_key: &Vec<MirScalarExpr>,
             expected_group_size: &Option<u64>,
+            group_ndv: Option<u64>,
             input: CardinalityEstimate,
         ) -> CardinalityEstimate {
             // TODO(mgree): if no `group_key` is present, we can do way better
@@ -1878,6 +2095,10 @@ mod cardinality {
                 input / f64::cast_lossy(group_size)
             } else if group_key.is_empty() {
                 CardinalityEstimate::from(1.0)
+            } else if let Some(ndv) = group_ndv.filter(|_| self.bounding()) {
+                // One row per distinct group key. Without a distinct-value bound the only sound
+                // answer is the input, which assumes every row forms its own group.
+                CardinalityEstimate::min(input, CardinalityEstimate::from(f64::cast_lossy(ndv)))
             } else {
                 // in the worst case, every row is its own group
                 input
@@ -1936,6 +2157,7 @@ mod cardinality {
         fn announce_dependencies(builder: &mut crate::analysis::DerivedBuilder) {
             builder.require(crate::analysis::Arity);
             builder.require(crate::analysis::UniqueKeys);
+            builder.require(crate::analysis::ColumnDistinctCount);
         }
 
         fn derive(
@@ -2028,7 +2250,15 @@ mod cardinality {
                     ..
                 } => {
                     let input = results[index - 1];
-                    self.reduce(group_key, expected_group_size, input)
+                    // One output row per distinct group key, so the number of distinct keys
+                    // bounds the output whenever it is known and smaller than the input.
+                    let ndv = depends.results::<ColumnDistinctCount>();
+                    let group_ndv = ndv.get(index - 1).and_then(|input_ndv| {
+                        group_key.iter().try_fold(1u64, |acc, key| {
+                            acc.checked_mul(expr_distinct_count(key, input_ndv)?)
+                        })
+                    });
+                    self.reduce(group_key, expected_group_size, group_ndv, input)
                 }
                 TopK {
                     group_key,
@@ -2125,12 +2355,37 @@ mod cardinality {
             let group_key = vec![MirScalarExpr::column(0)];
             let egs = Some(10);
             assert_eq!(
-                bounding().reduce(&group_key, &egs, rows(100.0)),
+                bounding().reduce(&group_key, &egs, None, rows(100.0)),
                 rows(100.0)
             );
             assert_eq!(
-                heuristic().reduce(&group_key, &egs, rows(100.0)),
+                heuristic().reduce(&group_key, &egs, None, rows(100.0)),
                 rows(10.0)
+            );
+        }
+
+        /// One row per distinct group key, so a distinct-value bound tightens the reduce. Without
+        /// one the only sound answer is the input, which assumes every row is its own group.
+        #[test]
+        fn reduce_uses_a_distinct_value_bound_when_it_has_one() {
+            let group_key = vec![MirScalarExpr::column(0)];
+            assert_eq!(
+                bounding().reduce(&group_key, &None, Some(7), rows(100.0)),
+                rows(7.0)
+            );
+            // Never above the input: a group cannot exist without a row in it.
+            assert_eq!(
+                bounding().reduce(&group_key, &None, Some(500), rows(100.0)),
+                rows(100.0)
+            );
+            assert_eq!(
+                bounding().reduce(&group_key, &None, None, rows(100.0)),
+                rows(100.0)
+            );
+            // The heuristic is unchanged by it.
+            assert_eq!(
+                heuristic().reduce(&group_key, &None, Some(7), rows(100.0)),
+                rows(100.0)
             );
         }
 
