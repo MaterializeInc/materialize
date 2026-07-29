@@ -21,16 +21,58 @@
 //! This module owns the first two. Keeping `rows` out means the per-row part of the bound can be
 //! measured and calibrated on its own, before any cardinality estimate is trusted.
 //!
-//! The bound covers steady-state arrangement contents only. It does not model the Spine holding
-//! geometric levels during merge, nor uncompacted history within the compaction window, both of
-//! which scale the result by a factor this module does not attempt to predict.
+//! A batch stores its keys, then its values, then the `(time, diff)` updates, with an offset range
+//! linking each layer to the next. So an update costs the row it holds plus a fixed overhead, and
+//! the worst case for the ranges is one value per key and one update per value.
+//!
+//! The bound covers the logical contents of steady-state batches. It does not model the Spine
+//! holding geometric levels during merge, uncompacted history within the compaction window, or the
+//! allocator retaining capacity a consolidated arrangement no longer uses. Measurement shows the
+//! last of these can exceed the bound for arrangements that ingested far more updates than they
+//! now hold, so this is a bound on content and not on resident bytes.
 
 use std::collections::BTreeMap;
 
 use mz_repr::{ReprRelationType, max_datum_size};
 
 use crate::plan::arrangement_count::{Caveat, predict_arrangement_counts};
-use crate::plan::{LirId, LirRelationExpr};
+use crate::plan::{LirId, LirRelationExpr, LirRelationNode};
+
+/// Bytes a batch spends on the difference accumulated for one update.
+pub const DIFF_BYTES: usize = 8;
+
+/// Bytes a batch spends on the timestamp of one update, outside a recursive scope.
+pub const TIMESTAMP_BYTES: usize = 8;
+
+/// Bytes the point stamp's own allocation costs, once per update inside a recursive scope.
+///
+/// Inside a `LetRec` the timestamp becomes a product of the outer timestamp and a point stamp.
+/// The point stamp holds its coordinates in a heap allocation, so an update pays for the pointer,
+/// length and capacity as well as the coordinates.
+pub const POINT_STAMP_HEADER_BYTES: usize = 3 * 8;
+
+/// Additional timestamp bytes per level of recursive nesting, one coordinate each.
+pub const RECURSION_TIMESTAMP_BYTES_PER_LEVEL: usize = 8;
+
+/// Bytes a batch spends on the offset delimiting one key's range of values.
+pub const KEY_RANGE_BYTES: usize = 8;
+
+/// Bytes a batch spends on the offset delimiting one value's range of updates.
+pub const VALUE_RANGE_BYTES: usize = 8;
+
+/// Per-update batch overhead outside the row itself, at recursion depth `depth`.
+///
+/// A batch stores keys, then values, then updates, with an offset range linking each layer to the
+/// next. Charging a full range per update is the worst case, reached when every key has exactly
+/// one value and every value exactly one update.
+pub fn overhead_bytes(depth: usize) -> usize {
+    let timestamp = if depth == 0 {
+        TIMESTAMP_BYTES
+    } else {
+        TIMESTAMP_BYTES + POINT_STAMP_HEADER_BYTES + depth * RECURSION_TIMESTAMP_BYTES_PER_LEVEL
+    };
+    DIFF_BYTES + timestamp + KEY_RANGE_BYTES + VALUE_RANGE_BYTES
+}
 
 /// The per-row memory a node's arrangements occupy, where it can be determined.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -38,8 +80,13 @@ pub struct BytesPerRow {
     /// Data arrangements the node builds. Zero for a node that holds no state.
     pub arrangements: usize,
     /// Widest encoding of one row of this node's output, or `None` if any column is unbounded.
+    ///
+    /// A batch splits the row across its key and value layers, so the two together are never
+    /// wider than the row.
     pub row_width: Option<usize>,
-    /// `arrangements * row_width`, or `None` when the width is unknown.
+    /// Per-update batch overhead, which grows with recursive nesting.
+    pub overhead: usize,
+    /// `arrangements * (row_width + overhead)`, or `None` when the width is unknown.
     ///
     /// Zero is a real answer, meaning the node holds nothing. `None` means the node holds
     /// something whose size cannot be bounded, which is the case a caller must not round down.
@@ -70,25 +117,46 @@ pub fn bytes_per_row(
     expr: &LirRelationExpr,
     node_types: &BTreeMap<LirId, ReprRelationType>,
 ) -> BTreeMap<LirId, BytesPerRow> {
-    predict_arrangement_counts(expr)
+    let counts = predict_arrangement_counts(expr);
+    let depths = recursion_depths(expr);
+
+    counts
         .into_iter()
         .map(|(lir_id, prediction)| {
             let row_width = node_types.get(&lir_id).and_then(max_row_width);
+            let overhead = overhead_bytes(depths.get(&lir_id).copied().unwrap_or(0));
             // A node that arranges nothing costs nothing, even where the width is unknown.
             let bytes_per_row = if prediction.data == 0 {
                 Some(0)
             } else {
-                row_width.map(|width| prediction.data * width)
+                row_width.map(|width| prediction.data * (width + overhead))
             };
             let entry = BytesPerRow {
                 arrangements: prediction.data,
                 row_width,
+                overhead,
                 bytes_per_row,
                 caveat: prediction.caveat,
             };
             (lir_id, entry)
         })
         .collect()
+}
+
+/// How many `LetRec` scopes enclose each node.
+fn recursion_depths(expr: &LirRelationExpr) -> BTreeMap<LirId, usize> {
+    let mut out = BTreeMap::new();
+    let mut stack = vec![(expr, 0usize)];
+    while let Some((expr, depth)) = stack.pop() {
+        out.insert(expr.lir_id, depth);
+        // Only a `LetRec` opens a new timestamp coordinate; its whole subtree sits inside it.
+        let child_depth = match &expr.node {
+            LirRelationNode::LetRec { .. } => depth + 1,
+            _ => depth,
+        };
+        stack.extend(expr.node.children().map(|child| (child, child_depth)));
+    }
+    out
 }
 
 /// Sums the per-row bound over a whole plan.
@@ -142,5 +210,46 @@ mod tests {
     #[mz_ore::test]
     fn an_empty_row_is_bounded_at_zero() {
         assert_eq!(max_row_width(&typ(vec![])), Some(0));
+    }
+
+    /// Outside recursion an update pays diff, timestamp, and one range per layer.
+    #[mz_ore::test]
+    fn overhead_outside_recursion() {
+        assert_eq!(overhead_bytes(0), 8 + 8 + 8 + 8);
+    }
+
+    /// Inside a `LetRec` the timestamp gains a point stamp, which costs its own allocation plus
+    /// one coordinate per enclosing level.
+    #[mz_ore::test]
+    fn overhead_grows_with_recursive_nesting() {
+        assert_eq!(overhead_bytes(1), 8 + (8 + 24 + 8) + 8 + 8);
+        assert_eq!(
+            overhead_bytes(2) - overhead_bytes(1),
+            RECURSION_TIMESTAMP_BYTES_PER_LEVEL
+        );
+        // The point stamp allocation is paid once, not once per level.
+        assert!(overhead_bytes(1) - overhead_bytes(0) > RECURSION_TIMESTAMP_BYTES_PER_LEVEL);
+    }
+
+    /// Measured against a live insert-only workload: every bound here exceeded the observed
+    /// bytes per record. Pinned so a change to the batch model has to confront the evidence.
+    #[mz_ore::test]
+    fn bound_exceeds_measured_bytes_per_record() {
+        // (row width, recursion depth, observed bytes per record)
+        let measured = [
+            (10, 0, 10.3), // index on (int4, int4), keyed by the first
+            (5, 0, 5.2),   // join arrangement whose value is empty after thinning
+            (10, 0, 11.6), // join arrangement over two int4 columns
+            (23, 0, 17.6), // accumulable reduce output, int4 key and two int8 aggregates
+            (5, 1, 52.7),  // distinct inside a WITH MUTUALLY RECURSIVE
+            (10, 1, 52.7), // arrangement on a computed key inside recursion
+        ];
+        for (row_width, depth, observed) in measured {
+            let bound = row_width + overhead_bytes(depth);
+            assert!(
+                f64::from(u32::try_from(bound).unwrap()) >= observed,
+                "bound {bound} below observed {observed} for width {row_width} at depth {depth}"
+            );
+        }
     }
 }
