@@ -752,14 +752,6 @@ impl LirRelationExpr {
         Ok(dataflow)
     }
 
-    /// Lowers the dataflow description from MIR to LIR. To this end, the
-    /// method collects all available arrangements and based on this information
-    /// creates plans for every object to be built for the dataflow.
-    #[mz_ore::instrument(
-        target = "optimizer",
-        level = "debug",
-        fields(path.segment ="mir_to_lir")
-    )]
     /// Like [`Self::finalize_dataflow`], but also returns the output type of each LIR node.
     ///
     /// Collecting types costs an `MirRelationExpr::typ()` per node, so the plain
@@ -780,6 +772,14 @@ impl LirRelationExpr {
         Ok((Self::finalize_lowered(dataflow)?, types))
     }
 
+    /// Lowers the dataflow description from MIR to LIR. To this end, the
+    /// method collects all available arrangements and based on this information
+    /// creates plans for every object to be built for the dataflow.
+    #[mz_ore::instrument(
+        target = "optimizer",
+        level = "debug",
+        fields(path.segment ="mir_to_lir")
+    )]
     fn lower_dataflow(
         desc: DataflowDescription<OptimizedMirRelationExpr>,
         features: &OptimizerFeatures,
