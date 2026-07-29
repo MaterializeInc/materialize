@@ -90,6 +90,8 @@ use mz_sql::catalog::EnvironmentId;
 use serde_json::json;
 use tokio::time::{self, Duration};
 
+use crate::BUILD_INFO;
+
 /// Telemetry configuration.
 #[derive(Clone)]
 pub struct Config {
@@ -239,6 +241,7 @@ async fn report_loop(
                 "license_expiration_behavior".into(),
                 json!(license_key.expiration_behavior),
             );
+            traits.insert("mz_version".into(), json!(BUILD_INFO.version));
         }
 
         tracing::info!(?traits, "telemetry traits");
