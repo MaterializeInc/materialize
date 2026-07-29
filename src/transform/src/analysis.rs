@@ -1415,17 +1415,51 @@ mod cardinality {
 
     use super::{Analysis, Arity, SubtreeSize, UniqueKeys};
 
+    /// Which semantics the estimator produces.
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    pub enum CardinalityMode {
+        /// Point estimates, using guessed selectivities and trusting `expected_group_size`.
+        ///
+        /// An estimate may fall arbitrarily far on either side of the truth. This is what the
+        /// join orderer consumes.
+        #[default]
+        Heuristic,
+        /// Sound upper bounds: an estimate is never below the true cardinality.
+        ///
+        /// Every guessed constant is replaced by the worst case an operator can produce, and
+        /// anything not boundable from the plan becomes `Unknown`. Estimates get much looser in
+        /// exchange for never claiming a relation is smaller than it is.
+        UpperBound,
+    }
+
     /// Compute the estimated cardinality of each subtree of a [MirRelationExpr] from the bottom up.
     #[allow(missing_debug_implementations)]
     pub struct Cardinality {
         /// Cardinalities for globally named entities
         pub stats: BTreeMap<GlobalId, usize>,
+        /// Whether to produce point estimates or sound upper bounds.
+        pub mode: CardinalityMode,
     }
 
     impl Cardinality {
         /// A cardinality estimator with provided statistics for the given global identifiers
         pub fn with_stats(stats: BTreeMap<GlobalId, usize>) -> Self {
-            Cardinality { stats }
+            Cardinality {
+                stats,
+                mode: CardinalityMode::Heuristic,
+            }
+        }
+
+        /// An estimator that produces sound upper bounds rather than point estimates.
+        pub fn upper_bound(stats: BTreeMap<GlobalId, usize>) -> Self {
+            Cardinality {
+                stats,
+                mode: CardinalityMode::UpperBound,
+            }
+        }
+
+        fn bounding(&self) -> bool {
+            self.mode == CardinalityMode::UpperBound
         }
     }
 
@@ -1433,6 +1467,7 @@ mod cardinality {
         fn default() -> Self {
             Cardinality {
                 stats: BTreeMap::new(),
+                mode: CardinalityMode::Heuristic,
             }
         }
     }
@@ -1592,19 +1627,40 @@ mod cardinality {
     //
     // We split it up into functions to make it all a bit more tractable to work with.
     impl Cardinality {
-        fn flat_map(&self, tf: &TableFunc, input: CardinalityEstimate) -> CardinalityEstimate {
+        fn flat_map(
+            &self,
+            tf: &TableFunc,
+            exprs: &[MirScalarExpr],
+            input: CardinalityEstimate,
+        ) -> CardinalityEstimate {
             match tf {
                 TableFunc::Wrap { types, width } => {
                     // DBZ is harmless (produces inf, empty estimate), but still a broken invariant
                     if *width == 0 {
                         error!("cardinality estimation encountered TableFunc::Wrap with width 0");
+                        return CardinalityEstimate::Unknown;
                     }
 
-                    input * (f64::cast_lossy(types.len()) / f64::cast_lossy(*width))
+                    if self.bounding() {
+                        // `wrap` chunks the *argument* list, emitting `ceil(exprs / width)` rows
+                        // per input row. `types` describes one output row, so `types.len()` equals
+                        // `width` at every construction site and the ratio below is always 1.
+                        let rows_per_input = exprs.len().div_ceil(*width);
+                        input * f64::cast_lossy(rows_per_input)
+                    } else {
+                        // TODO(database-issues): this is always `input * 1.0`. Retained so that
+                        // changing it does not perturb join ordering; fix alongside the goldens.
+                        input * (f64::cast_lossy(types.len()) / f64::cast_lossy(*width))
+                    }
                 }
                 _ => {
-                    // TODO(mgree) what explosion factor should we make up?
-                    input * CardinalityEstimate::from(4.0)
+                    if self.bounding() {
+                        // A table function may produce unboundedly many rows per input row.
+                        CardinalityEstimate::Unknown
+                    } else {
+                        // TODO(mgree) what explosion factor should we make up?
+                        input * CardinalityEstimate::from(4.0)
+                    }
                 }
             }
         }
@@ -1721,6 +1777,12 @@ mod cardinality {
                 }
             }
 
+            if self.bounding() {
+                // A predicate can only remove rows, so the input is already an upper bound. Every
+                // selectivity below is a guess, and guesses are exactly what a bound must not use.
+                return input;
+            }
+
             let mut estimate = input;
             for expr in predicates {
                 let selectivity = self.predicate(expr, &unique_columns);
@@ -1810,9 +1872,9 @@ mod cardinality {
         ) -> CardinalityEstimate {
             // TODO(mgree): if no `group_key` is present, we can do way better
 
-            if let Some(expected_group_size) = expected_group_size {
+            if let Some(expected_group_size) = expected_group_size.filter(|_| !self.bounding()) {
                 // if expected group size is 0, treat it as 1 (to avoid DBZ/+inf estimates)
-                let group_size = u64::max(*expected_group_size, 1);
+                let group_size = u64::max(expected_group_size, 1);
                 input / f64::cast_lossy(group_size)
             } else if group_key.is_empty() {
                 CardinalityEstimate::from(1.0)
@@ -1830,10 +1892,25 @@ mod cardinality {
             input: CardinalityEstimate,
         ) -> CardinalityEstimate {
             // TODO: support simple arithmetic expressions
-            let k = limit
-                .as_ref()
-                .and_then(|l| l.as_literal_int64())
-                .map_or(1, |l| std::cmp::max(0, l));
+            let literal_k = limit.as_ref().and_then(|l| l.as_literal_int64());
+
+            if self.bounding() {
+                // A top-k only ever discards rows, so the input always bounds it. The limit
+                // tightens that only when there is a single group.
+                //
+                // `limit: None` means *no* limit, and a non-literal limit is unknown at plan time.
+                // Defaulting either to 1, as the heuristic below does, silently claims a
+                // pure-`OFFSET` top-k emits a single row.
+                return match literal_k {
+                    Some(k) if group_key.is_empty() => CardinalityEstimate::min(
+                        input,
+                        CardinalityEstimate::from(f64::cast_lossy(k)),
+                    ),
+                    _ => input,
+                };
+            }
+
+            let k = literal_k.map_or(1, |l| std::cmp::max(0, l));
 
             if let Some(expected_group_size) = expected_group_size {
                 // if expected group size is 0, treat it as 1 (to avoid DBZ/+inf estimates)
@@ -1904,9 +1981,9 @@ mod cardinality {
                     .children_of_rev(index, expr.children().count())
                     .map(|off| results[off].clone())
                     .sum(),
-                FlatMap { func, .. } => {
+                FlatMap { func, exprs, .. } => {
                     let input = results[index - 1];
-                    self.flat_map(func, input)
+                    self.flat_map(func, exprs, input)
                 }
                 Filter { predicates, .. } => {
                     let input = results[index - 1];
@@ -1976,6 +2053,127 @@ mod cardinality {
                 CardinalityEstimate::Estimate(OrderedFloat(estimate)) => write!(f, "{estimate}"),
                 CardinalityEstimate::Unknown => write!(f, "<UNKNOWN>"),
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use mz_repr::{Datum, ReprScalarType, SqlScalarType};
+
+        use super::*;
+
+        fn bounding() -> Cardinality {
+            Cardinality::upper_bound(BTreeMap::new())
+        }
+
+        fn heuristic() -> Cardinality {
+            Cardinality::with_stats(BTreeMap::new())
+        }
+
+        fn rows(n: f64) -> CardinalityEstimate {
+            CardinalityEstimate::from(n)
+        }
+
+        fn int64(n: i64) -> MirScalarExpr {
+            MirScalarExpr::literal_ok(Datum::Int64(n), ReprScalarType::Int64)
+        }
+
+        /// A predicate can only remove rows, so the sound bound is the input. The heuristic
+        /// applies a guessed selectivity instead.
+        #[test]
+        fn filter_is_the_identity_when_bounding() {
+            // `IS NULL` is one of the predicates the heuristic assigns a guessed selectivity.
+            let predicates = vec![MirScalarExpr::column(0).call_is_null()];
+            let keys = vec![];
+            assert_eq!(
+                bounding().filter(&predicates, &keys, rows(100.0)),
+                rows(100.0)
+            );
+            assert_eq!(
+                heuristic().filter(&predicates, &keys, rows(100.0)),
+                rows(10.0)
+            );
+        }
+
+        /// A general table function has no static bound on rows produced per input row.
+        #[test]
+        fn unbounded_flat_map_is_unknown_when_bounding() {
+            let tf = TableFunc::GenerateSeriesInt64;
+            assert_eq!(
+                bounding().flat_map(&tf, &[], rows(10.0)),
+                CardinalityEstimate::Unknown
+            );
+            assert_eq!(heuristic().flat_map(&tf, &[], rows(10.0)), rows(40.0));
+        }
+
+        /// `wrap` chunks the argument list, so a two-argument wrap of width one doubles the input.
+        /// The heuristic divides `types.len()` by `width`, which is always one.
+        #[test]
+        fn wrap_counts_arguments_not_output_columns() {
+            let tf = TableFunc::Wrap {
+                types: vec![SqlScalarType::Int64.nullable(false)],
+                width: 1,
+            };
+            let exprs = vec![MirScalarExpr::column(0), MirScalarExpr::column(1)];
+            assert_eq!(bounding().flat_map(&tf, &exprs, rows(10.0)), rows(20.0));
+            assert_eq!(heuristic().flat_map(&tf, &exprs, rows(10.0)), rows(10.0));
+        }
+
+        /// `expected_group_size` is a user hint, so a bound cannot divide by it.
+        #[test]
+        fn reduce_ignores_the_group_size_hint_when_bounding() {
+            let group_key = vec![MirScalarExpr::column(0)];
+            let egs = Some(10);
+            assert_eq!(
+                bounding().reduce(&group_key, &egs, rows(100.0)),
+                rows(100.0)
+            );
+            assert_eq!(
+                heuristic().reduce(&group_key, &egs, rows(100.0)),
+                rows(10.0)
+            );
+        }
+
+        /// `limit: None` means no limit at all. Treating it as one row is an unbounded
+        /// underestimate for a pure-`OFFSET` top-k.
+        #[test]
+        fn top_k_without_a_literal_limit_is_bounded_by_its_input() {
+            let no_group = vec![];
+            assert_eq!(
+                bounding().topk(&no_group, &None, &None, rows(100.0)),
+                rows(100.0)
+            );
+            assert_eq!(
+                heuristic().topk(&no_group, &None, &None, rows(100.0)),
+                rows(1.0)
+            );
+
+            // A non-literal limit is equally unknown at plan time.
+            let computed = MirScalarExpr::column(0);
+            assert_eq!(
+                bounding().topk(&no_group, &Some(computed), &None, rows(100.0)),
+                rows(100.0)
+            );
+        }
+
+        /// With a single group the limit bounds the output, but never above the input.
+        #[test]
+        fn top_k_with_a_literal_limit_takes_the_smaller_of_limit_and_input() {
+            let no_group = vec![];
+            let group = vec![0];
+            assert_eq!(
+                bounding().topk(&no_group, &Some(int64(5)), &None, rows(100.0)),
+                rows(5.0)
+            );
+            assert_eq!(
+                bounding().topk(&no_group, &Some(int64(500)), &None, rows(100.0)),
+                rows(100.0)
+            );
+            // Many groups: every input row could be its own group, so only the input bounds it.
+            assert_eq!(
+                bounding().topk(&group, &Some(int64(5)), &None, rows(100.0)),
+                rows(100.0)
+            );
         }
     }
 }
