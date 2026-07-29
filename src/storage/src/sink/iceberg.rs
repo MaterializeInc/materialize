@@ -1658,8 +1658,7 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
                     }
 
                     // Read all the incoming (arrangement batches of) rows.
-                    let ready_events = std::iter::from_fn(|| input.next_sync()).collect_vec();
-                    for event in ready_events {
+                    while let Some(event) = input.next_sync() {
                         match event {
                             Event::Data(_cap, data) => {
                                 for rows in &data {
