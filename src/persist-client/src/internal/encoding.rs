@@ -1729,9 +1729,16 @@ pub struct LazyPartStats {
 
 impl Debug for LazyPartStats {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("LazyPartStats")
-            .field(&self.decode())
-            .finish()
+        let mut f = f.debug_tuple("LazyPartStats");
+        // These bytes come from blob and are never validated on the way in, so
+        // `Debug` runs on malformed encodings: `Spine::validate` formats the
+        // whole spine into the message it rejects an untrusted rollup with, and
+        // `Trace::unflatten` returns that as a decode error. Rendering the
+        // failure keeps that rejection path a hard error instead of a panic.
+        match self.try_decode() {
+            Ok(stats) => f.field(&stats).finish(),
+            Err(err) => f.field(&format_args!("<undecodable: {err}>")).finish(),
+        }
     }
 }
 
@@ -1748,11 +1755,26 @@ impl LazyPartStats {
     ///
     /// This does not cache the returned value, it decodes each time it's
     /// called.
+    ///
+    /// Panics if the encoded bytes are malformed. Only call this where the value
+    /// is known to have come from `Self::encode` rather than straight off blob.
     pub fn decode(&self) -> PartStats {
-        let key = self.key.decode().expect("valid proto");
-        PartStats {
-            key: key.into_rust().expect("valid stats"),
-        }
+        self.try_decode().expect("valid stats")
+    }
+
+    /// Like [Self::decode], but surfaces a malformed encoding as an error.
+    ///
+    /// The bytes are stored undecoded (see the [RustType] impl), so a corrupted
+    /// or crafted blob reaches here intact. Anything running on state that has
+    /// not been validated yet must use this.
+    pub fn try_decode(&self) -> Result<PartStats, TryFromProtoError> {
+        let key = self
+            .key
+            .decode()
+            .map_err(|err| TryFromProtoError::InvalidPersistState(err.to_string()))?;
+        Ok(PartStats {
+            key: key.into_rust()?,
+        })
     }
 }
 
@@ -2629,5 +2651,19 @@ mod tests {
         testcase("28.0.0", "26.0.1", Err(()));
         testcase("28.0.0", "26.1000.1", Err(()));
         testcase("28.0.0", "27.0.0", Ok(()));
+    }
+
+    /// `LazyPartStats`'s bytes are stored undecoded, so `Debug` runs on
+    /// encodings that came straight off blob and may be malformed. It must render
+    /// the failure: `Spine::validate` formats the whole spine into the message
+    /// with which `Trace::unflatten` rejects an untrusted rollup, so a panic here
+    /// turns that rejection into an unrecoverable shard.
+    #[mz_ore::test]
+    fn lazy_part_stats_debug_does_not_panic_on_garbage() {
+        // Tag 0 is never a legal protobuf tag.
+        let stats = LazyPartStats::from_proto(Bytes::from_static(&[0x00, 0xff]))
+            .expect("stats bytes are stored undecoded");
+        assert_err!(stats.try_decode());
+        assert!(format!("{stats:?}").contains("undecodable"));
     }
 }
