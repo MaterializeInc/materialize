@@ -15,7 +15,6 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 
-use mz_lowertest::MzReflect;
 use regex::{Error, RegexBuilder};
 use serde::de::Error as DeError;
 use serde::ser::SerializeStruct;
@@ -64,7 +63,7 @@ const MAX_REGEX_SIZE_BEFORE_COMPILATION: usize = 1 * 1024 * 1024;
 /// we reconstruct the regex field from the other fields upon deserialization.
 /// (Earlier, serialization was buggy due to <https://github.com/tailhook/serde-regex/issues/14>,
 /// and also making the same mistake in our own protobuf serialization code.)
-#[derive(Debug, Clone, MzReflect)]
+#[derive(Debug, Clone)]
 pub struct Regex {
     pub case_insensitive: bool,
     pub dot_matches_new_line: bool,

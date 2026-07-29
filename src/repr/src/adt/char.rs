@@ -11,7 +11,6 @@ use std::error::Error;
 use std::fmt;
 
 use anyhow::bail;
-use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_proto::{RustType, TryFromProtoError};
 #[cfg(any(test, feature = "proptest"))]
@@ -47,8 +46,7 @@ pub struct Char<S: AsRef<str>>(pub S);
     PartialOrd,
     Hash,
     Serialize,
-    Deserialize,
-    MzReflect
+    Deserialize
 )]
 pub struct CharLength(pub(crate) u32);
 

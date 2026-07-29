@@ -16,7 +16,6 @@ use std::fmt;
 use std::str::FromStr;
 
 use chrono::{NaiveDate, NaiveTime, Timelike};
-use mz_lowertest::MzReflect;
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_pgtz::timezone::Timezone;
 #[cfg(any(test, feature = "proptest"))]
@@ -39,8 +38,7 @@ use crate::adt::interval::Interval;
     Eq,
     Hash,
     Serialize,
-    Deserialize,
-    MzReflect
+    Deserialize
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum DateTimeUnits {

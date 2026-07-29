@@ -11,7 +11,6 @@ use std::fmt;
 
 use chrono::{DateTime, Utc};
 use mz_expr_derive::sqlfunc;
-use mz_lowertest::MzReflect;
 use mz_ore::cast::TryCastFrom;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::adt::timestamp::CheckedTimestamp;
@@ -210,8 +209,7 @@ fn cast_float64_to_uint64(a: f64) -> Result<u64, EvalError> {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct CastFloat64ToNumeric(pub Option<NumericMaxScale>);
 

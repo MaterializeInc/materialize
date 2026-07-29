@@ -26,17 +26,12 @@ serde.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-anyhow.workspace = true
 datadriven.workspace = true
 mz-expr-parser = { path = "../expr-parser" }
-mz-expr-test-util = { path = "../expr-test-util" }
-mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore", features = ["test"] }
 mz-transform = { path = ".", features = ["proptest"] }
-proc-macro2.workspace = true
 proptest.workspace = true
 proptest-derive.workspace = true
-serde_json.workspace = true
 
 [features]
 default = []

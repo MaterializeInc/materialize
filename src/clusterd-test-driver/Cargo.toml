@@ -16,9 +16,9 @@ mz-compute-client = { path = "../compute-client" }
 mz-compute-types = { path = "../compute-types" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-expr = { path = "../expr" }
-# The repo's MzReflect-free MIR-from-text parser (the `.spec` test syntax), so
-# `define` authors MIR in the readable pretty form rather than a hand-rolled
-# JSON vocabulary.
+# The repo's MIR-from-text parser (the `.spec` test syntax), so `define`
+# authors MIR in the readable pretty form rather than a hand-rolled JSON
+# vocabulary.
 mz-expr-parser = { path = "../expr-parser" }
 # Used by the binary to configure tracing. It also keeps orchestrator-tracing's
 # `tokio-console` feature enabled, which must stay consistent with mz-ore's

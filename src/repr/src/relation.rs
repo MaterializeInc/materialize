@@ -14,7 +14,6 @@ use std::{fmt, vec};
 
 use anyhow::bail;
 use itertools::Itertools;
-use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_ore::soft_panic_or_log;
 use mz_ore::str::StrExt;
@@ -56,8 +55,7 @@ use crate::{Datum, ReprScalarType, SqlScalarType};
     PartialOrd,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct SqlColumnType {
@@ -271,8 +269,7 @@ impl fmt::Display for SqlColumnType {
     PartialOrd,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct SqlRelationType {
@@ -420,8 +417,7 @@ impl RustType<ProtoKey> for Vec<usize> {
     PartialOrd,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct ReprRelationType {
     /// The type for each column, in order.
@@ -518,8 +514,7 @@ impl From<&SqlRelationType> for ReprRelationType {
     PartialOrd,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct ReprColumnType {
     /// The underlying representation scalar type (e.g., Int32 or String) of this column.
@@ -596,8 +591,7 @@ impl SqlColumnType {
     PartialOrd,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct ColumnName(Box<str>);
 
@@ -728,8 +722,7 @@ pub const UNKNOWN_COLUMN_NAME: &str = "?column?";
     Ord,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct ColumnIndex(usize);
 
@@ -762,8 +755,7 @@ impl ColumnIndex {
     Ord,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct RelationVersion(u64);
@@ -901,7 +893,7 @@ impl fmt::Display for SemanticType {
 }
 
 /// Metadata (other than type) for a column in a [`RelationDesc`].
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 struct ColumnMetadata {
     /// Name of the column.
     name: ColumnName,
@@ -980,7 +972,7 @@ struct ColumnMetadata {
 /// the index in [`SqlRelationType`] that corresponds to a given column, and the
 /// version at which this column was added or dropped.
 ///
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, MzReflect)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RelationDesc {
     typ: SqlRelationType,
     metadata: BTreeMap<ColumnIndex, ColumnMetadata>,
