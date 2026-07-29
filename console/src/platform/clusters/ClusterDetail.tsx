@@ -45,7 +45,7 @@ const ClusterDetailBreadcrumbs = (props: { crumbs: Breadcrumb[] }) => {
   const [showSystemObjects] = useShowSystemObjects();
   const { clusterId, clusterName } = useParams<ClusterParams>();
   const { data: clusters, getClusterById } = useAllClusters();
-  const { data: ownersById } = useOwners();
+  const { data: ownersById, isPending: isOwnersPending } = useOwners();
   const { pathname, search } = useLocation();
   assert(clusterId);
   assert(clusterName);
@@ -53,7 +53,7 @@ const ClusterDetailBreadcrumbs = (props: { crumbs: Breadcrumb[] }) => {
 
   // The subscribe upserts by id, so the atom's order is arbitrary.
   const clustersToShow = clusters
-    .filter((c) => showSystemObjects || c.id.startsWith("u"))
+    .filter((c) => showSystemObjects || !isSystemCluster(c.id))
     .sort((a, b) => a.name.localeCompare(b.name));
 
   const menu = (
@@ -87,7 +87,10 @@ const ClusterDetailBreadcrumbs = (props: { crumbs: Breadcrumb[] }) => {
           <OverflowMenuContainer
             cluster={{
               ...cluster,
-              isOwner: ownersById?.get(cluster.ownerId) ?? false,
+              // Treat an in-flight owners query as non-owner so owner-only menu
+              // items stay hidden until ownership is known.
+              isOwner:
+                !isOwnersPending && (ownersById?.get(cluster.ownerId) ?? false),
             }}
           />
         )
