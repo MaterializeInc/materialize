@@ -68,6 +68,9 @@ export const roleQueryKeys = {
       ...roleQueryKeys.all(),
       buildQueryKeyPart("grantedRoles", params),
     ] as const,
+  // Which roles the current user can act as. Under the roles namespace so the
+  // role mutations' `roleQueryKeys.all()` invalidations refresh derived ownership.
+  owners: () => [...roleQueryKeys.all(), buildQueryKeyPart("owners")] as const,
   revokeRoleMember: () =>
     [...roleQueryKeys.all(), buildQueryKeyPart("revokeRoleMember")] as const,
   grantRoleMember: () =>

@@ -81,6 +81,7 @@ import { assertNoMoreThanOneRow } from "~/api/materialize/MoreThanOneRowError";
 import { fetchOwners } from "~/api/materialize/owners";
 import { useSubscribe } from "~/api/materialize/useSubscribe";
 import { DataPoint, GraphLineSeries } from "~/components/FreshnessGraph/types";
+import { roleQueryKeys } from "~/platform/roles/queries";
 import { useEnvironmentGate } from "~/store/environments";
 import { notNullOrUndefined, sumPostgresIntervalMs } from "~/util";
 import { sortLagInfo } from "~/utils/freshness";
@@ -165,8 +166,6 @@ export const clusterQueryKeys = {
       ...clusterQueryKeys.all(),
       buildQueryKeyPart("clusterFreshness", params),
     ] as const,
-  owners: () =>
-    [...clusterQueryKeys.all(), buildQueryKeyPart("owners")] as const,
 };
 
 export function useClusters(filters?: ClusterListFilters) {
@@ -210,8 +209,10 @@ export function useClusters(filters?: ClusterListFilters) {
  */
 export function useOwners() {
   return useQuery({
-    refetchInterval: 60_000,
-    queryKey: clusterQueryKeys.owners(),
+    // Role mutations invalidate this key, so this long interval is only a
+    // backstop for external role changes while the page stays open.
+    refetchInterval: 300_000,
+    queryKey: roleQueryKeys.owners(),
     queryFn: ({ queryKey, signal }) => {
       return fetchOwners({ queryKey, requestOptions: { signal } });
     },
