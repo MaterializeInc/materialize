@@ -160,6 +160,42 @@ mod tests {
     use mz_repr::adt::interval::Interval;
     use mz_repr::{Datum, Row, SqlScalarType};
 
+    /// Serializes tests that read or write the process-wide `DICTIONARY_COMPRESSION`
+    /// flag. The flag itself has no synchronization, so under a shared-process test
+    /// harness (plain `cargo test`'s default of running all tests as threads in one
+    /// process) two tests setting it to different values could otherwise interleave,
+    /// corrupting whichever test observes the wrong value mid-run.
+    static DICTIONARY_COMPRESSION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Holds `DICTIONARY_COMPRESSION_TEST_LOCK` and restores the flag's prior value on
+    /// drop, so a test that sets the flag cannot affect any test that runs after it,
+    /// regardless of test order or whether the setting test panics.
+    struct DictionaryCompressionGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        prior: bool,
+    }
+
+    impl Drop for DictionaryCompressionGuard {
+        fn drop(&mut self) {
+            crate::DICTIONARY_COMPRESSION.store(self.prior, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// Sets `DICTIONARY_COMPRESSION` to `value` for the lifetime of the returned guard.
+    ///
+    /// A poisoned lock only means some earlier guarded test panicked while holding it;
+    /// the guarded state is a single `AtomicBool`, so there is no invalid data to
+    /// recover from, and we take the lock anyway rather than letting the poison fail
+    /// every later test that touches the flag.
+    #[must_use]
+    fn with_dictionary_compression(value: bool) -> DictionaryCompressionGuard {
+        let lock = DICTIONARY_COMPRESSION_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let prior = crate::DICTIONARY_COMPRESSION.swap(value, std::sync::atomic::Ordering::Relaxed);
+        DictionaryCompressionGuard { _lock: lock, prior }
+    }
+
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: integer-to-pointer casts and `ptr::with_exposed_provenance` are not supported
     fn test_round_trip() {
@@ -393,12 +429,11 @@ mod tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // integer-to-pointer casts in row decoding are unsupported under miri
     fn push_done_promotion_avoids_merge_poison() {
-        use std::sync::atomic::Ordering;
         use timely::container::PushInto;
 
-        // Gate the dictionary path on. Safe for other tests: the flag only controls
-        // whether `DatumContainer` gathers stats; it never changes decode results.
-        crate::DICTIONARY_COMPRESSION.store(true, Ordering::Relaxed);
+        // Gate the dictionary path on for this test. The guard serializes against
+        // other tests that touch the flag and restores its prior value on drop.
+        let _guard = with_dictionary_compression(true);
 
         // Low-cardinality rows, well under `STATS_THRESHOLD` (64Ki): a repeated
         // multi-byte string the dictionary compresses, plus an integer column that
@@ -580,15 +615,35 @@ mod tests {
         assert_eq!(a.exact_distinct_count(), Some(200));
     }
 
+    /// With dictionary compression disabled, a container never gathers statistics,
+    /// so `exact_distinct_counts` must report `None` regardless of what it is pushed.
+    ///
+    /// This is also the only test that pins down that `with_capacity` (and `clear`,
+    /// which rebuilds `stats` the same way) actually wires `DICTIONARY_COMPRESSION`
+    /// into `stats` at all: every other test in this file that touches the flag sets
+    /// it `true`, so a regression that gathered statistics unconditionally, ignoring
+    /// the flag, would otherwise go undetected.
+    #[mz_ore::test]
+    fn test_exact_distinct_counts_disabled() {
+        use timely::container::PushInto;
+
+        let _guard = with_dictionary_compression(false);
+
+        let mut container = DatumContainer::with_capacity(0);
+        for i in 0..10i64 {
+            container.push_into(Row::pack_slice(&[Datum::Int64(i % 3)]));
+        }
+        assert_eq!(container.exact_distinct_counts(), None);
+    }
+
     /// With dictionary compression enabled and few rows pushed, every column's
     /// summary is exact. Two columns with different distinct counts (3 vs 7) so a
     /// transposed or shared per-column result would fail.
     #[mz_ore::test]
     fn test_exact_distinct_counts_enabled() {
-        use std::sync::atomic::Ordering;
         use timely::container::PushInto;
 
-        crate::DICTIONARY_COMPRESSION.store(true, Ordering::Relaxed);
+        let _guard = with_dictionary_compression(true);
 
         let mut container = DatumContainer::with_capacity(0);
         for i in 0..50i64 {
@@ -607,23 +662,13 @@ mod tests {
     /// The production path to that state pushes `STATS_THRESHOLD` (64Ki) records,
     /// which is too slow for a unit test. `promote_stats_to_codec` (exercised by
     /// `push_done_promotion_avoids_merge_poison` above) reaches the identical
-    /// container state — `stats` taken and moved into `codec` — without pushing
-    /// anywhere near that many rows, so we drive it directly instead.
-    ///
-    /// This also stands in for the "dictionary compression disabled" case: both
-    /// leave `stats` as `None`, which is the only thing `exact_distinct_counts`
-    /// consults, and the two are documented as indistinguishable from outside. A
-    /// separate test that reached `None` by storing `false` into the process-wide
-    /// `DICTIONARY_COMPRESSION` flag would assert the same postcondition through a
-    /// racier route: `push_done_promotion_avoids_merge_poison` above stores `true`
-    /// into that same flag and never restores it, and nothing serializes the two.
-    /// Do not add such a test without also addressing that race.
+    /// container state without pushing anywhere near that many rows. It takes
+    /// `stats` and moves it into `codec`, so we drive it directly instead.
     #[mz_ore::test]
     fn test_exact_distinct_counts_after_codec_install() {
-        use std::sync::atomic::Ordering;
         use timely::container::PushInto;
 
-        crate::DICTIONARY_COMPRESSION.store(true, Ordering::Relaxed);
+        let _guard = with_dictionary_compression(true);
 
         let mut container = DatumContainer::with_capacity(0);
         for i in 0..10i64 {
@@ -640,10 +685,9 @@ mod tests {
     /// reports `None` once past the summary's `2 * k` (= 1024) tidy threshold.
     #[mz_ore::test]
     fn test_exact_distinct_counts_matches_reality() {
-        use std::sync::atomic::Ordering;
         use timely::container::PushInto;
 
-        crate::DICTIONARY_COMPRESSION.store(true, Ordering::Relaxed);
+        let _guard = with_dictionary_compression(true);
 
         let mut container = DatumContainer::with_capacity(0);
         for i in 0..20_000i64 {
