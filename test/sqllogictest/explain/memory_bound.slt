@@ -1,0 +1,106 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# `EXPLAIN MEMORY BOUND` factors its bound into arrangements * width * rows. The first
+# two need no statistics and are exact, so they are what this file pins down. The row
+# and byte columns need cardinality statistics, which stay unavailable here because
+# `enable_session_cardinality_estimates` is off by default. Enabling it would make
+# those columns depend on persist statistics arriving inside the optimizer's timeout,
+# the same race that keeps `cardinality.slt` halted, so they are asserted as NULL
+# rather than turned into a flake.
+
+statement ok
+CREATE TABLE t (a INT NOT NULL, b INT NOT NULL)
+
+statement ok
+CREATE TABLE u (x INT NOT NULL, y INT NOT NULL)
+
+statement ok
+CREATE TABLE s (k TEXT NOT NULL)
+
+statement ok
+INSERT INTO t VALUES (1, 10), (2, 20), (3, 30)
+
+statement ok
+INSERT INTO u VALUES (1, 100), (2, 200)
+
+statement ok
+INSERT INTO s VALUES ('a'), ('b')
+
+# A one-shot peek reads a snapshot, so its input is statically monotonic and the reduce
+# needs no bucket hierarchy. An accumulable reduce threads one accumulator per aggregate
+# through the difference position, so its bytes per row far exceed the row width.
+query ITIIIIIT
+EXPLAIN MEMORY BOUND FOR SELECT a, count(*) FROM t GROUP BY a
+----
+1  Get  0  5  0  NULL  NULL  NULL
+2  Reduce␠(accumulable,␠1␠aggregates)  2  14  364  NULL  NULL  NULL
+
+# A `text` column has no static size ceiling, so the width and every column derived
+# from it must be NULL rather than a number that does not bound anything.
+query ITIIIIIT
+EXPLAIN MEMORY BOUND FOR SELECT k, count(*) FROM s GROUP BY k
+----
+1  Get  0  NULL  0  NULL  NULL  NULL
+2  Reduce␠(accumulable,␠1␠aggregates)  2  NULL  NULL  NULL  NULL  NULL
+
+# A constant needs no statistics to settle its row count, so this is the one shape whose
+# row column is populated even with cardinality estimates off.
+query ITIIIIIT
+EXPLAIN MEMORY BOUND FOR SELECT 1
+----
+1  Constant  0  5  0  1  0  NULL
+
+# A differential join arranges each stage whose input is not already arranged, and the
+# join node itself then holds nothing. Reporting per node rather than per plan is what
+# makes that split visible.
+query ITIIIIIT
+EXPLAIN MEMORY BOUND FOR SELECT t.a, u.y FROM t, u WHERE t.a = u.x
+----
+1  Get  0  5  0  NULL  NULL  NULL
+2  ArrangeBy␠(1␠forms)  1  5  37  NULL  NULL  may␠reuse␠an␠already-available␠arrangement
+3  Get  0  10  0  NULL  NULL  NULL
+4  ArrangeBy␠(1␠forms)  1  10  42  NULL  NULL  may␠reuse␠an␠already-available␠arrangement
+5  Differential␠Join␠(1␠stages)  0  10  0  NULL  NULL  assumes␠the␠source␠arrangement␠is␠available
+
+# A materialized view's input is not monotonic, so `max` lowers to the bucket hierarchy.
+# The level count comes from `bucketing_of_expected_group_size`, which yields 7 rather
+# than 8 at the default group size because the loop stops once 16^n exceeds its limit.
+statement ok
+CREATE MATERIALIZED VIEW mv_max AS SELECT a, max(b) FROM t GROUP BY a
+
+query ITIIIIIT
+EXPLAIN MEMORY BOUND FOR MATERIALIZED VIEW mv_max
+----
+1  Get  0  10  0  NULL  NULL  NULL
+2  Reduce␠(hierarchical,␠7␠levels)  16  10  672  NULL  NULL  NULL
+
+# An `OFFSET` with no `LIMIT` skips the bucket hierarchy entirely, so it must not be
+# charged for the levels a `LIMIT` would build. In a one-shot peek `OFFSET` is applied by
+# the row-set finishing and no operator is rendered at all, so this needs a view to reach
+# the top-k plan.
+statement ok
+CREATE MATERIALIZED VIEW mv_offset AS SELECT * FROM (SELECT * FROM t ORDER BY a OFFSET 1)
+
+query ITIIIIIT
+EXPLAIN MEMORY BOUND FOR MATERIALIZED VIEW mv_offset
+----
+1  Get  0  10  0  NULL  NULL  NULL
+2  TopK␠(0␠levels)  2  10  84  NULL  NULL  NULL
+
+statement ok
+CREATE INDEX t_a ON t (a)
+
+query ITIIIIIT
+EXPLAIN MEMORY BOUND FOR INDEX t_a
+----
+1  Get  0  10  0  NULL  NULL  NULL
+2  ArrangeBy␠(1␠forms)  1  10  42  NULL  NULL  may␠reuse␠an␠already-available␠arrangement
