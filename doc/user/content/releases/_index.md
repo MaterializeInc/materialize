@@ -31,6 +31,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 - **`mz-debug` CPU profiling**: The `mz-debug` diagnostic tool now automatically collects CPU profiles alongside memory profiles for Self-Managed deployments.
 
 ### Bug Fixes {#v26.35-bug-fixes}
+- Fixed queries with many chained `INTERSECT` operations (e.g., 35+ inputs) exhausting environmentd memory during planning, causing the environment to become unresponsive.
 - Fixed a MySQL source stalling entirely when one of its tables was dropped while the initial snapshot was running; the dropped table now reports an error on its own and the rest of the snapshot proceeds.
 - Fixed a critical bug where a pending replacement materialized view could destroy the data of its live target materialized view after an environmentd restart.
 - Fixed `COPY FROM PARQUET` failing for columns of types `oid`, `time`, `timestamptz`, `char`, `varchar`, and `mz_timestamp`.
