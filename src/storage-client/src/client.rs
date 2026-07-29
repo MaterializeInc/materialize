@@ -26,6 +26,7 @@ use mz_persist_client::write::WriteHandle;
 use mz_persist_types::{Codec, Codec64, StepForward};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
+use mz_storage_types::configuration::StorageReplicaConfig;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::oneshot_sources::OneshotIngestionRequest;
 use mz_storage_types::parameters::StorageParameters;
@@ -68,6 +69,14 @@ pub enum StorageCommand {
     Hello {
         nonce: Uuid,
     },
+    /// Delivers the per-replica configuration to the replica.
+    ///
+    /// Sent once, right after `Hello` and before any other command, as the
+    /// storage analog of `ComputeCommand::CreateInstance`. The controller stamps
+    /// the target replica's configuration into it in
+    /// `ReplicaTask::specialize_command`, so the copy held in the shared command
+    /// history carries only placeholder defaults.
+    CreateInstance(StorageReplicaConfig),
     /// Indicates that the controller has sent all commands reflecting its
     /// initial state.
     InitializationComplete,
@@ -110,6 +119,7 @@ impl StorageCommand {
         use StorageCommand::*;
         match self {
             Hello { .. }
+            | CreateInstance(_)
             | InitializationComplete
             | AllowWrites
             | UpdateConfiguration(_)
@@ -392,7 +402,8 @@ impl PartitionedStorageState {
             StorageCommand::RunSink(export) => {
                 self.insert_new_uppers([export.id]);
             }
-            StorageCommand::InitializationComplete
+            StorageCommand::CreateInstance(_)
+            | StorageCommand::InitializationComplete
             | StorageCommand::AllowWrites
             | StorageCommand::UpdateConfiguration(_)
             | StorageCommand::AllowCompaction(_, _)

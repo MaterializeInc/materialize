@@ -94,7 +94,7 @@ use mz_storage_client::client::{
     RunIngestionCommand, StatusUpdate, StorageCommand, StorageResponse,
 };
 use mz_storage_types::AlterCompatible;
-use mz_storage_types::configuration::StorageConfiguration;
+use mz_storage_types::configuration::{StorageConfiguration, StorageReplicaConfig};
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::dyncfgs::STORAGE_SERVER_MAINTENANCE_INTERVAL;
@@ -118,6 +118,7 @@ use crate::internal_control::{
     InternalStorageCommand,
 };
 use crate::metrics::StorageMetrics;
+use crate::server::{TimelyLogWriter, register_timely_logger};
 use crate::statistics::{AggregatedStatistics, SinkStatistics, SourceStatistics};
 use crate::storage_state::async_storage_worker::{AsyncStorageWorker, AsyncStorageWorkerResponse};
 
@@ -138,6 +139,12 @@ pub struct Worker<'w> {
     /// The channel over which communication handles for newly connected clients
     /// are delivered.
     pub client_rx: mpsc::UnboundedReceiver<(Uuid, CommandReceiver, ResponseSender)>,
+    /// This worker's handle for forwarding timely log events to compute, or
+    /// `None` if storage introspection logging is disabled for the process.
+    ///
+    /// Consumed when the timely logger is registered, on the first
+    /// `CreateInstance` command that enables logging.
+    timely_log_writer: Option<TimelyLogWriter>,
     /// The state associated with collection ingress and egress.
     pub storage_state: StorageState,
 }
@@ -155,6 +162,7 @@ impl<'w> Worker<'w> {
         txns_ctx: TxnsContext,
         tracing_handle: Arc<TracingHandle>,
         shared_rocksdb_write_buffer_manager: SharedWriteBufferManager,
+        timely_log_writer: Option<TimelyLogWriter>,
     ) -> Self {
         // It is very important that we only create the internal control
         // flow/command sequencer once because a) the worker state is re-used
@@ -250,6 +258,7 @@ impl<'w> Worker<'w> {
         Self {
             timely_worker,
             client_rx,
+            timely_log_writer,
             storage_state,
         }
     }
@@ -419,6 +428,21 @@ impl<'w> Worker<'w> {
     pub fn run(&mut self) {
         while let Some((_nonce, rx, tx)) = self.client_rx.blocking_recv() {
             self.run_client(rx, tx);
+        }
+    }
+
+    /// Registers this worker's timely log forwarder if `config` enables logging,
+    /// using the configured interval. A `None` interval leaves logging disabled:
+    /// no logger is registered and no events are forwarded to compute.
+    ///
+    /// Idempotent. The writer is consumed on first registration, so repeated
+    /// calls (for example after the controller reconnects) are no-ops.
+    fn maybe_initialize_logging(&mut self, config: &StorageReplicaConfig) {
+        let Some(interval) = config.logging.interval else {
+            return;
+        };
+        if let Some(writer) = self.timely_log_writer.take() {
+            register_timely_logger(self.timely_worker, writer, interval);
         }
     }
 
@@ -1008,6 +1032,12 @@ impl<'w> Worker<'w> {
         loop {
             match command_rx.blocking_recv().ok_or(())? {
                 StorageCommand::InitializationComplete => break,
+                // The per-replica config arrives once, before initialization
+                // completes. Consume it here (registering the timely logger if
+                // enabled) rather than retaining it for reconciliation.
+                StorageCommand::CreateInstance(config) => {
+                    self.maybe_initialize_logging(&config);
+                }
                 command => commands.push(command),
             }
         }
@@ -1084,7 +1114,8 @@ impl<'w> Worker<'w> {
                     info!(%worker_id, %uuid, "reconcile: received CancelOneshotIngestion command");
                     cancel_oneshot_ingestions.insert(*uuid);
                 }
-                StorageCommand::InitializationComplete
+                StorageCommand::CreateInstance(_)
+                | StorageCommand::InitializationComplete
                 | StorageCommand::AllowWrites
                 | StorageCommand::UpdateConfiguration(_) => (),
             }
@@ -1203,7 +1234,8 @@ impl<'w> Worker<'w> {
                         .contains_key(ingestion_id);
                     should_keep = already_running;
                 }
-                StorageCommand::InitializationComplete
+                StorageCommand::CreateInstance(_)
+                | StorageCommand::InitializationComplete
                 | StorageCommand::AllowWrites
                 | StorageCommand::UpdateConfiguration(_)
                 | StorageCommand::AllowCompaction(_, _) => (),
@@ -1303,6 +1335,9 @@ impl StorageState {
     pub fn handle_storage_command(&mut self, cmd: StorageCommand) {
         match cmd {
             StorageCommand::Hello { .. } => panic!("Hello must be captured before"),
+            StorageCommand::CreateInstance(_) => {
+                panic!("CreateInstance must be captured before")
+            }
             StorageCommand::InitializationComplete => (),
             StorageCommand::AllowWrites => {
                 self.read_only_tx

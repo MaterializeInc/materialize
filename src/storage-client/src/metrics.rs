@@ -258,6 +258,8 @@ impl transport::Metrics<StorageCommand, StorageResponse> for ReplicaMetrics {
 pub struct CommandMetrics<M> {
     /// Metrics for `Hello`.
     pub hello: M,
+    /// Metrics for `CreateInstance`.
+    pub create_instance: M,
     /// Metrics for `InitializationComplete`.
     pub initialization_complete: M,
     /// Metrics for `AllowWrites`.
@@ -283,6 +285,7 @@ impl<M> CommandMetrics<M> {
     {
         Self {
             hello: build_metric("hello"),
+            create_instance: build_metric("create_instance"),
             initialization_complete: build_metric("initialization_complete"),
             allow_writes: build_metric("allow_writes"),
             update_configuration: build_metric("update_configuration"),
@@ -299,6 +302,7 @@ impl<M> CommandMetrics<M> {
         F: Fn(&M),
     {
         f(&self.hello);
+        f(&self.create_instance);
         f(&self.initialization_complete);
         f(&self.allow_writes);
         f(&self.update_configuration);
@@ -314,6 +318,7 @@ impl<M> CommandMetrics<M> {
 
         match command {
             Hello { .. } => &self.hello,
+            CreateInstance(..) => &self.create_instance,
             InitializationComplete => &self.initialization_complete,
             AllowWrites => &self.allow_writes,
             UpdateConfiguration(..) => &self.update_configuration,
