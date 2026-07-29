@@ -2111,6 +2111,21 @@ export interface MzNoticesRedacted {
   object_id: string | null;
 }
 
+export interface MzObjectArrangementSizes {
+  /**
+   * The ID of the compute object (index or materialized view). Corresponds to `mz_objects.id`.
+   */
+  object_id: string;
+  /**
+   * The ID of the cluster replica. Corresponds to `mz_cluster_replicas.id`.
+   */
+  replica_id: string;
+  /**
+   * The total arrangement heap and batcher size in bytes for this object on this replica, rounded to the nearest 10 MiB boundary to reduce per-byte churn in the differential collection. Objects with less than 5 MiB of arrangements report a size of 0.
+   */
+  size: Int8 | null;
+}
+
 export interface MzObjectDependencies {
   /**
    * The ID of the dependent object. Corresponds to `mz_objects.id`.
@@ -4378,6 +4393,7 @@ export interface DB {
   mz_network_policy_rules: MzNetworkPolicyRules;
   mz_notices: MzNotices;
   mz_notices_redacted: MzNoticesRedacted;
+  mz_object_arrangement_sizes: MzObjectArrangementSizes;
   mz_object_dependencies: MzObjectDependencies;
   mz_object_fully_qualified_names: MzObjectFullyQualifiedNames;
   mz_object_history: MzObjectHistory;
