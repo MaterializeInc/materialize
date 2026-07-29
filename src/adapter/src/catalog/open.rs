@@ -1120,23 +1120,28 @@ fn add_new_remove_old_builtin_roles_migration(
 /// Converges each builtin cluster's replica set on the cluster's own managed
 /// config.
 ///
-/// Builtin clusters are managed clusters, so their replicas are derived state:
-/// exactly `replication_factor` replicas, named by
-/// [`managed_cluster_replica_name`]. Replicas this creates are shaped from the
-/// cluster's config, but an existing replica is matched by name alone and left
-/// untouched, so this converges cardinality and names rather than shape.
+/// A builtin cluster is normally managed, and a managed cluster's replicas are
+/// derived state: exactly `replication_factor` replicas, named by
+/// [`managed_cluster_replica_name`]. One can be altered to unmanaged, which leaves
+/// no factor to derive from, and then its replica set is the operator's.
+///
+/// Replicas this creates are shaped from the cluster's config. An existing replica
+/// is matched by name alone and left untouched, so this converges cardinality and
+/// names rather than shape.
 ///
 /// The bootstrap flags seed `replication_factor` and `size` when a cluster is
 /// first created (see [`add_new_remove_old_builtin_clusters_migration`]) and are
 /// deliberately not consulted here, so an `ALTER CLUSTER` against a builtin
 /// cluster survives a restart.
 ///
-/// This is the sole owner of a builtin cluster's replica set, which is why the
-/// cluster controller excludes system clusters. Ownership sits here because this
-/// covers two windows the controller cannot: the coordinator's bootstrap brings up
-/// only replicas already recorded durably and runs before the controller task is
-/// spawned, and the controller is inactive entirely while a deployment is
-/// read-only.
+/// This runs at catalog open so the replicas a cluster's config calls for exist as
+/// early as possible. The coordinator's bootstrap brings up only replicas already
+/// recorded durably and runs before the cluster controller is spawned, and the
+/// controller does not run at all while a deployment is read-only.
+///
+/// The controller derives its target from the same cluster config, so it converges
+/// on the same replica set rather than competing for it. It excludes system
+/// clusters today, but nothing here depends on that staying true.
 fn reconcile_builtin_cluster_replicas(
     txn: &mut Transaction<'_>,
     builtin_cluster_config_map: &BuiltinBootstrapClusterConfigMap,
@@ -1314,16 +1319,30 @@ fn reconcile_builtin_cluster_replicas(
 /// the size map is not part of the durable catalog. A builtin cluster's size only
 /// ever comes from a bootstrap flag or an `ALTER` that already validated it.
 fn managed_replica_config(managed: &ClusterVariantManaged) -> ReplicaConfig {
+    // Exhaustive destructure (no `..`): a field added to the managed config is a
+    // compile error here until we decide whether a replica has to carry it.
+    let ClusterVariantManaged {
+        size,
+        availability_zones,
+        logging,
+        arrangement_compression,
+        replication_factor: _,
+        optimizer_feature_overrides: _,
+        schedule: _,
+        auto_scaling_strategy: _,
+        reconfiguration: _,
+        burst: _,
+    } = managed;
     ReplicaConfig {
         location: ReplicaLocation::Managed {
-            size: managed.size.clone(),
-            availability_zones: managed.availability_zones.clone(),
+            size: size.clone(),
+            availability_zones: availability_zones.clone(),
             billed_as: None,
             internal: false,
             pending: false,
         },
-        logging: managed.logging.clone(),
-        arrangement_compression: managed.arrangement_compression,
+        logging: logging.clone(),
+        arrangement_compression: *arrangement_compression,
     }
 }
 
@@ -1538,12 +1557,17 @@ mod tests {
 
         let config = managed_replica_config(&managed);
 
-        assert_eq!(config.logging, managed.logging);
-        assert_eq!(
-            config.arrangement_compression,
-            managed.arrangement_compression
-        );
-        match config.location {
+        // Exhaustive destructures throughout, so a field added to either type is a
+        // compile error here rather than a silently unasserted one.
+        let ReplicaConfig {
+            location,
+            logging,
+            arrangement_compression,
+        } = config;
+
+        assert_eq!(logging, managed.logging);
+        assert_eq!(arrangement_compression, managed.arrangement_compression);
+        match location {
             ReplicaLocation::Managed {
                 size,
                 availability_zones,

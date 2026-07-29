@@ -22,8 +22,9 @@
 //! the gate off the task does not tick, so the legacy scheduling and graceful
 //! paths remain the sole writers of the replica set. With the gate on the
 //! controller owns the *user* managed-cluster replica set; the legacy entry
-//! points no-op. (System/builtin clusters are never controller-owned. Their
-//! replicas are owned by `reconcile_builtin_cluster_replicas` at catalog open.)
+//! points no-op. (System/builtin clusters are excluded here. Their config-implied
+//! replicas are materialized by `reconcile_builtin_cluster_replicas` at catalog
+//! open, which derives the same target from the same config.)
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -58,8 +59,8 @@ use crate::error::AdapterError;
 #[derive(Debug)]
 pub enum ClusterControllerRequest {
     /// The ids of all *user* managed clusters the controller owns this tick.
-    /// System/builtin clusters are excluded. Their replica set is owned by
-    /// `reconcile_builtin_cluster_replicas` at catalog open, not the controller.
+    /// System/builtin clusters are excluded. `reconcile_builtin_cluster_replicas`
+    /// has already materialized their config-implied replicas at catalog open.
     ManagedClusterIds { tx: oneshot::Sender<Vec<ClusterId>> },
     /// A consistent durable view of the given clusters and their replicas, plus
     /// the current time.
@@ -277,13 +278,13 @@ impl Coordinator {
                     self.catalog()
                         .clusters()
                         // Only *user* managed clusters. System/builtin clusters
-                        // (mz_system, mz_catalog_server, …) are also managed, but
-                        // their replica set is owned by the catalog-open reconciler
-                        // (`reconcile_builtin_cluster_replicas`), which converges it
-                        // on the cluster's `replication_factor`. Two owners of one
-                        // replica set would fight, and only the reconciler can run
-                        // before the coordinator finishes bootstrap and while a
-                        // deployment is read-only, so it keeps them.
+                        // (mz_system, mz_catalog_server, …) are also managed, and
+                        // `reconcile_builtin_cluster_replicas` materializes their
+                        // config-implied replica set at catalog open, so those
+                        // replicas exist before the controller could ever tick.
+                        // Both derive the target from the cluster's
+                        // `replication_factor`, so extending ownership here would
+                        // converge rather than conflict.
                         .filter(|c| c.is_managed() && c.id.is_user())
                         .map(|c| c.id)
                         .collect()
