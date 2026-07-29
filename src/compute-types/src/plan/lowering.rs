@@ -20,7 +20,7 @@ use mz_expr::{
 };
 use mz_ore::{assert_none, soft_assert_eq_or_log, soft_panic_or_log};
 use mz_repr::optimize::OptimizerFeatures;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::{GlobalId, ReprRelationType, Timestamp};
 
 use crate::dataflows::{BuildDesc, DataflowDescription, IndexImport};
 use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
@@ -73,6 +73,11 @@ pub(super) struct Context {
     enable_reduce_mfp_fusion: bool,
     /// Metrics recorded during lowering, if any are being collected.
     metrics: Option<LoweringMetrics>,
+    /// Output type of each lowered node, collected only when a caller asks for it.
+    ///
+    /// Recording a type costs an `MirRelationExpr::typ()` per node, which walks the
+    /// subtree, so leaving this `None` keeps lowering off that quadratic path.
+    node_types: Option<BTreeMap<LirId, ReprRelationType>>,
     /// Whether the current expression is subject to single-time (one-shot
     /// `SELECT`) monotonic operator selection.
     ///
@@ -115,6 +120,7 @@ impl Context {
             },
             enable_reduce_mfp_fusion: features.enable_reduce_mfp_fusion,
             metrics: metrics.cloned(),
+            node_types: None,
             // Set from the dataflow in `lower` before any expression is lowered.
             single_time: false,
             source_imports: Default::default(),
@@ -133,8 +139,39 @@ impl Context {
         id
     }
 
-    pub fn lower(
+    /// Requests that lowering record the output type of every node it produces.
+    pub fn collect_node_types(&mut self) {
+        self.node_types = Some(BTreeMap::new());
+    }
+
+    /// Records that `to` produces the same rows as `from`, for a node with no MIR counterpart.
+    fn copy_node_type(&mut self, from: LirId, to: LirId) {
+        if let Some(types) = self.node_types.as_mut() {
+            if let Some(typ) = types.get(&from).cloned() {
+                types.insert(to, typ);
+            }
+        }
+    }
+
+    /// Lowers `desc`, additionally returning the per-node output types when collection was
+    /// requested via [`Self::collect_node_types`].
+    pub fn lower_collecting(
         mut self,
+        desc: DataflowDescription<OptimizedMirRelationExpr>,
+    ) -> Result<
+        (
+            DataflowDescription<LirRelationExpr>,
+            Option<BTreeMap<LirId, ReprRelationType>>,
+        ),
+        String,
+    > {
+        let dataflow = self.lower_inner(desc)?;
+        let types = self.node_types.take();
+        Ok((dataflow, types))
+    }
+
+    fn lower_inner(
+        &mut self,
         desc: DataflowDescription<OptimizedMirRelationExpr>,
     ) -> Result<DataflowDescription<LirRelationExpr>, String> {
         // Sources might provide arranged forms of their data, in the future.
@@ -345,7 +382,20 @@ impl Context {
         // to allow the unbounded growth here. We are though somewhat protected by
         // higher levels enforcing their own limits on stack depth (in the parser,
         // transformer/desugarer, and planner).
-        mz_ore::stack::maybe_grow(|| self.lower_mir_expr_stack_safe(expr))
+        let lowered = mz_ore::stack::maybe_grow(|| self.lower_mir_expr_stack_safe(expr))?;
+        // One record here covers every node derived from MIR. `expr` is the unmodified input, so
+        // even when an MFP is extracted and re-applied as a wrapping `Mfp` node, the type recorded
+        // against the returned root is the type that node actually produces.
+        if self.node_types.is_some() {
+            // Compute the type before reborrowing, and only when collecting: `typ()` walks the
+            // whole subtree, so doing it unconditionally would make lowering quadratic.
+            let typ = expr.typ();
+            let lir_id = lowered.plan.lir_id;
+            if let Some(types) = self.node_types.as_mut() {
+                types.insert(lir_id, typ);
+            }
+        }
+        Ok(lowered)
     }
 
     fn lower_mir_expr_stack_safe(&mut self, expr: &MirRelationExpr) -> Result<LoweredExpr, String> {
@@ -1586,6 +1636,9 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 (None, MapFilterProject::new(arity))
             };
             let lir_id = self.allocate_lir_id();
+            // This node has no MIR counterpart, so `lower_mir_expr` will not record a type for
+            // it. Arranging preserves the row, so the input's type is also this node's type.
+            self.copy_node_type(plan.lir_id, lir_id);
 
             LirRelationNode::ArrangeBy {
                 input_key,
