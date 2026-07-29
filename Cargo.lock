@@ -8516,7 +8516,6 @@ dependencies = [
  "mz-expr",
  "mz-interchange",
  "mz-kafka-util",
- "mz-lowertest",
  "mz-mysql-util",
  "mz-orchestrator",
  "mz-ore",

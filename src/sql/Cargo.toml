@@ -89,7 +89,6 @@ version-compare.workspace = true
 
 [dev-dependencies]
 datadriven.workspace = true
-mz-lowertest = { path = "../lowertest" }
 
 [features]
 default = []
