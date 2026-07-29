@@ -20,12 +20,11 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 {{</ note >}}
 
 ## v26.35.0
-*Released to Materialize Cloud: 2026-07-30* <br>
-*Released to Materialize Self-Managed: 2026-07-31* <br>
+*Released to Materialize Cloud: 2026-07-29* <br>
+*Released to Materialize Self-Managed: 2026-07-30* <br>
 
 ### Improvements {#v26.35-improvements}
 - **Faster read queries under write load**: Read-only queries (e.g., `SELECT 1`) are no longer blocked by concurrent write transactions; under high write load, victim query latency drops from multiple seconds to single-digit milliseconds.
-- **Faster MySQL source snapshots**: Initial snapshots for MySQL sources are now parallelized across workers, providing up to 2.7x faster snapshotting for sources with large individual tables.
 - **Better query plans for correlated subqueries**: Queries using patterns like `1 IN (SELECT 1 WHERE p)` and `NOT EXISTS (SELECT 1 WHERE p)` are now optimized to a simple filter, eliminating unnecessary semi/anti-joins.
 - **Console billing breakdown by account and cluster**: The billing page now shows a per-account and per-cluster cost breakdown with a stacked bar chart and expandable ledger, displaying account display names and real per-cluster usage figures.
 - **`mz-debug` CPU profiling**: The `mz-debug` diagnostic tool now automatically collects CPU profiles alongside memory profiles for Self-Managed deployments.
