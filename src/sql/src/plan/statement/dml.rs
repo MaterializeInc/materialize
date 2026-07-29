@@ -328,14 +328,14 @@ pub fn describe_explain_plan(
             relation_desc = relation_desc.with_column(name, SqlScalarType::String.nullable(false));
         }
         ExplainStage::MemoryBound => {
-            // Width and bytes are not reported yet: they need the per-node output types, which
-            // the explain path does not carry. Adding empty columns now would read as "no
-            // answer" rather than "not implemented".
+            // Width and bytes are nullable because a column with no static ceiling has no
+            // answer, and reporting a number there would claim a bound that does not hold.
             relation_desc = relation_desc
                 .with_column("Node Id", SqlScalarType::UInt64.nullable(false))
                 .with_column("Operator", SqlScalarType::String.nullable(false))
                 .with_column("Arrangements", SqlScalarType::UInt64.nullable(false))
-                .with_column("Error Arrangements", SqlScalarType::UInt64.nullable(false))
+                .with_column("Row Width", SqlScalarType::UInt64.nullable(true))
+                .with_column("Bytes Per Row", SqlScalarType::UInt64.nullable(true))
                 .with_column("Note", SqlScalarType::String.nullable(true));
         }
     };

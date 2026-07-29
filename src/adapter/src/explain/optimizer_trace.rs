@@ -177,10 +177,10 @@ impl OptimizerTrace {
                 rows
             }
             ExplainStage::MemoryBound => {
-                let Some(dataflow) = self.collect_physical_plan() else {
+                let Some(dataflow) = self.collect_global_plan() else {
                     coord_bail!("EXPLAIN MEMORY BOUND requires a dataflow plan");
                 };
-                crate::explain::memory_bound_rows(&dataflow)
+                crate::explain::memory_bound_rows(dataflow, features)?
             }
             ExplainStage::PlanInsights => {
                 if format != ExplainFormat::Json {
@@ -430,14 +430,6 @@ impl OptimizerTrace {
     }
 
     /// Collects the fast path plan from the trace, if it exists.
-    /// Retrieves the traced physical plan, still typed.
-    fn collect_physical_plan(&self) -> Option<DataflowDescription<LirRelationExpr>> {
-        self.0
-            .downcast_ref::<PlanTrace<DataflowDescription<LirRelationExpr>>>()
-            .and_then(|trace| trace.find(NamedPlan::Physical.path()))
-            .map(|entry| entry.plan)
-    }
-
     fn collect_fast_path_plan(&self) -> Option<FastPathPlan> {
         self.0
             .downcast_ref::<PlanTrace<FastPathPlan>>()

@@ -267,6 +267,18 @@ impl Coordinator {
                     dataflow_metainfo,
                 )?
             }
+            ExplainStage::MemoryBound => {
+                let Some(plan) = self
+                    .catalog()
+                    .try_get_optimized_plan(&index.global_id())
+                    .cloned()
+                else {
+                    tracing::error!("cannot find {stage} for index {id} in catalog");
+                    coord_bail!("cannot find {stage} for index in catalog");
+                };
+                let rows = crate::explain::memory_bound_rows(plan, &features)?;
+                return Ok(Self::send_immediate_rows(rows));
+            }
             _ => {
                 coord_bail!("cannot EXPLAIN {} FOR INDEX", stage);
             }

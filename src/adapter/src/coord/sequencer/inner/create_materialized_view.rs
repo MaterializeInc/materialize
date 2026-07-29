@@ -306,13 +306,12 @@ impl Coordinator {
                 )?
             }
             ExplainStage::MemoryBound => {
-                let Some(plan) = self.catalog().try_get_physical_plan(&gid).cloned() else {
+                let Some(plan) = self.catalog().try_get_optimized_plan(&gid).cloned() else {
                     tracing::error!("cannot find {stage} for materialized view {id} in catalog");
                     coord_bail!("cannot find {stage} for materialized view in catalog");
                 };
-                return Ok(Self::send_immediate_rows(
-                    crate::explain::memory_bound_rows(&plan),
-                ));
+                let rows = crate::explain::memory_bound_rows(plan, &features)?;
+                return Ok(Self::send_immediate_rows(rows));
             }
             _ => {
                 coord_bail!("cannot EXPLAIN {} FOR MATERIALIZED VIEW", stage);

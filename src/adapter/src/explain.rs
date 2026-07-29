@@ -119,44 +119,59 @@ where
     Ok(Explainable::new(&mut plan).explain(&format, &context)?)
 }
 
-/// Renders the static arrangement bound for each node of a physical plan.
+/// Renders the static memory bound for each node of a physical plan.
 ///
-/// Reports only what the plan alone settles. Width and bytes need the per-node output types,
-/// which this path does not carry, so they are not columns yet rather than empty ones.
+/// Takes the optimized MIR rather than the lowered plan, because the widths need each node's
+/// output type and LIR is type-erased. Lowering again here is what makes those types available;
+/// it also means the reported plan is the one current optimizer features produce, which can
+/// differ from a plan lowered before a feature flag moved.
 pub(crate) fn memory_bound_rows(
-    dataflow: &mz_compute_types::dataflows::DataflowDescription<
-        mz_compute_types::plan::LirRelationExpr,
-    >,
-) -> Vec<mz_repr::Row> {
-    use mz_compute_types::plan::arrangement_count::{Caveat, predict_arrangement_counts};
-    use mz_compute_types::plan::memory_bound::{node_label, nodes_by_id};
+    dataflow: mz_compute_types::dataflows::DataflowDescription<mz_expr::OptimizedMirRelationExpr>,
+    features: &mz_repr::optimize::OptimizerFeatures,
+) -> Result<Vec<mz_repr::Row>, AdapterError> {
+    use mz_compute_types::plan::LirRelationExpr;
+    use mz_compute_types::plan::arrangement_count::Caveat;
+    use mz_compute_types::plan::memory_bound::{bytes_per_row, node_label, nodes_by_id};
     use mz_ore::cast::CastFrom;
     use mz_repr::{Datum, Row};
+
+    let (dataflow, node_types) =
+        LirRelationExpr::finalize_dataflow_with_node_types(dataflow, features, None)
+            .map_err(|e| AdapterError::Internal(format!("cannot lower plan: {e}")))?;
 
     let mut rows = Vec::new();
     for build in &dataflow.objects_to_build {
         let nodes = nodes_by_id(&build.plan);
-        for (lir_id, prediction) in predict_arrangement_counts(&build.plan) {
+        for (lir_id, entry) in bytes_per_row(&build.plan, &node_types) {
             let label = nodes
                 .get(&lir_id)
                 .map_or_else(|| "<unknown>".to_string(), |node| node_label(node));
             // A caveat means the plan alone does not settle the count, so name it rather than
             // presenting a guess as exact.
-            let note = prediction.caveat.map(|caveat| match caveat {
+            let note = entry.caveat.map(|caveat| match caveat {
                 Caveat::ArrangeByMayReuse => "may reuse an already-available arrangement",
                 Caveat::ThresholdFlavorUnknown => {
                     "one more error arrangement if the input is an imported trace"
                 }
                 Caveat::JoinSourceMayReuse => "assumes the source arrangement is available",
             });
+            // A width of `None` means some column has no static ceiling. Reporting a number
+            // there would claim a bound that does not hold.
+            let width = entry
+                .row_width
+                .map_or(Datum::Null, |w| Datum::UInt64(u64::cast_from(w)));
+            let bytes = entry
+                .bytes_per_row
+                .map_or(Datum::Null, |b| Datum::UInt64(u64::cast_from(b)));
             rows.push(Row::pack_slice(&[
                 Datum::UInt64(lir_id.into()),
                 Datum::String(&label),
-                Datum::UInt64(u64::cast_from(prediction.data)),
-                Datum::UInt64(u64::cast_from(prediction.error)),
+                Datum::UInt64(u64::cast_from(entry.arrangements)),
+                width,
+                bytes,
                 note.map_or(Datum::Null, Datum::String),
             ]));
         }
     }
-    rows
+    Ok(rows)
 }
