@@ -145,6 +145,11 @@ pub struct Worker<'w> {
     /// Consumed when the timely logger is registered, on the first
     /// `CreateInstance` command that enables logging.
     timely_log_writer: Option<TimelyLogWriter>,
+    /// The batching interval of this worker's timely logger, or `None` while
+    /// logging is disabled. Set once the logger is registered. When set, the
+    /// main loop caps how long it parks so the logger's batches are flushed at
+    /// least this often.
+    timely_logging_interval: Option<Duration>,
     /// The state associated with collection ingress and egress.
     pub storage_state: StorageState,
 }
@@ -259,6 +264,7 @@ impl<'w> Worker<'w> {
             timely_worker,
             client_rx,
             timely_log_writer,
+            timely_logging_interval: None,
             storage_state,
         }
     }
@@ -443,6 +449,7 @@ impl<'w> Worker<'w> {
         };
         if let Some(writer) = self.timely_log_writer.take() {
             register_timely_logger(self.timely_worker, writer, interval);
+            self.timely_logging_interval = Some(interval);
         }
     }
 
@@ -503,6 +510,12 @@ impl<'w> Worker<'w> {
                 let mut park_duration = stats_interval.saturating_sub(last_stats_time.elapsed());
                 if let Some(sleep_duration) = sleep_duration {
                     park_duration = std::cmp::min(sleep_duration, park_duration);
+                }
+                // Don't park longer than the logging interval, so the timely
+                // logger's batches are flushed to compute at least that often
+                // rather than stalling until the next command or maintenance.
+                if let Some(logging_interval) = self.timely_logging_interval {
+                    park_duration = std::cmp::min(park_duration, logging_interval);
                 }
                 self.timely_worker.step_or_park(Some(park_duration));
             } else {
