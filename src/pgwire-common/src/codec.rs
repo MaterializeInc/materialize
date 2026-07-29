@@ -52,6 +52,7 @@ impl fmt::Display for CodecError {
 pub trait Pgbuf: BufMut {
     fn put_string(&mut self, s: &str);
     fn put_length_i16(&mut self, len: usize) -> Result<(), io::Error>;
+    fn put_length_u16(&mut self, len: usize) -> Result<(), io::Error>;
     fn put_format_i8(&mut self, format: Format);
     fn put_format_i16(&mut self, format: Format);
 }
@@ -67,6 +68,17 @@ impl<B: BufMut> Pgbuf for B {
             io::Error::new(io::ErrorKind::InvalidData, "length does not fit in an i16")
         })?;
         self.put_i16(len);
+        Ok(())
+    }
+
+    /// Writes a count field as unsigned, so it may exceed 32767. The protocol
+    /// calls these fields `Int16`, but PostgreSQL clients decode them as
+    /// unsigned.
+    fn put_length_u16(&mut self, len: usize) -> Result<(), io::Error> {
+        let len = u16::try_from(len).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidData, "length does not fit in a u16")
+        })?;
+        self.put_u16(len);
         Ok(())
     }
 
@@ -285,17 +297,6 @@ impl<'a> Cursor<'a> {
         }
     }
 
-    /// Reads the next 16-bit signed integer, advancing the cursor by two
-    /// bytes.
-    pub fn read_i16(&mut self) -> Result<i16, io::Error> {
-        if self.buf.len() < 2 {
-            return Err(input_err("not enough buffer for an Int16"));
-        }
-        let val = NetworkEndian::read_i16(self.buf);
-        self.advance(2);
-        Ok(val)
-    }
-
     /// Reads the next 32-bit signed integer, advancing the cursor by four
     /// bytes.
     pub fn read_i32(&mut self) -> Result<i32, io::Error> {
@@ -304,6 +305,17 @@ impl<'a> Cursor<'a> {
         }
         let val = NetworkEndian::read_i32(self.buf);
         self.advance(4);
+        Ok(val)
+    }
+
+    /// Reads the next 16-bit unsigned integer, advancing the cursor by two
+    /// bytes.
+    pub fn read_u16(&mut self) -> Result<u16, io::Error> {
+        if self.buf.len() < 2 {
+            return Err(input_err("not enough buffer for an Int16"));
+        }
+        let val = NetworkEndian::read_u16(self.buf);
+        self.advance(2);
         Ok(val)
     }
 
@@ -320,7 +332,7 @@ impl<'a> Cursor<'a> {
 
     /// Reads the next 16-bit format code, advancing the cursor by two bytes.
     pub fn read_format(&mut self) -> Result<Format, io::Error> {
-        Format::try_from(self.read_i16()?)
+        Format::try_from(self.read_u16()?)
     }
 
     /// Advances the cursor by `n` bytes.
