@@ -34,7 +34,6 @@ use std::sync::LazyLock;
 use chrono::offset::{Offset, TimeZone};
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use dec::OrderedDecimal;
-use mz_lowertest::MzReflect;
 use mz_ore::cast::ReinterpretCast;
 use mz_ore::error::ErrorExt;
 use mz_ore::fmt::FormatBuffer;
@@ -1968,8 +1967,7 @@ where
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ParseError {
@@ -1989,8 +1987,7 @@ pub struct ParseError {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum ParseErrorKind {
@@ -2110,8 +2107,7 @@ impl RustType<ProtoParseError> for ParseError {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum ParseHexError {

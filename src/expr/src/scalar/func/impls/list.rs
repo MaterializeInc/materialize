@@ -10,7 +10,6 @@
 use std::fmt;
 
 use mz_expr_derive::sqlfunc;
-use mz_lowertest::MzReflect;
 use mz_repr::{AsColumnType, Datum, DatumList, Row, RowArena, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
 
@@ -27,8 +26,7 @@ use crate::{Eval, EvalError, MirScalarExpr};
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct CastListToString {
     pub ty: SqlScalarType,
@@ -95,8 +93,7 @@ impl fmt::Display for CastListToString {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct CastListToJsonb {
     pub cast_element: Box<MirScalarExpr>,
@@ -175,8 +172,7 @@ impl fmt::Display for CastListToJsonb {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct CastList1ToList2 {
     /// List2's type
@@ -265,8 +261,7 @@ fn list_length<'a>(a: DatumList<'a>) -> Result<i32, EvalError> {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct ListLengthMax {
     /// Maximal allowed layer to query.

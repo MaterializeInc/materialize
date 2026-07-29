@@ -9,7 +9,6 @@
 
 use std::fmt;
 
-use mz_lowertest::MzReflect;
 use mz_repr::GlobalId;
 use serde::{Deserialize, Serialize};
 
@@ -25,8 +24,7 @@ use serde::{Deserialize, Serialize};
     PartialOrd,
     Hash,
     Serialize,
-    Deserialize,
-    MzReflect
+    Deserialize
 )]
 pub enum Id {
     /// An identifier that refers to a local component of a dataflow.
@@ -55,8 +53,7 @@ impl fmt::Display for Id {
     PartialOrd,
     Hash,
     Serialize,
-    Deserialize,
-    MzReflect
+    Deserialize
 )]
 pub struct LocalId(pub(crate) u64);
 

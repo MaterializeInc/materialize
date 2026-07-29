@@ -12,7 +12,6 @@ expression: "#[sqlfunc(test = true)]\nfn unary_fn<'a>(a: &i16) -> bool {\n    un
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect,
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
 pub struct UnaryFn;

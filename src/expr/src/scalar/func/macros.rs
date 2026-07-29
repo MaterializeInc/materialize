@@ -148,8 +148,7 @@ macro_rules! derive_unary {
         #[derive(
             Ord, PartialOrd, Clone, Debug, Eq, PartialEq,
             serde::Serialize, serde::Deserialize, Hash,
-            mz_lowertest::MzReflect,
-        )]
+                )]
         pub enum UnaryFunc {
             $($name($name),)*
         }
@@ -275,7 +274,7 @@ macro_rules! derive_variadic {
     ($($name:ident ( $variant:ident )),* $(,)?) => {
         #[derive(
             Ord, PartialOrd, Clone, Debug, Eq, PartialEq,
-            serde::Serialize, serde::Deserialize, Hash, mz_lowertest::MzReflect,
+            serde::Serialize, serde::Deserialize, Hash,
         )]
         pub enum VariadicFunc {
             $($name($variant),)*
@@ -407,8 +406,7 @@ macro_rules! derive_binary {
         #[derive(
             Ord, PartialOrd, Clone, Debug, Eq, PartialEq,
             serde::Serialize, serde::Deserialize, Hash,
-            mz_lowertest::MzReflect,
-        )]
+                )]
         pub enum BinaryFunc {
             $($name($variant),)*
         }

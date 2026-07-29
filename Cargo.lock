@@ -7220,8 +7220,6 @@ dependencies = [
  "mz-expr-derive",
  "mz-expr-derive-impl",
  "mz-expr-parser",
- "mz-expr-test-util",
- "mz-lowertest",
  "mz-ore",
  "mz-persist-types",
  "mz-pgrepr",
@@ -7283,22 +7281,6 @@ dependencies = [
  "mz-repr",
  "proc-macro2",
  "syn 2.0.117",
-]
-
-[[package]]
-name = "mz-expr-test-util"
-version = "0.0.0"
-dependencies = [
- "datadriven",
- "itertools 0.14.0",
- "mz-expr",
- "mz-lowertest",
- "mz-ore",
- "mz-repr",
- "mz-repr-test-util",
- "proc-macro2",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -7487,29 +7469,6 @@ dependencies = [
  "tokio",
  "utoipa",
  "uuid",
-]
-
-[[package]]
-name = "mz-lowertest"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "datadriven",
- "itertools 0.14.0",
- "mz-lowertest-derive",
- "mz-ore",
- "proc-macro2",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "mz-lowertest-derive"
-version = "0.0.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
 ]
 
 [[package]]
@@ -8063,7 +8022,6 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "itertools 0.14.0",
- "mz-lowertest",
  "mz-ore",
  "mz-ore-build",
  "phf 0.13.1",
@@ -8283,7 +8241,6 @@ dependencies = [
  "insta",
  "itertools 0.14.0",
  "mz-build-tools",
- "mz-lowertest",
  "mz-ore",
  "mz-persist",
  "mz-persist-types",
@@ -8316,19 +8273,6 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
-]
-
-[[package]]
-name = "mz-repr-test-util"
-version = "0.0.0"
-dependencies = [
- "chrono",
- "datadriven",
- "itertools 0.14.0",
- "mz-lowertest",
- "mz-ore",
- "mz-repr",
- "proc-macro2",
 ]
 
 [[package]]

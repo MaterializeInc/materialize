@@ -24,7 +24,6 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use dec::OrderedDecimal;
 use enum_kinds::EnumKind;
 use itertools::Itertools;
-use mz_lowertest::MzReflect;
 use mz_ore::Overflowing;
 #[cfg(any(test, feature = "proptest"))]
 use mz_ore::cast::CastFrom;
@@ -1616,8 +1615,7 @@ impl fmt::Display for Datum<'_> {
     Ord,
     PartialOrd,
     Hash,
-    EnumKind,
-    MzReflect
+    EnumKind
 )]
 #[enum_kind(SqlScalarBaseType, derive(PartialOrd, Ord, Hash))]
 pub enum SqlScalarType {
@@ -4720,7 +4718,7 @@ impl Arbitrary for ReprScalarType {
 ///
 /// It is important that any new variants for this enum be added to the `Arbitrary` instance
 /// and the `union` method.
-#[derive(Clone, Debug, EnumKind, Serialize, Deserialize, MzReflect)]
+#[derive(Clone, Debug, EnumKind, Serialize, Deserialize)]
 #[enum_kind(ReprScalarBaseType, derive(PartialOrd, Ord, Hash))]
 pub enum ReprScalarType {
     Bool,

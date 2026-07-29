@@ -43,7 +43,6 @@ itertools.workspace = true
 md-5.workspace = true
 murmur2.workspace = true
 mz-expr-derive = { path = "../expr-derive", features = ["test"] }
-mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore", features = ["network", "proptest", "id_gen"] }
 mz-persist-types = { path = "../persist-types" }
 mz-pgrepr = { path = "../pgrepr" }
@@ -79,7 +78,6 @@ insta.workspace = true
 mz-expr = { path = ".", features = ["proptest"] }
 mz-expr-derive-impl = { path = "../expr-derive-impl", features = ["test"] }
 mz-expr-parser = { path = "../expr-parser" }
-mz-expr-test-util = { path = "../expr-test-util" }
 mz-ore = { path = "../ore" }
 mz-transform = { path = "../transform" }
 proptest.workspace = true

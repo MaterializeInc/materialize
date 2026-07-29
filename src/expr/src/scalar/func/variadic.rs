@@ -24,7 +24,6 @@ use hmac::{Hmac, Mac};
 use itertools::Itertools;
 use md5::Md5;
 use mz_expr_derive::sqlfunc;
-use mz_lowertest::MzReflect;
 use mz_ore::cast::{CastFrom, ReinterpretCast};
 use mz_pgtz::timezone::TimezoneSpec;
 use mz_repr::ReprColumnType;
@@ -59,8 +58,7 @@ use mz_repr::adt::jsonb::JsonbRef;
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct And;
 
@@ -136,8 +134,7 @@ impl LazyVariadicFunc for And {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct ArrayCreate {
     pub elem_type: SqlScalarType,
@@ -233,8 +230,7 @@ fn array_create_multidim<'a>(
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct ArrayFill {
     pub elem_type: SqlScalarType,
@@ -347,8 +343,7 @@ fn array_fill<'a>(
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct ArrayIndex {
     pub offset: i64,
@@ -435,8 +430,7 @@ fn array_position<'a>(
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct ArrayToString {
     pub elem_type: SqlScalarType,
@@ -480,8 +474,7 @@ fn array_to_string<'a>(
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct Coalesce;
 
@@ -545,8 +538,7 @@ impl LazyVariadicFunc for Coalesce {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct RangeCreate {
     pub elem_type: SqlScalarType,
@@ -675,8 +667,7 @@ fn date_diff_timestamp_tz(
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct ErrorIfNull;
 
@@ -732,8 +723,7 @@ impl LazyVariadicFunc for ErrorIfNull {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct Greatest;
 
@@ -871,8 +861,7 @@ fn jsonb_build_object<'a>(
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct Least;
 
@@ -930,8 +919,7 @@ impl LazyVariadicFunc for Least {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct ListCreate {
     pub elem_type: SqlScalarType,
@@ -954,8 +942,7 @@ fn list_create<'a>(&self, datums: Variadic<Datum<'a>>, temp_storage: &'a RowAren
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct RecordCreate {
     pub field_names: Vec<ColumnName>,
@@ -1098,8 +1085,7 @@ fn make_timestamp(
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct MapBuild {
     pub value_type: SqlScalarType,
@@ -1132,8 +1118,7 @@ fn map_build<'a>(
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct Or;
 
