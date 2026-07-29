@@ -15,9 +15,12 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::implementations::BatchContainer;
+use differential_dataflow::trace::implementations::ord_neu::OrdValBatch;
 use differential_dataflow::trace::implementations::spine_fueled::Spine;
 use differential_dataflow::trace::{Batch, Batcher, Builder, Trace, TraceReader};
 use differential_dataflow::{Collection, Data, ExchangeData, Hashable, VecCollection};
+use mz_repr::Row;
+use mz_row_spine::RowRowLayout;
 use timely::Container;
 use timely::container::{ContainerBuilder, PushInto};
 use timely::dataflow::Stream;
@@ -311,12 +314,13 @@ where
                         false
                     }
                 });
-                // `keys` is the arrangement's distinct-key count, summed across live batches
-                // deduplicated by the same `Rc::as_ptr` cache as the heap-size figures above. It
-                // has no consumer yet: nothing here reads or logs it. A later change surfaces it
-                // through a new introspection log, at which point it feeds a memory-bound
-                // estimate for `Reduce` arrangements, so over-counting is safe but
-                // under-counting is not.
+                // `keys` sums each live batch's distinct-key count, deduplicated by the same
+                // `Rc::as_ptr` cache as the heap-size figures above. A key present in more than
+                // one live batch is counted once per batch, which happens normally across the
+                // spine's batch pyramid and while a `MergeState::Double` merge is in progress, so
+                // this sum is an upper bound on the arrangement's distinct-key count, not the
+                // exact count. Currently unconsumed: nothing here reads or logs it. Over-counting
+                // is safe; under-counting is not.
 
                 let size = size.try_into().expect("must fit");
                 if size != old_size {
@@ -440,23 +444,36 @@ where
     R: Semigroup + Ord + MzArrangeData + 'static,
 {
     fn log_arrangement_size(self) -> Self {
-        log_arrangement_size_inner(self, |batch| {
-            let (mut size, mut capacity, mut allocations) = (0, 0, 0);
-            let mut callback = |siz, cap| {
-                size += siz;
-                capacity += cap;
-                allocations += usize::from(cap > 0);
-            };
-            batch.storage.keys.heap_size(&mut callback);
-            batch.storage.vals.offs.heap_size(&mut callback);
-            batch.storage.vals.vals.heap_size(&mut callback);
-            batch.storage.upds.offs.heap_size(&mut callback);
-            batch.storage.upds.times.heap_size(&mut callback);
-            batch.storage.upds.diffs.heap_size(&mut callback);
-            let keys = batch.storage.keys.len();
-            (size, capacity, allocations, keys)
-        })
+        log_arrangement_size_inner(self, row_row_batch_stats::<T, R>)
     }
+}
+
+/// Heap size, capacity, allocation count, and distinct-key count for a `RowRowAgent` batch.
+///
+/// A free function rather than an inline closure so a unit test can call it directly on a batch
+/// built from the production `DatumContainer`-backed [`RowRowLayout`], without needing a running
+/// timely worker to drive [`log_arrangement_size_inner`].
+fn row_row_batch_stats<T, R>(
+    batch: &OrdValBatch<RowRowLayout<((Row, Row), T, R)>>,
+) -> (usize, usize, usize, usize)
+where
+    T: MzTimestamp,
+    R: Semigroup + Ord + MzArrangeData + 'static,
+{
+    let (mut size, mut capacity, mut allocations) = (0, 0, 0);
+    let mut callback = |siz, cap| {
+        size += siz;
+        capacity += cap;
+        allocations += usize::from(cap > 0);
+    };
+    batch.storage.keys.heap_size(&mut callback);
+    batch.storage.vals.offs.heap_size(&mut callback);
+    batch.storage.vals.vals.heap_size(&mut callback);
+    batch.storage.upds.offs.heap_size(&mut callback);
+    batch.storage.upds.times.heap_size(&mut callback);
+    batch.storage.upds.diffs.heap_size(&mut callback);
+    let keys = batch.storage.keys.len();
+    (size, capacity, allocations, keys)
 }
 
 impl<'scope, T, R> ArrangementSize for Arranged<'scope, RowAgent<T, R>>
@@ -484,36 +501,45 @@ where
 
 #[cfg(test)]
 mod tests {
-    use differential_dataflow::trace::implementations::Vector;
-    use differential_dataflow::trace::implementations::ord_neu::{OrdValBatch, OrdValBuilder};
+    use differential_dataflow::trace::implementations::BatchContainer;
     use differential_dataflow::trace::{BatchReader, Builder, Description};
+    use mz_repr::{Datum, Row};
+    use mz_row_spine::RowRowBuilder;
+    use mz_timely_util::columnation::ColumnationStack;
     use timely::progress::Antichain;
 
-    /// `batch.storage.keys.len()` must report the number of distinct *keys* in a batch, not the
+    use super::row_row_batch_stats;
+
+    /// `row_row_batch_stats` (the per-batch closure `log_arrangement_size_inner` caches for
+    /// `RowRowAgent` arrangements) must report the number of distinct *keys* in a batch, not the
     /// number of distinct `(key, value)` pairs and not the number of raw update records.
     ///
-    /// This is the read `log_arrangement_size_inner` relies on to cache a distinct-key count
-    /// alongside the existing heap-size figures: a batch with one key, several distinct values
-    /// under it, and a repeated `(key, value)` at a second timestamp exercises all three counts
-    /// at once, so a regression that conflates any of them shows up here rather than only in the
-    /// eventual memory-bound estimate that consumes it.
+    /// The batch is built through the production [`RowRowBuilder`], so the key container under
+    /// test is the real `DatumContainer` that ships in `RowRowAgent` arrangements, whose `len()`
+    /// is a hand-maintained counter, rather than differential's plain `Vec`-backed container
+    /// whose `len()` would be trivially correct regardless of what the read under test does. The
+    /// test calls `row_row_batch_stats` itself instead of duplicating its logic, so a regression
+    /// that swaps the key read for a value-count or a constant zero is caught here rather than
+    /// only in the eventual memory-bound estimate that consumes it.
     #[mz_ore::test]
     fn distinct_key_count_is_per_key_not_per_row() {
-        type Layout = Vector<((i32, i32), u64, i64)>;
-        let mut builder = OrdValBuilder::<Layout, Vec<((i32, i32), u64, i64)>>::new();
-        let mut chunk: Vec<((i32, i32), u64, i64)> = vec![
-            ((1, 10), 0, 1),
-            ((1, 20), 0, 1),
-            ((1, 20), 1, 1), // same (key, value) as above, different time: bumps the record count only.
-            ((1, 30), 0, 1),
-        ];
-        builder.push(&mut chunk);
+        let key = Row::pack_slice(&[Datum::Int64(1)]);
+        let val_a = Row::pack_slice(&[Datum::Int64(10)]);
+        let val_b = Row::pack_slice(&[Datum::Int64(20)]);
+        let val_c = Row::pack_slice(&[Datum::Int64(30)]);
+
+        let mut chunk: ColumnationStack<((Row, Row), u64, i64)> = Default::default();
+        chunk.copy(&((key.clone(), val_a), 0, 1));
+        chunk.copy(&((key.clone(), val_b.clone()), 0, 1));
+        chunk.copy(&((key.clone(), val_b), 1, 1)); // same (key, value) as above, different time: bumps the record count only.
+        chunk.copy(&((key, val_c), 0, 1));
+
         let description = Description::new(
-            Antichain::from_elem(0),
-            Antichain::from_elem(2),
-            Antichain::from_elem(0),
+            Antichain::from_elem(0u64),
+            Antichain::from_elem(2u64),
+            Antichain::from_elem(0u64),
         );
-        let batch: OrdValBatch<Layout> = builder.done(description);
+        let batch = RowRowBuilder::<u64, i64>::seal(&mut vec![chunk], description);
 
         assert_eq!(batch.storage.keys.len(), 1, "one distinct key");
         assert_eq!(
@@ -522,6 +548,20 @@ mod tests {
             "three distinct (key, value) pairs"
         );
         assert_eq!(batch.len(), 4, "four raw update records");
-        assert!(batch.storage.keys.len() < batch.len());
+
+        let (_, _, _, keys) = row_row_batch_stats(&batch);
+        assert_eq!(
+            keys, 1,
+            "row_row_batch_stats must report the distinct-key count"
+        );
+        assert_ne!(
+            keys,
+            batch.storage.vals.vals.len(),
+            "would fail if the key read were swapped for a (key, value)-pair count"
+        );
+        assert_ne!(
+            keys, 0,
+            "would fail if the key read were swapped for a constant zero"
+        );
     }
 }

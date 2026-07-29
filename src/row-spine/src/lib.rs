@@ -17,8 +17,8 @@ pub use self::dictionary::DatumContainer;
 pub use self::dictionary::DatumSeq;
 pub use self::offset_opt::OffsetOptimized;
 pub use self::spines::{
-    RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowRowColPagedBuilder, RowRowSpine,
-    RowSpine, RowValBatcher, RowValBuilder, RowValSpine, ValRowBatcher, ValRowBuilder,
+    RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowRowColPagedBuilder, RowRowLayout,
+    RowRowSpine, RowSpine, RowValBatcher, RowValBuilder, RowValSpine, ValRowBatcher, ValRowBuilder,
     ValRowColPagedBuilder, ValRowSpine,
 };
 use differential_dataflow::trace::implementations::OffsetList;
