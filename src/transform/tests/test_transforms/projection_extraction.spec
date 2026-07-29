@@ -14,7 +14,7 @@ DefSource name=x
 ----
 Source defined as t0
 
-apply pipeline=projection_extraction
+apply pipeline=ProjectionExtraction
 Map (#1, #0)
   Get x
 ----

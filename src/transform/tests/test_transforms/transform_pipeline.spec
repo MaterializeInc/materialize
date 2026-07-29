@@ -17,21 +17,21 @@ Source defined as t0
 
 # various pipeline= parameters run different transformation pipelines
 
-# pipeline=identity leaves expressions as-is
-apply pipeline=identity
+# pipeline=Identity leaves expressions as-is
+apply pipeline=Identity
 Get x
 ----
 Get x
 
 # Can build nested expressions.
-apply pipeline=identity
+apply pipeline=Identity
 Filter #0
   Get x
 ----
 Filter #0
   Get x
 
-apply pipeline=identity
+apply pipeline=Identity
 Filter #0 AND #1
   Map (true)
     Get x
@@ -40,8 +40,8 @@ Filter #0 AND #1
   Map (true)
     Get x
 
-# pipeline=predicate_pushdown runs predicate pushdown
-apply pipeline=predicate_pushdown
+# pipeline=PredicatePushdown runs predicate pushdown
+apply pipeline=PredicatePushdown
 Filter #0 AND #1
   Map (true)
     Get x
@@ -59,7 +59,7 @@ Project (#3)
 Project (#1)
   Get x
 
-apply pipeline=identity
+apply pipeline=Identity
 Join on=(#0 = #2 AND #1 = #3)
   Get x
   Get x
@@ -68,7 +68,7 @@ Join on=(#0 = #2 AND #1 = #3)
   Get x
   Get x
 
-apply pipeline=identity
+apply pipeline=Identity
 Negate
   Constant // { types: "(bigint?)" }
     - (1)

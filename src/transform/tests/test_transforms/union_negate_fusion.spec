@@ -14,7 +14,7 @@ DefSource name=x
 ----
 Source defined as t0
 
-apply pipeline=union_fusion
+apply pipeline=UnionFusion
 Union
   Get x
   Union
@@ -29,7 +29,7 @@ Union
   Get x
   Get x
 
-apply pipeline=union_negate_fusion
+apply pipeline=UnionNegateFusion
 Union
   Get x
   Union

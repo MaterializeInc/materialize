@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 # test that predicates in the body of a let get pushed down to values
-apply pipeline=predicate_pushdown
+apply pipeline=PredicatePushdown
 With
   cte l0 =
     Constant // { types: "(bigint?, bigint?, bigint?)" }

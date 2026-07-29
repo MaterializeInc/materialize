@@ -16,7 +16,7 @@ Source defined as t0
 
 # both have limit and offset
 
-apply pipeline=fusion
+apply pipeline=Fusion
 TopK limit=1 offset=1
   TopK limit=3 offset=2
     Get x
@@ -24,7 +24,7 @@ TopK limit=1 offset=1
 TopK limit=1 offset=3
   Get x
 
-apply pipeline=fusion
+apply pipeline=Fusion
 TopK group_by=[#0] order_by=[#0 asc nulls_first] limit=1 offset=1
   TopK group_by=[#0] order_by=[#0 asc nulls_first] limit=3 offset=2
     Get x
@@ -34,7 +34,7 @@ TopK group_by=[#0] order_by=[#0 asc nulls_first] limit=1 offset=3
 
 # outer limit is greater than inner limit plus outer offset
 
-apply pipeline=fusion
+apply pipeline=Fusion
 TopK group_by=[#0] order_by=[#0 asc nulls_first] limit=10
   TopK group_by=[#0] order_by=[#0 asc nulls_first] limit=3 offset=2
     Get x
@@ -42,7 +42,7 @@ TopK group_by=[#0] order_by=[#0 asc nulls_first] limit=10
 TopK group_by=[#0] order_by=[#0 asc nulls_first] limit=3 offset=2
   Get x
 
-apply pipeline=fusion
+apply pipeline=Fusion
 TopK group_by=[#0] order_by=[#0 asc nulls_first] limit=10 offset=1
   TopK group_by=[#0] order_by=[#0 asc nulls_first] limit=3 offset=2
     Get x
@@ -52,7 +52,7 @@ TopK group_by=[#0] order_by=[#0 asc nulls_first] limit=2 offset=3
 
 # outer offset is equal to inner limit
 
-apply pipeline=fusion
+apply pipeline=Fusion
 TopK limit=1 offset=3
   TopK limit=3 offset=2
     Get x
@@ -61,7 +61,7 @@ Constant <empty>
 
 # outer offset is greater than the inner offset
 
-apply pipeline=fusion
+apply pipeline=Fusion
 TopK offset=4
   TopK limit=3
     Get x
@@ -70,7 +70,7 @@ Constant <empty>
 
 # inner has no limit, but both have offset
 
-apply pipeline=fusion
+apply pipeline=Fusion
 TopK group_by=[#0] order_by=[#0 asc nulls_first] limit=10 offset=1
   TopK group_by=[#0] order_by=[#0 asc nulls_first] offset=2
     Get x
@@ -80,7 +80,7 @@ TopK group_by=[#0] order_by=[#0 asc nulls_first] limit=10 offset=3
 
 # both have no limit, but offset
 
-apply pipeline=fusion
+apply pipeline=Fusion
 TopK group_by=[#0] order_by=[#0 asc nulls_first] offset=1
   TopK group_by=[#0] order_by=[#0 asc nulls_first] offset=2
     Get x
@@ -90,7 +90,7 @@ TopK group_by=[#0] order_by=[#0 asc nulls_first] offset=3
 
 # outer has no limit, but both have offset
 
-apply pipeline=fusion
+apply pipeline=Fusion
 TopK order_by=[#0 asc nulls_first] offset=1
   TopK order_by=[#0 asc nulls_first] limit=3 offset=2
     Get x
@@ -100,7 +100,7 @@ TopK order_by=[#0 asc nulls_first] limit=2 offset=3
 
 # outer has no limit and no offset
 
-apply pipeline=fusion
+apply pipeline=Fusion
 TopK order_by=[#0 asc nulls_first]
   TopK order_by=[#0 asc nulls_first] limit=3 offset=2
     Get x
@@ -110,7 +110,7 @@ TopK order_by=[#0 asc nulls_first] limit=3 offset=2
 
 # inner has no limit and no offset
 
-apply pipeline=fusion
+apply pipeline=Fusion
 TopK order_by=[#0 asc nulls_first] limit=3 offset=2
   TopK order_by=[#0 asc nulls_first]
     Get x
@@ -120,7 +120,7 @@ TopK order_by=[#0 asc nulls_first] limit=3 offset=2
 
 # inner has no limit and no offset, and outer has only limit
 
-apply pipeline=fusion
+apply pipeline=Fusion
 TopK order_by=[#0 asc nulls_first] limit=3
   TopK order_by=[#0 asc nulls_first]
     Get x
@@ -130,7 +130,7 @@ TopK order_by=[#0 asc nulls_first] limit=3
 
 # inner has no limit and no offset, and outer has only offset
 
-apply pipeline=fusion
+apply pipeline=Fusion
 TopK order_by=[#0 asc nulls_first] offset=1
   TopK order_by=[#0 asc nulls_first]
     Get x
@@ -140,7 +140,7 @@ TopK order_by=[#0 asc nulls_first] offset=1
 
 # both have no limit and no offset
 
-apply pipeline=fusion
+apply pipeline=Fusion
 TopK order_by=[#0 asc nulls_first]
   TopK order_by=[#0 asc nulls_first]
     Get x
@@ -150,7 +150,7 @@ TopK order_by=[#0 asc nulls_first]
 
 # both have limit 0 and no offset
 
-apply pipeline=fusion
+apply pipeline=Fusion
 TopK order_by=[#0 asc nulls_first] limit=0
   TopK order_by=[#0 asc nulls_first] limit=0
     Get x
@@ -159,7 +159,7 @@ Constant <empty>
 
 # outer has limit 0
 
-apply pipeline=fusion
+apply pipeline=Fusion
 TopK order_by=[#0 asc nulls_first] limit=0
   TopK order_by=[#0 asc nulls_first]
     Get x
@@ -168,14 +168,14 @@ Constant <empty>
 
 # inner has limit 0
 
-apply pipeline=fusion
+apply pipeline=Fusion
 TopK order_by=[#0 asc nulls_first]
   TopK order_by=[#0 asc nulls_first] limit=0
     Get x
 ----
 Constant <empty>
 
-apply pipeline=identity
+apply pipeline=Identity
 TopK limit=1 offset=1
   TopK limit=3 offset=2
     Constant // { types: "(integer?)" }
@@ -196,7 +196,7 @@ TopK limit=1 offset=1
       - (2)
       - (1)
 
-apply pipeline=fusion
+apply pipeline=Fusion
 TopK limit=1 offset=1
   TopK limit=3 offset=2
     Constant // { types: "(integer?)" }
@@ -231,7 +231,7 @@ Constant
   - (3)
 
 
-apply pipeline=fusion
+apply pipeline=Fusion
 TopK limit=1 offset=3
   TopK limit=3 offset=2
     Constant // { types: "(integer?)" }
@@ -244,7 +244,7 @@ TopK limit=1 offset=3
 ----
 Constant <empty>
 
-apply pipeline=fusion
+apply pipeline=Fusion
 TopK order_by=[#0 asc nulls_first] limit=1
   TopK order_by=[#1 asc nulls_first] limit=3 offset=2
     Constant // { types: "(integer?, integer?)" }
@@ -259,7 +259,7 @@ TopK order_by=[#0 asc nulls_first] limit=1
       - (3, 2)
       - (1, 0)
 
-apply pipeline=fusion
+apply pipeline=Fusion
 TopK order_by=[#1 asc nulls_first] limit=1
   TopK order_by=[#1 asc nulls_first] limit=3 offset=2
     Constant // { types: "(integer?, integer?)" }
@@ -273,7 +273,7 @@ TopK order_by=[#1 asc nulls_first] limit=1 offset=2
     - (3, 2)
     - (1, 0)
 
-apply pipeline=fusion
+apply pipeline=Fusion
 TopK group_by=[#1] order_by=[#1 asc nulls_first] limit=1
   TopK group_by=[#0] order_by=[#0 asc nulls_first] limit=3 offset=2
     Constant // { types: "(integer?, integer?)" }
@@ -288,7 +288,7 @@ TopK group_by=[#1] order_by=[#1 asc nulls_first] limit=1
       - (3, 2)
       - (1, 0)
 
-apply pipeline=fusion
+apply pipeline=Fusion
 TopK group_by=[#0] order_by=[#1 asc nulls_first] limit=1
   TopK group_by=[#0] limit=3 offset=2
     Constant // { types: "(integer?, integer?)" }
@@ -305,7 +305,7 @@ TopK group_by=[#0] order_by=[#1 asc nulls_first] limit=1
 
 # Fusionable TopK operators with grouping key
 
-apply pipeline=fusion
+apply pipeline=Fusion
 TopK group_by=[#0] limit=1
   TopK group_by=[#0] limit=3 offset=1
     Constant // { types: "(integer?, integer?)" }
@@ -321,7 +321,7 @@ TopK group_by=[#0] limit=1 offset=1
     - (1, 0)
     - (1, 1)
 
-apply pipeline=fold_constants
+apply pipeline=FoldConstants
 TopK group_by=[#0] limit=1 offset=1
   Constant // { types: "(integer?, integer?)" }
     - (5, 4)
@@ -332,7 +332,7 @@ TopK group_by=[#0] limit=1 offset=1
 Constant
   - (1, 1)
 
-apply pipeline=fold_constants
+apply pipeline=FoldConstants
 TopK group_by=[#0] limit=1
   TopK group_by=[#0] limit=3 offset=1
     Constant // { types: "(integer?, integer?)" }
@@ -346,7 +346,7 @@ Constant
 
 # Both nulls_last
 
-apply pipeline=fusion
+apply pipeline=Fusion
 TopK group_by=[#0] order_by=[#0 asc nulls_last] limit=1 offset=1
   TopK group_by=[#0] order_by=[#0 asc nulls_last] limit=3 offset=2
     Get x
@@ -356,7 +356,7 @@ TopK group_by=[#0] order_by=[#0 asc nulls_last] limit=1 offset=3
 
 # Cannot be fused, because nulls_last differs
 
-apply pipeline=fusion
+apply pipeline=Fusion
 TopK group_by=[#0] order_by=[#0 asc nulls_last] limit=1 offset=1
   TopK group_by=[#0] order_by=[#0 asc nulls_first] limit=3 offset=2
     Get x
@@ -367,7 +367,7 @@ TopK group_by=[#0] order_by=[#0 asc nulls_last] limit=1 offset=1
 
 # Cannot be fused, because asc-desc differs
 
-apply pipeline=fusion
+apply pipeline=Fusion
 TopK group_by=[#0] order_by=[#0 desc nulls_first] limit=1 offset=1
   TopK group_by=[#0] order_by=[#0 asc nulls_first] limit=3 offset=2
     Get x

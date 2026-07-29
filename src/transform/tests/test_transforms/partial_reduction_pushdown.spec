@@ -48,7 +48,7 @@ Source defined as t3
 
 # Distinct Pushdown tests
 
-apply pipeline=reduction_pushdown
+apply pipeline=ReductionPushdown
 Distinct project=[#1]
   Join on=(#1 = #3)
     Get x
@@ -63,7 +63,7 @@ Project (#0)
 
 ## distinct(<multiple columns from same input>)
 
-apply pipeline=reduction_pushdown
+apply pipeline=ReductionPushdown
 Distinct project=[#0, #1]
   Join on=(#1 = #3)
     Constant <empty> // { types: "(integer?, text?)" }
@@ -78,7 +78,7 @@ Project (#0, #1)
 
 ## distinct(<multiple columns from differing inputs>)
 
-apply pipeline=reduction_pushdown
+apply pipeline=ReductionPushdown
 Distinct project=[#0, #1, #2]
   Join on=(#1 = #3)
     Get x
@@ -94,7 +94,7 @@ Project (#0, #1, #3)
 ## Negative test: Perform a full reduction pushdown
 ## if all inputs are constant
 
-apply pipeline=reduction_pushdown
+apply pipeline=ReductionPushdown
 Distinct project=[#1]
   Join on=(#1 = #3)
     Constant <empty> // { types: "(integer?, text?)" }
@@ -109,7 +109,7 @@ Project (#0)
 
 ## Expressions in join equivalence classes
 
-apply pipeline=reduction_pushdown
+apply pipeline=ReductionPushdown
 Distinct project=[#3]
   Join on=(substr(#1, 5) = #3)
     Constant <empty> // { types: "(integer?, text?)" }
@@ -122,7 +122,7 @@ Project (#1)
     Distinct project=[#1]
       Get y
 
-apply pipeline=reduction_pushdown
+apply pipeline=ReductionPushdown
 Distinct project=[substr(#1, 5)]
   Join on=(substr(#1, 5) = #3)
     Get x
@@ -138,7 +138,7 @@ Project (#0)
 ### Negative test: Do not do reduction pushdown
 ### if there are multi-component expressions in the join equivalence
 
-apply pipeline=reduction_pushdown
+apply pipeline=ReductionPushdown
 Distinct project=[substr(#1, 5)]
   Join on=(substr(#1, 5) = text_concat_binary(#1, #3))
     Get x
@@ -149,7 +149,7 @@ Distinct project=[substr(#1, 5)]
     Get x
     Constant <empty>
 
-apply pipeline=reduction_pushdown
+apply pipeline=ReductionPushdown
 Distinct project=[substr(#1, 5)]
   Join on=(substr(#1, 5) = #3 AND text_concat_binary(#1, #3) = "hello")
     Constant <empty> // { types: "(integer?, text?)" }
@@ -162,7 +162,7 @@ Distinct project=[substr(#1, 5)]
 
 ### Negative test: multi-input expression in group by key
 
-apply pipeline=reduction_pushdown
+apply pipeline=ReductionPushdown
 Distinct project=[text_concat_binary(#1, #3)]
   Join on=(text_concat_binary(#1, #3) = "hello")
     Get x
@@ -176,7 +176,7 @@ Distinct project=[(#1 || #3)]
 ## Distinct pushdown across more than two inputs
 ## Make sure no cross joins happen.
 
-apply pipeline=reduction_pushdown
+apply pipeline=ReductionPushdown
 Distinct project=[#1]
   Join on=(#1 = #3 = #5)
     Get x
@@ -192,7 +192,7 @@ Project (#0)
     Distinct project=[#1]
       Constant <empty>
 
-apply pipeline=reduction_pushdown
+apply pipeline=ReductionPushdown
 Distinct project=[#1, #5]
   Join on=(#1 = #3 AND #2 = #4)
     Get x
@@ -211,7 +211,7 @@ Project (#0, #2)
 ### Negative test: Perform a full pushdown
 ### if each sub-join is non-constant
 
-apply pipeline=reduction_pushdown
+apply pipeline=ReductionPushdown
 Distinct project=[#3, #5]
   Join on=(#0 = #2 AND #1 = #5)
     Get x
@@ -229,7 +229,7 @@ Project (#0, #2)
 
 ## Cross join tests
 
-apply pipeline=reduction_pushdown
+apply pipeline=ReductionPushdown
 Distinct project=[#5]
   Join on=(#3 = #5)
     Constant <empty> // { types: "(integer?, text?)" }
@@ -245,7 +245,7 @@ Project (#1)
     Distinct project=[#1]
       Get z
 
-apply pipeline=reduction_pushdown
+apply pipeline=ReductionPushdown
 Distinct project=[#0]
   Join on=(#3 = #5)
     Constant <empty> // { types: "(integer?, text?)" }
@@ -263,7 +263,7 @@ Project (#0)
 
 # Pushdown agg(distinct <single-input-expression>)
 
-apply pipeline=reduction_pushdown
+apply pipeline=ReductionPushdown
 Reduce group_by=[#1] aggregates=[sum_int32(distinct #0)]
   Join on=(#1 = #3)
     Get x
@@ -276,7 +276,7 @@ Project (#0, #1)
     Distinct project=[#1]
       Constant <empty>
 
-apply pipeline=reduction_pushdown
+apply pipeline=ReductionPushdown
 Reduce group_by=[#3] aggregates=[sum_int16(distinct #2)]
   Join on=(#1 = #3)
     Get x
@@ -292,7 +292,7 @@ Project (#1, #2)
     Distinct project=[]
       Get z
 
-apply pipeline=reduction_pushdown
+apply pipeline=ReductionPushdown
 Reduce group_by=[#3] aggregates=[sum_int32(distinct neg_int32(#0)), sum_int16(distinct #2)]
   Join on=(#1 = #3 = #5)
     Constant <empty> // { types: "(integer?, text?)" }
@@ -310,7 +310,7 @@ Project (#2, #1, #3)
 
 # Pushdown agg(distinct <single-component multi-input expression>)
 
-apply pipeline=reduction_pushdown
+apply pipeline=ReductionPushdown
 Reduce group_by=[#6] aggregates=[sum_int32(distinct add_int32(#0, cast_int16_to_int32(#2))), sum_int16(distinct mul_int16(#2, #4))]
   Join on=(#1 = #3 = #5 AND #4 = #6)
     Constant <empty> // { types: "(integer?, text?)" }

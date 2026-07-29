@@ -16,21 +16,21 @@ Source defined as t0
 
 # Redundant IS NOT NULL predicate
 
-apply pipeline=fusion
+apply pipeline=Fusion
 Filter not(((#0) IS NULL)) AND (#0 = 1)
   Get x
 ----
 Filter (#0 = 1)
   Get x
 
-apply pipeline=fusion
+apply pipeline=Fusion
 Filter not(((#1) IS NULL)) AND (#0 = #1)
   Get x
 ----
 Filter (#0 = #1)
   Get x
 
-apply pipeline=fusion
+apply pipeline=Fusion
 Filter (#0 = 1)
   Filter not(((#0) IS NULL))
     Get x
@@ -40,7 +40,7 @@ Filter (#0 = 1)
 
 # Impossible condition detection
 
-apply pipeline=fusion
+apply pipeline=Fusion
 Filter (#0 = 1)
   Filter ((#0) IS NULL)
     Get x
@@ -48,14 +48,14 @@ Filter (#0 = 1)
 Filter false
   Get x
 
-apply pipeline=(fusion,fold_constants)
+apply pipeline=(Fusion,FoldConstants)
 Filter (#0 = 1)
   Filter ((#0) IS NULL)
     Get x
 ----
 Constant <empty>
 
-apply pipeline=fusion
+apply pipeline=Fusion
 Filter (#0 = #1)
   Filter ((#1) IS NULL)
     Get x
@@ -63,7 +63,7 @@ Filter (#0 = #1)
 Filter false
   Get x
 
-apply pipeline=fusion
+apply pipeline=Fusion
 Filter not(((#0) IS NULL))
   Filter ((#0) IS NULL)
     Get x

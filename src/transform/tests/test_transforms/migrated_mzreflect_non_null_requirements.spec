@@ -15,7 +15,7 @@ DefSource name=x
 Source defined as t0
 
 # Regression test for materialize#5520
-apply pipeline=non_null_requirements
+apply pipeline=NonNullRequirements
 Filter (#0 = #3)
   FlatMap generate_series_i32(#1)
     Map (null::integer)

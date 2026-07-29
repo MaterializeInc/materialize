@@ -22,7 +22,7 @@ DefSource name=y
 Source defined as t1
 
 # Discard literals that are not projected.
-apply pipeline=literal_lifting
+apply pipeline=LiteralLifting
 Project (#5, #3)
   Map (1, 2, 3, 4)
     Get x
@@ -31,7 +31,7 @@ Project (#3, #2)
   Map (2, 4)
     Get x
 
-apply pipeline=identity
+apply pipeline=Identity
 Project (#3, #3)
   Map (1, 2, 3)
     Get x
@@ -40,7 +40,7 @@ Project (#3, #3)
   Map (1, 2, 3)
     Get x
 
-apply pipeline=literal_lifting
+apply pipeline=LiteralLifting
 Project (#3, #3)
   Map (1, 2, 3)
     Get x
@@ -49,7 +49,7 @@ Project (#2, #2)
   Map (2)
     Get x
 
-apply pipeline=literal_lifting
+apply pipeline=LiteralLifting
 Project (#3, #4, #3)
   Map (1, 2, 3)
     Get x
@@ -59,7 +59,7 @@ Project (#2, #3, #2)
     Get x
 
 # Merge nested Map operators within a Project
-apply pipeline=literal_lifting
+apply pipeline=LiteralLifting
 Project (#2, #3)
   Map (2)
     Map (1)
@@ -70,7 +70,7 @@ Project (#2, #3)
     Get x
 
 # Map: Permute columns to put literals at the end
-apply pipeline=literal_lifting
+apply pipeline=LiteralLifting
 Project (#3, #6)
   Map (3, #2, 4)
     Map (1, #0, 2)
@@ -84,7 +84,7 @@ Project (#3, #6)
           Get x
 
 
-apply pipeline=(literal_lifting,projection_lifting,literal_lifting)
+apply pipeline=(LiteralLifting,ProjectionLifting,LiteralLifting)
 Project (#3, #6)
   Map (3, #2, 4)
     Map (1, #0, 2)
@@ -106,7 +106,7 @@ Project (#0, #2)
     Get x
 
 # Extract common values in all rows in Constant operator
-apply pipeline=identity
+apply pipeline=Identity
 Constant // { types: "(bigint?, bigint?, bigint?)" }
   - (1, 2, 3)
   - (1, 4, 3)
@@ -115,7 +115,7 @@ Constant
   - (1, 2, 3)
   - (1, 4, 3)
 
-apply pipeline=literal_lifting
+apply pipeline=LiteralLifting
 Constant // { types: "(bigint?, bigint?, bigint?)" }
   - (1, 2, 3)
   - (1, 4, 3)
@@ -127,7 +127,7 @@ Map (3)
         - (2)
         - (4)
 
-apply pipeline=literal_lifting
+apply pipeline=LiteralLifting
 Union
   Constant // { types: "(bigint?, bigint?, bigint?)" }
     - (1, 2, 3)
@@ -145,7 +145,7 @@ Map (3)
       - (3, 2)
       - (4, 4)
 
-apply pipeline=literal_lifting
+apply pipeline=LiteralLifting
 Union
   Constant // { types: "(bigint?, bigint?, bigint?)" }
     - (1, 2, 3)
@@ -167,7 +167,7 @@ Map (3)
           - (2)
           - (4)
 
-apply pipeline=(literal_lifting,projection_lifting,literal_lifting)
+apply pipeline=(LiteralLifting,ProjectionLifting,LiteralLifting)
 Union
   Constant // { types: "(bigint?, bigint?, bigint?)" }
     - (1, 2, 3)
@@ -186,7 +186,7 @@ Project (#1, #0, #2)
         - (2)
         - (4)
 
-apply pipeline=literal_lifting
+apply pipeline=LiteralLifting
 Union
   Constant // { types: "(bigint?, bigint?, bigint?)" }
     - (1, 2, 3)
@@ -208,7 +208,7 @@ Map (3)
           - (2)
           - (4)
 
-apply pipeline=(literal_lifting,projection_lifting,literal_lifting)
+apply pipeline=(LiteralLifting,ProjectionLifting,LiteralLifting)
 Union
   Constant // { types: "(bigint?, bigint?, bigint?)" }
     - (1, 2, 3)
@@ -229,7 +229,7 @@ Project (#1, #0, #2)
           - (2)
           - (4)
 
-apply pipeline=literal_lifting
+apply pipeline=LiteralLifting
 Union
   Constant // { types: "(bigint?, bigint?, bigint?)" }
     - (1, 2, 3)
@@ -250,7 +250,7 @@ Map (3)
           - (3)
           - (5)
 
-apply pipeline=(literal_lifting,projection_lifting,literal_lifting)
+apply pipeline=(LiteralLifting,ProjectionLifting,LiteralLifting)
 Union
   Constant // { types: "(bigint?, bigint?, bigint?)" }
     - (1, 2, 3)
@@ -272,7 +272,7 @@ Map (3)
           - (5)
 
 # Union: literals in the suffix in all branches are lifted...
-apply pipeline=literal_lifting
+apply pipeline=LiteralLifting
 Union
   Project (#0, #3, #2)
     Map (2, 1)
@@ -290,7 +290,7 @@ Union
       Get x
 
 # .. but other common literals are not lifted by LiteralLifting...
-apply pipeline=literal_lifting
+apply pipeline=LiteralLifting
 Union
   Project (#2, #0)
     Map (1)
@@ -308,7 +308,7 @@ Union
       Get x
 
 # ... however, they eventually get lifted as a result of the following transformations
-apply pipeline=(projection_lifting,literal_lifting)
+apply pipeline=(ProjectionLifting,LiteralLifting)
 Union
   Project (#2, #0)
     Map (1)
@@ -343,7 +343,7 @@ Return
     Project (#2, #1)
       Get l0
 
-apply pipeline=literal_lifting
+apply pipeline=LiteralLifting
 Constant // { types: "(bigint?, bigint?, bigint?)", keys: "([1, 2])" }
   - (1, 2, 3)
   - (1, 4, 3)

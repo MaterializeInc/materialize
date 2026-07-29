@@ -26,7 +26,7 @@ Source defined as t0
 # TopK, limit 1, offset 0: masks magnitudes like a Distinct, so the inner
 # Distinct is redundant and is removed when the flag is on.
 # ---------------------------------------------------------------------------
-apply pipeline=will_distinct enable_will_distinct_propagation=true
+apply pipeline=WillDistinct enable_will_distinct_propagation=true
 Distinct project=[#0, #1]
   TopK order_by=[#0 asc nulls_first] limit=1
     Distinct project=[#0, #1]
@@ -41,7 +41,7 @@ Distinct project=[#0, #1]
 # NEGATIVE (locks in the #1 fix): TopK limit 1 OFFSET 5. Which row survives
 # depends on the cumulative multiplicities of the skipped rows, so the inner
 # Distinct must NOT be removed even with the flag on.
-apply pipeline=will_distinct enable_will_distinct_propagation=true
+apply pipeline=WillDistinct enable_will_distinct_propagation=true
 Distinct project=[#0, #1]
   TopK order_by=[#0 asc nulls_first] limit=1 offset=5
     Distinct project=[#0, #1]
@@ -54,7 +54,7 @@ Distinct project=[#0, #1]
 
 # CONTROL: with the flag OFF, the generalized TopK arm is inert and the inner
 # Distinct survives even for limit 1 offset 0 (reproduces historic behavior).
-apply pipeline=will_distinct
+apply pipeline=WillDistinct
 Distinct project=[#0, #1]
   TopK order_by=[#0 asc nulls_first] limit=1
     Distinct project=[#0, #1]
@@ -70,7 +70,7 @@ Distinct project=[#0, #1]
 # ---------------------------------------------------------------------------
 
 # Map
-apply pipeline=will_distinct enable_will_distinct_propagation=true
+apply pipeline=WillDistinct enable_will_distinct_propagation=true
 Distinct project=[#0, #1, #2]
   Map (add_int64(#0, #1))
     Distinct project=[#0, #1]
@@ -83,7 +83,7 @@ Distinct project=[#0..=#2]
         Get x
 
 # Filter
-apply pipeline=will_distinct enable_will_distinct_propagation=true
+apply pipeline=WillDistinct enable_will_distinct_propagation=true
 Distinct project=[#0, #1]
   Filter (#0 > #1)
     Distinct project=[#0, #1]
@@ -96,7 +96,7 @@ Distinct project=[#0, #1]
         Get x
 
 # Negate
-apply pipeline=will_distinct enable_will_distinct_propagation=true
+apply pipeline=WillDistinct enable_will_distinct_propagation=true
 Distinct project=[#0, #1]
   Negate
     Distinct project=[#0, #1]
@@ -109,7 +109,7 @@ Distinct project=[#0, #1]
         Get x
 
 # Threshold
-apply pipeline=will_distinct enable_will_distinct_propagation=true
+apply pipeline=WillDistinct enable_will_distinct_propagation=true
 Distinct project=[#0, #1]
   Threshold
     Distinct project=[#0, #1]
@@ -123,7 +123,7 @@ Distinct project=[#0, #1]
 
 # FlatMap: retains input columns, so distinct input rows never merge; the
 # table-function count is non-negative, so the inner Distinct is removed.
-apply pipeline=will_distinct enable_will_distinct_propagation=true
+apply pipeline=WillDistinct enable_will_distinct_propagation=true
 Distinct project=[#0, #1]
   FlatMap generate_series(#0, #1, 1)
     Distinct project=[#0, #1]
@@ -137,7 +137,7 @@ Distinct project=[#0, #1]
 
 # NEGATIVE: TopK whose limit is a non-literal expression (a column reference) is
 # not recognized as a magnitude mask, so the inner Distinct is preserved.
-apply pipeline=will_distinct enable_will_distinct_propagation=true
+apply pipeline=WillDistinct enable_will_distinct_propagation=true
 Distinct project=[#0, #1]
   TopK order_by=[#0 asc nulls_first] limit=#0
     Distinct project=[#0, #1]
@@ -155,7 +155,7 @@ Distinct project=[#0, #1]
 # ---------------------------------------------------------------------------
 
 # Non-negative Project: removed.
-apply pipeline=will_distinct enable_will_distinct_propagation=true
+apply pipeline=WillDistinct enable_will_distinct_propagation=true
 Distinct project=[#0]
   Project (#0)
     Distinct project=[#0, #1]
@@ -168,7 +168,7 @@ Distinct project=[#0]
         Get x
 
 # Project over a Negate (negative input): preserved.
-apply pipeline=will_distinct enable_will_distinct_propagation=true
+apply pipeline=WillDistinct enable_will_distinct_propagation=true
 Distinct project=[#0]
   Project (#0)
     Negate

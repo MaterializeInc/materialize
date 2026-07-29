@@ -26,7 +26,7 @@ Filter (#0 = 1) AND (#1 = 2)
   Get t0
 
 # A `pipeline` list applies its transforms in sequence.
-apply pipeline=(fusion_join,fold_constants)
+apply pipeline=(JoinFusion,FoldConstants)
 CrossJoin
   CrossJoin
     Get t0
@@ -41,7 +41,7 @@ CrossJoin
     - (1)
 
 # Flag-gated transform behavior is enabled via directive args.
-apply pipeline=will_distinct enable_will_distinct_propagation=true
+apply pipeline=WillDistinct enable_will_distinct_propagation=true
 Distinct project=[#0]
   Project (#0)
     Get t0

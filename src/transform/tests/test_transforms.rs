@@ -158,46 +158,99 @@ fn handle_apply(
 }
 
 /// Resolves a `pipeline` entry of the `apply` directive to a transform
-/// sequence. Most names map to a single transform, `optimize` expands to the
-/// full optimizer pipeline.
+/// sequence. Names are the transforms' canonical `Transform::name` strings and
+/// map to a single transform, `optimize` expands to the full optimizer
+/// pipeline.
 fn get_transforms(name: &str) -> Result<Vec<Box<dyn Transform>>, String> {
     use mz_transform::*;
     let transform: Box<dyn Transform> = match name {
         // Pseudo-transforms.
-        "identity" => Box::new(Identity),
+        "Identity" => Box::new(Identity),
         "optimize" => return Ok(full_transform_list()),
         // Actual transforms.
-        "anf" => Box::new(cse::anf::ANF::default()),
-        "canonicalize_mfp" => Box::new(canonicalize_mfp::CanonicalizeMfp),
-        "case_literal" => Box::new(case_literal::CaseLiteralTransform),
-        "coalesce_case" => Box::new(coalesce_case::CoalesceCase),
-        "equivalence_propagation" => {
+        "ANF" => Box::new(cse::anf::ANF::default()),
+        "CanonicalizeMfp" => Box::new(canonicalize_mfp::CanonicalizeMfp),
+        "CaseLiteralTransform" => Box::new(case_literal::CaseLiteralTransform),
+        "CoalesceCase" => Box::new(coalesce_case::CoalesceCase),
+        "EquivalencePropagation" => {
             Box::new(equivalence_propagation::EquivalencePropagation::default())
         }
-        "flat_map_elimination" => Box::new(canonicalization::FlatMapElimination),
-        "fold_constants" => Box::new(fold_constants::FoldConstants { limit: None }),
-        "fusion" => Box::new(fusion::Fusion),
-        "fusion_join" => Box::new(fusion::join::Join),
-        "fusion_top_k" => Box::new(fusion::top_k::TopK),
-        "literal_lifting" => Box::new(literal_lifting::LiteralLifting::default()),
-        "non_null_requirements" => Box::new(non_null_requirements::NonNullRequirements::default()),
-        "normalize_lets" => Box::new(normalize_lets::NormalizeLets::new(false)),
-        "predicate_pushdown" => Box::new(predicate_pushdown::PredicatePushdown::default()),
-        "projection_extraction" => Box::new(canonicalization::ProjectionExtraction),
-        "projection_lifting" => Box::new(movement::ProjectionLifting::default()),
-        "projection_pushdown" => Box::new(movement::ProjectionPushdown::default()),
-        "reduction_pushdown" => Box::new(reduction_pushdown::ReductionPushdown),
-        "redundant_join" => Box::new(redundant_join::RedundantJoin::default()),
-        "relation_cse" => Box::new(cse::relation_cse::RelationCSE::new(false)),
-        "semijoin_idempotence" => Box::new(semijoin_idempotence::SemijoinIdempotence::default()),
-        "threshold_elision" => Box::new(threshold_elision::ThresholdElision),
-        "union_branch_cancellation" => Box::new(union_cancel::UnionBranchCancellation),
-        "union_fusion" => Box::new(fusion::union::Union),
-        "union_negate_fusion" => Box::new(compound::UnionNegateFusion),
-        "will_distinct" => Box::new(will_distinct::WillDistinct),
+        "FlatMapElimination" => Box::new(canonicalization::FlatMapElimination),
+        "FoldConstants" => Box::new(fold_constants::FoldConstants { limit: None }),
+        "Fusion" => Box::new(fusion::Fusion),
+        "JoinFusion" => Box::new(fusion::join::Join),
+        "LiteralLifting" => Box::new(literal_lifting::LiteralLifting::default()),
+        "NonNullRequirements" => Box::new(non_null_requirements::NonNullRequirements::default()),
+        "NormalizeLets" => Box::new(normalize_lets::NormalizeLets::new(false)),
+        "PredicatePushdown" => Box::new(predicate_pushdown::PredicatePushdown::default()),
+        "ProjectionExtraction" => Box::new(canonicalization::ProjectionExtraction),
+        "ProjectionLifting" => Box::new(movement::ProjectionLifting::default()),
+        "ProjectionPushdown" => Box::new(movement::ProjectionPushdown::default()),
+        "ReductionPushdown" => Box::new(reduction_pushdown::ReductionPushdown),
+        "RedundantJoin" => Box::new(redundant_join::RedundantJoin::default()),
+        "RelationCSE" => Box::new(cse::relation_cse::RelationCSE::new(false)),
+        "SemijoinIdempotence" => Box::new(semijoin_idempotence::SemijoinIdempotence::default()),
+        "ThresholdElision" => Box::new(threshold_elision::ThresholdElision),
+        "TopKFusion" => Box::new(fusion::top_k::TopK),
+        "UnionBranchCancellation" => Box::new(union_cancel::UnionBranchCancellation),
+        "UnionFusion" => Box::new(fusion::union::Union),
+        "UnionNegateFusion" => Box::new(compound::UnionNegateFusion),
+        "WillDistinct" => Box::new(will_distinct::WillDistinct),
         transform => return Err(format!("unsupported pipeline transform: {transform}")),
     };
     Ok(vec![transform])
+}
+
+/// Checks that every single-transform pipeline name accepted by
+/// [`get_transforms`] is the canonical [`Transform::name`] of the transform it
+/// resolves to. Names added to the `match` in [`get_transforms`] must also be
+/// added here. `optimize` is exempt, it expands to the full optimizer pipeline
+/// rather than naming a single transform.
+#[mz_ore::test]
+fn pipeline_names_are_canonical() {
+    const PIPELINE_NAMES: &[&str] = &[
+        "Identity",
+        "ANF",
+        "CanonicalizeMfp",
+        "CaseLiteralTransform",
+        "CoalesceCase",
+        "EquivalencePropagation",
+        "FlatMapElimination",
+        "FoldConstants",
+        "Fusion",
+        "JoinFusion",
+        "LiteralLifting",
+        "NonNullRequirements",
+        "NormalizeLets",
+        "PredicatePushdown",
+        "ProjectionExtraction",
+        "ProjectionLifting",
+        "ProjectionPushdown",
+        "ReductionPushdown",
+        "RedundantJoin",
+        "RelationCSE",
+        "SemijoinIdempotence",
+        "ThresholdElision",
+        "TopKFusion",
+        "UnionBranchCancellation",
+        "UnionFusion",
+        "UnionNegateFusion",
+        "WillDistinct",
+    ];
+
+    for name in PIPELINE_NAMES {
+        let transforms = get_transforms(name).expect("known pipeline name");
+        assert_eq!(
+            transforms.len(),
+            1,
+            "`{name}` must resolve to one transform"
+        );
+        assert_eq!(
+            transforms[0].name(),
+            *name,
+            "pipeline name `{name}` must match the transform's canonical name",
+        );
+    }
 }
 
 /// The full optimizer pipeline, as applied by the `optimize` pipeline name.
@@ -246,7 +299,7 @@ fn apply_transforms(
     features.enable_dequadratic_eqprop_map = true;
     features.enable_eq_classes_withholding_errors = true;
     // Tests opt into flag-gated transform behavior via directive args, e.g.
-    // `apply pipeline=will_distinct enable_will_distinct_propagation=true`.
+    // `apply pipeline=WillDistinct enable_will_distinct_propagation=true`.
     if args.contains_key("enable_will_distinct_propagation") {
         features.enable_will_distinct_propagation = true;
     }

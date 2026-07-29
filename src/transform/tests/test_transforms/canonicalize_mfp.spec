@@ -30,7 +30,7 @@ DefSource name=t2
 Source defined as t2
 
 # regression test for materialize#8235
-apply pipeline=canonicalize_mfp
+apply pipeline=CanonicalizeMfp
 Project (#1)
   Filter (add_int64(null::boolean, #3) = 5::integer)
     Map (add_int64(#1, #2))
@@ -41,7 +41,7 @@ Project (#1)
     Get x
 
 # pushdown filters with a map. filters should be fused and re-sorted with the expression inlined
-apply pipeline=canonicalize_mfp
+apply pipeline=CanonicalizeMfp
 Project (#3)
   Filter (#3 > 1234::integer)
     Filter (#3 < 4321::integer)
@@ -54,7 +54,7 @@ Project (#3)
       Get x
 
 # multiple pushdown filters without a map. filters should be fused and re-sorted least to greatest
-apply pipeline=canonicalize_mfp
+apply pipeline=CanonicalizeMfp
 Project (#0, #1)
   Filter (#1 > 4321::integer)
     Filter (#0 < 1234::integer)
@@ -65,7 +65,7 @@ Project (#0, #1)
     Get x
 
 # multiple retained filters with a map. canonicalized filters should be re-sorted least to greatest
-apply pipeline=canonicalize_mfp
+apply pipeline=CanonicalizeMfp
 Project (#0, #3, #4)
   Filter ((#4) IS NULL) AND ((#3) IS NULL)
     Map (hmac_string(#0, #1, #2), hmac_string(#0, #1))
@@ -76,7 +76,7 @@ Project (#0, #3, #4)
     Map (hmac(#0, #1, #2), hmac(#0, #1))
       Get x
 
-apply pipeline=canonicalize_mfp
+apply pipeline=CanonicalizeMfp
 Project (#0, #3)
   Filter (#0 < 1234) AND ((#3) IS NULL)
     Map (hmac_string(#0, #1, #2))
@@ -90,7 +90,7 @@ Project (#0, #3)
 # regression test for materialize#10000.
 # Even though there is no map in the test, the duplicated predicates cause the creation
 # of a map via memoizing common subexpressions that then gets optimized away.
-apply pipeline=canonicalize_mfp
+apply pipeline=CanonicalizeMfp
 Project (#0)
   Filter not(((#0) IS NULL)) AND ((#0 = 5::integer) OR (#0 = 1337::integer)) AND ((#0 = 5::integer) OR (#0 = 1337::integer))
     Project (#0)
@@ -105,7 +105,7 @@ Project (#0)
       Get t2
 
 # same test as above, but with predicates that are equivalent only after considering the innermost map-project
-apply pipeline=canonicalize_mfp
+apply pipeline=CanonicalizeMfp
 Project (#0)
   Filter not(((#0) IS NULL)) AND ((add_int64(#0, #2) = 5::integer) OR (add_int64(#0, #1) = 9::integer)) AND ((#3 = 5::integer) OR (#3 = 9::integer))
     Map (add_int64(#0, #2))
@@ -122,7 +122,7 @@ Project (#0)
         Get t2
 
 # consecutive levels of map-filter-project. outermost mfp is the same as the materialize#10000 regression test.
-apply pipeline=canonicalize_mfp
+apply pipeline=CanonicalizeMfp
 Project (#0, #3)
   Filter not(((#0) IS NULL)) AND ((#0 = 5::integer) OR (#0 = 1337::integer)) AND ((#0 = 5::integer) OR (#0 = 1337::integer))
     Project (#0, #1, #2, #3)
@@ -144,7 +144,7 @@ Project (#0, #3)
       Map ((#0 * #1))
         Get t2
 
-apply pipeline=canonicalize_mfp
+apply pipeline=CanonicalizeMfp
 Project (#2)
   Map (add_int64(#0, #1))
     Filter not(((#0) IS NULL)) AND ((#0 = 5::integer) OR (#0 = 1337::integer)) AND ((#0 = 5::integer) OR (#0 = 1337::integer))
