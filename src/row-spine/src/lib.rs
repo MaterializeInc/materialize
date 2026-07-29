@@ -580,32 +580,6 @@ mod tests {
         assert_eq!(a.exact_distinct_count(), Some(200));
     }
 
-    /// With dictionary compression disabled, a container never gathers statistics,
-    /// so `exact_distinct_counts` must report `None` regardless of what it is pushed.
-    ///
-    /// This explicitly stores `false` rather than relying on the flag's initial
-    /// value, mirroring how `push_done_promotion_avoids_merge_poison` explicitly
-    /// stores `true`. `DICTIONARY_COMPRESSION` is a process-wide `AtomicBool` with
-    /// no serialization primitive guarding it, and `push_done_promotion_avoids_merge_poison`
-    /// sets it on and never restores it. Under `cargo nextest` (this project's
-    /// preferred runner, see the `mz-test` skill), each test runs in its own process,
-    /// so this store cannot race that one. Under a shared-process harness (plain
-    /// `cargo test`'s default thread-per-test-within-one-process model) the two
-    /// stores could still interleave; there is nothing in this crate preventing that.
-    #[mz_ore::test]
-    fn test_exact_distinct_counts_disabled() {
-        use std::sync::atomic::Ordering;
-        use timely::container::PushInto;
-
-        crate::DICTIONARY_COMPRESSION.store(false, Ordering::Relaxed);
-
-        let mut container = DatumContainer::with_capacity(0);
-        for i in 0..10i64 {
-            container.push_into(Row::pack_slice(&[Datum::Int64(i % 3)]));
-        }
-        assert_eq!(container.exact_distinct_counts(), None);
-    }
-
     /// With dictionary compression enabled and few rows pushed, every column's
     /// summary is exact. Two columns with different distinct counts (3 vs 7) so a
     /// transposed or shared per-column result would fail.
@@ -635,6 +609,15 @@ mod tests {
     /// `push_done_promotion_avoids_merge_poison` above) reaches the identical
     /// container state — `stats` taken and moved into `codec` — without pushing
     /// anywhere near that many rows, so we drive it directly instead.
+    ///
+    /// This also stands in for the "dictionary compression disabled" case: both
+    /// leave `stats` as `None`, which is the only thing `exact_distinct_counts`
+    /// consults, and the two are documented as indistinguishable from outside. A
+    /// separate test that reached `None` by storing `false` into the process-wide
+    /// `DICTIONARY_COMPRESSION` flag would assert the same postcondition through a
+    /// racier route: `push_done_promotion_avoids_merge_poison` above stores `true`
+    /// into that same flag and never restores it, and nothing serializes the two.
+    /// Do not add such a test without also addressing that race.
     #[mz_ore::test]
     fn test_exact_distinct_counts_after_codec_install() {
         use std::sync::atomic::Ordering;
