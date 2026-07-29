@@ -1022,6 +1022,11 @@ fn test_pgtest_mz_stray_copy() {
 }
 
 #[mz_ore::test]
+fn test_pgtest_mz_set_local() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/set-local.pt"), true);
+}
+
+#[mz_ore::test]
 fn test_pgtest_mz_transactions() {
     pg_test_inner(Path::new("../../test/pgtest-mz/transactions.pt"), true);
 }
