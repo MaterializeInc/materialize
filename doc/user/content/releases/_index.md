@@ -19,6 +19,12 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.34.1
+*Released to Materialize Self-Managed: 2026-07-24* <br>
+
+### Bug Fixes {#v26.34.1-bug-fixes}
+- Fixed an issue where `ALTER CLUSTER ... WITH (WAIT UNTIL READY ...)` would deadlock on clusters hosting single-replica sources (Postgres, MySQL, SQL Server), causing graceful reconfiguration to time out and roll back without resizing.
+
 ## v26.34.0
 *Released to Materialize Cloud: 2026-07-21* <br>
 *Released to Materialize Self-Managed: 2026-07-21* <br>
