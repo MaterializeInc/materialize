@@ -260,6 +260,11 @@
     {{% include-from-yaml data="postgres_source_details"
     name="postgres-incompatible-schema-changes-handling-legacy" %}}
 
+    {{% include-from-yaml data="postgres_source_details"
+    name="postgres-considerations-body" %}}
+
+- name: postgres-considerations-body
+  content: |
     ### Publication membership
 
     {{% include-from-yaml data="postgres_source_details"
@@ -275,11 +280,6 @@
 
     {{% include-from-yaml data="postgres_source_details"
     name="postgres-unsupported-types" %}}
-
-    ### Truncation
-
-    {{% include-from-yaml data="postgres_source_details"
-    name="postgres-truncation-restriction" %}}
 
     ### Inherited tables
 

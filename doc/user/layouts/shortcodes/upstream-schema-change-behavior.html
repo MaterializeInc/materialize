@@ -13,57 +13,123 @@
 */ -}}
 {{- $connector := .Get "connector" -}}
 {{- $is_postgres := eq $connector "postgres" -}}
+
+This section describes how changes to upstream tables that Materialize ingests
+affect the corresponding Materialize tables.
+
 ### Adding a column
 
-By default, when you add a new column to your upstream database, nothing changes
-in Materialize. Materialize continues to ingest the existing columns. To
-incorporate the new column, create a new table from the source. See [Handle
-upstream column
-addition](/ingest-data/{{ $connector }}/source-versioning/#handle-upstream-column-addition).
+When you add a new column to your upstream table, Materialize continues to
+ingest only the existing columns.
+
+To incorporate the new column:
+
+- If using the new [`CREATE SOURCE` and `CREATE TABLE FROM
+SOURCE`](/sql/create-source/{{ $connector }}-v2/) syntax, create a new table from
+the source. See [Handle upstream column addition](/ingest-data/{{ $connector
+}}/source-versioning/#handle-upstream-column-addition).
+
+- If using the legacy [`CREATE SOURCE ... FOR ...`](/sql/create-source/{{
+$connector }}/) syntax that creates subsources, use [`DROP
+SOURCE`](/sql/drop-source/) to drop the affected subsource, and then add the
+table back to the source using [`ALTER SOURCE ... ADD
+SUBSOURCE`](/sql/alter-source/). The re-added subsource includes the new column.
 
 ### Dropping a column
 
+Dropping columns that Materialize does not ingest (for example, columns added
+after the source was created, or columns that are excluded) is supported. As
+these columns were never ingested, you can drop them without issue.
+
 If your Materialize source ingests a column, dropping that column from your
-upstream database causes ingestion to stall. You can safely drop a column by
-first ignoring it in Materialize. See [Handle upstream column
-drop](/ingest-data/{{ $connector }}/source-versioning/#handle-upstream-column-drop).
+upstream table causes ingestion to stall.
+
+- If using the new [`CREATE SOURCE` and `CREATE TABLE FROM
+SOURCE`](/sql/create-source/{{ $connector }}-v2/) syntax, you can safely drop a
+column by first ignoring it in Materialize. See [Handle upstream column
+drop](/ingest-data/{{ $connector
+}}/source-versioning/#handle-upstream-column-drop).
+
+- If using legacy [`CREATE SOURCE ... FOR ...`](/sql/create-source/{{ $connector
+}}/) syntax, use [`DROP SOURCE`](/sql/drop-source/) to drop the affected
+subsource, and then add the table back to the source using [`ALTER
+SOURCE ... ADD SUBSOURCE`](/sql/alter-source/).
 
 ### Changing constraints
 
-Materialize ignores foreign key and `CHECK`{{ if $is_postgres }} and `EXCLUSION`{{ end }}
-constraints today, so you can change them with no impact to Materialize. Adding
-a new `UNIQUE` or `NOT NULL` constraint also has no impact. Dropping a `UNIQUE`
-or `NOT NULL` constraint isn't supported today.
+{{ if ne $connector "sql-server" -}}
+Materialize ignores the following constraint changes: foreign
+key{{ if $is_postgres }}, `CHECK`, and `EXCLUSION`{{ else }} and `CHECK`{{ end }}.
+As such, you can add or drop them without affecting ingestion.
+
+Materialize also ignores `NOT NULL`, `UNIQUE`, and `PRIMARY KEY` constraints that
+are added after the Materialize table is created (that is, the table was created
+without them). Adding such a constraint, and later dropping it, does not affect
+ingestion.
+
+Dropping a `NOT NULL`, `UNIQUE`, or `PRIMARY KEY` constraint that existed when
+the table was created puts the affected table into an error state.
+
+{{ else -}}
+Materialize ignores the following constraint changes: foreign key, `CHECK`,
+`UNIQUE`, and `PRIMARY KEY` constraints. As such, you can add or drop them
+without affecting ingestion.
+
+Adding or removing a `NOT NULL` constraint on an ingested column requires an
+upstream `ALTER COLUMN`, which puts the affected table into an error state. See
+[Changing a column's data type](#changing-a-columns-data-type).
+{{ end -}}
 
 ### Changing a column's data type
 
 {{ if $is_postgres -}}
-Changing a column's data type puts the affected table into an error state,
-unless you change it to `text`. Ingestion for that table stops, and you must
-drop and recreate the affected table in Materialize to resume.
+Changing an ingested column's data type upstream puts the affected
+Materialize table into an error state unless the column was ingested as `text`
+via the `TEXT COLUMNS` option. Ingestion for that table stops, and you must
+drop and recreate the table in Materialize to resume ingestion.
 {{ else if eq $connector "mysql" -}}
-Changing a column's data type to one that maps to a different Materialize type
-puts the affected table into an error state. Ingestion for that table stops,
-and you must drop and recreate the affected table in Materialize to resume.
+Changing an ingested column's data type upstream so that it maps to a different
+Materialize type than before puts the affected Materialize table into an
+error state. Ingestion for that table stops, and you must drop and recreate the
+table in Materialize to resume ingestion.
 
-Changes within the same Materialize type do not error. For example, `tinyint`
-↔ `smallint`, the `text`/`tinytext`/`mediumtext`/`longtext` family, and
-adjusting `bit(n)` precision are all safe. Appending values to an existing enum
-is also safe; removing enum values errors.
+Changing an ingested column's upstream data type so that it continues to map to
+the same Materialize type does not interrupt ingestion. For example, changing
+`tinyint` to `smallint`, changing within the
+`text`/`tinytext`/`mediumtext`/`longtext` family, and adjusting `bit(n)`
+precision are all safe.
+
+Appending new values to the **end** of an existing enum does not put the table
+into an error state. However, the newly-added values are not recognized, so rows
+that use them fail to decode until you drop and recreate the table. Existing
+enum values remain recognized, and rows that use them continue to decode
+successfully.
+
+Any other enum change puts the affected Materialize table into an
+error state, including inserting a value before the end, reordering or renaming
+values, and removing values.
 {{ else if eq $connector "sql-server" -}}
-Any `ALTER COLUMN` puts the affected table into an error state. Ingestion for
-that table stops, and you must drop and recreate the affected table in
-Materialize to resume.
+Any upstream `ALTER COLUMN` on an ingested column puts the affected Materialize
+table into an error state. This covers every `ALTER COLUMN` operation, not just
+data-type changes. Changing a column's collation, sparseness, masking, or
+nullability all error the table the same way. Ingestion for that table stops,
+and you must drop and recreate the table in Materialize to resume ingestion.
 {{ end }}
-### Operations that require recreating the table
+
+### Renaming a column
+
+Renaming a column that Materialize ingests puts the affected table into an error
+state. Ingestion for that table stops, and you must drop and recreate the table
+in Materialize to resume ingestion.
+
+### Table-level operations
 
 The following upstream operations put the affected table into an error state.
 Ingestion for that table stops, and you must drop and recreate the affected
 table in Materialize to resume:
 
-- Dropping a table (`DROP TABLE`){{ if $is_postgres }}, removing it from the publication (`ALTER PUBLICATION ... DROP TABLE`), or dropping the publication (`DROP PUBLICATION`){{ end }}
-- Renaming a column
-- Renaming a table or moving it to a different schema
-{{ if $is_postgres }}- Setting a table's replica identity to anything other than `FULL` (`ALTER TABLE ... REPLICA IDENTITY`)
-{{ end }}{{ if ne $connector "sql-server" }}- Truncating a table (`TRUNCATE`)
+- Dropping a table (`DROP TABLE`){{ if $is_postgres }}, removing it from the publication (`ALTER PUBLICATION ... DROP TABLE`), or dropping the publication (`DROP PUBLICATION`){{ end }}.
+- Renaming a table or moving it to a different schema.
+{{ if $is_postgres }}- Setting a table's replica identity to anything other than `FULL` (`ALTER TABLE ... REPLICA IDENTITY`).
+{{ end }}{{ if ne $connector "sql-server" }}- Truncating a table (`TRUNCATE`). To clear a table without putting it into an error state, use an unqualified `DELETE FROM t;` instead.
 {{ end }}
