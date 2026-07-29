@@ -22,8 +22,8 @@
 //! the gate off the task does not tick, so the legacy scheduling and graceful
 //! paths remain the sole writers of the replica set. With the gate on the
 //! controller owns the *user* managed-cluster replica set; the legacy entry
-//! points no-op. (System/builtin clusters are never controller-owned. The
-//! catalog's bootstrap migration owns their replicas.)
+//! points no-op. (System/builtin clusters are never controller-owned. Their
+//! replicas are owned by `reconcile_builtin_cluster_replicas` at catalog open.)
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -58,8 +58,8 @@ use crate::error::AdapterError;
 #[derive(Debug)]
 pub enum ClusterControllerRequest {
     /// The ids of all *user* managed clusters the controller owns this tick.
-    /// System/builtin clusters are excluded. Their replica set is owned by the
-    /// catalog's bootstrap migration, not the controller.
+    /// System/builtin clusters are excluded. Their replica set is owned by
+    /// `reconcile_builtin_cluster_replicas` at catalog open, not the controller.
     ManagedClusterIds { tx: oneshot::Sender<Vec<ClusterId>> },
     /// A consistent durable view of the given clusters and their replicas, plus
     /// the current time.
@@ -278,16 +278,12 @@ impl Coordinator {
                         .clusters()
                         // Only *user* managed clusters. System/builtin clusters
                         // (mz_system, mz_catalog_server, …) are also managed, but
-                        // their replica set is owned by the bootstrap migration
-                        // (`add_new_remove_old_builtin_cluster_replicas_migration`),
-                        // which holds exactly the `BUILTIN_CLUSTER_REPLICAS`-defined
-                        // replicas regardless of the cluster's `replication_factor`.
-                        // Letting the controller own them too would make two writers
-                        // of one replica set: the baseline would, for example, add a
-                        // replica to reach a builtin cluster's `replication_factor`,
-                        // which the bootstrap migration then tears down on the next
-                        // open. The legacy scheduler likewise only ever acted on user
-                        // clusters.
+                        // their replica set is owned by the catalog-open reconciler
+                        // (`reconcile_builtin_cluster_replicas`), which converges it
+                        // on the cluster's `replication_factor`. Two owners of one
+                        // replica set would fight, and only the reconciler can run
+                        // before the coordinator finishes bootstrap and while a
+                        // deployment is read-only, so it keeps them.
                         .filter(|c| c.is_managed() && c.id.is_user())
                         .map(|c| c.id)
                         .collect()
