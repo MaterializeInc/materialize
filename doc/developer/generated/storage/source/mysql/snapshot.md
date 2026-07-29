@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/source/mysql/snapshot.rs
-revision: 8d40d19a29
+revision: 1d07b38a9c
 ---
 
 # mz-storage::source::mysql::snapshot
