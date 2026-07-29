@@ -543,6 +543,42 @@ mod tests {
         }
         assert_eq!(mg.exact_distinct_count(), Some(1024));
     }
+
+    // `AddAssign` merges one summary into another via `rhs.done()` (which drops
+    // `rhs`'s `tidied` flag along with the rest of its structure) followed by
+    // `self.update(..)`. If `self.tidied` were left untouched by the merge, a
+    // summary that had already discarded elements could be folded into one that
+    // had not, and the merged result would wrongly report an exact count.
+    #[mz_ore::test]
+    fn test_misra_gries_add_assign_propagates_tidied() {
+        use crate::row_codec::MisraGries;
+
+        // `rhs` alone exceeds 2 * k and discards, so it is non-exact.
+        let mut tidied = MisraGries::default();
+        for i in 0..2000u64 {
+            tidied.insert(i);
+        }
+        assert_eq!(tidied.exact_distinct_count(), None);
+
+        // Merging it into an untidied, far-smaller summary must not "launder"
+        // the discard: the merged summary is still non-exact.
+        let mut merged = MisraGries::default();
+        merged.insert(0u64);
+        merged += tidied;
+        assert_eq!(merged.exact_distinct_count(), None);
+
+        // Two summaries that never discarded merge into one that still hasn't.
+        let mut a = MisraGries::default();
+        for i in 0..100u64 {
+            a.insert(i);
+        }
+        let mut b = MisraGries::default();
+        for i in 100..200u64 {
+            b.insert(i);
+        }
+        a += b;
+        assert_eq!(a.exact_distinct_count(), Some(200));
+    }
 }
 
 /// A `[u8]`-specialized container.
@@ -2106,9 +2142,13 @@ mod row_codec {
                 let mut mg = MisraGries::default();
                 let mut tags: [u64; 4] = [0; 4];
                 for stat in stats.into_iter() {
-                    for (thing, count) in stat.stats.0.clone().done() {
-                        mg.update(thing, count);
-                    }
+                    // `+=` (not a manual `done()`-then-`update()` loop) so a source
+                    // that already discarded elements carries its `tidied` flag into
+                    // `mg` too. `mg` is discarded at the end of this function (the
+                    // returned codec's own summary starts fresh, see below), so this
+                    // has no observable effect today, but keeps the merge correct if
+                    // that ever changes.
+                    mg += stat.stats.0.clone();
                     tags[0] |= stat.stats.1[0];
                     tags[1] |= stat.stats.1[1];
                     tags[2] |= stat.stats.1[2];
@@ -2343,8 +2383,8 @@ mod row_codec {
             /// longer relates to the number of distinct elements observed. A summary that never
             /// discarded holds every element it saw, so its length is exact.
             //
-            // Exposed for callers that need a sound upper bound on the number of distinct
-            // values in a column; none exists in this crate yet.
+            // Exposed for callers that need a sound upper bound on the number of
+            // distinct values in a column. No such caller exists in this crate yet.
             #[allow(dead_code)]
             pub fn exact_distinct_count(&self) -> Option<usize> {
                 (!self.tidied).then_some(self.inner.len())
@@ -2412,9 +2452,18 @@ mod row_codec {
 
         impl<T: Ord + Hash> std::ops::AddAssign for MisraGries<T> {
             fn add_assign(&mut self, rhs: Self) {
+                // `rhs.done()` consumes `rhs` into a plain `Vec`, dropping its `tidied`
+                // flag along with the rest of its structure. Read it first: if `rhs` had
+                // already discarded elements, the merged summary must report the same,
+                // even if `self` alone never has.
+                let rhs_tidied = rhs.tidied;
                 for (element, count) in rhs.done() {
                     self.update(element, count);
                 }
+                // Plain assignment, not `|=`: clippy's `suspicious_op_assign_impl`
+                // flags compound-assignment operators on `self` fields inside an
+                // `AddAssign` impl as likely copy-paste mistakes.
+                self.tidied = self.tidied || rhs_tidied;
             }
         }
     }
