@@ -15,7 +15,9 @@ DefSource name=x
 ----
 Source defined as t0
 
-# Build builds the IR exactly as written, and performs no optimizations on it.
+# various pipeline= parameters run different transformation pipelines
+
+# pipeline=identity leaves expressions as-is
 apply pipeline=identity
 Get x
 ----
@@ -38,8 +40,7 @@ Filter #0 AND #1
   Map (true)
     Get x
 
-# If the `apply` flag is passed to build with the name of a transform, that
-# transform will be applied (once).
+# pipeline=predicate_pushdown runs predicate pushdown
 apply pipeline=predicate_pushdown
 Filter #0 AND #1
   Map (true)
@@ -49,7 +50,7 @@ Map (true)
   Filter #0 AND #1
     Get x
 
-# If `opt` is used instead of `build`, the full optimizer is run on the IR.
+# pipeline=optimize runs a full optimization pipeline
 apply pipeline=optimize
 Project (#3)
   Map (#0, #1)
