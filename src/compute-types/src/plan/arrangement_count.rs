@@ -305,21 +305,21 @@ mod tests {
 
     /// The default expected group size yields seven levels, not eight: the loop stops once
     /// `16^8` exceeds the 4e9 limit. Hard-coding eight would inflate every hierarchical reduce.
-    #[test]
+    #[mz_ore::test]
     fn default_bucketing_has_seven_levels() {
         assert_eq!(bucketing_of_expected_group_size(None).len(), 7);
     }
 
     /// A pure-`OFFSET` top-k skips the whole hierarchy, because the renderer gates the bucket loop
     /// on a limit being present. Charging it for its buckets over-counts eightfold by default.
-    #[test]
+    #[mz_ore::test]
     fn basic_top_k_without_limit_skips_the_hierarchy() {
         let buckets = bucketing_of_expected_group_size(None);
         assert_eq!(top_k_count(&basic_top_k(None, buckets.clone())), (2, 0));
         assert_eq!(top_k_count(&basic_top_k(Some(column()), buckets)), (16, 0));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn monotonic_top_k_variants() {
         // Only Top1 advertises its arrangement upward, so only Top1 gets a bundle error trace.
         let top1 = TopKPlan::MonotonicTop1(MonotonicTop1Plan {
@@ -340,12 +340,12 @@ mod tests {
         assert_eq!(top_k_count(&top_k), (2, 0));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn distinct_reduce() {
         assert_eq!(reduce_count(&ReducePlan::Distinct, false), (2, 1));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn accumulable_charges_two_per_distinct_aggregate() {
         let plan = |distinct_count: usize| {
             ReducePlan::Accumulable(AccumulablePlan {
@@ -358,7 +358,7 @@ mod tests {
         assert_eq!(reduce_count(&plan(2), false), (6, 1));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn monotonic_hierarchical_charges_for_a_fallible_mfp() {
         let plan = ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(MonotonicPlan {
             aggr_funcs: vec![],
@@ -368,7 +368,7 @@ mod tests {
         assert_eq!(reduce_count(&plan, true), (2, 1));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn bucketed_hierarchical_counts_levels() {
         let plan = |buckets: Vec<u64>| {
             ReducePlan::Hierarchical(HierarchicalPlan::Bucketed(BucketedPlan {
@@ -386,7 +386,7 @@ mod tests {
         assert_eq!(reduce_count(&plan(vec![]), false), (2, 1));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn basic_single_validates_unless_distinct_or_fused() {
         let plan = |distinct, fused_unnest_list| {
             ReducePlan::Basic(BasicPlan::Single(SingleBasicPlan {
@@ -404,7 +404,7 @@ mod tests {
     }
 
     /// Only the first aggregate validates. Later ones see the shared error output already set.
-    #[test]
+    #[mz_ore::test]
     fn basic_multiple_validates_once() {
         let plan = |aggrs: Vec<LirAggregateExpr>| ReducePlan::Basic(BasicPlan::Multiple(aggrs));
         // Two plain aggregates: (2 + 1) + 2, plus the collating pair.
@@ -419,7 +419,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn delta_join_builds_nothing() {
         let node = LirRelationNode::Join {
             inputs: vec![],
@@ -428,7 +428,7 @@ mod tests {
         assert_eq!(predict_node(&node), Prediction::default());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn linear_join_charges_per_stage_less_seed_reuse() {
         let join = |source_key| LirRelationNode::Join {
             inputs: vec![],

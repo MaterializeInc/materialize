@@ -2339,7 +2339,7 @@ mod cardinality {
 
         /// A predicate can only remove rows, so the sound bound is the input. The heuristic
         /// applies a guessed selectivity instead.
-        #[test]
+        #[mz_ore::test]
         fn filter_is_the_identity_when_bounding() {
             // `IS NULL` is one of the predicates the heuristic assigns a guessed selectivity.
             let predicates = vec![MirScalarExpr::column(0).call_is_null()];
@@ -2355,7 +2355,7 @@ mod cardinality {
         }
 
         /// A general table function has no static bound on rows produced per input row.
-        #[test]
+        #[mz_ore::test]
         fn unbounded_flat_map_is_unknown_when_bounding() {
             let tf = TableFunc::GenerateSeriesInt64;
             assert_eq!(
@@ -2367,7 +2367,7 @@ mod cardinality {
 
         /// `wrap` chunks the argument list, so a two-argument wrap of width one doubles the input.
         /// The heuristic divides `types.len()` by `width`, which is always one.
-        #[test]
+        #[mz_ore::test]
         fn wrap_counts_arguments_not_output_columns() {
             let tf = TableFunc::Wrap {
                 types: vec![SqlScalarType::Int64.nullable(false)],
@@ -2379,7 +2379,7 @@ mod cardinality {
         }
 
         /// `expected_group_size` is a user hint, so a bound cannot divide by it.
-        #[test]
+        #[mz_ore::test]
         fn reduce_ignores_the_group_size_hint_when_bounding() {
             let group_key = vec![MirScalarExpr::column(0)];
             let egs = Some(10);
@@ -2395,7 +2395,7 @@ mod cardinality {
 
         /// One row per distinct group key, so a distinct-value bound tightens the reduce. Without
         /// one the only sound answer is the input, which assumes every row is its own group.
-        #[test]
+        #[mz_ore::test]
         fn reduce_uses_a_distinct_value_bound_when_it_has_one() {
             let group_key = vec![MirScalarExpr::column(0)];
             assert_eq!(
@@ -2420,7 +2420,7 @@ mod cardinality {
 
         /// `limit: None` means no limit at all. Treating it as one row is an unbounded
         /// underestimate for a pure-`OFFSET` top-k.
-        #[test]
+        #[mz_ore::test]
         fn top_k_without_a_literal_limit_is_bounded_by_its_input() {
             let no_group = vec![];
             assert_eq!(
@@ -2441,7 +2441,7 @@ mod cardinality {
         }
 
         /// With a single group the limit bounds the output, but never above the input.
-        #[test]
+        #[mz_ore::test]
         fn top_k_with_a_literal_limit_takes_the_smaller_of_limit_and_input() {
             let no_group = vec![];
             let group = vec![0];
