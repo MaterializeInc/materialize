@@ -215,9 +215,8 @@ pub static MYSQL_SOURCE_SNAPSHOT_PARALLELISM: Config<bool> = Config::new(
     "Whether to split MySQL snapshot reads across workers by primary-key ranges.",
 );
 
-/// The largest optimizer-estimated table size for which the MySQL snapshot size
-/// gauge is computed with an exact `COUNT(*)`. Larger tables report the
-/// `information_schema` estimate directly, skipping the O(rows) count.
+/// If the optimizer estimates the table has fewer rows than this, compute the exact row count
+/// with `COUNT(*)`. Otherwise, report the `information_schema` estimate directly.
 pub static MYSQL_SOURCE_SNAPSHOT_EXACT_COUNT_MAX_ROWS: Config<usize> = Config::new(
     "mysql_source_snapshot_exact_count_max_rows",
     1_000_000,

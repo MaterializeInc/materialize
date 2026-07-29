@@ -220,14 +220,15 @@ fn worker_pk_range(
     })
 }
 
-/// Walks the primary key index in steps of about `total / worker_count`, taking the key
+/// Walks the primary key index in steps of about `row_count / worker_count`, taking the key
 /// at each step's `OFFSET`. The per-step OFFSET scans sum to a full index pass, so this
-/// is O(total). Worker count is small, so the OFFSET scans dominate. `total` is the row
-/// count supplied by the caller. It can be an optimizer estimate for large tables, so
-/// the partitions are approximate. An overestimate walks off the end of the index and
-/// stops with fewer boundaries, an underestimate leaves a larger final partition, both
-/// still correctly partition the table. Returns None if the primary key column type is
-/// not supported or the table is too small to split.
+/// function has a time complexity of O(row_count). Worker count is small, so the OFFSET
+/// scans dominate the runtime. `row_count` can be an optimizer estimate for large tables,
+/// so the partitions are approximate. An overestimate walks off the end of the index and stops
+/// with fewer boundaries, resulting in some workers receiving less or no work. An underestimate
+/// leaves a larger final partition for the last worker, however both still correctly partition
+/// the table. Returns None if the primary key column type is not supported or the table is too
+/// small to split.
 async fn compute_sampled_splits<Q>(
     conn: &mut Q,
     table: &MySqlTableName,
@@ -301,7 +302,10 @@ where
 /// supported single-column primary key, compute the PK-range split boundaries,
 /// concurrently over at most `worker_count` connections. `None` bounds means
 /// single-worker fallback for that table. The counts are reused for both the sampling
-/// stride and the snapshot size gauge.
+/// stride and the snapshot size gauge. Snapshot size gauge is a metric for the snapshot
+/// size used to report how many rows we need to process. "Sampling stride" refers to
+/// the number of rows we use to page through the table to find roughly evenly spaced
+/// primary keys to use as partition boundaries.
 async fn sample_pk_bounds(
     config: &RawSourceCreationConfig,
     connection_config: &mz_mysql_util::Config,
@@ -1213,8 +1217,9 @@ where
     let mut stats = TableStatistics::default();
 
     // The optimizer's row estimate for the table. InnoDB keeps it roughly current
-    // (within the churn since the last stats recalculation), but it can be NULL or
-    // stale-at-zero, in which case we fall through to the exact count.
+    // (within the churn since the last stats recalculation), but it can be
+    // stale-at-zero, in which case we fall through to the exact count. We don't expect
+    // it to be null, but also fall back to count(*) in that case.
     let estimate: Option<Option<u64>> = conn
         .exec_first(
             "SELECT table_rows FROM information_schema.tables \
