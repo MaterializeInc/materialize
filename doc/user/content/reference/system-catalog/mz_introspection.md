@@ -85,6 +85,19 @@ Specifically, reductions can use more memory than we show here.
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_arrangement_heap_capacity_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_arrangement_heap_size_raw -->
 
+## `mz_arrangement_distinct_keys_per_worker`
+
+The `mz_arrangement_distinct_keys_per_worker` view describes an upper bound on the number of distinct keys in each [arrangement] in the system, split by Timely Dataflow worker.
+
+<!-- RELATION_SPEC mz_introspection.mz_arrangement_distinct_keys_per_worker -->
+| Field           | Type       | Meaning                                                                                                                                                                                                                                                                    |
+|-----------------|------------| --------                                                                                                                                                                                                                                                                   |
+| `operator_id`   | [`uint8`]  | The ID of the operator that created the arrangement. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).                                                                                                                                                 |
+| `worker_id`     | [`uint8`]  | The worker hosting the arrangement.                                                                                                                                                                                                                                       |
+| `distinct_keys` | [`bigint`] | An upper bound on the number of distinct keys in the arrangement, not the exact count: a key present in more than one live batch is counted once per batch, which happens normally across the spine's batch pyramid and during in-progress merges. Treating this value as exact would understate memory usage. |
+
+<!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_arrangement_distinct_keys_raw -->
+
 ## `mz_compute_error_counts`
 
 The `mz_compute_error_counts` view describes the counts of errors in objects exported by [dataflows][dataflow] in the system.

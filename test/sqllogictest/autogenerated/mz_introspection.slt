@@ -60,6 +60,13 @@ capacity  bigint  The␠capacity␠in␠bytes␠of␠the␠arrangement.␠Can␠
 allocations  bigint  The␠number␠of␠separate␠memory␠allocations␠backing␠the␠arrangement.
 
 query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_arrangement_distinct_keys_per_worker' ORDER BY position
+----
+operator_id  uint8  The␠ID␠of␠the␠operator␠that␠created␠the␠arrangement.␠Corresponds␠to␠`mz_dataflow_operators.id`.
+worker_id  uint8  The␠worker␠hosting␠the␠arrangement.
+distinct_keys  bigint  An␠upper␠bound␠on␠the␠number␠of␠distinct␠keys␠in␠the␠arrangement,␠not␠the␠exact␠count:␠a␠key␠present␠in␠more␠than␠one␠live␠batch␠is␠counted␠once␠per␠batch,␠which␠happens␠normally␠across␠the␠spine's␠batch␠pyramid␠and␠during␠in-progress␠merges.␠Treating␠this␠value␠as␠exact␠would␠understate␠memory␠usage.
+
+query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_compute_error_counts' ORDER BY position
 ----
 export_id  text  The␠ID␠of␠the␠dataflow␠export.␠Corresponds␠to␠`mz_compute_exports.export_id`.
@@ -267,6 +274,8 @@ mz_arrangement_batcher_capacity_raw
 mz_arrangement_batcher_records_raw
 mz_arrangement_batcher_size_raw
 mz_arrangement_batches_raw
+mz_arrangement_distinct_keys_per_worker
+mz_arrangement_distinct_keys_raw
 mz_arrangement_heap_allocations_raw
 mz_arrangement_heap_capacity_raw
 mz_arrangement_heap_size_raw
