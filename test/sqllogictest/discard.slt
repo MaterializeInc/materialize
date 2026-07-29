@@ -93,12 +93,12 @@ COMPLETE 1
 # well as the simple one (SQL-529). Records without the `simple` directive run
 # over the extended protocol.
 statement ok
-SET extra_float_digits = 1
+SET extra_float_digits = 2
 
 query T
 SHOW extra_float_digits
 ----
-1
+2
 
 statement ok
 DISCARD ALL
@@ -106,4 +106,4 @@ DISCARD ALL
 query T
 SHOW extra_float_digits
 ----
-3
+1
