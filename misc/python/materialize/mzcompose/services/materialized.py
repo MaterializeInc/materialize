@@ -129,12 +129,14 @@ class Materialized(Service):
         if cluster_replica_size is None:
             cluster_replica_size = cluster_replica_size_map()
         if builtin_system_cluster_replication_factor is None:
-            # Deliberately not `default_replication_factor`. Builtin clusters
-            # honor their replication factor, so tracking the user default here
+            # Deliberately not `default_replication_factor`. A builtin cluster
+            # honors its replication factor, so tracking the user default here
             # would run two mz_system and two mz_probe replicas in every
             # composition that asks for a replicated user cluster, at no benefit
             # to what those tests actually exercise. One replica is all these
             # clusters need, and is what the flags below are here to guarantee.
+            # A test that needs a different builtin factor, including 0, has to
+            # ask for it explicitly.
             builtin_system_cluster_replication_factor = 1
         if builtin_probe_cluster_replication_factor is None:
             builtin_probe_cluster_replication_factor = 1
