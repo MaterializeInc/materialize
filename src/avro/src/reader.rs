@@ -259,6 +259,16 @@ impl<R: AvroRead> Reader<R> {
         }
 
         self.inner.read_exact(&mut self.buf[..n])?;
+        // Cut the buffer down to exactly this block's payload. The resize above
+        // only ever grows, so a block shorter than a previous one would otherwise
+        // leave that block's tail visible past its own payload, and everything
+        // downstream reads the buffer by its length: `read_next` slices
+        // `self.buf[self.buf_idx..]`, and `Codec::decompress` hands the whole
+        // buffer to the decompressor. A block whose declared object count outruns
+        // its own bytes would then decode stale bytes as values instead of hitting
+        // the end of the block. `truncate` keeps the allocation, so the buffer is
+        // still reused across blocks.
+        self.buf.truncate(n);
         self.buf_idx = 0;
         Ok(())
     }
@@ -956,6 +966,61 @@ mod tests {
     use crate::types::{Record, ToAvro};
 
     use super::*;
+
+    /// Assemble an object-container file: header (writer schema, `null` codec,
+    /// sync marker) followed by `blocks`. Each block is given as `(declared
+    /// count, declared byte size, payload)` so a test can lie about the framing
+    /// the way a corrupt or hostile file does.
+    fn ocf(schema_json: &str, blocks: &[(i64, i64, &[u8])]) -> Vec<u8> {
+        fn blob(bytes: &[u8], out: &mut Vec<u8>) {
+            util::zig_i64(bytes.len() as i64, out);
+            out.extend_from_slice(bytes);
+        }
+
+        let marker = [7u8; 16];
+        let mut out = b"Obj\x01".to_vec();
+        util::zig_i64(2, &mut out); // metadata map: one block of two entries
+        blob(b"avro.schema", &mut out);
+        blob(schema_json.as_bytes(), &mut out);
+        blob(b"avro.codec", &mut out);
+        blob(b"null", &mut out);
+        util::zig_i64(0, &mut out); // end of metadata map
+        out.extend_from_slice(&marker);
+        for (count, size, payload) in blocks {
+            util::zig_i64(*count, &mut out);
+            util::zig_i64(*size, &mut out);
+            out.extend_from_slice(payload);
+            out.extend_from_slice(&marker);
+        }
+        out
+    }
+
+    #[mz_ore::test]
+    fn reader_does_not_decode_a_previous_blocks_bytes() {
+        // One buffer is reused across blocks, so a block shorter than its
+        // predecessor must not leave that predecessor's tail readable. Block 2
+        // here declares two objects but carries only one, and its payload is
+        // shorter than block 1's, whose bytes are arranged so that what lands
+        // past block 2's payload would decode as a perfectly good `"x"`. The
+        // second decode has to run out of input instead.
+        //
+        // The block bound does not catch this: `string` has a one-byte floor and
+        // the block claims 2 objects in 3 bytes.
+        let long = &[0x0a, b'A', b'B', 0x02, b'x', b'C'][..]; // one 5-char string
+        let short = &[0x04, b'a', b'b'][..]; // one 2-char string
+        let file = ocf(
+            r#""string""#,
+            &[(1, long.len() as i64, long), (2, short.len() as i64, short)],
+        );
+
+        let items: Vec<_> = Reader::new(&file[..]).expect("OCF header parses").collect();
+        assert_eq!(items.len(), 3, "expected two values then an error");
+        assert_eq!(
+            items[1].as_ref().expect("block 2's real value decodes"),
+            &Value::String("ab".into())
+        );
+        assert_err!(&items[2]);
+    }
 
     #[mz_ore::test]
     fn reader_rejects_huge_block_object_count() {
