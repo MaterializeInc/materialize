@@ -1361,6 +1361,30 @@ def workflow_test_drop_quickstart_cluster(c: Composition) -> None:
     )
 
 
+def workflow_test_storage_introspection_catalog_freshness(c: Composition) -> None:
+    """Test that enabling storage introspection logging does not degrade
+    mz_catalog_server freshness.
+
+    `enable_storage_introspection_logs` is baked into a replica's clusterd args
+    at spawn, so it must be set as a system-parameter default at environmentd
+    startup for the mz_catalog_server replica to come up with it enabled."""
+
+    with c.override(
+        Testdrive(),
+        Materialized(
+            additional_system_parameter_defaults={
+                "enable_storage_introspection_logs": "true",
+                # Sample wallclock lag frequently so the freshness assertion has
+                # fine-grained history to aggregate over.
+                "wallclock_lag_recording_interval": "1s",
+            },
+        ),
+    ):
+        c.up("materialized")
+
+        c.run_testdrive_files("storage-introspection-catalog-freshness.td")
+
+
 def workflow_test_resource_limits(c: Composition) -> None:
     """Test resource limits in Materialize."""
 
