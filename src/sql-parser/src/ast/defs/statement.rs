@@ -4884,7 +4884,9 @@ impl ExplainStage {
             Self::PhysicalPlan => Some(smallvec![Physical]),
             Self::Trace => None,
             Self::PlanInsights => Some(smallvec![Raw, Global, FastPath]),
-            Self::MemoryBound => Some(smallvec![Physical]),
+            // The bound is computed from the optimized MIR, which is re-lowered with type
+            // collection, so this is the plan the trace must retain.
+            Self::MemoryBound => Some(smallvec![Global]),
         }
     }
 
