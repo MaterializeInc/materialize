@@ -14,6 +14,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::implementations::spine_fueled::Spine;
 use differential_dataflow::trace::{Batch, Batcher, Builder, Trace, TraceReader};
 use differential_dataflow::{Collection, Data, ExchangeData, Hashable, VecCollection};
@@ -238,15 +239,17 @@ pub trait ArrangementSize {
 /// Helper for [`ArrangementSize`] to install a common operator holding on to a trace.
 ///
 /// * `arranged`: The arrangement to inspect.
-/// * `logic`: Closure that calculates the heap size/capacity/allocations for a batch. The return
-///    value are size and capacity in bytes, and number of allocations, all in absolute values.
+/// * `logic`: Closure that calculates the heap size/capacity/allocations and the distinct key
+///    count for a batch. The first three values are size and capacity in bytes, and number of
+///    allocations, all in absolute values. The fourth is the number of distinct keys in the
+///    batch, an exact count read directly from the key container's stored length.
 fn log_arrangement_size_inner<'scope, B, L>(
     arranged: Arranged<'scope, TraceAgent<Spine<Rc<B>>>>,
     mut logic: L,
 ) -> Arranged<'scope, TraceAgent<Spine<Rc<B>>>>
 where
     B: Batch + 'static,
-    L: FnMut(&B) -> (usize, usize, usize) + 'static,
+    L: FnMut(&B) -> (usize, usize, usize, usize) + 'static,
 {
     let scope = arranged.stream.scope();
     let Some(logger) = scope
@@ -276,7 +279,8 @@ where
             // once (when first observed) and cache it alongside the weak reference.
             // Subsequent activations only sum the cached values for live batches,
             // avoiding a repeated walk of every batch's backing regions.
-            let mut batches: BTreeMap<*const B, (Weak<B>, (usize, usize, usize))> = BTreeMap::new();
+            let mut batches: BTreeMap<*const B, (Weak<B>, (usize, usize, usize, usize))> =
+                BTreeMap::new();
 
             move |input, output| {
                 input.for_each(|time, data| {
@@ -297,16 +301,22 @@ where
                         .or_insert_with(|| (Rc::downgrade(batch), logic(batch)));
                 });
 
-                let (mut size, mut capacity, mut allocations) = (0, 0, 0);
+                let (mut size, mut capacity, mut allocations, mut keys) = (0, 0, 0, 0);
                 batches.retain(|_, (weak, cached)| {
                     if weak.strong_count() > 0 {
-                        let (sz, c, a) = *cached;
-                        (size += sz, capacity += c, allocations += a);
+                        let (sz, c, a, k) = *cached;
+                        (size += sz, capacity += c, allocations += a, keys += k);
                         true
                     } else {
                         false
                     }
                 });
+                // `keys` is the arrangement's distinct-key count, summed across live batches
+                // deduplicated by the same `Rc::as_ptr` cache as the heap-size figures above. It
+                // has no consumer yet: nothing here reads or logs it. A later change surfaces it
+                // through a new introspection log, at which point it feeds a memory-bound
+                // estimate for `Reduce` arrangements, so over-counting is safe but
+                // under-counting is not.
 
                 let size = size.try_into().expect("must fit");
                 if size != old_size {
@@ -368,7 +378,8 @@ where
             batch.storage.upds.offs.heap_size(&mut callback);
             batch.storage.upds.times.heap_size(&mut callback);
             batch.storage.upds.diffs.heap_size(&mut callback);
-            (size, capacity, allocations)
+            let keys = batch.storage.keys.len();
+            (size, capacity, allocations, keys)
         })
     }
 }
@@ -391,7 +402,8 @@ where
             batch.storage.upds.offs.heap_size(&mut callback);
             batch.storage.upds.times.heap_size(&mut callback);
             batch.storage.upds.diffs.heap_size(&mut callback);
-            (size, capacity, allocations)
+            let keys = batch.storage.keys.len();
+            (size, capacity, allocations, keys)
         })
     }
 }
@@ -416,7 +428,8 @@ where
             batch.storage.upds.offs.heap_size(&mut callback);
             batch.storage.upds.times.heap_size(&mut callback);
             batch.storage.upds.diffs.heap_size(&mut callback);
-            (size, capacity, allocations)
+            let keys = batch.storage.keys.len();
+            (size, capacity, allocations, keys)
         })
     }
 }
@@ -440,7 +453,8 @@ where
             batch.storage.upds.offs.heap_size(&mut callback);
             batch.storage.upds.times.heap_size(&mut callback);
             batch.storage.upds.diffs.heap_size(&mut callback);
-            (size, capacity, allocations)
+            let keys = batch.storage.keys.len();
+            (size, capacity, allocations, keys)
         })
     }
 }
@@ -462,7 +476,52 @@ where
             batch.storage.upds.offs.heap_size(&mut callback);
             batch.storage.upds.times.heap_size(&mut callback);
             batch.storage.upds.diffs.heap_size(&mut callback);
-            (size, capacity, allocations)
+            let keys = batch.storage.keys.len();
+            (size, capacity, allocations, keys)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use differential_dataflow::trace::implementations::Vector;
+    use differential_dataflow::trace::implementations::ord_neu::{OrdValBatch, OrdValBuilder};
+    use differential_dataflow::trace::{BatchReader, Builder, Description};
+    use timely::progress::Antichain;
+
+    /// `batch.storage.keys.len()` must report the number of distinct *keys* in a batch, not the
+    /// number of distinct `(key, value)` pairs and not the number of raw update records.
+    ///
+    /// This is the read `log_arrangement_size_inner` relies on to cache a distinct-key count
+    /// alongside the existing heap-size figures: a batch with one key, several distinct values
+    /// under it, and a repeated `(key, value)` at a second timestamp exercises all three counts
+    /// at once, so a regression that conflates any of them shows up here rather than only in the
+    /// eventual memory-bound estimate that consumes it.
+    #[mz_ore::test]
+    fn distinct_key_count_is_per_key_not_per_row() {
+        type Layout = Vector<((i32, i32), u64, i64)>;
+        let mut builder = OrdValBuilder::<Layout, Vec<((i32, i32), u64, i64)>>::new();
+        let mut chunk: Vec<((i32, i32), u64, i64)> = vec![
+            ((1, 10), 0, 1),
+            ((1, 20), 0, 1),
+            ((1, 20), 1, 1), // same (key, value) as above, different time: bumps the record count only.
+            ((1, 30), 0, 1),
+        ];
+        builder.push(&mut chunk);
+        let description = Description::new(
+            Antichain::from_elem(0),
+            Antichain::from_elem(2),
+            Antichain::from_elem(0),
+        );
+        let batch: OrdValBatch<Layout> = builder.done(description);
+
+        assert_eq!(batch.storage.keys.len(), 1, "one distinct key");
+        assert_eq!(
+            batch.storage.vals.vals.len(),
+            3,
+            "three distinct (key, value) pairs"
+        );
+        assert_eq!(batch.len(), 4, "four raw update records");
+        assert!(batch.storage.keys.len() < batch.len());
     }
 }
