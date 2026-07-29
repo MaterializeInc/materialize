@@ -2240,8 +2240,8 @@ GROUP BY operator_id",
     }),
 });
 
-pub static MZ_ARRANGEMENT_DISTINCT_KEYS_PER_WORKER: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_ARRANGEMENT_DISTINCT_KEYS_PER_WORKER: LazyLock<BuiltinView> =
+    LazyLock::new(|| BuiltinView {
         name: "mz_arrangement_distinct_keys_per_worker",
         schema: MZ_INTROSPECTION_SCHEMA,
         oid: oid::VIEW_MZ_ARRANGEMENT_DISTINCT_KEYS_PER_WORKER_OID,
@@ -2251,30 +2251,66 @@ pub static MZ_ARRANGEMENT_DISTINCT_KEYS_PER_WORKER: LazyLock<BuiltinView> = Lazy
             .with_column("distinct_keys", SqlScalarType::Int64.nullable(false))
             .with_key(vec![0, 1])
             .finish(),
-        column_comments: BTreeMap::from_iter([
-            (
-                "operator_id",
-                "The ID of the operator that created the arrangement. Corresponds to `mz_dataflow_operators.id`.",
-            ),
-            ("worker_id", "The worker hosting the arrangement."),
-            (
-                "distinct_keys",
-                "An upper bound on the number of distinct keys in the arrangement, not the exact \
-                 count: a key present in more than one live batch is counted once per batch, which \
-                 happens normally across the spine's batch pyramid and during in-progress merges. \
-                 Treating this value as exact would understate memory usage.",
-            ),
-        ]),
+        column_comments: BTreeMap::new(),
         sql: "
+WITH operators_per_worker_cte AS (
+    SELECT
+        id AS operator_id,
+        worker_id
+    FROM
+        mz_introspection.mz_dataflow_operators_per_worker
+),
+distinct_keys_cte AS (
+    SELECT
+        operator_id,
+        worker_id,
+        COUNT(*) AS distinct_keys
+    FROM
+        mz_introspection.mz_arrangement_distinct_keys_raw
+    GROUP BY
+        operator_id, worker_id
+)
 SELECT
-    operator_id,
-    worker_id,
-    COUNT(*) AS distinct_keys
-FROM mz_introspection.mz_arrangement_distinct_keys_raw
-GROUP BY operator_id, worker_id",
+    opw.operator_id,
+    opw.worker_id,
+    distinct_keys_cte.distinct_keys
+FROM
+    operators_per_worker_cte opw
+JOIN distinct_keys_cte USING (operator_id, worker_id)",
         access: vec![PUBLIC_SELECT],
         ontology: None,
-    }
+    });
+
+pub static MZ_ARRANGEMENT_DISTINCT_KEYS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_arrangement_distinct_keys",
+    schema: MZ_INTROSPECTION_SCHEMA,
+    oid: oid::VIEW_MZ_ARRANGEMENT_DISTINCT_KEYS_OID,
+    desc: RelationDesc::builder()
+        .with_column("operator_id", SqlScalarType::UInt64.nullable(false))
+        .with_column("distinct_keys", SqlScalarType::Int64.nullable(false))
+        .with_key(vec![0])
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "operator_id",
+            "The ID of the operator that created the arrangement. Corresponds to `mz_dataflow_operators.id`.",
+        ),
+        (
+            "distinct_keys",
+            "An upper bound on the number of distinct keys in the arrangement, not the exact \
+             count: a key present in more than one live batch is counted once per batch, which \
+             happens normally across the spine's batch pyramid and during in-progress merges. \
+             Treating this value as exact would understate memory usage.",
+        ),
+    ]),
+    sql: "
+SELECT
+    operator_id,
+    SUM(distinct_keys)::int8 AS distinct_keys
+FROM mz_introspection.mz_arrangement_distinct_keys_per_worker
+GROUP BY operator_id",
+    access: vec![PUBLIC_SELECT],
+    ontology: None,
 });
 
 pub static MZ_ARRANGEMENT_SHARING_PER_WORKER: LazyLock<BuiltinView> =

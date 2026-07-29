@@ -776,6 +776,7 @@ mz_scheduling_parks_histogram_raw            log   <null>    ""
 
 > SHOW VIEWS FROM mz_introspection
 mz_active_peeks ""
+mz_arrangement_distinct_keys ""
 mz_arrangement_distinct_keys_per_worker ""
 mz_arrangement_sharing ""
 mz_arrangement_sharing_per_worker ""

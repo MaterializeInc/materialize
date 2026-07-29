@@ -1216,6 +1216,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_ARRANGEMENT_SIZES_PER_WORKER),
         Builtin::View(&MZ_ARRANGEMENT_SIZES),
         Builtin::View(&MZ_ARRANGEMENT_DISTINCT_KEYS_PER_WORKER),
+        Builtin::View(&MZ_ARRANGEMENT_DISTINCT_KEYS),
         Builtin::View(&MZ_DATAFLOWS_PER_WORKER),
         Builtin::View(&MZ_DATAFLOWS),
         Builtin::View(&MZ_DATAFLOW_ADDRESSES),

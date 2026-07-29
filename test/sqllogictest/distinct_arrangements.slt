@@ -981,6 +981,7 @@ SELECT mz_unsafe.mz_sleep(4)
 query T
 SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 ----
+Arrange Compute(ArrangementDistinctKeys)
 Arrange Compute(ArrangementHeapAllocations)
 Arrange Compute(ArrangementHeapCapacity)
 Arrange Compute(ArrangementHeapSize)
