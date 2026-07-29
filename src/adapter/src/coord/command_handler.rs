@@ -1379,6 +1379,7 @@ impl Coordinator {
                     | Statement::CreateSchema(_)
                     | Statement::CreateSecret(_)
                     | Statement::CreateSink(_)
+                    | Statement::CreateMetricSink(_)
                     | Statement::CreateSubsource(_)
                     | Statement::CreateTable(_)
                     | Statement::CreateType(_)

@@ -1529,6 +1529,10 @@ pub fn item_type(create_sql: &str) -> CatalogItemType {
             assert_eq!(tokens.next(), Some("VIEW"));
             CatalogItemType::MaterializedView
         }
+        Some("METRIC") => {
+            assert_eq!(tokens.next(), Some("SINK"));
+            CatalogItemType::MetricSink
+        }
         Some("INDEX") => CatalogItemType::Index,
         Some("TYPE") => CatalogItemType::Type,
         Some("FUNCTION") => CatalogItemType::Func,
