@@ -39,6 +39,8 @@ use crate::plan::transform::{Transform, TransformConfig};
 
 mod lowering;
 
+pub use lowering::RowBoundFn;
+
 pub mod arrangement_count;
 pub mod interpret;
 pub mod join;
@@ -760,16 +762,23 @@ impl LirRelationExpr {
         desc: DataflowDescription<OptimizedMirRelationExpr>,
         features: &OptimizerFeatures,
         metrics: Option<&LoweringMetrics>,
+        row_bound: Option<RowBoundFn>,
     ) -> Result<
         (
             DataflowDescription<Self>,
             BTreeMap<LirId, mz_repr::ReprRelationType>,
+            BTreeMap<LirId, u64>,
         ),
         String,
     > {
-        let (dataflow, types) = Self::lower_dataflow_inner(desc, features, metrics, true)?;
+        let (dataflow, types, bounds) =
+            Self::lower_dataflow_inner(desc, features, metrics, true, row_bound)?;
         let types = types.expect("collection requested");
-        Ok((Self::finalize_lowered(dataflow)?, types))
+        Ok((
+            Self::finalize_lowered(dataflow)?,
+            types,
+            bounds.unwrap_or_default(),
+        ))
     }
 
     /// Lowers the dataflow description from MIR to LIR. To this end, the
@@ -785,7 +794,8 @@ impl LirRelationExpr {
         features: &OptimizerFeatures,
         metrics: Option<&LoweringMetrics>,
     ) -> Result<DataflowDescription<Self>, String> {
-        let (dataflow, _types) = Self::lower_dataflow_inner(desc, features, metrics, false)?;
+        let (dataflow, _types, _bounds) =
+            Self::lower_dataflow_inner(desc, features, metrics, false, None)?;
         Ok(dataflow)
     }
 
@@ -794,10 +804,12 @@ impl LirRelationExpr {
         features: &OptimizerFeatures,
         metrics: Option<&LoweringMetrics>,
         collect_node_types: bool,
+        row_bound: Option<RowBoundFn>,
     ) -> Result<
         (
             DataflowDescription<Self>,
             Option<BTreeMap<LirId, mz_repr::ReprRelationType>>,
+            Option<BTreeMap<LirId, u64>>,
         ),
         String,
     > {
@@ -805,11 +817,14 @@ impl LirRelationExpr {
         if collect_node_types {
             context.collect_node_types();
         }
-        let (dataflow, types) = context.lower_collecting(desc)?;
+        if let Some(row_bound) = row_bound {
+            context.collect_row_bounds(row_bound);
+        }
+        let (dataflow, types, bounds) = context.lower_collecting(desc)?;
 
         mz_repr::explain::trace_plan(&dataflow);
 
-        Ok((dataflow, types))
+        Ok((dataflow, types, bounds))
     }
 
     /// Refines the plans of objects to be built as part of a single-time `dataflow` to relax

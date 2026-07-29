@@ -310,7 +310,7 @@ impl Coordinator {
                     tracing::error!("cannot find {stage} for materialized view {id} in catalog");
                     coord_bail!("cannot find {stage} for materialized view in catalog");
                 };
-                let rows = crate::explain::memory_bound_rows(plan, &features)?;
+                let rows = crate::explain::memory_bound_rows(plan, &features, cardinality_stats)?;
                 return Ok(Self::send_immediate_rows(rows));
             }
             _ => {

@@ -180,7 +180,9 @@ impl OptimizerTrace {
                 let Some(dataflow) = self.collect_global_plan() else {
                     coord_bail!("EXPLAIN MEMORY BOUND requires a dataflow plan");
                 };
-                crate::explain::memory_bound_rows(dataflow, features)?
+                // This path has no statistics available, so every leaf is unknown and the bound
+                // degrades to unknown with it. That is the honest answer here, not zero.
+                crate::explain::memory_bound_rows(dataflow, features, Default::default())?
             }
             ExplainStage::PlanInsights => {
                 if format != ExplainFormat::Json {

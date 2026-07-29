@@ -128,6 +128,7 @@ where
 pub(crate) fn memory_bound_rows(
     dataflow: mz_compute_types::dataflows::DataflowDescription<mz_expr::OptimizedMirRelationExpr>,
     features: &mz_repr::optimize::OptimizerFeatures,
+    stats: std::collections::BTreeMap<mz_repr::GlobalId, usize>,
 ) -> Result<Vec<mz_repr::Row>, AdapterError> {
     use mz_compute_types::plan::LirRelationExpr;
     use mz_compute_types::plan::arrangement_count::Caveat;
@@ -135,9 +136,32 @@ pub(crate) fn memory_bound_rows(
     use mz_ore::cast::CastFrom;
     use mz_repr::{Datum, Row};
 
-    let (dataflow, node_types) =
-        LirRelationExpr::finalize_dataflow_with_node_types(dataflow, features, None)
-            .map_err(|e| AdapterError::Internal(format!("cannot lower plan: {e}")))?;
+    // Sound upper bound rather than the heuristic estimate: an underestimate here would
+    // understate the memory a plan needs, which is the dangerous direction.
+    //
+    // Invoked once per lowered node on that node's subtree, so this is quadratic in plan size.
+    // Acceptable on an EXPLAIN, which is not on any hot path.
+    let bound_features = features.clone();
+    let row_bound: mz_compute_types::plan::RowBoundFn =
+        Box::new(move |expr: &mz_expr::MirRelationExpr| {
+            let mut builder = mz_transform::analysis::DerivedBuilder::new(&bound_features);
+            builder.require(mz_transform::analysis::Cardinality::upper_bound(
+                stats.clone(),
+            ));
+            let derived = builder.visit(expr);
+            let estimate = *derived
+                .as_view()
+                .value::<mz_transform::analysis::Cardinality>()?;
+            estimate.rounded().map(u64::cast_from)
+        });
+
+    let (dataflow, node_types, row_bounds) = LirRelationExpr::finalize_dataflow_with_node_types(
+        dataflow,
+        features,
+        None,
+        Some(row_bound),
+    )
+    .map_err(|e| AdapterError::Internal(format!("cannot lower plan: {e}")))?;
 
     let mut rows = Vec::new();
     for build in &dataflow.objects_to_build {
@@ -163,12 +187,23 @@ pub(crate) fn memory_bound_rows(
             let bytes = entry
                 .bytes_per_row
                 .map_or(Datum::Null, |b| Datum::UInt64(u64::cast_from(b)));
+            // Total bytes needs every factor: unknown width or unknown rows means unknown
+            // total, not a smaller one.
+            let node_rows = row_bounds.get(&lir_id).copied();
+            let total = match (entry.bytes_per_row, node_rows) {
+                (Some(per_row), Some(n)) => u64::try_from(per_row)
+                    .ok()
+                    .and_then(|per_row| per_row.checked_mul(n)),
+                _ => None,
+            };
             rows.push(Row::pack_slice(&[
                 Datum::UInt64(lir_id.into()),
                 Datum::String(&label),
                 Datum::UInt64(u64::cast_from(entry.arrangements)),
                 width,
                 bytes,
+                node_rows.map_or(Datum::Null, Datum::UInt64),
+                total.map_or(Datum::Null, Datum::UInt64),
                 note.map_or(Datum::Null, Datum::String),
             ]));
         }

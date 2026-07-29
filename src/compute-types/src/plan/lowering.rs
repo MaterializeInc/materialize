@@ -22,6 +22,7 @@ use mz_ore::{assert_none, soft_assert_eq_or_log, soft_panic_or_log};
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::{GlobalId, ReprRelationType, Timestamp};
 
+pub use self::row_bound::RowBoundFn;
 use crate::dataflows::{BuildDesc, DataflowDescription, IndexImport};
 use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
@@ -30,6 +31,7 @@ use crate::plan::scalar::{
 };
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
+
 use crate::plan::{
     ArrangementStrategy, AvailableCollections, GetPlan, LirId, LirRelationExpr, LirRelationNode,
     LoweringMetrics,
@@ -78,6 +80,11 @@ pub(super) struct Context {
     /// Recording a type costs an `MirRelationExpr::typ()` per node, which walks the
     /// subtree, so leaving this `None` keeps lowering off that quadratic path.
     node_types: Option<BTreeMap<LirId, ReprRelationType>>,
+    /// A caller-supplied bound on the rows each node can produce, and where to collect it.
+    ///
+    /// Taken as a callback because the estimator lives above this crate. It is invoked once per
+    /// lowered node on that node's MIR subtree.
+    row_bound: Option<(RowBoundFn, BTreeMap<LirId, u64>)>,
     /// Whether the current expression is subject to single-time (one-shot
     /// `SELECT`) monotonic operator selection.
     ///
@@ -121,6 +128,7 @@ impl Context {
             enable_reduce_mfp_fusion: features.enable_reduce_mfp_fusion,
             metrics: metrics.cloned(),
             node_types: None,
+            row_bound: None,
             // Set from the dataflow in `lower` before any expression is lowered.
             single_time: false,
             source_imports: Default::default(),
@@ -137,6 +145,11 @@ impl Context {
                 .expect("No LirId overflow"),
         );
         id
+    }
+
+    /// Requests that lowering record a row bound for every node it produces.
+    pub fn collect_row_bounds(&mut self, bound: RowBoundFn) {
+        self.row_bound = Some((bound, BTreeMap::new()));
     }
 
     /// Requests that lowering record the output type of every node it produces.
@@ -162,12 +175,14 @@ impl Context {
         (
             DataflowDescription<LirRelationExpr>,
             Option<BTreeMap<LirId, ReprRelationType>>,
+            Option<BTreeMap<LirId, u64>>,
         ),
         String,
     > {
         let dataflow = self.lower_inner(desc)?;
         let types = self.node_types.take();
-        Ok((dataflow, types))
+        let bounds = self.row_bound.take().map(|(_, collected)| collected);
+        Ok((dataflow, types, bounds))
     }
 
     fn lower_inner(
@@ -393,6 +408,11 @@ impl Context {
             let lir_id = lowered.plan.lir_id;
             if let Some(types) = self.node_types.as_mut() {
                 types.insert(lir_id, typ);
+            }
+        }
+        if let Some((bound, collected)) = self.row_bound.as_mut() {
+            if let Some(rows) = bound(expr) {
+                collected.insert(lowered.plan.lir_id, rows);
             }
         }
         Ok(lowered)
@@ -1664,4 +1684,14 @@ impl std::fmt::Display for LirDebugInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Debug name: {}; id: {}", self.debug_name, self.id)
     }
+}
+
+mod row_bound {
+    use mz_expr::MirRelationExpr;
+
+    /// Bounds the rows a MIR subtree can produce, or `None` where no bound is known.
+    ///
+    /// Boxed rather than generic so `Context` needs no type parameter, and owned so it needs no
+    /// lifetime.
+    pub type RowBoundFn = Box<dyn Fn(&MirRelationExpr) -> Option<u64>>;
 }

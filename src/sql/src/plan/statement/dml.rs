@@ -336,6 +336,8 @@ pub fn describe_explain_plan(
                 .with_column("Arrangements", SqlScalarType::UInt64.nullable(false))
                 .with_column("Row Width", SqlScalarType::UInt64.nullable(true))
                 .with_column("Bytes Per Row", SqlScalarType::UInt64.nullable(true))
+                .with_column("Max Rows", SqlScalarType::UInt64.nullable(true))
+                .with_column("Max Bytes", SqlScalarType::UInt64.nullable(true))
                 .with_column("Note", SqlScalarType::String.nullable(true));
         }
     };
