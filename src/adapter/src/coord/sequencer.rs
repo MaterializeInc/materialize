@@ -1190,6 +1190,7 @@ pub(crate) async fn explain_plan_inner(
     explain_ctx: ExplainPlanContext,
     optimizer: peek::Optimizer,
     insights_ctx: Option<Box<PlanInsightsContext>>,
+    cardinality_stats: BTreeMap<GlobalId, usize>,
 ) -> Result<Vec<Row>, AdapterError> {
     let ExplainPlanContext {
         config,
@@ -1234,6 +1235,7 @@ pub(crate) async fn explain_plan_inner(
             stage,
             plan::ExplaineeStatementKind::Select,
             insights_ctx,
+            cardinality_stats,
         )
         .await?;
 

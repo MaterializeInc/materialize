@@ -9,6 +9,7 @@
 
 //! Tracing utilities for explainable plans.
 
+use std::collections::BTreeMap;
 use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
@@ -23,7 +24,7 @@ use mz_repr::explain::{
     Explain, ExplainConfig, ExplainError, ExplainFormat, ExprHumanizer, UsedIndexes,
 };
 use mz_repr::optimize::OptimizerFeatures;
-use mz_repr::{Datum, Row};
+use mz_repr::{Datum, GlobalId, Row};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::plan::{self, HirRelationExpr, HirScalarExpr};
 use mz_sql_parser::ast::{ExplainStage, NamedPlan};
@@ -132,6 +133,10 @@ impl OptimizerTrace {
 
     /// Convert the optimizer trace into a vector or rows that can be returned
     /// to the client.
+    ///
+    /// `cardinality_stats` maps a source or index-backing collection to its row count. Only
+    /// [`ExplainStage::MemoryBound`] reads it; every other stage may pass an empty map. An empty
+    /// map is always sound, it just leaves the estimated columns unknown.
     pub async fn into_rows(
         self,
         format: ExplainFormat,
@@ -144,6 +149,7 @@ impl OptimizerTrace {
         stage: ExplainStage,
         stmt_kind: plan::ExplaineeStatementKind,
         insights_ctx: Option<Box<PlanInsightsContext>>,
+        cardinality_stats: BTreeMap<GlobalId, usize>,
     ) -> Result<Vec<Row>, AdapterError> {
         let collect_all = |format| {
             self.collect_all(
@@ -180,9 +186,7 @@ impl OptimizerTrace {
                 let Some(dataflow) = self.collect_global_plan() else {
                     coord_bail!("EXPLAIN MEMORY BOUND requires a dataflow plan");
                 };
-                // This path has no statistics available, so every leaf is unknown and the bound
-                // degrades to unknown with it. That is the honest answer here, not zero.
-                crate::explain::memory_bound_rows(dataflow, features, Default::default())?
+                crate::explain::memory_bound_rows(dataflow, features, cardinality_stats)?
             }
             ExplainStage::PlanInsights => {
                 if format != ExplainFormat::Json {
@@ -332,6 +336,7 @@ impl OptimizerTrace {
                 ExplainStage::PlanInsights,
                 plan::ExplaineeStatementKind::Select,
                 insights_ctx,
+                Default::default(),
             )
             .await?;
 
@@ -424,7 +429,9 @@ impl OptimizerTrace {
     }
 
     /// Collects the global optimized plan from the trace, if it exists.
-    fn collect_global_plan(&self) -> Option<DataflowDescription<OptimizedMirRelationExpr>> {
+    pub(crate) fn collect_global_plan(
+        &self,
+    ) -> Option<DataflowDescription<OptimizedMirRelationExpr>> {
         self.0
             .downcast_ref::<PlanTrace<DataflowDescription<OptimizedMirRelationExpr>>>()
             .and_then(|trace| trace.find(NamedPlan::Global.path()))

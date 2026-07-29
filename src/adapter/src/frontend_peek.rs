@@ -852,6 +852,11 @@ impl PeekClient {
         .await
         .unwrap_or_else(|_| Box::new(EmptyStatisticsOracle));
 
+        // Snapshot the oracle before it moves into the optimizer task. `EXPLAIN MEMORY BOUND`
+        // needs the same row counts the optimizer saw, and re-querying persist afterwards would
+        // both cost a second round trip and risk disagreeing with the plan being explained.
+        let cardinality_stats = stats.as_map();
+
         // Generate data structures that can be moved to another task where we will perform possibly
         // expensive optimizations.
         let timestamp_context = determination.timestamp_context.clone();
@@ -1216,6 +1221,7 @@ impl PeekClient {
                     explain_ctx,
                     optimizer,
                     insights_ctx,
+                    cardinality_stats,
                 )
                 .await?;
 

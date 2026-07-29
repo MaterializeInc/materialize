@@ -311,23 +311,8 @@ impl Coordinator {
                     coord_bail!("cannot find {stage} for materialized view in catalog");
                 };
                 // The rest of EXPLAIN runs without statistics. This stage needs them, because
-                // the row term is the whole point of the bound. Gated on
-                // `enable_session_cardinality_estimates`, so it costs nothing by default, and
-                // degrades to no statistics rather than failing the EXPLAIN.
-                // An input reached through an index still has statistics on the object the
-                // index is built on, so collect both. Taking only `source_imports` misses every
-                // dataflow whose inputs happen to be indexed, which is most of them.
-                let source_ids = plan
-                    .source_imports
-                    .keys()
-                    .copied()
-                    .chain(plan.index_imports.values().map(|import| import.desc.on_id))
-                    .collect();
-                let as_of = timely::progress::Antichain::from_elem(mz_repr::Timestamp::MIN);
-                let stats = self
-                    .statistics_oracle(ctx.session(), &source_ids, &as_of, true)
-                    .await
-                    .map_or_else(|_| BTreeMap::new(), |oracle| oracle.as_map());
+                // the row term is the whole point of the bound.
+                let stats = self.dataflow_cardinality_stats(ctx.session(), &plan).await;
                 let rows = crate::explain::memory_bound_rows(plan, &features, stats)?;
                 return Ok(Self::send_immediate_rows(rows));
             }
@@ -995,6 +980,10 @@ impl Coordinator {
             .override_from(&self.cluster_scoped_optimizer_overrides(cluster_id))
             .override_from(&config.features);
 
+        let cardinality_stats = self
+            .explain_cardinality_stats(session, &stage, &optimizer_trace)
+            .await;
+
         let rows = optimizer_trace
             .into_rows(
                 format,
@@ -1007,6 +996,7 @@ impl Coordinator {
                 stage,
                 plan::ExplaineeStatementKind::CreateMaterializedView,
                 None,
+                cardinality_stats,
             )
             .await?;
 

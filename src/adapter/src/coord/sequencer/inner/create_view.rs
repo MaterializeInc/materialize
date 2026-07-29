@@ -483,6 +483,10 @@ impl Coordinator {
         let features =
             OptimizerFeatures::from(self.catalog().system_config()).override_from(&config.features);
 
+        let cardinality_stats = self
+            .explain_cardinality_stats(session, &stage, &optimizer_trace)
+            .await;
+
         let rows = optimizer_trace
             .into_rows(
                 format,
@@ -495,6 +499,7 @@ impl Coordinator {
                 stage,
                 plan::ExplaineeStatementKind::CreateView,
                 None,
+                cardinality_stats,
             )
             .await?;
 

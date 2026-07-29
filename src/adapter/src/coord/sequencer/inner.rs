@@ -68,6 +68,7 @@ use mz_sql::pure::{PurifiedSourceExport, generate_subsource_statements};
 use mz_storage_types::sinks::StorageSinkDesc;
 use mz_timestamp_oracle::TimestampOracle;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
+use mz_compute_types::dataflows::DataflowDescription;
 use mz_sql::plan::{
     AlterConnectionAction, AlterConnectionPlan, CreateSourcePlanBundle, ExplainSinkSchemaPlan,
     Explainee, ExplaineeStatement, MutationKind, Params, Plan, PlannedAlterRoleOption,
@@ -82,7 +83,7 @@ use mz_sql::session::vars::{
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    ConnectionOption, ConnectionOptionName, CreateSourceConnection, DeferredItemName,
+    ConnectionOption, ConnectionOptionName, CreateSourceConnection, DeferredItemName, ExplainStage,
     MySqlConfigOption, PgConfigOption, PgConfigOptionName, Statement, TransactionMode,
     WithOptionValue,
 };
@@ -113,6 +114,7 @@ use crate::coord::{
     WatchSetResponse, validate_ip_with_policy_rules,
 };
 use crate::error::AdapterError;
+use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::{AdapterNotice, DroppedInUseIndex};
 use crate::optimize::dataflows::{EvalTime, ExprPrep, ExprPrepOneShot};
 use crate::optimize::{self, Optimize};
@@ -2504,6 +2506,51 @@ impl Coordinator {
                 self.explain_replan_index(ctx, plan).await;
             }
         };
+    }
+
+    /// Row counts for the leaves of `stage`'s plan, empty for every stage that does not use them.
+    ///
+    /// [`ExplainStage::MemoryBound`] is the only consumer, so no other stage pays a persist
+    /// round trip. An empty map is always sound, it just leaves the estimated columns unknown.
+    pub(super) async fn explain_cardinality_stats(
+        &self,
+        session: &Session,
+        stage: &ExplainStage,
+        optimizer_trace: &OptimizerTrace,
+    ) -> BTreeMap<GlobalId, usize> {
+        if !matches!(stage, ExplainStage::MemoryBound) {
+            return BTreeMap::new();
+        }
+        match optimizer_trace.collect_global_plan() {
+            Some(plan) => self.dataflow_cardinality_stats(session, &plan).await,
+            // A pipeline that never reached the global stage, for instance under `EXPLAIN BROKEN`,
+            // has no leaves to attribute statistics to.
+            None => BTreeMap::new(),
+        }
+    }
+
+    /// Row counts for the persist-backed leaves of `plan`.
+    ///
+    /// Gated on `enable_session_cardinality_estimates`, so it costs nothing by default, and
+    /// degrades to no statistics rather than failing the EXPLAIN. An input reached through an
+    /// index still has statistics on the object the index is built on, so both import kinds
+    /// contribute. Taking only `source_imports` misses every dataflow whose inputs happen to be
+    /// indexed, which is most of them.
+    pub(super) async fn dataflow_cardinality_stats(
+        &self,
+        session: &Session,
+        plan: &DataflowDescription<OptimizedMirRelationExpr>,
+    ) -> BTreeMap<GlobalId, usize> {
+        let source_ids = plan
+            .source_imports
+            .keys()
+            .copied()
+            .chain(plan.index_imports.values().map(|import| import.desc.on_id))
+            .collect();
+        let as_of = Antichain::from_elem(mz_repr::Timestamp::MIN);
+        self.statistics_oracle(session, &source_ids, &as_of, true)
+            .await
+            .map_or_else(|_| BTreeMap::new(), |oracle| oracle.as_map())
     }
 
     pub(super) async fn sequence_explain_pushdown(

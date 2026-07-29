@@ -493,6 +493,10 @@ impl Coordinator {
             )
             .await
             .unwrap_or_else(|_| Box::new(EmptyStatisticsOracle));
+        // Snapshot the oracle before it moves into the optimizer task. `EXPLAIN MEMORY BOUND`
+        // needs the same row counts the optimizer saw, and re-querying persist afterwards would
+        // both cost a second round trip and risk disagreeing with the plan being explained.
+        let cardinality_stats = stats.as_map();
         let session = session.meta();
         let now = self.catalog().config().now.clone();
         let catalog = self.owned_catalog();
@@ -576,6 +580,7 @@ impl Coordinator {
                                         df_meta,
                                         explain_ctx,
                                         insights_ctx,
+                                        cardinality_stats,
                                     })
                                 }
                                 ExplainContext::PlanInsightsNotice(optimizer_trace) => {
@@ -667,6 +672,7 @@ impl Coordinator {
                                     df_meta: Default::default(),
                                     explain_ctx,
                                     insights_ctx: None,
+                                    cardinality_stats,
                                 })
                             } else {
                                 // In regular `EXPLAIN` contexts, immediately retire
@@ -970,6 +976,7 @@ impl Coordinator {
             insights_ctx,
             df_meta,
             explain_ctx,
+            cardinality_stats,
             ..
         }: PeekStageExplainPlan,
     ) -> Result<StageResult<Box<PeekStage>>, AdapterError> {
@@ -980,6 +987,7 @@ impl Coordinator {
             explain_ctx,
             optimizer,
             insights_ctx,
+            cardinality_stats,
         )
         .await?;
 

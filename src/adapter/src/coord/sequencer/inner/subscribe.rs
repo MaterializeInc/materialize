@@ -656,6 +656,10 @@ impl Coordinator {
             .override_from(&self.cluster_scoped_optimizer_overrides(cluster_id))
             .override_from(&config.features);
 
+        let cardinality_stats = self
+            .explain_cardinality_stats(session, &stage, &optimizer_trace)
+            .await;
+
         let rows = optimizer_trace
             .into_rows(
                 format,
@@ -668,6 +672,7 @@ impl Coordinator {
                 stage,
                 plan::ExplaineeStatementKind::Subscribe,
                 None,
+                cardinality_stats,
             )
             .await?;
 

@@ -745,6 +745,9 @@ pub struct PeekStageExplainPlan {
     df_meta: DataflowMetainfo,
     explain_ctx: ExplainPlanContext,
     insights_ctx: Option<Box<PlanInsightsContext>>,
+    /// Row counts the optimizer saw, carried forward so `EXPLAIN MEMORY BOUND` bounds its
+    /// leaves against the same numbers rather than querying persist a second time.
+    cardinality_stats: BTreeMap<GlobalId, usize>,
 }
 
 #[derive(Debug)]
