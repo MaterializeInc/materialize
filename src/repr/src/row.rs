@@ -2182,6 +2182,59 @@ pub fn datum_size(datum: &Datum) -> usize {
     }
 }
 
+/// The largest number of bytes any value of `typ` can occupy when packed into a [`Row`].
+///
+/// Returns `None` for types whose encoding is unbounded, meaning the variable-length ones
+/// (`String`, `Bytes`, `Jsonb`) and the collections built over them (`Array`, `List`, `Map`,
+/// `Int2Vector`). A caller that needs a total row width must treat `None` as an unknown rather
+/// than substituting a default, since no default is sound.
+///
+/// This mirrors [`datum_size`], which is per value. Keep the two in sync: the test below asserts
+/// the bound holds for extreme values of every bounded type, so a drift in one shows up there.
+pub fn max_datum_size(typ: &crate::ReprScalarType) -> Option<usize> {
+    use crate::ReprScalarType as T;
+
+    let size = match typ {
+        T::Bool => 1,
+        // Integers are varint-encoded, so these are the widest, not the only, encodings.
+        T::Int16 | T::UInt16 => 1 + size_of::<i16>(),
+        T::Int32 | T::UInt32 | T::Date => 1 + size_of::<i32>(),
+        T::Int64 | T::UInt64 | T::MzTimestamp => 1 + size_of::<i64>(),
+        T::UInt8 => 1 + size_of::<u8>(),
+        T::Float32 => 1 + size_of::<f32>(),
+        T::Float64 => 1 + size_of::<f64>(),
+        T::Time => 1 + 8,
+        // A timestamp outside the nanosecond-representable range takes the wider encoding.
+        T::Timestamp | T::TimestampTz => 1 + 16,
+        T::Interval => 1 + size_of::<i32>() + size_of::<i32>() + size_of::<i64>(),
+        T::Uuid => 1 + size_of::<uuid::Bytes>(),
+        // Tag, digit, exponent and bit flags, then two bytes per coefficient unit. The datum
+        // context caps precision at three digits per unit.
+        T::Numeric => 4 + usize::from(crate::adt::numeric::NUMERIC_DATUM_WIDTH) * 2,
+        T::MzAclItem => 1 + crate::adt::mz_acl_item::MzAclItem::binary_size(),
+        T::AclItem => 1 + crate::adt::mz_acl_item::AclItem::binary_size(),
+
+        // Variable-length payloads with no static ceiling.
+        T::Bytes | T::Jsonb | T::String | T::Int2Vector => return None,
+        T::Array(_) | T::List { .. } | T::Map { .. } => return None,
+
+        // A record has fixed arity, so it is bounded exactly when all of its fields are. It is
+        // encoded as a list.
+        T::Record { fields } => {
+            let mut total = 1 + size_of::<u64>();
+            for field in fields.iter() {
+                total += max_datum_size(&field.scalar_type)?;
+            }
+            total
+        }
+
+        // Tag and flags, then the encoded form of each endpoint.
+        T::Range { element_type } => 2 + 2 * max_datum_size(element_type)?,
+    };
+
+    Some(size)
+}
+
 /// Number of bytes required by a sequence of datums.
 ///
 /// This method can be used to right-size the allocation for a `Row`
@@ -4245,6 +4298,101 @@ mod tests {
                 "Datum-level comparison treats -0.0 and +0.0 as equal"
             );
         }
+    }
+
+    /// `max_datum_size` is hand-derived from `datum_size`, so assert the bound actually holds
+    /// for extreme values rather than trusting the derivation. A drift in either function shows
+    /// up here.
+    #[mz_ore::test]
+    fn test_max_datum_size_bounds_extreme_values() {
+        use crate::ReprScalarType as T;
+        use crate::adt::numeric;
+
+        let mut cx = numeric::cx_datum();
+        let widest_numeric = cx
+            .parse("9".repeat(usize::from(numeric::NUMERIC_DATUM_MAX_PRECISION)))
+            .expect("max-precision numeric parses");
+
+        let cases: Vec<(T, Vec<Datum>)> = vec![
+            (T::Bool, vec![Datum::True, Datum::False]),
+            (
+                T::Int16,
+                vec![Datum::Int16(i16::MIN), Datum::Int16(i16::MAX)],
+            ),
+            (
+                T::Int32,
+                vec![Datum::Int32(i32::MIN), Datum::Int32(i32::MAX)],
+            ),
+            (
+                T::Int64,
+                vec![Datum::Int64(i64::MIN), Datum::Int64(i64::MAX)],
+            ),
+            (T::UInt8, vec![Datum::UInt8(u8::MAX)]),
+            (T::UInt16, vec![Datum::UInt16(u16::MAX)]),
+            (T::UInt32, vec![Datum::UInt32(u32::MAX)]),
+            (T::UInt64, vec![Datum::UInt64(u64::MAX)]),
+            (
+                T::Float32,
+                vec![
+                    Datum::Float32(f32::MIN.into()),
+                    Datum::Float32(f32::MAX.into()),
+                ],
+            ),
+            (
+                T::Float64,
+                vec![
+                    Datum::Float64(f64::MIN.into()),
+                    Datum::Float64(f64::MAX.into()),
+                ],
+            ),
+            (T::MzTimestamp, vec![Datum::MzTimestamp(Timestamp::MAX)]),
+            (
+                T::Uuid,
+                vec![Datum::Uuid(uuid::Uuid::from_bytes([0xff; 16]))],
+            ),
+            (
+                T::Numeric,
+                vec![Datum::Numeric(dec::OrderedDecimal(widest_numeric))],
+            ),
+        ];
+
+        for (typ, datums) in cases {
+            let bound = max_datum_size(&typ).unwrap_or_else(|| panic!("{typ:?} should be bounded"));
+            for datum in datums {
+                let actual = datum_size(&datum);
+                assert!(
+                    actual <= bound,
+                    "{typ:?}: datum_size {actual} exceeds max_datum_size {bound} for {datum:?}"
+                );
+            }
+        }
+
+        // Unbounded types must say so rather than returning a plausible-looking default.
+        for typ in [T::String, T::Bytes, T::Jsonb, T::Int2Vector] {
+            assert_eq!(max_datum_size(&typ), None, "{typ:?} should be unbounded");
+        }
+        assert_eq!(
+            max_datum_size(&T::List {
+                element_type: Box::new(T::Int64)
+            }),
+            None
+        );
+
+        // A record is bounded exactly when every field is.
+        let bounded_record = T::Record {
+            fields: Box::new([crate::ReprColumnType {
+                scalar_type: T::Int64,
+                nullable: false,
+            }]),
+        };
+        assert!(max_datum_size(&bounded_record).is_some());
+        let unbounded_record = T::Record {
+            fields: Box::new([crate::ReprColumnType {
+                scalar_type: T::String,
+                nullable: false,
+            }]),
+        };
+        assert_eq!(max_datum_size(&unbounded_record), None);
     }
 
     /// Hash must agree with Eq: equal lists must have the same hash.
