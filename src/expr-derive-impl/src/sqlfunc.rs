@@ -1045,6 +1045,10 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
             }
         }
 
+        impl crate::func::FuncName for #struct_name {
+            const NAME: &'static str = stringify!(#fn_name);
+        }
+
         #func
     };
     Ok(result)
@@ -1280,6 +1284,10 @@ fn binary_func(
             fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
                 f.write_str(#name)
             }
+        }
+
+        impl crate::func::FuncName for #struct_name {
+            const NAME: &'static str = stringify!(#fn_name);
         }
 
         #func
@@ -1580,6 +1588,12 @@ fn variadic_func(
         }
     };
 
+    let funcname_impl = quote! {
+        impl crate::func::FuncName for #struct_name {
+            const NAME: &'static str = stringify!(#fn_name);
+        }
+    };
+
     let result = if has_self {
         // External struct: generate method impl + trait impl + Display.
         quote! {
@@ -1588,6 +1602,7 @@ fn variadic_func(
             }
             #trait_impl
             #display_impl
+            #funcname_impl
         }
     } else {
         // Unit struct: generate struct + trait impl + Display + original function.
@@ -1602,6 +1617,7 @@ fn variadic_func(
 
             #trait_impl
             #display_impl
+            #funcname_impl
 
             #func
         }

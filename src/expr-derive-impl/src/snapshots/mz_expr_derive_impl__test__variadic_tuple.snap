@@ -53,6 +53,9 @@ impl std::fmt::Display for Replace {
         f.write_str("replace")
     }
 }
+impl crate::func::FuncName for Replace {
+    const NAME: &'static str = stringify!(replace);
+}
 fn replace(text: &str, from: &str, to: &str) -> Result<String, EvalError> {
     Ok(text.replace(from, to))
 }

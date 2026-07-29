@@ -50,6 +50,9 @@ impl std::fmt::Display for Fallible3 {
         f.write_str(stringify!(fallible3))
     }
 }
+impl crate::func::FuncName for Fallible3 {
+    const NAME: &'static str = stringify!(fallible3);
+}
 #[allow(dead_code)]
 fn fallible3(a: f32, b: f32) -> Result<Option<f32>, EvalError> {
     Ok(Some(a + b))

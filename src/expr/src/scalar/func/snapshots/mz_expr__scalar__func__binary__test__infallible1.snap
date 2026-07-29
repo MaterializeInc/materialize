@@ -53,6 +53,9 @@ impl std::fmt::Display for Infallible1 {
         f.write_str("INFALLIBLE")
     }
 }
+impl crate::func::FuncName for Infallible1 {
+    const NAME: &'static str = stringify!(infallible1);
+}
 #[allow(dead_code)]
 fn infallible1(a: f32, b: f32) -> f32 {
     a + b

@@ -48,6 +48,9 @@ impl std::fmt::Display for Fallible2 {
         f.write_str(stringify!(fallible2))
     }
 }
+impl crate::func::FuncName for Fallible2 {
+    const NAME: &'static str = stringify!(fallible2);
+}
 #[allow(dead_code)]
 fn fallible2(a: Option<f32>, b: Option<f32>) -> Result<f32, EvalError> {
     Ok(a.unwrap_or_default() + b.unwrap_or_default())

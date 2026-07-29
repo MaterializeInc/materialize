@@ -38,6 +38,9 @@ impl std::fmt::Display for UnaryFn {
         f.write_str(stringify!(unary_fn))
     }
 }
+impl crate::func::FuncName for UnaryFn {
+    const NAME: &'static str = stringify!(unary_fn);
+}
 fn unary_fn<'a>(a: Datum<'a>) -> bool {
     unimplemented!()
 }

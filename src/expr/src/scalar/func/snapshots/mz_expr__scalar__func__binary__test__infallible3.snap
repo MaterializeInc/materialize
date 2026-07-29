@@ -50,6 +50,9 @@ impl std::fmt::Display for Infallible3 {
         f.write_str(stringify!(infallible3))
     }
 }
+impl crate::func::FuncName for Infallible3 {
+    const NAME: &'static str = stringify!(infallible3);
+}
 #[allow(dead_code)]
 fn infallible3(a: f32, b: f32) -> Option<f32> {
     Some(a + b)

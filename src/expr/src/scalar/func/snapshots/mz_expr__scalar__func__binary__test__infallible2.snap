@@ -48,6 +48,9 @@ impl std::fmt::Display for Infallible2 {
         f.write_str(stringify!(infallible2))
     }
 }
+impl crate::func::FuncName for Infallible2 {
+    const NAME: &'static str = stringify!(infallible2);
+}
 #[allow(dead_code)]
 fn infallible2(a: Option<f32>, b: Option<f32>) -> f32 {
     a.unwrap_or_default() + b.unwrap_or_default()

@@ -56,6 +56,9 @@ impl std::fmt::Display for Greatest {
         f.write_str("greatest")
     }
 }
+impl crate::func::FuncName for Greatest {
+    const NAME: &'static str = stringify!(greatest);
+}
 fn greatest<'a>(datums: Variadic<Datum<'a>>) -> Datum<'a> {
     datums.into_iter().max().unwrap_or(Datum::Null)
 }

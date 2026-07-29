@@ -88,6 +88,9 @@ impl std::fmt::Display for ListListConcat {
         f.write_str("||")
     }
 }
+impl crate::func::FuncName for ListListConcat {
+    const NAME: &'static str = stringify!(list_list_concat);
+}
 fn list_list_concat<'a, T>(
     a: Option<DatumList<'a, T>>,
     b: Option<DatumList<'a, T>>,

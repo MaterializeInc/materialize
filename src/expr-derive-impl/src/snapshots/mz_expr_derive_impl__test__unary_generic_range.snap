@@ -50,6 +50,9 @@ impl std::fmt::Display for RangeLower {
         f.write_str("rangelower")
     }
 }
+impl crate::func::FuncName for RangeLower {
+    const NAME: &'static str = stringify!(range_lower);
+}
 fn range_lower<'a, T>(a: Range<T>) -> Option<T> {
     a.inner.map(|inner| inner.lower.bound).flatten()
 }

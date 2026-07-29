@@ -62,6 +62,9 @@ impl std::fmt::Display for MultiGeneric {
         f.write_str("multi_generic")
     }
 }
+impl crate::func::FuncName for MultiGeneric {
+    const NAME: &'static str = stringify!(multi_generic);
+}
 fn multi_generic<'a, A, B>(a: DatumList<'a, A>, b: DatumList<'a, B>) -> Option<B> {
     unimplemented!()
 }

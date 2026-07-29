@@ -53,6 +53,9 @@ impl std::fmt::Display for Concat {
         f.write_str("concat")
     }
 }
+impl crate::func::FuncName for Concat {
+    const NAME: &'static str = stringify!(concat);
+}
 fn concat(strs: Variadic<Option<&str>>) -> Result<String, EvalError> {
     Ok(strs.into_iter().flatten().collect())
 }

@@ -60,6 +60,9 @@ impl std::fmt::Display for AddInt16 {
         f.write_str("+")
     }
 }
+impl crate::func::FuncName for AddInt16 {
+    const NAME: &'static str = stringify!(add_int16);
+}
 fn add_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_int16()
         .checked_add(b.unwrap_int16())

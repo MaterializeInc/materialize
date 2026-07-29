@@ -211,6 +211,33 @@ macro_rules! derive_unary {
                     $(Self::$name(f) => LazyUnaryFunc::is_eliminable_cast(f),)*
                 }
             }
+
+            /// Attempts to construct a `UnaryFunc` from the canonical name of
+            /// one of its variants, as declared by the variant's
+            /// [`FuncName`](crate::func::FuncName) impl (the name of the
+            /// underlying Rust function, e.g. `cast_int32_to_numeric`).
+            ///
+            /// Intended for test tooling that needs to name exact function
+            /// variants. Only variants whose inner function deserializes from
+            /// no data (unit functions and functions all of whose parameters
+            /// may default to `None`) are constructible. Returns `None` for
+            /// other variants and for unknown names.
+            pub fn from_variant_name(name: &str) -> Option<Self> {
+                $(
+                    if name == <$name as crate::func::FuncName>::NAME {
+                        return serde_json::from_value(
+                            serde_json::json!({ stringify!($name): null }),
+                        )
+                        .ok();
+                    }
+                )*
+                None
+            }
+
+            /// The canonical names of all variants, in declaration order.
+            pub fn variant_names() -> impl Iterator<Item = &'static str> {
+                [$(<$name as crate::func::FuncName>::NAME,)*].into_iter()
+            }
         }
 
         impl fmt::Display for UnaryFunc {
@@ -306,6 +333,33 @@ macro_rules! derive_variadic {
                 match self {
                     $(Self::$name(f) => LazyVariadicFunc::is_infix_op(f),)*
                 }
+            }
+
+            /// Attempts to construct a `VariadicFunc` from the canonical name
+            /// of one of its variants, as declared by the variant's
+            /// [`FuncName`](crate::func::FuncName) impl (the name of the
+            /// underlying Rust function, e.g. `record_create`).
+            ///
+            /// Intended for test tooling that needs to name exact function
+            /// variants. Only variants whose inner function deserializes from
+            /// no data (unit functions and functions all of whose parameters
+            /// may default to `None`) are constructible. Returns `None` for
+            /// other variants and for unknown names.
+            pub fn from_variant_name(name: &str) -> Option<Self> {
+                $(
+                    if name == <$variant as crate::func::FuncName>::NAME {
+                        return serde_json::from_value(
+                            serde_json::json!({ stringify!($name): null }),
+                        )
+                        .ok();
+                    }
+                )*
+                None
+            }
+
+            /// The canonical names of all variants, in declaration order.
+            pub fn variant_names() -> impl Iterator<Item = &'static str> {
+                [$(<$variant as crate::func::FuncName>::NAME,)*].into_iter()
             }
         }
 
@@ -409,6 +463,33 @@ macro_rules! derive_binary {
                 match self {
                     $(Self::$name(f) => LazyBinaryFunc::is_infinity_monotone(f),)*
                 }
+            }
+
+            /// Attempts to construct a `BinaryFunc` from the canonical name of
+            /// one of its variants, as declared by the variant's
+            /// [`FuncName`](crate::func::FuncName) impl (the name of the
+            /// underlying Rust function, e.g. `add_int32`).
+            ///
+            /// Intended for test tooling that needs to name exact function
+            /// variants. Only variants whose inner function deserializes from
+            /// no data (unit functions and functions all of whose parameters
+            /// may default to `None`) are constructible. Returns `None` for
+            /// other variants and for unknown names.
+            pub fn from_variant_name(name: &str) -> Option<Self> {
+                $(
+                    if name == <$variant as crate::func::FuncName>::NAME {
+                        return serde_json::from_value(
+                            serde_json::json!({ stringify!($name): null }),
+                        )
+                        .ok();
+                    }
+                )*
+                None
+            }
+
+            /// The canonical names of all variants, in declaration order.
+            pub fn variant_names() -> impl Iterator<Item = &'static str> {
+                [$(<$variant as crate::func::FuncName>::NAME,)*].into_iter()
             }
         }
 

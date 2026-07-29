@@ -60,6 +60,9 @@ impl std::fmt::Display for ComplexOutputTypeFn {
         f.write_str("test")
     }
 }
+impl crate::func::FuncName for ComplexOutputTypeFn {
+    const NAME: &'static str = stringify!(complex_output_type_fn);
+}
 fn complex_output_type_fn<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
