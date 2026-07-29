@@ -87,8 +87,5 @@ uncased.workspace = true
 uuid = { workspace = true, features = ["serde", "v4"] }
 version-compare.workspace = true
 
-[dev-dependencies]
-datadriven.workspace = true
-
 [features]
 default = []
