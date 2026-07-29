@@ -9221,7 +9221,6 @@ dependencies = [
 name = "mz-transform"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "datadriven",
  "differential-dataflow",
  "enum-kinds",
@@ -9229,19 +9228,15 @@ dependencies = [
  "mz-compute-types",
  "mz-expr",
  "mz-expr-parser",
- "mz-expr-test-util",
- "mz-lowertest",
  "mz-ore",
  "mz-repr",
  "mz-sql",
  "mz-transform",
  "ordered-float 5.1.0",
  "paste",
- "proc-macro2",
  "proptest",
  "proptest-derive",
  "serde",
- "serde_json",
  "tracing",
 ]
 
