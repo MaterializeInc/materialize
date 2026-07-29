@@ -35,12 +35,24 @@ class BuiltinClusterReplicationFactor(Check):
         # `mz_support` owns its own cluster, so the ALTER has to run as that role.
         # Its sessions default to `mz_catalog_server`, which has a replica, so a
         # statement from this connection is safe to issue.
+        #
+        # A restart separates the two phases, so phase 2 asserting the replica is
+        # still there is the regression assertion: the replica set has to be
+        # rederived from the cluster's factor rather than from a fixed list.
         return [
             Testdrive(dedent(s))
             for s in [
                 """
                 $ postgres-execute connection=postgres://mz_support:materialize@${testdrive.materialize-internal-sql-addr}
                 ALTER CLUSTER mz_support SET (REPLICATION FACTOR 1);
+                """,
+                """
+                > SELECT c.replication_factor, count(r.id)
+                  FROM mz_clusters c
+                  LEFT JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+                  WHERE c.name = 'mz_support'
+                  GROUP BY c.replication_factor
+                1 1
                 """,
             ]
         ]
