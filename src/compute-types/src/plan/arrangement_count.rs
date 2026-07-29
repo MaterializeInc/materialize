@@ -12,12 +12,13 @@
 //! This is the physical-multiplier half of a static memory bound: an arrangement's byte cost is
 //! `count * rows * width`, and only `count` is determined by the plan alone, with no statistics.
 //! Predicting it is therefore separable from, and verifiable independently of, any cardinality
-//! estimate. Validation compares these numbers against the operators in each node's
+//! estimate. Validation compares [`Prediction::data`] against the operators in each node's
 //! `mz_lir_mapping` range, where a mismatch is a bug in this module rather than an estimation
 //! error.
 //!
-//! Counts include error arrangements, which outnumber data arrangements in most plans and which
-//! any comparison against `mz_arrangement_sizes` will otherwise trip over.
+//! Error arrangements are counted separately, not folded into one total. They hold nothing in a
+//! healthy dataflow, so charging them against a row bound would inflate it, and they surface in
+//! `mz_arrangement_sizes` only when they happen to have allocated, which no plan property predicts.
 //!
 //! Three counts cannot be read off the plan alone and are reported via [`Prediction::caveat`]
 //! rather than silently guessed. See [`Caveat`] for which and why.
@@ -49,25 +50,41 @@ pub enum Caveat {
 }
 
 /// A predicted arrangement count for one LIR node.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+///
+/// Data and error arrangements are separated because they behave differently in both directions
+/// that matter. Only data arrangements scale with the collection, so only `data` may multiply a row
+/// bound: charging a reduce for its error traces would inflate its byte bound by half. And error
+/// arrangements are only observable when they happen to have allocated, which is an allocator
+/// artifact rather than a plan property, so only `data` can be validated against
+/// `mz_arrangement_sizes`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Prediction {
-    /// Number of arrangements, counting error arrangements.
-    pub count: usize,
+    /// Arrangements holding collection data. These carry the memory.
+    pub data: usize,
+    /// Arrangements holding errors. Empty in a healthy dataflow.
+    pub error: usize,
     /// Set when the count is not decidable from the plan alone.
     pub caveat: Option<Caveat>,
 }
 
 impl Prediction {
-    fn exact(count: usize) -> Self {
+    /// Total arrangements built, whether or not they hold anything.
+    pub fn total(&self) -> usize {
+        self.data + self.error
+    }
+
+    fn exact(data: usize, error: usize) -> Self {
         Prediction {
-            count,
+            data,
+            error,
             caveat: None,
         }
     }
 
-    fn caveated(count: usize, caveat: Caveat) -> Self {
+    fn caveated(data: usize, error: usize, caveat: Caveat) -> Self {
         Prediction {
-            count,
+            data,
+            error,
             caveat: Some(caveat),
         }
     }
@@ -93,46 +110,44 @@ pub fn predict_arrangement_counts(expr: &LirRelationExpr) -> BTreeMap<LirId, Pre
 pub fn predict_node(node: &LirRelationNode) -> Prediction {
     match node {
         // Imports an arrangement, never builds one.
-        LirRelationNode::Get { .. } => Prediction::exact(0),
+        LirRelationNode::Get { .. } => Prediction::default(),
 
-        // Stateless, or state that does not scale with the collection.
+        // Stateless, or state that does not scale with the collection. `Union`'s
+        // `consolidate_output` installs a merge batcher rather than a trace, bounded by updates at
+        // incomplete timestamps.
         LirRelationNode::Constant { .. }
         | LirRelationNode::Let { .. }
         | LirRelationNode::LetRec { .. }
         | LirRelationNode::Mfp { .. }
         | LirRelationNode::FlatMap { .. }
-        | LirRelationNode::Negate { .. } => Prediction::exact(0),
+        | LirRelationNode::Negate { .. }
+        | LirRelationNode::Union { .. } => Prediction::default(),
 
-        // `consolidate_output` installs a merge batcher, not a trace. Its state is bounded by
-        // updates at incomplete timestamps rather than by collection size, so it holds no
-        // arrangement.
-        LirRelationNode::Union { .. } => Prediction::exact(0),
-
-        // One data plus one error arrangement per form actually built.
         LirRelationNode::ArrangeBy { forms, .. } => {
-            Prediction::caveated(2 * forms.arranged.len(), Caveat::ArrangeByMayReuse)
+            let forms = forms.arranged.len();
+            Prediction::caveated(forms, forms, Caveat::ArrangeByMayReuse)
         }
 
         LirRelationNode::Threshold { .. } => {
-            Prediction::caveated(1, Caveat::ThresholdFlavorUnknown)
+            Prediction::caveated(1, 1, Caveat::ThresholdFlavorUnknown)
         }
 
         LirRelationNode::Join { plan, .. } => match plan {
             // Every stage is a `half_join` over a pre-existing trace, and the output is assembled
             // from collections, so not even an error arrangement appears.
-            JoinPlan::Delta(_) => Prediction::exact(0),
+            JoinPlan::Delta(_) => Prediction::default(),
             JoinPlan::Linear(plan) => {
                 // Each stage arranges its incoming stream. The seed is the exception: it is reused
                 // when an arrangement was selected for it and no initial closure forces a rebuild.
                 let reuses_source = plan.source_key.is_some() && plan.initial_closure.is_none();
-                let count = plan
+                let data = plan
                     .stage_plans
                     .len()
                     .saturating_sub(usize::from(reuses_source));
                 if reuses_source {
-                    Prediction::caveated(count, Caveat::JoinSourceMayReuse)
+                    Prediction::caveated(data, 0, Caveat::JoinSourceMayReuse)
                 } else {
-                    Prediction::exact(count)
+                    Prediction::exact(data, 0)
                 }
             }
         },
@@ -143,32 +158,37 @@ pub fn predict_node(node: &LirRelationNode) -> Prediction {
             // The renderer discards an identity MFP before testing it, so an identity MFP that
             // reports `could_error` must not be charged for an error arrangement.
             let mfp_can_error = !mfp_after.is_identity() && mfp_after.could_error();
-            // `render_reduce_plan` wraps every reduce in a bundle error arrangement.
-            Prediction::exact(1 + reduce_count(plan, mfp_can_error))
+            let (data, error) = reduce_count(plan, mfp_can_error);
+            // `render_reduce_plan` wraps every reduce in a bundle error arrangement. Empirically
+            // this one never allocates, so it never appears in `mz_arrangement_sizes`.
+            Prediction::exact(data, error + 1)
         }
 
-        LirRelationNode::TopK { top_k_plan, .. } => Prediction::exact(top_k_count(top_k_plan)),
+        LirRelationNode::TopK { top_k_plan, .. } => {
+            let (data, error) = top_k_count(top_k_plan);
+            Prediction::exact(data, error)
+        }
     }
 }
 
-/// Arrangements built by a reduce plan, excluding the bundle error arrangement.
-fn reduce_count(plan: &ReducePlan, mfp_can_error: bool) -> usize {
+/// Data and error arrangements built by a reduce plan, excluding the bundle error arrangement.
+fn reduce_count(plan: &ReducePlan, mfp_can_error: bool) -> (usize, usize) {
     match plan {
-        // Arrange, reduce, and an unconditional error reduce.
-        ReducePlan::Distinct => 3,
+        // Arrange and reduce, plus an unconditional error reduce.
+        ReducePlan::Distinct => (2, 1),
 
-        // Arrange, reduce, and an unconditional error reduce, plus an arrange/reduce pair to
-        // pre-distinct each `DISTINCT` aggregate.
-        ReducePlan::Accumulable(plan) => 3 + 2 * plan.distinct_aggrs.len(),
+        // As `Distinct`, plus an arrange/reduce pair to pre-distinct each `DISTINCT` aggregate.
+        ReducePlan::Accumulable(plan) => (2 + 2 * plan.distinct_aggrs.len(), 1),
 
-        ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(_)) => 2 + usize::from(mfp_can_error),
+        ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(_)) => (2, usize::from(mfp_can_error)),
 
         ReducePlan::Hierarchical(HierarchicalPlan::Bucketed(plan)) => {
             // Two per level, then a final arrange/reduce pair. The final error reduce fires when
             // no level validated, which happens only when there are no levels at all, or when the
             // trailing MFP can error.
             let validated_in_a_level = !plan.buckets.is_empty();
-            2 * plan.buckets.len() + 2 + usize::from(!validated_in_a_level || mfp_can_error)
+            let error = usize::from(!validated_in_a_level || mfp_can_error);
+            (2 * plan.buckets.len() + 2, error)
         }
 
         ReducePlan::Basic(BasicPlan::Single(plan)) => {
@@ -177,35 +197,34 @@ fn reduce_count(plan: &ReducePlan, mfp_can_error: bool) -> usize {
             let validating = !plan.fused_unnest_list;
             let distinct = plan.expr.distinct;
             let must_validate = validating && !distinct;
-            2 * usize::from(distinct) + 2 + usize::from(must_validate || mfp_can_error)
+            let error = usize::from(must_validate || mfp_can_error);
+            (2 + 2 * usize::from(distinct), error)
         }
 
         ReducePlan::Basic(BasicPlan::Multiple(aggrs)) => {
             // Only the first aggregate validates: it populates the shared error output, and every
             // later aggregate sees it as already present. Sub-aggregates are rendered with no MFP,
             // so only the collating stage can contribute an MFP error check.
-            let per_aggregate: usize = aggrs
-                .iter()
-                .enumerate()
-                .map(|(index, aggr)| {
-                    let must_validate = index == 0 && !aggr.distinct;
-                    2 + 2 * usize::from(aggr.distinct) + usize::from(must_validate)
-                })
-                .sum();
-            per_aggregate + 2 + usize::from(mfp_can_error)
+            let mut data = 0;
+            let mut error = 0;
+            for (index, aggr) in aggrs.iter().enumerate() {
+                data += 2 + 2 * usize::from(aggr.distinct);
+                error += usize::from(index == 0 && !aggr.distinct);
+            }
+            (data + 2, error + usize::from(mfp_can_error))
         }
     }
 }
 
-/// Arrangements built by a top-k plan.
-fn top_k_count(plan: &TopKPlan) -> usize {
+/// Data and error arrangements built by a top-k plan.
+fn top_k_count(plan: &TopKPlan) -> (usize, usize) {
     match plan {
         // Arrange and reduce, plus a bundle error arrangement that the other variants do not get,
         // because this is the only variant whose group-key arrangement is advertised upward.
-        TopKPlan::MonotonicTop1(_) => 3,
+        TopKPlan::MonotonicTop1(_) => (2, 1),
 
         // A single stage: the hierarchy is unnecessary when the input is monotonic.
-        TopKPlan::MonotonicTopK(_) => 2,
+        TopKPlan::MonotonicTopK(_) => (2, 0),
 
         TopKPlan::Basic(plan) => {
             // NOTE: the bucket hierarchy is gated on a limit being present. A pure-`OFFSET` top-k
@@ -216,7 +235,7 @@ fn top_k_count(plan: &TopKPlan) -> usize {
             } else {
                 0
             };
-            2 * levels + 2
+            (2 * levels + 2, 0)
         }
     }
 }
@@ -291,8 +310,8 @@ mod tests {
     #[test]
     fn basic_top_k_without_limit_skips_the_hierarchy() {
         let buckets = bucketing_of_expected_group_size(None);
-        assert_eq!(top_k_count(&basic_top_k(None, buckets.clone())), 2);
-        assert_eq!(top_k_count(&basic_top_k(Some(column()), buckets)), 16);
+        assert_eq!(top_k_count(&basic_top_k(None, buckets.clone())), (2, 0));
+        assert_eq!(top_k_count(&basic_top_k(Some(column()), buckets)), (16, 0));
     }
 
     #[test]
@@ -304,7 +323,7 @@ mod tests {
             arity: 1,
             must_consolidate: false,
         });
-        assert_eq!(top_k_count(&top1), 3);
+        assert_eq!(top_k_count(&top1), (2, 1));
 
         let top_k = TopKPlan::MonotonicTopK(MonotonicTopKPlan {
             group_key: vec![],
@@ -313,12 +332,12 @@ mod tests {
             arity: 1,
             must_consolidate: false,
         });
-        assert_eq!(top_k_count(&top_k), 2);
+        assert_eq!(top_k_count(&top_k), (2, 0));
     }
 
     #[test]
     fn distinct_reduce() {
-        assert_eq!(reduce_count(&ReducePlan::Distinct, false), 3);
+        assert_eq!(reduce_count(&ReducePlan::Distinct, false), (2, 1));
     }
 
     #[test]
@@ -330,8 +349,8 @@ mod tests {
                 distinct_aggrs: (0..distinct_count).map(|i| (i, aggregate(true))).collect(),
             })
         };
-        assert_eq!(reduce_count(&plan(0), false), 3);
-        assert_eq!(reduce_count(&plan(2), false), 7);
+        assert_eq!(reduce_count(&plan(0), false), (2, 1));
+        assert_eq!(reduce_count(&plan(2), false), (6, 1));
     }
 
     #[test]
@@ -340,8 +359,8 @@ mod tests {
             aggr_funcs: vec![],
             must_consolidate: false,
         }));
-        assert_eq!(reduce_count(&plan, false), 2);
-        assert_eq!(reduce_count(&plan, true), 3);
+        assert_eq!(reduce_count(&plan, false), (2, 0));
+        assert_eq!(reduce_count(&plan, true), (2, 1));
     }
 
     #[test]
@@ -356,10 +375,10 @@ mod tests {
         // the first level already validated.
         assert_eq!(
             reduce_count(&plan(bucketing_of_expected_group_size(None)), false),
-            16
+            (16, 0)
         );
         // With no levels nothing validated, so the final error reduce fires.
-        assert_eq!(reduce_count(&plan(vec![]), false), 3);
+        assert_eq!(reduce_count(&plan(vec![]), false), (2, 1));
     }
 
     #[test]
@@ -371,12 +390,12 @@ mod tests {
             }))
         };
         // Plain: arrange, reduce, and an unconditional validation reduce.
-        assert_eq!(reduce_count(&plan(false, false), false), 3);
+        assert_eq!(reduce_count(&plan(false, false), false), (2, 1));
         // A fused unnest-list skips validation entirely.
-        assert_eq!(reduce_count(&plan(false, true), false), 2);
+        assert_eq!(reduce_count(&plan(false, true), false), (2, 0));
         // A distinct aggregate supplies errors from its own demux, so no validation reduce, but it
         // pays for the pre-distinct arrange/reduce pair.
-        assert_eq!(reduce_count(&plan(true, false), false), 4);
+        assert_eq!(reduce_count(&plan(true, false), false), (4, 0));
     }
 
     /// Only the first aggregate validates. Later ones see the shared error output already set.
@@ -386,12 +405,12 @@ mod tests {
         // Two plain aggregates: (2 + 1) + 2, plus the collating pair.
         assert_eq!(
             reduce_count(&plan(vec![aggregate(false), aggregate(false)]), false),
-            7
+            (6, 1)
         );
         // A leading distinct aggregate never validates, so nothing else does either.
         assert_eq!(
             reduce_count(&plan(vec![aggregate(true), aggregate(false)]), false),
-            8
+            (8, 0)
         );
     }
 
@@ -401,7 +420,7 @@ mod tests {
             inputs: vec![],
             plan: JoinPlan::Delta(DeltaJoinPlan { path_plans: vec![] }),
         };
-        assert_eq!(predict_node(&node), Prediction::exact(0));
+        assert_eq!(predict_node(&node), Prediction::default());
     }
 
     #[test]
@@ -417,11 +436,11 @@ mod tests {
             }),
         };
         // No source arrangement: every stage arranges its own input.
-        assert_eq!(predict_node(&join(None)), Prediction::exact(2));
+        assert_eq!(predict_node(&join(None)), Prediction::exact(2, 0));
         // A reusable source arrangement saves the seed, but only if it is really there.
         assert_eq!(
             predict_node(&join(Some(vec![column()]))),
-            Prediction::caveated(1, Caveat::JoinSourceMayReuse)
+            Prediction::caveated(1, 0, Caveat::JoinSourceMayReuse)
         );
     }
 }
