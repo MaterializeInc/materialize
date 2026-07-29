@@ -18,6 +18,7 @@ use std::iter;
 use std::num::NonZeroU32;
 use std::time::Duration;
 
+use chrono::DateTime;
 use itertools::Itertools;
 use mz_adapter_types::compaction::{CompactionWindow, DEFAULT_LOGICAL_COMPACTION_WINDOW_DURATION};
 use mz_arrow_util::builder::ArrowBuilder;
@@ -33,6 +34,7 @@ use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
+use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
@@ -2819,6 +2821,19 @@ pub fn describe_alter_network_policy(
     Ok(StatementDesc::new(None))
 }
 
+/// Rejects times that `mz_materialized_view_refresh_strategies` could not pack as a
+/// `timestamptz`, whose range is far smaller than `mz_timestamp`'s.
+fn check_refresh_time(option: &str, ts: Timestamp) -> Result<(), PlanError> {
+    let renderable = i64::try_from(ts)
+        .ok()
+        .and_then(DateTime::from_timestamp_millis)
+        .is_some_and(|dt| CheckedTimestamp::try_from(dt).is_ok());
+    if !renderable {
+        sql_bail!("{option} time too large: {ts}");
+    }
+    Ok(())
+}
+
 pub fn plan_create_materialized_view(
     scx: &StatementContext,
     mut stmt: CreateMaterializedViewStatement<Aug>,
@@ -2927,6 +2942,7 @@ pub fn plan_create_materialized_view(
                     let timestamp = hir
                         .into_literal_mz_timestamp()
                         .ok_or_else(|| PlanError::InvalidRefreshAt)?;
+                    check_refresh_time("REFRESH AT", timestamp)?;
                     refresh_schedule.ats.push(timestamp);
                 }
                 RefreshOptionValue::Every(RefreshEveryOptionValue {
@@ -2992,6 +3008,7 @@ pub fn plan_create_materialized_view(
                     let aligned_to_const = aligned_to_hir
                         .into_literal_mz_timestamp()
                         .ok_or_else(|| PlanError::InvalidRefreshEveryAlignedTo)?;
+                    check_refresh_time("REFRESH EVERY ... ALIGNED TO", aligned_to_const)?;
 
                     refresh_schedule.everies.push(RefreshEvery {
                         interval,
