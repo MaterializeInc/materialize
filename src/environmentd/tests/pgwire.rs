@@ -536,12 +536,12 @@ async fn test_discard_all_resets_over_extended_protocol() {
     {
         let client = server.connect().await.unwrap();
         client
-            .execute("SET extra_float_digits = 1", &[])
+            .execute("SET extra_float_digits = 2", &[])
             .await
             .unwrap();
-        assert_eq!(show(&client, "extra_float_digits").await, "1");
+        assert_eq!(show(&client, "extra_float_digits").await, "2");
         client.execute("DISCARD ALL", &[]).await.unwrap();
-        assert_eq!(show(&client, "extra_float_digits").await, "3");
+        assert_eq!(show(&client, "extra_float_digits").await, "1");
     }
 
     // A startup-supplied default survives DISCARD ALL rather than reverting to

@@ -334,8 +334,18 @@ metrics:
   help: Count of snapshot consolidation passes.
   source: src/catalog/src/durable/metrics.rs
   visibility: internal
-- name: mz_catalog_snapshot_latency_seconds
-  help: Total latency for fetching a snapshot of the durable catalog.
+- name: mz_catalog_snapshot_latency_seconds_bucket
+  help: Latency for fetching a snapshot of the durable catalog.
+  labels:
+  - le
+  source: src/catalog/src/durable/metrics.rs
+  visibility: internal
+- name: mz_catalog_snapshot_latency_seconds_count
+  help: Latency for fetching a snapshot of the durable catalog.
+  source: src/catalog/src/durable/metrics.rs
+  visibility: internal
+- name: mz_catalog_snapshot_latency_seconds_sum
+  help: Latency for fetching a snapshot of the durable catalog.
   source: src/catalog/src/durable/metrics.rs
   visibility: internal
 - name: mz_catalog_snapshot_max_entries
@@ -365,13 +375,42 @@ metrics:
   help: Count of snapshots taken.
   source: src/catalog/src/durable/metrics.rs
   visibility: internal
-- name: mz_catalog_sync_latency_seconds
-  help: Total latency for syncing the in-memory state of the durable catalog with the persisted contents.
+- name: mz_catalog_sync_latency_seconds_bucket
+  help: Latency for syncing the in-memory state of the durable catalog with the persisted contents.
+  labels:
+  - le
+  source: src/catalog/src/durable/metrics.rs
+  visibility: internal
+- name: mz_catalog_sync_latency_seconds_count
+  help: Latency for syncing the in-memory state of the durable catalog with the persisted contents.
+  source: src/catalog/src/durable/metrics.rs
+  visibility: internal
+- name: mz_catalog_sync_latency_seconds_sum
+  help: Latency for syncing the in-memory state of the durable catalog with the persisted contents.
   source: src/catalog/src/durable/metrics.rs
   visibility: internal
 - name: mz_catalog_syncs
   help: Count of catalog syncs.
   source: src/catalog/src/durable/metrics.rs
+  visibility: internal
+- name: mz_catalog_transact_phase_seconds_bucket
+  help: Wall time of the individual phases of a coordinator catalog transaction, to attribute where transact time is spent. Phases overlap and do not sum to mz_catalog_transact_seconds. The transact phase includes the durable catalog sync and commit.
+  labels:
+  - le
+  - phase
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_catalog_transact_phase_seconds_count
+  help: Wall time of the individual phases of a coordinator catalog transaction, to attribute where transact time is spent. Phases overlap and do not sum to mz_catalog_transact_seconds. The transact phase includes the durable catalog sync and commit.
+  labels:
+  - phase
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_catalog_transact_phase_seconds_sum
+  help: Wall time of the individual phases of a coordinator catalog transaction, to attribute where transact time is spent. Phases overlap and do not sum to mz_catalog_transact_seconds. The transact phase includes the durable catalog sync and commit.
+  labels:
+  - phase
+  source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_catalog_transact_seconds_bucket
   help: The time it takes to run various catalog transact methods.
@@ -392,8 +431,18 @@ metrics:
   - method
   source: src/adapter/src/metrics.rs
   visibility: internal
-- name: mz_catalog_transaction_commit_latency_seconds
-  help: Total latency for committing a durable catalog transactions.
+- name: mz_catalog_transaction_commit_latency_seconds_bucket
+  help: Latency for committing a durable catalog transaction.
+  labels:
+  - le
+  source: src/catalog/src/durable/metrics.rs
+  visibility: internal
+- name: mz_catalog_transaction_commit_latency_seconds_count
+  help: Latency for committing a durable catalog transaction.
+  source: src/catalog/src/durable/metrics.rs
+  visibility: internal
+- name: mz_catalog_transaction_commit_latency_seconds_sum
+  help: Latency for committing a durable catalog transaction.
   source: src/catalog/src/durable/metrics.rs
   visibility: internal
 - name: mz_catalog_transaction_commits
