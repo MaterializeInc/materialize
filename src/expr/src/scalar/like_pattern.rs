@@ -369,6 +369,9 @@ fn build_regex(subpatterns: &[Subpattern], case_insensitive: bool) -> Result<Reg
     match Regex::new(&r, case_insensitive) {
         Ok(regex) => Ok(regex),
         Err(RegexCompilationError::PatternTooLarge { .. }) => Err(EvalError::LikePatternTooLong),
+        Err(RegexCompilationError::PatternTooExpensive { .. }) => {
+            Err(EvalError::LikePatternTooLong)
+        }
         Err(RegexCompilationError::RegexError(regex::Error::CompiledTooBig(_))) => {
             Err(EvalError::LikePatternTooLong)
         }
