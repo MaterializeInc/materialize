@@ -146,128 +146,107 @@ fn handle_apply(
         return "missing required `pipeline` argument for `apply` directive".to_string();
     };
 
-    if pipeline.len() != 1 {
-        return "unexpected `pipeline` arguments for `apply` directive".to_string();
+    if pipeline.is_empty() {
+        return "empty `pipeline` argument for `apply` directive".to_string();
     }
 
-    let result = match pipeline[0].as_str() {
-        // Pseudo-transforms.
-        "identity" => {
-            // noop
-            let transform = Identity::default();
-            apply_transform(transform, catalog, input)
+    let mut transforms = vec![];
+    for name in pipeline {
+        match get_transforms(name) {
+            Ok(ts) => transforms.extend(ts),
+            Err(err) => return err,
         }
-        // Actual transforms.
-        "anf" => {
-            use mz_transform::cse::anf::ANF;
-            let transform = ANF::default();
-            apply_transform(transform, catalog, input)
-        }
-        "equivalence_propagation" => {
-            use mz_transform::equivalence_propagation::EquivalencePropagation;
-            let transform = EquivalencePropagation::default();
-            apply_transform(transform, catalog, input)
-        }
-        "flat_map_elimination" => {
-            use mz_transform::canonicalization::FlatMapElimination;
-            let transform = FlatMapElimination;
-            apply_transform(transform, catalog, input)
-        }
-        "fold_constants" => {
-            use mz_transform::fold_constants::FoldConstants;
-            let transform = FoldConstants { limit: None };
-            apply_transform(transform, catalog, input)
-        }
-        "fusion_join" => {
-            use mz_transform::fusion::join::Join;
-            let transform = Join;
-            apply_transform(transform, catalog, input)
-        }
-        "fusion_top_k" => {
-            use mz_transform::fusion::top_k::TopK;
-            let transform = TopK;
-            apply_transform(transform, catalog, input)
-        }
-        "literal_lifting" => {
-            use mz_transform::literal_lifting::LiteralLifting;
-            let transform = LiteralLifting::default();
-            apply_transform(transform, catalog, input)
-        }
-        "non_null_requirements" => {
-            use mz_transform::non_null_requirements::NonNullRequirements;
-            let transform = NonNullRequirements::default();
-            apply_transform(transform, catalog, input)
-        }
-        "predicate_pushdown" => {
-            use mz_transform::predicate_pushdown::PredicatePushdown;
-            let transform = PredicatePushdown::default();
-            apply_transform(transform, catalog, input)
-        }
-        "projection_lifting" => {
-            use mz_transform::movement::ProjectionLifting;
-            let transform = ProjectionLifting::default();
-            apply_transform(transform, catalog, input)
-        }
-        "projection_pushdown" => {
-            use mz_transform::movement::ProjectionPushdown;
-            let transform = ProjectionPushdown::default();
-            apply_transform(transform, catalog, input)
-        }
-        "normalize_lets" => {
-            use mz_transform::normalize_lets::NormalizeLets;
-            let transform = NormalizeLets::new(false);
-            apply_transform(transform, catalog, input)
-        }
-        "reduction_pushdown" => {
-            use mz_transform::reduction_pushdown::ReductionPushdown;
-            let transform = ReductionPushdown;
-            apply_transform(transform, catalog, input)
-        }
-        "redundant_join" => {
-            use mz_transform::redundant_join::RedundantJoin;
-            let transform = RedundantJoin::default();
-            apply_transform(transform, catalog, input)
-        }
-        "relation_cse" => {
-            use mz_transform::cse::relation_cse::RelationCSE;
-            let transform = RelationCSE::new(false);
-            apply_transform(transform, catalog, input)
-        }
-        "semijoin_idempotence" => {
-            use mz_transform::semijoin_idempotence::SemijoinIdempotence;
-            let transform = SemijoinIdempotence::default();
-            apply_transform(transform, catalog, input)
-        }
-        "case_literal" => {
-            use mz_transform::case_literal::CaseLiteralTransform;
-            let transform = CaseLiteralTransform;
-            apply_transform(transform, catalog, input)
-        }
-        "coalesce_case" => {
-            use mz_transform::coalesce_case::CoalesceCase;
-            let transform = CoalesceCase;
-            apply_transform(transform, catalog, input)
-        }
-        "threshold_elision" => {
-            use mz_transform::threshold_elision::ThresholdElision;
-            let transform = ThresholdElision;
-            apply_transform(transform, catalog, input)
-        }
-        "union_branch_cancellation" => {
-            use mz_transform::union_cancel::UnionBranchCancellation;
-            let transform = UnionBranchCancellation;
-            apply_transform(transform, catalog, input)
-        }
-        transform => Err(format!("unsupported pipeline transform: {transform}")),
-    };
+    }
 
-    result.unwrap_or_else(|err| err)
+    apply_transforms(transforms, catalog, input, args).unwrap_or_else(|err| err)
 }
 
-fn apply_transform<T: mz_transform::Transform>(
-    transform: T,
+/// Resolves a `pipeline` entry of the `apply` directive to a transform
+/// sequence. Most names map to a single transform, `optimize` expands to the
+/// full optimizer pipeline.
+fn get_transforms(name: &str) -> Result<Vec<Box<dyn mz_transform::Transform>>, String> {
+    let transform: Box<dyn mz_transform::Transform> = match name {
+        // Pseudo-transforms.
+        "identity" => Box::new(Identity),
+        "optimize" => return Ok(full_transform_list()),
+        // Actual transforms.
+        "anf" => Box::new(mz_transform::cse::anf::ANF::default()),
+        "canonicalize_mfp" => Box::new(mz_transform::canonicalize_mfp::CanonicalizeMfp),
+        "case_literal" => Box::new(mz_transform::case_literal::CaseLiteralTransform),
+        "coalesce_case" => Box::new(mz_transform::coalesce_case::CoalesceCase),
+        "equivalence_propagation" => {
+            Box::new(mz_transform::equivalence_propagation::EquivalencePropagation::default())
+        }
+        "flat_map_elimination" => Box::new(mz_transform::canonicalization::FlatMapElimination),
+        "fold_constants" => Box::new(mz_transform::fold_constants::FoldConstants { limit: None }),
+        "fusion" => Box::new(mz_transform::fusion::Fusion),
+        "fusion_join" => Box::new(mz_transform::fusion::join::Join),
+        "fusion_top_k" => Box::new(mz_transform::fusion::top_k::TopK),
+        "literal_lifting" => Box::new(mz_transform::literal_lifting::LiteralLifting::default()),
+        "non_null_requirements" => {
+            Box::new(mz_transform::non_null_requirements::NonNullRequirements::default())
+        }
+        "normalize_lets" => Box::new(mz_transform::normalize_lets::NormalizeLets::new(false)),
+        "predicate_pushdown" => {
+            Box::new(mz_transform::predicate_pushdown::PredicatePushdown::default())
+        }
+        "projection_extraction" => Box::new(mz_transform::canonicalization::ProjectionExtraction),
+        "projection_lifting" => Box::new(mz_transform::movement::ProjectionLifting::default()),
+        "projection_pushdown" => Box::new(mz_transform::movement::ProjectionPushdown::default()),
+        "reduction_pushdown" => Box::new(mz_transform::reduction_pushdown::ReductionPushdown),
+        "redundant_join" => Box::new(mz_transform::redundant_join::RedundantJoin::default()),
+        "relation_cse" => Box::new(mz_transform::cse::relation_cse::RelationCSE::new(false)),
+        "semijoin_idempotence" => {
+            Box::new(mz_transform::semijoin_idempotence::SemijoinIdempotence::default())
+        }
+        "threshold_elision" => Box::new(mz_transform::threshold_elision::ThresholdElision),
+        "union_branch_cancellation" => {
+            Box::new(mz_transform::union_cancel::UnionBranchCancellation)
+        }
+        "union_fusion" => Box::new(mz_transform::fusion::union::Union),
+        "union_negate_fusion" => Box::new(mz_transform::compound::UnionNegateFusion),
+        "will_distinct" => Box::new(mz_transform::will_distinct::WillDistinct),
+        transform => return Err(format!("unsupported pipeline transform: {transform}")),
+    };
+    Ok(vec![transform])
+}
+
+/// The full optimizer pipeline, as applied by the `optimize` pipeline name.
+fn full_transform_list() -> Vec<Box<dyn mz_transform::Transform>> {
+    use mz_transform::{Optimizer, TransformCtx, typecheck};
+
+    let features = OptimizerFeatures::default();
+    let typecheck_ctx = typecheck::empty_typechecking_context();
+    let mut df_meta = DataflowMetainfo::default();
+    let mut transform_ctx = TransformCtx::local(
+        &features,
+        &typecheck_ctx,
+        &mut df_meta,
+        None,
+        Some(TEST_GLOBAL_ID),
+    );
+
+    #[allow(deprecated)]
+    Optimizer::logical_optimizer(&mut transform_ctx)
+        .transforms
+        .into_iter()
+        .chain(std::iter::once::<Box<dyn mz_transform::Transform>>(
+            Box::new(mz_transform::movement::ProjectionPushdown::default()),
+        ))
+        .chain(std::iter::once::<Box<dyn mz_transform::Transform>>(
+            Box::new(mz_transform::normalize_lets::NormalizeLets::new(false)),
+        ))
+        .chain(Optimizer::logical_cleanup_pass(&mut transform_ctx, false).transforms)
+        .chain(Optimizer::physical_optimizer(&mut transform_ctx).transforms)
+        .collect::<Vec<_>>()
+}
+
+#[allow(clippy::disallowed_types)]
+fn apply_transforms(
+    transforms: Vec<Box<dyn mz_transform::Transform>>,
     catalog: &TestCatalog,
     input: &str,
+    args: &std::collections::HashMap<String, Vec<String>>,
 ) -> Result<String, String> {
     // Parse the relation, returning early on parse error.
     let mut relation = try_parse_mir(catalog, input)?;
@@ -277,6 +256,11 @@ fn apply_transform<T: mz_transform::Transform>(
     features.enable_letrec_fixpoint_analysis = true;
     features.enable_dequadratic_eqprop_map = true;
     features.enable_eq_classes_withholding_errors = true;
+    // Tests opt into flag-gated transform behavior via directive args, e.g.
+    // `apply pipeline=will_distinct enable_will_distinct_propagation=true`.
+    if args.contains_key("enable_will_distinct_propagation") {
+        features.enable_will_distinct_propagation = true;
+    }
     let typecheck_ctx = mz_transform::typecheck::empty_typechecking_context();
     let mut df_meta = DataflowMetainfo::default();
     let mut transform_ctx = mz_transform::TransformCtx::local(
@@ -287,10 +271,12 @@ fn apply_transform<T: mz_transform::Transform>(
         Some(TEST_GLOBAL_ID),
     );
 
-    // Apply the transformation, returning early on TransformError.
-    transform
-        .transform(&mut relation, &mut transform_ctx)
-        .map_err(|e| format!("{}\n", e.to_string().trim()))?;
+    // Apply the transformations, returning early on TransformError.
+    for transform in transforms {
+        transform
+            .transform(&mut relation, &mut transform_ctx)
+            .map_err(|e| format!("{}\n", e.to_string().trim()))?;
+    }
 
     // Serialize and return the transformed relation.
     Ok(relation.debug_explain(&ExplainConfig::default(), Some(catalog)))
