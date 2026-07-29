@@ -88,6 +88,23 @@ spec:
         {{- end }}
         {{- end }}
 
+        {{/* GCP Configuration */}}
+        {{- if eq .Values.operator.cloudProvider.type "gcp" }}
+        {{- with .Values.operator.cloudProvider.providers.gcp }}
+        {{- with .nodeUpgradeRolloutTrigger }}
+        {{- if .enabled }}
+        - "--enable-gcp-node-upgrade-rollout-trigger"
+        - "--gcp-node-upgrade-notification-subscription={{ required "nodeUpgradeRolloutTrigger.notificationSubscription is required when nodeUpgradeRolloutTrigger is enabled" .notificationSubscription }}"
+        - "--gcp-cluster-name={{ required "nodeUpgradeRolloutTrigger.clusterName is required when nodeUpgradeRolloutTrigger is enabled" .clusterName }}"
+        - "--gcp-cluster-location={{ required "nodeUpgradeRolloutTrigger.clusterLocation is required when nodeUpgradeRolloutTrigger is enabled" .clusterLocation }}"
+        {{- range .watchedNodePools }}
+        - "--gcp-node-upgrade-watched-node-pool={{ . }}"
+        {{- end }}
+        {{- end }}
+        {{- end }}
+        {{- end }}
+        {{- end }}
+
         {{/* Feature Flags */}}
         {{- if .Values.balancerd.enabled }}
         - "--create-balancers"

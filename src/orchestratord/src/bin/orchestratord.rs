@@ -38,7 +38,7 @@ use mz_build_info::{BuildInfo, build_info};
 use mz_orchestrator_kubernetes::{KubernetesImagePullPolicy, util::create_client};
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_orchestratord::{
-    controller,
+    controller, gcp_node_upgrade,
     k8s::{ConversionWebhookConfig, register_crds},
     metrics::{self, Metrics},
     tls::DefaultCertificateSpecs,
@@ -121,6 +121,40 @@ pub struct Args {
     console_image_tag_default: String,
     #[clap(long)]
     console_image_tag_map: Vec<KeyValueArg<String, String>>,
+
+    /// Trigger rollouts of Materialize instances when GKE upgrades the node
+    /// pools underneath them. Requires `--install-v1-crd` and
+    /// `--cloud-provider=gcp`, and the watched node pools should be
+    /// configured to use the blue-green upgrade strategy.
+    #[clap(long)]
+    enable_gcp_node_upgrade_rollout_trigger: bool,
+    /// The Pub/Sub subscription receiving GKE cluster notifications for this
+    /// cluster, in `projects/{project}/subscriptions/{subscription}` form.
+    /// Required when `--enable-gcp-node-upgrade-rollout-trigger` is set.
+    #[clap(
+        long,
+        required_if_eq("enable_gcp_node_upgrade_rollout_trigger", "true")
+    )]
+    gcp_node_upgrade_notification_subscription: Option<String>,
+    /// The name of the GKE cluster this orchestratord is running in.
+    /// Required when `--enable-gcp-node-upgrade-rollout-trigger` is set.
+    #[clap(
+        long,
+        required_if_eq("enable_gcp_node_upgrade_rollout_trigger", "true")
+    )]
+    gcp_cluster_name: Option<String>,
+    /// The location (region or zone) of the GKE cluster this orchestratord
+    /// is running in. Required when
+    /// `--enable-gcp-node-upgrade-rollout-trigger` is set.
+    #[clap(
+        long,
+        required_if_eq("enable_gcp_node_upgrade_rollout_trigger", "true")
+    )]
+    gcp_cluster_location: Option<String>,
+    /// A node pool to watch for GKE node upgrades; may be passed multiple
+    /// times. When not passed, all node pools are watched.
+    #[clap(long = "gcp-node-upgrade-watched-node-pool")]
+    gcp_node_upgrade_watched_node_pools: Vec<String>,
 
     #[clap(long)]
     aws_account_id: Option<String>,
@@ -454,6 +488,34 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 panic!("metrics server failed: {}", e.display_with_causes());
             }
         });
+    }
+
+    if args.enable_gcp_node_upgrade_rollout_trigger {
+        anyhow::ensure!(
+            args.cloud_provider == CloudProvider::Gcp,
+            "--enable-gcp-node-upgrade-rollout-trigger requires --cloud-provider=gcp"
+        );
+        anyhow::ensure!(
+            args.install_v1_crd,
+            "--enable-gcp-node-upgrade-rollout-trigger requires --install-v1-crd, since \
+             rollouts are triggered through the v1 Materialize CRD"
+        );
+        let config = gcp_node_upgrade::Config::new(
+            args.gcp_node_upgrade_notification_subscription
+                .clone()
+                .expect("clap requires --gcp-node-upgrade-notification-subscription"),
+            args.gcp_cluster_name
+                .clone()
+                .expect("clap requires --gcp-cluster-name"),
+            args.gcp_cluster_location
+                .clone()
+                .expect("clap requires --gcp-cluster-location"),
+            args.gcp_node_upgrade_watched_node_pools.clone(),
+        )?;
+        mz_ore::task::spawn(
+            || "gcp node upgrade watcher",
+            gcp_node_upgrade::run(client.clone(), config),
+        );
     }
 
     mz_ore::task::spawn(

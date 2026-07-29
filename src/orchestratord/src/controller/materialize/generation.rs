@@ -1293,7 +1293,7 @@ fn create_environmentd_statefulset_object(
         metadata: ObjectMeta {
             annotations: Some(btreemap! {
                 "materialize.cloud/generation".to_owned() => generation.to_string(),
-                "materialize.cloud/force".to_owned() => mz.spec.force_rollout.to_string(),
+                "materialize.cloud/force".to_owned() => mz.force_rollout_value(),
             }),
             ..mz.managed_resource_meta(mz.environmentd_statefulset_name(generation))
         },
