@@ -18,17 +18,14 @@ use std::net::IpAddr;
 
 use async_trait::async_trait;
 use bytes::{Buf, BufMut, BytesMut};
-use bytesize::ByteSize;
 use futures::{SinkExt, TryStreamExt, sink};
 use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
-use mz_ore::cast::CastFrom;
 use mz_ore::future::OreSinkExt;
 use mz_ore::netio::AsyncReady;
 use mz_pgwire_common::{
-    ChannelBinding, Conn, Cursor, DecodeState, ErrorResponse, FrontendMessage, GS2Header,
-    MAX_REQUEST_SIZE, Pgbuf, SASLClientFinalResponse, SASLInitialResponse, input_err,
-    parse_frame_len,
+    ChannelBinding, Conn, Cursor, DecodeState, ErrorResponse, FrontendMessage, GS2Header, Pgbuf,
+    SASLClientFinalResponse, SASLInitialResponse, input_err, parse_frame_len,
 };
 use tokio::io::{self, AsyncRead, AsyncWrite, Interest, Ready};
 use tokio::time::{self, Duration};
@@ -148,15 +145,6 @@ where
         codec.text_settings = text_settings;
     }
 
-    /// Enables or disables copy mode on the codec.
-    ///
-    /// When copy mode is enabled, the aggregate buffer size check in the
-    /// decoder is skipped. This is needed during COPY FROM STDIN because
-    /// many small CopyData frames can accumulate in the TCP read buffer.
-    pub fn set_copy_mode(&mut self, enabled: bool) {
-        self.inner.get_mut().codec_mut().in_copy_mode = enabled;
-    }
-
     /// Waits for the connection to be closed.
     ///
     /// Returns a "connection closed" error when the connection is closed. If
@@ -222,12 +210,6 @@ pub struct Codec {
     encode_state: Vec<(mz_pgrepr::Type, mz_pgwire_common::Format)>,
     /// The session's text encoding settings when `encode_state` was installed.
     text_settings: mz_pgrepr::TextEncodeSettings,
-    /// When true, skip the aggregate buffer size check in `decode()`.
-    /// During COPY FROM STDIN, many small CopyData frames accumulate in the
-    /// TCP read buffer and can exceed MAX_REQUEST_SIZE even though individual
-    /// frames are small. Individual frame lengths are still validated by
-    /// `parse_frame_len()`.
-    in_copy_mode: bool,
 }
 
 impl Codec {
@@ -237,7 +219,6 @@ impl Codec {
             decode_state: DecodeState::Head,
             encode_state: vec![],
             text_settings: mz_pgrepr::TextEncodeSettings::STABLE,
-            in_copy_mode: false,
         }
     }
 }
@@ -514,15 +495,6 @@ impl Decoder for Codec {
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<FrontendMessage>, io::Error> {
-        if !self.in_copy_mode && src.len() > MAX_REQUEST_SIZE {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "request larger than {}",
-                    ByteSize::b(u64::cast_from(MAX_REQUEST_SIZE))
-                ),
-            ));
-        }
         loop {
             match self.decode_state {
                 DecodeState::Head => {
