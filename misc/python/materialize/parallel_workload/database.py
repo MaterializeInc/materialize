@@ -893,6 +893,146 @@ class S3Object(DBObject):
         return self.name()
 
 
+# A fixed name, never run through `naughtify`, in `materialize.public` rather
+# than one of the workload's own databases: no action creates, renames, swaps or
+# drops that database or schema, so the name resolves for a whole run and the
+# end-of-run check is guaranteed to find the table.
+READ_THEN_WRITE_COUNTER_NAME = "materialize.public.pw_rtw_counter"
+
+# Error texts that prove an increment did not land.
+#
+# A concurrently modified dependency is what the coordinator reports when it
+# revalidates a plan before sequencing it, which is before any write. The other
+# is a cluster-resolution failure during planning, which the workload provokes
+# on purpose by pointing the default cluster at a nonexistent one, so the
+# statement never reaches a write path at all. The trailing quote keeps it from
+# matching "unknown cluster replica size" errors.
+#
+# Every other failure counts as unknown, a statement timeout and a cancellation
+# included, because either can race a commit that did happen. A wrong entry here
+# makes healthy runs fail, an unnecessary unknown only widens the upper bound.
+DEFINITELY_NOT_COMMITTED_ERRORS = (
+    "was concurrently modified",
+    "unknown cluster '",
+)
+
+
+class ReadThenWriteCounter:
+    """A single-row counter table that `ReadThenWriteCounterUpdateAction`
+    increments with read-then-write UPDATEs, plus the tallies of the outcomes its
+    workers saw.
+
+    The table is registered in none of the `Database` object lists and lives
+    outside the workload's own databases, so no other action writes to, renames,
+    alters or drops it. That is what makes it an oracle: every increment of `v`
+    comes from one recorded attempt, so
+
+        definitely_committed <= v <= definitely_committed + unknown
+
+    must hold at the end of a run. A violation means a lost update, an update
+    applied twice, a success reported for a write that never landed, or an error
+    reported for a write that did land. The lower bound is
+    dropped in the backup-restore scenario, see `validate`.
+    """
+
+    lock: threading.Lock
+    definitely_committed: int
+    definitely_not_committed: int
+    unknown: int
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.definitely_committed = 0
+        self.definitely_not_committed = 0
+        self.unknown = 0
+
+    def __str__(self) -> str:
+        return READ_THEN_WRITE_COUNTER_NAME
+
+    def create(self, exe: Executor) -> None:
+        """Creates and seeds the table, once per run.
+
+        Assumes the harness has already granted all privileges on tables to
+        PUBLIC, so that a worker which reconnected as a random role can still
+        increment the counter."""
+        exe.execute(f"DROP TABLE IF EXISTS {self} CASCADE")
+        exe.execute(f"CREATE TABLE {self} (id int, v bigint)")
+        exe.execute(f"INSERT INTO {self} VALUES (1, 0)")
+
+    def drop(self, exe: Executor) -> None:
+        exe.execute(f"DROP TABLE IF EXISTS {self} CASCADE")
+
+    def record_committed(self) -> None:
+        with self.lock:
+            self.definitely_committed += 1
+
+    def record_unknown(self) -> None:
+        with self.lock:
+            self.unknown += 1
+
+    def record_failure(self, error: str) -> None:
+        """Classifies a failed increment, see `DEFINITELY_NOT_COMMITTED_ERRORS`.
+        An error this cannot classify counts as unknown."""
+        if not any(known in error for known in DEFINITELY_NOT_COMMITTED_ERRORS):
+            self.record_unknown()
+            return
+        with self.lock:
+            self.definitely_not_committed += 1
+
+    def validate(self, exe: Executor) -> None:
+        """Checks the conservation invariant, raising if it is violated.
+
+        Must run after all workers have joined, otherwise an in-flight increment
+        can land between reading the tallies and reading the table."""
+        with self.lock:
+            committed = self.definitely_committed
+            unknown = self.unknown
+            tallies = (
+                f"definitely_committed={committed} "
+                f"definitely_not_committed={self.definitely_not_committed} "
+                f"unknown={unknown}"
+            )
+        print(f"read-then-write counter tallies: {tallies}")
+
+        # A restore rolls the whole instance back to the backup point, so
+        # increments that committed after it are gone and the lower bound does
+        # not hold in that scenario. Rolling back can only lose increments, never
+        # invent them, so the upper bound holds everywhere and stays sharp.
+        lower = 0 if exe.db.scenario == Scenario.BackupRestore else committed
+        upper = committed + unknown
+
+        # `FlipFlagsAction` points the system-wide default cluster at a
+        # nonexistent one to hunt for panics, and it can still be doing that when
+        # the run ends. This session inherits that default, so the read below
+        # needs a cluster that is certainly there. quickstart is the only one the
+        # harness guarantees: the workload creates and drops its own clusters,
+        # but never that one.
+        exe.execute("SET cluster = quickstart")
+        exe.execute(f"SELECT id, v FROM {self}")
+        rows = exe.cur.fetchall()
+        if len(rows) != 1 or rows[0][0] != 1:
+            message = (
+                f"read-then-write counter table should hold exactly the seeded row "
+                f"(1, v), "
+                f"found {rows} ({tallies})"
+            )
+            print(f"+++ {message}")
+            raise ValueError(message)
+        value = rows[0][1]
+        if not lower <= value <= upper:
+            message = (
+                f"read-then-write counter conservation invariant violated: "
+                f"observed v={value}, "
+                f"expected {lower} <= v <= {upper} ({tallies})"
+            )
+            print(f"+++ {message}")
+            raise ValueError(message)
+        print(
+            f"read-then-write counter conservation invariant holds: "
+            f"{lower} <= v={value} <= {upper}"
+        )
+
+
 class Index:
     _name: str
     schema: Schema
@@ -1042,6 +1182,7 @@ class Database:
     kafka_sink_id: int
     s3_path: int
     s3_objects: list[S3Object]
+    read_then_write_counter: ReadThenWriteCounter
     lock: threading.Lock
     seed: str
     sqlsmith_state: str
@@ -1130,6 +1271,7 @@ class Database:
         self.sql_server_source_id = len(self.sql_server_sources)
         self.iceberg_sink_id = len(self.iceberg_sinks)
         self.kafka_sink_id = len(self.kafka_sinks)
+        self.read_then_write_counter = ReadThenWriteCounter()
         self.lock = threading.Lock()
         self.sqlsmith_state = ""
         self.flags = {}
@@ -1254,6 +1396,10 @@ class Database:
                 "INSERT INTO materialize.public.repeat_row_source VALUES (1), (1), (-1), (-1), (0)"
             )
 
+        # Created and seeded exactly once per run: re-seeding mid-run would reset
+        # `v` while the workers' tallies keep growing.
+        self.read_then_write_counter.create(exe)
+
         print("Creating relations")
 
         for relation in self:
@@ -1272,6 +1418,10 @@ class Database:
         # self.sqlsmith_state = result.stdout
 
     def drop(self, exe: Executor) -> None:
+        # The counter table lives outside the workload's databases, so dropping
+        # them does not reclaim it.
+        self.read_then_write_counter.drop(exe)
+
         for db in self.dbs:
             print(f"Dropping database {db}")
             db.drop(exe)
