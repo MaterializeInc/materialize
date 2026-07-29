@@ -31,9 +31,15 @@ pub trait Analysis: 'static {
     type Value: std::fmt::Debug;
     /// Announce any dependencies this analysis has on other analyses.
     ///
-    /// The method should invoke `builder.require::<Foo>()` for each other
-    /// analysis `Foo` this analysis depends upon.
-    fn announce_dependencies(_builder: &mut DerivedBuilder) {}
+    /// The method should invoke `builder.require(Foo)` for each other analysis `Foo` this
+    /// analysis depends upon.
+    ///
+    /// Takes `&self` so an analysis can pass its own configuration to what it requires. An
+    /// analysis holding statistics, for example, can hand them to a dependency that needs them.
+    /// Whoever requires a type first supplies its instance, and `require` silently ignores later
+    /// instances of the same type, so a dependency configured here must not also be required with
+    /// different configuration elsewhere.
+    fn announce_dependencies(&self, _builder: &mut DerivedBuilder) {}
     /// The analysis value derived for an expression, given other analysis results.
     ///
     /// The other analysis results include the results of this analysis for all children,
@@ -78,9 +84,11 @@ pub trait Lattice<T> {
 /// Upper bounds on the number of distinct values in each column.
 mod distinct_count {
 
+    use std::collections::BTreeMap;
+
     use mz_expr::{Id, MirRelationExpr, MirScalarExpr};
     use mz_ore::cast::CastFrom;
-    use mz_repr::{ReprColumnType, ReprScalarType};
+    use mz_repr::{GlobalId, ReprColumnType, ReprScalarType};
 
     use super::{Analysis, Arity, Derived};
 
@@ -91,12 +99,22 @@ mod distinct_count {
     ///
     /// Every rule may only over-state. A bound that is too small would make the memory bound built
     /// on it unsound, which is the direction that matters.
-    /// Carries no statistics, so a leaf column is unbounded unless its type is small. Seeding
-    /// leaves from cardinality statistics would additionally bound a group key drawn from a small
-    /// relation, but `Cardinality` already depends on this analysis and cannot hand it a map
-    /// through `announce_dependencies`, which takes no receiver.
-    #[derive(Debug)]
-    pub struct ColumnDistinctCount;
+    #[allow(missing_debug_implementations)]
+    pub struct ColumnDistinctCount {
+        /// Cardinalities for globally named entities.
+        ///
+        /// A column holds at most as many distinct values as its relation has rows, so these
+        /// seed the leaves. Without them only small-typed columns are bounded at all, and the
+        /// equi-join rule has nothing to propagate.
+        pub stats: BTreeMap<GlobalId, usize>,
+    }
+
+    impl ColumnDistinctCount {
+        /// An analysis using the provided statistics for global identifiers.
+        pub fn with_stats(stats: BTreeMap<GlobalId, usize>) -> Self {
+            ColumnDistinctCount { stats }
+        }
+    }
 
     /// The tighter of two bounds, where `None` is no bound at all.
     fn tighten(a: Option<u64>, b: Option<u64>) -> Option<u64> {
@@ -151,7 +169,7 @@ mod distinct_count {
     impl Analysis for ColumnDistinctCount {
         type Value = Vec<Option<u64>>;
 
-        fn announce_dependencies(builder: &mut crate::analysis::DerivedBuilder) {
+        fn announce_dependencies(&self, builder: &mut crate::analysis::DerivedBuilder) {
             builder.require(Arity);
             builder.require(super::ReprRelationType);
         }
@@ -174,7 +192,10 @@ mod distinct_count {
                     vec![Some(rows); arity]
                 }
                 Get { id, typ, .. } => match id {
-                    Id::Global(_) => vec![None; typ.arity()],
+                    // A column cannot hold more distinct values than its relation has rows.
+                    Id::Global(id) => {
+                        vec![self.stats.get(id).map(|n| u64::cast_from(*n)); typ.arity()]
+                    }
                     // A forward or self reference inside a `LetRec` has no result yet, which
                     // `get` reports as absent rather than as a bound.
                     Id::Local(id) => {
@@ -293,7 +314,7 @@ mod distinct_count {
 pub mod common {
 
     use std::any::{Any, TypeId};
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use itertools::Itertools;
     use mz_expr::LocalId;
@@ -476,6 +497,11 @@ pub mod common {
     pub struct DerivedBuilder<'a> {
         result: Derived,
         features: &'a OptimizerFeatures,
+        /// Analyses whose dependencies are being resolved, for cycle detection.
+        ///
+        /// Kept separately from `result.analyses` because an analysis now announces its
+        /// dependencies before it is installed, so presence there no longer marks "in progress".
+        in_progress: BTreeSet<TypeId>,
     }
 
     impl<'a> DerivedBuilder<'a> {
@@ -483,6 +509,7 @@ pub mod common {
         pub fn new(features: &'a OptimizerFeatures) -> Self {
             // The default builder should include `SubtreeSize` to facilitate navigation.
             let mut builder = DerivedBuilder {
+                in_progress: BTreeSet::new(),
                 result: Derived::default(),
                 features,
             };
@@ -503,12 +530,12 @@ pub mod common {
             // found a cycle in dependencies.
             let type_id = TypeId::of::<Bundle<A>>();
             if !self.result.order.contains(&type_id) {
-                // If we have not sequenced `type_id` but have a bundle, it means
-                // we are in the process of fulfilling its requirements: a cycle.
-                if self.result.analyses.contains_key(&type_id) {
+                // Re-entering an analysis whose dependencies we are still resolving is a cycle.
+                if !self.in_progress.insert(type_id) {
                     panic!("Cyclic dependency detected: {}", std::any::type_name::<A>());
                 }
-                // Insert the analysis bundle first, so that we can detect cycles.
+                // Announce before installing, so the analysis can configure what it requires.
+                analysis.announce_dependencies(self);
                 self.result.analyses.insert(
                     type_id,
                     Box::new(Bundle::<A> {
@@ -518,7 +545,7 @@ pub mod common {
                         allow_optimistic: self.features.enable_letrec_fixpoint_analysis,
                     }),
                 );
-                A::announce_dependencies(self);
+                self.in_progress.remove(&type_id);
                 // All dependencies are successfully sequenced; sequence `type_id`.
                 self.result.order.push(type_id);
             }
@@ -907,7 +934,7 @@ mod unique_keys {
     impl Analysis for UniqueKeys {
         type Value = Vec<Vec<usize>>;
 
-        fn announce_dependencies(builder: &mut DerivedBuilder) {
+        fn announce_dependencies(&self, builder: &mut DerivedBuilder) {
             builder.require(Arity);
         }
 
@@ -2154,10 +2181,12 @@ mod cardinality {
     impl Analysis for Cardinality {
         type Value = CardinalityEstimate;
 
-        fn announce_dependencies(builder: &mut crate::analysis::DerivedBuilder) {
+        fn announce_dependencies(&self, builder: &mut crate::analysis::DerivedBuilder) {
             builder.require(crate::analysis::Arity);
             builder.require(crate::analysis::UniqueKeys);
-            builder.require(crate::analysis::ColumnDistinctCount);
+            builder.require(crate::analysis::ColumnDistinctCount::with_stats(
+                self.stats.clone(),
+            ));
         }
 
         fn derive(
