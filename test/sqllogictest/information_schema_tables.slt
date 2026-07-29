@@ -885,6 +885,14 @@ mz_arrangement_batches_raw
 SOURCE
 materialize
 mz_introspection
+mz_arrangement_distinct_keys_per_worker
+VIEW
+materialize
+mz_introspection
+mz_arrangement_distinct_keys_raw
+SOURCE
+materialize
+mz_introspection
 mz_arrangement_heap_allocations_raw
 SOURCE
 materialize
