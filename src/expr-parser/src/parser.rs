@@ -177,7 +177,7 @@ mod relation {
         }
     }
 
-    fn parse_constant(ctx: CtxRef, input: ParseStream) -> Result {
+    fn parse_constant(_ctx: CtxRef, input: ParseStream) -> Result {
         let constant = input.parse::<kw::Constant>()?;
 
         let parse_typ = |input: ParseStream| -> syn::Result<ReprRelationType> {
@@ -198,12 +198,15 @@ mod relation {
         } else {
             let typ = parse_typ(input)?;
             let parse_children = ParseChildren::new(input, constant.span().start());
-            let rows = Ok(parse_children.parse_many(ctx, parse_constant_entry)?);
+            let rows = Ok(parse_children.parse_many(&typ, parse_constant_entry)?);
             Ok(MirRelationExpr::Constant { rows, typ })
         }
     }
 
-    fn parse_constant_entry(_ctx: CtxRef, input: ParseStream) -> syn::Result<(Row, Diff)> {
+    fn parse_constant_entry(
+        typ: &ReprRelationType,
+        input: ParseStream,
+    ) -> syn::Result<(Row, Diff)> {
         input.parse::<syn::Token![-]>()?;
 
         let (row, diff);
@@ -214,14 +217,14 @@ mod relation {
         if inner1.peek(syn::token::Paren) {
             let inner2;
             syn::parenthesized!(inner2 in inner1);
-            row = inner2.parse::<Parsed<Row>>()?.into();
+            row = row::parse_row(&inner2, &typ.column_types)?;
             inner1.parse::<kw::x>()?;
             diff = match inner1.parse::<syn::Lit>()? {
                 syn::Lit::Int(l) => Ok(l.base10_parse::<Diff>()?),
                 _ => Err(Error::new(inner1.span(), "expected Diff literal")),
             }?;
         } else {
-            row = inner1.parse::<Parsed<Row>>()?.into();
+            row = row::parse_row(&inner1, &typ.column_types)?;
             diff = Diff::ONE;
         }
 
@@ -1440,6 +1443,14 @@ mod aggregate {
             "max" => MaxInt64,
             "min" => MinInt64,
             "sum" => SumInt64,
+            // Exact variants, for tests that pin a specific width.
+            "max_int32" => MaxInt32,
+            "max_int64" => MaxInt64,
+            "min_int32" => MinInt32,
+            "min_int64" => MinInt64,
+            "sum_int16" => SumInt16,
+            "sum_int32" => SumInt32,
+            "sum_int64" => SumInt64,
             _ => Err(Error::new(ident.span(), "unsupported function name"))?,
         };
 
@@ -1467,57 +1478,60 @@ mod aggregate {
 
 /// Support for parsing [mz_repr::Row].
 mod row {
-    use mz_repr::{Datum, Row, RowPacker};
+    use mz_repr::{Datum, ReprColumnType, ReprScalarType, Row};
 
     use super::*;
 
-    impl Parse for Parsed<Row> {
-        fn parse(input: ParseStream) -> syn::Result<Self> {
-            let mut row = Row::default();
-            let mut packer = ParseRow::new(&mut row);
+    /// Parses a comma-separated datum list into a [`Row`], coercing each datum
+    /// to the corresponding column type where the literal admits it.
+    ///
+    /// Literals that do not match their column type (and datums beyond the
+    /// column count) fall back to type inference from the literal alone. The
+    /// parser deliberately does not reject such rows, ill-typed constants are
+    /// valid parser output that tests feed to the typechecker.
+    pub fn parse_row(input: ParseStream, types: &[ReprColumnType]) -> syn::Result<Row> {
+        let mut row = Row::default();
+        let mut packer = row.packer();
 
-            loop {
-                if input.is_empty() {
-                    break;
-                }
-                packer.parse_datum(input)?;
-                if input.is_empty() {
-                    break;
-                }
-                input.parse::<syn::Token![,]>()?;
+        let mut types = types.iter();
+        loop {
+            if input.is_empty() {
+                break;
             }
-
-            Ok(Parsed(row))
+            parse_datum(input, &mut packer, types.next())?;
+            if input.is_empty() {
+                break;
+            }
+            input.parse::<syn::Token![,]>()?;
         }
+
+        Ok(row)
     }
 
-    impl From<Parsed<Row>> for Row {
-        fn from(parsed: Parsed<Row>) -> Self {
-            parsed.0
+    fn parse_datum(
+        input: ParseStream,
+        packer: &mut mz_repr::RowPacker,
+        typ: Option<&ReprColumnType>,
+    ) -> syn::Result<()> {
+        use ReprScalarType::*;
+        if input.eat(kw::null) {
+            packer.push(Datum::Null);
+            return Ok(());
         }
-    }
-
-    struct ParseRow<'a>(RowPacker<'a>);
-
-    impl<'a> ParseRow<'a> {
-        fn new(row: &'a mut Row) -> Self {
-            Self(row.packer())
+        let lit = input.parse::<syn::Lit>()?;
+        match (&lit, typ.map(|t| &t.scalar_type)) {
+            (syn::Lit::Int(l), Some(Int16)) => packer.push(Datum::from(l.base10_parse::<i16>()?)),
+            (syn::Lit::Int(l), Some(Int32)) => packer.push(Datum::from(l.base10_parse::<i32>()?)),
+            (syn::Lit::Int(l), Some(Float64)) => packer.push(Datum::from(l.base10_parse::<f64>()?)),
+            // Literal-only inference, also the fallback for literals that do
+            // not match their column type.
+            (syn::Lit::Str(l), _) => packer.push(Datum::from(l.value().as_str())),
+            (syn::Lit::Int(l), _) => packer.push(Datum::from(l.base10_parse::<i64>()?)),
+            (syn::Lit::Float(l), _) => packer.push(Datum::from(l.base10_parse::<f64>()?)),
+            (syn::Lit::Bool(l), _) => packer.push(Datum::from(l.value)),
+            (lit, _) => Err(Error::new(lit.span(), "cannot parse literal"))?,
         }
-
-        fn parse_datum(&mut self, input: ParseStream) -> syn::Result<()> {
-            if input.eat(kw::null) {
-                self.0.push(Datum::Null)
-            } else {
-                match input.parse::<syn::Lit>()? {
-                    syn::Lit::Str(l) => self.0.push(Datum::from(l.value().as_str())),
-                    syn::Lit::Int(l) => self.0.push(Datum::from(l.base10_parse::<i64>()?)),
-                    syn::Lit::Float(l) => self.0.push(Datum::from(l.base10_parse::<f64>()?)),
-                    syn::Lit::Bool(l) => self.0.push(Datum::from(l.value)),
-                    _ => Err(Error::new(input.span(), "cannot parse literal"))?,
-                }
-            }
-            Ok(())
-        }
+        Ok(())
     }
 }
 
@@ -1556,12 +1570,17 @@ mod analyses {
                         let value = inner.parse::<syn::LitStr>()?.value();
                         analyses.types = Some(parse_types.parse_str(&value)?);
                     }
-                    // TODO: support keys
+                    "keys" => {
+                        inner.parse::<syn::Token![:]>()?;
+                        let value = inner.parse::<syn::LitStr>()?.value();
+                        analyses.keys = Some(parse_keys.parse_str(&value)?);
+                    }
                     key => {
                         let msg = format!("unexpected analysis type `{}`", key);
                         Err(Error::new(inner.span(), msg))?;
                     }
                 }
+                inner.eat(syn::Token![,]);
             }
         }
         Ok(analyses)
@@ -1571,6 +1590,18 @@ mod analyses {
         let inner;
         syn::parenthesized!(inner in input);
         inner.parse_comma_sep(parse_column_type)
+    }
+
+    /// Parses a unique keys annotation in the format printed by EXPLAIN,
+    /// e.g. `([0], [1, 2])`.
+    fn parse_keys(input: ParseStream) -> syn::Result<Vec<Vec<usize>>> {
+        let inner;
+        syn::parenthesized!(inner in input);
+        inner.parse_comma_sep(|input| {
+            let inner;
+            syn::bracketed!(inner in input);
+            inner.parse_comma_sep(|input| input.parse::<syn::LitInt>()?.base10_parse::<usize>())
+        })
     }
 
     pub fn parse_column_type(input: ParseStream) -> syn::Result<ReprColumnType> {
@@ -1791,9 +1822,6 @@ mod util {
     }
 
     pub type CtxRef<'a> = &'a Ctx<'a>;
-
-    /// Newtype for external types that need to implement [Parse].
-    pub struct Parsed<T>(pub T);
 
     /// Provides facilities for parsing
     pub struct ParseChildren<'a> {

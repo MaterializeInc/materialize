@@ -126,7 +126,8 @@ impl<'a> TestCatalog {
         Ok(id)
     }
 
-    fn get(&'a self, name: &str) -> Option<&'a (GlobalId, SqlRelationType)> {
+    /// Looks up the id and type of the object named `name`.
+    pub fn get(&'a self, name: &str) -> Option<&'a (GlobalId, SqlRelationType)> {
         self.objects.get(name)
     }
 
