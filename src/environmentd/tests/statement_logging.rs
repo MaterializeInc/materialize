@@ -1017,3 +1017,75 @@ fn test_statement_logging_ws_subscribe_no_crash() {
     // Give the server time to crash, if it's going to.
     std::thread::sleep(Duration::from_secs(1))
 }
+
+/// `finished_at` must record when execution finished, not when the coordinator
+/// got around to the end event. A statement the session task retires itself
+/// reports its own end timestamp, so a busy coordinator cannot inflate it.
+///
+/// The coordinator is stalled inside `Catalog::transact` while the measured
+/// statement runs. That failpoint sits ahead of every catalog mutation, so the
+/// catalog revision does not move while it sleeps and the session's cached
+/// snapshot stays valid, which is what keeps the measured statement from
+/// needing the coordinator at all.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_statement_logging_finished_at_excludes_coordinator_queue() {
+    let (server, mut client) = setup_statement_logging(1.0, 1.0, "");
+
+    // Populate this session's catalog snapshot cache, so the measured statement
+    // below needs nothing from the stalled coordinator.
+    client.execute("SELECT 1", &[]).unwrap();
+
+    let mut ddl = server.connect_internal(postgres::NoTls).unwrap();
+    fail::cfg("catalog_transact", "sleep(3000)").unwrap();
+    let stall = thread::spawn(move || {
+        let _ = ddl.batch_execute("CREATE TABLE stalls_the_coordinator (x int)");
+    });
+    // Give the DDL time to reach the failpoint before we measure.
+    thread::sleep(Duration::from_millis(500));
+
+    // Logged timestamps are epoch milliseconds and truncate, so floor the lower
+    // bound and ceil the upper one rather than comparing against the
+    // sub-millisecond instants `Utc::now` reports.
+    let began_bound = Utc::now().timestamp_millis();
+    client
+        .execute("SELECT 1 AS finished_at_probe", &[])
+        .unwrap();
+    let finished_bound = Utc::now().timestamp_millis() + 1;
+
+    stall.join().unwrap();
+    fail::remove("catalog_transact");
+
+    let mut internal = server.connect_internal(postgres::NoTls).unwrap();
+    let query = "
+        SELECT mseh.began_at, mseh.finished_at
+        FROM mz_internal.mz_statement_execution_history AS mseh
+        JOIN mz_internal.mz_prepared_statement_history AS mpsh
+            ON mseh.prepared_statement_id = mpsh.id
+        JOIN mz_internal.mz_sql_text AS mst ON mpsh.sql_hash = mst.sql_hash
+        WHERE mst.sql ~~ '%finished_at_probe%' AND mseh.finished_at IS NOT NULL";
+
+    let mut rows = Vec::new();
+    for _ in 0..30 {
+        rows = internal.query(query, &[]).unwrap();
+        if !rows.is_empty() {
+            break;
+        }
+        thread::sleep(Duration::from_secs(1));
+    }
+    assert_eq!(rows.len(), 1, "expected exactly one logged probe statement");
+
+    let began_at: DateTime<Utc> = rows[0].get(0);
+    let finished_at: DateTime<Utc> = rows[0].get(1);
+    assert!(
+        began_at.timestamp_millis() >= began_bound,
+        "began_at precedes the client-observed start of the statement by {} ms",
+        began_bound - began_at.timestamp_millis()
+    );
+    assert!(
+        finished_at.timestamp_millis() <= finished_bound,
+        "finished_at is {} ms past the client-observed end of the statement, so it \
+         charges the statement for time its end event spent queued for the coordinator",
+        finished_at.timestamp_millis() - finished_bound
+    );
+}
