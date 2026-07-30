@@ -408,6 +408,11 @@ pub enum Message {
         span: Span,
         stage: CreateIndexStage,
     },
+    CreateMetricSinkStageReady {
+        ctx: ExecuteContext,
+        span: Span,
+        stage: CreateMetricSinkStage,
+    },
     CreateViewStageReady {
         ctx: ExecuteContext,
         span: Span,
@@ -542,6 +547,7 @@ impl Message {
             Message::PeekStageReady { .. } => "peek_stage_ready",
             Message::ExplainTimestampStageReady { .. } => "explain_timestamp_stage_ready",
             Message::CreateIndexStageReady { .. } => "create_index_stage_ready",
+            Message::CreateMetricSinkStageReady { .. } => "create_metric_sink_stage_ready",
             Message::CreateViewStageReady { .. } => "create_view_stage_ready",
             Message::CreateMaterializedViewStageReady { .. } => {
                 "create_materialized_view_stage_ready"
@@ -784,6 +790,31 @@ pub struct CreateIndexExplain {
     plan: plan::CreateIndexPlan,
     df_meta: DataflowMetainfo,
     explain_ctx: ExplainPlanContext,
+}
+
+#[derive(Debug)]
+pub enum CreateMetricSinkStage {
+    Optimize(CreateMetricSinkOptimize),
+    Finish(CreateMetricSinkFinish),
+}
+
+#[derive(Debug)]
+pub struct CreateMetricSinkOptimize {
+    validity: PlanValidity,
+    plan: plan::CreateMetricSinkPlan,
+    resolved_ids: ResolvedIds,
+}
+
+#[derive(Debug)]
+pub struct CreateMetricSinkFinish {
+    validity: PlanValidity,
+    item_id: CatalogItemId,
+    global_id: GlobalId,
+    plan: plan::CreateMetricSinkPlan,
+    resolved_ids: ResolvedIds,
+    global_mir_plan: optimize::metric_sink::GlobalMirPlan,
+    global_lir_plan: optimize::metric_sink::GlobalLirPlan,
+    optimizer_features: OptimizerFeatures,
 }
 
 #[derive(Debug)]
@@ -2745,6 +2776,32 @@ impl Coordinator {
                         self.allow_writes(mview.cluster_id, mview.global_id_writes());
                     }
                 }
+                CatalogItem::MetricSink(metric_sink) => {
+                    let df_desc = self
+                        .catalog()
+                        .try_get_physical_plan(&metric_sink.global_id)
+                        .expect("added in `bootstrap_dataflow_plans`")
+                        .clone();
+
+                    let df_meta = self
+                        .catalog()
+                        .try_get_dataflow_metainfo(&metric_sink.global_id)
+                        .expect("added in `bootstrap_dataflow_plans`");
+
+                    if self.catalog().state().system_config().enable_mz_notices() {
+                        // Collect optimization hint updates.
+                        self.catalog().state().pack_optimizer_notices(
+                            &mut builtin_table_updates,
+                            df_meta.optimizer_notices.iter(),
+                            Diff::ONE,
+                        );
+                    }
+
+                    // No read policy to set: the export is a sink, not a readable collection, so
+                    // `ship_dataflow` has no index export to initialize a policy for.
+                    self.ship_dataflow(df_desc, metric_sink.cluster_id, None)
+                        .await;
+                }
                 CatalogItem::Sink(sink) => {
                     policies_to_set
                         .entry(CompactionWindow::Default)
@@ -2767,8 +2824,7 @@ impl Coordinator {
                 CatalogItem::Log(_)
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
-                | CatalogItem::Secret(_)
-                | CatalogItem::MetricSink(_) => {}
+                | CatalogItem::Secret(_) => {}
             }
         }
 
@@ -3758,6 +3814,99 @@ impl Coordinator {
 
                     compute_instance.insert_collection(mv.global_id_writes());
                 }
+                CatalogItem::MetricSink(metric_sink) => {
+                    // Collect optimizer parameters.
+                    let compute_instance = instance_snapshots
+                        .entry(metric_sink.cluster_id)
+                        .or_insert_with(|| {
+                            self.instance_snapshot(metric_sink.cluster_id)
+                                .expect("compute instance exists")
+                        });
+                    let global_id = metric_sink.global_id;
+                    let optimizer_config = optimizer_config(&self.catalog, metric_sink.cluster_id);
+
+                    let (optimized_plan, physical_plan, metainfo) = match cached_global_exprs
+                        .remove(&global_id)
+                    {
+                        Some(global_expressions)
+                            if global_expressions.optimizer_features
+                                == optimizer_config.features =>
+                        {
+                            debug!("global expression cache hit for {global_id:?}");
+                            (
+                                global_expressions.global_mir,
+                                global_expressions.physical_plan,
+                                global_expressions.dataflow_metainfos,
+                            )
+                        }
+                        Some(_) | None => {
+                            // A transient id for the view the optimizer builds over `from` to
+                            // shape its rows (see `optimize::metric_sink::shape_metric_sink_source`).
+                            // The id only needs to be unique within this dataflow, so a cached plan
+                            // reusing a transient id from a previous boot is safe: build ids are
+                            // dataflow-local on the worker and never registered in the controller's
+                            // instance-global collections (only export ids are).
+                            let (_, view_id) = self.allocate_transient_id();
+
+                            let (optimized_plan, global_lir_plan) = {
+                                let mut optimizer = optimize::metric_sink::Optimizer::new(
+                                    self.owned_catalog(),
+                                    compute_instance.clone(),
+                                    view_id,
+                                    global_id,
+                                    optimizer_config.clone(),
+                                    self.optimizer_metrics(),
+                                );
+
+                                // MIR ⇒ MIR optimization (global)
+                                let metric_sink_plan = optimize::metric_sink::MetricSink::new(
+                                    entry.name().clone(),
+                                    metric_sink.from,
+                                    metric_sink.prefix.clone(),
+                                );
+                                let global_mir_plan = optimizer.optimize(metric_sink_plan)?;
+                                let optimized_plan = global_mir_plan.df_desc().clone();
+
+                                // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                                let global_lir_plan = optimizer.optimize(global_mir_plan)?;
+
+                                (optimized_plan, global_lir_plan)
+                            };
+
+                            let (physical_plan, metainfo) = global_lir_plan.unapply();
+                            let metainfo = {
+                                // Pre-allocate a vector of transient GlobalIds for each notice.
+                                let notice_ids =
+                                    std::iter::repeat_with(|| self.allocate_transient_id())
+                                        .map(|(_item_id, gid)| gid)
+                                        .take(metainfo.optimizer_notices.len())
+                                        .collect::<Vec<_>>();
+                                // Return a metainfo with rendered notices.
+                                self.catalog()
+                                    .render_notices(metainfo, notice_ids, Some(global_id))
+                            };
+                            uncached_expressions.insert(
+                                global_id,
+                                GlobalExpressions {
+                                    global_mir: optimized_plan.clone(),
+                                    physical_plan: physical_plan.clone(),
+                                    dataflow_metainfos: metainfo.clone(),
+                                    optimizer_features: optimizer_config.features.clone(),
+                                },
+                            );
+                            (optimized_plan, physical_plan, metainfo)
+                        }
+                    };
+
+                    let catalog = self.catalog_mut();
+                    catalog.set_optimized_plan(global_id, optimized_plan);
+                    catalog.set_physical_plan(global_id, physical_plan);
+                    catalog.set_dataflow_metainfo(global_id, metainfo);
+
+                    // NOTE: No `insert_collection` for the export. A metric sink writes to the
+                    // metrics registry rather than to a readable collection, so no later dataflow
+                    // can import it.
+                }
                 CatalogItem::Table(_)
                 | CatalogItem::Source(_)
                 | CatalogItem::Log(_)
@@ -3766,8 +3915,7 @@ impl Coordinator {
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_)
-                | CatalogItem::Connection(_)
-                | CatalogItem::MetricSink(_) => (),
+                | CatalogItem::Connection(_) => (),
             }
         }
 
@@ -3791,6 +3939,7 @@ impl Coordinator {
             let gid = match entry.item() {
                 CatalogItem::Index(idx) => idx.global_id(),
                 CatalogItem::MaterializedView(mv) => mv.global_id_writes(),
+                CatalogItem::MetricSink(metric_sink) => metric_sink.global_id,
                 CatalogItem::Table(_)
                 | CatalogItem::Source(_)
                 | CatalogItem::Log(_)
@@ -3799,8 +3948,7 @@ impl Coordinator {
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_)
-                | CatalogItem::Connection(_)
-                | CatalogItem::MetricSink(_) => continue,
+                | CatalogItem::Connection(_) => continue,
             };
             if let Some(plan) = self.catalog.try_get_physical_plan(&gid) {
                 catalog_ids.push(gid);

@@ -15,9 +15,10 @@ from materialize.mz_version import MzVersion
 
 
 class MetricSink(Check):
-    """A metric sink ships no dataflow, so surviving a restart is the whole of
-    what it does. Boot has to re-parse its `create_sql` back into a catalog item
-    and rebuild the dependency edge to the relation it reads."""
+    """Boot has to re-parse a metric sink's `create_sql` back into a catalog
+    item, rebuild the dependency edge to the relation it reads, and re-render
+    the sink's dataflow. A sink whose dataflow does not come back publishes no
+    metrics, so the check probes for the dataflow, not just the item."""
 
     def _can_run(self, e: Executor) -> bool:
         return self.base_version >= MzVersion.parse_mz("v26.39.0-dev")
@@ -32,7 +33,7 @@ class MetricSink(Check):
 
                 > CREATE SCHEMA metric_sink_schema
 
-                > CREATE METRIC SINK metric_sink_schema.metric_sink_one FROM metric_sink_view WITH (PREFIX = 'one_')
+                > CREATE METRIC SINK metric_sink_schema.metric_sink_one FROM metric_sink_view WITH (PREFIX = 'mz_metric_sink_one_')
                 """))
 
     def manipulate(self) -> list[Testdrive]:
@@ -42,12 +43,12 @@ class MetricSink(Check):
                 """
                 > INSERT INTO metric_sink_table VALUES ('b', 'counter', '{x=>z}', 2, 'help b')
 
-                > CREATE METRIC SINK metric_sink_two IN CLUSTER quickstart FROM metric_sink_view WITH (PREFIX = 'two_')
+                > CREATE METRIC SINK metric_sink_two IN CLUSTER quickstart FROM metric_sink_view WITH (PREFIX = 'mz_metric_sink_two_')
                 """,
                 """
                 > INSERT INTO metric_sink_table VALUES ('c', 'gauge', '{}', 3, 'help c')
 
-                > CREATE METRIC SINK IF NOT EXISTS metric_sink_three FROM metric_sink_view WITH (PREFIX = 'three_')
+                > CREATE METRIC SINK IF NOT EXISTS metric_sink_three FROM metric_sink_view WITH (PREFIX = 'mz_metric_sink_three_')
 
                 # A sink is never the subject of a rename, but it is a bystander of every
                 # rename of the relation it reads or of the schema it lives in, and both
@@ -70,13 +71,13 @@ class MetricSink(Check):
         # current probe is a proxy: it confirms the catalog item was re-parsed on
         # boot without needing a system connection.
         return Testdrive(dedent("""
-                ! CREATE METRIC SINK metric_sink_schema_renamed.metric_sink_one FROM metric_sink_view_renamed WITH (PREFIX = 'one_')
+                ! CREATE METRIC SINK metric_sink_schema_renamed.metric_sink_one FROM metric_sink_view_renamed WITH (PREFIX = 'mz_metric_sink_one_')
                 contains:metric sink "materialize.metric_sink_schema_renamed.metric_sink_one" already exists
 
-                ! CREATE METRIC SINK metric_sink_two FROM metric_sink_view_renamed WITH (PREFIX = 'two_')
+                ! CREATE METRIC SINK metric_sink_two FROM metric_sink_view_renamed WITH (PREFIX = 'mz_metric_sink_two_')
                 contains:metric sink "materialize.public.metric_sink_two" already exists
 
-                ! CREATE METRIC SINK metric_sink_three FROM metric_sink_view_renamed WITH (PREFIX = 'three_')
+                ! CREATE METRIC SINK metric_sink_three FROM metric_sink_view_renamed WITH (PREFIX = 'mz_metric_sink_three_')
                 contains:metric sink "materialize.public.metric_sink_three" already exists
 
                 # The FROM edge came back too, so the view is still pinned, under the
@@ -86,4 +87,29 @@ class MetricSink(Check):
 
                 > SELECT count(*) FROM metric_sink_view_renamed
                 3
+
+                # Each re-rendered dataflow registers a collector that stamps
+                # its own sink id on a frontier gauge, so three distinct ids
+                # means all three dataflows came back. The registry is only
+                # sampled every `compute_prometheus_introspection_scrape_interval`,
+                # so give the scrape room to land.
+                $ set-sql-timeout duration=60s
+
+                # Every replica has its own registry, so this introspection
+                # relation can only be read with a replica targeted.
+                $ set-from-sql var=replica-name
+                SELECT r.name
+                FROM mz_catalog.mz_cluster_replicas r
+                JOIN mz_catalog.mz_clusters c ON c.id = r.cluster_id
+                WHERE c.name = 'quickstart'
+                ORDER BY r.name
+                LIMIT 1
+
+                > SET cluster_replica = ${replica-name}
+
+                > SELECT count(DISTINCT labels -> 'sink') FROM mz_introspection.mz_cluster_prometheus_metrics
+                  WHERE metric_name = 'mz_compute_metric_sink_frontier_ms'
+                3
+
+                > RESET cluster_replica
                 """))
