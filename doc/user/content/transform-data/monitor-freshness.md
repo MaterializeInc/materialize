@@ -84,7 +84,7 @@ The following query builds a freshness CCDF across every object from the last 24
 hours of history. It reads the fast, indexed
 `mz_internal.mz_wallclock_global_lag_recent_history` and, for a fixed set of
 decade thresholds (1, 10, and 100 seconds), reports the fraction of observations
-whose lag was at or above each threshold. The fixed thresholds mean every run
+whose freshness was at or above each threshold. The fixed thresholds mean every run
 returns all three rows, even when the larger thresholds have no observations:
 
 ```mzsql
@@ -120,7 +120,7 @@ The query returns output like the following:
 (3 rows)
 ```
 
-Read this as: lag was at or above 1 second 100% of the time and never reached 10
+Read this as: freshness was at or above 1 second 100% of the time and never reached 10
 seconds or 100 seconds (0% at or above each). The curve drops off sharply after
 1 second, the healthy shape for an instance whose objects all sit at a low,
 near-constant lag.
@@ -128,7 +128,7 @@ near-constant lag.
 ![Freshness CCDF plotted from the sample output at the 1-, 10-, and 100-second thresholds: the fraction of time at or above is 1.0 at 1 second and 0 at both 10 and 100 seconds](/images/freshness-ccdf-sample.png)
 
 The chart above is generated from the sample output, captured on a lightly
-loaded local instance where all lag stayed under 10 seconds, so the 10-second
+loaded local instance where freshness stayed under 10 seconds, so the 10-second
 and 100-second thresholds sit at zero. A production instance under real load
 would show non-zero fractions at those higher thresholds.
 
@@ -146,14 +146,14 @@ single object, add a join to `mz_catalog.mz_objects` and a name filter to the
 
 Reading a freshness CCDF is straightforward once you know what the axes mean.
 The **x-axis** is the lag threshold in seconds, on a log scale, and the
-**y-axis** is the fraction of the window the object spent at or above that lag.
+**y-axis** is the fraction of the window the object spent at or above that threshold.
 
 A **healthy** object produces a curve that drops off early and hugs low lag
 values, so almost all of the time its lag is small. An **unhealthy** object
 produces a long, flat tail that extends into minutes or hours, which means the
 object is frequently far behind.
 
-To read the curve against an SLO, pick your target lag (say 10 seconds) and read
+To read the curve against an SLO, pick your target freshness (say 10 seconds) and read
 the fraction of time at or above it. That fraction is how often the object was
 violating the SLO over the window.
 
