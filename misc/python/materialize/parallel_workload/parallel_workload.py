@@ -250,10 +250,17 @@ def run(
         )
         workers.append(worker)
 
+        # Daemon threads, so that a worker still stuck in a long-running query
+        # cannot block interpreter shutdown. The clean paths below join
+        # explicitly, and a WorkerFailedException propagates out of `run` past
+        # those joins. Without this a single wedged worker keeps the process
+        # alive until the CI step timeout kills it, which reports the timeout
+        # instead of the failure that actually happened.
         thread = threading.Thread(
             name=thread_name,
             target=worker.run,
             args=(host, ports["materialized"], ports["http"], "materialize", database),
+            daemon=True,
         )
         thread.start()
         threads.append(thread)
@@ -274,6 +281,7 @@ def run(
             name="cancel",
             target=worker.run,
             args=(host, ports["mz_system"], ports["http"], "mz_system", database),
+            daemon=True,
         )
         thread.start()
         threads.append(thread)
@@ -294,6 +302,7 @@ def run(
             name="kill",
             target=worker.run,
             args=(host, ports["materialized"], ports["http"], "materialize", database),
+            daemon=True,
         )
         thread.start()
         threads.append(thread)
@@ -321,6 +330,7 @@ def run(
             name="zero-downtime-deploy",
             target=worker.run,
             args=(host, ports["materialized"], ports["http"], "materialize", database),
+            daemon=True,
         )
         thread.start()
         threads.append(thread)
@@ -341,6 +351,7 @@ def run(
             name="kill",
             target=worker.run,
             args=(host, ports["materialized"], ports["http"], "materialize", database),
+            daemon=True,
         )
         thread.start()
         threads.append(thread)
@@ -365,6 +376,7 @@ def run(
             name="statistics",
             target=worker.run,
             args=(host, ports["mz_system"], ports["http"], "mz_system", database),
+            daemon=True,
         )
         thread.start()
         threads.append(thread)

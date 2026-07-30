@@ -29,6 +29,7 @@ from psycopg.errors import OperationalError
 import materialize.parallel_workload.column
 from materialize.data_ingest.data_type import (
     DATA_TYPES,
+    DATA_TYPES_FOR_COLUMNS,
     NUMBER_TYPES,
     RANGE_TYPES,
     UUID,
@@ -974,6 +975,15 @@ class CopyFromS3Action(Action):
                 # fails to parse back (SS-345). See FINDINGS-BUGS.md ("COPY FROM CSV
                 # cannot decode a large-year date written by COPY TO").
                 "expected_dur_like_tokens can only be called with",
+                # TODO: Reenable when SS-361 is fixed. A COPY FROM without a
+                # column list plans every target column as its DEFAULT, and
+                # that projection only acts as identity by accident. Expression
+                # memoization collapses two identical default literals, so any
+                # table with two same-type nullable columns (their defaults are
+                # identical typed nulls) decodes a shifted row. Shifts that are
+                # type-incompatible fail here, type-compatible ones are
+                # inserted silently.
+                "failed to decode Row from a record batch",
             ]
         )
         if exe.db.complexity == Complexity.DDL:
@@ -1265,6 +1275,7 @@ class InsertReturningAction(Action):
         table.num_rows += len(column_values)
         exe.insert_table = table.table_id
         return True
+
 
 class CopyToStdoutAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
@@ -2475,7 +2486,9 @@ class ParameterizedQueryAction(Action):
     def run(self, exe: Executor) -> bool:
         obj = self.rng.choice(exe.db.db_objects())
         n = self.rng.randint(1, 4)
-        param_types = [self.rng.choice(list(DATA_TYPES)) for _ in range(n)]
+        # Record and record list are expression-only pseudo types, a
+        # parameter cast to them fails with "cannot reference pseudo type".
+        param_types = [self.rng.choice(list(DATA_TYPES_FOR_COLUMNS)) for _ in range(n)]
         projection = ", ".join(
             f"${i + 1}::{t.name()}" for i, t in enumerate(param_types)
         )
@@ -3710,7 +3723,18 @@ class ReconfigureClusterAction(Action):
             )
             status = None
             seen = False
-            deadline = time.time() + 180
+            # Slack over the ALTER's own 120s deadline. Rolling back tears down
+            # the target replicas and the builtin table read then has to catch
+            # up, both under whatever load the other workers put on the
+            # cluster, so a terminal status can take a while to become visible.
+            # Only a record still in-progress well past that is the wedge this
+            # asserts on.
+            #
+            # Must stay comfortably under the 300s the run gives all workers to
+            # join after `end_time` (`parallel_workload.run`). A poll that
+            # outlives that budget makes a worker doing its job look wedged, and
+            # the run then hard-exits 0 without its final checks.
+            deadline = time.time() + 240
             while time.time() < deadline:
                 exe.execute(query)
                 rows = exe.cur.fetchall()
@@ -3726,9 +3750,21 @@ class ReconfigureClusterAction(Action):
                 if size == new_size:
                     cluster.size = new_size
                     return True
-                if time.time() > alter_started + 120 and status in (
-                    "timed-out",
-                    "resource-exhausted",
+                # Any settled record is a legitimate end state, so accept every
+                # status but "in-progress". A rollback at the deadline
+                # ("timed-out"), a controller that could not get the replicas
+                # ("resource-exhausted"), a concurrent shape-touching ALTER
+                # calling the transition off ("cancelled"), or one that
+                # retargeted it to a shape that then cut over ("finalized" on a
+                # size that is not ours) all mean the reconfiguration settled.
+                # FlipFlagsAction alters EXPERIMENTAL ARRANGEMENT COMPRESSION
+                # without holding the cluster lock, and that is a shape
+                # dimension (`alter_changes_replica_shape`), so it reaches the
+                # record this poll is watching. A record with no status at all
+                # stays a failure: the ALTER succeeded, so a record must exist.
+                if time.time() > alter_started + 120 and status not in (
+                    None,
+                    "in-progress",
                 ):
                     return True
                 time.sleep(1)
@@ -5422,8 +5458,11 @@ class AlterClusterSetAction(Action):
 
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
-            # A concurrent graceful reconfiguration of the same cluster.
-            "cannot be modified while a reconfiguration is in progress",
+            # A SET (SIZE) here or a ReconfigureCluster on the same cluster
+            # leaves a reconfiguration record in flight past the statement
+            # that started it. Replication factor is folded in at cut-over,
+            # so changing it meanwhile is refused.
+            "cannot change replication factor while a reconfiguration is in progress",
         ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> bool:
