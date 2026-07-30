@@ -1854,10 +1854,18 @@ impl VersionedRelationDesc {
                 }
             }
 
+            // Every version past the root is stamped exactly once, by the add or the
+            // drop that created it, so a column that was added and later dropped
+            // accounts for two of them and both have to be counted. Collapsing to
+            // `dropped.unwrap_or(added)` would lose the add's version, and with it any
+            // desc where a non-root column was later dropped.
             let versions = desc
                 .metadata
                 .values()
-                .map(|meta| meta.dropped.unwrap_or(meta.added));
+                .flat_map(|meta| [Some(meta.added), meta.dropped])
+                .flatten()
+                // The root version is the one version many columns can share.
+                .filter(|version| *version != RelationVersion::root());
             let mut max = 0;
             let mut sum = 0;
             for version in versions {
@@ -2354,6 +2362,33 @@ mod tests {
           }
         }
         "###);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `pipe2` on OS `linux`
+    fn test_drop_column_added_after_root() {
+        let desc = RelationDesc::builder()
+            .with_column("a", SqlScalarType::Bool.nullable(true))
+            .finish();
+        let mut versioned = VersionedRelationDesc::new(desc);
+
+        let v1 = versioned.add_column("b", SqlScalarType::String.nullable(false));
+        let v2 = versioned.drop_column("b");
+        assert_eq!(v1, RelationVersion(1));
+        assert_eq!(v2, RelationVersion(2));
+
+        assert_eq!(
+            versioned
+                .at_version(RelationVersionSelector::Specific(v1))
+                .arity(),
+            2
+        );
+        assert_eq!(
+            versioned
+                .at_version(RelationVersionSelector::Specific(v2))
+                .arity(),
+            1
+        );
     }
 
     #[mz_ore::test]
