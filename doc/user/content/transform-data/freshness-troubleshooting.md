@@ -33,6 +33,40 @@ Common causes of lag include:
 - [**Source ingestion**](#check-source-ingestion): The source is behind. All
   downstream objects for the source are affected.
 
+## How to monitor freshness
+
+To track freshness for a specific object over time, query its wallclock lag
+history. The following query returns the last 6 hours of wallclock lag for a
+materialized view (replace `<your_mv_name>` with the name of your object):
+
+```mzsql
+SELECT wl.occurred_at, wl.lag
+FROM mz_internal.mz_wallclock_global_lag_recent_history wl
+JOIN mz_catalog.mz_objects o ON wl.object_id = o.id
+WHERE o.name = '<your_mv_name>'
+  AND wl.occurred_at > now() - INTERVAL '6 hours'
+ORDER BY wl.occurred_at DESC;
+```
+
+{{< note >}}
+
+Materialize exposes wallclock lag history through two relations. Which one you
+query has a large impact on performance.
+
+- [`mz_internal.mz_wallclock_global_lag_recent_history`](/reference/system-catalog/mz_internal/#mz_wallclock_global_lag_recent_history)
+  is indexed and holds only the past 24 hours of data. Querying it is fast, so
+  it is the right choice for frequent or interactive monitoring and for
+  dashboards. Use this relation by default, as in the query above.
+
+- [`mz_internal.mz_wallclock_global_lag_history`](/reference/system-catalog/mz_internal/#mz_wallclock_global_lag_history)
+  covers the full retention window (at least 30 days) but is unindexed, so it
+  can be slow to query. A single query can occupy `mz_catalog_server` for
+  several seconds, during which the Console becomes unresponsive. Reach for this
+  relation only when you specifically need data older than 24 hours, and avoid
+  querying it frequently.
+
+{{< /note >}}
+
 ## Check materialization lag
 
 ### Step 1. Find lagging object(s)
