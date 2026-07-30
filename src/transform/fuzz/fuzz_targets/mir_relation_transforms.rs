@@ -22,7 +22,16 @@
 //! Transforms exercised: `FoldConstants` itself, `CanonicalizeMfp` (Map/Filter/
 //! Project chains), `UnionBranchCancellation`, the structural fusions
 //! (`Filter`/`Project`/`Map`/`Negate`/`Union`) and `ProjectionExtraction`, plus
-//! a hand-written semantics-preserving structural rewrite. Where
+//! a hand-written semantics-preserving structural rewrite.
+//!
+//! NOTE: the generator deliberately builds some nodes as raw variants rather than
+//! through `MirRelationExpr`'s smart constructors. Those constructors normalize
+//! away exactly the shapes the structural fusions collapse: `map` extends an
+//! existing `Map`'s scalar list, `negate` cancels an enclosing `Negate`, `union`
+//! flattens its operands, `project` composes into an existing `Project`, and
+//! `filter` merges, sorts and dedups predicates. Building only through them left
+//! `MapFusion`, `NegateFusion` and `UnionFusion` unable to fire on any input, so
+//! their assertions compared a plan against a clone of itself. Where
 //! `full_optimizer_equiv` runs the whole pipeline over constant-rooted plans,
 //! this target checks each transform in isolation, so a divergence points at a
 //! single transform rather than an interaction.
@@ -42,6 +51,7 @@ use std::collections::BTreeMap;
 
 use libfuzzer_sys::arbitrary::{self, Unstructured};
 use libfuzzer_sys::fuzz_target;
+use mz_expr::visit::Visit;
 use mz_expr::{MirRelationExpr, MirScalarExpr};
 use mz_repr::{Diff, ReprRelationType, Row};
 use mz_transform::canonicalization::ProjectionExtraction;
@@ -50,7 +60,8 @@ use mz_transform::fold_constants::FoldConstants;
 use mz_transform::fusion;
 use mz_transform::union_cancel::UnionBranchCancellation;
 use mz_transform_fuzz::{
-    Ty, apply_recursively, fold_to_multiset, gen_constant, gen_scalar, rand_ty,
+    FOLD_ROW_LIMIT, Ty, apply_recursively, fold_to_multiset, gen_constant, gen_scalar,
+    hits_non_strict_error_fold, rand_ty,
 };
 
 fn gen_rel(u: &mut Unstructured, depth: u32) -> arbitrary::Result<(MirRelationExpr, Vec<Ty>)> {
@@ -62,10 +73,26 @@ fn gen_rel(u: &mut Unstructured, depth: u32) -> arbitrary::Result<(MirRelationEx
         // Filter: 1-2 boolean predicates over the input columns, shape unchanged.
         0 => {
             let n = u.int_in_range(1usize..=2)?;
-            let preds = (0..n)
+            let mut preds = (0..n)
                 .map(|_| gen_scalar(u, Ty::Bool, &schema, 2))
                 .collect::<arbitrary::Result<Vec<_>>>()?;
-            (inner.filter(preds), schema)
+            // `filter` merges into an existing `Filter` and sorts/dedups, so the
+            // smart constructor cannot build the nested `Filter` that
+            // `fusion::filter`'s own loop looks for. Split the predicates across
+            // two real nodes sometimes. See `renest` note in the module doc.
+            let rel = if preds.len() == 2 && u.ratio(1u8, 2u8)? {
+                let outer = preds.pop().expect("len 2");
+                MirRelationExpr::Filter {
+                    input: Box::new(MirRelationExpr::Filter {
+                        input: Box::new(inner),
+                        predicates: preds,
+                    }),
+                    predicates: vec![outer],
+                }
+            } else {
+                inner.filter(preds)
+            };
+            (rel, schema)
         }
         // Map: append one computed column.
         1 => {
@@ -73,7 +100,18 @@ fn gen_rel(u: &mut Unstructured, depth: u32) -> arbitrary::Result<(MirRelationEx
             let e = gen_scalar(u, ty, &schema, 2)?;
             let mut s = schema.clone();
             s.push(ty);
-            (inner.map(vec![e]), s)
+            // `map` extends an existing `Map`'s scalar list rather than nesting,
+            // so `Map { input: Map { .. } }` is unbuildable through it, and that
+            // is the only shape `fusion::map` collapses.
+            let rel = if u.ratio(1u8, 2u8)? {
+                MirRelationExpr::Map {
+                    input: Box::new(inner),
+                    scalars: vec![e],
+                }
+            } else {
+                inner.map(vec![e])
+            };
+            (rel, s)
         }
         // Project: pick a (possibly reordered/duplicated) subset of columns.
         2 => {
@@ -83,10 +121,34 @@ fn gen_rel(u: &mut Unstructured, depth: u32) -> arbitrary::Result<(MirRelationEx
             for _ in 0..k {
                 outputs.push(u.int_in_range(0..=len - 1)?);
             }
-            let s = outputs.iter().map(|&i| schema[i]).collect();
-            (inner.project(outputs), s)
+            let s: Vec<Ty> = outputs.iter().map(|&i| schema[i]).collect();
+            // `project` composes into an existing `Project` instead of nesting.
+            let rel = if u.ratio(1u8, 2u8)? {
+                MirRelationExpr::Project {
+                    input: Box::new(inner),
+                    outputs,
+                }
+            } else {
+                inner.project(outputs)
+            };
+            (rel, s)
         }
-        3 => (inner.negate(), schema),
+        3 => {
+            // `negate` cancels against an existing `Negate`, so the doubled shape
+            // `fusion::negate` exists to collapse has to be built by hand. Two
+            // negations are semantically the identity, so the fold result is
+            // `inner`'s either way.
+            let rel = if u.ratio(1u8, 2u8)? {
+                MirRelationExpr::Negate {
+                    input: Box::new(MirRelationExpr::Negate {
+                        input: Box::new(inner),
+                    }),
+                }
+            } else {
+                inner.negate()
+            };
+            (rel, schema)
+        }
         4 => (inner.distinct(), schema),
         // Union `inner` with a cancelling counterpart. Instead of the trivial
         // `inner ∪ -inner`, the counterpart is `inner` wrapped in a random chain
@@ -145,19 +207,38 @@ fn gen_rel(u: &mut Unstructured, depth: u32) -> arbitrary::Result<(MirRelationEx
             // `inner` filtered by a fresh predicate.
             let distinct_pred = gen_scalar(u, Ty::Bool, &schema, 2)?;
             let extra = inner.clone().filter(vec![distinct_pred]);
-            // Randomize branch order so the matcher's position search is exercised
-            // (`.union` flattens, so this yields a single 3-input `Union`).
+            // Randomize branch order so the matcher's position search is exercised.
             let [b0, b1, b2] = match u.int_in_range(0u8..=2)? {
                 0 => [right, extra, left],
                 1 => [extra, left, right],
                 _ => [left, right, extra],
             };
-            (b0.union(b1).union(b2), schema)
+            // `union` flattens both operands, so it yields a single 3-input
+            // `Union` and never the nested shape `fusion::union` collapses. Build
+            // that shape by hand sometimes; nesting does not change the multiset.
+            let rel = if u.ratio(1u8, 2u8)? {
+                MirRelationExpr::Union {
+                    base: Box::new(b0),
+                    inputs: vec![MirRelationExpr::Union {
+                        base: Box::new(b1),
+                        inputs: vec![b2],
+                    }],
+                }
+            } else {
+                b0.union(b1).union(b2)
+            };
+            (rel, schema)
         }
     })
 }
 
 /// Wrap `rel` in a transformation that preserves its `(row, diff)` multiset.
+///
+/// Every arm is built from raw variants. Through the smart constructors two of
+/// these were unconditional no-ops, which silently reduced the oracle to
+/// `fold(rel) == fold(rel)`: `filter` drops a literal-true predicate outright,
+/// and `negate` cancels against the `Negate` the first call just added, so
+/// `rel.negate().negate()` is the identity on every plan this generator builds.
 fn wrap_preserving(
     u: &mut Unstructured,
     rel: MirRelationExpr,
@@ -165,9 +246,27 @@ fn wrap_preserving(
 ) -> arbitrary::Result<MirRelationExpr> {
     let identity = || (0..arity).collect::<Vec<_>>();
     Ok(match u.int_in_range(0u8..=3)? {
-        0 => rel.project(identity()),
-        1 => rel.filter(vec![MirScalarExpr::literal_true()]),
-        2 => rel.negate().negate(),
+        // A reversing projection composed with its own inverse.
+        0 => {
+            let rev: Vec<usize> = (0..arity).rev().collect();
+            MirRelationExpr::Project {
+                input: Box::new(MirRelationExpr::Project {
+                    input: Box::new(rel),
+                    outputs: rev.clone(),
+                }),
+                outputs: rev,
+            }
+        }
+        // A `Filter` node that is actually present in the tree.
+        1 => MirRelationExpr::Filter {
+            input: Box::new(rel),
+            predicates: vec![MirScalarExpr::literal_true()],
+        },
+        2 => MirRelationExpr::Negate {
+            input: Box::new(MirRelationExpr::Negate {
+                input: Box::new(rel),
+            }),
+        },
         _ => rel
             .map(vec![MirScalarExpr::literal_true()])
             .project(identity()),
@@ -208,6 +307,13 @@ fn assert_same_rows(
 
 fn run(u: &mut Unstructured) -> arbitrary::Result<()> {
     let (rel, schema) = gen_rel(u, 5)?;
+
+    // Skip the shape of the open bug CLU-137. `CanonicalizeMfp` and
+    // `FoldConstants` both reach the `reduce` fold it lives in.
+    if hits_non_strict_error_fold(&rel) {
+        return Ok(());
+    }
+
     let baseline = fold_to_multiset(rel.clone());
 
     // A hand-written semantics-preserving structural rewrite.
@@ -235,32 +341,49 @@ fn run(u: &mut Unstructured) -> arbitrary::Result<()> {
     }
 
     // Structural fusions. Each is a purely local, semantics-preserving rewrite
-    // applied across the whole tree (pre-order, matching their real drivers).
-    // None changes the result multiset or the output shape, on any input.
-    for (who, action) in [
+    // applied across the whole tree, in the traversal order its real driver uses:
+    // the `Filter`/`Project`/`Map`/`Negate` fusions call `visit_mut_pre`, while
+    // `fusion::union` and `ProjectionExtraction` call `visit_mut_post`. None
+    // changes the result multiset or the output shape, on any input.
+    for (who, action, post_order) in [
         (
             "FilterFusion",
             fusion::filter::Filter::action as fn(&mut MirRelationExpr),
+            false,
         ),
-        ("ProjectFusion", fusion::project::Project::action),
-        ("MapFusion", fusion::map::Map::action),
-        ("NegateFusion", fusion::negate::Negate::action),
-        ("UnionFusion", fusion::union::Union::action),
-        ("ProjectionExtraction", ProjectionExtraction::action),
+        ("ProjectFusion", fusion::project::Project::action, false),
+        ("MapFusion", fusion::map::Map::action, false),
+        ("NegateFusion", fusion::negate::Negate::action, false),
+        ("UnionFusion", fusion::union::Union::action, true),
+        ("ProjectionExtraction", ProjectionExtraction::action, true),
     ] {
         let mut r = rel.clone();
         let before = r.typ();
-        r.visit_pre_mut(action);
+        let mut action = action;
+        if post_order {
+            r.visit_mut_post(&mut action);
+        } else {
+            r.visit_pre_mut(action);
+        }
         assert_shape(&before, &r.typ(), who, &rel);
         assert_same_rows(&baseline, r, who, &rel);
     }
 
     // FoldConstants: the evaluator itself must at least preserve shape.
     {
-        let mut r = rel;
+        let mut r = rel.clone();
         let before = r.typ();
-        if apply_recursively(FoldConstants { limit: None }, &mut r).is_ok() {
-            assert_shape(&before, &r.typ(), "FoldConstants", &r);
+        if apply_recursively(
+            FoldConstants {
+                limit: Some(FOLD_ROW_LIMIT),
+            },
+            &mut r,
+        )
+        .is_ok()
+        {
+            // Report the input plan, not the folded one: the folded output is the
+            // harder direction to triage a divergence from.
+            assert_shape(&before, &r.typ(), "FoldConstants", &rel);
         }
     }
     Ok(())

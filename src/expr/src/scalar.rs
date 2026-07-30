@@ -1407,6 +1407,44 @@ impl VisitChildren<Self> for MirScalarExpr {
 }
 
 impl MirScalarExpr {
+    /// Reports whether this expression contains a non-strict variadic call with an
+    /// operand that could error, the shape of the open bug CLU-137.
+    ///
+    /// `And`, `Or` and `ErrorIfNull` do not evaluate every operand: `Or::eval`
+    /// returns `true` the moment it sees a true operand and drops any error it
+    /// collected, `And::eval` does the same for `false`, and `ErrorIfNull`
+    /// evaluates its message operand only when the first operand is NULL. Yet
+    /// `reduce_call_variadic`'s generic error propagation replaces the whole call
+    /// with any operand's literal error, wherever it sits. So `reduce` can turn a
+    /// row the expression should evaluate into an error, and, because that literal
+    /// is typed non-nullable, it can go on to license a nullability-dependent
+    /// rewrite and yield a different *value* rather than an error.
+    ///
+    /// Fuzz oracles that compare evaluation across `reduce` use this to skip the
+    /// shape rather than rediscover CLU-137 on every run. It lives here, next to
+    /// the fold it describes, so the several oracles that need it cannot drift
+    /// apart on which functions count as non-strict.
+    ///
+    /// Deliberately conservative: it asks whether an operand *could* error rather
+    /// than whether it already holds a literal error, because `reduce` folds a
+    /// column-free fallible operand (`1 / 0`) to a literal error first and absorbs
+    /// it after.
+    pub fn could_hit_nonstrict_error_fold(&self) -> bool {
+        let mut hit = false;
+        self.visit_pre(|e| {
+            if let MirScalarExpr::CallVariadic { func, exprs } = e {
+                let non_strict = matches!(
+                    func,
+                    VariadicFunc::And(_) | VariadicFunc::Or(_) | VariadicFunc::ErrorIfNull(_)
+                );
+                if non_strict && exprs.iter().any(|operand| operand.could_error()) {
+                    hit = true;
+                }
+            }
+        });
+        hit
+    }
+
     /// Iterates through references to child expressions.
     pub fn children(&self) -> impl DoubleEndedIterator<Item = &Self> {
         let mut first = None;

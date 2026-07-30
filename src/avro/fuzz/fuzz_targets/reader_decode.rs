@@ -32,18 +32,34 @@
 //!   * an unrecognized codec string: the `UnrecognizedCodec` header-parse
 //!     error. (`snappy` is gated behind a Cargo feature that this fuzz crate
 //!     does not enable, so it is intentionally not generated.)
-//! We also corrupt the declared block framing: occasionally the object-count or
-//! byte-size prefix is replaced with a huge or wildly inconsistent value, which
-//! must be caught by the `safe_len` allocation guard rather than spinning or
-//! over-allocating. And we still hit the structural error paths, occasionally a
-//! corrupted trailing sync marker (the mismatch path) or a whole-file truncation
-//! mid-block (the short-read path). Decoding must never panic any of these ways.
+//! We also corrupt the declared block framing. `read_block_next` runs both the
+//! object-count and the byte-size prefix through the `safe_len` allocation guard
+//! before it touches the payload, so a magnitude past `MAX_ALLOCATION_BYTES`
+//! never reaches anything downstream of that guard. The lies therefore straddle
+//! it deliberately:
+//!   * a count or size past the budget, which `safe_len` must reject rather than
+//!     attempt a giant allocation.
+//!   * a count over the objects the block actually encodes but inside the
+//!     budget, which `safe_len` accepts. `bound_block_object_count` must then
+//!     reject any count the payload could not hold, and one it accepts must
+//!     terminate against the bytes present instead of spinning.
+//!   * a size over the bytes the block actually carries but inside the budget,
+//!     so `fill_buf` runs and takes the short-read path.
+//! And we still hit the structural error paths, occasionally a corrupted trailing
+//! sync marker (the mismatch path) or a whole-file truncation mid-block (another
+//! short read). Decoding must never panic any of these ways.
 
 #![no_main]
 
 use libfuzzer_sys::arbitrary::{self, Unstructured};
 use libfuzzer_sys::fuzz_target;
 use mz_avro::{Codec, Reader};
+
+/// The ceiling `util::safe_len` applies to every length read off the wire, from
+/// the private `mz_avro::util::MAX_ALLOCATION_BYTES`. Only used to pick the
+/// magnitude of a corrupted block prefix, so drift merely shifts which side of
+/// the guard a generated prefix lands on.
+const MAX_ALLOCATION_BYTES: i64 = 512 * 1024 * 1024;
 
 /// A generated Avro type. Structured (not straight-to-JSON) so the object
 /// encoder can walk the same type. An array is one item type in the schema but
@@ -82,7 +98,11 @@ fn gen_ty(u: &mut Unstructured, counter: &mut u32, depth: u32) -> arbitrary::Res
         7 => Ty::Bytes,
         8 => {
             *counter += 1;
-            let size = u.int_in_range(0u32..=24)?;
+            // Size 0 is rejected outright ("Fixed values require a positive size
+            // attribute"), which would fail the header parse and discard the
+            // input before a single block decodes. `avro_schema_parse` covers
+            // that rejection deliberately.
+            let size = u.int_in_range(1u32..=24)?;
             Ty::Fixed(*counter, size)
         }
         9 => {
@@ -101,7 +121,22 @@ fn gen_ty(u: &mut Unstructured, counter: &mut u32, depth: u32) -> arbitrary::Res
         }
         11 => Ty::Array(Box::new(gen_ty(u, counter, depth - 1)?)),
         12 => Ty::Map(Box::new(gen_ty(u, counter, depth - 1)?)),
-        _ => Ty::Nullable(Box::new(gen_ty(u, counter, depth - 1)?)),
+        _ => {
+            // `Ty::Nullable` is the only union this target emits, and the parser
+            // rejects both `["null","null"]` and a union nested directly inside a
+            // union. Flatten a nested nullable and swap a bare `null` for a type
+            // that keeps the union valid, so the header still parses. Those two
+            // rejections belong to `avro_schema_parse`. Here they would only
+            // discard the input before any block decodes.
+            let mut inner = gen_ty(u, counter, depth - 1)?;
+            while let Ty::Nullable(nested) = inner {
+                inner = *nested;
+            }
+            if matches!(inner, Ty::Null) {
+                inner = Ty::Long;
+            }
+            Ty::Nullable(Box::new(inner))
+        }
     })
 }
 
@@ -115,14 +150,16 @@ fn ty_to_json(ty: &Ty, out: &mut String) {
         Ty::Double => out.push_str("\"double\""),
         Ty::String => out.push_str("\"string\""),
         Ty::Bytes => out.push_str("\"bytes\""),
-        Ty::Fixed(n, size) => {
-            out.push_str(&format!("{{\"type\":\"fixed\",\"name\":\"F{n}\",\"size\":{size}}}"))
-        }
+        Ty::Fixed(n, size) => out.push_str(&format!(
+            "{{\"type\":\"fixed\",\"name\":\"F{n}\",\"size\":{size}}}"
+        )),
         Ty::Enum(n) => out.push_str(&format!(
             "{{\"type\":\"enum\",\"name\":\"E{n}\",\"symbols\":[\"A\",\"B\",\"C\"]}}"
         )),
         Ty::Record(n, fields) => {
-            out.push_str(&format!("{{\"type\":\"record\",\"name\":\"R{n}\",\"fields\":["));
+            out.push_str(&format!(
+                "{{\"type\":\"record\",\"name\":\"R{n}\",\"fields\":["
+            ));
             for (i, f) in fields.iter().enumerate() {
                 if i > 0 {
                     out.push(',');
@@ -332,20 +369,36 @@ fn run(mut u: Unstructured) -> arbitrary::Result<()> {
         }
 
         // The block framing prefixes. Usually honest, but occasionally we lie
-        // about the object count or the byte size, including absurdly large or
-        // negative (→ huge `usize`) values, to exercise the `safe_len` guard
-        // and the short-read handling, neither of which may panic.
+        // about the object count or the byte size. `read_block_next` runs both
+        // prefixes through `safe_len` before touching the payload, so a
+        // magnitude past `MAX_ALLOCATION_BYTES` only ever reaches that guard.
+        // The lies below therefore straddle it deliberately: over the budget to
+        // exercise the guard, and over the *encoded data* but inside the budget
+        // to exercise what the reader does with a framing it accepted.
         let (count_prefix, size_prefix) = match u.int_in_range(0u8..=9)? {
             // Honest framing (the common case).
             0..=6 => (nobj, objs.len() as i64),
-            // Huge object count with the real byte size: the reader must cap
-            // the count via `safe_len` instead of trying to decode billions.
-            7 => (u.int_in_range(1i64 << 40..=i64::MAX)?, objs.len() as i64),
+            7 => match u.int_in_range(0u8..=3)? {
+                // More objects than the block encodes, drawn across the whole
+                // range `safe_len` accepts. Two further guards live in here and
+                // both must hold without spinning: `bound_block_object_count`
+                // rejects a count the payload could not hold, and a count it
+                // accepts has to terminate against the bytes actually present.
+                0..=2 => (
+                    u.int_in_range(nobj + 1..=MAX_ALLOCATION_BYTES)?,
+                    objs.len() as i64,
+                ),
+                // Past the budget: `safe_len` must reject before the block bound
+                // is ever consulted.
+                _ => (u.int_in_range(1i64 << 40..=i64::MAX)?, objs.len() as i64),
+            },
             // Negative byte size (wraps to an enormous `usize`): `safe_len`
             // must reject it rather than attempt a giant allocation.
             8 => (nobj, -u.int_in_range(1i64..=i64::MAX)?),
-            // Byte size far larger than the bytes actually present → short read.
-            _ => (nobj, objs.len() as i64 + (1i64 << 30)),
+            // More bytes than the block carries, but a size `safe_len` accepts,
+            // so `fill_buf` runs and takes the short-read path. A magnitude over
+            // the budget would stop at the guard and never get there.
+            _ => (nobj, objs.len() as i64 + u.int_in_range(1i64..=1i64 << 20)?),
         };
         encode_long(count_prefix, &mut out);
         encode_long(size_prefix, &mut out);
@@ -360,7 +413,7 @@ fn run(mut u: Unstructured) -> arbitrary::Result<()> {
     }
 
     // Occasionally truncate the whole file mid-block (short-read path).
-    if !out.is_empty() && u.int_in_range(0u8..=7)? == 0 {
+    if u.int_in_range(0u8..=7)? == 0 {
         let keep = u.int_in_range(0usize..=out.len())?;
         out.truncate(keep);
     }
