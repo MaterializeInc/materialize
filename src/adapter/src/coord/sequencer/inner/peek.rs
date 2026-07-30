@@ -504,6 +504,9 @@ impl Coordinator {
         let cardinality_stats = crate::explain::MemoryBoundStats {
             rows: stats.as_map(),
             arrangements: (*self.index_arrangement_stats.snapshot()).clone(),
+            // The peek path has no compute controller to ask, so index key counts
+            // qualify here only by having caught up with their relation's row count.
+            hydrated_indexes: Default::default(),
         };
         let session = session.meta();
         let now = self.catalog().config().now.clone();

@@ -131,6 +131,11 @@ pub struct MemoryBoundStats {
     pub rows: BTreeMap<GlobalId, usize>,
     /// Arrangement statistics, keyed by the index that maintains them.
     pub arrangements: BTreeMap<GlobalId, ArrangementStats>,
+    /// Indexes the compute controller reports hydrated on the plan's cluster.
+    ///
+    /// Empty where the caller cannot ask, which only costs coverage: an index still
+    /// qualifies by having caught up with its relation's row count.
+    pub hydrated_indexes: BTreeSet<GlobalId>,
 }
 
 /// Distinct-key bounds per relation, from the dataflow's own index imports.
@@ -144,15 +149,18 @@ pub struct MemoryBoundStats {
 ///
 /// * An index whose key is not a list of plain columns. Matching an expression key would
 ///   mean comparing it against the group key's expressions, which lowering does not attempt.
-/// * An index that has not caught up with its relation, judged by comparing the records it
-///   holds against the relation's row count. **A hydrating index reports fewer keys than its
+/// * An index that may not have caught up. **A hydrating index reports fewer keys than its
 ///   collection holds**, and an under-count would understate a memory bound, which is the
-///   direction that ends in an out-of-memory kill. A relation with no row count of its own
-///   gives nothing to compare against, so it is declined too.
+///   direction that ends in an out-of-memory kill. An index qualifies either by the
+///   controller reporting it hydrated, or by holding at least as many records as its
+///   relation has rows. The second is only a proxy for the first, and it is kept because
+///   the peek paths cannot ask the controller; where neither is available the index is
+///   declined.
 fn index_key_bounds(
     dataflow: &mz_compute_types::dataflows::DataflowDescription<mz_expr::OptimizedMirRelationExpr>,
     stats: &std::collections::BTreeMap<mz_repr::GlobalId, usize>,
     index_stats: &std::collections::BTreeMap<mz_repr::GlobalId, ArrangementStats>,
+    hydrated: &BTreeSet<mz_repr::GlobalId>,
 ) -> BTreeMap<mz_repr::GlobalId, Vec<IndexKeyBound>> {
     use mz_ore::cast::CastFrom;
 
@@ -161,10 +169,13 @@ fn index_key_bounds(
         let Some(arrangement) = index_stats.get(index_id) else {
             continue;
         };
-        let Some(relation_rows) = stats.get(&import.desc.on_id).copied().map(u64::cast_from) else {
-            continue;
-        };
-        if arrangement.records < relation_rows {
+        let caught_up = hydrated.contains(index_id)
+            || stats
+                .get(&import.desc.on_id)
+                .copied()
+                .map(u64::cast_from)
+                .is_some_and(|rows| arrangement.records >= rows);
+        if !caught_up {
             continue;
         }
         let mut key_columns = BTreeSet::new();
@@ -210,7 +221,12 @@ pub(crate) fn memory_bound_rows(
     use mz_ore::cast::CastFrom;
     use mz_repr::{Datum, Row};
 
-    let index_key_bounds = index_key_bounds(&dataflow, &stats.rows, &stats.arrangements);
+    let index_key_bounds = index_key_bounds(
+        &dataflow,
+        &stats.rows,
+        &stats.arrangements,
+        &stats.hydrated_indexes,
+    );
     let stats = stats.rows;
 
     // Sound upper bound rather than the heuristic estimate: an underestimate here would

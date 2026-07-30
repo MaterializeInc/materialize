@@ -2568,9 +2568,24 @@ impl Coordinator {
             .statistics_oracle(session, &source_ids, &as_of, true, cluster_id, true)
             .await
             .map_or_else(|_| BTreeMap::new(), |oracle| oracle.as_map());
+        // Ask the controller which of the plan's indexes have caught up. A hydrating index
+        // reports fewer keys than its collection holds, and trusting one would understate the
+        // bound. One round trip per index, which an EXPLAIN can afford.
+        let mut hydrated_indexes = BTreeSet::new();
+        for index_id in plan.index_imports.keys() {
+            if let Ok(true) = self
+                .controller
+                .compute
+                .collection_hydrated(cluster_id, *index_id)
+                .await
+            {
+                hydrated_indexes.insert(*index_id);
+            }
+        }
         MemoryBoundStats {
             rows,
             arrangements: (*self.index_arrangement_stats.snapshot()).clone(),
+            hydrated_indexes,
         }
     }
 
