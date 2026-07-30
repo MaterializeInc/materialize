@@ -1558,7 +1558,7 @@ impl CatalogState {
     /// Set the optimized plan for the item identified by `id`.
     ///
     /// # Panics
-    /// If the item is not an `Index` or `MaterializedView`.
+    /// If the item is not an `Index`, `MaterializedView`, or `MetricSink`.
     pub(super) fn set_optimized_plan(
         &mut self,
         id: GlobalId,
@@ -1577,7 +1577,7 @@ impl CatalogState {
     /// Set the physical plan for the item identified by `id`.
     ///
     /// # Panics
-    /// If the item is not an `Index` or `MaterializedView`.
+    /// If the item is not an `Index`, `MaterializedView`, or `MetricSink`.
     pub(super) fn set_physical_plan(
         &mut self,
         id: GlobalId,
@@ -1596,7 +1596,7 @@ impl CatalogState {
     /// Set the `DataflowMetainfo` for the item identified by `id`.
     ///
     /// # Panics
-    /// If the item is not an `Index` or `MaterializedView`.
+    /// If the item is not an `Index`, `MaterializedView`, or `MetricSink`.
     pub(super) fn set_dataflow_metainfo(
         &mut self,
         id: GlobalId,
