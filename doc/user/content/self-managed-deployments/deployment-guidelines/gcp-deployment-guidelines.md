@@ -107,6 +107,26 @@ It is strongly recommended to enable the Kubernetes `static` [CPU management pol
 This ensures that each worker thread of Materialize is given exclusively access to a vCPU. Our benchmarks have shown this
 to substantially improve the performance of compute-bound workloads.
 
+## Recommended metadata database sizing
+
+{{< include-md file="shared-content/self-managed/metadata-database-sizing.md" >}}
+
+### Cloud SQL machine types
+
+For the Cloud SQL for PostgreSQL instance that backs the metadata database, we
+recommend:
+
+- The **Enterprise Plus** edition with a **performance-optimized (N-series)**
+  machine type, which provides the 1:8 vCPU-to-memory ratio recommended for the
+  metadata database. Avoid shared-core machine types (`db-f1-micro`,
+  `db-g1-small`) in production.
+- A **regional (highly available)** configuration for production.
+
+| Deployment size | `tier` | vCPU / memory | Continuously-active objects (~60% CPU) |
+|---|---|---|---|
+| Entry / small production | `db-perf-optimized-N-4` | 4 / 32 GB | ~4,500 |
+| Recommended default | `db-perf-optimized-N-16` | 16 / 128 GB | ~18,000 |
+
 ## TLS
 
 When running with TLS in production, run with certificates from an official

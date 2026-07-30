@@ -76,6 +76,24 @@ If deploying `v25.2`, Materialize clusters will not automatically use swap unles
 Materialize writes **block** blobs on Azure. As a general guideline, we
 recommend **Premium block blob** storage accounts.
 
+## Recommended metadata database sizing
+
+{{< include-md file="shared-content/self-managed/metadata-database-sizing.md" >}}
+
+### Flexible Server SKUs
+
+For the Azure Database for PostgreSQL flexible server that backs the metadata
+database, we recommend:
+
+- The **Memory Optimized** tier (E-series), which provides the 1:8
+  vCore-to-memory ratio recommended for the metadata database.
+- **Zone-redundant high availability** for production.
+
+| Deployment size | `sku_name` | vCores / memory | Continuously-active objects (~60% CPU) |
+|---|---|---|---|
+| Entry / small production | `MO_Standard_E4ds_v5` | 4 / 32 GiB | ~4,500 |
+| Recommended default | `MO_Standard_E16ds_v5` | 16 / 128 GiB | ~18,000 |
+
 ## TLS
 
 When running with TLS in production, run with certificates from an official

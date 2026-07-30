@@ -59,6 +59,23 @@ If deploying `v25.2`, Materialize clusters will not automatically use swap unles
 {{< /tab >}}
 {{< /tabs >}}
 
+## Recommended metadata database sizing
+
+{{< include-md file="shared-content/self-managed/metadata-database-sizing.md" >}}
+
+### RDS instance types
+
+For the RDS PostgreSQL metadata database, we recommend:
+
+- **Graviton (ARM)** memory-optimized instances (the `r6g` / `r7g` families).
+- **Multi-AZ** for production.
+- **gp3** storage.
+
+| Deployment size | Instance | vCPU / memory | Continuously-active objects (~60% CPU) |
+|---|---|---|---|
+| Entry / small production | `db.r6g.large` | 2 / 16 GiB | ~4,500 |
+| Recommended default | `db.r6g.2xlarge` | 8 / 64 GiB | ~18,000 |
+
 ## TLS
 
 When running with TLS in production, run with certificates from an official
