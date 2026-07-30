@@ -1690,6 +1690,16 @@ where
 
     let lower_bound = match buf.peek() {
         Some(',') => None,
+        // A bound whose rendering needs escaping is emitted quoted by
+        // `format_range`, so the quotes have to come back off here. Without this
+        // the raw substring reaches the element parser, which mostly tolerates a
+        // stray `"` and then misreads it the moment it abuts a meaningful token,
+        // for example the `BC"` of a pre-Common-Era date or timestamp.
+        Some('"') => {
+            let v = lex_quoted_element(buf)?;
+            let v = gen_elem(v).map_err(|e| e.to_string())?;
+            Some(v)
+        }
         Some(_) => {
             let v = buf.take_while(|c| !matches!(c, ','));
             let v = gen_elem(Cow::from(v)).map_err(|e| e.to_string())?;
@@ -1706,6 +1716,12 @@ where
 
     let upper_bound = match buf.peek() {
         Some(']' | ')') => None,
+        // See the lower bound above.
+        Some('"') => {
+            let v = lex_quoted_element(buf)?;
+            let v = gen_elem(v).map_err(|e| e.to_string())?;
+            Some(v)
+        }
         Some(_) => {
             let v = buf.take_while(|c| !matches!(c, ')' | ']'));
             let v = gen_elem(Cow::from(v)).map_err(|e| e.to_string())?;
