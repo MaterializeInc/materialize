@@ -25,9 +25,20 @@
 //! and *Avro-binary-encode a random value against that same type*, so the body
 //! is valid by construction and the decoder walks all the way through. Coverage
 //! guidance then learns which byte streams produce which shapes. We don't lose
-//! the error-path coverage a random body gave, though: a quarter of the inputs
-//! feed the raw remaining bytes, and others truncate or single-byte-corrupt the
-//! valid encoding. Either way, an accepted schema must never panic.
+//! the error-path coverage a random body gave, though: up to a quarter of the
+//! inputs feed the raw remaining bytes, and others truncate or
+//! single-byte-corrupt the valid encoding. Either way, an accepted schema must
+//! never panic.
+//!
+//! NOTE: every "don't build a valid body" branch must be gated on there being
+//! input left. `Unstructured::int_in_range` does not fail on an exhausted
+//! `Unstructured`, it returns the *low end* of the range forever, and schema
+//! generation consumes input greedily, so an ungated `int_in_range(0..=3)? == 0`
+//! branch is taken by every exhausted input. That funnelled the majority of
+//! executions into a zero-length body (`take_rest` on nothing, or
+//! truncate-to-zero), which fails at the first `read_exact` and walks none of
+//! the deep decode logic this target exists to reach. Exhaustion must fall
+//! through to the clean-encoding path, never select a degenerate one.
 //!
 //! Beyond "never panic", we add one error oracle. Most bodies *should* be
 //! rejected (random bytes, truncations, an out-of-range `enum` index, an
@@ -37,8 +48,21 @@
 //! (plain scalars, `fixed`, and structural composites over them, see
 //! `decode_infallible`), the decoder is round-tripping bytes it *must* accept,
 //! so there a decode error is a real bug and we assert success. A panic-only
-//! oracle never notices a "valid input wrongly rejected" regression (cf.
-//! #37087's deferred union-promotion error).
+//! oracle never notices a "valid input wrongly rejected" regression.
+//!
+//! NOTE: the scope of that oracle is the *identity-resolution* decode path only.
+//! We build the decoder with `WriterSchemaProvider::None`, for which
+//! `AvroSchemaResolver::resolve` hands back the reader schema verbatim, so no
+//! `SchemaPiece::Resolve*` piece is ever constructed. The deferred
+//! union-promotion class of regression (#37087), where a failed writer/reader
+//! variant pairing is stored as an `Err` inside the resolved union and re-raised
+//! at decode time, lives entirely in that resolution machinery and cannot be
+//! reached from here. It is covered by
+//! `src/avro/fuzz/fuzz_targets/schema_resolve.rs`, which fuzzes `resolve_schemas`
+//! against `from_avro_datum`. Reaching it through the interchange-side
+//! Row-packing decoder would need a separate target that builds the resolved
+//! schema with `resolve_schemas` and hands it to `AvroFlatDecoder` directly,
+//! since `Decoder` offers no way to inject a writer schema without a registry.
 //!
 //! A fraction of inputs instead drive a round-trip *correctness* oracle
 //! (`run_roundtrip`): a decode that succeeds but yields the *wrong* datum slips
@@ -49,10 +73,12 @@
 //!
 //! Rather than freeze the schema-dependent knobs at one value each, we vary the
 //! ones that drive distinct decode arithmetic: `decimal` precision (1..=39, the
-//! `NUMERIC_DATUM_MAX_PRECISION` boundary), scale (0..=precision, where
-//! `parse_decimal` rejects scale > precision and `twos_complement_be_to_numeric`
-//! interprets it), and the backing `fixed` size, so the two's-complement byte
-//! run and the precision/scale interaction are not pinned. The decimal
+//! `NUMERIC_DATUM_MAX_PRECISION` boundary, further capped by the backing `fixed`
+//! size so `parse_fixed` does not silently demote the decimal to a plain
+//! `fixed`), scale (0..=precision, where `parse_decimal` rejects scale >
+//! precision and `twos_complement_be_to_numeric` interprets it), and the backing
+//! `fixed` size, so the two's-complement byte run and the precision/scale
+//! interaction are not pinned. The decimal
 //! *value* bytes are likewise biased (see `push_twos_complement` /
 //! `gen_decimal_len`) toward the patterns that stress that arithmetic rather
 //! than only uniform-random runs: the empty run (== 0), all-`0x00`/`0xFF` sign
@@ -61,10 +87,23 @@
 //! `json` logical field (a `string` tagged `connect.name:io.debezium.data.Json`)
 //! whose body is real JSON text, reaching the `AvroFlatDecoder::json` ->
 //! `JsonbPacker` path that a plain string never touches. And multi-variant
-//! *essential* unions like `["int","string"]`, accepted only as a record field
-//! (each non-null variant expands to its own nullable column) and rejected
-//! elsewhere, exercising `get_union_columns`' field-invention/expansion logic
-//! that the `["null", T]` nullability pattern alone never reaches.
+//! *essential* unions like `["int","string"]`, which occupy one column per
+//! non-null variant, exercising the multi-column `AvroFlatDecoder::union_branch`
+//! arithmetic (one `Datum` pushed per non-null variant, `Datum::Null` for every
+//! unselected one) that the two-branch `["null", T]` pattern never reaches.
+//!
+//! NOTE: this target stops at `parse_schema`. `Decoder::new` ->
+//! `AvroSchemaResolver::new` -> `parse_schema` is the whole chain, so none of
+//! `src/interchange/src/avro/schema.rs`'s SQL-side validation runs here:
+//! `validate_schema_1` / `validate_schema_2` / `get_union_columns` are reachable
+//! only from `schema_to_relationdesc`, which nothing here calls. The union
+//! column-name invention (`get_union_columns`' `format!("{}{}", n, i + 1)`, the
+//! `UNKNOWN_COLUMN_NAME` fallback, the resulting `RelationDesc`) is therefore
+//! untested by this target. Where the generator does keep to a validator rule
+//! (essential unions only as record fields, decimal precision <= 39) the reason
+//! is that production runs `schema_to_relationdesc` before ever building a
+//! `Decoder`, so those are the only schemas the decoder sees in practice. It is
+//! not that this target would reject the others.
 
 #![no_main]
 
@@ -125,20 +164,37 @@ enum Ty {
     Nullable(Box<Ty>),
     /// A multi-variant *essential* union of non-null variants, optionally with a
     /// leading `null`: e.g. `["int","string"]` or `["null","int","string"]`.
-    /// `validate_schema_2` rejects this everywhere except as a record field,
-    /// where `get_union_columns` expands it to one nullable column per non-null
-    /// variant. Stored as (has_null, variants). Generated only as a record field.
+    /// At decode time `AvroFlatDecoder::union_branch` packs one `Datum` per
+    /// non-null variant. Stored as (has_null, variants). Generated only as a
+    /// record field, because that is the only position the SQL validator accepts
+    /// it in and therefore the only one production reaches (this target does not
+    /// run that validator, see the module docs). Avro itself would accept the
+    /// same union anywhere a type is expected.
     EssentialUnion(bool, Vec<Ty>),
 }
 
-/// Generate a `decimal`'s precision/scale. `parse_decimal` requires
-/// `0 <= scale <= precision` and the SQL validator caps precision at
-/// `NUMERIC_DATUM_MAX_PRECISION` (39). Pick within those bounds so the schema is
-/// accepted and we vary the decode arithmetic across the whole legal range.
-fn gen_decimal_params(u: &mut Unstructured) -> arbitrary::Result<(u32, u32)> {
-    let precision = u.int_in_range(1u32..=39)?;
+/// Materialize's `NUMERIC_DATUM_MAX_PRECISION`. The SQL Avro validator caps
+/// `decimal` precision here, and production only hands the decoder schemas that
+/// passed it, so stay within it even though this target never runs that check.
+const MAX_DECIMAL_PRECISION: u32 = 39;
+
+/// Generate a `decimal`'s precision/scale with precision in
+/// `1..=max_precision`. `parse_decimal` requires `0 <= scale <= precision`, so
+/// pick the scale from the chosen precision and vary the decode arithmetic
+/// across the whole legal range.
+fn gen_decimal_params(u: &mut Unstructured, max_precision: u32) -> arbitrary::Result<(u32, u32)> {
+    let precision = u.int_in_range(1u32..=max_precision)?;
     let scale = u.int_in_range(0u32..=precision)?;
     Ok((precision, scale))
+}
+
+/// The largest `decimal` precision `parse_fixed` will honour over a `size`-byte
+/// `fixed`, mirroring its own bound. Past it the logical type is silently
+/// demoted to a plain `fixed` (a `warn!`, not a parse error), so the schema
+/// stops exercising the decimal path and the harness is left believing a
+/// `DecimalFixed` node is a decimal when the decoder sees a `fixed`.
+fn max_precision_over_fixed(size: u32) -> u32 {
+    ((f64::from(8 * size - 1)) * 2f64.log10()).floor() as u32
 }
 
 /// Generate one syntactically valid Avro type. `counter` keeps named types
@@ -164,15 +220,19 @@ fn gen_ty(u: &mut Unstructured, counter: &mut u32, depth: u32) -> arbitrary::Res
             _ => Ty::Bytes,
         },
         1 => {
-            let (p, s) = gen_decimal_params(u)?;
+            let (p, s) = gen_decimal_params(u, MAX_DECIMAL_PRECISION)?;
             Ty::DecimalBytes(p, s)
         }
         2 => {
             *counter += 1;
-            let (p, s) = gen_decimal_params(u)?;
             // `fixed` requires a positive size. Allow runs both shorter and
             // longer than the canonical 16/24 to vary the two's-complement path.
             let size = u.int_in_range(1u32..=40)?;
+            // Bound the precision by the byte run, else `parse_fixed` demotes
+            // the decimal to a plain `fixed` and this node stops testing the
+            // decimal path at all (`Ty::Fixed` already covers plain runs).
+            let max = max_precision_over_fixed(size).min(MAX_DECIMAL_PRECISION);
+            let (p, s) = gen_decimal_params(u, max)?;
             Ty::DecimalFixed(*counter, size, p, s)
         }
         3 => Ty::Date,
@@ -181,7 +241,9 @@ fn gen_ty(u: &mut Unstructured, counter: &mut u32, depth: u32) -> arbitrary::Res
         6 => Ty::Uuid,
         7 => {
             *counter += 1;
-            let size = u.int_in_range(0u32..=24)?;
+            // `parse_fixed` rejects a non-positive size outright, which would
+            // fail `Decoder::new` and discard the whole input, schema and body.
+            let size = u.int_in_range(1u32..=24)?;
             Ty::Fixed(*counter, size)
         }
         8 => {
@@ -201,7 +263,18 @@ fn gen_ty(u: &mut Unstructured, counter: &mut u32, depth: u32) -> arbitrary::Res
         }
         11 => Ty::Array(Box::new(gen_ty(u, counter, depth - 1)?)),
         12 => Ty::Map(Box::new(gen_ty(u, counter, depth - 1)?)),
-        _ => Ty::Nullable(Box::new(gen_ty(u, counter, depth - 1)?)),
+        _ => {
+            // `UnionSchema::new` rejects `["null",["null",T]]` ("Unions may not
+            // directly contain a union"), which would fail `Decoder::new` and
+            // discard the whole input. Collapse rather than re-roll, so the
+            // input the inner type already consumed is not wasted either.
+            let inner = gen_ty(u, counter, depth - 1)?;
+            if matches!(inner, Ty::Nullable(_)) {
+                inner
+            } else {
+                Ty::Nullable(Box::new(inner))
+            }
+        }
     })
 }
 
@@ -377,7 +450,11 @@ fn encode_json(u: &mut Unstructured, out: &mut Vec<u8>) -> arbitrary::Result<()>
         }
         5 => "[]".into(),
         6 => "{}".into(),
-        7 => format!("[{},{},null]", u.arbitrary::<i32>()?, u.arbitrary::<bool>()?),
+        7 => format!(
+            "[{},{},null]",
+            u.arbitrary::<i32>()?,
+            u.arbitrary::<bool>()?
+        ),
         // Not valid JSON: exercise the decoder's BadJson error path.
         _ => "{".into(),
     };
@@ -392,7 +469,11 @@ fn encode_json(u: &mut Unstructured, out: &mut Vec<u8>) -> arbitrary::Result<()>
 /// (`len <= 17`), the `negate_twos_complement_le` path (any negative value), and
 /// the wide-representation precision-overflow handling. Most of the time it
 /// still emits a uniform-random run so coverage guidance keeps exploring.
-fn push_twos_complement(u: &mut Unstructured, len: usize, out: &mut Vec<u8>) -> arbitrary::Result<()> {
+fn push_twos_complement(
+    u: &mut Unstructured,
+    len: usize,
+    out: &mut Vec<u8>,
+) -> arbitrary::Result<()> {
     let fill = match u.int_in_range(0u8..=9)? {
         0 => 0x00u8, // zero / positive sign-extension
         1 => 0xFF,   // -1 / negative sign-extension
@@ -459,7 +540,11 @@ fn encode_value(u: &mut Unstructured, ty: &Ty, out: &mut Vec<u8>) -> arbitrary::
         // The fixed-backed decimal reads exactly `size` bytes (no length prefix),
         // so only the byte pattern varies.
         Ty::DecimalFixed(_, size, _, _) => {
-            push_twos_complement(u, usize::try_from(*size).expect("fixed size fits usize"), out)?;
+            push_twos_complement(
+                u,
+                usize::try_from(*size).expect("fixed size fits usize"),
+                out,
+            )?;
         }
         Ty::Json => encode_json(u, out)?,
         Ty::Uuid => {
@@ -703,10 +788,11 @@ fn run_roundtrip(u: &mut Unstructured) -> arbitrary::Result<()> {
     }
     schema.push_str("]}");
 
-    let Ok(mut decoder) = Decoder::new(&schema, &[], WriterSchemaProvider::None, "fuzz".into()) else {
-        // A record of plain scalars always validates. If not, nothing to check.
-        return Ok(());
-    };
+    // `Decoder::new` only parses the schema, and this one is built from a fixed
+    // template over plain scalars, so a parse failure is a harness bug rather
+    // than an input we should skip.
+    let mut decoder = Decoder::new(&schema, &[], WriterSchemaProvider::None, "fuzz".into())
+        .expect("plain-scalar record schema parses");
 
     let mut body = Vec::new();
     for (val, nullable) in &cols {
@@ -728,7 +814,9 @@ fn run_roundtrip(u: &mut Unstructured) -> arbitrary::Result<()> {
             "Avro decode produced the wrong row for a plain-scalar record\nschema = {schema}",
         ),
         Ok(Err(e)) => panic!("plain-scalar record failed to decode (schema = {schema}): {e}"),
-        Err(e) => panic!("plain-scalar record hit a transient decode error (schema = {schema}): {e}"),
+        Err(e) => {
+            panic!("plain-scalar record hit a transient decode error (schema = {schema}): {e}")
+        }
     }
     Ok(())
 }
@@ -741,8 +829,8 @@ fn run(mut u: Unstructured) -> arbitrary::Result<()> {
         return run_roundtrip(&mut u);
     }
 
-    // Top-level reader schema: a record whose fields span everything
-    // `validate_schema_2` accepts.
+    // Top-level reader schema: a record whose fields span every single-column
+    // shape the decoder handles.
     let mut counter = 0u32;
     let nfields = u.int_in_range(1u8..=8)?;
     let mut fields = Vec::with_capacity(nfields.into());
@@ -757,37 +845,51 @@ fn run(mut u: Unstructured) -> arbitrary::Result<()> {
 
     // No CSR client and confluent_wire_format = false, so decode is
     // self-contained (no network) over the generated reader schema.
-    let Ok(mut decoder) = Decoder::new(&schema, &[], WriterSchemaProvider::None, "fuzz".into()) else {
+    let Ok(mut decoder) = Decoder::new(&schema, &[], WriterSchemaProvider::None, "fuzz".into())
+    else {
         return Ok(());
     };
 
-    // Body: usually a valid encoding (so the decoder runs deep), but a quarter
-    // of the time the raw remaining bytes, and otherwise a valid encoding
-    // occasionally truncated or single-byte corrupted. The non-valid forms keep
-    // the decoder's error paths covered: short read, bad length/union tag,
-    // inconsistent content.
+    // Body: usually a valid encoding (so the decoder runs deep), but up to a
+    // quarter of the time the raw remaining bytes, and otherwise a valid
+    // encoding occasionally truncated or single-byte corrupted. The non-valid
+    // forms keep the decoder's error paths covered: short read, bad length/union
+    // tag, inconsistent content.
+    // Both "don't build a valid body" decisions are gated on input remaining,
+    // because an exhausted `Unstructured` returns the low end of every range and
+    // would otherwise steer the majority of executions into an empty body (see
+    // the module docs).
     // `assert_success` is set only when the body is a *clean* (uncorrupted)
     // encoding of a type tree every node of which is guaranteed to decode for
     // any value the encoder can produce (see `decode_infallible`). In that one
     // case the decoder is round-tripping bytes it must accept, so a decode
     // *error* is a real bug. The panic-only oracle that the random-bytes,
     // truncated, corrupted, and value-validated (`enum`/`decimal`/`json`/…)
-    // arms rely on would silently miss it, the same class of regression as the
-    // deferred union-promotion error in #37087.
+    // arms rely on would silently miss it. This covers the identity-resolution
+    // decode path only, see the module docs for the resolved-schema gap.
     let mut assert_success = false;
-    let body = if u.int_in_range(0u8..=3)? == 0 {
+    // Only take the raw tail when there actually is one to feed.
+    let body = if u.len() >= 8 && u.int_in_range(0u8..=3)? == 0 {
         u.take_rest().to_vec()
     } else {
         let mut b = Vec::new();
         encode_value(&mut u, &row, &mut b)?;
-        match u.int_in_range(0u8..=9)? {
-            0 if !b.is_empty() => {
-                let keep = u.int_in_range(0usize..=b.len())?;
+        let corruption = if u.is_empty() {
+            None
+        } else {
+            Some(u.int_in_range(0u8..=9)?)
+        };
+        match corruption {
+            // `0..=len - 1`, not `0..=len`: a `keep == len` draw would leave the
+            // body untouched, so the arm would not always truncate.
+            Some(0) if !b.is_empty() => {
+                let keep = u.int_in_range(0usize..=b.len() - 1)?;
                 b.truncate(keep);
             }
-            1 if !b.is_empty() => {
+            // A nonzero mask, so the arm always flips at least one bit.
+            Some(1) if !b.is_empty() => {
                 let i = u.int_in_range(0usize..=b.len() - 1)?;
-                b[i] ^= u.arbitrary::<u8>()?;
+                b[i] ^= u.int_in_range(1u8..=u8::MAX)?;
             }
             // Uncorrupted body: if its type is guaranteed decodable, the decode
             // below must succeed.
@@ -809,6 +911,15 @@ fn run(mut u: Unstructured) -> arbitrary::Result<()> {
                 "decoder rejected a clean, in-range Avro body whose every field is guaranteed \
                  decodable; such a round-trip must succeed",
             );
+        // `decode` reads through `bytes`, so a clean body must be consumed in
+        // full. A length-accounting bug that under-consumes while still packing
+        // a well-formed `Row` passes every other oracle here.
+        assert!(
+            bytes.is_empty(),
+            "decoder left {} of {} bytes of a clean Avro body unconsumed (schema = {schema})",
+            bytes.len(),
+            body.len(),
+        );
     }
     Ok(())
 }

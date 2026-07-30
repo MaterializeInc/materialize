@@ -908,6 +908,7 @@ impl crate::AlterCompatible for SourceExportDetails {
 /// to generate the appropriate `SourceExportDetails` struct during planning.
 /// NOTE that this is serialized as proto to the catalog, so any changes here
 /// must be backwards compatible or will require a migration.
+#[derive(Debug, Eq, PartialEq)]
 pub enum SourceExportStatementDetails {
     Postgres {
         table: mz_postgres_util::desc::PostgresTableDesc,

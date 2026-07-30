@@ -34,9 +34,9 @@ use mz_proto::ProtoType;
 use mz_repr::Row;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::{ProtoSourceData, SourceData};
-use prost::Message;
 use proptest::strategy::{Strategy, ValueTree};
 use proptest::test_runner::{Config, RngAlgorithm, TestRng, TestRunner};
+use prost::Message;
 
 /// Build a 32-byte proptest seed from `bytes` (zero-padded / truncated).
 fn seed_from(bytes: &[u8]) -> [u8; 32] {
@@ -72,14 +72,15 @@ fuzz_target!(|data: &[u8]| {
             TestRng::from_seed(RngAlgorithm::ChaCha, &seed),
         );
         let value = if mode & 2 == 0 {
-            let Ok(tree) = <Row as proptest::arbitrary::Arbitrary>::arbitrary().new_tree(&mut runner)
+            let Ok(tree) =
+                <Row as proptest::arbitrary::Arbitrary>::arbitrary().new_tree(&mut runner)
             else {
                 return;
             };
             SourceData(Ok(tree.current()))
         } else {
-            let Ok(tree) =
-                <DataflowError as proptest::arbitrary::Arbitrary>::arbitrary().new_tree(&mut runner)
+            let Ok(tree) = <DataflowError as proptest::arbitrary::Arbitrary>::arbitrary()
+                .new_tree(&mut runner)
             else {
                 return;
             };

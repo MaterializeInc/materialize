@@ -2503,6 +2503,49 @@ mod tests {
 
     use super::*;
 
+    /// Wrap `"int"` in `n` layers of `{"type":"array","items":…}`.
+    fn nest_arrays(n: usize) -> Value {
+        let mut value = Value::String("int".to_string());
+        for _ in 0..n {
+            let mut layer = Map::new();
+            layer.insert("type".to_string(), Value::String("array".to_string()));
+            layer.insert("items".to_string(), value);
+            value = Value::Object(layer);
+        }
+        value
+    }
+
+    #[mz_ore::test]
+    fn parse_rejects_nesting_past_the_depth_limit() {
+        // `MAX_SCHEMA_DEPTH` counts `parse_inner` levels, and the innermost leaf
+        // costs a level without being a JSON container, so `n` wrappers reach
+        // depth `n + 1`.
+        assert_ok!(Schema::parse(&nest_arrays(MAX_SCHEMA_DEPTH - 1)));
+        let err = Schema::parse(&nest_arrays(MAX_SCHEMA_DEPTH))
+            .expect_err("nesting past the limit must be rejected");
+        assert!(
+            err.to_string()
+                .contains(&format!("nesting depth exceeds limit {MAX_SCHEMA_DEPTH}")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn from_str_cannot_reach_the_depth_limit() {
+        // Why the test above builds a `Value` rather than parsing text: `from_str`
+        // runs serde_json first, whose own recursion limit is also 128
+        // containers, so it rejects the schema one level before the guard could
+        // fire. A depth-guard test written against text would be asserting
+        // serde_json's error, not ours. If this ever fails, the guard became
+        // reachable from text and deserves a test there too.
+        let text = serde_json::to_string(&nest_arrays(MAX_SCHEMA_DEPTH)).unwrap();
+        let err = Schema::from_str(&text).expect_err("serde_json must reject this depth");
+        assert!(
+            err.to_string().contains("recursion limit exceeded"),
+            "unexpected error: {err}"
+        );
+    }
+
     fn check_schema(schema: &str, expected: SchemaPiece) {
         let schema = Schema::from_str(schema).unwrap();
         assert_eq!(&expected, schema.top_node().inner);
