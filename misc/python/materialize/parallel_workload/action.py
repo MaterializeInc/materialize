@@ -970,11 +970,6 @@ class CopyFromS3Action(Action):
                 # roundtrip can produce NULLs for NOT NULL columns.
                 "violates not-null constraint",
                 "timeout: error trying to connect",
-                # TODO: Remove when https://linear.app/materializeinc/issue/SS-341 is fixed
-                "parquet error",
-                # Same SS-341 class via the arrow record-batch path: COPY TO
-                # writes a type (e.g. a daterange) that COPY FROM cannot decode.
-                "failed to decode Row from a record batch",
                 # COPY TO CSV writes a large-year date that COPY FROM CSV then
                 # fails to parse back (SS-345). See FINDINGS-BUGS.md ("COPY FROM CSV
                 # cannot decode a large-year date written by COPY TO").
