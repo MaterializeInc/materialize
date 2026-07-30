@@ -207,6 +207,29 @@ SELECT timezone('+00:00', TIMESTAMPTZ '2024-06-30 23:59:60+00')
 ----
 2024-07-01 00:00:00
 
+# The mirror direction, TIMESTAMP -> TIMESTAMPTZ, needs the same fold in
+# `checked_sub_with_leapsecond`. `timezone()` reads a numeric offset as POSIX,
+# where a positive offset is *west* of Greenwich (see the note in timezone.slt),
+# so `+00:00:01` has a `local_minus_utc` of -1 and moves the leap second forward
+# past the minute boundary, while `-00:00:01` moves it back onto `:58`. Neither
+# lands on `:59`, so both take the folding branch.
+query T
+SELECT timezone('+00:00:01', TIMESTAMP '2024-06-30 23:59:60')
+----
+2024-07-01 00:00:01+00
+
+query T
+SELECT timezone('-00:00:01', TIMESTAMP '2024-06-30 23:59:60')
+----
+2024-06-30 23:59:59+00
+
+# A zero offset keeps the result on `:59`, exercising the `else` branch that
+# restores the leap-second nanos.
+query T
+SELECT timezone('+00:00', TIMESTAMP '2024-06-30 23:59:60')
+----
+2024-07-01 00:00:00+00
+
 ### to_char
 
 statement ok
