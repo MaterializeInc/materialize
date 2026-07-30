@@ -503,10 +503,11 @@ impl Coordinator {
         // both cost a second round trip and risk disagreeing with the plan being explained.
         let cardinality_stats = crate::explain::MemoryBoundStats {
             rows: stats.as_map(),
-            arrangements: (*self.index_arrangement_stats.snapshot()).clone(),
-            // The peek path has no compute controller to ask, so index key counts
-            // qualify here only by having caught up with their relation's row count.
-            hydrated_indexes: Default::default(),
+            // TODO: resolve index key bounds here too. The reduce tightening needs the
+            // catalog's indexes for the plan's cluster plus a hydration check, and this
+            // point runs before optimization, so the plan's inputs are not settled yet.
+            // `EXPLAIN MEMORY BOUND FOR SELECT` therefore keeps the row bound only.
+            index_key_bounds: Default::default(),
         };
         let session = session.meta();
         let now = self.catalog().config().now.clone();

@@ -14,7 +14,7 @@
 //! struct in order to provide alternate [`mz_repr::explain::Explain`]
 //! implementations for some structs (see the [`mir`]) module for details.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use mz_compute_types::dataflows::DataflowDescription;
@@ -27,7 +27,6 @@ use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
 
 use crate::AdapterError;
-use crate::index_arrangement_stats::ArrangementStats;
 
 pub(crate) mod fast_path;
 pub(crate) mod hir;
@@ -129,79 +128,8 @@ where
 pub struct MemoryBoundStats {
     /// Row counts, keyed by the relation they describe.
     pub rows: BTreeMap<GlobalId, usize>,
-    /// Arrangement statistics, keyed by the index that maintains them.
-    pub arrangements: BTreeMap<GlobalId, ArrangementStats>,
-    /// Indexes the compute controller reports hydrated on the plan's cluster.
-    ///
-    /// Empty where the caller cannot ask, which only costs coverage: an index still
-    /// qualifies by having caught up with its relation's row count.
-    pub hydrated_indexes: BTreeSet<GlobalId>,
-}
-
-/// Distinct-key bounds per relation, from the dataflow's own index imports.
-///
-/// A relation's key columns take at most as many distinct values as an index over them
-/// reports keys, so this tightens a `Reduce` whose group key those columns cover. Lowering
-/// matches the columns against plan shape; deciding which reports to trust is this
-/// function's job.
-///
-/// Two reports are declined rather than approximated:
-///
-/// * An index whose key is not a list of plain columns. Matching an expression key would
-///   mean comparing it against the group key's expressions, which lowering does not attempt.
-/// * An index that may not have caught up. **A hydrating index reports fewer keys than its
-///   collection holds**, and an under-count would understate a memory bound, which is the
-///   direction that ends in an out-of-memory kill. An index qualifies either by the
-///   controller reporting it hydrated, or by holding at least as many records as its
-///   relation has rows. The second is only a proxy for the first, and it is kept because
-///   the peek paths cannot ask the controller; where neither is available the index is
-///   declined.
-fn index_key_bounds(
-    dataflow: &mz_compute_types::dataflows::DataflowDescription<mz_expr::OptimizedMirRelationExpr>,
-    stats: &std::collections::BTreeMap<mz_repr::GlobalId, usize>,
-    index_stats: &std::collections::BTreeMap<mz_repr::GlobalId, ArrangementStats>,
-    hydrated: &BTreeSet<mz_repr::GlobalId>,
-) -> BTreeMap<mz_repr::GlobalId, Vec<IndexKeyBound>> {
-    use mz_ore::cast::CastFrom;
-
-    let mut bounds: BTreeMap<_, Vec<_>> = BTreeMap::new();
-    for (index_id, import) in &dataflow.index_imports {
-        let Some(arrangement) = index_stats.get(index_id) else {
-            continue;
-        };
-        let caught_up = hydrated.contains(index_id)
-            || stats
-                .get(&import.desc.on_id)
-                .copied()
-                .map(u64::cast_from)
-                .is_some_and(|rows| arrangement.records >= rows);
-        if !caught_up {
-            continue;
-        }
-        let mut key_columns = BTreeSet::new();
-        for key in &import.desc.key {
-            match key {
-                mz_expr::MirScalarExpr::Column(col, _) => {
-                    key_columns.insert(*col);
-                }
-                _ => {
-                    key_columns.clear();
-                    break;
-                }
-            }
-        }
-        if key_columns.is_empty() {
-            continue;
-        }
-        bounds
-            .entry(import.desc.on_id)
-            .or_default()
-            .push(IndexKeyBound {
-                key_columns,
-                distinct_keys: arrangement.distinct_keys,
-            });
-    }
-    bounds
+    /// Distinct-key bounds per relation, already resolved and vetted by the caller.
+    pub index_key_bounds: BTreeMap<GlobalId, Vec<IndexKeyBound>>,
 }
 
 /// Renders the static memory bound for each node of a physical plan.
@@ -221,12 +149,7 @@ pub(crate) fn memory_bound_rows(
     use mz_ore::cast::CastFrom;
     use mz_repr::{Datum, Row};
 
-    let index_key_bounds = index_key_bounds(
-        &dataflow,
-        &stats.rows,
-        &stats.arrangements,
-        &stats.hydrated_indexes,
-    );
+    let index_key_bounds = stats.index_key_bounds;
     let stats = stats.rows;
 
     // Sound upper bound rather than the heuristic estimate: an underestimate here would

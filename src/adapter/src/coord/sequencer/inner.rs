@@ -125,6 +125,7 @@ use crate::session::{
 };
 use crate::util::{ClientTransmitter, ResultExt, viewable_variables};
 use crate::{PeekResponseUnary, ReadHolds};
+use mz_compute_types::plan::IndexKeyBound;
 
 /// A future that resolves to a real-time recency timestamp.
 type RtrTimestampFuture = BoxFuture<'static, Result<Timestamp, StorageError>>;
@@ -2568,25 +2569,91 @@ impl Coordinator {
             .statistics_oracle(session, &source_ids, &as_of, true, cluster_id, true)
             .await
             .map_or_else(|_| BTreeMap::new(), |oracle| oracle.as_map());
-        // Ask the controller which of the plan's indexes have caught up. A hydrating index
-        // reports fewer keys than its collection holds, and trusting one would understate the
-        // bound. One round trip per index, which an EXPLAIN can afford.
-        let mut hydrated_indexes = BTreeSet::new();
-        for index_id in plan.index_imports.keys() {
-            if let Ok(true) = self
-                .controller
-                .compute
-                .collection_hydrated(cluster_id, *index_id)
-                .await
-            {
-                hydrated_indexes.insert(*index_id);
-            }
-        }
         MemoryBoundStats {
             rows,
-            arrangements: (*self.index_arrangement_stats.snapshot()).clone(),
-            hydrated_indexes,
+            index_key_bounds: self.index_key_bounds(plan, cluster_id).await,
         }
+    }
+
+    /// Distinct-key bounds per relation the plan reads, from every index over it.
+    ///
+    /// Resolved from the catalog rather than from the plan's `index_imports`, and that
+    /// distinction is the whole point. The optimizer imports whichever index it wants for the
+    /// read, which is typically the primary key, and a primary key's distinct-key count is
+    /// close to its row count and so bounds nothing. The useful index is often a different one
+    /// on the same relation: on TPC-H `lineitem`, the imported
+    /// `pk_lineitem_orderkey_linenumber` reports 61631 keys against 62409 records, while
+    /// `fk_lineitem_orderkey` reports 15271, a 4x tightening. The bound describes the indexed
+    /// collection, not the path the plan reads it by, so any index over the relation qualifies.
+    ///
+    /// Declined rather than approximated:
+    ///
+    /// * an index whose key is not a list of plain columns, since matching an expression key
+    ///   would mean comparing it against the group key's expressions;
+    /// * an index that may not have caught up. **A hydrating index reports fewer keys than its
+    ///   collection holds**, and an under-count would understate the bound, which is the
+    ///   direction that ends in an out-of-memory kill. The controller is asked directly.
+    async fn index_key_bounds(
+        &self,
+        plan: &DataflowDescription<OptimizedMirRelationExpr>,
+        cluster_id: ClusterId,
+    ) -> BTreeMap<GlobalId, Vec<IndexKeyBound>> {
+        let snapshot = self.index_arrangement_stats.snapshot();
+        if snapshot.is_empty() {
+            return BTreeMap::new();
+        }
+        // Every relation the plan reads appears either as a source import or as some index
+        // import's on-id, so this is the full set of `Get` targets.
+        let relations: BTreeSet<_> = plan
+            .source_imports
+            .keys()
+            .copied()
+            .chain(plan.index_imports.values().map(|i| i.desc.on_id))
+            .collect();
+
+        let mut bounds: BTreeMap<_, Vec<_>> = BTreeMap::new();
+        for relation in relations {
+            let candidates: Vec<_> = self
+                .catalog()
+                .state()
+                .get_indexes_on(relation, cluster_id)
+                .map(|(index_id, index)| (index_id, index.keys.clone()))
+                .collect();
+            for (index_id, keys) in candidates {
+                let Some(stats) = snapshot.get(&index_id) else {
+                    continue;
+                };
+                let mut key_columns = BTreeSet::new();
+                for key in keys.iter() {
+                    match key {
+                        mz_expr::MirScalarExpr::Column(col, _) => {
+                            key_columns.insert(*col);
+                        }
+                        _ => {
+                            key_columns.clear();
+                            break;
+                        }
+                    }
+                }
+                if key_columns.is_empty() {
+                    continue;
+                }
+                if !matches!(
+                    self.controller
+                        .compute
+                        .collection_hydrated(cluster_id, index_id)
+                        .await,
+                    Ok(true)
+                ) {
+                    continue;
+                }
+                bounds.entry(relation).or_default().push(IndexKeyBound {
+                    key_columns,
+                    distinct_keys: stats.distinct_keys,
+                });
+            }
+        }
+        bounds
     }
 
     pub(super) async fn sequence_explain_pushdown(
