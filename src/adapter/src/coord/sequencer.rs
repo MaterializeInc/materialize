@@ -1246,6 +1246,11 @@ pub(crate) async fn explain_plan_inner(
 ///
 /// This is a free-standing function that can be called from both the old peek sequencing
 /// and the new frontend peek sequencing.
+///
+/// Collects nothing unless the session asks for cardinality estimates, or `force` is set.
+/// `force` exists for `EXPLAIN MEMORY BOUND`, whose row and byte columns are the whole
+/// point of the statement, so that measuring a bound does not require enabling estimates
+/// for every other query in the session.
 pub(crate) async fn statistics_oracle(
     session: &Session,
     source_ids: &BTreeSet<GlobalId>,
@@ -1256,8 +1261,9 @@ pub(crate) async fn statistics_oracle(
     catalog: &CatalogState,
     cluster_id: ClusterId,
     index_arrangement_stats: &IndexArrangementStats,
+    force: bool,
 ) -> Result<Box<dyn StatisticsOracle>, AdapterError> {
-    if !session.vars().enable_session_cardinality_estimates() {
+    if !force && !session.vars().enable_session_cardinality_estimates() {
         let stats: Box<dyn StatisticsOracle> = Box::new(EmptyStatisticsOracle);
         return Ok(stats);
     }

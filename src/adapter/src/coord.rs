@@ -975,6 +975,20 @@ impl ExplainContext {
             }) | ExplainContext::PlanInsightsNotice(_)
         )
     }
+
+    /// Whether this is the one stage whose output depends on cardinality statistics.
+    ///
+    /// The peek path builds its statistics oracle before optimizing, so the decision to
+    /// collect has to be made from here rather than at the point the bound is rendered.
+    pub(crate) fn needs_cardinality_stats(&self) -> bool {
+        matches!(
+            self,
+            ExplainContext::Plan(ExplainPlanContext {
+                stage: ExplainStage::MemoryBound,
+                ..
+            })
+        )
+    }
 }
 
 #[derive(Debug)]

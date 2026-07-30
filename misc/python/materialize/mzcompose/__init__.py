@@ -257,6 +257,13 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "enable_index_cardinality_estimates", "true", ["true", "false"]
         ),
+        # On by default so EXPLAIN MEMORY BOUND's row and byte columns are exercised in
+        # CI. Deliberately independent of the two flags above: this one scopes statistics
+        # collection to that stage, so it moves no join orders and adds no statistics
+        # await to ordinary peeks.
+        VariableSystemParameter(
+            "enable_memory_bound_cardinality_estimates", "true", ["true", "false"]
+        ),
         VariableSystemParameter(
             "enable_compute_sync_mv_sink",
             "true",

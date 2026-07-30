@@ -483,6 +483,10 @@ impl Coordinator {
         // Generate data structures that can be moved to another task where we will perform possibly
         // expensive optimizations.
         let timestamp_context = determination.timestamp_context.clone();
+        // `EXPLAIN MEMORY BOUND` needs statistics even when the session has not enabled them
+        // for optimization, since its row and byte columns are the whole output.
+        let force_stats = explain_ctx.needs_cardinality_stats()
+            && session.vars().enable_memory_bound_cardinality_estimates();
         let stats = self
             .statistics_oracle(
                 session,
@@ -490,6 +494,7 @@ impl Coordinator {
                 &timestamp_context.antichain(),
                 true,
                 optimizer.cluster_id(),
+                force_stats,
             )
             .await
             .unwrap_or_else(|_| Box::new(EmptyStatisticsOracle));

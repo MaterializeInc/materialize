@@ -838,6 +838,10 @@ impl PeekClient {
 
         // # From peek_optimize
 
+        // `EXPLAIN MEMORY BOUND` needs statistics even when the session has not enabled
+        // them for optimization, since its row and byte columns are the whole output.
+        let force_stats = explain_ctx.needs_cardinality_stats()
+            && session.vars().enable_memory_bound_cardinality_estimates();
         let stats = statistics_oracle(
             session,
             &source_ids,
@@ -848,6 +852,7 @@ impl PeekClient {
             catalog.state(),
             target_cluster_id,
             &self.index_arrangement_stats,
+            force_stats,
         )
         .await
         .unwrap_or_else(|_| Box::new(EmptyStatisticsOracle));

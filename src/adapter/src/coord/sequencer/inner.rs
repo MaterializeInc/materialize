@@ -2535,10 +2535,10 @@ impl Coordinator {
 
     /// Row counts for the leaves of `plan`, as the plan's own cluster sees them.
     ///
-    /// Gated on `enable_session_cardinality_estimates`, so it costs nothing by default, and
-    /// degrades to no statistics rather than failing the EXPLAIN. An input reached through an
-    /// index still has statistics on the object the index is built on, so both import kinds
-    /// contribute. Taking only `source_imports` misses every dataflow whose inputs happen to be
+    /// Gated on `enable_memory_bound_cardinality_estimates`, and degrades to no statistics
+    /// rather than failing the EXPLAIN. An input reached through an index still has
+    /// statistics on the object the index is built on, so both import kinds contribute.
+    /// Taking only `source_imports` misses every dataflow whose inputs happen to be
     /// indexed, which is most of them.
     ///
     /// `cluster_id` must be the cluster the plan will run on. Index-derived counts are
@@ -2550,6 +2550,9 @@ impl Coordinator {
         plan: &DataflowDescription<OptimizedMirRelationExpr>,
         cluster_id: ClusterId,
     ) -> BTreeMap<GlobalId, usize> {
+        if !session.vars().enable_memory_bound_cardinality_estimates() {
+            return BTreeMap::new();
+        }
         let source_ids = plan
             .source_imports
             .keys()
@@ -2557,7 +2560,10 @@ impl Coordinator {
             .chain(plan.index_imports.values().map(|import| import.desc.on_id))
             .collect();
         let as_of = Antichain::from_elem(mz_repr::Timestamp::MIN);
-        self.statistics_oracle(session, &source_ids, &as_of, true, cluster_id)
+        // Forced, because this stage's whole output is the bound. The session flag above is
+        // the gate; `enable_session_cardinality_estimates` governs query optimization and
+        // is deliberately not consulted here.
+        self.statistics_oracle(session, &source_ids, &as_of, true, cluster_id, true)
             .await
             .map_or_else(|_| BTreeMap::new(), |oracle| oracle.as_map())
     }
@@ -4974,6 +4980,7 @@ impl Coordinator {
         query_as_of: &Antichain<Timestamp>,
         is_oneshot: bool,
         cluster_id: ClusterId,
+        force: bool,
     ) -> Result<Box<dyn mz_transform::StatisticsOracle>, AdapterError> {
         super::statistics_oracle(
             session,
@@ -4985,6 +4992,7 @@ impl Coordinator {
             self.catalog().state(),
             cluster_id,
             &self.index_arrangement_stats,
+            force,
         )
         .await
     }
