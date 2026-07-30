@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
+use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Timelike, Utc};
 use mz_repr::adt::date::Date;
 use mz_repr::adt::datetime::DateTimeField;
 use mz_repr::adt::interval::Interval;
@@ -311,6 +311,63 @@ fn test_parse_timestamptz_errors() {
             e.to_string(),
             format!("{}", strconv::parse_timestamptz(s).unwrap_err())
         );
+    }
+}
+
+#[mz_ore::test]
+fn test_parse_timestamptz_offset_overflow() {
+    // `HIGH_DATE` is exactly `chrono::NaiveDate::MAX` and the low bound is
+    // PostgreSQL's 4713 BC, so applying the offset to a value just inside either
+    // bound leaves chrono's range. The offset is applied before the
+    // `CheckedTimestamp` bound check, so that check cannot catch it, and chrono's
+    // own `NaiveDateTime - FixedOffset` panics instead of erroring.
+    for s in [
+        // High end: a westward offset moves the value past `NaiveDate::MAX`. One
+        // second of offset is enough on the last second of the day.
+        "262142-12-31 23:00:00-01",
+        "262142-12-31 23:59:59-00:00:01",
+        // Low end: an eastward offset moves the value below chrono's minimum,
+        // January 1, 262144 BCE.
+        "262144-01-01 00:00:00+01 BC",
+        "262144-01-01 00:00:00+00:00:01 BC",
+    ] {
+        assert_eq!(
+            format!("{}", strconv::parse_timestamptz(s).unwrap_err()),
+            format!("{s:?} is out of range for type timestamp with time zone"),
+        );
+    }
+
+    // The opposite offset direction on the high boundary stays in range and is
+    // still accepted, so the check is not simply rejecting the boundary day. The
+    // low boundary has no such counterpart: `LOW_DATE` is 4713 BC, far above
+    // chrono's minimum, so every value near that minimum is rejected either way.
+    assert!(strconv::parse_timestamptz("262142-12-31 23:00:00+01").is_ok());
+    assert!(strconv::parse_timestamptz("262142-12-31 23:59:59+00:00:01").is_ok());
+}
+
+#[mz_ore::test]
+fn test_parse_timestamptz_leap_second_offset_fold() {
+    // A parsed `:60` becomes chrono's leap-second representation (sub-second
+    // >= 1s), which is only representable at a second-of-minute of 59. An offset
+    // that is not a whole number of minutes shifts it off `:59`, and the
+    // resulting value used to panic in `Row` encoding. Fold it into the next
+    // regular second instead, which is also what PostgreSQL does with `:60`.
+    for (input, expected) in [
+        ("1970-01-01 00:00:60+00:00:30", "1970-01-01 00:00:30+00"),
+        ("1970-01-01 12:00:60-00:00:30", "1970-01-01 12:01:30+00"),
+    ] {
+        let ts = strconv::parse_timestamptz(input).unwrap();
+        assert_eq!(ts.nanosecond(), 0, "leap-second nanos survived the fold");
+        let mut buf = String::new();
+        strconv::format_timestamptz(&mut buf, &ts);
+        assert_eq!(buf, expected);
+    }
+
+    // A whole-minute offset keeps the value on `:59`, where the leap-second
+    // representation is legal, so it is preserved rather than folded.
+    for input in ["1970-01-01 00:00:60+01", "1970-01-01 12:00:60-05:30"] {
+        let ts = strconv::parse_timestamptz(input).unwrap();
+        assert_eq!(ts.nanosecond(), 1_000_000_000);
     }
 }
 

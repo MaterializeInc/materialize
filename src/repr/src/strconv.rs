@@ -58,7 +58,7 @@ use crate::adt::mz_acl_item::{AclItem, MzAclItem};
 use crate::adt::numeric::{self, NUMERIC_DATUM_MAX_PRECISION, Numeric};
 use crate::adt::pg_legacy_name::NAME_MAX_BYTES;
 use crate::adt::range::{Range, RangeBound, RangeInner};
-use crate::adt::timestamp::CheckedTimestamp;
+use crate::adt::timestamp::{CheckedTimestamp, checked_sub_with_leapsecond};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.strconv.rs"));
 
@@ -566,32 +566,35 @@ fn parse_timestamptz_inner(
     s: &str,
     order: DateOrder,
 ) -> Result<CheckedTimestamp<DateTime<Utc>>, ParseError> {
-    parse_timestamp_string(s, order)
-        .and_then(|(date, time, timezone)| {
-            use Timezone::*;
-            let mut dt = date.and_time(time);
-            let offset = match timezone {
-                FixedOffset(offset) => offset,
-                Tz(tz) => match tz.offset_from_local_datetime(&dt).latest() {
-                    Some(offset) => offset.fix(),
-                    None => {
-                        dt += Duration::try_hours(1).unwrap();
-                        tz.offset_from_local_datetime(&dt)
-                            .latest()
-                            .ok_or_else(|| "invalid timezone conversion".to_owned())?
-                            .fix()
-                    }
-                },
-            };
-            Ok(DateTime::from_naive_utc_and_offset(dt - offset, Utc))
-        })
-        .map_err(|e| {
-            ParseError::invalid_input_syntax("timestamp with time zone", s).with_details(e)
-        })
-        .and_then(|ts| {
-            CheckedTimestamp::from_timestamplike(ts)
-                .map_err(|_| ParseError::out_of_range("timestamp with time zone", s))
-        })
+    let invalid_syntax = |details: String| {
+        ParseError::invalid_input_syntax("timestamp with time zone", s).with_details(details)
+    };
+    let out_of_range = || ParseError::out_of_range("timestamp with time zone", s);
+
+    let (date, time, timezone) = parse_timestamp_string(s, order).map_err(&invalid_syntax)?;
+    let mut dt = date.and_time(time);
+    let offset = match timezone {
+        Timezone::FixedOffset(offset) => offset,
+        Timezone::Tz(tz) => match tz.offset_from_local_datetime(&dt).latest() {
+            Some(offset) => offset.fix(),
+            None => {
+                dt = dt
+                    .checked_add_signed(Duration::try_hours(1).unwrap())
+                    .ok_or_else(out_of_range)?;
+                tz.offset_from_local_datetime(&dt)
+                    .latest()
+                    .ok_or_else(|| invalid_syntax("invalid timezone conversion".to_owned()))?
+                    .fix()
+            }
+        },
+    };
+    // `HIGH_DATE` is exactly `NaiveDate::MAX`, so applying a westward offset to
+    // a time late on that day leaves chrono's range, and chrono's own
+    // `NaiveDateTime - FixedOffset` panics there. This runs before the
+    // `CheckedTimestamp` bound check below, so that check cannot save it.
+    let dt = checked_sub_with_leapsecond(&dt, &offset).ok_or_else(out_of_range)?;
+    CheckedTimestamp::from_timestamplike(DateTime::from_naive_utc_and_offset(dt, Utc))
+        .map_err(|_| out_of_range())
 }
 
 /// Writes a [`DateTime<Utc>`] timestamp to `buf`.
