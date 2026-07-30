@@ -105,6 +105,20 @@ def workflow_mode_append(c: Composition) -> None:
     )
 
 
+def workflow_idle_gap(c: Composition) -> None:
+    """A caught-up Iceberg sink whose input goes quiet and then receives a
+    write must stay healthy. Differential's arrange leaves a gap in the emitted
+    batch stream across a data-free frontier advance, and `write_data_files`
+    has to tolerate it rather than halting the dataflow."""
+    key = _setup(c)
+
+    c.run_testdrive_files(
+        f"--var=s3-access-key={key}",
+        "--var=aws-endpoint=minio:9000",
+        "idle-gap.td",
+    )
+
+
 def workflow_alter_commit_interval(c: Composition) -> None:
     """ALTER SINK ... SET (COMMIT INTERVAL ...) restarts the sink dataflow
     with the new interval and subsequent batches follow the new cadence."""
