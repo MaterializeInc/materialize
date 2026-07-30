@@ -85,6 +85,8 @@ pub(super) struct Context {
     /// Taken as a callback because the estimator lives above this crate. It is invoked once per
     /// lowered node on that node's MIR subtree.
     row_bound: Option<(RowBoundFn, BTreeMap<LirId, u64>)>,
+    /// Row bounds for the object currently being lowered, keyed by MIR node address.
+    row_bounds_for_object: BTreeMap<usize, u64>,
     /// Whether the current expression is subject to single-time (one-shot
     /// `SELECT`) monotonic operator selection.
     ///
@@ -149,6 +151,7 @@ impl Context {
             metrics: metrics.cloned(),
             node_types: None,
             row_bound: None,
+            row_bounds_for_object: BTreeMap::new(),
             // Set from the dataflow in `lower` before any expression is lowered.
             single_time: false,
             source_imports: Default::default(),
@@ -258,6 +261,12 @@ impl Context {
         let mut objects_to_build = Vec::with_capacity(desc.objects_to_build.len());
         for build in desc.objects_to_build {
             self.debug_info.id = build.id;
+            // Analyse this object's whole tree once, so a node inside a `Let` body can still
+            // resolve the binding it refers to.
+            self.row_bounds_for_object = match &self.row_bound {
+                Some((bound, _)) => bound(&build.plan),
+                None => BTreeMap::new(),
+            };
             let LoweredExpr {
                 plan,
                 keys,
@@ -445,8 +454,12 @@ impl Context {
         } else {
             None
         };
-        if let Some((bound, collected)) = self.row_bound.as_mut() {
-            let rows = match (bound(expr), index_bound) {
+        let mir_bound = self
+            .row_bounds_for_object
+            .get(&(expr as *const MirRelationExpr as usize))
+            .copied();
+        if let Some((_bound, collected)) = self.row_bound.as_mut() {
+            let rows = match (mir_bound, index_bound) {
                 (Some(a), Some(b)) => Some(a.min(b)),
                 (Some(a), None) | (None, Some(a)) => Some(a),
                 (None, None) => None,
@@ -1785,11 +1798,21 @@ impl std::fmt::Display for LirDebugInfo {
 }
 
 mod row_bound {
+    use std::collections::BTreeMap;
+
     use mz_expr::MirRelationExpr;
 
-    /// Bounds the rows a MIR subtree can produce, or `None` where no bound is known.
+    /// Bounds the rows every node of a MIR tree can produce, keyed by node address.
+    ///
+    /// Invoked once per object to build, on that object's root, rather than once per node on
+    /// that node's own subtree. The distinction is not an optimization: a node inside a `Let`
+    /// body refers to the binding by `Id::Local`, and an analysis given only that node's
+    /// subtree cannot resolve it, so every bound above a CTE degraded to unknown.
+    ///
+    /// Addresses are stable because the caller holds the tree by reference for the whole of
+    /// lowering, and only ever looks up nodes of the tree it was handed.
     ///
     /// Boxed rather than generic so `Context` needs no type parameter, and owned so it needs no
     /// lifetime.
-    pub type RowBoundFn = Box<dyn Fn(&MirRelationExpr) -> Option<u64>>;
+    pub type RowBoundFn = Box<dyn Fn(&MirRelationExpr) -> BTreeMap<usize, u64>>;
 }

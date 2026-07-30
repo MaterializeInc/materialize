@@ -159,16 +159,36 @@ pub(crate) fn memory_bound_rows(
     // Acceptable on an EXPLAIN, which is not on any hot path.
     let bound_features = features.clone();
     let row_bound: mz_compute_types::plan::RowBoundFn =
-        Box::new(move |expr: &mz_expr::MirRelationExpr| {
+        Box::new(move |root: &mz_expr::MirRelationExpr| {
+            use mz_expr::visit::Visit;
+
             let mut builder = mz_transform::analysis::DerivedBuilder::new(&bound_features);
             builder.require(mz_transform::analysis::Cardinality::upper_bound(
                 stats.clone(),
             ));
-            let derived = builder.visit(expr);
-            let estimate = *derived
-                .as_view()
-                .value::<mz_transform::analysis::Cardinality>()?;
-            estimate.rounded().map(u64::cast_from)
+            let derived = builder.visit(root);
+            let estimates = derived.results::<mz_transform::analysis::Cardinality>();
+
+            // The analysis stores one result per node in post-order, so walking the tree the
+            // same way lines addresses up with estimates positionally.
+            let mut order = Vec::with_capacity(estimates.len());
+            root.visit_post(&mut |node: &mz_expr::MirRelationExpr| {
+                order.push(node as *const mz_expr::MirRelationExpr as usize);
+            });
+            // A length mismatch would mean the two traversals disagree, and pairing them
+            // anyway would attribute one node's bound to another. Better no bounds than
+            // wrong ones, since a wrong one here understates memory.
+            if order.len() != estimates.len() {
+                return BTreeMap::new();
+            }
+
+            order
+                .into_iter()
+                .zip(estimates)
+                .filter_map(|(addr, estimate)| {
+                    Some((addr, estimate.rounded().map(u64::cast_from)?))
+                })
+                .collect()
         });
 
     let (dataflow, node_types, row_bounds) = LirRelationExpr::finalize_dataflow_with_node_types(
