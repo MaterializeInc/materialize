@@ -22,7 +22,9 @@ use mz_ore::cast;
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 #[cfg(any(test, feature = "proptest"))]
-use proptest_derive::Arbitrary;
+use proptest::arbitrary::Arbitrary;
+#[cfg(any(test, feature = "proptest"))]
+use proptest::strategy::{BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.numeric.rs"));
@@ -113,7 +115,6 @@ pub mod str_serde {
     Serialize,
     Deserialize
 )]
-#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct NumericMaxScale(pub(crate) u8);
 
 impl NumericMaxScale {
@@ -123,6 +124,18 @@ impl NumericMaxScale {
     /// Consumes the newtype wrapper, returning the inner `u8`.
     pub fn into_u8(self) -> u8 {
         self.0
+    }
+}
+
+#[cfg(any(test, feature = "proptest"))]
+impl Arbitrary for NumericMaxScale {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<NumericMaxScale>;
+
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        (0..=NUMERIC_DATUM_MAX_PRECISION)
+            .prop_map(NumericMaxScale)
+            .boxed()
     }
 }
 
@@ -154,8 +167,15 @@ impl RustType<ProtoNumericMaxScale> for NumericMaxScale {
         }
     }
 
+    // NOTE: `from_proto` is a trust boundary for durable and protocol state, so it
+    // enforces the same domain as `TryFrom<i64>` rather than trusting the wire.
     fn from_proto(max_scale: ProtoNumericMaxScale) -> Result<Self, TryFromProtoError> {
-        Ok(NumericMaxScale(max_scale.value.into_rust()?))
+        NumericMaxScale::try_from(i64::from(max_scale.value)).map_err(|e| {
+            TryFromProtoError::InvalidFieldError(format!(
+                "ProtoNumericMaxScale::value {}: {e}",
+                max_scale.value
+            ))
+        })
     }
 }
 

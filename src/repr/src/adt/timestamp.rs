@@ -30,13 +30,11 @@ use chrono::Timelike;
 use mz_ore::cast::{self, CastFrom};
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::chrono::ProtoNaiveDateTime;
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
+use mz_proto::{RustType, TryFromProtoError};
 #[cfg(any(test, feature = "proptest"))]
 use proptest::arbitrary::Arbitrary;
 #[cfg(any(test, feature = "proptest"))]
 use proptest::strategy::{BoxedStrategy, Strategy};
-#[cfg(any(test, feature = "proptest"))]
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize, Serializer};
 use thiserror::Error;
 
@@ -79,13 +77,22 @@ pub const MAX_PRECISION: u8 = 6;
     Serialize,
     Deserialize
 )]
-#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct TimestampPrecision(pub(crate) u8);
 
 impl TimestampPrecision {
     /// Consumes the newtype wrapper, returning the inner `u8`.
     pub fn into_u8(self) -> u8 {
         self.0
+    }
+}
+
+#[cfg(any(test, feature = "proptest"))]
+impl Arbitrary for TimestampPrecision {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<TimestampPrecision>;
+
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        (0..=MAX_PRECISION).prop_map(TimestampPrecision).boxed()
     }
 }
 
@@ -109,8 +116,16 @@ impl RustType<ProtoTimestampPrecision> for TimestampPrecision {
         }
     }
 
+    // NOTE: `from_proto` is a trust boundary for durable and protocol state, so it
+    // enforces the same domain as `TryFrom<i64>`. Consumers rely on the invariant:
+    // a precision above `MAX_PRECISION` panics `round_to_precision`.
     fn from_proto(proto: ProtoTimestampPrecision) -> Result<Self, TryFromProtoError> {
-        Ok(TimestampPrecision(proto.value.into_rust()?))
+        TimestampPrecision::try_from(i64::from(proto.value)).map_err(|e| {
+            TryFromProtoError::InvalidFieldError(format!(
+                "ProtoTimestampPrecision::value {}: {e}",
+                proto.value
+            ))
+        })
     }
 }
 
