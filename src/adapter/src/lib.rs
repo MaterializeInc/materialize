@@ -52,7 +52,7 @@ pub mod catalog;
 pub mod client;
 pub mod config;
 pub mod flags;
-pub mod index_cardinalities;
+pub mod index_arrangement_stats;
 pub mod metrics;
 pub mod peek_client;
 pub mod session;

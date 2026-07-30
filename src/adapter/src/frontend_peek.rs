@@ -847,7 +847,7 @@ impl PeekClient {
             &*self.storage_collections,
             catalog.state(),
             target_cluster_id,
-            &self.index_cardinalities,
+            &self.index_arrangement_stats,
         )
         .await
         .unwrap_or_else(|_| Box::new(EmptyStatisticsOracle));

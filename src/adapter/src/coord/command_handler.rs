@@ -902,7 +902,7 @@ impl Coordinator {
                     persist_client: self.persist_client.clone(),
                     statement_logging_frontend,
                     superuser_attribute,
-                    index_cardinalities: Arc::clone(&self.index_cardinalities),
+                    index_arrangement_stats: Arc::clone(&self.index_arrangement_stats),
                 });
                 if tx.send(resp).is_err() {
                     // Failed to send to adapter, but everything is setup so we can terminate

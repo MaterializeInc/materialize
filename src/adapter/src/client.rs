@@ -286,7 +286,7 @@ impl Client {
             persist_client,
             statement_logging_frontend,
             superuser_attribute,
-            index_cardinalities,
+            index_arrangement_stats,
         } = response;
 
         let peek_client = PeekClient::new(
@@ -297,7 +297,7 @@ impl Client {
             optimizer_metrics,
             persist_client,
             statement_logging_frontend,
-            index_cardinalities,
+            index_arrangement_stats,
         );
 
         let mut client = SessionClient {

@@ -4984,7 +4984,7 @@ impl Coordinator {
             self.controller.storage_collections.as_ref(),
             self.catalog().state(),
             cluster_id,
-            &self.index_cardinalities,
+            &self.index_arrangement_stats,
         )
         .await
     }

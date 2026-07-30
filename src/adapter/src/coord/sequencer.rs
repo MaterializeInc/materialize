@@ -66,7 +66,7 @@ use crate::coord::{
 };
 use crate::error::AdapterError;
 use crate::explain::insights::PlanInsightsContext;
-use crate::index_cardinalities::IndexCardinalities;
+use crate::index_arrangement_stats::IndexArrangementStats;
 use crate::notice::AdapterNotice;
 use crate::optimize::dataflows::{EvalTime, ExprPrep, ExprPrepOneShot};
 use crate::optimize::peek;
@@ -1255,7 +1255,7 @@ pub(crate) async fn statistics_oracle(
     storage_collections: &dyn StorageCollections,
     catalog: &CatalogState,
     cluster_id: ClusterId,
-    index_cardinalities: &IndexCardinalities,
+    index_arrangement_stats: &IndexArrangementStats,
 ) -> Result<Box<dyn StatisticsOracle>, AdapterError> {
     if !session.vars().enable_session_cardinality_estimates() {
         let stats: Box<dyn StatisticsOracle> = Box::new(EmptyStatisticsOracle);
@@ -1265,7 +1265,7 @@ pub(crate) async fn statistics_oracle(
     // Estimates from index arrangements, which need no await. These cover indexed
     // views, which persist cannot cover at all because a view has no shard.
     let index_estimates = if system_config.enable_index_cardinality_estimates() {
-        index_cardinality_estimates(source_ids, catalog, cluster_id, index_cardinalities)
+        index_cardinality_estimates(source_ids, catalog, cluster_id, index_arrangement_stats)
     } else {
         BTreeMap::new()
     };
@@ -1324,9 +1324,9 @@ fn index_cardinality_estimates(
     source_ids: &BTreeSet<GlobalId>,
     catalog: &CatalogState,
     cluster_id: ClusterId,
-    index_cardinalities: &IndexCardinalities,
+    index_arrangement_stats: &IndexArrangementStats,
 ) -> BTreeMap<GlobalId, usize> {
-    let snapshot = index_cardinalities.snapshot();
+    let snapshot = index_arrangement_stats.snapshot();
     if snapshot.is_empty() {
         return BTreeMap::new();
     }
@@ -1345,7 +1345,7 @@ fn index_cardinality_estimates(
         // laggard is the one still hydrating, so take the largest.
         let records = catalog
             .get_indexes_on(id, cluster_id)
-            .filter_map(|(index_id, _)| snapshot.get(&index_id).copied())
+            .filter_map(|(index_id, _)| snapshot.get(&index_id).map(|stats| stats.records))
             .max();
         if let Some(records) = records {
             estimates.insert(id, usize::cast_from(records));

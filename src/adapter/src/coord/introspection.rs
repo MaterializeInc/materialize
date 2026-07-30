@@ -382,8 +382,9 @@ impl Coordinator {
                     subscribe.delete_write_op(),
                 );
             }
-            SubscribeSink::IndexCardinalities => {
-                self.index_cardinalities.evict_replica(subscribe.replica_id);
+            SubscribeSink::IndexArrangementStats => {
+                self.index_arrangement_stats
+                    .evict_replica(subscribe.replica_id);
             }
         }
     }
@@ -431,13 +432,13 @@ impl Coordinator {
                 // new subscribe starts reporting data.
                 subscribe.deferred_write = Some(subscribe.delete_write_op());
             }
-            SubscribeSink::IndexCardinalities => {
+            SubscribeSink::IndexArrangementStats => {
                 // Evict now rather than deferring. Serving a restarted replica's
                 // previous counts is not the harmless staleness it is for the
                 // storage-backed sinks: reads take a maximum across replicas, so a
                 // stale high count suppresses every other replica's estimate until
                 // the new subscribe reports.
-                self.index_cardinalities.evict_replica(replica_id);
+                self.index_arrangement_stats.evict_replica(replica_id);
             }
         }
         // Until then, the collection serves the previous subscribe's data, which the replica may
@@ -482,13 +483,13 @@ impl Coordinator {
 
         let introspection_type = match subscribe.spec.sink {
             SubscribeSink::Introspection(introspection_type) => introspection_type,
-            SubscribeSink::IndexCardinalities => {
+            SubscribeSink::IndexArrangementStats => {
                 // Applied in time order rather than repacked and appended, because
                 // an in-memory map has nothing to consolidate on its behalf. See
-                // `IndexCardinalities::apply_batch`.
+                // `IndexArrangementStats::apply_batch`.
                 let replica_id = subscribe.replica_id;
                 subscribe.first_data_at.get_or_insert_with(Instant::now);
-                self.index_cardinalities.apply_batch(
+                self.index_arrangement_stats.apply_batch(
                     replica_id,
                     updates
                         .iter()
@@ -611,7 +612,7 @@ pub(super) enum SubscribeSink {
     ///
     /// Unlike the storage-backed sinks this keeps no history and does not survive
     /// a restart. It is rebuilt from the replicas' subscribes each time.
-    IndexCardinalities,
+    IndexArrangementStats,
 }
 
 /// The specification for an introspection subscribe.
@@ -714,50 +715,67 @@ const SUBSCRIBES: &[SubscribeSpec] = &[
             GROUP BY ce.export_id
         )",
     },
-    // Record counts of index arrangements, read by the join planner.
+    // Per-index arrangement statistics: record counts, read by the join planner, and
+    // distinct-key counts, read by the memory bound.
     //
-    // The counts land in memory rather than a storage collection because the
-    // optimizer reads them on the peek path, where a persist round trip is the
-    // cost this exists to avoid.
+    // They land in memory rather than a storage collection because the optimizer reads
+    // them on the peek path, where a persist round trip is the cost this exists to
+    // avoid.
     //
-    // `mz_compute_export_arrangements` is what makes this a single join. An index
-    // that reuses an already-arranged collection renders no arrange operator of
-    // its own, so the arrangement it serves cannot be found by walking the
-    // export's own LIR operator range, and summing every arrangement in the
-    // dataflow over-counts a reduce's input alongside its output.
+    // `mz_compute_export_arrangements` is what makes this a single join. An index that
+    // reuses an already-arranged collection renders no arrange operator of its own, so
+    // the arrangement it serves cannot be found by walking the export's own LIR
+    // operator range, and summing every arrangement in the dataflow over-counts a
+    // reduce's input alongside its output. Logging indexes are deliberately absent from
+    // that relation, so they never appear here.
     //
-    // Transient export IDs (`t*`) are ephemeral dataflows (peeks, subscribes,
-    // including this one); we drop them to avoid self-feedback churn.
     // Reads the two raw record logs rather than `mz_arrangement_sizes`. That view
     // expands to nine grouped CTEs outer-joined against
     // `mz_dataflow_operators_per_worker`, and going through it made this the most
     // expensive dataflow on the replica, an order of magnitude above the other
-    // introspection subscribes. The neighbouring arrangement sizes spec reads raw
-    // logs for the same reason.
+    // introspection subscribes. The neighbouring arrangement sizes spec reads raw logs
+    // for the same reason. Counting rows of those raw logs yields a cross-worker sum of
+    // records rather than a row count, because the logs carry per-worker counts as diff
+    // multiplicities.
     //
-    // The join is an outer join so that an index whose arrangement holds no records
-    // reports zero rather than dropping out. Zero and unknown mean very different
-    // things to a join orderer.
+    // NOTE: the two statistics ride one tagged `UNION ALL` through a single join and a
+    // single reduce. Every raw log carries its count as a diff multiplicity, so summing
+    // a per-branch constant recovers each count and one grouped aggregate serves both.
     //
-    // Transient export IDs (`t*`) are ephemeral dataflows (peeks, subscribes,
-    // including this one); we drop them to avoid self-feedback churn.
+    // Joining them separately is what the obvious shape does, and it is wrong twice
+    // over. It fans out, multiplying one statistic by the other's row count, measured at
+    // 20,000,000 against a truth of 1000. Pre-aggregating each side to stop the fan-out
+    // then costs an extra reduce per statistic, which `distinct_arrangements.slt` caught
+    // as three further `ReduceAccumulable` operators plus a `Threshold`. This subscribe
+    // runs on every replica, so its operator count is a real cost.
     //
-    // Introspection source indexes (`si*`) are included. Their arrangements report
-    // record counts because the differential logger is registered before the logging
-    // dataflow is built, independently of `log_logging`. Measured: an index reporting
-    // zero here was genuinely empty, so the outer join's zeros are trustworthy.
+    // Reads `mz_arrangement_distinct_keys_raw` rather than the cross-worker view for the
+    // same reason: the view is itself a reduce over a join.
+    //
+    // The join stays an outer join so that an index whose arrangement holds nothing
+    // reports zero rather than dropping out. Zero and unknown mean very different things
+    // to both consumers.
+    //
+    // Transient export IDs (`t*`) are ephemeral dataflows (peeks, subscribes, including
+    // this one); we drop them to avoid self-feedback churn.
     SubscribeSpec {
-        sink: SubscribeSink::IndexCardinalities,
+        sink: SubscribeSink::IndexArrangementStats,
         sql: "SUBSCRIBE (
             SELECT
                 ea.export_id,
-                count(r.operator_id)::int8 AS records
+                coalesce(sum(src.records), 0)::int8 AS records,
+                coalesce(sum(src.distinct_keys), 0)::int8 AS distinct_keys
             FROM mz_introspection.mz_compute_export_arrangements AS ea
             LEFT JOIN (
-                SELECT operator_id FROM mz_introspection.mz_arrangement_records_raw
+                SELECT operator_id, 1::int8 AS records, 0::int8 AS distinct_keys
+                FROM mz_introspection.mz_arrangement_records_raw
                 UNION ALL
-                SELECT operator_id FROM mz_introspection.mz_arrangement_batcher_records_raw
-            ) AS r ON r.operator_id = ea.operator_id
+                SELECT operator_id, 1::int8, 0::int8
+                FROM mz_introspection.mz_arrangement_batcher_records_raw
+                UNION ALL
+                SELECT operator_id, 0::int8, 1::int8
+                FROM mz_introspection.mz_arrangement_distinct_keys_raw
+            ) AS src ON src.operator_id = ea.operator_id
             WHERE ea.export_id NOT LIKE 't%'
             GROUP BY ea.export_id
         )",
