@@ -64,7 +64,7 @@ query has a large impact on performance.
 - [`mz_internal.mz_wallclock_global_lag_history`](/reference/system-catalog/mz_internal/#mz_wallclock_global_lag_history)
   covers the full retention window (at least 30 days) but is unindexed, so it
   can be slow to query. A single query can occupy `mz_catalog_server` for
-  several seconds, during which the Console becomes unresponsive. Reach for this
+  several seconds. Reach for this
   relation only when you specifically need data older than 24 hours, and avoid
   querying it frequently.
 
