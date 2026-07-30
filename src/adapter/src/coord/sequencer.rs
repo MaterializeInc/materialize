@@ -1319,6 +1319,30 @@ pub(crate) async fn statistics_oracle(
     )))
 }
 
+/// Per-column byte ceilings for `relations`, from the SQL types they were declared with.
+///
+/// A plan carries repr types, which unify `char(n)`, `varchar(n)` and `text` into one unbounded
+/// `String`. Only the catalog still knows which of those a column was declared as, so the widths
+/// have to come from here for a declared length to bound anything.
+///
+/// A relation with no `RelationDesc`, an index or a sink, simply contributes nothing.
+pub(crate) fn declared_column_widths(
+    catalog: &CatalogState,
+    relations: impl Iterator<Item = GlobalId>,
+) -> BTreeMap<GlobalId, Vec<Option<usize>>> {
+    relations
+        .filter_map(|id| {
+            let entry = catalog.get_entry_by_global_id(&id);
+            let desc = entry.relation_desc()?;
+            let widths = desc
+                .iter_types()
+                .map(|typ| mz_repr::max_sql_datum_size(&typ.scalar_type))
+                .collect();
+            Some((id, widths))
+        })
+        .collect()
+}
+
 /// Estimates drawn from index arrangements, keyed by the indexed object.
 ///
 /// Indexes are cluster-scoped, so this resolves against the query's cluster. An

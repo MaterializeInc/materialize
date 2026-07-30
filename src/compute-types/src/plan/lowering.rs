@@ -22,7 +22,7 @@ use mz_ore::{assert_none, soft_assert_eq_or_log, soft_panic_or_log};
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::{GlobalId, ReprRelationType, Timestamp};
 
-pub use self::row_bound::RowBoundFn;
+pub use self::row_bound::{NodeBounds, NodeBoundsFn};
 use crate::dataflows::{BuildDesc, DataflowDescription, IndexImport};
 use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
@@ -80,13 +80,12 @@ pub(super) struct Context {
     /// Recording a type costs an `MirRelationExpr::typ()` per node, which walks the
     /// subtree, so leaving this `None` keeps lowering off that quadratic path.
     node_types: Option<BTreeMap<LirId, ReprRelationType>>,
-    /// A caller-supplied bound on the rows each node can produce, and where to collect it.
+    /// A caller-supplied bound on what each node holds, and where to collect it.
     ///
-    /// Taken as a callback because the estimator lives above this crate. It is invoked once per
-    /// lowered node on that node's MIR subtree.
-    row_bound: Option<(RowBoundFn, BTreeMap<LirId, u64>)>,
-    /// Row bounds for the object currently being lowered, keyed by MIR node address.
-    row_bounds_for_object: BTreeMap<usize, u64>,
+    /// Taken as a callback because the estimator lives above this crate.
+    node_bounds: Option<(NodeBoundsFn, BTreeMap<LirId, NodeBounds>)>,
+    /// Bounds for the object currently being lowered, keyed by MIR node address.
+    node_bounds_for_object: BTreeMap<usize, NodeBounds>,
     /// Whether the current expression is subject to single-time (one-shot
     /// `SELECT`) monotonic operator selection.
     ///
@@ -150,8 +149,8 @@ impl Context {
             enable_reduce_mfp_fusion: features.enable_reduce_mfp_fusion,
             metrics: metrics.cloned(),
             node_types: None,
-            row_bound: None,
-            row_bounds_for_object: BTreeMap::new(),
+            node_bounds: None,
+            node_bounds_for_object: BTreeMap::new(),
             // Set from the dataflow in `lower` before any expression is lowered.
             single_time: false,
             source_imports: Default::default(),
@@ -171,9 +170,9 @@ impl Context {
         id
     }
 
-    /// Requests that lowering record a row bound for every node it produces.
-    pub fn collect_row_bounds(&mut self, bound: RowBoundFn) {
-        self.row_bound = Some((bound, BTreeMap::new()));
+    /// Requests that lowering record bounds for every node it produces.
+    pub fn collect_node_bounds(&mut self, bounds: NodeBoundsFn) {
+        self.node_bounds = Some((bounds, BTreeMap::new()));
     }
 
     /// Supplies per-relation distinct-key bounds for tightening reduce row bounds.
@@ -207,13 +206,13 @@ impl Context {
         (
             DataflowDescription<LirRelationExpr>,
             Option<BTreeMap<LirId, ReprRelationType>>,
-            Option<BTreeMap<LirId, u64>>,
+            Option<BTreeMap<LirId, NodeBounds>>,
         ),
         String,
     > {
         let dataflow = self.lower_inner(desc)?;
         let types = self.node_types.take();
-        let bounds = self.row_bound.take().map(|(_, collected)| collected);
+        let bounds = self.node_bounds.take().map(|(_, collected)| collected);
         Ok((dataflow, types, bounds))
     }
 
@@ -263,8 +262,8 @@ impl Context {
             self.debug_info.id = build.id;
             // Analyse this object's whole tree once, so a node inside a `Let` body can still
             // resolve the binding it refers to.
-            self.row_bounds_for_object = match &self.row_bound {
-                Some((bound, _)) => bound(&build.plan),
+            self.node_bounds_for_object = match &self.node_bounds {
+                Some((bounds, _)) => bounds(&build.plan),
                 None => BTreeMap::new(),
             };
             let LoweredExpr {
@@ -460,23 +459,24 @@ impl Context {
             }
         }
         // Computed before the mutable borrow below, and only when bounds are wanted.
-        let index_bound = if self.row_bound.is_some() {
+        let index_bound = if self.node_bounds.is_some() {
             self.index_derived_row_bound(expr)
         } else {
             None
         };
-        let mir_bound = self
-            .row_bounds_for_object
+        let mir_bounds = self
+            .node_bounds_for_object
             .get(&(expr as *const MirRelationExpr as usize))
-            .copied();
-        if let Some((_bound, collected)) = self.row_bound.as_mut() {
-            let rows = match (mir_bound, index_bound) {
+            .cloned();
+        if let Some((_bounds, collected)) = self.node_bounds.as_mut() {
+            let mut bounds = mir_bounds.unwrap_or_default();
+            bounds.rows = match (bounds.rows, index_bound) {
                 (Some(a), Some(b)) => Some(a.min(b)),
                 (Some(a), None) | (None, Some(a)) => Some(a),
                 (None, None) => None,
             };
-            if let Some(rows) = rows {
-                collected.insert(lir_id, rows);
+            if bounds != NodeBounds::default() {
+                collected.insert(lir_id, bounds);
             }
         }
     }
@@ -1818,7 +1818,23 @@ mod row_bound {
 
     use mz_expr::MirRelationExpr;
 
-    /// Bounds the rows every node of a MIR tree can produce, keyed by node address.
+    /// Static bounds on what one node of a plan holds.
+    ///
+    /// Both fields are supplied by the caller and both are optional, since the estimator that
+    /// produces them reaches no conclusion for some plan shapes. Absent means unknown, never
+    /// zero: a bound that silently reads as zero understates the memory a dataflow holds.
+    #[derive(Clone, Debug, Default, PartialEq, Eq)]
+    pub struct NodeBounds {
+        /// Upper bound on the rows the node produces.
+        pub rows: Option<u64>,
+        /// Upper bound on the bytes each column of one row occupies, per column.
+        ///
+        /// Per column rather than per row so a caller can see which column is unbounded, and
+        /// because the widths are propagated through the plan one column at a time.
+        pub column_widths: Option<Vec<Option<usize>>>,
+    }
+
+    /// Bounds every node of a MIR tree, keyed by node address.
     ///
     /// Invoked once per object to build, on that object's root, rather than once per node on
     /// that node's own subtree. The distinction is not an optimization: a node inside a `Let`
@@ -1830,5 +1846,5 @@ mod row_bound {
     ///
     /// Boxed rather than generic so `Context` needs no type parameter, and owned so it needs no
     /// lifetime.
-    pub type RowBoundFn = Box<dyn Fn(&MirRelationExpr) -> BTreeMap<usize, u64>>;
+    pub type NodeBoundsFn = Box<dyn Fn(&MirRelationExpr) -> BTreeMap<usize, NodeBounds>>;
 }

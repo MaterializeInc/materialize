@@ -4449,6 +4449,56 @@ mod tests {
         assert_eq!(max_datum_size(&unbounded_record), None);
     }
 
+    /// A declared length bounds a string column that the repr type reports as unbounded. The
+    /// length counts characters, so the ceiling has to allow the widest UTF-8 encoding of each.
+    #[mz_ore::test]
+    fn test_max_sql_datum_size_bounds_declared_lengths() {
+        use crate::SqlScalarType as T;
+        use crate::adt::char::CharLength;
+        use crate::adt::varchar::VarCharMaxLength;
+
+        // A four-character string of four-byte characters, which is the worst case for `char(4)`.
+        let widest = "𐍈".repeat(4);
+        assert_eq!(widest.len(), 16);
+        let actual = datum_size(&Datum::String(&widest));
+
+        let fixed = T::Char {
+            length: Some(CharLength::try_from(4i64).expect("valid length")),
+        };
+        let capped = T::VarChar {
+            max_length: Some(VarCharMaxLength::try_from(4i64).expect("valid length")),
+        };
+        for typ in [fixed, capped] {
+            let bound = max_sql_datum_size(&typ).expect("a declared length is a bound");
+            assert!(
+                actual <= bound,
+                "{typ:?}: datum_size {actual} exceeds max_sql_datum_size {bound}"
+            );
+        }
+
+        // Without a declared length there is nothing to recover, and claiming otherwise would
+        // understate every bound built on it.
+        for typ in [
+            T::String,
+            T::Char { length: None },
+            T::VarChar { max_length: None },
+        ] {
+            assert_eq!(
+                max_sql_datum_size(&typ),
+                None,
+                "{typ:?} should be unbounded"
+            );
+        }
+
+        // `name` is capped in bytes rather than characters.
+        assert_eq!(
+            max_sql_datum_size(&T::PgLegacyName),
+            Some(max_string_datum_size(
+                crate::adt::pg_legacy_name::NAME_MAX_BYTES
+            ))
+        );
+    }
+
     /// Hash must agree with Eq: equal lists must have the same hash.
     #[mz_ore::test]
     fn test_datum_list_hash_consistency() {

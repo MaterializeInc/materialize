@@ -39,7 +39,7 @@ use crate::plan::transform::{Transform, TransformConfig};
 
 mod lowering;
 
-pub use lowering::{IndexKeyBound, RowBoundFn};
+pub use lowering::{IndexKeyBound, NodeBounds, NodeBoundsFn};
 
 pub mod arrangement_count;
 pub mod interpret;
@@ -762,18 +762,24 @@ impl LirRelationExpr {
         desc: DataflowDescription<OptimizedMirRelationExpr>,
         features: &OptimizerFeatures,
         metrics: Option<&LoweringMetrics>,
-        row_bound: Option<RowBoundFn>,
+        node_bounds: Option<NodeBoundsFn>,
         index_key_bounds: BTreeMap<GlobalId, Vec<IndexKeyBound>>,
     ) -> Result<
         (
             DataflowDescription<Self>,
             BTreeMap<LirId, mz_repr::ReprRelationType>,
-            BTreeMap<LirId, u64>,
+            BTreeMap<LirId, NodeBounds>,
         ),
         String,
     > {
-        let (dataflow, types, bounds) =
-            Self::lower_dataflow_inner(desc, features, metrics, true, row_bound, index_key_bounds)?;
+        let (dataflow, types, bounds) = Self::lower_dataflow_inner(
+            desc,
+            features,
+            metrics,
+            true,
+            node_bounds,
+            index_key_bounds,
+        )?;
         let types = types.expect("collection requested");
         Ok((
             Self::finalize_lowered(dataflow)?,
@@ -805,13 +811,13 @@ impl LirRelationExpr {
         features: &OptimizerFeatures,
         metrics: Option<&LoweringMetrics>,
         collect_node_types: bool,
-        row_bound: Option<RowBoundFn>,
+        node_bounds: Option<NodeBoundsFn>,
         index_key_bounds: BTreeMap<GlobalId, Vec<IndexKeyBound>>,
     ) -> Result<
         (
             DataflowDescription<Self>,
             Option<BTreeMap<LirId, mz_repr::ReprRelationType>>,
-            Option<BTreeMap<LirId, u64>>,
+            Option<BTreeMap<LirId, NodeBounds>>,
         ),
         String,
     > {
@@ -819,8 +825,8 @@ impl LirRelationExpr {
         if collect_node_types {
             context.collect_node_types();
         }
-        if let Some(row_bound) = row_bound {
-            context.collect_row_bounds(row_bound);
+        if let Some(node_bounds) = node_bounds {
+            context.collect_node_bounds(node_bounds);
             context.set_index_key_bounds(index_key_bounds);
         }
         let (dataflow, types, bounds) = context.lower_collecting(desc)?;

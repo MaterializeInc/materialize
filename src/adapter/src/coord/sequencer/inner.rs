@@ -2590,6 +2590,10 @@ impl Coordinator {
         MemoryBoundStats {
             rows,
             index_key_bounds: Self::index_key_bounds(&hydrated),
+            declared_widths: crate::coord::sequencer::declared_column_widths(
+                self.catalog().state(),
+                source_ids.iter().copied(),
+            ),
         }
     }
 

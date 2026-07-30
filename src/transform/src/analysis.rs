@@ -17,6 +17,7 @@ use mz_expr::MirRelationExpr;
 pub use arity::Arity;
 pub use cardinality::Cardinality;
 pub use column_names::{ColumnName, ColumnNames};
+pub use column_width::ColumnMaxWidth;
 pub use common::{Derived, DerivedBuilder, DerivedView};
 pub use distinct_count::ColumnDistinctCount;
 pub use explain::annotate_plan;
@@ -306,6 +307,258 @@ mod distinct_count {
                 }
             }
             out
+        }
+    }
+}
+
+mod column_width {
+
+    use std::collections::BTreeMap;
+
+    use mz_expr::{Id, MirRelationExpr, MirScalarExpr};
+    use mz_repr::{GlobalId, datums_size, max_datum_size};
+
+    use super::{Analysis, Arity, Derived};
+
+    /// An upper bound on the bytes one datum of each column occupies in a `Row`.
+    ///
+    /// Exists so a memory bound can multiply rows by a width. The repr type alone is not enough:
+    /// it collapses `char(n)` and `varchar(n)` into `String`, which has no ceiling, so a schema
+    /// that does declare its string lengths would still report an unbounded row.
+    ///
+    /// Every rule may only over-state. A width that is too small understates the memory a
+    /// dataflow holds, which is the direction that ends in an out-of-memory kill.
+    #[allow(missing_debug_implementations)]
+    pub struct ColumnMaxWidth {
+        /// Per-column byte ceilings for globally named entities, from their declared SQL types.
+        ///
+        /// Supplied by the caller, since only the catalog knows the declared type. Absent
+        /// entries and absent columns both mean the repr type is all there is to go on.
+        pub declared: BTreeMap<GlobalId, Vec<Option<usize>>>,
+    }
+
+    impl ColumnMaxWidth {
+        /// An analysis using the provided declared widths for global identifiers.
+        pub fn with_declared(declared: BTreeMap<GlobalId, Vec<Option<usize>>>) -> Self {
+            ColumnMaxWidth { declared }
+        }
+    }
+
+    /// The tighter of two bounds, where `None` is no bound at all.
+    fn tighten(a: Option<usize>, b: Option<usize>) -> Option<usize> {
+        match (a, b) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (Some(a), None) | (None, Some(a)) => Some(a),
+            (None, None) => None,
+        }
+    }
+
+    /// An upper bound on the bytes `expr` evaluates to, over rows whose column widths are `input`.
+    ///
+    /// Only the forms that carry a width through. A computed value is left to the repr type of the
+    /// column it lands in, which the analysis applies to every column anyway.
+    fn expr_max_width(expr: &MirScalarExpr, input: &[Option<usize>]) -> Option<usize> {
+        mz_ore::stack::maybe_grow(|| match expr {
+            MirScalarExpr::Column(col, _) => input.get(*col).copied().flatten(),
+            MirScalarExpr::Literal(Ok(row), _) => Some(datums_size(row.iter())),
+            // The result is one branch or the other, so the wider of the two bounds both.
+            MirScalarExpr::If { cond: _, then, els } => {
+                let a = expr_max_width(then, input)?;
+                let b = expr_max_width(els, input)?;
+                Some(a.max(b))
+            }
+            _ => None,
+        })
+    }
+
+    impl Analysis for ColumnMaxWidth {
+        type Value = Vec<Option<usize>>;
+
+        fn announce_dependencies(&self, builder: &mut crate::analysis::DerivedBuilder) {
+            builder.require(Arity);
+            builder.require(super::ReprRelationType);
+        }
+
+        fn derive(
+            &self,
+            expr: &MirRelationExpr,
+            index: usize,
+            results: &[Self::Value],
+            depends: &Derived,
+        ) -> Self::Value {
+            use MirRelationExpr::*;
+
+            let arity = depends.as_view().results::<Arity>()[index];
+
+            let mut out = match expr {
+                Constant { rows, .. } => {
+                    let mut out = vec![Some(0); arity];
+                    // A literal relation is its own tightest bound, so read it off the rows.
+                    // `Err` carries no rows and leaves every column to its type.
+                    match rows {
+                        Ok(rows) => {
+                            for (row, _diff) in rows {
+                                for (slot, datum) in out.iter_mut().zip(row.iter()) {
+                                    let width = datums_size(std::iter::once(datum));
+                                    *slot = Some(slot.unwrap_or(0).max(width));
+                                }
+                            }
+                            out
+                        }
+                        Err(_) => vec![None; arity],
+                    }
+                }
+                Get { id, typ, .. } => match id {
+                    Id::Global(id) => match self.declared.get(id) {
+                        Some(declared) => {
+                            let mut declared = declared.clone();
+                            declared.resize(typ.arity(), None);
+                            declared
+                        }
+                        None => vec![None; typ.arity()],
+                    },
+                    // A forward or self reference inside a `LetRec` has no result yet, which
+                    // `get` reports as absent rather than as a bound.
+                    Id::Local(id) => {
+                        let binding = depends.bindings().get(id).copied();
+                        match binding.and_then(|index| results.get(index)) {
+                            Some(widths) => widths.clone(),
+                            None => vec![None; typ.arity()],
+                        }
+                    }
+                },
+                // Structurally transparent: the columns are unchanged, or rows only removed.
+                Let { .. }
+                | Filter { .. }
+                | Negate { .. }
+                | Threshold { .. }
+                | ArrangeBy { .. }
+                | TopK { .. } => results[index - 1].clone(),
+                Project { outputs, .. } => {
+                    let input = &results[index - 1];
+                    outputs.iter().map(|col| input[*col]).collect()
+                }
+                Map { scalars, .. } => {
+                    let mut out = results[index - 1].clone();
+                    for scalar in scalars {
+                        // Each scalar may refer to columns this `Map` already added.
+                        out.push(expr_max_width(scalar, &out));
+                    }
+                    out
+                }
+                FlatMap { .. } => {
+                    // The input columns survive; the table function's own are left to their types.
+                    let mut out = results[index - 1].clone();
+                    out.resize(arity, None);
+                    out
+                }
+                Union { .. } => {
+                    let mut out = vec![Some(0); arity];
+                    for child in depends.children_of_rev(index, expr.children().count()) {
+                        // Indexed rather than zipped: a `LetRec` binding can be visited before
+                        // its value is known, so the lengths need not agree.
+                        let child = &results[child];
+                        for (col, slot) in out.iter_mut().enumerate() {
+                            *slot = match (*slot, child.get(col).copied().flatten()) {
+                                (Some(a), Some(b)) => Some(a.max(b)),
+                                _ => None,
+                            };
+                        }
+                    }
+                    out
+                }
+                Join { .. } => {
+                    // Left to right, matching how the join numbers its columns.
+                    let mut children = depends
+                        .children_of_rev(index, expr.children().count())
+                        .collect::<Vec<_>>();
+                    children.reverse();
+                    let mut out = Vec::with_capacity(arity);
+                    for child in children {
+                        out.extend(results[child].iter().copied());
+                    }
+                    out
+                }
+                Reduce {
+                    group_key,
+                    aggregates,
+                    ..
+                } => {
+                    let input = &results[index - 1];
+                    let mut out = group_key
+                        .iter()
+                        .map(|key| expr_max_width(key, input))
+                        .collect::<Vec<_>>();
+                    // An aggregate's width is left to the type of the column it produces.
+                    out.extend(std::iter::repeat(None).take(aggregates.len()));
+                    out
+                }
+                // A binding may be revisited before its value is known.
+                LetRec { .. } => vec![None; arity],
+            };
+
+            out.resize(arity, None);
+
+            // Whatever the structural rules concluded, a column is never wider than its own type
+            // admits. This is where every column whose type is bounded gets its width, so the
+            // rules above only have to be tighter than the type, never as complete as it.
+            let types = depends.as_view().results::<super::ReprRelationType>();
+            if let Some(Some(types)) = types.get(index) {
+                for (col, slot) in out.iter_mut().enumerate() {
+                    if let Some(typ) = types.get(col) {
+                        *slot = tighten(*slot, max_datum_size(&typ.scalar_type));
+                    }
+                }
+            }
+            out
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use mz_repr::{ReprScalarType, SqlScalarType, max_sql_datum_size};
+
+        use super::*;
+
+        /// The width a caller declares for a leaf has to survive the operators above it, or a
+        /// bound can only ever describe a plan that reads a table and does nothing.
+        #[mz_ore::test]
+        fn declared_width_propagates_through_a_plan() {
+            let id = GlobalId::User(1);
+            let declared = max_sql_datum_size(&SqlScalarType::Char {
+                length: Some(mz_repr::adt::char::CharLength::try_from(4i64).expect("valid")),
+            });
+            assert!(declared.is_some(), "a declared length is a bound");
+
+            let typ = mz_repr::ReprRelationType::new(vec![
+                ReprScalarType::String.nullable(false),
+                ReprScalarType::Int64.nullable(false),
+            ]);
+            let get = MirRelationExpr::Get {
+                id: Id::Global(id),
+                typ,
+                access_strategy: mz_expr::AccessStrategy::UnknownOrLocal,
+            };
+            // Group by the string column, which puts it above a `Reduce` and a `Project`.
+            let expr = get.project(vec![1, 0]).reduce(vec![1], vec![], None);
+
+            let features = mz_repr::optimize::OptimizerFeatures::default();
+            let mut builder = crate::analysis::DerivedBuilder::new(&features);
+            builder.require(ColumnMaxWidth::with_declared(BTreeMap::from([(
+                id,
+                vec![declared, None],
+            )])));
+            let derived = builder.visit(&expr);
+            let widths = derived.as_view().value::<ColumnMaxWidth>().unwrap();
+            assert_eq!(widths, &vec![declared]);
+
+            // Declaring nothing leaves the column to its repr type, which for a string is no
+            // bound at all. Reporting a number here would claim one that does not hold.
+            let mut builder = crate::analysis::DerivedBuilder::new(&features);
+            builder.require(ColumnMaxWidth::with_declared(BTreeMap::new()));
+            let derived = builder.visit(&expr);
+            let widths = derived.as_view().value::<ColumnMaxWidth>().unwrap();
+            assert_eq!(widths, &vec![None]);
         }
     }
 }

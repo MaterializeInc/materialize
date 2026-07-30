@@ -130,6 +130,11 @@ pub struct MemoryBoundStats {
     pub rows: BTreeMap<GlobalId, usize>,
     /// Distinct-key bounds per relation, already resolved and vetted by the caller.
     pub index_key_bounds: BTreeMap<GlobalId, Vec<IndexKeyBound>>,
+    /// Per-column byte ceilings from each relation's declared SQL types.
+    ///
+    /// Only the catalog knows a column was declared `char(n)` rather than `text`, and the repr
+    /// type the plan carries has already erased the difference.
+    pub declared_widths: BTreeMap<GlobalId, Vec<Option<usize>>>,
 }
 
 /// Renders the static memory bound for each node of a physical plan.
@@ -144,21 +149,23 @@ pub(crate) fn memory_bound_rows(
     stats: MemoryBoundStats,
 ) -> Result<Vec<mz_repr::Row>, AdapterError> {
     use mz_compute_types::plan::LirRelationExpr;
+    use mz_compute_types::plan::NodeBounds;
     use mz_compute_types::plan::arrangement_count::Caveat;
     use mz_compute_types::plan::memory_bound::{bytes_per_row, node_label, nodes_by_id};
     use mz_ore::cast::CastFrom;
     use mz_repr::{Datum, Row};
 
     let index_key_bounds = stats.index_key_bounds;
+    let declared_widths = stats.declared_widths;
     let stats = stats.rows;
 
-    // Sound upper bound rather than the heuristic estimate: an underestimate here would
+    // Sound upper bounds rather than heuristic estimates: an underestimate here would
     // understate the memory a plan needs, which is the dangerous direction.
     //
-    // Invoked once per lowered node on that node's subtree, so this is quadratic in plan size.
-    // Acceptable on an EXPLAIN, which is not on any hot path.
+    // Invoked once per object to build, on that object's root, so a node inside a `Let` body
+    // can still resolve the binding it refers to.
     let bound_features = features.clone();
-    let row_bound: mz_compute_types::plan::RowBoundFn =
+    let node_bounds: mz_compute_types::plan::NodeBoundsFn =
         Box::new(move |root: &mz_expr::MirRelationExpr| {
             use mz_expr::visit::Visit;
 
@@ -166,36 +173,44 @@ pub(crate) fn memory_bound_rows(
             builder.require(mz_transform::analysis::Cardinality::upper_bound(
                 stats.clone(),
             ));
+            builder.require(mz_transform::analysis::ColumnMaxWidth::with_declared(
+                declared_widths.clone(),
+            ));
             let derived = builder.visit(root);
             let estimates = derived.results::<mz_transform::analysis::Cardinality>();
+            let widths = derived.results::<mz_transform::analysis::ColumnMaxWidth>();
 
-            // The analysis stores one result per node in post-order, so walking the tree the
-            // same way lines addresses up with estimates positionally.
+            // Each analysis stores one result per node in post-order, so walking the tree the
+            // same way lines addresses up with results positionally.
             let mut order = Vec::with_capacity(estimates.len());
             root.visit_post(&mut |node: &mz_expr::MirRelationExpr| {
                 order.push(node as *const mz_expr::MirRelationExpr as usize);
             });
-            // A length mismatch would mean the two traversals disagree, and pairing them
-            // anyway would attribute one node's bound to another. Better no bounds than
-            // wrong ones, since a wrong one here understates memory.
-            if order.len() != estimates.len() {
+            // A length mismatch would mean the traversals disagree, and pairing them anyway
+            // would attribute one node's bound to another. Better no bounds than wrong ones,
+            // since a wrong one here understates memory.
+            if order.len() != estimates.len() || order.len() != widths.len() {
                 return BTreeMap::new();
             }
 
             order
                 .into_iter()
-                .zip(estimates)
-                .filter_map(|(addr, estimate)| {
-                    Some((addr, estimate.rounded().map(u64::cast_from)?))
+                .enumerate()
+                .map(|(index, addr)| {
+                    let bounds = NodeBounds {
+                        rows: estimates[index].rounded().map(u64::cast_from),
+                        column_widths: Some(widths[index].clone()),
+                    };
+                    (addr, bounds)
                 })
                 .collect()
         });
 
-    let (dataflow, node_types, row_bounds) = LirRelationExpr::finalize_dataflow_with_node_types(
+    let (dataflow, node_types, node_bounds) = LirRelationExpr::finalize_dataflow_with_node_types(
         dataflow,
         features,
         None,
-        Some(row_bound),
+        Some(node_bounds),
         index_key_bounds,
     )
     .map_err(|e| AdapterError::Internal(format!("cannot lower plan: {e}")))?;
@@ -203,7 +218,7 @@ pub(crate) fn memory_bound_rows(
     let mut rows = Vec::new();
     for build in &dataflow.objects_to_build {
         let nodes = nodes_by_id(&build.plan);
-        for (lir_id, entry) in bytes_per_row(&build.plan, &node_types) {
+        for (lir_id, entry) in bytes_per_row(&build.plan, &node_types, &node_bounds) {
             let label = nodes
                 .get(&lir_id)
                 .map_or_else(|| "<unknown>".to_string(), |node| node_label(node));
@@ -226,7 +241,7 @@ pub(crate) fn memory_bound_rows(
                 .map_or(Datum::Null, |b| Datum::UInt64(u64::cast_from(b)));
             // Total bytes needs every factor: unknown width or unknown rows means unknown
             // total, not a smaller one.
-            let node_rows = row_bounds.get(&lir_id).copied();
+            let node_rows = node_bounds.get(&lir_id).and_then(|bounds| bounds.rows);
             let total = match (entry.bytes_per_row, node_rows) {
                 (Some(per_row), Some(n)) => u64::try_from(per_row)
                     .ok()

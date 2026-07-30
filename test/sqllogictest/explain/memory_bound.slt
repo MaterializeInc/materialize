@@ -61,7 +61,7 @@ EXPLAIN MEMORY BOUND FOR SELECT k, count(*) FROM s GROUP BY k
 query ITIIIIIT
 EXPLAIN MEMORY BOUND FOR SELECT 1
 ----
-1  Constant  0  5  0  1  0  NULL
+1  Constant  0  2  0  1  0  NULL
 
 # A differential join arranges each stage whose input is not already arranged, and the
 # join node itself then holds nothing. Reporting per node rather than per plan is what
@@ -153,3 +153,19 @@ EXPLAIN MEMORY BOUND FOR SELECT a, count(*) * 2 FROM t GROUP BY a
 1  Get  0  5  0  3  0  NULL
 2  Reduce␠(accumulable,␠1␠aggregates)  2  14  364  3  1092  NULL
 3  Map/Filter/Project  0  14  0  3  0  NULL
+
+# A declared length bounds a string column, where `text` does not. The plan carries repr
+# types, which unify `char(n)`, `varchar(n)` and `text` into one unbounded `String`, so a
+# width here proves the declared type reached the bound from the catalog rather than from
+# the plan. `char(4)` is four characters, and UTF-8 spends up to four bytes on each.
+statement ok
+CREATE TABLE c (fixed CHAR(4) NOT NULL, capped VARCHAR(10) NOT NULL)
+
+statement ok
+INSERT INTO c VALUES ('ab', 'cd')
+
+query ITIIIIIT
+EXPLAIN MEMORY BOUND FOR SELECT fixed, count(*) FROM c GROUP BY fixed
+----
+1  Get  0  18  0  1  0  NULL
+2  Reduce␠(accumulable,␠1␠aggregates)  2  27  390  1  390  NULL

@@ -37,7 +37,7 @@ use mz_repr::{ReprRelationType, max_datum_size};
 
 use crate::plan::arrangement_count::{Caveat, predict_arrangement_counts};
 use crate::plan::reduce::ReducePlan;
-use crate::plan::{LirId, LirRelationExpr, LirRelationNode};
+use crate::plan::{LirId, LirRelationExpr, LirRelationNode, NodeBounds};
 
 /// Bytes a batch spends on the difference accumulated for one update.
 pub const DIFF_BYTES: usize = 8;
@@ -148,6 +148,7 @@ pub fn max_row_width(typ: &ReprRelationType) -> Option<usize> {
 pub fn bytes_per_row(
     expr: &LirRelationExpr,
     node_types: &BTreeMap<LirId, ReprRelationType>,
+    node_bounds: &BTreeMap<LirId, NodeBounds>,
 ) -> BTreeMap<LirId, BytesPerRow> {
     let counts = predict_arrangement_counts(expr);
     let depths = recursion_depths(expr);
@@ -156,7 +157,16 @@ pub fn bytes_per_row(
     counts
         .into_iter()
         .map(|(lir_id, prediction)| {
-            let row_width = node_types.get(&lir_id).and_then(max_row_width);
+            // Caller-supplied widths first: they know the declared SQL types, which bound a
+            // `char(n)` column that the repr type reports as an unbounded `String`. They are
+            // never looser, since the analysis producing them also consults the repr type.
+            let row_width = node_bounds
+                .get(&lir_id)
+                .and_then(|bounds| bounds.column_widths.as_ref())
+                .map_or_else(
+                    || node_types.get(&lir_id).and_then(max_row_width),
+                    |widths| widths.iter().copied().sum::<Option<usize>>(),
+                );
             let depth = depths.get(&lir_id).copied().unwrap_or(0);
             let overhead = overhead_bytes_with_diff(
                 depth,
@@ -275,9 +285,10 @@ fn recursion_depths(expr: &LirRelationExpr) -> BTreeMap<LirId, usize> {
 pub fn total_bytes_per_row(
     expr: &LirRelationExpr,
     node_types: &BTreeMap<LirId, ReprRelationType>,
+    node_bounds: &BTreeMap<LirId, NodeBounds>,
 ) -> Option<usize> {
     let mut total = 0;
-    for entry in bytes_per_row(expr, node_types).values() {
+    for entry in bytes_per_row(expr, node_types, node_bounds).values() {
         total += entry.bytes_per_row?;
     }
     Some(total)

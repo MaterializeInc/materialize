@@ -867,6 +867,12 @@ impl PeekClient {
             // point runs before optimization, so the plan's inputs are not settled yet.
             // `EXPLAIN MEMORY BOUND FOR SELECT` therefore keeps the row bound only.
             index_key_bounds: Default::default(),
+            // Widths need neither a cluster nor a hydration check, only the declared types,
+            // so they are available this early.
+            declared_widths: crate::coord::sequencer::declared_column_widths(
+                catalog.state(),
+                source_ids.iter().copied(),
+            ),
         };
 
         // Generate data structures that can be moved to another task where we will perform possibly
