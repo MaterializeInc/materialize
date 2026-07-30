@@ -1,6 +1,6 @@
 ---
 source: src/repr/src/adt/numeric.rs
-revision: 2bd0f58824
+revision: 94ee2d5448
 ---
 
 # mz-repr::adt::numeric

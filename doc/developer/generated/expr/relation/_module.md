@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/relation.rs
-revision: c9ff2972b6
+revision: 94ee2d5448
 ---
 
 # mz-expr::relation

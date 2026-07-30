@@ -1,6 +1,6 @@
 ---
 source: src/pgtz/src/timezone.rs
-revision: e5dab9cc27
+revision: 94ee2d5448
 ---
 
 # mz-pgtz::timezone

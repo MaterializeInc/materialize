@@ -1,6 +1,6 @@
 ---
 source: src/sqllogictest/src/runner.rs
-revision: fc9d219c84
+revision: 10a94621ed
 ---
 
 # sqllogictest::runner

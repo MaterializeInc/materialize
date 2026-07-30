@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/timestamp.rs
-revision: 26cb0194dc
+revision: 94ee2d5448
 ---
 
 # mz-expr::scalar::func::impls::timestamp
