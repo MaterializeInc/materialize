@@ -30,6 +30,7 @@ from materialize.parallel_workload.action import (
     CreateReplacementMaterializedViewAction,
     ExplainAnalyzeAction,
     KillAction,
+    SealedCollectionCheckAction,
     StatisticsAction,
     ZeroDowntimeDeployAction,
     action_lists,
@@ -66,6 +67,23 @@ from materialize.parallel_workload.worker_exception import WorkerFailedException
 
 SEED_RANGE = 1_000_000
 REPORT_TIME = 10
+
+
+def run_final_sealed_check(
+    rng: random.Random, database: Database, cur: psycopg.Cursor
+) -> None:
+    """Guaranteed final oracle pass, before the objects are dropped.
+
+    The finalize task seals a wrongly finalized shard only ~5s after the
+    triggering DROP, so damage from the run's last actions is not visible
+    immediately, and a run whose random scheduling never picked
+    SealedCollectionCheckAction would otherwise end without any pass.
+    """
+    exe = Executor(rng, cur, None, database)
+    sealed_check = SealedCollectionCheckAction(rng, None)
+    if sealed_check.applicable(exe):
+        time.sleep(10)
+        sealed_check.run(exe)
 
 
 def run(
@@ -391,6 +409,22 @@ def run(
         merge_num_queries(num_queries, workers)
         print_stats(num_queries, workers, num_threads, scenario)
 
+        # A wedged worker must not mask damage, so run the final oracle pass
+        # on a fresh connection before exiting. Skipped for 0dt deploys,
+        # where connecting to the fenced-out environmentd can hang forever.
+        if scenario != Scenario.ZeroDowntimeDeploy:
+            try:
+                check_conn = psycopg.connect(
+                    host=host, port=ports["materialized"], user="materialize"
+                )
+            except Exception as e:
+                print(f"Skipping final sealed-collection check: {e}")
+            else:
+                check_conn.autocommit = True
+                with check_conn.cursor() as cur:
+                    run_final_sealed_check(rng, database, cur)
+                check_conn.close()
+
         if num_threads >= 50:
             # Under high load some queries can't finish quickly, especially UPDATE/DELETE
             os._exit(0)
@@ -425,6 +459,8 @@ def run(
         # Before the drop, and only now that every worker has joined, so that no
         # increment can still be in flight.
         database.read_then_write_counter.validate(exe)
+
+        run_final_sealed_check(rng, database, cur)
 
         # Dropping the database also releases the long running connections
         # used by database objects.

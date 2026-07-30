@@ -11,6 +11,7 @@ import copy
 import datetime
 import json
 import random
+import re
 import threading
 import time
 import urllib.parse
@@ -1914,6 +1915,11 @@ class CreateReplacementMaterializedViewAction(Action):
         errors = [
             # A concurrent replacement of the same view
             "because it already has a replacement",
+            # The target's query constant-folded to a plan without live
+            # inputs and completed, which can_seal cannot know. The
+            # SealedCollectionCheckAction oracle arbitrates whether a sealed
+            # shard is legitimate.
+            "is sealed and thus cannot be replaced",
         ] + super().errors_to_ignore(exe)
         if exe.db.scenario == Scenario.Rename:
             # The view's rendered SELECT embeds qualified names captured at
@@ -1923,13 +1929,14 @@ class CreateReplacementMaterializedViewAction(Action):
 
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
-            # Skip views whose shard can seal legitimately. Sealing is
-            # transitive: REFRESH AT views seal after their last refresh,
+            # Skip views whose shard is known to seal legitimately. Sealing
+            # is transitive: REFRESH AT views seal after their last refresh,
             # repeat_row constant views seal on hydration, and any view that
-            # reads from a sealing input seals too (View.can_seal). Never
-            # replacing those keeps "is sealed" errors and empty write
-            # frontiers of the remaining views hard failure signals, see
-            # SealedMaterializedViewCheckAction.
+            # reads from a sealing input seals too (View.can_seal). A sealed
+            # target cannot be replaced, so skipping these avoids wasted
+            # work. can_seal cannot know about constant-folded queries
+            # though, so "is sealed" errors are still ignored and
+            # SealedCollectionCheckAction arbitrates damage.
             mvs = [v for v in exe.db.views if v.materialized and not v.can_seal]
             if not mvs:
                 return False
@@ -1987,13 +1994,14 @@ class ResolveReplacementMaterializedViewAction(Action):
 
 class ApplyReplacementMaterializedViewAction(ResolveReplacementMaterializedViewAction):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
-        # NOTE: "is sealed and thus cannot be replaced" is deliberately not
-        # ignored. Replacements are only created for views whose shard never
-        # seals legitimately, so hitting it means the target's shard was
-        # wrongly finalized (incident 1136).
         errors = [
             # A concurrent apply or drop won the race for this replacement
             "replacement materialized view does not exist",
+            # The target's shard sealed, which is legitimate for targets
+            # whose query constant-folded to a plan without live inputs.
+            # SealedCollectionCheckAction arbitrates whether a sealed shard
+            # is damage, so it is not treated as a failure here.
+            "is sealed and thus cannot be replaced",
         ] + super().errors_to_ignore(exe)
         if exe.db.scenario == Scenario.Rename:
             # The target was renamed between picking and applying
@@ -2031,7 +2039,7 @@ class DropReplacementMaterializedViewAction(ResolveReplacementMaterializedViewAc
     This is the incident 1136 trigger statement when it runs after an envd
     restart: bootstrap loses the replacement collection's primary link, so
     the drop wrongly finalizes the target's live shard.
-    SealedMaterializedViewCheckAction detects the resulting damage.
+    SealedCollectionCheckAction detects the resulting damage.
     """
 
     def run(self, exe: Executor) -> bool:
@@ -2044,18 +2052,24 @@ class DropReplacementMaterializedViewAction(ResolveReplacementMaterializedViewAc
         return True
 
 
-class SealedMaterializedViewCheckAction(Action):
-    """Client-side data-loss oracle for wrongly finalized MV shards.
+class SealedCollectionCheckAction(Action):
+    """Client-side data-loss oracle for wrongly finalized persist shards.
 
-    A shard's upper only becomes empty when the shard is sealed, in normal
-    operation only during shard finalization after its collection was
-    dropped. A live materialized view with an empty write frontier therefore
-    means its shard was finalized out from under it. Incident 1136 is the
-    known trigger: dropping a replacement after an envd restart finalizes the
+    A shard's upper only becomes empty when the shard is sealed. That is
+    legitimate when the writing dataflow completed (a constant plan, inputs
+    that all sealed, a REFRESH AT view past its last refresh, a bounded load
+    generator that finished) and destructive when shard finalization ran
+    against a live collection. Incident 1136 is the known destructive
+    trigger: dropping a replacement after an envd restart finalizes the
     target's shard because bootstrap dropped the replacement collection's
-    primary link. REFRESH AT views seal legitimately after their last refresh
-    and are excluded, and because sealing is transitive so is anything that
-    reads from one.
+    primary link. Tables are covered too because versioned tables
+    (ALTER TABLE ADD COLUMN) carry the same primary ownership chain.
+
+    A live user table or materialized view with an empty write frontier and
+    at least one live plan input has no legitimate explanation and is
+    reported as damage. This oracle is the single arbiter of wrongly sealed
+    shards, the replacement actions ignore "is sealed" errors instead of
+    treating them as failures.
     """
 
     def applicable(self, exe: Executor) -> bool:
@@ -2068,36 +2082,104 @@ class SealedMaterializedViewCheckAction(Action):
             "in the same timedomain",
         ] + super().errors_to_ignore(exe)
 
+    def completed_legitimately(
+        self, exe: Executor, database: str, schema: str, name: str
+    ) -> bool:
+        """Whether a sealed materialized view's dataflow completed on its own.
+
+        A dataflow completes, sealing its shard, once it can never produce
+        more output: its optimized plan reads no storage collections at all
+        (constant folding, e.g. a join ON false, drops inputs the catalog
+        still records as dependencies), or every storage collection it reads
+        is itself sealed. Only a sealed view with at least one live plan
+        input is damage.
+        """
+        try:
+            exe.execute(
+                "EXPLAIN OPTIMIZED PLAN AS JSON FOR MATERIALIZED VIEW"
+                f" {identifier(database)}.{identifier(schema)}.{identifier(name)}",
+                http=Http.NO,
+            )
+            plan = "\n".join(str(row[0]) for row in exe.cur.fetchall())
+        except QueryError as e:
+            if "unknown catalog item" in str(e) or "does not exist" in str(e):
+                # Dropped concurrently, so its shard is allowed to seal.
+                return True
+            raise
+        input_ids = sorted({f"u{m}" for m in re.findall(r'"User"\s*:\s*(\d+)', plan)})
+        if not input_ids:
+            return True
+        id_list = ", ".join(f"'{i}'" for i in input_ids)
+        exe.execute(
+            "SELECT count(*) FROM mz_internal.mz_frontiers"
+            f" WHERE object_id IN ({id_list}) AND write_frontier IS NOT NULL",
+            http=Http.NO,
+        )
+        return exe.cur.fetchall()[0][0] == 0
+
     def run(self, exe: Executor) -> bool:
         # Sealing is transitive: a view reading from a REFRESH AT view seals
         # once that input seals, even though its own refresh strategy is not
-        # 'at'. Walk the dependency graph up from every REFRESH AT view and
+        # 'at', and likewise for anything reading a bounded load generator's
+        # table. Walk the dependency graph up from every REFRESH AT view and
+        # every load generator source (all of PW's are UP TO bounded) and
         # exclude everything that transitively depends on one. repeat_row
         # constant views also seal transitively but are not marked in the
         # catalog, which is why this oracle is disabled in the RepeatRow
-        # scenario, see applicable.
-        exe.execute(
-            "WITH MUTUALLY RECURSIVE"
-            " sealing(id text) AS ("
-            "SELECT rs.materialized_view_id"
-            " FROM mz_internal.mz_materialized_view_refresh_strategies rs"
-            " WHERE rs.type = 'at'"
-            " UNION"
-            " SELECT d.object_id"
-            " FROM mz_internal.mz_object_dependencies d"
-            " JOIN sealing s ON d.referenced_object_id = s.id)"
-            " SELECT mv.id, mv.name"
-            " FROM mz_catalog.mz_materialized_views mv"
-            " JOIN mz_internal.mz_frontiers f ON f.object_id = mv.id"
-            " WHERE f.write_frontier IS NULL"
-            " AND mv.id NOT IN (SELECT id FROM sealing)",
-            http=Http.NO,
-        )
-        sealed = exe.cur.fetchall()
-        if sealed:
+        # scenario, see applicable. Plain user tables never seal and need no
+        # exclusions, and source-fed tables are covered by the walk through
+        # their source.
+        def sealed_collections() -> list:
+            exe.execute(
+                "WITH MUTUALLY RECURSIVE"
+                " sealing(id text) AS ("
+                "SELECT rs.materialized_view_id"
+                " FROM mz_internal.mz_materialized_view_refresh_strategies rs"
+                " WHERE rs.type = 'at'"
+                " UNION"
+                " SELECT s.id"
+                " FROM mz_catalog.mz_sources s"
+                " WHERE s.type = 'load-generator'"
+                " UNION"
+                " SELECT d.object_id"
+                " FROM mz_internal.mz_object_dependencies d"
+                " JOIN sealing s ON d.referenced_object_id = s.id)"
+                " SELECT o.id, d.name, sc.name, o.name, o.type"
+                " FROM mz_catalog.mz_objects o"
+                " JOIN mz_catalog.mz_schemas sc ON sc.id = o.schema_id"
+                " JOIN mz_catalog.mz_databases d ON d.id = sc.database_id"
+                " JOIN mz_internal.mz_frontiers f ON f.object_id = o.id"
+                " WHERE o.type IN ('materialized-view', 'table')"
+                " AND o.id LIKE 'u%'"
+                " AND f.write_frontier IS NULL"
+                " AND o.id NOT IN (SELECT id FROM sealing)",
+                http=Http.NO,
+            )
+            return exe.cur.fetchall()
+
+        sealed = sealed_collections()
+        if not sealed:
+            return True
+        # The catalog relations and mz_frontiers are not updated atomically,
+        # so a query timestamp can land inside a concurrent CREATE or DROP
+        # where the object is cataloged but its frontier reads as the empty
+        # antichain. A wrongly finalized shard is permanent, so only report
+        # objects that are still sealed on a re-check.
+        time.sleep(5)
+        sealed_ids = {row[0] for row in sealed}
+        damaged = [
+            row
+            for row in sealed_collections()
+            if row[0] in sealed_ids
+            and not (
+                row[4] == "materialized-view"
+                and self.completed_legitimately(exe, row[1], row[2], row[3])
+            )
+        ]
+        if damaged:
             raise ValueError(
-                "Materialized views with wrongly sealed persist shards"
-                f" (incident 1136 class): {sealed}"
+                "Collections with wrongly sealed persist shards"
+                f" (incident 1136 class): {damaged}"
             )
         return True
 
@@ -6084,7 +6166,7 @@ ddl_action_list = ActionList(
         (CreateReplacementMaterializedViewAction, 10),
         (ApplyReplacementMaterializedViewAction, 5),
         (DropReplacementMaterializedViewAction, 5),
-        (SealedMaterializedViewCheckAction, 2),
+        (SealedCollectionCheckAction, 2),
         (TransactionIsolationAction, 1),
         (BoundedStalenessReadAction, 2),
         (ReadOnlyTransactionAction, 3),

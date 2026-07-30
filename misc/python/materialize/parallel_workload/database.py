@@ -176,9 +176,12 @@ class MzTempSchema(Schema):
 class DBObject:
     columns: list[Column]
     lock: threading.Lock
-    # Whether this object's backing persist shard can reach the empty (sealed)
-    # frontier in normal operation. Tables and sources never seal, so the
-    # default is False. Materialized views override it per instance.
+    # Whether reading from this object can legitimately reach the empty
+    # (sealed) frontier: its own shard seals in normal operation, or a
+    # dataflow reading it sees an input frontier that becomes empty. Plain
+    # tables and unbounded sources never seal, so the default is False.
+    # Bounded (UP TO) load generators seal once they finish, and views
+    # propagate sealing from their inputs, materialized or not.
     can_seal: bool = False
 
     def __init__(self):
@@ -314,8 +317,9 @@ class View(DBObject):
         # constant views on hydration, and transitively for any view that reads
         # from an input that itself seals. The replacement and sealed-shard
         # oracles key off this to tell legitimate seals from wrongly finalized
-        # shards.
-        self.can_seal = self.materialized and (
+        # shards. Unmaterialized views have no shard, but a dataflow reading
+        # one inlines its inputs, so sealing must propagate through them too.
+        self.can_seal = (
             (self.refresh or "").startswith("AT")
             or self.repeat_row_const
             or base_object.can_seal
@@ -922,6 +926,10 @@ class LoadGeneratorSource(DBObject):
     grow without limit, which also exercises the finished-source lifecycle
     state. The readable object (str(self)) is the table created from the
     source, matching the source-table model the other sources use."""
+
+    # A finished (UP TO reached) counter advances the source table's frontier
+    # to the empty antichain, so anything reading it seals legitimately.
+    can_seal = True
 
     source_id: int
     cluster: "Cluster"
