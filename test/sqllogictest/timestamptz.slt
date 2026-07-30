@@ -252,6 +252,25 @@ SELECT '262142-12-31 23:00:00+01'::timestamptz
 ----
 262142-12-31 22:00:00+00
 
+# Rounding to the column's precision happens after the range check, so rounding
+# *up* off the end of `HIGH_DATE` needs its own check. The lower the precision,
+# the fewer fractional digits it takes: at precision 0 a single `.5` rounds up a
+# whole second, well inside what any client can send.
+query error timestamp out of range
+SELECT '262142-12-31 23:59:59.5'::timestamptz(0)
+
+query error timestamp out of range
+SELECT '262142-12-31 23:59:59.9995'::timestamptz(3)
+
+query error timestamp out of range
+SELECT '262142-12-31 23:59:59.9999995'::timestamptz
+
+# Rounding down on the same day is unaffected.
+query T
+SELECT '262142-12-31 23:59:59.4'::timestamptz(0)
+----
+262142-12-31 23:59:59+00
+
 # A parsed `:60` is stored as chrono's leap second, which is only representable
 # at a second-of-minute of 59. An offset that is not a whole number of minutes
 # shifts it off `:59`; that value used to reach row encoding and panic there.
