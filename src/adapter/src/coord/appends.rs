@@ -593,6 +593,16 @@ impl GroupCommitter {
         let now: Timestamp = (self.now)().into();
         crate::coord::timeline::check_runaway_write_ts(&now, write_ts.timestamp);
 
+        // The append above is already readable in Persist and has advanced the
+        // table's upper, while no oracle-timestamped read can reach it until
+        // the line below. Anything concluding from a read that follows Persist
+        // rather than the oracle has to cope with this window, so a test can
+        // hold it open here. Every txns-shard write parks here while armed,
+        // including the keepalives that advance table uppers, so arm it with a
+        // bounded `sleep` rather than a `pause`. Used by
+        // workflow_test_occ_zero_row_write_linearization.
+        fail::fail_point!("group_commit_before_apply_write");
+
         self.oracle.apply_write(write_ts.timestamp).await;
 
         TxnsWriteAttempt::Applied

@@ -14,6 +14,7 @@ purpose of exercising fencing.
 
 import argparse
 import random
+import threading
 import time
 from concurrent import futures
 from dataclasses import dataclass
@@ -95,6 +96,17 @@ SERVICES = [
     Materialized(name="mz_first"),
     Materialized(name="mz_second"),
 ]
+
+# Selects how a process sequences DELETE/UPDATE/INSERT ... SELECT: `false` keeps
+# them on the Coordinator behind in-process write locks, `true` sequences them
+# from the session task under optimistic concurrency control. The value is
+# sampled once at process startup, so two processes in one environment can hold
+# different values.
+OCC_FLAG = "enable_adapter_frontend_occ_read_then_write"
+
+# Observed once per read-then-write that the OCC path sequenced, so the
+# histogram's sample count identifies which path a process took.
+OCC_METRIC = "mz_occ_read_then_write_retry_count_count"
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -281,3 +293,264 @@ def run_workload(c: Composition, workload: Workload, args: argparse.Namespace) -
                 ), f"Unexpected result {result}; commit: {commit}; target {target}"
 
         print("Verification complete.")
+
+
+# Connections driving increments.
+MIXED_MODE_CONCURRENCY = 16
+
+# The statement never reached a server, or a server refused it, so it wrote
+# nothing. Keeping these apart from the indeterminate ones below matters: a
+# fenced instance produces plenty, and each one widens the band the counter is
+# checked against.
+NOT_APPLIED = [
+    # Targeted a container that is not up, or one that died before the
+    # connection was established, or one that stopped responding mid-connect.
+    "running docker compose failed",
+    "Connection refused",
+    "Connection timed out",
+    "canceling statement due to statement timeout",
+    # How the OCC path reports sustained contention.
+    "read-then-write exceeded maximum retry attempts under contention",
+]
+
+# The connection went away with the statement in flight, so the increment may or
+# may not be durable. A fenced container still publishes its port, so the
+# connection is accepted and reset.
+INDETERMINATE = [
+    "server closed the connection unexpectedly",
+    "Connection reset by peer",
+]
+
+
+class Increment(Enum):
+    ACKED = 0
+    REJECTED = 1
+    UNKNOWN = 2
+
+
+def occ_sequenced_writes(c: Composition, service: str) -> int:
+    """How many read-then-writes `service` has sequenced through the OCC path."""
+    metrics = c.exec(
+        service, "curl", "--silent", "localhost:6878/metrics", capture=True
+    ).stdout
+    for line in metrics.splitlines():
+        if line.startswith(f"{OCC_METRIC} "):
+            return int(float(line.split()[1]))
+    # The histogram is registered unconditionally, so a missing line means the
+    # scrape itself did not land.
+    raise RuntimeError(f"{OCC_METRIC} not found in {service} metrics")
+
+
+def increment_counter(args: tuple[Composition, str, bool]) -> Increment:
+    """Increments the shared counter by one through a read-then-write.
+
+    `slow` stretches the read phase, so that the operation can straddle the
+    moment the second instance comes up. The sleep takes its duration from the
+    `delay` column rather than from a literal, so that it is not folded away at
+    plan time and instead runs while the selection is read.
+    """
+    c, mz_service, slow = args
+    sleep = " AND mz_unsafe.mz_sleep(delay) IS NULL" if slow else ""
+    try:
+        c.sql_cursor(service=mz_service).execute(
+            f"UPDATE counter SET v = v + 1 WHERE k = 1{sleep}".encode()
+        )
+    except Exception as e:
+        if any(msg in str(e) for msg in NOT_APPLIED):
+            return Increment.REJECTED
+        if any(msg in str(e) for msg in INDETERMINATE):
+            return Increment.UNKNOWN
+        raise RuntimeError(f"unexpected exception: {e}")
+    return Increment.ACKED
+
+
+def workflow_mixed_mode_read_then_write(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Two instances in one environment sequencing read-then-write differently.
+
+    `OCC_FLAG` is sampled once per process, so a rolling restart or a newly added
+    serving process can leave one instance on the Coordinator's write-lock path
+    and another on the OCC path. The two do not synchronize: the lock path
+    excludes concurrent writers, the OCC path detects them afterwards from the
+    write timestamp. A blind write from the lock path landing on top of an OCC
+    write leaves the row with a negative copy of the stale value and two copies
+    of the new one.
+
+    Both orderings run, because they put the lock path on opposite sides of the
+    handover. Each one goes red on a lost update or a broken multiplicity, and
+    also on the precondition for either: the two instances committing at the same
+    time.
+    """
+    parser.add_argument(
+        "--azurite", action="store_true", help="Use Azurite as blob store instead of S3"
+    )
+    args = parser.parse_args()
+
+    # Every increment opens its own connection, so leave out the per-invocation
+    # Docker Compose echo.
+    c.silent = True
+
+    for first_occ, second_occ in [("false", "true"), ("true", "false")]:
+        print(
+            f"+++ Running with {OCC_FLAG} {first_occ} on 'mz_first', {second_occ} on 'mz_second' ..."
+        )
+        run_mixed_mode(c, args.azurite, first_occ, second_occ)
+
+
+def run_mixed_mode(
+    c: Composition, azurite: bool, first_occ: str, second_occ: str
+) -> None:
+    """Runs one ordering: 'mz_first' comes up first, then 'mz_second' displaces it."""
+    c.down(destroy_volumes=True)
+    c.up(c.metadata_store())
+
+    with c.override(
+        *[
+            Materialized(
+                name=mz_name,
+                external_metadata_store=True,
+                external_blob_store=True,
+                blob_store_is_azure=azurite,
+                sanity_restart=False,
+                support_external_clusterd=True,
+                additional_system_parameter_defaults={OCC_FLAG: occ},
+            )
+            for mz_name, occ in [("mz_first", first_occ), ("mz_second", second_occ)]
+        ]
+    ):
+        c.up("mz_first")
+
+        # Idempotent, because a retried connection re-runs the whole batch after
+        # the statements it already applied. `mz_sleep` blocks the timely worker
+        # it runs on, so `delay` stays short enough that the slow increments do
+        # not starve the replica.
+        c.sql(
+            """
+            CREATE TABLE IF NOT EXISTS counter (k int, v bigint, delay double precision);
+            DELETE FROM counter;
+            INSERT INTO counter VALUES (1, 0, 0.5);
+            """,
+            service="mz_first",
+        )
+
+        print("--- Confirming the instances disagree on how to sequence")
+        assert (
+            increment_counter((c, "mz_first", False)) == Increment.ACKED
+        ), "baseline increment on 'mz_first' did not commit"
+        occ_writes = occ_sequenced_writes(c, "mz_first")
+        assert (occ_writes > 0) == (first_occ == "true"), (
+            f"'mz_first' sequenced {occ_writes} read-then-writes through OCC, "
+            f"which does not match {OCC_FLAG}={first_occ}"
+        )
+
+        print("--- Driving increments across both instances")
+        stop = threading.Event()
+
+        def drive(worker: int) -> list[tuple[str, Increment, float, float]]:
+            # Worker 0 keeps a slow read-then-write in flight on 'mz_first' for
+            # the whole run, so that 'mz_second' comes up while an operation
+            # there sits between its read and its write. The workers aimed at
+            # 'mz_second' start before it can serve and take their rejections
+            # until it can.
+            mz_service = "mz_first" if worker % 2 == 0 else "mz_second"
+            op = (c, mz_service, worker == 0)
+            outcomes = []
+            while not stop.is_set():
+                issued = time.time()
+                outcomes.append(
+                    (mz_service, increment_counter(op), issued, time.time())
+                )
+            return outcomes
+
+        with futures.ThreadPoolExecutor(MIXED_MODE_CONCURRENCY) as executor:
+            drivers = [
+                executor.submit(drive, worker)
+                for worker in range(MIXED_MODE_CONCURRENCY)
+            ]
+            try:
+                time.sleep(2)
+                c.up("mz_second")
+                # The fence lands while 'mz_second' opens the catalog, well
+                # before it reports healthy, so keep driving past that point to
+                # cover the handover from both sides.
+                time.sleep(15)
+            finally:
+                stop.set()
+            outcomes = [outcome for driver in drivers for outcome in driver.result()]
+
+        # The baseline increment on 'mz_first' counts too.
+        acked = 1 + sum(
+            1 for _, outcome, _, _ in outcomes if outcome == Increment.ACKED
+        )
+        unknown = sum(
+            1 for _, outcome, _, _ in outcomes if outcome == Increment.UNKNOWN
+        )
+        print(f"acked: {acked}, unknown: {unknown}")
+
+        occ_writes = occ_sequenced_writes(c, "mz_second")
+        assert (occ_writes > 0) == (second_occ == "true"), (
+            f"'mz_second' sequenced {occ_writes} read-then-writes through OCC, "
+            f"which does not match {OCC_FLAG}={second_occ}"
+        )
+
+        # Without a commit from each side the run exercised one instance only.
+        acks = {
+            mz_service: [
+                (issued, at)
+                for service, outcome, issued, at in outcomes
+                if service == mz_service and outcome == Increment.ACKED
+            ]
+            for mz_service in ["mz_first", "mz_second"]
+        }
+        for mz_service, times in acks.items():
+            assert times, f"'{mz_service}' committed no increment"
+
+        # What keeps the two modes from corrupting the row today is that they
+        # never commit at the same time: both paths advance the catalog upper
+        # before every write, so an instance stops committing once the other has
+        # fenced it, and the fence lands before the other instance reads anything.
+        # Overlapping commit windows are the bug's precondition, because a
+        # lock-path write can then land on top of an OCC write and leave the row
+        # with a negative copy of the stale value and two copies of the new one.
+        # Sampling the flag once per process does not prevent that, so a red
+        # assertion here means the modes have to be fenced against each other
+        # rather than merely fixed per process.
+        # Comparing when 'mz_first' last *issued* a statement that went on to
+        # commit against when 'mz_second' first committed keeps a slow response
+        # from reading as an overlap: a statement issued after the other instance
+        # had already committed cannot have committed before it.
+        gap = min(at for _, at in acks["mz_second"]) - max(
+            issued for issued, _ in acks["mz_first"]
+        )
+        print(f"'mz_first' stopped committing {gap:.1f}s before 'mz_second' started")
+        assert gap > 0, (
+            f"'mz_first' committed a statement it issued {-gap:.1f}s after "
+            f"'mz_second' had committed, so both sequencing modes were live at once"
+        )
+
+        print("--- Verifying the counter")
+        cursor = c.sql_cursor(service="mz_second")
+
+        # A negative copy of the stale value has no rendering, so a broken
+        # multiplicity surfaces here as a missing row, an extra row, or a
+        # retraction error.
+        cursor.execute("SELECT v FROM counter WHERE k = 1")
+        rows = cursor.fetchall()
+        assert len(rows) == 1, f"counter holds {rows}, expected exactly one row"
+
+        # An acked increment is durable, one whose connection died may or may not
+        # be. Anything below `acked` is a lost update.
+        v = rows[0][0]
+        assert (
+            acked <= v <= acked + unknown
+        ), f"counter is {v}, expected between {acked} and {acked + unknown}"
+
+        # Checked last so that a lost update is reported as such rather than as a
+        # missing fence. The fence bounds the window in which the two modes
+        # overlap: both paths advance the catalog upper before every write, so an
+        # instance stops writing once the other one has fenced it.
+        log = c.invoke("logs", "mz_first", capture=True).stdout
+        assert (
+            "unable to advance catalog upper" in log or "fenced by envd" in log
+        ), "'mz_first' was never fenced, so the two instances never overlapped"

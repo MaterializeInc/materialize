@@ -2408,6 +2408,17 @@ steps:
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 
+  - id: occ-mixed-mode-read-then-write
+    label: "Read-then-write sequencing split across two environmentd processes"
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: txn-wal-fencing
+          run: mixed-mode-read-then-write
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
   - group: "Copy"
     key: copy
     steps:
