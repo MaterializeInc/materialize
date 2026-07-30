@@ -749,6 +749,10 @@ pub(super) struct ReplicaConfig {
     pub build_info: &'static BuildInfo,
     pub location: ClusterReplicaLocation,
     pub grpc_client: GrpcClientParameters,
+    // Plumbed from the adapter but not yet consumed: no storage command carries
+    // this config to the replica, so nothing reads it. `dead_code` is allowed so
+    // the plumbing can land on its own, and is removed once the field is read.
+    #[allow(dead_code)]
     pub logging: StorageReplicaLogging,
 }
 
