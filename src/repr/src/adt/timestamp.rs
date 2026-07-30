@@ -24,7 +24,8 @@ use std::ops::Sub;
 use std::sync::LazyLock;
 
 use ::chrono::{
-    DateTime, Datelike, Days, Duration, Months, NaiveDate, NaiveDateTime, NaiveTime, Utc,
+    DateTime, Datelike, Days, Duration, FixedOffset, Months, NaiveDate, NaiveDateTime, NaiveTime,
+    Utc,
 };
 use chrono::Timelike;
 use mz_ore::cast::{self, CastFrom};
@@ -1052,6 +1053,53 @@ impl FixedSizeCodec<NaiveDateTime> for PackedNaiveDateTime {
             .expect("NaiveTime roundtrips with PackedNaiveDateTime");
 
         NaiveDateTime::new(date, time)
+    }
+}
+
+/// Adds a fixed offset to `lhs`, returning `None` on overflow.
+///
+/// chrono's own `NaiveDateTime + FixedOffset` panics on overflow, so this is the
+/// only safe way to shift a timestamp that may sit at the edge of chrono's
+/// range. Beyond the overflow check it also normalizes a leap second that the
+/// shift moves off `:59`, see the note in the body.
+pub fn checked_add_with_leapsecond(
+    lhs: &NaiveDateTime,
+    rhs: &FixedOffset,
+) -> Option<NaiveDateTime> {
+    checked_offset_with_leapsecond(lhs, rhs.local_minus_utc())
+}
+
+/// Subtracts a fixed offset from `lhs`, returning `None` on overflow.
+///
+/// The mirror of [`checked_add_with_leapsecond`], with the same guarantees.
+pub fn checked_sub_with_leapsecond(
+    lhs: &NaiveDateTime,
+    rhs: &FixedOffset,
+) -> Option<NaiveDateTime> {
+    checked_offset_with_leapsecond(lhs, rhs.local_minus_utc().checked_neg()?)
+}
+
+/// Shifts `lhs` by `seconds`, keeping a leap second representable.
+fn checked_offset_with_leapsecond(lhs: &NaiveDateTime, seconds: i32) -> Option<NaiveDateTime> {
+    // The fractional part is set aside so that the shift operates on whole
+    // seconds only, then recovered below.
+    let nanos = lhs.nanosecond();
+    let whole = lhs.with_nanosecond(0).expect("0 is a valid nanosecond");
+    let dt = whole.checked_add_signed(Duration::try_seconds(i64::from(seconds))?)?;
+    // chrono represents a leap second as `nanos >= 1_000_000_000`, but only on a
+    // second-of-minute of 59. If the shift moved us off `:59`, we can't keep the
+    // leap-second representation: the resulting `NaiveTime` would be
+    // unconstructable via `from_num_seconds_from_midnight_opt` and would panic
+    // when round-tripped through `Row` encoding. In that case, fold the leap
+    // second into the next regular second, which is also what PostgreSQL does
+    // with a `:60` literal.
+    if nanos >= 1_000_000_000 && dt.second() != 59 {
+        dt.checked_add_signed(Duration::nanoseconds(i64::from(nanos)))
+    } else {
+        Some(
+            dt.with_nanosecond(nanos)
+                .expect("nanos came from a NaiveTime"),
+        )
     }
 }
 
