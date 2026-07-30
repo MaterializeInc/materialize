@@ -142,6 +142,20 @@ fn test_parse_time_errors() {
         "03.456",
         "invalid input syntax for type time: have unprocessed tokens 3.456000000: \"03.456\"",
     );
+    // A string that parses without naming a single time field is rejected rather
+    // than read as midnight, matching PostgreSQL.
+    run_test_parse_time_errors(
+        "",
+        "invalid input syntax for type time: no time fields found: \"\"",
+    );
+    run_test_parse_time_errors(
+        " ",
+        "invalid input syntax for type time: no time fields found: \" \"",
+    );
+    run_test_parse_time_errors(
+        ":",
+        "invalid input syntax for type time: no time fields found: \":\"",
+    );
 
     fn run_test_parse_time_errors(s: &str, e: &str) {
         assert_eq!(
@@ -149,6 +163,24 @@ fn test_parse_time_errors() {
             format!("{}", strconv::parse_time(s).unwrap_err())
         );
     }
+}
+
+/// The frozen storage-cast reading of a TIME string with no time field in it.
+/// See the stability contract in `mz_storage_types::sources::casts`.
+#[mz_ore::test]
+fn test_parse_time_legacy_fieldless() {
+    for s in ["", " ", ":"] {
+        assert_eq!(
+            strconv::parse_time_legacy(s).unwrap(),
+            NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+            "for input {s:?}"
+        );
+    }
+    // Everything else parses identically to `parse_time`.
+    assert_eq!(
+        strconv::parse_time_legacy("01:02:03").unwrap(),
+        strconv::parse_time("01:02:03").unwrap()
+    );
 }
 
 #[mz_ore::test]
