@@ -82,36 +82,31 @@ at a time series, you can make statements like "the p99 freshness was 1s".
 
 The following query builds a freshness CCDF across every object from the last 24
 hours of history. It reads the fast, indexed
-`mz_internal.mz_wallclock_global_lag_recent_history`, buckets each observation
-into decade (power-of-ten) buckets, and then sums the tail of the histogram to
-produce `(lag_threshold_seconds, fraction_of_time_at_or_above)` pairs:
+`mz_internal.mz_wallclock_global_lag_recent_history` and, for a fixed set of
+decade thresholds (1, 10, and 100 seconds), reports the fraction of observations
+whose lag was at or above each threshold. The fixed thresholds mean every run
+returns all three rows, even when the larger thresholds have no observations:
 
 ```mzsql
 WITH lags AS (
     -- Convert each lag to seconds, dropping unhydrated (NULL) observations and
-    -- any non-positive lag, since the log scale is undefined at or below zero.
+    -- any non-positive lag.
     SELECT extract(epoch FROM wl.lag) AS lag_seconds
     FROM mz_internal.mz_wallclock_global_lag_recent_history wl
     WHERE wl.lag IS NOT NULL
       AND wl.lag > INTERVAL '0'
 ),
-histogram AS (
-    -- Decade bucket: floor each lag to its power of ten, so lags land in
-    -- 0.1, 1, 10, 100, ... second buckets ([1, 10) -> 1, [10, 100) -> 10).
-    SELECT
-        pow(10.0, floor(log10(lag_seconds))) AS lag_bucket,
-        count(*) AS frequency
-    FROM lags
-    GROUP BY 1
+thresholds AS (
+    -- Fixed decade thresholds, so the CCDF always reports 1s, 10s, and 100s.
+    SELECT unnest(ARRAY[1, 10, 100]) AS lag_threshold_seconds
 )
 SELECT
-    h.lag_bucket AS lag_threshold_seconds,
-    sum(g.frequency)::float8
-        / (SELECT sum(frequency) FROM histogram) AS fraction_of_time_at_or_above
-FROM histogram g, histogram h
-WHERE g.lag_bucket >= h.lag_bucket   -- complement: sum the tail at or above the threshold
-GROUP BY h.lag_bucket
-ORDER BY h.lag_bucket;
+    t.lag_threshold_seconds,
+    count(*) FILTER (WHERE l.lag_seconds >= t.lag_threshold_seconds)::float8
+        / count(*) AS fraction_of_time_at_or_above
+FROM thresholds t, lags l
+GROUP BY t.lag_threshold_seconds
+ORDER BY t.lag_threshold_seconds;
 ```
 
 The query returns output like the following:
@@ -120,20 +115,22 @@ The query returns output like the following:
  lag_threshold_seconds | fraction_of_time_at_or_above
 -----------------------+------------------------------
                      1 |                            1
-(1 row)
+                    10 |                            0
+                   100 |                            0
+(3 rows)
 ```
 
-Read this as: every observation of positive lag fell in the 1-second decade
-bucket, so lag was at or above 1 second 100% of the time and never reached the
-10-second bucket. The curve is a single step, the healthy shape for an instance
-whose objects all sit at a low, near-constant lag.
+Read this as: lag was at or above 1 second 100% of the time and never reached 10
+seconds or 100 seconds (0% at or above each). The curve drops off sharply after
+1 second, the healthy shape for an instance whose objects all sit at a low,
+near-constant lag.
 
-![Freshness CCDF plotted from the sample output: the fraction of time at or above is 1.0 at the 1-second threshold and drops to 0 above 10 seconds, forming a single step](/images/freshness-ccdf-sample.png)
+![Freshness CCDF plotted from the sample output at the 1-, 10-, and 100-second thresholds: the fraction of time at or above is 1.0 at 1 second and 0 at both 10 and 100 seconds](/images/freshness-ccdf-sample.png)
 
 The chart above is generated from the sample output, captured on a lightly
-loaded local instance where every observation landed in the 1-second bucket. A
-production instance under real load shows a longer tail, with points extending
-into the 10-second and 100-second thresholds.
+loaded local instance where all lag stayed under 10 seconds, so the 10-second
+and 100-second thresholds sit at zero. A production instance under real load
+would show non-zero fractions at those higher thresholds.
 
 By default this query aggregates across every object. To scope the CCDF to a
 single object, add a join to `mz_catalog.mz_objects` and a name filter to the
