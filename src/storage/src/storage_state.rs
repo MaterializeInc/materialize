@@ -127,6 +127,11 @@ pub mod async_storage_worker;
 type CommandReceiver = mpsc::UnboundedReceiver<StorageCommand>;
 type ResponseSender = mpsc::UnboundedSender<StorageResponse>;
 
+/// Batching interval used for storage introspection log forwarding when a
+/// replica has no explicit introspection interval. Matches the fixed interval
+/// storage forwarded at before the interval became configurable.
+const DEFAULT_STORAGE_INTROSPECTION_INTERVAL: Duration = Duration::from_secs(1);
+
 /// State maintained for each worker thread.
 ///
 /// Much of this state can be viewed as local variables for the worker thread,
@@ -444,10 +449,19 @@ impl<'w> Worker<'w> {
     /// Idempotent. The writer is consumed on first registration, so repeated
     /// calls (for example after the controller reconnects) are no-ops.
     fn maybe_initialize_logging(&mut self, config: &StorageReplicaConfig) {
-        let Some(interval) = config.logging.interval else {
-            return;
-        };
+        // Register the timely log forwarder whenever this process was given a
+        // writer, i.e. `enable_storage_introspection_logs` is on. Compute's
+        // logging dataflow consumes this stream, so its frontier must keep
+        // advancing regardless of the replica's own introspection interval,
+        // otherwise compute-side hydration stalls (which, during a graceful
+        // cluster reconfiguration, blocks the cut-over). The per-replica
+        // interval only sets the batching granularity, so fall back to a
+        // default when it is unset.
         if let Some(writer) = self.timely_log_writer.take() {
+            let interval = config
+                .logging
+                .interval
+                .unwrap_or(DEFAULT_STORAGE_INTROSPECTION_INTERVAL);
             register_timely_logger(self.timely_worker, writer, interval);
             self.timely_logging_interval = Some(interval);
         }
