@@ -1863,3 +1863,48 @@ query T
 SELECT TIMESTAMP WITH TIME ZONE '01/02/03 04:05:06+00'
 ----
 2003-01-02 04:05:06+00
+
+# The text renderer writes microseconds. A sub-second fraction of `.9999995` or
+# more rounds up to a full second, which has to reach the seconds field: written
+# into the fraction it becomes `1000000` microseconds, and stripping trailing
+# zeros turns that into `.1`, about a second early.
+#
+# `simple` is required. These assert on the *text* encoding, and the extended
+# protocol that plain `query` uses returns TIME and TIMESTAMP in binary.
+#
+# The TIMESTAMP cast rounds to microseconds on the way in, so it hides this. The
+# TIME cast does not round, and neither does DATE + TIME, so both carry the full
+# parsed nanoseconds to the renderer, as does COPY ... FROM in TEXT/CSV format.
+simple
+SELECT TIME '12:34:56.9999999';
+----
+12:34:57
+COMPLETE 1
+
+simple
+SELECT DATE '2020-01-01' + TIME '00:00:00.9999999';
+----
+2020-01-01 00:00:01
+COMPLETE 1
+
+# Just below the rounding threshold, so the fraction stays where it is.
+simple
+SELECT TIME '12:34:56.9999994';
+----
+12:34:56.999999
+COMPLETE 1
+
+# The carry crosses the minute and the day.
+simple
+SELECT DATE '2020-01-31' + TIME '23:59:59.9999999';
+----
+2020-02-01 00:00:00
+COMPLETE 1
+
+# A leap second is already in the seconds field, so only the part below one
+# second is a fraction. It used to render as `23:59:60.1`.
+simple
+SELECT TIME '23:59:60';
+----
+23:59:60
+COMPLETE 1

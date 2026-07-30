@@ -494,13 +494,29 @@ pub fn parse_time(s: &str) -> Result<NaiveTime, ParseError> {
         .map_err(|e| ParseError::invalid_input_syntax("time", s).with_details(e))
 }
 
-/// Writes a [`NaiveDateTime`] timestamp to `buf`.
+/// Writes a [`NaiveTime`] to `buf`.
 pub fn format_time<F>(buf: &mut F, t: NaiveTime) -> Nestable
 where
     F: FormatBuffer,
 {
+    let (carry, micros) = split_nanos_to_micros(t.nanosecond());
+    // A carry out of the last second of the day has nowhere to go: a
+    // `NaiveTime` wraps to midnight rather than reaching PostgreSQL's
+    // `24:00:00`, and rendering a time a whole day early is a worse lie than
+    // dropping the carry. Saturate at the largest renderable fraction instead.
+    let (t, micros) = match carry {
+        false => (t, micros),
+        true => match t
+            .with_nanosecond(0)
+            .expect("0 is a valid nanosecond")
+            .overflowing_add_signed(Duration::seconds(1))
+        {
+            (carried, 0) => (carried, 0),
+            (_, _wrapped) => (t, MICROS_PER_SECOND - 1),
+        },
+    };
     write!(buf, "{}", t.format("%H:%M:%S"));
-    format_nanos_to_micros(buf, t.nanosecond());
+    format_micros(buf, micros);
     Nestable::Yes
 }
 
@@ -536,9 +552,10 @@ pub fn format_timestamp<F>(buf: &mut F, ts: &NaiveDateTime) -> Nestable
 where
     F: FormatBuffer,
 {
+    let (ts, micros) = round_to_micros(*ts);
     let (year_ad, year) = ts.year_ce();
     write!(buf, "{:04}-{}", year, ts.format("%m-%d %H:%M:%S"));
-    format_nanos_to_micros(buf, ts.and_utc().timestamp_subsec_nanos());
+    format_micros(buf, micros);
     if !year_ad {
         write!(buf, " BC");
     }
@@ -602,9 +619,10 @@ pub fn format_timestamptz<F>(buf: &mut F, ts: &DateTime<Utc>) -> Nestable
 where
     F: FormatBuffer,
 {
+    let (ts, micros) = round_to_micros(ts.naive_utc());
     let (year_ad, year) = ts.year_ce();
     write!(buf, "{:04}-{}", year, ts.format("%m-%d %H:%M:%S"));
-    format_nanos_to_micros(buf, ts.timestamp_subsec_nanos());
+    format_micros(buf, micros);
     write!(buf, "+00");
     if !year_ad {
         write!(buf, " BC");
@@ -837,24 +855,79 @@ where
     Nestable::Yes
 }
 
-fn format_nanos_to_micros<F>(buf: &mut F, nanos: u32)
+const NANOS_PER_SECOND: u32 = 1_000_000_000;
+const MICROS_PER_SECOND: u32 = 1_000_000;
+
+/// Splits a sub-second nanosecond count into a whole-second carry and the
+/// microsecond fraction to render, rounding half away from zero.
+///
+/// The returned fraction is always below one second, so it can never be written
+/// as a fractional field of more than six digits. Only a nanosecond count of
+/// `.9999995` or more produces a carry.
+///
+/// chrono spells a leap second as a nanosecond count of one second or more, and
+/// its `%S` already accounts for that, rendering `60` on a second-of-minute of
+/// 59 and folding into the next second elsewhere. The leap second is therefore
+/// already in the seconds field and only the part below one second is ours to
+/// write.
+fn split_nanos_to_micros(nanos: u32) -> (bool, u32) {
+    let micros = (nanos % NANOS_PER_SECOND + 500) / 1_000;
+    if micros >= MICROS_PER_SECOND {
+        (true, 0)
+    } else {
+        (false, micros)
+    }
+}
+
+/// Rounds `ts` to microseconds, returning the value whose date and seconds are
+/// to be rendered plus the fraction to append to it.
+///
+/// A fraction that rounds up to a full second is carried into the seconds field
+/// rather than written as a fractional `1_000_000` microseconds, which the
+/// trailing-zero stripper would turn into a nonsense `.1`, roughly one second
+/// early. At the very end of chrono's range the carry has nowhere to go, so the
+/// fraction saturates at `.999999` rather than the value rolling over to an
+/// unrepresentable date.
+fn round_to_micros(ts: NaiveDateTime) -> (NaiveDateTime, u32) {
+    let (carry, micros) = split_nanos_to_micros(ts.and_utc().timestamp_subsec_nanos());
+    if !carry {
+        return (ts, micros);
+    }
+    // Dropping the fraction before adding the second is what makes this correct
+    // for a leap second too: `23:59:59` plus chrono's leap nanos is `23:59:60`,
+    // and the second after it is `00:00:00` of the next minute, which is exactly
+    // where clearing the nanos and adding a second lands.
+    match ts
+        .with_nanosecond(0)
+        .expect("0 is a valid nanosecond")
+        .checked_add_signed(Duration::seconds(1))
+    {
+        Some(carried) => (carried, 0),
+        None => (ts, MICROS_PER_SECOND - 1),
+    }
+}
+
+/// Writes a microsecond fraction to `buf` with trailing zeros stripped, or
+/// nothing at all when it is zero.
+///
+/// `micros` must be below one second, which is what [`split_nanos_to_micros`]
+/// guarantees. A larger value would be written as a fraction it does not fit
+/// in, silently shifting the rendered time by about a second.
+fn format_micros<F>(buf: &mut F, micros: u32)
 where
     F: FormatBuffer,
 {
-    if nanos >= 500 {
-        let mut micros = nanos / 1000;
-        let rem = nanos % 1000;
-        if rem >= 500 {
-            micros += 1;
-        }
-        // strip trailing zeros
-        let mut width = 6;
-        while micros % 10 == 0 {
-            width -= 1;
-            micros /= 10;
-        }
-        write!(buf, ".{:0width$}", micros, width = width);
+    assert!(micros < MICROS_PER_SECOND);
+    if micros == 0 {
+        return;
     }
+    let mut micros = micros;
+    let mut width = 6;
+    while micros % 10 == 0 {
+        width -= 1;
+        micros /= 10;
+    }
+    write!(buf, ".{:0width$}", micros, width = width);
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -2260,22 +2333,31 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn test_format_nanos_to_micros() {
-        let cases: Vec<(u32, &str)> = vec![
-            (0, ""),
-            (1, ""),
-            (499, ""),
-            (500, ".000001"),
-            (500_000, ".0005"),
-            (5_000_000, ".005"),
-            // Leap second. This is possibly wrong and should maybe be reduced (nanosecond
-            // % 1_000_000_000), but we are at least now aware it does this.
-            (1_999_999_999, ".2"),
+    fn test_split_nanos_to_micros() {
+        let cases: Vec<(u32, bool, &str)> = vec![
+            (0, false, ""),
+            (1, false, ""),
+            (499, false, ""),
+            (500, false, ".000001"),
+            (500_000, false, ".0005"),
+            (5_000_000, false, ".005"),
+            (999_999_499, false, ".999999"),
+            // Rounds up to a full second, which belongs in the seconds field.
+            // Written as a fraction it would render as `.1`.
+            (999_999_500, true, ""),
+            (999_999_900, true, ""),
+            // chrono's leap-second representation. The leap is already in the
+            // seconds field, so only the part below one second is rendered.
+            (1_000_000_000, false, ""),
+            (1_500_000_000, false, ".5"),
+            (1_999_999_999, true, ""),
         ];
-        for (nanos, expect) in cases {
+        for (nanos, expect_carry, expect) in cases {
+            let (carry, micros) = split_nanos_to_micros(nanos);
+            assert_eq!(carry, expect_carry, "carry for {nanos}ns");
             let mut buf = String::new();
-            format_nanos_to_micros(&mut buf, nanos);
-            assert_eq!(&buf, expect);
+            format_micros(&mut buf, micros);
+            assert_eq!(&buf, expect, "fraction for {nanos}ns");
         }
     }
 
