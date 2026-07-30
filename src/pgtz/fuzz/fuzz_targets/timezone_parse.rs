@@ -12,21 +12,33 @@
 //! tokenizer + offset builder, in both ISO and POSIX modes. Any panic is an
 //! availability bug.
 //!
-//! The interesting surface is the *offset tokenizer*: `tokenize_timezone`
-//! grabs the first alphabetic run as a single `TzName` and returns immediately
-//! (so any POSIX DST-rule tail is silently discarded, making fuzzing that
-//! grammar dead weight), while everything else flows through `parse_num`, which
-//! splits long all-digit runs into `[..hhhh]mm` chunks unless a `:` is present,
-//! plus the punctuation-as-delimiter trimming and the `z`/`Z`-only-at-end rule.
-//! `build_timezone_offset_second` then matches the token stream against twelve
-//! fixed `±H[H][:M[M][:S[S]]]` / `±HHH` / `TzName` / `Zulu` shapes and enforces
-//! the `hour<=15`, `min<60`, `sec<60` bounds. So we generate inputs that stress
-//! exactly that math: long all-digit runs (`+00000100`, `+0000001:000001`),
-//! the hour/min/sec boundaries (`+15:59:59`, `+16`, `+0:60`), the colon-vs-no-
-//! colon `split_nums` toggle, punctuation-delimited junk around a real offset,
-//! bare `z`/`Z` placed mid-string vs at the end, abbreviations drawn from
-//! `TIMEZONE_ABBREVS`, and case-mangled IANA names. A quarter of inputs stay
-//! the raw bytes so the tokenizer reject paths keep their coverage.
+//! The interesting surface is the *offset tokenizer*. On the first ASCII
+//! alphabetic character `tokenize_timezone` pushes the entire remainder of the
+//! string as a single `TzName` and returns, so everything after a letter is
+//! folded into the name rather than tokenized. Two consequences shape this
+//! generator: fuzzing the POSIX DST-rule grammar is dead weight, and only
+//! inputs whose letters come *last* get both halves of the string tokenized.
+//! Everything else flows through `parse_num`, which splits long all-digit runs
+//! into `[..hhhh]mm` chunks unless a `:` is present, plus the
+//! punctuation-as-`Delim` handling and the `z`/`Z`-only-at-end rule.
+//! `build_timezone_offset_second` then matches the token stream against a table
+//! of `±H[H][:M[M][:S[S]]]` / `±HH H` / `TzName` / `Zulu` shapes and enforces
+//! the `hour<=15`, `min<60`, `sec<60` bounds.
+//!
+//! So we generate inputs that stress exactly that math: long all-digit runs
+//! (`+00000100`, `+0000001:000001`), runs long enough to overflow the `u64`
+//! parse, the hour/min/sec boundaries (`+15:59:59`, `+16`, `+0:60`), the
+//! colon-vs-no-colon `split_nums` toggle, *interior* punctuation, a `z`/`Z`
+//! after digits, abbreviations from `TIMEZONE_ABBREVS` placed after an offset
+//! so both halves tokenize, and case-mangled IANA names. A quarter of inputs
+//! stay the raw bytes so the tokenizer reject paths keep their coverage.
+//!
+//! NOTE: two of the twelve entries in that format table, `[±, Num, Num, Num]`,
+//! are unreachable. `parse_num` is the only thing that pushes `Num` and it
+//! pushes at most two per digit run, while every other tokenizer arm pushes a
+//! separator, `Zulu`, or `TzName` in between, so no input yields three
+//! consecutive `Num` tokens. The widest all-digit offset (`+00000100`) matches
+//! the three-token `[Plus, Num, Num]` shape instead.
 
 #![no_main]
 
@@ -36,38 +48,49 @@ use mz_pgtz::timezone::{Timezone, TimezoneSpec};
 
 /// IANA names exercising fractional-hour offsets and DST, in canonical casing.
 /// `gen_named` may re-case them to hit the case-insensitive lookup path.
+/// `posixrules` is not a chrono-tz zone, so it covers the reject path.
 const NAMED: &[&str] = &[
     "UTC",
     "GMT",
     "America/New_York",
     "Europe/London",
-    "Asia/Kolkata",          // :30 offset
-    "Australia/Lord_Howe",   // :30 offset with DST
-    "Pacific/Chatham",       // :45 offset
+    "Asia/Kolkata",        // :30 offset
+    "Australia/Lord_Howe", // :30 offset with DST
+    "Pacific/Chatham",     // :45 offset
     "America/Argentina/Buenos_Aires",
     "Etc/GMT+12",
     "posixrules",
 ];
 
 /// A spread of abbreviations from `TIMEZONE_ABBREVS`: fixed-offset ones, DST
-/// ones, and ones that alias to a `Tz`, so the abbrev lookup + fallback to
-/// `Tz::from_str_insensitive` both run. `EST`/`PST`/... also double as the
-/// leading `std` name of a POSIX-looking string (whose offset tail is what the
-/// tokenizer actually keeps).
+/// ones, and ones that alias to a `Tz`, so the abbrev lookup and its fallback
+/// to `Tz::from_str_insensitive` both run. `WEST` is the one entry absent from
+/// `src/pgtz/tznames/Default`, so it drives the miss-then-fallback-then-reject
+/// path.
 const ABBREVS: &[&str] = &[
-    "EST", "EDT", "PST", "PDT", "CST", "CDT", "MST", "MDT", "CET", "CEST", "EET",
-    "EEST", "BST", "IST", "JST", "ACDT", "ACST", "AEST", "AEDT", "NZST", "NZDT",
-    "CHADT", "CHAST", "HKT", "WET", "WEST", "UCT", "ZULU", "GMT", "UTC",
+    "EST", "EDT", "PST", "PDT", "CST", "CDT", "MST", "MDT", "CET", "CEST", "EET", "EEST", "BST",
+    "IST", "JST", "ACDT", "ACST", "AEST", "AEDT", "NZST", "NZDT", "CHADT", "CHAST", "HKT", "WET",
+    "WEST", "UCT", "ZULU", "GMT", "UTC",
 ];
+
+/// ASCII whitespace and punctuation, which the tokenizer trims at the edges of
+/// the string and turns into a `Delim` in the interior. Deliberately excludes
+/// `+`/`-`, the two characters the trimming closure spares.
+const JUNK: &[char] = &[' ', '!', '?', '.', ',', '*', '/', '#', '~', '\t'];
 
 /// Emit a numeric UTC offset, biased toward the tokenizer/builder boundaries:
 /// `z`/`Z`, `±HH`, `±HH:MM`, `±HH:MM:SS`, long all-digit runs that `parse_num`
-/// must chunk, and the exact `hour<=15` / `min<60` / `sec<60` edges.
+/// must chunk or fail to parse, and the exact `hour<=15` / `min<60` / `sec<60`
+/// edges.
+///
+/// Every shape but the bare `z`/`Z` ends in a digit. Callers that append more
+/// text must check for that, since a trailing letter would make the tokenizer
+/// fold the whole string into one `TzName`.
 fn gen_offset(u: &mut Unstructured, out: &mut String) -> arbitrary::Result<()> {
-    match u.int_in_range(0u8..=8)? {
+    match u.int_in_range(0u8..=9)? {
         // Bare Zulu (only valid at end-of-string).
         0 => {
-            out.push(if u.ratio(1, 2)? { 'z' } else { 'Z' });
+            out.push(zulu(u)?);
             return Ok(());
         }
         // Hour at/around the `<= 15` boundary.
@@ -104,11 +127,12 @@ fn gen_offset(u: &mut Unstructured, out: &mut String) -> arbitrary::Result<()> {
             }
             out.push_str(&u.int_in_range(0u32..=999)?.to_string());
         }
-        // Colon-delimited long all-digit runs (colon disables `split_nums`),
-        // e.g. `+0000001:000001:000001`.
+        // Colon-delimited long all-digit runs (a colon disables `split_nums`),
+        // e.g. `+0000001:000001:000001`. At least two parts: a single part emits
+        // no colon at all and degenerates into the arm above.
         5 => {
             out.push(sign(u)?);
-            let parts = u.int_in_range(1u8..=3)?;
+            let parts = u.int_in_range(2u8..=3)?;
             for p in 0..parts {
                 if p > 0 {
                     out.push(':');
@@ -118,6 +142,22 @@ fn gen_offset(u: &mut Unstructured, out: &mut String) -> arbitrary::Result<()> {
                     out.push('0');
                 }
                 out.push_str(&u.int_in_range(0u32..=99)?.to_string());
+            }
+        }
+        // A digit run long enough to overflow the `u64` parse in `parse_num`.
+        // The run must start nonzero: leading zeros accumulate to zero and never
+        // overflow, however long the padding. `parse_num` parses the whole run
+        // when a colon is present (`split_nums` off, overflowing past 20 digits)
+        // and the run minus its last two digits otherwise, so this range
+        // straddles both thresholds.
+        6 => {
+            out.push(sign(u)?);
+            let digits = u.int_in_range(18u32..=24)?;
+            for _ in 0..digits {
+                out.push(*u.choose(&['1', '8', '9'])?);
+            }
+            if u.ratio(1, 2)? {
+                out.push_str(":00");
             }
         }
         // Ordinary `±HH[:MM[:SS]]` across the full valid range.
@@ -142,6 +182,10 @@ fn sign(u: &mut Unstructured) -> arbitrary::Result<char> {
     Ok(if u.ratio(1, 2)? { '+' } else { '-' })
 }
 
+fn zulu(u: &mut Unstructured) -> arbitrary::Result<char> {
+    Ok(if u.ratio(1, 2)? { 'z' } else { 'Z' })
+}
+
 /// Emit an IANA name, sometimes case-mangled to hit `from_str_insensitive`.
 fn gen_named(u: &mut Unstructured, out: &mut String) -> arbitrary::Result<()> {
     let name = *u.choose(NAMED)?;
@@ -163,40 +207,77 @@ fn gen_named(u: &mut Unstructured, out: &mut String) -> arbitrary::Result<()> {
     Ok(())
 }
 
-/// Wrap an inner spec in leading/trailing whitespace and ASCII punctuation,
-/// which the tokenizer trims (except `+`/`-`) or treats as `Delim`. This keeps
-/// the `" ! ? ! - 5:15 ? ! ? "`-style paths covered.
-fn gen_punct_wrapped(u: &mut Unstructured, out: &mut String) -> arbitrary::Result<()> {
-    const JUNK: &[char] = &[' ', '!', '?', '.', ',', '*', '/', '#', '~', '\t'];
-    let lead = u.int_in_range(0u8..=3)?;
-    for _ in 0..lead {
+/// Emit an offset whose components are separated by *interior* punctuation,
+/// e.g. `+05!30` or `-12.30`.
+///
+/// Interior placement is what makes this arm distinct: the tokenizer trims
+/// leading and trailing whitespace and punctuation, so an offset merely
+/// *bracketed* in junk is byte-identical to the bare offset by the time it is
+/// tokenized, and yields no `Delim` at all. Empty components put two separators
+/// back to back, producing the odd token streams that match no format at all
+/// (`-5::15` gives `[Dash, Num, Colon, Colon, Num]`), which drives the
+/// mismatch/reset arm of `build_timezone_offset_second`.
+fn gen_punct_delimited(u: &mut Unstructured, out: &mut String) -> arbitrary::Result<()> {
+    // Leading junk is trimmed away, so keep it rare, just enough to cover the
+    // trimming closure itself.
+    if u.ratio(1, 4)? {
         out.push(*u.choose(JUNK)?);
     }
-    gen_offset(u, out)?;
-    let trail = u.int_in_range(0u8..=3)?;
-    for _ in 0..trail {
-        out.push(*u.choose(JUNK)?);
+    out.push(sign(u)?);
+    let parts = u.int_in_range(2u8..=4)?;
+    for p in 0..parts {
+        if p > 0 {
+            // `:` keeps `split_nums` disabled, JUNK yields a `Delim`.
+            if u.ratio(1, 3)? {
+                out.push(':');
+            } else {
+                out.push(*u.choose(JUNK)?);
+            }
+        }
+        if u.ratio(7, 8)? {
+            out.push_str(&u.int_in_range(0u32..=99)?.to_string());
+        }
     }
     Ok(())
 }
 
 fn gen_tz(u: &mut Unstructured, out: &mut String) -> arbitrary::Result<()> {
-    match u.int_in_range(0u8..=6)? {
+    match u.int_in_range(0u8..=9)? {
         0 => gen_named(u, out)?,
         1 => out.push_str(u.choose(ABBREVS)?),
-        2 | 3 => gen_offset(u, out)?,
-        4 => gen_punct_wrapped(u, out)?,
-        // An abbreviation immediately followed by an offset: the tokenizer keeps
-        // the abbrev as a `TzName` and returns, so the offset tail is ignored,
-        // but this still stresses the "first alpha wins" early return.
-        5 => {
-            out.push_str(u.choose(ABBREVS)?);
+        2 | 3 | 4 => {
             gen_offset(u, out)?;
+            // A `z`/`Z` after digits is the only shape that reaches the
+            // `parse_num` call in the tokenizer's Zulu arm with digits pending,
+            // e.g. `+05:30z` -> `[Plus, Num, Colon, Num, Zulu]`. Appending it to
+            // a bare `z` offset would instead just build a two-letter `TzName`.
+            if out.ends_with(|c: char| c.is_ascii_digit()) && u.ratio(1, 4)? {
+                out.push(zulu(u)?);
+            }
         }
-        // A bare `z`/`Z` placed *before* more text, so it is NOT at end-of-string
-        // and must be tokenized as a `TzName`, not `Zulu`.
+        5 | 6 => gen_punct_delimited(u, out)?,
+        // An offset, a delimiter, then an abbreviation, e.g. `+05:30 EST` ->
+        // `[Plus, Num, Colon, Num, Delim, TzName("EST")]`. The letters have to
+        // come last for both halves to tokenize, and this reaches a `Delim`, a
+        // short `TzName`, and a six-token stream in one input.
+        7 | 8 => {
+            gen_offset(u, out)?;
+            if out.ends_with(|c: char| c.is_ascii_digit()) {
+                out.push(*u.choose(JUNK)?);
+                out.push_str(u.choose(ABBREVS)?);
+            }
+        }
+        // Letters first, so the alphabetic branch takes the whole remaining
+        // string and the numeric tail is never tokenized: the input collapses
+        // into one long `TzName` that misses both the abbrev table and
+        // `Tz::from_str_insensitive`. Low weight, because its only marginal
+        // coverage over a bare abbreviation is a longer lookup miss.
         _ => {
-            out.push(if u.ratio(1, 2)? { 'z' } else { 'Z' });
+            if u.ratio(1, 2)? {
+                out.push_str(u.choose(ABBREVS)?);
+            } else {
+                out.push(zulu(u)?);
+            }
             gen_offset(u, out)?;
         }
     }

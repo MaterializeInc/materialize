@@ -1888,6 +1888,18 @@ impl ElementEscaper for RecordElementEscaper {
     }
 }
 
+/// Reports whether `elem` would be quoted by the list, map or record element
+/// escaper.
+///
+/// This is the union of the three, because one rendering can be nested in any of
+/// them. Returning [`Nestable::Yes`] is a promise that this is false, so a
+/// formatter's oracle can check the promise rather than restate the rules.
+pub fn element_needs_escaping(elem: &[u8]) -> bool {
+    ListElementEscaper::needs_escaping(elem)
+        || MapElementEscaper::needs_escaping(elem)
+        || RecordElementEscaper::needs_escaping(elem)
+}
+
 /// Escapes a list, record, or map element in place.
 ///
 /// The element must start at `start` and extend to the end of the buffer. The

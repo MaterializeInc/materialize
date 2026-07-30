@@ -909,6 +909,9 @@ impl FixedSizeCodec<Interval> for PackedInterval {
 
 #[cfg(test)]
 mod test {
+    use mz_ore::assert_ok;
+    use mz_proto::protobuf_roundtrip;
+
     use super::*;
     use proptest::prelude::*;
 
@@ -1340,5 +1343,19 @@ mod test {
         proptest!(|(interval in any::<Vec<Interval>>())| {
             sort_intervals(interval);
         });
+    }
+
+    // `Interval` <-> `ProtoInterval` is a field-for-field copy today, so this only
+    // bites once the two structs drift: a field added to `Interval` but not carried
+    // through `ProtoInterval` silently decodes as that field's default. NOTE: the
+    // guard is blind unless `Interval::arbitrary` also generates the new field, so
+    // extend the strategy alongside the field.
+    proptest! {
+        #[mz_ore::test]
+        fn interval_protobuf_roundtrip(expect in any::<Interval>()) {
+            let actual = protobuf_roundtrip::<_, ProtoInterval>(&expect);
+            assert_ok!(actual);
+            assert_eq!(actual.unwrap(), expect);
+        }
     }
 }

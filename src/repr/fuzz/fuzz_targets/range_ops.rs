@@ -27,8 +27,8 @@
 
 use libfuzzer_sys::arbitrary::{self, Unstructured};
 use libfuzzer_sys::fuzz_target;
-use mz_repr::adt::range::{Range, RangeBound};
 use mz_repr::Datum;
+use mz_repr::adt::range::{Range, RangeBound};
 
 // None = infinite bound. Some((inclusive, value)) = finite bound.
 type BoundSpec = Option<(bool, i32)>;
@@ -78,11 +78,7 @@ fn check(a: Range<Datum<'static>>, b: Range<Datum<'static>>, elem: i32) {
             "union must contain both operands"
         );
     }
-    assert_eq!(
-        a.union(&b),
-        b.union(&a),
-        "union must be commutative"
-    );
+    assert_eq!(a.union(&b), b.union(&a), "union must be commutative");
     if let Ok(uaa) = a.union(&a) {
         assert_eq!(uaa, a, "union must be idempotent (a ∪ a == a)");
     }
@@ -107,10 +103,7 @@ fn check(a: Range<Datum<'static>>, b: Range<Datum<'static>>, elem: i32) {
     // --- Difference algebra: a ∖ b ⊆ a and disjoint from b. ---------------
     if let Ok(diff) = a.difference(&b) {
         let diff = to_static(diff);
-        assert!(
-            a.contains_range(&diff),
-            "a ∖ b must be a subset of a"
-        );
+        assert!(a.contains_range(&diff), "a ∖ b must be a subset of a");
         assert!(
             diff.intersection(&b).inner.is_none(),
             "a ∖ b must be disjoint from b"
