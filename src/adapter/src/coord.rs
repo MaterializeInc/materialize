@@ -1733,6 +1733,10 @@ impl ExecuteContext {
     /// (possibly wrapped in a new `ExecuteContext`) is passed back to the coordinator for
     /// eventual retirement. The returned response barriers must stay attached
     /// to the user-visible response path.
+    ///
+    /// The returned parts lose the `Drop` backstop that answers the client on shutdown, so they
+    /// must not be held across an await point. A bare `ClientTransmitter` panics when dropped
+    /// unsent.
     pub fn into_parts(
         mut self,
     ) -> (
@@ -1755,26 +1759,23 @@ impl ExecuteContext {
     /// Retire the execution, by sending a message to the coordinator.
     #[instrument(level = "debug")]
     pub fn retire(mut self, result: Result<ExecuteResponse, AdapterError>) {
-        let ExecuteContextInner {
-            tx,
-            internal_cmd_tx,
-            session,
-            extra,
-            response_barriers,
-        } = *self.inner.take().expect("only consumed by value");
+        let response_barriers = std::mem::take(&mut self.response_barriers);
         if response_barriers.is_empty() {
+            let (tx, internal_cmd_tx, session, extra, _) = self.into_parts();
             retire_execution_context(tx, internal_cmd_tx, session, extra, result);
-        } else {
-            spawn(
-                || "execute_context::retire_after_response_barriers",
-                async move {
-                    for barrier in response_barriers {
-                        barrier.await;
-                    }
-                    retire_execution_context(tx, internal_cmd_tx, session, extra, result);
-                },
-            );
+            return;
         }
+        // Keep `self` intact across the wait: if shutdown drops this task, the context's `Drop`
+        // backstop answers the client. Barriers are empty on re-entry, so this terminates.
+        spawn(
+            || "execute_context::retire_after_response_barriers",
+            async move {
+                for barrier in response_barriers {
+                    barrier.await;
+                }
+                self.retire(result);
+            },
+        );
     }
 
     /// Delays sending this statement's response until `barrier` resolves.
@@ -5515,6 +5516,46 @@ pub(crate) fn infer_sql_type_for_catalog(
     let mut typ = hir_expr.top_level_typ();
     typ.backport_nullability_and_keys(&mir_expr.typ());
     typ
+}
+
+#[cfg(test)]
+mod execute_context_tests {
+    use tokio::sync::{mpsc, oneshot};
+
+    use super::*;
+    use crate::session::Session;
+    use crate::util::ClientTransmitter;
+
+    /// Runtime shutdown drops the barrier-waiting task that `retire` spawns. The context's `Drop`
+    /// backstop must answer the client, rather than panicking on an unsent `ClientTransmitter`.
+    #[mz_ore::test]
+    fn test_retire_answers_client_when_runtime_shuts_down() {
+        let runtime = tokio::runtime::Runtime::new().expect("can build runtime");
+
+        let (client_tx, mut client_rx) = oneshot::channel();
+        let (internal_cmd_tx, _internal_cmd_rx) = mpsc::unbounded_channel();
+
+        runtime.block_on(async {
+            let ctx = ExecuteContext::from_parts_with_response_barriers(
+                ClientTransmitter::new(client_tx, internal_cmd_tx.clone()),
+                internal_cmd_tx,
+                Session::dummy(),
+                ExecuteContextGuard::default(),
+                // Stands in for a group commit that shutdown will never apply.
+                vec![Box::pin(std::future::pending())],
+            );
+            ctx.retire(Ok(ExecuteResponse::StartedTransaction));
+        });
+
+        drop(runtime);
+
+        let response = client_rx.try_recv().expect("client must be answered");
+        assert!(
+            matches!(response.result, Err(AdapterError::Internal(_))),
+            "expected an internal error, got {:?}",
+            response.result
+        );
+    }
 }
 
 #[cfg(test)]
