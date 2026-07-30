@@ -25,8 +25,8 @@ use tokio::sync::mpsc;
 use crate::PeekResponseUnary;
 use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribe};
 use crate::catalog::Catalog;
-use crate::coord::appends::WriteResult;
 use crate::coord::Coordinator;
+use crate::coord::appends::WriteResult;
 use crate::error::AdapterError;
 
 /// Adds `id` to the worklist the first time it is seen, enforcing the

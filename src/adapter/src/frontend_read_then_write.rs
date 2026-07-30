@@ -171,10 +171,22 @@ impl FrontendWriteAttemptState {
 
 /// What the OCC loop produced.
 enum OccOutcome {
-    /// The write is durable at `write_ts`, or there was nothing to write.
+    /// The write is durable at `write_ts`.
     Committed {
         response: ExecuteResponse,
-        write_ts: Option<Timestamp>,
+        write_ts: Timestamp,
+    },
+    /// The selection was empty, so there was nothing to write.
+    ///
+    /// `observed_ts` is the timestamp emptiness was concluded at, and is
+    /// `None` only when the selection reads no persisted state. When it is
+    /// `Some`, the caller must linearize against it before responding: the
+    /// subscribe follows Persist, which runs ahead of the oracle, so the
+    /// emptiness can be concluded from state no oracle-timestamped read can
+    /// reach yet.
+    NoRowsMatched {
+        response: ExecuteResponse,
+        observed_ts: Option<Timestamp>,
     },
     /// Diffs from a selection that reads no persisted state. The subscribe ran
     /// to completion, so they are frontier-independent and the caller chooses
@@ -505,10 +517,26 @@ impl PeekClient {
         // waiting for our write to commit.
         let response = match result {
             Ok(OccOutcome::Committed { response, write_ts }) => {
-                if let Some(write_ts) = write_ts {
-                    session.apply_write(write_ts);
-                }
+                session.apply_write(write_ts);
                 Ok(response)
+            }
+            Ok(OccOutcome::NoRowsMatched {
+                response,
+                observed_ts,
+            }) => {
+                // A write would have linearized this for us, because group
+                // commit advances the oracle before it answers. With nothing
+                // to write we have to do it ourselves, or we report an empty
+                // selection from state a later strict-serializable read cannot
+                // see yet, and that read finds the rows we said were not
+                // there.
+                match observed_ts {
+                    Some(observed_ts) => self
+                        .ensure_read_linearized(&timeline, observed_ts)
+                        .await
+                        .map(|()| response),
+                    None => Ok(response),
+                }
             }
             Ok(OccOutcome::Blind { response, diffs }) => {
                 match self
@@ -840,8 +868,10 @@ impl PeekClient {
     /// are frontier-independent. Those are returned as [`OccOutcome::Blind`]
     /// for the caller to submit or buffer, and this never writes them.
     ///
-    /// Read linearization is the caller's responsibility: `as_of` must
-    /// already be linearized (oracle read_ts >= `as_of`) on entry. See
+    /// Read linearization is the caller's responsibility, on both ends.
+    /// `as_of` must already be linearized (oracle read_ts >= `as_of`) on
+    /// entry, and an [`OccOutcome::NoRowsMatched`] carrying an `observed_ts`
+    /// must be linearized against it before the response goes out. See
     /// `ensure_read_linearized` at the call site.
     ///
     /// Returns `(retry_count, result)` so the caller can record OCC retry
@@ -893,9 +923,9 @@ impl PeekClient {
                     // flatten to `Timestamp::MIN` for `consolidate_updates`.
                     state.consolidate(Timestamp::MIN);
                     if state.all_diffs.is_empty() {
-                        break Ok(OccOutcome::Committed {
+                        break Ok(OccOutcome::NoRowsMatched {
                             response: build_no_rows_response(&kind),
-                            write_ts: None,
+                            observed_ts: None,
                         });
                     }
                     let success_response = match self.build_success_response(
@@ -940,10 +970,10 @@ impl PeekClient {
                                     &table_desc,
                                 ) {
                                     ProcessResult::Continue { .. } => {}
-                                    ProcessResult::NoRowsMatched => {
-                                        break Some(Ok(OccOutcome::Committed {
+                                    ProcessResult::NoRowsMatched { observed_ts } => {
+                                        break Some(Ok(OccOutcome::NoRowsMatched {
                                             response: build_no_rows_response(&kind),
-                                            write_ts: None,
+                                            observed_ts: Some(observed_ts),
                                         }));
                                     }
                                     ProcessResult::Error(e) => {
@@ -1036,7 +1066,7 @@ impl PeekClient {
                             // fires off the cleanup message.
                             break Ok(OccOutcome::Committed {
                                 response: success_response,
-                                write_ts: Some(timestamp),
+                                write_ts: timestamp,
                             });
                         }
                         WriteOutcome::Failed(err) => break Err(err),
@@ -1085,10 +1115,10 @@ impl PeekClient {
                         }
                     }
                 }
-                ProcessResult::NoRowsMatched => {
-                    break Ok(OccOutcome::Committed {
+                ProcessResult::NoRowsMatched { observed_ts } => {
+                    break Ok(OccOutcome::NoRowsMatched {
                         response: build_no_rows_response(&kind),
-                        write_ts: None,
+                        observed_ts: Some(observed_ts),
                     });
                 }
                 ProcessResult::Error(e) => {
@@ -1314,8 +1344,13 @@ impl OccState {
 
 /// Result of processing a single subscribe message in the OCC loop.
 enum ProcessResult {
-    Continue { ready_to_write: bool },
-    NoRowsMatched,
+    Continue {
+        ready_to_write: bool,
+    },
+    /// The consolidated selection is empty as of `observed_ts`.
+    NoRowsMatched {
+        observed_ts: Timestamp,
+    },
     Error(AdapterError),
 }
 
@@ -1398,7 +1433,7 @@ fn process_message(
                     // `src/adapter/src/active_compute_sink.rs` for
                     // the emission order.
                     if ts > as_of && state.all_diffs.is_empty() {
-                        return ProcessResult::NoRowsMatched;
+                        return ProcessResult::NoRowsMatched { observed_ts: ts };
                     }
                 } else {
                     let Some(diff_datum) = datums.next() else {
