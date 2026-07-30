@@ -483,9 +483,9 @@ impl Coordinator {
         let features =
             OptimizerFeatures::from(self.catalog().system_config()).override_from(&config.features);
 
-        let cardinality_stats = self
-            .explain_cardinality_stats(session, &stage, &optimizer_trace)
-            .await;
+        // A view is not a dataflow and has no cluster, so no stage reaches a global plan here and
+        // there is nothing to attribute statistics to.
+        let cardinality_stats = BTreeMap::new();
 
         let rows = optimizer_trace
             .into_rows(

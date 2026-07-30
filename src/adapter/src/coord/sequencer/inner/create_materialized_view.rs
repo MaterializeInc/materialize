@@ -312,7 +312,9 @@ impl Coordinator {
                 };
                 // The rest of EXPLAIN runs without statistics. This stage needs them, because
                 // the row term is the whole point of the bound.
-                let stats = self.dataflow_cardinality_stats(ctx.session(), &plan).await;
+                let stats = self
+                    .dataflow_cardinality_stats(ctx.session(), &plan, view.cluster_id)
+                    .await;
                 let rows = crate::explain::memory_bound_rows(plan, &features, stats)?;
                 return Ok(Self::send_immediate_rows(rows));
             }
@@ -981,7 +983,7 @@ impl Coordinator {
             .override_from(&config.features);
 
         let cardinality_stats = self
-            .explain_cardinality_stats(session, &stage, &optimizer_trace)
+            .explain_cardinality_stats(session, &stage, &optimizer_trace, cluster_id)
             .await;
 
         let rows = optimizer_trace

@@ -657,7 +657,7 @@ impl Coordinator {
             .override_from(&config.features);
 
         let cardinality_stats = self
-            .explain_cardinality_stats(session, &stage, &optimizer_trace)
+            .explain_cardinality_stats(session, &stage, &optimizer_trace, cluster_id)
             .await;
 
         let rows = optimizer_trace

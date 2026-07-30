@@ -2517,29 +2517,38 @@ impl Coordinator {
         session: &Session,
         stage: &ExplainStage,
         optimizer_trace: &OptimizerTrace,
+        cluster_id: ClusterId,
     ) -> BTreeMap<GlobalId, usize> {
         if !matches!(stage, ExplainStage::MemoryBound) {
             return BTreeMap::new();
         }
         match optimizer_trace.collect_global_plan() {
-            Some(plan) => self.dataflow_cardinality_stats(session, &plan).await,
+            Some(plan) => {
+                self.dataflow_cardinality_stats(session, &plan, cluster_id)
+                    .await
+            }
             // A pipeline that never reached the global stage, for instance under `EXPLAIN BROKEN`,
             // has no leaves to attribute statistics to.
             None => BTreeMap::new(),
         }
     }
 
-    /// Row counts for the persist-backed leaves of `plan`.
+    /// Row counts for the leaves of `plan`, as the plan's own cluster sees them.
     ///
     /// Gated on `enable_session_cardinality_estimates`, so it costs nothing by default, and
     /// degrades to no statistics rather than failing the EXPLAIN. An input reached through an
     /// index still has statistics on the object the index is built on, so both import kinds
     /// contribute. Taking only `source_imports` misses every dataflow whose inputs happen to be
     /// indexed, which is most of them.
+    ///
+    /// `cluster_id` must be the cluster the plan will run on. Index-derived counts are
+    /// cluster-scoped, since a view indexed only on another cluster is inlined here and
+    /// contributes no `Get` to attribute a count to.
     pub(super) async fn dataflow_cardinality_stats(
         &self,
         session: &Session,
         plan: &DataflowDescription<OptimizedMirRelationExpr>,
+        cluster_id: ClusterId,
     ) -> BTreeMap<GlobalId, usize> {
         let source_ids = plan
             .source_imports
@@ -2548,7 +2557,7 @@ impl Coordinator {
             .chain(plan.index_imports.values().map(|import| import.desc.on_id))
             .collect();
         let as_of = Antichain::from_elem(mz_repr::Timestamp::MIN);
-        self.statistics_oracle(session, &source_ids, &as_of, true)
+        self.statistics_oracle(session, &source_ids, &as_of, true, cluster_id)
             .await
             .map_or_else(|_| BTreeMap::new(), |oracle| oracle.as_map())
     }
