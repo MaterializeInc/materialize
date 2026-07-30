@@ -18,6 +18,8 @@ If freshness is worse than expected, see [Freshness
 troubleshooting](/transform-data/freshness-troubleshooting/) to diagnose and
 resolve the cause.
 
+## Track freshness over time
+
 To track freshness for a specific object over time, query its wallclock lag
 history. The following query returns the last 6 hours of wallclock lag for a
 materialized view (replace `<your_mv_name>` with the name of your object):
