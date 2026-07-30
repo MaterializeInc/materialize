@@ -2641,7 +2641,7 @@ impl Coordinator {
                 .catalog()
                 .state()
                 .get_indexes_on(relation, cluster_id)
-                .map(|(index_id, index)| (index_id, index.keys.clone()))
+                .map(|(index_id, index)| (index_id, Arc::clone(&index.keys)))
                 .collect();
             for (index_id, keys) in candidates {
                 let Some(stats) = snapshot.get(&index_id) else {

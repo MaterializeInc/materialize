@@ -398,7 +398,12 @@ mod column_width {
                     match rows {
                         Ok(rows) => {
                             for (row, _diff) in rows {
-                                for (slot, datum) in out.iter_mut().zip(row.iter()) {
+                                // Indexed rather than zipped: a row shorter than the arity
+                                // would silently leave the tail columns claiming zero.
+                                for (col, datum) in row.iter().enumerate() {
+                                    let Some(slot) = out.get_mut(col) else {
+                                        break;
+                                    };
                                     let width = datums_size(std::iter::once(datum));
                                     *slot = Some(slot.unwrap_or(0).max(width));
                                 }

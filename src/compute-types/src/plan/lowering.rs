@@ -466,7 +466,7 @@ impl Context {
         };
         let mir_bounds = self
             .node_bounds_for_object
-            .get(&(expr as *const MirRelationExpr as usize))
+            .get(&std::ptr::from_ref(expr).addr())
             .cloned();
         if let Some((_bounds, collected)) = self.node_bounds.as_mut() {
             let mut bounds = mir_bounds.unwrap_or_default();

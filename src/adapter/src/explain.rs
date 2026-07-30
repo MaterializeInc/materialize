@@ -184,7 +184,7 @@ pub(crate) fn memory_bound_rows(
             // same way lines addresses up with results positionally.
             let mut order = Vec::with_capacity(estimates.len());
             root.visit_post(&mut |node: &mz_expr::MirRelationExpr| {
-                order.push(node as *const mz_expr::MirRelationExpr as usize);
+                order.push(std::ptr::from_ref(node).addr());
             });
             // A length mismatch would mean the traversals disagree, and pairing them anyway
             // would attribute one node's bound to another. Better no bounds than wrong ones,
