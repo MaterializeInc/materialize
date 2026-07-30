@@ -67,6 +67,88 @@ query has a large impact on performance.
 
 {{< /note >}}
 
+### Summarize freshness with a CCDF
+
+A raw lag time series is hard to summarize. A **complementary cumulative
+distribution function (CCDF)** compresses a whole window of lag observations
+into a single curve that answers one question: for a given lag threshold `X`,
+what fraction of the time was the object's lag at or above `X`? It is the
+complement of the ordinary cumulative distribution, so `CCDF(X) = 1 - CDF(X)`.
+
+This is the compact way to describe a freshness distribution. Instead of staring
+at a time series, you can make statements like "lag exceeded 10 seconds only 1%
+of the time". Because latency spans many orders of magnitude, the threshold is
+bucketed on a log scale so the tail (the rare, large lags you care about most)
+stays visible.
+
+The following query builds a freshness CCDF for a single object from the last 24
+hours of history. It reads the fast, indexed
+`mz_internal.mz_wallclock_global_lag_recent_history`, buckets each observation on
+a log scale (100 buckets per doubling of lag), and then sums the tail of the
+histogram to produce `(lag_threshold_seconds, fraction_of_time_at_or_above)`
+pairs. Replace `<your_mv_name>` with the name of your object:
+
+```mzsql
+WITH lags AS (
+    -- Convert each lag to seconds, dropping unhydrated (NULL) observations and
+    -- any non-positive lag, since the log scale is undefined at or below zero.
+    SELECT extract(epoch FROM wl.lag) AS lag_seconds
+    FROM mz_internal.mz_wallclock_global_lag_recent_history wl
+    JOIN mz_catalog.mz_objects o ON wl.object_id = o.id
+    WHERE o.name = '<your_mv_name>'
+      AND wl.lag IS NOT NULL
+      AND wl.lag > INTERVAL '0'
+),
+histogram AS (
+    -- Log-scale bucket, labeled back in seconds: 100 buckets per doubling of lag.
+    SELECT
+        pow(2.0, round(100 * log(2, lag_seconds)) / 100.0) AS lag_bucket,
+        count(*) AS frequency
+    FROM lags
+    GROUP BY 1
+)
+SELECT
+    h.lag_bucket AS lag_threshold_seconds,
+    sum(g.frequency)::float8
+        / (SELECT sum(frequency) FROM histogram) AS fraction_of_time_at_or_above
+FROM histogram g, histogram h
+WHERE g.lag_bucket >= h.lag_bucket   -- complement: sum the tail at or above the threshold
+GROUP BY h.lag_bucket
+ORDER BY h.lag_bucket;
+```
+
+The log-scale bucketing is the same idea as the HDR histogram in the
+[Percentile calculation](/transform-data/patterns/percentiles/) pattern, and the
+final cross join is the same cumulative transform, flipped from `<=` to `>=` so
+it sums the tail rather than the head. The cross join is quadratic in the number
+of buckets, but the log bucketing keeps the bucket count small, so this stays
+cheap. To get a single global curve or a per-cluster curve, drop the object
+filter and add the grouping columns you want.
+
+{{< note >}}
+
+How to read and use a freshness CCDF:
+
+- The **x-axis is the lag threshold** in seconds, on a log scale. The **y-axis
+  is the fraction of the window** the object spent at or above that lag.
+
+- A **healthy** object produces a curve that drops off early and hugs low lag
+  values. Almost all of the time, lag is small. An **unhealthy** object produces
+  a long, flat tail that extends into minutes or hours, meaning the object is
+  frequently far behind.
+
+- To use it against an SLO, pick your target lag (say 10 seconds) and read the
+  fraction of time at or above it. That fraction is how often you were violating
+  the SLO over the window.
+
+- Exclude or expect a few artifacts. NULL lag rows are unhydrated observations
+  and are already filtered out above. If a spurious shelf appears far out at
+  roughly `1.76e9` seconds (about 56 years), it comes from unhydrated
+  collections reported at the Unix epoch. Filter it out (for example with `AND
+  wl.lag < INTERVAL '1 year'`) so it does not distort the curve.
+
+{{< /note >}}
+
 ## Check materialization lag
 
 ### Step 1. Find lagging object(s)
