@@ -10,12 +10,16 @@
 mode cockroach
 
 # `EXPLAIN MEMORY BOUND` factors its bound into arrangements * width * rows. The first
-# two need no statistics and are exact, so they are what this file pins down. The row
-# and byte columns need cardinality statistics, which stay unavailable here because
-# `enable_session_cardinality_estimates` is off by default. Enabling it would make
-# those columns depend on persist statistics arriving inside the optimizer's timeout,
-# the same race that keeps `cardinality.slt` halted, so they are asserted as NULL
-# rather than turned into a flake.
+# two need no statistics and are exact. The row and byte columns need cardinality
+# statistics, which the CI configuration supplies by defaulting
+# `enable_memory_bound_cardinality_estimates` on. That flag collects statistics for this
+# stage only, so it neither moves a join order nor makes any other query in the session
+# await persist.
+#
+# The fixtures are deliberately tiny, two and three rows, so the statistics they depend
+# on are available immediately. Should this ever flake on a loaded machine the failure is
+# a NULL where a number is expected, which is a visible mismatch rather than a silently
+# wrong bound.
 
 statement ok
 CREATE TABLE t (a INT NOT NULL, b INT NOT NULL)
@@ -41,16 +45,16 @@ INSERT INTO s VALUES ('a'), ('b')
 query ITIIIIIT
 EXPLAIN MEMORY BOUND FOR SELECT a, count(*) FROM t GROUP BY a
 ----
-1  Get  0  5  0  NULL  NULL  NULL
-2  Reduce␠(accumulable,␠1␠aggregates)  2  14  364  NULL  NULL  NULL
+1  Get  0  5  0  3  0  NULL
+2  Reduce␠(accumulable,␠1␠aggregates)  2  14  364  3  1092  NULL
 
 # A `text` column has no static size ceiling, so the width and every column derived
 # from it must be NULL rather than a number that does not bound anything.
 query ITIIIIIT
 EXPLAIN MEMORY BOUND FOR SELECT k, count(*) FROM s GROUP BY k
 ----
-1  Get  0  NULL  0  NULL  NULL  NULL
-2  Reduce␠(accumulable,␠1␠aggregates)  2  NULL  NULL  NULL  NULL  NULL
+1  Get  0  NULL  0  2  0  NULL
+2  Reduce␠(accumulable,␠1␠aggregates)  2  NULL  NULL  2  NULL  NULL
 
 # A constant needs no statistics to settle its row count, so this is the one shape whose
 # row column is populated even with cardinality estimates off.
@@ -65,11 +69,11 @@ EXPLAIN MEMORY BOUND FOR SELECT 1
 query ITIIIIIT
 EXPLAIN MEMORY BOUND FOR SELECT t.a, u.y FROM t, u WHERE t.a = u.x
 ----
-1  Get  0  5  0  NULL  NULL  NULL
-2  ArrangeBy␠(1␠forms)  1  5  37  NULL  NULL  may␠reuse␠an␠already-available␠arrangement
-3  Get  0  10  0  NULL  NULL  NULL
-4  ArrangeBy␠(1␠forms)  1  10  42  NULL  NULL  may␠reuse␠an␠already-available␠arrangement
-5  Differential␠Join␠(1␠stages)  0  10  0  NULL  NULL  assumes␠the␠source␠arrangement␠is␠available
+1  Get  0  5  0  3  0  NULL
+2  ArrangeBy␠(1␠forms)  1  5  37  3  111  may␠reuse␠an␠already-available␠arrangement
+3  Get  0  10  0  2  0  NULL
+4  ArrangeBy␠(1␠forms)  1  10  42  2  84  may␠reuse␠an␠already-available␠arrangement
+5  Differential␠Join␠(1␠stages)  0  10  0  6  0  assumes␠the␠source␠arrangement␠is␠available
 
 # A materialized view's input is not monotonic, so `max` lowers to the bucket hierarchy.
 # The level count comes from `bucketing_of_expected_group_size`, which yields 7 rather
@@ -80,8 +84,8 @@ CREATE MATERIALIZED VIEW mv_max AS SELECT a, max(b) FROM t GROUP BY a
 query ITIIIIIT
 EXPLAIN MEMORY BOUND FOR MATERIALIZED VIEW mv_max
 ----
-1  Get  0  10  0  NULL  NULL  NULL
-2  Reduce␠(hierarchical,␠7␠levels)  16  10  672  NULL  NULL  NULL
+1  Get  0  10  0  3  0  NULL
+2  Reduce␠(hierarchical,␠7␠levels)  16  10  672  3  2016  NULL
 
 # An `OFFSET` with no `LIMIT` skips the bucket hierarchy entirely, so it must not be
 # charged for the levels a `LIMIT` would build. In a one-shot peek `OFFSET` is applied by
@@ -93,8 +97,8 @@ CREATE MATERIALIZED VIEW mv_offset AS SELECT * FROM (SELECT * FROM t ORDER BY a 
 query ITIIIIIT
 EXPLAIN MEMORY BOUND FOR MATERIALIZED VIEW mv_offset
 ----
-1  Get  0  10  0  NULL  NULL  NULL
-2  TopK␠(0␠levels)  2  10  84  NULL  NULL  NULL
+1  Get  0  10  0  3  0  NULL
+2  TopK␠(0␠levels)  2  10  84  3  252  NULL
 
 statement ok
 CREATE INDEX t_a ON t (a)
@@ -102,5 +106,5 @@ CREATE INDEX t_a ON t (a)
 query ITIIIIIT
 EXPLAIN MEMORY BOUND FOR INDEX t_a
 ----
-1  Get  0  10  0  NULL  NULL  NULL
-2  ArrangeBy␠(1␠forms)  1  10  42  NULL  NULL  may␠reuse␠an␠already-available␠arrangement
+1  Get  0  10  0  3  0  NULL
+2  ArrangeBy␠(1␠forms)  1  10  42  3  126  may␠reuse␠an␠already-available␠arrangement

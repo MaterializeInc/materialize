@@ -2455,6 +2455,10 @@ static SESSION_SYSTEM_VARS: LazyLock<BTreeMap<&'static UncasedStr, &'static VarD
             &TIMEZONE,
             &TRANSACTION_ISOLATION,
             &MAX_QUERY_RESULT_SIZE,
+            // Needs a system default so the CI configuration can turn it on for the whole
+            // suite. Without membership here `ALTER SYSTEM SET` and
+            // `--system-parameter-default` are silently accepted and have no effect.
+            &ENABLE_MEMORY_BOUND_CARDINALITY_ESTIMATES,
         ]
         .into_iter()
         .map(|var| (UncasedStr::new(var.name()), var))
