@@ -1271,66 +1271,6 @@ class InsertReturningAction(Action):
         exe.insert_table = table.table_id
         return True
 
-
-class InsertSelectAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
-        result = super().errors_to_ignore(exe)
-        result.extend(
-            [
-                # A random source expression can evaluate to NULL even for a
-                # NOT NULL target column, a legitimate rejection.
-                "violates not-null constraint",
-                "canceling statement due to statement timeout",
-            ]
-        )
-        if exe.db.complexity == Complexity.DDL:
-            result.extend(
-                [
-                    "does not exist",
-                ]
-            )
-        return result
-
-    def run(self, exe: Executor) -> bool:
-        # Temp tables can only be written by their creating session, and
-        # other sessions' temp tables cannot be read either.
-        tables = [
-            table
-            for table in exe.db.tables
-            if not table.temp or table in exe.temp_objects
-        ]
-        writable = [table for table in tables if table.num_rows < MAX_ROWS]
-        if not writable:
-            return False
-        table = self.rng.choice(writable)
-        source_table = self.rng.choice(tables)
-        limit = self.rng.randint(0, min(100, MAX_ROWS - table.num_rows))
-        column_names = ", ".join(column.name(True) for column in table.columns)
-        # Cast each projection to its target column's type. INSERT .. SELECT
-        # requires the projection to assignment-cast to the target, and a few
-        # types (notably bytea) come back from expression() as a bare text
-        # literal that has no text->target assignment cast.
-        select_exprs = ", ".join(
-            "({})::{}".format(
-                expression(
-                    column.data_type,
-                    source_table.columns,
-                    self.rng,
-                    kind=ExprKind.WRITE,
-                ),
-                column.data_type.name(),
-            )
-            for column in table.columns
-        )
-        query = f"INSERT INTO {table} ({column_names}) SELECT {select_exprs} FROM {source_table} LIMIT {limit}"
-        exe.execute(query, http=Http.RANDOM)
-        # The actual count depends on the source table's size, LIMIT is an
-        # upper bound. Overestimating num_rows is fine, it only gates further
-        # inserts.
-        table.num_rows += limit
-        return True
-
-
 class CopyToStdoutAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = super().errors_to_ignore(exe)
