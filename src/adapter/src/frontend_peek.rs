@@ -860,7 +860,10 @@ impl PeekClient {
         // Snapshot the oracle before it moves into the optimizer task. `EXPLAIN MEMORY BOUND`
         // needs the same row counts the optimizer saw, and re-querying persist afterwards would
         // both cost a second round trip and risk disagreeing with the plan being explained.
-        let cardinality_stats = stats.as_map();
+        let cardinality_stats = crate::explain::MemoryBoundStats {
+            rows: stats.as_map(),
+            arrangements: (*self.index_arrangement_stats.snapshot()).clone(),
+        };
 
         // Generate data structures that can be moved to another task where we will perform possibly
         // expensive optimizations.

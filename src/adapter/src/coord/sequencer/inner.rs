@@ -114,6 +114,7 @@ use crate::coord::{
     WatchSetResponse, validate_ip_with_policy_rules,
 };
 use crate::error::AdapterError;
+use crate::explain::MemoryBoundStats;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::{AdapterNotice, DroppedInUseIndex};
 use crate::optimize::dataflows::{EvalTime, ExprPrep, ExprPrepOneShot};
@@ -2518,9 +2519,9 @@ impl Coordinator {
         stage: &ExplainStage,
         optimizer_trace: &OptimizerTrace,
         cluster_id: ClusterId,
-    ) -> BTreeMap<GlobalId, usize> {
+    ) -> MemoryBoundStats {
         if !matches!(stage, ExplainStage::MemoryBound) {
-            return BTreeMap::new();
+            return MemoryBoundStats::default();
         }
         match optimizer_trace.collect_global_plan() {
             Some(plan) => {
@@ -2529,7 +2530,7 @@ impl Coordinator {
             }
             // A pipeline that never reached the global stage, for instance under `EXPLAIN BROKEN`,
             // has no leaves to attribute statistics to.
-            None => BTreeMap::new(),
+            None => MemoryBoundStats::default(),
         }
     }
 
@@ -2549,9 +2550,9 @@ impl Coordinator {
         session: &Session,
         plan: &DataflowDescription<OptimizedMirRelationExpr>,
         cluster_id: ClusterId,
-    ) -> BTreeMap<GlobalId, usize> {
+    ) -> MemoryBoundStats {
         if !session.vars().enable_memory_bound_cardinality_estimates() {
-            return BTreeMap::new();
+            return MemoryBoundStats::default();
         }
         let source_ids = plan
             .source_imports
@@ -2563,9 +2564,14 @@ impl Coordinator {
         // Forced, because this stage's whole output is the bound. The session flag above is
         // the gate; `enable_session_cardinality_estimates` governs query optimization and
         // is deliberately not consulted here.
-        self.statistics_oracle(session, &source_ids, &as_of, true, cluster_id, true)
+        let rows = self
+            .statistics_oracle(session, &source_ids, &as_of, true, cluster_id, true)
             .await
-            .map_or_else(|_| BTreeMap::new(), |oracle| oracle.as_map())
+            .map_or_else(|_| BTreeMap::new(), |oracle| oracle.as_map());
+        MemoryBoundStats {
+            rows,
+            arrangements: (*self.index_arrangement_stats.snapshot()).clone(),
+        }
     }
 
     pub(super) async fn sequence_explain_pushdown(

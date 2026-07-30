@@ -14,10 +14,11 @@
 //! struct in order to provide alternate [`mz_repr::explain::Explain`]
 //! implementations for some structs (see the [`mir`]) module for details.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::plan::IndexKeyBound;
 use mz_expr::explain::ExplainContext;
 use mz_repr::GlobalId;
 use mz_repr::explain::{Explain, ExplainConfig, ExplainError, ExplainFormat, ExprHumanizer};
@@ -26,6 +27,7 @@ use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
 
 use crate::AdapterError;
+use crate::index_arrangement_stats::ArrangementStats;
 
 pub(crate) mod fast_path;
 pub(crate) mod hir;
@@ -119,6 +121,78 @@ where
     Ok(Explainable::new(&mut plan).explain(&format, &context)?)
 }
 
+/// Statistics `EXPLAIN MEMORY BOUND` needs to populate its row and byte columns.
+///
+/// Empty for every other stage, and empty is always sound: it leaves those columns unknown
+/// rather than guessing.
+#[derive(Debug, Default, Clone)]
+pub struct MemoryBoundStats {
+    /// Row counts, keyed by the relation they describe.
+    pub rows: BTreeMap<GlobalId, usize>,
+    /// Arrangement statistics, keyed by the index that maintains them.
+    pub arrangements: BTreeMap<GlobalId, ArrangementStats>,
+}
+
+/// Distinct-key bounds per relation, from the dataflow's own index imports.
+///
+/// A relation's key columns take at most as many distinct values as an index over them
+/// reports keys, so this tightens a `Reduce` whose group key those columns cover. Lowering
+/// matches the columns against plan shape; deciding which reports to trust is this
+/// function's job.
+///
+/// Two reports are declined rather than approximated:
+///
+/// * An index whose key is not a list of plain columns. Matching an expression key would
+///   mean comparing it against the group key's expressions, which lowering does not attempt.
+/// * An index that has not caught up with its relation, judged by comparing the records it
+///   holds against the relation's row count. **A hydrating index reports fewer keys than its
+///   collection holds**, and an under-count would understate a memory bound, which is the
+///   direction that ends in an out-of-memory kill. A relation with no row count of its own
+///   gives nothing to compare against, so it is declined too.
+fn index_key_bounds(
+    dataflow: &mz_compute_types::dataflows::DataflowDescription<mz_expr::OptimizedMirRelationExpr>,
+    stats: &std::collections::BTreeMap<mz_repr::GlobalId, usize>,
+    index_stats: &std::collections::BTreeMap<mz_repr::GlobalId, ArrangementStats>,
+) -> BTreeMap<mz_repr::GlobalId, Vec<IndexKeyBound>> {
+    use mz_ore::cast::CastFrom;
+
+    let mut bounds: BTreeMap<_, Vec<_>> = BTreeMap::new();
+    for (index_id, import) in &dataflow.index_imports {
+        let Some(arrangement) = index_stats.get(index_id) else {
+            continue;
+        };
+        let Some(relation_rows) = stats.get(&import.desc.on_id).copied().map(u64::cast_from) else {
+            continue;
+        };
+        if arrangement.records < relation_rows {
+            continue;
+        }
+        let mut key_columns = BTreeSet::new();
+        for key in &import.desc.key {
+            match key {
+                mz_expr::MirScalarExpr::Column(col, _) => {
+                    key_columns.insert(*col);
+                }
+                _ => {
+                    key_columns.clear();
+                    break;
+                }
+            }
+        }
+        if key_columns.is_empty() {
+            continue;
+        }
+        bounds
+            .entry(import.desc.on_id)
+            .or_default()
+            .push(IndexKeyBound {
+                key_columns,
+                distinct_keys: arrangement.distinct_keys,
+            });
+    }
+    bounds
+}
+
 /// Renders the static memory bound for each node of a physical plan.
 ///
 /// Takes the optimized MIR rather than the lowered plan, because the widths need each node's
@@ -128,13 +202,16 @@ where
 pub(crate) fn memory_bound_rows(
     dataflow: mz_compute_types::dataflows::DataflowDescription<mz_expr::OptimizedMirRelationExpr>,
     features: &mz_repr::optimize::OptimizerFeatures,
-    stats: std::collections::BTreeMap<mz_repr::GlobalId, usize>,
+    stats: MemoryBoundStats,
 ) -> Result<Vec<mz_repr::Row>, AdapterError> {
     use mz_compute_types::plan::LirRelationExpr;
     use mz_compute_types::plan::arrangement_count::Caveat;
     use mz_compute_types::plan::memory_bound::{bytes_per_row, node_label, nodes_by_id};
     use mz_ore::cast::CastFrom;
     use mz_repr::{Datum, Row};
+
+    let index_key_bounds = index_key_bounds(&dataflow, &stats.rows, &stats.arrangements);
+    let stats = stats.rows;
 
     // Sound upper bound rather than the heuristic estimate: an underestimate here would
     // understate the memory a plan needs, which is the dangerous direction.
@@ -160,6 +237,7 @@ pub(crate) fn memory_bound_rows(
         features,
         None,
         Some(row_bound),
+        index_key_bounds,
     )
     .map_err(|e| AdapterError::Internal(format!("cannot lower plan: {e}")))?;
 

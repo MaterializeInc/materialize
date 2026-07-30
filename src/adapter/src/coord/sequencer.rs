@@ -1190,7 +1190,7 @@ pub(crate) async fn explain_plan_inner(
     explain_ctx: ExplainPlanContext,
     optimizer: peek::Optimizer,
     insights_ctx: Option<Box<PlanInsightsContext>>,
-    cardinality_stats: BTreeMap<GlobalId, usize>,
+    cardinality_stats: crate::explain::MemoryBoundStats,
 ) -> Result<Vec<Row>, AdapterError> {
     let ExplainPlanContext {
         config,

@@ -485,7 +485,7 @@ impl Coordinator {
 
         // A view is not a dataflow and has no cluster, so no stage reaches a global plan here and
         // there is nothing to attribute statistics to.
-        let cardinality_stats = BTreeMap::new();
+        let cardinality_stats = crate::explain::MemoryBoundStats::default();
 
         let rows = optimizer_trace
             .into_rows(

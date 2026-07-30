@@ -39,7 +39,7 @@ use crate::plan::transform::{Transform, TransformConfig};
 
 mod lowering;
 
-pub use lowering::RowBoundFn;
+pub use lowering::{IndexKeyBound, RowBoundFn};
 
 pub mod arrangement_count;
 pub mod interpret;
@@ -763,6 +763,7 @@ impl LirRelationExpr {
         features: &OptimizerFeatures,
         metrics: Option<&LoweringMetrics>,
         row_bound: Option<RowBoundFn>,
+        index_key_bounds: BTreeMap<GlobalId, Vec<IndexKeyBound>>,
     ) -> Result<
         (
             DataflowDescription<Self>,
@@ -772,7 +773,7 @@ impl LirRelationExpr {
         String,
     > {
         let (dataflow, types, bounds) =
-            Self::lower_dataflow_inner(desc, features, metrics, true, row_bound)?;
+            Self::lower_dataflow_inner(desc, features, metrics, true, row_bound, index_key_bounds)?;
         let types = types.expect("collection requested");
         Ok((
             Self::finalize_lowered(dataflow)?,
@@ -795,7 +796,7 @@ impl LirRelationExpr {
         metrics: Option<&LoweringMetrics>,
     ) -> Result<DataflowDescription<Self>, String> {
         let (dataflow, _types, _bounds) =
-            Self::lower_dataflow_inner(desc, features, metrics, false, None)?;
+            Self::lower_dataflow_inner(desc, features, metrics, false, None, BTreeMap::new())?;
         Ok(dataflow)
     }
 
@@ -805,6 +806,7 @@ impl LirRelationExpr {
         metrics: Option<&LoweringMetrics>,
         collect_node_types: bool,
         row_bound: Option<RowBoundFn>,
+        index_key_bounds: BTreeMap<GlobalId, Vec<IndexKeyBound>>,
     ) -> Result<
         (
             DataflowDescription<Self>,
@@ -819,6 +821,7 @@ impl LirRelationExpr {
         }
         if let Some(row_bound) = row_bound {
             context.collect_row_bounds(row_bound);
+            context.set_index_key_bounds(index_key_bounds);
         }
         let (dataflow, types, bounds) = context.lower_collecting(desc)?;
 

@@ -9,7 +9,6 @@
 
 //! Tracing utilities for explainable plans.
 
-use std::collections::BTreeMap;
 use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
@@ -24,7 +23,7 @@ use mz_repr::explain::{
     Explain, ExplainConfig, ExplainError, ExplainFormat, ExprHumanizer, UsedIndexes,
 };
 use mz_repr::optimize::OptimizerFeatures;
-use mz_repr::{Datum, GlobalId, Row};
+use mz_repr::{Datum, Row};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::plan::{self, HirRelationExpr, HirScalarExpr};
 use mz_sql_parser::ast::{ExplainStage, NamedPlan};
@@ -134,9 +133,8 @@ impl OptimizerTrace {
     /// Convert the optimizer trace into a vector or rows that can be returned
     /// to the client.
     ///
-    /// `cardinality_stats` maps a source or index-backing collection to its row count. Only
-    /// [`ExplainStage::MemoryBound`] reads it; every other stage may pass an empty map. An empty
-    /// map is always sound, it just leaves the estimated columns unknown.
+    /// Only [`ExplainStage::MemoryBound`] reads `cardinality_stats`; every other stage may pass
+    /// the default. Empty is always sound, it just leaves the estimated columns unknown.
     pub async fn into_rows(
         self,
         format: ExplainFormat,
@@ -149,7 +147,7 @@ impl OptimizerTrace {
         stage: ExplainStage,
         stmt_kind: plan::ExplaineeStatementKind,
         insights_ctx: Option<Box<PlanInsightsContext>>,
-        cardinality_stats: BTreeMap<GlobalId, usize>,
+        cardinality_stats: crate::explain::MemoryBoundStats,
     ) -> Result<Vec<Row>, AdapterError> {
         let collect_all = |format| {
             self.collect_all(

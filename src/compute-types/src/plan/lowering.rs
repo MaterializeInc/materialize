@@ -109,6 +109,26 @@ pub(super) struct Context {
     /// into. Retaining the MIR form here lets it find common parts without
     /// round-tripping the LIR plans back through MIR.
     source_get_mfps: BTreeMap<LirId, MfpPlan<MirScalarExpr>>,
+    /// Distinct-key bounds available on each relation, from indexes over it.
+    ///
+    /// Empty unless a caller supplies them. Used only to tighten a `Reduce`'s row bound.
+    index_key_bounds: BTreeMap<GlobalId, Vec<IndexKeyBound>>,
+}
+
+/// An upper bound on the distinct values a relation's key columns jointly take.
+///
+/// The caller vets these before supplying them, since an index that is still hydrating
+/// reports fewer keys than its collection holds, and an under-count would understate a
+/// memory bound rather than overstate it.
+#[derive(Debug, Clone)]
+pub struct IndexKeyBound {
+    /// Columns of the indexed relation that the index is keyed on.
+    ///
+    /// A set rather than a sequence: key order decides arrangement layout, not how many
+    /// distinct tuples the key takes.
+    pub key_columns: BTreeSet<usize>,
+    /// Upper bound on distinct tuples over `key_columns`.
+    pub distinct_keys: u64,
 }
 
 impl Context {
@@ -133,6 +153,7 @@ impl Context {
             single_time: false,
             source_imports: Default::default(),
             source_get_mfps: Default::default(),
+            index_key_bounds: Default::default(),
         }
     }
 
@@ -150,6 +171,14 @@ impl Context {
     /// Requests that lowering record a row bound for every node it produces.
     pub fn collect_row_bounds(&mut self, bound: RowBoundFn) {
         self.row_bound = Some((bound, BTreeMap::new()));
+    }
+
+    /// Supplies per-relation distinct-key bounds for tightening reduce row bounds.
+    ///
+    /// Only consulted while a row bound is being collected. The caller owns deciding which
+    /// counts are trustworthy; this only matches them against plan shape.
+    pub fn set_index_key_bounds(&mut self, bounds: BTreeMap<GlobalId, Vec<IndexKeyBound>>) {
+        self.index_key_bounds = bounds;
     }
 
     /// Requests that lowering record the output type of every node it produces.
@@ -410,12 +439,81 @@ impl Context {
                 types.insert(lir_id, typ);
             }
         }
+        // Computed before the mutable borrow below, and only when bounds are wanted.
+        let index_bound = if self.row_bound.is_some() {
+            self.index_derived_row_bound(expr)
+        } else {
+            None
+        };
         if let Some((bound, collected)) = self.row_bound.as_mut() {
-            if let Some(rows) = bound(expr) {
+            let rows = match (bound(expr), index_bound) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (Some(a), None) | (None, Some(a)) => Some(a),
+                (None, None) => None,
+            };
+            if let Some(rows) = rows {
                 collected.insert(lowered.plan.lir_id, rows);
             }
         }
         Ok(lowered)
+    }
+
+    /// An upper bound on a `Reduce`'s output rows, drawn from an index over its input.
+    ///
+    /// A reduce emits one row per distinct group key, so an index whose key columns are a
+    /// **superset** of the group key bounds the output: projecting columns away from a set of
+    /// distinct tuples can only merge them, never create new ones.
+    ///
+    /// The direction matters and is not symmetric. A key that is a strict *subset* of the
+    /// group key bounds nothing, because one key value can carry arbitrarily many distinct
+    /// group-key tuples. Accepting that case would understate the rows, and understating is
+    /// what turns a memory bound into an out-of-memory kill rather than a wasted reservation.
+    ///
+    /// The bound describes the indexed collection, not the path the reduce reads it by, so it
+    /// applies whether or not the plan happens to read through that index.
+    fn index_derived_row_bound(&self, expr: &MirRelationExpr) -> Option<u64> {
+        if self.index_key_bounds.is_empty() {
+            return None;
+        }
+        let MirRelationExpr::Reduce {
+            input, group_key, ..
+        } = expr
+        else {
+            return None;
+        };
+        // Only an index over the reduce's own input can bound it. Carrying the fact further
+        // would have to survive a join or a union, which is deliberately not attempted.
+        let (mfp, inner) = MapFilterProject::extract_from_expression(input);
+        let MirRelationExpr::Get {
+            id: Id::Global(gid),
+            ..
+        } = inner
+        else {
+            return None;
+        };
+        let candidates = self.index_key_bounds.get(gid)?;
+
+        // Re-express the group key in the indexed relation's own columns. Anything that is
+        // not a straight column reference is declined rather than approximated: a computed
+        // group key would have to be matched against the index's expressions, and a mapped
+        // column does not exist in the indexed relation at all.
+        let mut group_columns = BTreeSet::new();
+        for key in group_key {
+            let MirScalarExpr::Column(col, _) = key else {
+                return None;
+            };
+            let base = *mfp.projection.get(*col)?;
+            if base >= mfp.input_arity {
+                return None;
+            }
+            group_columns.insert(base);
+        }
+
+        candidates
+            .iter()
+            .filter(|candidate| group_columns.is_subset(&candidate.key_columns))
+            .map(|candidate| candidate.distinct_keys)
+            .min()
     }
 
     fn lower_mir_expr_stack_safe(&mut self, expr: &MirRelationExpr) -> Result<LoweredExpr, String> {
