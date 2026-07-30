@@ -215,9 +215,10 @@ impl ArmedPools {
 
 /// Runs the GCP node upgrade watcher forever. Errors are logged and retried.
 ///
-/// Never returns. Dropping this future stops all of its work: it spawns no
-/// tasks, so it is safe to run under a leadership lease, which it must be,
-/// since it triggers rollouts and only one replica may do that.
+/// Never returns. Dropping this future aborts all of its work, which it must,
+/// since it triggers rollouts and only the replica holding the leadership
+/// lease may do that. The abort is not synchronous with the drop: a task
+/// caught mid-poll runs until its next await point.
 pub async fn run(client: Client, config: Config) {
     info!(
         subscription = config.notification_subscription,
@@ -231,13 +232,23 @@ pub async fn run(client: Client, config: Config) {
 
     let gcp = Arc::new(GcpApiClient::new().await);
 
-    // The subscriber is polled inline rather than spawned, so that dropping
-    // this future stops it too. A subscriber that outlived it would keep
-    // pulling notifications, and acking them, out from under whichever
-    // replica holds the lease next.
+    // The two loops run as separate tasks, so that they are scheduled
+    // independently and neither can hold the other's poll up. Their handles
+    // are held here and abort the tasks when dropped, so neither loop
+    // outlives this future. A subscriber that did would keep pulling
+    // notifications, and acking them, out from under whichever replica holds
+    // the lease next.
     future::join(
-        subscriber_loop(Arc::clone(&gcp), config.clone(), Arc::clone(&armed)),
-        scan_loop(client, gcp, config, armed),
+        mz_ore::task::spawn(
+            || "gcp node upgrade notification subscriber",
+            subscriber_loop(Arc::clone(&gcp), config.clone(), Arc::clone(&armed)),
+        )
+        .abort_on_drop(),
+        mz_ore::task::spawn(
+            || "gcp node upgrade scan",
+            scan_loop(client, gcp, config, armed),
+        )
+        .abort_on_drop(),
     )
     .await;
 }

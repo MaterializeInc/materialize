@@ -860,24 +860,46 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             // `with_lease` polls this future only once it holds the lease, so
             // building the controllers here, rather than passing them in, ties
             // both them and the metric to the moment leadership is acquired.
+            //
+            // Each of them runs as its own task, so that they are scheduled
+            // independently and none can hold up the poll of the others, or of
+            // the lease renewal that `with_lease` runs alongside them. Their
+            // handles abort the tasks when dropped, so that none of them
+            // outlives the lease.
             let controllers = Box::pin(leader_election.with_lease(async {
                 metrics.leadership_acquired();
                 join4(
-                    make_materialize_controller().run(),
-                    make_balancer_controller().run(),
-                    make_console_controller().run(),
-                    make_gcp_node_upgrade_watcher(),
+                    mz_ore::task::spawn(
+                        || "materialize controller",
+                        make_materialize_controller().run(),
+                    )
+                    .abort_on_drop(),
+                    mz_ore::task::spawn(|| "balancer controller", make_balancer_controller().run())
+                        .abort_on_drop(),
+                    mz_ore::task::spawn(|| "console controller", make_console_controller().run())
+                        .abort_on_drop(),
+                    mz_ore::task::spawn(
+                        || "gcp node upgrade watcher",
+                        make_gcp_node_upgrade_watcher(),
+                    )
+                    .abort_on_drop(),
                 )
                 .await
             }));
             match select(controllers, pin!(sigterm.recv())).await {
                 Either::Left((None, _)) => {
-                    // Losing the lease dropped the futures above, which cancels
-                    // the in-flight reconciliations and the node upgrade watch.
-                    // Both are polled inline rather than spawned, so no work
-                    // outlives the lease and we can rejoin the election in
-                    // process instead of restarting. Staying up keeps this
-                    // replica serving the conversion webhook.
+                    // Losing the lease dropped the handles above, which aborts
+                    // the in-flight reconciliations and the node upgrade watch,
+                    // so we can rejoin the election in process instead of
+                    // restarting. Staying up keeps this replica serving the
+                    // conversion webhook.
+                    //
+                    // An aborted task runs until its next await point, so a
+                    // reconciliation can still finish a request it had already
+                    // issued. That is within the margin the lease timings
+                    // leave: the renew deadline is shorter than the lease
+                    // duration, so we give leadership up before another
+                    // candidate is allowed to take the lease over.
                     //
                     // The leader-only gauges describe what this replica saw
                     // while it was reconciling, and this process outlives its
@@ -897,10 +919,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                     std::process::exit(1);
                 }
                 Either::Right((_, controllers)) => {
-                    // Stop reconciling before releasing the lease, so that no
-                    // reconciliation outlives our leadership. Releasing hands
-                    // leadership over immediately rather than making the other
-                    // replicas wait for the lease to expire.
+                    // Abort the controllers before releasing the lease, so that
+                    // reconciliation stops before another replica picks
+                    // leadership up. Releasing hands leadership over
+                    // immediately rather than making the other replicas wait
+                    // for the lease to expire.
                     drop(controllers);
                     // The webhook keeps serving for a while below, so this
                     // replica is still scraped after it stops reconciling.
