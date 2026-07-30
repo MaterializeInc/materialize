@@ -58,6 +58,7 @@ mz_comments_ind  CREATE␠INDEX␠"mz_comments_ind"␠IN␠CLUSTER␠[s2]␠ON�
 mz_compute_dataflow_global_ids_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_compute_dataflow_global_ids_per_worker_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_compute_dataflow_global_ids_per_worker"␠("id",␠"worker_id",␠"global_id")
 mz_compute_dependencies_ind  CREATE␠INDEX␠"mz_compute_dependencies_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s739␠AS␠"mz_internal"."mz_compute_dependencies"]␠("dependency_id")
 mz_compute_error_counts_raw_s2_primary_idx  CREATE␠INDEX␠"mz_compute_error_counts_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_compute_error_counts_raw"␠("export_id",␠"worker_id")
+mz_compute_export_arrangements_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_compute_export_arrangements_per_worker_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_compute_export_arrangements_per_worker"␠("export_id",␠"worker_id")
 mz_compute_exports_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_compute_exports_per_worker_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_compute_exports_per_worker"␠("export_id",␠"worker_id")
 mz_compute_frontiers_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_compute_frontiers_per_worker_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_compute_frontiers_per_worker"␠("export_id",␠"worker_id")
 mz_compute_hydration_times_ind  CREATE␠INDEX␠"mz_compute_hydration_times_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s748␠AS␠"mz_internal"."mz_compute_hydration_times"]␠("replica_id")
@@ -84,7 +85,7 @@ mz_message_batch_counts_received_raw_s2_primary_idx  CREATE␠INDEX␠"mz_messag
 mz_message_batch_counts_sent_raw_s2_primary_idx  CREATE␠INDEX␠"mz_message_batch_counts_sent_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_message_batch_counts_sent_raw"␠("channel_id",␠"from_worker_id",␠"to_worker_id")
 mz_message_counts_received_raw_s2_primary_idx  CREATE␠INDEX␠"mz_message_counts_received_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_message_counts_received_raw"␠("channel_id",␠"from_worker_id",␠"to_worker_id")
 mz_message_counts_sent_raw_s2_primary_idx  CREATE␠INDEX␠"mz_message_counts_sent_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_message_counts_sent_raw"␠("channel_id",␠"from_worker_id",␠"to_worker_id")
-mz_notices_ind  CREATE␠INDEX␠"mz_notices_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s833␠AS␠"mz_internal"."mz_notices"]␠("id")
+mz_notices_ind  CREATE␠INDEX␠"mz_notices_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s835␠AS␠"mz_internal"."mz_notices"]␠("id")
 mz_object_arrangement_size_history_object_ind  CREATE␠INDEX␠"mz_object_arrangement_size_history_object_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s751␠AS␠"mz_internal"."mz_object_arrangement_size_history"]␠("object_id")
 mz_object_arrangement_size_history_ts_ind  CREATE␠INDEX␠"mz_object_arrangement_size_history_ts_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s751␠AS␠"mz_internal"."mz_object_arrangement_size_history"]␠("collection_timestamp")
 mz_object_arrangement_sizes_ind  CREATE␠INDEX␠"mz_object_arrangement_sizes_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s749␠AS␠"mz_internal"."mz_object_arrangement_sizes"]␠("replica_id")
@@ -334,6 +335,9 @@ mz_compute_dependencies  object_id
 mz_compute_error_counts_raw  count
 mz_compute_error_counts_raw  export_id
 mz_compute_error_counts_raw  worker_id
+mz_compute_export_arrangements_per_worker  export_id
+mz_compute_export_arrangements_per_worker  operator_id
+mz_compute_export_arrangements_per_worker  worker_id
 mz_compute_exports_per_worker  dataflow_id
 mz_compute_exports_per_worker  export_id
 mz_compute_exports_per_worker  worker_id

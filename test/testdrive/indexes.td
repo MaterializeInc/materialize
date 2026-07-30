@@ -315,6 +315,7 @@ mz_comments_ind                                             mz_comments         
 mz_compute_dependencies_ind                                 mz_compute_dependencies                      mz_catalog_server    {dependency_id}                             ""
 mz_compute_dataflow_global_ids_per_worker_s2_primary_idx   mz_compute_dataflow_global_ids_per_worker     mz_catalog_server    {id,worker_id,global_id}                   ""
 mz_compute_error_counts_raw_s2_primary_idx                  mz_compute_error_counts_raw                  mz_catalog_server    {export_id,worker_id}                       ""
+mz_compute_export_arrangements_per_worker_s2_primary_idx    mz_compute_export_arrangements_per_worker    mz_catalog_server    {export_id,worker_id}                       ""
 mz_compute_exports_per_worker_s2_primary_idx                mz_compute_exports_per_worker                mz_catalog_server    {export_id,worker_id}                       ""
 mz_compute_frontiers_per_worker_s2_primary_idx              mz_compute_frontiers_per_worker              mz_catalog_server    {export_id,worker_id}                       ""
 mz_compute_hydration_times_ind                              mz_compute_hydration_times                   mz_catalog_server    {replica_id}                                ""

@@ -1240,6 +1240,8 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17104  mz_cluster_auto_scaling_strategies_ind
 17105  parse_postgres_source_details
 17106  parse_kafka_source_details
-17107  mz_arrangement_distinct_keys_raw
-17108  mz_arrangement_distinct_keys_per_worker
-17109  mz_arrangement_distinct_keys
+17107  mz_compute_export_arrangements_per_worker
+17108  mz_compute_export_arrangements
+17109  mz_arrangement_distinct_keys_raw
+17110  mz_arrangement_distinct_keys_per_worker
+17111  mz_arrangement_distinct_keys

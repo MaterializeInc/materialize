@@ -752,6 +752,7 @@ mz_arrangement_records_raw                   log   <null>    ""
 mz_arrangement_sharing_raw                   log   <null>    ""
 mz_compute_dataflow_global_ids_per_worker    log   <null>    ""
 mz_compute_error_counts_raw                  log   <null>    ""
+mz_compute_export_arrangements_per_worker    log   <null>    ""
 mz_compute_exports_per_worker                log   <null>    ""
 mz_compute_frontiers_per_worker              log   <null>    ""
 mz_compute_hydration_times_per_worker        log   <null>    ""
@@ -784,6 +785,7 @@ mz_arrangement_sizes ""
 mz_arrangement_sizes_per_worker ""
 mz_compute_error_counts ""
 mz_compute_error_counts_per_worker ""
+mz_compute_export_arrangements ""
 mz_compute_exports ""
 mz_compute_frontiers ""
 mz_compute_import_frontiers ""
@@ -837,7 +839,7 @@ test_table ""
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-278
+284
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2
