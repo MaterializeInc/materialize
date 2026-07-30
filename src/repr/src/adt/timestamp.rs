@@ -788,6 +788,10 @@ impl<T: TimestampLike> CheckedTimestamp<T> {
     }
 
     /// Rounds the timestamp to the specified number of digits of precision.
+    ///
+    /// Returns [`TimestampError::OutOfRange`] when rounding up would leave
+    /// chrono's representable range, which the last microsecond of
+    /// [`HIGH_DATE`] does for every precision.
     pub fn round_to_precision(
         &self,
         precision: Option<TimestampPrecision>,
@@ -810,7 +814,11 @@ impl<T: TimestampLike> CheckedTimestamp<T> {
         let seventh_digit = (nanoseconds % 1_000) / 100;
         assert!(seventh_digit < 10);
         if seventh_digit >= 5 {
-            original = original + Duration::microseconds(1);
+            // Checked, not `+`: on the last microsecond of `HIGH_DATE` this
+            // nudge leaves chrono's range, and chrono's `Add` panics there.
+            original = original
+                .checked_add_signed(Duration::microseconds(1))
+                .ok_or(TimestampError::OutOfRange)?;
         }
         // this is copied from [`chrono::round::duration_round`]
         // but using microseconds instead of nanoseconds precision
@@ -825,11 +833,14 @@ impl<T: TimestampLike> CheckedTimestamp<T> {
                 } else {
                     (round_to_micros - delta_down, delta_down)
                 };
+                // Both directions are checked for the same reason as the
+                // seventh-digit nudge above.
                 if delta_up <= delta_down {
-                    original + Duration::microseconds(delta_up)
+                    original.checked_add_signed(Duration::microseconds(delta_up))
                 } else {
-                    original - Duration::microseconds(delta_down)
+                    original.checked_sub_signed(Duration::microseconds(delta_down))
                 }
+                .ok_or(TimestampError::OutOfRange)?
             }
         };
 
@@ -1092,7 +1103,7 @@ fn checked_offset_with_leapsecond(lhs: &NaiveDateTime, seconds: i32) -> Option<N
 mod test {
     use super::*;
     use itertools::Itertools;
-    use mz_ore::assert_err;
+    use mz_ore::{assert_err, assert_ok};
     use proptest::prelude::*;
 
     #[mz_ore::test]
@@ -1188,6 +1199,46 @@ mod test {
             ts.round_to_precision(precision.map(TimestampPrecision))
                 .unwrap();
         }
+    }
+
+    #[mz_ore::test]
+    fn test_round_to_precision_high_date_overflow() {
+        // `HIGH_DATE` is exactly `NaiveDate::MAX`, so rounding *up* from the last
+        // fraction of that day leaves chrono's range. Both the seventh-digit
+        // nudge and the rounding branch used unchecked `+`, which panics in
+        // chrono rather than returning an error.
+        //
+        // A precision below 6 reaches this with far fewer fractional digits than
+        // the microsecond default: at precision 0 a single `.5` rounds up a whole
+        // second. Every precision is covered because each has its own quantum.
+        for (nanos, precision) in [
+            (999_999_500, None),
+            (500_000_000, Some(0)),
+            (950_000_000, Some(1)),
+            (995_000_000, Some(2)),
+            (999_500_000, Some(3)),
+            (999_950_000, Some(4)),
+            (999_995_000, Some(5)),
+            (999_999_500, Some(6)),
+        ] {
+            let ts =
+                CheckedTimestamp::try_from(HIGH_DATE.and_hms_nano_opt(23, 59, 59, nanos).unwrap())
+                    .unwrap();
+            assert!(
+                matches!(
+                    ts.round_to_precision(precision.map(TimestampPrecision)),
+                    Err(TimestampError::OutOfRange)
+                ),
+                "rounding {nanos}ns to {precision:?} should report out of range"
+            );
+        }
+
+        // The mirror case: rounding *down* stays in range, so it must still
+        // succeed rather than being caught by an over-broad check.
+        let ts =
+            CheckedTimestamp::try_from(HIGH_DATE.and_hms_nano_opt(23, 59, 59, 400_000).unwrap())
+                .unwrap();
+        assert_ok!(ts.round_to_precision(Some(TimestampPrecision(3))));
     }
 
     #[mz_ore::test]
