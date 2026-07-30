@@ -489,8 +489,45 @@ where
 ///     [ <period> [ <seconds fraction> ] ]
 /// ```
 pub fn parse_time(s: &str) -> Result<NaiveTime, ParseError> {
+    parse_time_inner(s, TimeFields::Required)
+}
+
+/// Parses a `NaiveTime` from `s`, resolving a string that names no time field at
+/// all to midnight.
+///
+/// NOTE: This exists solely to keep the storage source cast `CastStringToTime`
+/// evaluation-stable across releases (see the stability contract in
+/// `mz_storage_types::sources::casts`). Use [`parse_time`] everywhere else.
+pub fn parse_time_legacy(s: &str) -> Result<NaiveTime, ParseError> {
+    parse_time_inner(s, TimeFields::Optional)
+}
+
+/// Whether a TIME string has to name at least one time field.
+enum TimeFields {
+    /// Reject a string that names none, as PostgreSQL does.
+    Required,
+    /// Read a string that names none as midnight.
+    Optional,
+}
+
+fn parse_time_inner(s: &str, fields: TimeFields) -> Result<NaiveTime, ParseError> {
     ParsedDateTime::build_parsed_datetime_time(s)
-        .and_then(|pdt| pdt.compute_time())
+        .and_then(|pdt| {
+            // A string carrying no time field at all, `""` or `":"`, tokenizes
+            // to nothing the time grammar has to consume, so it parses without
+            // filling a single field and every field then defaults to zero.
+            // PostgreSQL rejects such a string rather than reading it as
+            // midnight. Hour, minute and second are the only fields the time
+            // grammar fills, and the only ones `compute_time` reads.
+            if matches!(fields, TimeFields::Required)
+                && pdt.hour.is_none()
+                && pdt.minute.is_none()
+                && pdt.second.is_none()
+            {
+                return Err("no time fields found".into());
+            }
+            pdt.compute_time()
+        })
         .map_err(|e| ParseError::invalid_input_syntax("time", s).with_details(e))
 }
 

@@ -1367,6 +1367,18 @@ select '9::60.1'::time
 statement error invalid input syntax for type time: HOUR must be \[0, 23\], got 24: "24:00:00"
 select '24:00:00'::time
 
+# A TIME string that names no field at all is rejected rather than read as
+# midnight, matching PostgreSQL. The storage source cast `CastStringToTime` is
+# frozen on the older lenient reading, see `mz_storage_types::sources::casts`.
+statement error invalid input syntax for type time: no time fields found: ""
+select ''::time
+
+statement error invalid input syntax for type time: no time fields found: " "
+select ' '::time
+
+statement error invalid input syntax for type time: no time fields found: ":"
+select ':'::time
+
 # BC years are properly formatted
 # Using INTERVAL to work around the parser not supporting BC identifiers yet
 query T
