@@ -477,6 +477,11 @@ where
     write!(buf, "{:04}-{}", year, d.format("%m-%d"));
     if !year_ad {
         write!(buf, " BC");
+        // The ` BC` suffix carries whitespace, which every element escaper
+        // treats as needing quotes. `Nestable::Yes` is only for renderings that
+        // can *never* need escaping, so it would be a lie here. A Common Era
+        // date is plain `YYYY-MM-DD` and keeps the cheaper answer.
+        return Nestable::MayNeedEscaping;
     }
     Nestable::Yes
 }
