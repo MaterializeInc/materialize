@@ -153,7 +153,6 @@ assert-no-tracing = ["ctor"]
 assert = ["assert-no-tracing", "ctor", "tracing"]
 proptest = ["dep:proptest", "proptest-derive"]
 overflowing = ["assert"]
-pager = ["dep:bytemuck", "libc", "rand", "dep:tracing"]
 pool = ["dep:bytemuck", "libc", "dep:tracing"]
 
 [[test]]
@@ -178,13 +177,9 @@ harness = false
 required-features = ["bytes", "region", "tracing"]
 
 [[bench]]
-name = "pager"
+name = "pool_steady_state"
 harness = false
-required-features = ["pager"]
-
-[[example]]
-name = "pager_merge"
-required-features = ["pager"]
+required-features = ["pool"]
 
 [package.metadata.cargo-udeps.ignore]
 # Only used in doc-tests.

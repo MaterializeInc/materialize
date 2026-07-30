@@ -6733,6 +6733,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-stream",
+ "bytemuck",
  "bytesize",
  "columnar",
  "columnation",
@@ -8270,6 +8271,7 @@ dependencies = [
  "bincode",
  "derivative",
  "itertools 0.14.0",
+ "lz4_flex",
  "mz-ore",
  "mz-rocksdb-types",
  "num_cpus",
@@ -9091,7 +9093,6 @@ dependencies = [
  "proptest",
  "rand 0.9.4",
  "serde",
- "tempfile",
  "timely",
  "tokio",
  "tracing",

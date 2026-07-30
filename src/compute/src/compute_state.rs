@@ -289,19 +289,6 @@ impl ComputeState {
             lgalloc::lgalloc_set_config(lgalloc::LgAlloc::new().disable());
         }
 
-        // Pager backend selection follows scratch-directory availability:
-        // a scratch dir means the file backend; no scratch dir means swap.
-        // `set_scratch_dir` and `set_backend` are both idempotent, so calling
-        // on every `apply_worker_config` tick is safe. The pager module is
-        // only compiled on Unix targets (`mz_ore::pager` is `cfg(unix)`).
-        #[cfg(unix)]
-        if let Some(path) = &self.context.scratch_directory {
-            mz_ore::pager::set_scratch_dir(path.clone());
-            mz_ore::pager::set_backend(mz_ore::pager::Backend::File);
-        } else {
-            mz_ore::pager::set_backend(mz_ore::pager::Backend::Swap);
-        }
-
         crate::memory_limiter::apply_limiter_config(config);
 
         mz_ore::region::ENABLE_LGALLOC_REGION.store(
@@ -313,52 +300,6 @@ impl ComputeState {
         // settings above, it is captured once at replica creation (see `handle_create_instance`
         // and `InstanceConfig::arrangement_dictionary_compression`) and held fixed, so that
         // flipping the flag does not retroactively change arrangements on existing replicas.
-
-        // Apply column-paged-batcher configuration. Routes through
-        // `apply_tiered_config`, which reuses a process-wide `TieredPolicy`
-        // singleton — operator-driven tunes mutate the existing atomics
-        // rather than installing a fresh policy with a fresh budget atomic
-        // that would orphan in-flight resident tickets.
-        //
-        // Backend selection mirrors the lower-level `mz_ore::pager`
-        // already configured above: file when a scratch directory is
-        // available, swap otherwise.
-        {
-            use mz_ore::pager::Backend;
-            use mz_timely_util::column_pager::{Codec, apply_tiered_config};
-
-            let enabled = ENABLE_COLUMN_PAGED_BATCHER_SPILL.get(config);
-            let codec = COLUMN_PAGED_BATCHER_LZ4.get(config).then_some(Codec::Lz4);
-            let swap_pageout = COLUMN_PAGED_BATCHER_SWAP_PAGEOUT.get(config);
-
-            // Budget derivation: fraction × announced memory limit, with a
-            // 128 MiB floor so the no-pressure case doesn't page per chunk.
-            // Falls back to a 4 GiB assumption if no limit was announced
-            // (e.g. dev environments).
-            const MIB: usize = 1024 * 1024;
-            const DEFAULT_MEM_LIMIT: usize = 4 * 1024 * MIB;
-            let mem_limit = crate::memory_limiter::get_memory_limit().unwrap_or(DEFAULT_MEM_LIMIT);
-            let fraction = COLUMN_PAGED_BATCHER_BUDGET_FRACTION.get(config).max(0.0);
-            let total = usize::cast_lossy(f64::cast_lossy(mem_limit) * fraction).max(128 * MIB);
-
-            let backend = if self.context.scratch_directory.is_some() {
-                Backend::File
-            } else {
-                Backend::Swap
-            };
-
-            debug!(
-                enabled,
-                ?backend,
-                ?codec,
-                swap_pageout,
-                fraction,
-                mem_limit,
-                budget_bytes = total,
-                "column-paged batcher: applying tiered config",
-            );
-            apply_tiered_config(enabled, total, backend, codec, swap_pageout);
-        }
 
         // Install and retune the process-wide buffer pool that backs chunk
         // spilling. Installation is the gate. The pool is constructed, and its
@@ -428,6 +369,13 @@ impl ComputeState {
                     warn!("chunk spill: buffer pool unavailable; chunks stay resident");
                 }
             }
+
+            // Compute's leg of the chunk-world spill gate: committed chunk
+            // bodies from the chunk-API batchers spill to the buffer pool
+            // while either subsystem's gate is set — storage's leg comes from
+            // `enable_upsert_paged_spill` — so each side writes only its own
+            // bit and the flags compose as an OR.
+            mz_timely_util::columnar::chunk::set_compute_spill_enabled(compute_spill);
         }
 
         // Remember the maintenance interval locally to avoid reading it from the config set on

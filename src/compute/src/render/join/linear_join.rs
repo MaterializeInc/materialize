@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
+use differential_dataflow::trace::chunk::ChunkBatcher;
 use differential_dataflow::trace::cursor::{BatchCursor, BatchKey, BatchVal};
 use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 use differential_dataflow::{AsCollection, Data, VecCollection};
@@ -30,7 +31,8 @@ use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::{Col2ValBatcher, Col2ValPagedBatcher, columnar_exchange};
+use mz_timely_util::columnar::chunk::{ChunkChunker, ColumnChunk, UnchunkBuilder};
+use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
@@ -393,9 +395,9 @@ where
             let arranged = if ENABLE_COLUMN_PAGED_BATCHER.get(&self.config_set) {
                 keyed.mz_arrange_core::<
                     _,
-                    batcher::ColumnChunker<_>,
-                    Col2ValPagedBatcher<_, _, _, _>,
-                    RowRowColPagedBuilder<_, _>,
+                    ChunkChunker<(Row, Row), T, Diff>,
+                    ChunkBatcher<ColumnChunk<(Row, Row), T, Diff>>,
+                    UnchunkBuilder<RowRowColPagedBuilder<T, Diff>, (Row, Row), T, Diff>,
                     RowRowSpine<_, _>,
                 >(exchange, "JoinStage")
             } else {
