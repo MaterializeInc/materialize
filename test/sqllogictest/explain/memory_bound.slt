@@ -108,3 +108,37 @@ EXPLAIN MEMORY BOUND FOR INDEX t_a
 ----
 1  Get  0  10  0  3  0  NULL
 2  ArrangeBy␠(1␠forms)  1  10  42  3  126  may␠reuse␠an␠already-available␠arrangement
+
+# An index over a reduce's input can bound it, because a reduce emits one row per distinct
+# group key and projecting columns off a set of distinct tuples can only merge them. The
+# cases below pin the two shapes that must NOT be bounded that way, and they are
+# deterministic whether or not the index's key count has reached the coordinator: both
+# decline, so both report the input row count either way.
+#
+# Getting this direction backwards would understate the rows rather than overstate them,
+# which is the difference between a wasted reservation and an out-of-memory kill, and no
+# amount of golden output would reveal it. Hence a test for the refusal, not just the use.
+
+statement ok
+CREATE TABLE d (g INT NOT NULL, v INT NOT NULL)
+
+statement ok
+INSERT INTO d VALUES (1, 10), (1, 20), (2, 30)
+
+statement ok
+CREATE INDEX d_g ON d (g)
+
+# Group key is a strict superset of the index key. One `g` carries arbitrarily many `(g, v)`
+# pairs, so the index bounds nothing here and the input row count stands.
+query ITIIIIIT
+EXPLAIN MEMORY BOUND FOR SELECT g, v, count(*) FROM d GROUP BY g, v
+----
+1  Get  0  10  0  3  0  NULL
+2  Reduce␠(accumulable,␠1␠aggregates)  2  19  374  3  1122  NULL
+
+# Group key the index does not cover at all.
+query ITIIIIIT
+EXPLAIN MEMORY BOUND FOR SELECT v, count(*) FROM d GROUP BY v
+----
+1  Get  0  5  0  3  0  NULL
+2  Reduce␠(accumulable,␠1␠aggregates)  2  14  364  3  1092  NULL
