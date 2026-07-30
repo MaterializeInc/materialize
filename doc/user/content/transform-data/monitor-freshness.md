@@ -75,17 +75,16 @@ query has a large impact on performance.
 A raw time series is hard to summarize. A **complementary cumulative
 distribution function (CCDF)** compresses a whole window of freshness observations
 into a single curve that answers one question: for a given threshold `X`,
-what fraction of the time was the object's freshness at or above `X`? 
+what fraction of the time was the object's freshness at or above `X`?
 
 This is the compact way to describe a freshness distribution. Instead of staring
-at a time series, you can make statements like "the p99 freshness was 1s". 
+at a time series, you can make statements like "the p99 freshness was 1s".
 
-The following query builds a freshness CCDF for a single object from the last 24
+The following query builds a freshness CCDF across every object from the last 24
 hours of history. It reads the fast, indexed
-`mz_internal.mz_wallclock_global_lag_recent_history`, buckets each observation on
-a log scale (100 buckets per doubling of lag), and then sums the tail of the
-histogram to produce `(lag_threshold_seconds, fraction_of_time_at_or_above)`
-pairs. Replace `<your_mv_name>` with the name of your object:
+`mz_internal.mz_wallclock_global_lag_recent_history`, buckets each observation
+into decade (power-of-ten) buckets, and then sums the tail of the histogram to
+produce `(lag_threshold_seconds, fraction_of_time_at_or_above)` pairs:
 
 ```mzsql
 WITH lags AS (
@@ -93,15 +92,14 @@ WITH lags AS (
     -- any non-positive lag, since the log scale is undefined at or below zero.
     SELECT extract(epoch FROM wl.lag) AS lag_seconds
     FROM mz_internal.mz_wallclock_global_lag_recent_history wl
-    JOIN mz_catalog.mz_objects o ON wl.object_id = o.id
-    WHERE o.name = '<your_mv_name>'
-      AND wl.lag IS NOT NULL
+    WHERE wl.lag IS NOT NULL
       AND wl.lag > INTERVAL '0'
 ),
 histogram AS (
-    -- Log-scale bucket, labeled back in seconds: 100 buckets per doubling of lag.
+    -- Decade bucket: floor each lag to its power of ten, so lags land in
+    -- 0.1, 1, 10, 100, ... second buckets ([1, 10) -> 1, [10, 100) -> 10).
     SELECT
-        pow(2.0, round(100 * log(2, lag_seconds)) / 100.0) AS lag_bucket,
+        pow(10.0, floor(log10(lag_seconds))) AS lag_bucket,
         count(*) AS frequency
     FROM lags
     GROUP BY 1
@@ -116,57 +114,54 @@ GROUP BY h.lag_bucket
 ORDER BY h.lag_bucket;
 ```
 
-Run globally across every object (that is, with the `o.name` filter removed),
-the query returns output like the following:
+The query returns output like the following:
 
 ```none
-          lag_threshold_seconds           | fraction_of_time_at_or_above
-------------------------------------------+------------------------------
-                                        1 |                            1
-                                        2 |           0.6438906752411575
- 2.98969849726987683297067456375109798188 |          0.05787781350482315
-(3 rows)
+ lag_threshold_seconds | fraction_of_time_at_or_above
+-----------------------+------------------------------
+                     1 |                            1
+(1 row)
 ```
 
-Read this as: lag was at or above 1 second 100% of the time, at or above 2
-seconds about 64% of the time, and at or above roughly 3 seconds only about 6%
-of the time.
+Read this as: every observation of positive lag fell in the 1-second decade
+bucket, so lag was at or above 1 second 100% of the time and never reached the
+10-second bucket. The curve is a single step, the healthy shape for an instance
+whose objects all sit at a low, near-constant lag.
 
-{{< note >}}
-The output above comes from a lightly loaded instance whose objects sit at a
-low, near-constant lag, so the curve is short and drops off within a few
-seconds. A production instance under real load produces a longer tail with more
-buckets extending into the higher lag thresholds.
-{{< /note >}}
+![Freshness CCDF plotted from the sample output: the fraction of time at or above is 1.0 at the 1-second threshold and drops to 0 above 10 seconds, forming a single step](/images/freshness-ccdf-sample.png)
 
-The log-scale bucketing is the same idea as the HDR histogram in the
-[Percentile calculation](/transform-data/patterns/percentiles/) pattern, and the
-final cross join is the same cumulative transform, flipped from `<=` to `>=` so
-it sums the tail rather than the head. The cross join is quadratic in the number
-of buckets, but the log bucketing keeps the bucket count small, so this stays
-cheap. To get a single global curve or a per-cluster curve, drop the object
-filter and add the grouping columns you want.
+The chart above is generated from the sample output, captured on a lightly
+loaded local instance where every observation landed in the 1-second bucket. A
+production instance under real load shows a longer tail, with points extending
+into the 10-second and 100-second thresholds.
 
-{{< note >}}
+By default this query aggregates across every object. To scope the CCDF to a
+single object, add a join to `mz_catalog.mz_objects` and a name filter to the
+`lags` CTE (replace `<your_mv_name>` with the name of your object):
 
-How to read and use a freshness CCDF:
+```mzsql
+    FROM mz_internal.mz_wallclock_global_lag_recent_history wl
+    JOIN mz_catalog.mz_objects o ON wl.object_id = o.id
+    WHERE o.name = '<your_mv_name>'
+      AND wl.lag IS NOT NULL
+      AND wl.lag > INTERVAL '0'
+```
 
-- The **x-axis is the lag threshold** in seconds, on a log scale. The **y-axis
-  is the fraction of the window** the object spent at or above that lag.
+Reading a freshness CCDF is straightforward once you know what the axes mean.
+The **x-axis** is the lag threshold in seconds, on a log scale, and the
+**y-axis** is the fraction of the window the object spent at or above that lag.
 
-- A **healthy** object produces a curve that drops off early and hugs low lag
-  values. Almost all of the time, lag is small. An **unhealthy** object produces
-  a long, flat tail that extends into minutes or hours, meaning the object is
-  frequently far behind.
+A **healthy** object produces a curve that drops off early and hugs low lag
+values, so almost all of the time its lag is small. An **unhealthy** object
+produces a long, flat tail that extends into minutes or hours, which means the
+object is frequently far behind.
 
-- To use it against an SLO, pick your target lag (say 10 seconds) and read the
-  fraction of time at or above it. That fraction is how often you were violating
-  the SLO over the window.
+To read the curve against an SLO, pick your target lag (say 10 seconds) and read
+the fraction of time at or above it. That fraction is how often the object was
+violating the SLO over the window.
 
-- Exclude or expect a few artifacts. NULL lag rows are unhydrated observations
-  and are already filtered out above. If a spurious shelf appears far out at
-  roughly `1.76e9` seconds (about 56 years), it comes from unhydrated
-  collections reported at the Unix epoch. Filter it out (for example with `AND
-  wl.lag < INTERVAL '1 year'`) so it does not distort the curve.
-
-{{< /note >}}
+Expect a few artifacts in the data. NULL lag rows are unhydrated observations,
+and the query above already filters them out. If a spurious shelf appears far
+out at roughly `1.76e9` seconds (about 56 years), it comes from unhydrated
+collections reported at the Unix epoch, so filter it out (for example with `AND
+wl.lag < INTERVAL '1 year'`) so it does not distort the curve.
