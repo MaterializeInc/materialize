@@ -142,3 +142,14 @@ EXPLAIN MEMORY BOUND FOR SELECT v, count(*) FROM d GROUP BY v
 ----
 1  Get  0  5  0  3  0  NULL
 2  Reduce␠(accumulable,␠1␠aggregates)  2  14  364  3  1092  NULL
+
+# An expression over an aggregate puts a `Map`/`Project` above the reduce, which lowering
+# lifts off as a separate MFP stage. The reduce is still the node holding the arrangements,
+# so it must carry its own row bound rather than surrendering it to the stage lifted above
+# it. A plan whose only stateful operator reports no bound has no bound at all.
+query ITIIIIIT
+EXPLAIN MEMORY BOUND FOR SELECT a, count(*) * 2 FROM t GROUP BY a
+----
+1  Get  0  5  0  3  0  NULL
+2  Reduce␠(accumulable,␠1␠aggregates)  2  14  364  3  1092  NULL
+3  Map/Filter/Project  0  14  0  3  0  NULL

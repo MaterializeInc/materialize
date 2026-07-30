@@ -436,14 +436,25 @@ impl Context {
         // higher levels enforcing their own limits on stack depth (in the parser,
         // transformer/desugarer, and planner).
         let lowered = mz_ore::stack::maybe_grow(|| self.lower_mir_expr_stack_safe(expr))?;
-        // One record here covers every node derived from MIR. `expr` is the unmodified input, so
-        // even when an MFP is extracted and re-applied as a wrapping `Mfp` node, the type recorded
-        // against the returned root is the type that node actually produces.
+        // `expr` is the unmodified input, so even when an MFP is extracted and re-applied as a
+        // wrapping `Mfp` node, what is recorded against the returned root describes that node.
+        self.record_mir_facts(expr, lowered.plan.lir_id);
+        Ok(lowered)
+    }
+
+    /// Records the output type and row bound of the MIR node `expr` against `lir_id`.
+    ///
+    /// Called once for the node [`Self::lower_mir_expr`] returns, and again from inside the
+    /// lowering of a stage that extracted a leading MFP. That stage returns a wrapping `Mfp`
+    /// node, so without the second call the operator underneath, which is the one that actually
+    /// arranges, would carry neither a type nor a bound.
+    ///
+    /// Both are cheap no-ops unless a caller asked for them.
+    fn record_mir_facts(&mut self, expr: &MirRelationExpr, lir_id: LirId) {
         if self.node_types.is_some() {
             // Compute the type before reborrowing, and only when collecting: `typ()` walks the
             // whole subtree, so doing it unconditionally would make lowering quadratic.
             let typ = expr.typ();
-            let lir_id = lowered.plan.lir_id;
             if let Some(types) = self.node_types.as_mut() {
                 types.insert(lir_id, typ);
             }
@@ -465,10 +476,9 @@ impl Context {
                 (None, None) => None,
             };
             if let Some(rows) = rows {
-                collected.insert(lowered.plan.lir_id, rows);
+                collected.insert(lir_id, rows);
             }
         }
-        Ok(lowered)
     }
 
     /// An upper bound on a `Reduce`'s output rows, drawn from an index over its input.
@@ -1523,6 +1533,12 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 }
             }
         };
+
+        // `expr` was shadowed above by the expression left after extracting the MFP, so this
+        // attributes the facts of the operator that was actually planned to the node planning it
+        // produced. Where the MFP turns out to be the identity this is the returned root and
+        // `lower_mir_expr` records the same thing again, which is harmless.
+        self.record_mir_facts(expr, plan.lir_id);
 
         // If the plan stage did not absorb all linear operators, introduce a new stage to implement them.
         if !mfp.is_identity() {
