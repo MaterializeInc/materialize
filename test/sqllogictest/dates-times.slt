@@ -1396,6 +1396,47 @@ select ('0001-01-01'::date - interval '1 DAY')::date
 ----
 0001-12-31 BC
 
+# The ` BC` suffix carries whitespace, so a BC date nested in a container has to
+# be quoted, the same as the timestamp renderings above. `format_date` reported
+# `Nestable::Yes` unconditionally, which skips the escaping step entirely, so
+# these came out unquoted and diverged from PostgreSQL's `array_out`.
+query T
+select ARRAY[('0001-02-24'::date - interval '1 YEAR')::date]::text
+----
+{"0001-02-24 BC"}
+
+query T
+select ARRAY[('0001-02-24'::date - interval '1 YEAR')::date, '2020-01-01'::date]::text
+----
+{"0001-02-24 BC",2020-01-01}
+
+query T
+select LIST[('0001-02-24'::date - interval '1 YEAR')::date]::text
+----
+{"0001-02-24 BC"}
+
+query T
+select daterange(('0001-02-24'::date - interval '1 YEAR')::date, '2020-01-01'::date)::text
+----
+["0001-02-24 BC",2020-01-01)
+
+# Both renderings must survive being read back.
+query T
+select ARRAY[('0001-02-24'::date - interval '1 YEAR')::date, '2020-01-01'::date]::text::date[]::text
+----
+{"0001-02-24 BC",2020-01-01}
+
+query T
+select daterange(('0001-02-24'::date - interval '1 YEAR')::date, '2020-01-01'::date)::text::daterange::text
+----
+["0001-02-24 BC",2020-01-01)
+
+# A Common Era date needs no quoting and must not acquire any.
+query T
+select ARRAY['2020-01-01'::date, '2020-06-01'::date]::text
+----
+{2020-01-01,2020-06-01}
+
 query error "-2147483648" interval out of range
 select '0001-02-24'::date - interval '-2147483648 MONTHS'
 
