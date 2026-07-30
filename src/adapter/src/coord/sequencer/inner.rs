@@ -116,6 +116,7 @@ use crate::coord::{
 use crate::error::AdapterError;
 use crate::explain::MemoryBoundStats;
 use crate::explain::optimizer_trace::OptimizerTrace;
+use crate::index_arrangement_stats::ArrangementStats;
 use crate::notice::{AdapterNotice, DroppedInUseIndex};
 use crate::optimize::dataflows::{EvalTime, ExprPrep, ExprPrepOneShot};
 use crate::optimize::{self, Optimize};
@@ -2565,17 +2566,35 @@ impl Coordinator {
         // Forced, because this stage's whole output is the bound. The session flag above is
         // the gate; `enable_session_cardinality_estimates` governs query optimization and
         // is deliberately not consulted here.
-        let rows = self
+        let mut rows = self
             .statistics_oracle(session, &source_ids, &as_of, true, cluster_id, true)
             .await
             .map_or_else(|_| BTreeMap::new(), |oracle| oracle.as_map());
+
+        let hydrated = self.hydrated_index_stats(plan, cluster_id).await;
+
+        // The oracle's own index layer does not check hydration, so a relation whose every
+        // index is still catching up can reach here with a count of zero. Zero is not a bound,
+        // it is the absence of one, and believing it understates the memory bound. Raising each
+        // count to what the hydrated indexes report repairs that: an ungated zero can then only
+        // lose to a vetted count, never replace one.
+        for (relation, indexes) in hydrated.iter() {
+            let Some(records) = indexes.iter().map(|(_, stats)| stats.records).max() else {
+                continue;
+            };
+            let records = usize::cast_from(records);
+            let entry = rows.entry(*relation).or_insert(records);
+            *entry = (*entry).max(records);
+        }
+
         MemoryBoundStats {
             rows,
-            index_key_bounds: self.index_key_bounds(plan, cluster_id).await,
+            index_key_bounds: Self::index_key_bounds(&hydrated),
         }
     }
 
-    /// Distinct-key bounds per relation the plan reads, from every index over it.
+    /// Arrangement statistics per relation the plan reads, from every index over it whose
+    /// numbers can be trusted.
     ///
     /// Resolved from the catalog rather than from the plan's `index_imports`, and that
     /// distinction is the whole point. The optimizer imports whichever index it wants for the
@@ -2590,14 +2609,15 @@ impl Coordinator {
     ///
     /// * an index whose key is not a list of plain columns, since matching an expression key
     ///   would mean comparing it against the group key's expressions;
-    /// * an index that may not have caught up. **A hydrating index reports fewer keys than its
-    ///   collection holds**, and an under-count would understate the bound, which is the
-    ///   direction that ends in an out-of-memory kill. The controller is asked directly.
-    async fn index_key_bounds(
+    /// * an index that may not have caught up. **A hydrating index reports fewer keys and fewer
+    ///   records than its collection holds**, and an under-count would understate the bound,
+    ///   which is the direction that ends in an out-of-memory kill. The controller is asked
+    ///   directly.
+    async fn hydrated_index_stats(
         &self,
         plan: &DataflowDescription<OptimizedMirRelationExpr>,
         cluster_id: ClusterId,
-    ) -> BTreeMap<GlobalId, Vec<IndexKeyBound>> {
+    ) -> BTreeMap<GlobalId, Vec<(BTreeSet<usize>, ArrangementStats)>> {
         let snapshot = self.index_arrangement_stats.snapshot();
         if snapshot.is_empty() {
             return BTreeMap::new();
@@ -2647,13 +2667,32 @@ impl Coordinator {
                 ) {
                     continue;
                 }
-                bounds.entry(relation).or_default().push(IndexKeyBound {
-                    key_columns,
-                    distinct_keys: stats.distinct_keys,
-                });
+                bounds
+                    .entry(relation)
+                    .or_default()
+                    .push((key_columns, *stats));
             }
         }
         bounds
+    }
+
+    /// Reads the distinct-key bound out of each vetted index's statistics.
+    fn index_key_bounds(
+        hydrated: &BTreeMap<GlobalId, Vec<(BTreeSet<usize>, ArrangementStats)>>,
+    ) -> BTreeMap<GlobalId, Vec<IndexKeyBound>> {
+        hydrated
+            .iter()
+            .map(|(relation, indexes)| {
+                let bounds = indexes
+                    .iter()
+                    .map(|(key_columns, stats)| IndexKeyBound {
+                        key_columns: key_columns.clone(),
+                        distinct_keys: stats.distinct_keys,
+                    })
+                    .collect();
+                (*relation, bounds)
+            })
+            .collect()
     }
 
     pub(super) async fn sequence_explain_pushdown(

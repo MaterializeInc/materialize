@@ -2182,6 +2182,60 @@ pub fn datum_size(datum: &Datum) -> usize {
     }
 }
 
+/// The largest number of bytes a string of at most `max_bytes` bytes occupies in a [`Row`].
+///
+/// Mirrors the `Datum::String` arm of [`datum_size`], including its variable-length size prefix.
+pub fn max_string_datum_size(max_bytes: usize) -> usize {
+    let bytes_for_length = match max_bytes {
+        0..TINY => 1,
+        TINY..SHORT => 2,
+        SHORT..LONG => 4,
+        _ => 8,
+    };
+    1 + bytes_for_length + max_bytes
+}
+
+/// The largest number of bytes any value of a column of SQL type `typ` can occupy in a [`Row`].
+///
+/// Refines [`max_datum_size`] with the length limits that only the SQL type carries. A `char(n)`
+/// or `varchar(n)` column is bounded, where the `String` it lowers to is not.
+///
+/// Returns `None` wherever the SQL type is equally unbounded, so a caller still has to treat the
+/// absence of a bound as unknown.
+pub fn max_sql_datum_size(typ: &crate::SqlScalarType) -> Option<usize> {
+    use crate::SqlScalarType as T;
+
+    // A character length counts characters, and UTF-8 spends up to four bytes on one.
+    const MAX_UTF8_BYTES_PER_CHAR: usize = 4;
+
+    match typ {
+        // A `char(n)` is blank-padded to exactly `n` characters, a `varchar(n)` capped at `n`.
+        T::Char { length: Some(n) } => Some(max_string_datum_size(
+            usize::cast_from(n.into_u32()) * MAX_UTF8_BYTES_PER_CHAR,
+        )),
+        T::VarChar {
+            max_length: Some(n),
+        } => Some(max_string_datum_size(
+            usize::cast_from(n.into_u32()) * MAX_UTF8_BYTES_PER_CHAR,
+        )),
+        // Postgres caps a `name` at `NAMEDATALEN` bytes, not characters.
+        T::PgLegacyName => Some(max_string_datum_size(
+            crate::adt::pg_legacy_name::NAME_MAX_BYTES,
+        )),
+        // A record has fixed arity, so it is bounded exactly when all of its fields are.
+        T::Record { fields, .. } => {
+            let mut total = 1 + size_of::<u64>();
+            for (_, field) in fields.iter() {
+                total += max_sql_datum_size(&field.scalar_type)?;
+            }
+            Some(total)
+        }
+        T::Range { element_type } => Some(2 + 2 * max_sql_datum_size(element_type)?),
+        // Everything else carries no more length information than its `Row` encoding does.
+        _ => max_datum_size(&crate::ReprScalarType::from(typ)),
+    }
+}
+
 /// The largest number of bytes any value of `typ` can occupy when packed into a [`Row`].
 ///
 /// Returns `None` for types whose encoding is unbounded, meaning the variable-length ones
