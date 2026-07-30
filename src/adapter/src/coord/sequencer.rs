@@ -1300,7 +1300,17 @@ pub(crate) async fn statistics_oracle(
 
             BTreeMap::new()
         }
-        Err(mz_ore::future::TimeoutError::Inner(e)) => return Err(AdapterError::Storage(e)),
+        // A persist failure must not discard the index estimates, which are already in hand
+        // and need no persist at all. Returning here let one unreadable shard veto every
+        // count the indexes could supply, which on an all-indexed input set is all of them.
+        Err(mz_ore::future::TimeoutError::Inner(e)) => {
+            warn!(
+                is_oneshot = is_oneshot,
+                "optimizer statistics collection from persist failed: {e}"
+            );
+
+            BTreeMap::new()
+        }
     };
 
     Ok(Box::new(LayeredStatisticsOracle::new(
