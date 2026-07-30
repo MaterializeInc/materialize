@@ -4,7 +4,7 @@ description: "Connecting Materialize to a SQL Server database for Change Data Ca
 pagerank: 40
 menu:
   main:
-    parent: 'create-source'
+    parent: 'create-source-legacy'
     identifier: cs_sql-server
     name: SQL Server (Legacy Syntax)
     weight: 31

@@ -1,3 +1,6 @@
+---
+headless: true
+---
 #### Schema registries
 
 Materialize can retrieve Avro schemas from either of two schema registries,

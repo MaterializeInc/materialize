@@ -9,6 +9,7 @@ menu:
   main:
     parent: "kafka"
     name: "WarpStream"
+    weight: 40
 ---
 
 [//]: # "TODO(morsapaes) The Kafka guides need to be rewritten for consistency

@@ -12,6 +12,7 @@ menu:
   main:
     parent: "kafka"
     name: "Self-hosted Kafka"
+    weight: 30
 ---
 
 [//]: # "TODO(morsapaes) The Kafka guides need to be rewritten for consistency

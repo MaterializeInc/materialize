@@ -11,6 +11,7 @@ menu:
   main:
     parent: "kafka"
     name: "Amazon MSK"
+    weight: 10
 ---
 
 [//]: # "TODO(morsapaes) The Kafka guides need to be rewritten for consistency

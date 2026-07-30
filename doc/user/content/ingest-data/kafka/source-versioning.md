@@ -9,8 +9,6 @@ menu:
         weight: 85
 ---
 
-{{< public-preview />}}
-
 Materialize resolves the Avro schema of a Kafka topic when you create a table
 from the source, and pins that reader schema to the table. Compatible upstream
 schema changes continue to decode, but a table does not expose fields that were

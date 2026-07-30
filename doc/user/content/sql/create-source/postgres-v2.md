@@ -9,13 +9,11 @@ menu:
     weight: 20
 ---
 
-{{< public-preview />}}
-
 {{< source-versioning-disambiguation is_new=true
 other_ref="[old reference page](/sql/create-source/postgres/)" include_blurb=true >}}
 
 {{% create-source-intro external_source="PostgreSQL" version="11+"
-create_table="/sql/create-table/" %}}
+create_table="/sql/create-table/postgres/" %}}
 
 PostgreSQL 16+ is required for connecting Materialize to a physical replica.
 
@@ -46,7 +44,7 @@ SOURCE`](/sql/create-table/) allows for the handling of certain upstream DDL
 changes without downtime.
 
 See [`CREATE TABLE FROM
-SOURCE`](/sql/create-table/#handling-table-schema-changes) for details.
+SOURCE`](/sql/create-table/postgres/#handling-table-schema-changes) for details.
 
 #### Supported types
 

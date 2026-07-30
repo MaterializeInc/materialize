@@ -1,14 +1,63 @@
 - name: "syntax"
   description: |
-    To create a read-only table from a [Kafka/Redpanda
-    source](/sql/create-source/kafka-v2/) (new syntax), decode the topic with a
-    `FORMAT`, optionally exposing metadata with `INCLUDE` and choosing an
-    `ENVELOPE`:
+    Regardless of format, a Kafka `CREATE TABLE ... FROM SOURCE` statement uses
+    the following elements:
+  syntax_elements:
+    - name: "**IF NOT EXISTS**"
+      description: |
+        *Optional.* If specified, do not throw an error if the table with the same
+        name already exists. Instead, issue a notice and skip the table creation.
 
+        {{< include-md file="shared-content/create-table-if-not-exists-tip.md" >}}
+    - name: "`<table_name>`"
+      description: |
+
+        The name of the table to create. Names for tables must follow the [naming
+        guidelines](/sql/identifiers/#naming-restrictions).
+
+    - name: "`<source_name>`"
+      description: |
+
+        The name of the [Kafka source](/sql/create-source/kafka-v2/) to read
+        from. Unlike other source types, a Kafka `CREATE TABLE ... FROM SOURCE`
+        does **not** take a `(REFERENCE ...)` clause: a Kafka source exposes a
+        single topic, so the table reads from it automatically.
+
+    - name: "**FORMAT** / **KEY FORMAT** / **VALUE FORMAT**"
+      description: |
+
+        The format used to decode the topic. See [supported
+        formats](/sql/create-table/kafka/#syntax).
+
+    - name: "**INCLUDE** `<metadata>`"
+      description: |
+
+        *Optional.* Expose the message key, headers, and other metadata fields
+        as additional columns. See [Exposing source
+        metadata](/sql/create-table/kafka/#exposing-source-metadata).
+
+    - name: "**ENVELOPE** `<envelope>`"
+      description: |
+
+        *Optional.* How to interpret records as inserts, updates, and deletes.
+        Defaults to `ENVELOPE NONE` (append-only). See
+        [envelopes](/sql/create-table/kafka/#envelopes).
+
+- name: "syntax-avro"
+  description: |
+    Materialize can decode Avro messages by integrating with a schema registry
+    to retrieve a schema, and automatically determine the columns and data types
+    to use in the table.
   code: |
     CREATE TABLE [IF NOT EXISTS] <table_name>
-    FROM SOURCE <source_name>
-    [ FORMAT <format> | KEY FORMAT <format> VALUE FORMAT <format> ]
+    FROM SOURCE <src_name>
+    FORMAT AVRO
+        USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name>
+          [KEY STRATEGY <key_strategy>]
+          [VALUE STRATEGY <value_strategy>]
+      | USING AWS GLUE SCHEMA REGISTRY CONNECTION <glue_connection_name> (
+          SCHEMA NAME = '<schema_name>'
+        )
     [INCLUDE
         KEY [AS <name>]
       | PARTITION [AS <name>]
@@ -36,34 +85,490 @@
         The name of the table to create. Names for tables must follow the [naming
         guidelines](/sql/identifiers/#naming-restrictions).
 
-    - name: "`<source_name>`"
+    - name: "`<src_name>`"
       description: |
 
         The name of the [Kafka source](/sql/create-source/kafka-v2/) to read
-        from. Unlike other source types, a Kafka `CREATE TABLE ... FROM SOURCE`
-        does **not** take a `(REFERENCE ...)` clause: a Kafka source exposes a
-        single topic, so the table reads from it automatically.
+        from.
 
-    - name: "**FORMAT** / **KEY FORMAT** / **VALUE FORMAT**"
+    - name: "`<csr_connection_name>`"
       description: |
-
-        The format used to decode the topic. See [supported
-        formats](/sql/create-source/kafka-v2/#syntax).
-
-    - name: "**INCLUDE** `<metadata>`"
+        The [Confluent Schema Registry connection](/sql/create-connection/#confluent-schema-registry)
+        to use in the source. Applies to both the key and value.
+    - name: "`<glue_connection_name>` (**SCHEMA NAME** `'<schema_name>'`)"
       description: |
+        **Private preview.** This feature is under active development.
 
-        *Optional.* Expose the message key, headers, and other metadata fields
-        as additional columns. See [Exposing source
-        metadata](/sql/create-source/kafka-v2/#exposing-source-metadata).
+        Decode Avro messages using a schema managed in AWS Glue Schema
+        Registry. `<glue_connection_name>` is the [AWS Glue Schema Registry
+        connection](/sql/create-connection/#aws-glue-schema-registry), and
+        `SCHEMA NAME` (**required**) is the name of the schema to read from
+        the connection's registry. The schema is pinned at the time the
+        source is created.
+
+        A single `FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY` clause resolves
+        one schema. To set the key and value independently (for example,
+        under `ENVELOPE UPSERT` or `ENVELOPE DEBEZIUM`), specify `KEY FORMAT
+        ... VALUE FORMAT ...` explicitly.
+    - name: "**KEY STRATEGY** `<key_strategy>`"
+      description: |
+        Optional. Define how an Avro reader schema will be chosen for the
+        message key.
+        | Strategy | Description |
+        |--------|-------------|
+        | **LATEST** | (Default) Use the latest writer schema from the schema registry as the reader schema. |
+        | **ID** | Use a specific schema from the registry. |
+        | **INLINE** | Use the inline schema. |
+
+
+    - name: "**VALUE STRATEGY** `<value_strategy>`"
+      description: |
+        Optional. Define how an Avro reader schema will be chosen for the message value.
+        | Strategy | Description |
+        |--------|-------------|
+        | **LATEST** | (Default) Use the latest writer schema from the schema registry as the reader schema. |
+        | **ID** | Use a specific schema from the registry. |
+        | **INLINE** | Use the inline schema. |
+
+    - name: "**INCLUDE** `<include_option>`"
+      description: |
+        Optional. If specified, include the additional information as column(s) in the table. The following `<include_option>`s are supported:
+
+        {{% include-headless "/headless/kafka-include-metadata-options" %}}
 
     - name: "**ENVELOPE** `<envelope>`"
       description: |
+        Optional. Specifies how Materialize interprets incoming records. Valid envelope types:
 
-        *Optional.* How to interpret records as inserts, updates, and deletes.
-        Defaults to `ENVELOPE NONE` (append-only). See
-        [envelopes](/sql/create-source/kafka-v2/#envelopes).
+        | Envelope | Description |
+        |----------|-------------|
+        | `NONE` | Append-only envelope (default). Each message is inserted as a new row. |
+        | `DEBEZIUM` | Decode Kafka messages produced by [Debezium](https://debezium.io/). |
+        | `UPSERT [ ( VALUE DECODING ERRORS = INLINE [AS <name>] ) ]` | Use the standard key-value convention to support inserts, updates, and deletes. Required to consume [log compacted topics](https://docs.confluent.io/platform/current/kafka/design.html#log-compaction). |
+  
+- name: "syntax-json"
+  description: |
+    Materialize can decode JSON messages into a single column named `data` with
+    type `jsonb`. Refer to the [`jsonb` type](/sql/types/jsonb) documentation for
+    the supported operations on this type.
+  code: |
+    CREATE TABLE [IF NOT EXISTS] <table_name>
+    FROM SOURCE <src_name>
+    FORMAT JSON
+    [INCLUDE
+        PARTITION [AS <name>]
+      | OFFSET [AS <name>]
+      | TIMESTAMP [AS <name>]
+      | HEADERS [AS <name>]
+      | HEADER '<key>' AS <name> [BYTES]
+      [, ...]
+    ]
+    [ENVELOPE NONE];
+
+  syntax_elements:
+    - name: "**IF NOT EXISTS**"
+      description: |
+        *Optional.* If specified, do not throw an error if the table with the same
+        name already exists. Instead, issue a notice and skip the table creation.
+
+        {{< include-md file="shared-content/create-table-if-not-exists-tip.md" >}}
+    - name: "`<table_name>`"
+      description: |
+
+        The name of the table to create. Names for tables must follow the [naming
+        guidelines](/sql/identifiers/#naming-restrictions).
+
+    - name: "`<src_name>`"
+      description: |
+
+        The name of the [Kafka source](/sql/create-source/kafka-v2/) to read
+        from.
+    - name: "**INCLUDE** `<include_option>`"
+      description: |
+        Optional. If specified, include the additional information as column(s) in the table. The following `<include_option>`s are supported:
+
+        {{% include-headless "/headless/kafka-include-metadata-options" %}}
+
+    - name: "**ENVELOPE** NONE"
+      description: |
+        Optional. Specifies how Materialize interprets incoming records. Valid envelope type(s):
+
+        | Envelope | Description |
+        |----------|-------------|
+        | `NONE` | Append-only envelope (default). Each message is inserted as a new row. |
+
+- name: "syntax-text-bytes"
+  description: |
+    Materialize can parse **new-line delimited** data as plain text, or read raw
+    bytes without applying any formatting or decoding. Text-formatted tables have
+    a single column, by default named `text`. Raw byte-formatted tables have a
+    single column, by default named `data`.
+  code: |
+    CREATE TABLE [IF NOT EXISTS] <table_name>
+    FROM SOURCE <src_name>
+    FORMAT TEXT | BYTES
+    [INCLUDE
+        PARTITION [AS <name>]
+      | OFFSET [AS <name>]
+      | TIMESTAMP [AS <name>]
+      | HEADERS [AS <name>]
+      | HEADER '<key>' AS <name> [BYTES]
+      [, ...]
+    ]
+    [ENVELOPE NONE];
+
+  syntax_elements:
+    - name: "**IF NOT EXISTS**"
+      description: |
+        *Optional.* If specified, do not throw an error if the table with the same
+        name already exists. Instead, issue a notice and skip the table creation.
+
+        {{< include-md file="shared-content/create-table-if-not-exists-tip.md" >}}
+    - name: "`<table_name>`"
+      description: |
+
+        The name of the table to create. Names for tables must follow the [naming
+        guidelines](/sql/identifiers/#naming-restrictions).
+
+    - name: "`<src_name>`"
+      description: |
+
+        The name of the [Kafka source](/sql/create-source/kafka-v2/) to read
+        from.
+    - name: "**INCLUDE** `<include_option>`"
+      description: |
+        Optional. If specified, include the additional information as column(s) in the table. The following `<include_option>`s are supported:
+
+        {{% include-headless "/headless/kafka-include-metadata-options" %}}
+
+    - name: "**ENVELOPE** NONE"
+      description: |
+        Optional. Specifies how Materialize interprets incoming records. Valid envelope type(s):
+
+        | Envelope | Description |
+        |----------|-------------|
+        | `NONE` | Append-only envelope (default). Each message is inserted as a new row. |
+
+- name: "syntax-csv"
+  description: |
+    Materialize can parse CSV-formatted data. The data in CSV tables is read as
+    [`text`](/sql/types/text).
+  code: |
+    CREATE TABLE [IF NOT EXISTS] <table_name>
+    FROM SOURCE <src_name>
+    FORMAT CSV WITH <n> COLUMNS [DELIMITED BY <char>]
+    [INCLUDE
+        PARTITION [AS <name>]
+      | OFFSET [AS <name>]
+      | TIMESTAMP [AS <name>]
+      | HEADERS [AS <name>]
+      | HEADER '<key>' AS <name> [BYTES]
+      [, ...]
+    ]
+    [ENVELOPE NONE];
+
+  syntax_elements:
+    - name: "**IF NOT EXISTS**"
+      description: |
+        *Optional.* If specified, do not throw an error if the table with the same
+        name already exists. Instead, issue a notice and skip the table creation.
+
+        {{< include-md file="shared-content/create-table-if-not-exists-tip.md" >}}
+    - name: "`<table_name>`"
+      description: |
+
+        The name of the table to create. Names for tables must follow the [naming
+        guidelines](/sql/identifiers/#naming-restrictions).
+
+    - name: "`<src_name>`"
+      description: |
+
+        The name of the [Kafka source](/sql/create-source/kafka-v2/) to read
+        from.
+  
+    - name: "`<n>` **COLUMNS**"
+      description: |
+        The number of columns in the CSV message.
+
+    - name: "**DELIMITED BY** `<char>`"
+      description: |
+        *Optional.* If specified, the delimiter character. By default, uses a
+        comma `,` as the delimiter.
+
+    - name: "**INCLUDE** `<include_option>`"
+      description: |
+        Optional. If specified, include the additional information as column(s) in the table. The following `<include_option>`s are supported:
+
+        {{% include-headless "/headless/kafka-include-metadata-options" %}}
+
+    - name: "**ENVELOPE** NONE"
+      description: |
+        Optional. Specifies how Materialize interprets incoming records. Valid envelope type(s):
+
+        | Envelope | Description |
+        |----------|-------------|
+        | `NONE` | Append-only envelope (default). Each message is inserted as a new row. |
+
+
+- name: "syntax-protobuf"
+  description: |
+    Materialize can decode Protobuf messages by integrating with a schema
+    registry or parsing an inline schema to retrieve a `.proto` schema
+    definition. It can then automatically define the columns and data types to
+    use in the table.
+  code: |
+    CREATE TABLE [IF NOT EXISTS] <table_name>
+    FROM SOURCE <src_name>
+    FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name>
+      | FORMAT PROTOBUF MESSAGE '<message_name>' USING SCHEMA '<schema_bytes>'
+    [INCLUDE
+        KEY [AS <name>]
+      | PARTITION [AS <name>]
+      | OFFSET [AS <name>]
+      | TIMESTAMP [AS <name>]
+      | HEADERS [AS <name>]
+      | HEADER '<key>' AS <name> [BYTES]
+      [, ...]
+    ]
+    [ENVELOPE
+        NONE
+      | UPSERT [ ( VALUE DECODING ERRORS = INLINE [AS <name>] ) ]
+    ];
+  syntax_elements:
+    - name: "**IF NOT EXISTS**"
+      description: |
+        *Optional.* If specified, do not throw an error if the table with the same
+        name already exists. Instead, issue a notice and skip the table creation.
+
+        {{< include-md file="shared-content/create-table-if-not-exists-tip.md" >}}
+    - name: "`<table_name>`"
+      description: |
+
+        The name of the table to create. Names for tables must follow the [naming
+        guidelines](/sql/identifiers/#naming-restrictions).
+
+    - name: "`<src_name>`"
+      description: |
+
+        The name of the [Kafka source](/sql/create-source/kafka-v2/) to read
+        from.
+
+    - name: "`<csr_connection_name>`"
+      description: |
+        The [Confluent Schema Registry connection](/sql/create-connection/#confluent-schema-registry)
+        to use to retrieve the `.proto` schema definition.
+
+    - name: "**MESSAGE** `'<message_name>'` **USING SCHEMA** `'<schema_bytes>'`"
+      description: |
+        Decode Protobuf messages using an inline schema instead of a schema
+        registry. `<message_name>` is the top-level message name and
+        `<schema_bytes>` is the encoded `FileDescriptorSet`.
+
+    - name: "**INCLUDE** `<include_option>`"
+      description: |
+        Optional. If specified, include the additional information as column(s) in the table. The following `<include_option>`s are supported:
+
+        {{% include-headless "/headless/kafka-include-metadata-options" %}}
+
+    - name: "**ENVELOPE** `<envelope>`"
+      description: |
+        Optional. Specifies how Materialize interprets incoming records. Valid envelope types:
+
+        | Envelope | Description |
+        |----------|-------------|
+        | `NONE` | Append-only envelope (default). Each message is inserted as a new row. |
+        | `UPSERT [ ( VALUE DECODING ERRORS = INLINE [AS <name>] ) ]` | Use the standard key-value convention to support inserts, updates, and deletes. Required to consume [log compacted topics](https://docs.confluent.io/platform/current/kafka/design.html#log-compaction). |
+
+- name: "syntax-key-value-format"
+  description: |
+    By default, the message key is decoded using the same format as the message
+    value. However, you can set the key and value encodings explicitly using
+    `KEY FORMAT ... VALUE FORMAT`.
+  code: |
+    CREATE TABLE [IF NOT EXISTS] <table_name>
+    FROM SOURCE <src_name>
+    KEY FORMAT <key_format> VALUE FORMAT <value_format>
+    -- <key_format> and <value_format> can be:
+    -- AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <conn_name>
+    --     [KEY STRATEGY <strategy>]
+    --     [VALUE STRATEGY <strategy>]
+    -- | AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION <glue_conn_name> (SCHEMA NAME = '<schema_name>')
+    -- | CSV WITH <num> COLUMNS DELIMITED BY <char>
+    -- | JSON | TEXT | BYTES
+    -- | PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION <conn_name>
+    -- | PROTOBUF MESSAGE '<message_name>' USING SCHEMA '<schema_bytes>'
+    [INCLUDE
+        KEY [AS <name>]
+      | PARTITION [AS <name>]
+      | OFFSET [AS <name>]
+      | TIMESTAMP [AS <name>]
+      | HEADERS [AS <name>]
+      | HEADER '<key>' AS <name> [BYTES]
+      [, ...]
+    ]
+    [ENVELOPE
+        NONE
+      | DEBEZIUM
+      | UPSERT [(VALUE DECODING ERRORS = INLINE [AS name])]
+    ];
+  syntax_elements:
+    - name: "**IF NOT EXISTS**"
+      description: |
+        *Optional.* If specified, do not throw an error if the table with the same
+        name already exists. Instead, issue a notice and skip the table creation.
+
+        {{< include-md file="shared-content/create-table-if-not-exists-tip.md" >}}
+    - name: "`<table_name>`"
+      description: |
+
+        The name of the table to create. Names for tables must follow the [naming
+        guidelines](/sql/identifiers/#naming-restrictions).
+
+    - name: "`<src_name>`"
+      description: |
+
+        The name of the [Kafka source](/sql/create-source/kafka-v2/) to read
+        from.
+
+    - name: "**KEY FORMAT** `<key_format>` **VALUE FORMAT** `<value_format>`"
+      description: |
+        Set the key and value encodings explicitly, instead of decoding both with
+        a single `FORMAT`. Each of `<key_format>` and `<value_format>` can be
+        `AVRO`, `JSON`, `TEXT`, `BYTES`, `CSV`, or `PROTOBUF`. See [supported
+        formats](/sql/create-table/kafka/#syntax).
+
+    - name: "**INCLUDE** `<include_option>`"
+      description: |
+        Optional. If specified, include the additional information as column(s) in the table. The following `<include_option>`s are supported:
+
+        {{% include-headless "/headless/kafka-include-metadata-options" %}}
+
+    - name: "**ENVELOPE** `<envelope>`"
+      description: |
+        Optional. Specifies how Materialize interprets incoming records. Valid envelope types:
+
+        | Envelope | Description |
+        |----------|-------------|
+        | `NONE` | Append-only envelope (default). Each message is inserted as a new row. |
+        | `DEBEZIUM` | Decode Kafka messages produced by [Debezium](https://debezium.io/). |
+        | `UPSERT [ ( VALUE DECODING ERRORS = INLINE [AS <name>] ) ]` | Use the standard key-value convention to support inserts, updates, and deletes. Required to consume [log compacted topics](https://docs.confluent.io/platform/current/kafka/design.html#log-compaction). |
 
 - name: "syntax-version-requirement"
   description: |
     You must be on **v26+** to use the new syntax.
+
+- name: "create-table"
+  description: |
+
+    To create a **read-only** table from a Kafka source, use the `CREATE TABLE
+    ... FROM SOURCE` statement. Unlike other source types, a Kafka source
+    exposes a single topic, so the statement does **not** take a `(REFERENCE
+    ...)` clause. The following example creates a **read-only** table `orders`
+    that decodes the topic as [JSON](/sql/create-table/kafka/#json).
+
+    {{< note >}}
+
+    - You can create multiple tables from the same Kafka source, each decoding
+    the topic with a different format or envelope.
+
+    - For `JSON`-formatted topics, we recommend creating a
+    [parsing view](/sql/create-table/kafka/#json) on top of the table to map the
+    individual fields to columns with the appropriate data types.
+
+    {{< /note >}}
+
+  test_setup: |
+    $ kafka-create-topic topic=orders partitions=1
+    $ kafka-ingest format=bytes topic=orders
+    {"id": 1, "item": "widget", "quantity": 5}
+    {"id": 2, "item": "gadget", "quantity": 2}
+
+    > CREATE CONNECTION kafka_connection TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
+    > CREATE SOURCE orders_src FROM KAFKA CONNECTION kafka_connection (TOPIC 'testdrive-orders-${testdrive.seed}');
+
+  code: |
+    /* This example assumes:
+      - In Materialize:
+        - You have defined a connection to the upstream Kafka broker.
+        - You have used the connection to create a source.
+
+       For example (substitute with your configuration):
+          CREATE CONNECTION kafka_connection TO KAFKA (
+            BROKER '<broker>',            -- substitute
+            SECURITY PROTOCOL = SASL_SSL,
+            SASL MECHANISMS = 'SCRAM-SHA-256',
+            SASL USERNAME = '<user>',     -- substitute
+            SASL PASSWORD = SECRET kafka_password
+          );
+
+          CREATE SOURCE orders_src
+          FROM KAFKA CONNECTION kafka_connection (
+            TOPIC 'orders'                -- substitute
+          );
+    */
+
+    CREATE TABLE orders
+    FROM SOURCE orders_src
+    FORMAT JSON
+    ;
+  results: |
+
+    {{< include-md
+    file="content/headless/create-table-from-source-snapshotting.md" >}}
+
+    {{< include-md file="content/headless/create-table-if-not-exists-tip.md" >}}
+
+  testable_results: false
+
+- name: "show-tables"
+  description: |
+    To verify that the table has been created, you can run [`SHOW
+    TABLES`](/sql/show-tables/) to list all tables in the current
+    [schema](/sql/namespaces/#namespace-hierarchy):
+  code: |
+    SHOW TABLES;
+  results: |
+    The results should include the `orders` table:
+
+    ```hc {hl_lines="3"}
+    | name    | comment |
+    | ------- | ------- |
+    | orders  |         |
+    ```
+
+- name: "show-columns"
+  description: |
+    Inspect the table columns using the [`SHOW COLUMNS`](/sql/show-columns/)
+    command:
+  code: |
+    SHOW COLUMNS FROM orders;
+  results: |
+    Because the table decodes the topic as `JSON`, the message value is exposed
+    as a single `data` column of type [`jsonb`](/sql/types/jsonb/):
+
+    ```hc
+    | name | nullable | type  | comment |
+    | ---- | -------- | ----- | ------- |
+    | data | false    | jsonb |         |
+    ```
+
+- name: "read-from-table"
+  description: |
+    Once the snapshotting process completes and the table is in the running
+    state, you can query the table. For `JSON`-formatted data, use the
+    [`jsonb` operators](/sql/types/jsonb/#operators) to extract individual
+    fields:
+  code: |
+    SELECT
+        (data->>'id')::bigint AS id,
+        data->>'item' AS item,
+        (data->>'quantity')::bigint AS quantity
+    FROM orders
+    ORDER BY id;
+  results: |
+    ```hc
+    | id | item   | quantity |
+    | -- | ------ | -------- |
+    | 1  | widget | 5        |
+    | 2  | gadget | 2        |
+    ```

@@ -1,3 +1,6 @@
+---
+headless: true
+---
 In addition to the message value, Materialize can expose the message key,
 headers and other source metadata fields to SQL through the `INCLUDE` clause.
 For where the `INCLUDE` clause goes, see [Syntax](#syntax).

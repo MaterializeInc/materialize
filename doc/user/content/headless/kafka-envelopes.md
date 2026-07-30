@@ -1,3 +1,6 @@
+---
+headless: true
+---
 In addition to determining how to decode incoming records, Materialize also
 needs to understand how to interpret them. Whether a new record inserts,
 updates, or deletes existing data in Materialize depends on the `ENVELOPE`

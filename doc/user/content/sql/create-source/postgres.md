@@ -4,7 +4,7 @@ description: "Connecting Materialize to a PostgreSQL database for Change Data Ca
 pagerank: 40
 menu:
   main:
-    parent: 'create-source'
+    parent: 'create-source-legacy'
     identifier: cs_postgres
     name: PostgreSQL (Legacy Syntax)
     weight: 21

@@ -1,3 +1,6 @@
+---
+headless: true
+---
 Unlike Avro, Protobuf does not serialize a schema with the message, so Materialize expects:
 
 * A `FileDescriptorSet` that encodes the Protobuf message schema. You can generate the `FileDescriptorSet` with [`protoc`](https://grpc.io/docs/protoc-installation/), for example:

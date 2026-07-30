@@ -10,138 +10,42 @@ menu:
     weight: 10
 ---
 
-{{< public-preview />}}
-
 {{< source-versioning-disambiguation is_new=true
 other_ref="[old reference page](/sql/create-source/kafka/)" >}}
 
-Materialize can read data from a Kafka or Redpanda broker. With the new syntax,
-you first create a [source](/concepts/sources/) that connects to a topic, and
-then use [`CREATE TABLE ... FROM SOURCE`](/sql/create-table/) to decode the topic
-and start ingesting data. Because each table pins its own reader schema, you can
-pick up upstream schema changes without downtime. For a step-by-step
-walkthrough, see [Handle upstream schema changes with zero
-downtime](/ingest-data/kafka/source-versioning/).
+{{% create-source-intro external_source="Kafka or Redpanda broker" 
+create_table="/sql/create-table/kafka" %}}
 
-To connect to a Kafka/Redpanda broker (and optionally a schema registry), you
-first need to [create a
-connection](/sql/create-source/kafka/#prerequisite-creating-a-connection) that
-specifies access and authentication parameters. Once created, a connection is
-**reusable** across multiple `CREATE SOURCE` and `CREATE SINK` statements.
+The decoding options (`FORMAT`, `INCLUDE`, and `ENVELOPE`) are set on the
+[`CREATE TABLE ... FROM SOURCE`](/sql/create-table/kafka) statement that reads
+from the source. For the full catalog of formats, envelopes, and exposed
+metadata, see [CREATE TABLE: Kafka source table](/sql/create-table/kafka/).
 
 {{< note >}}
 The same syntax, supported formats and features can be used to connect to a
 [Redpanda](/integrations/redpanda/) broker.
 {{</ note >}}
 
-With the new syntax, the `CREATE SOURCE` statement connects to the topic, and the
-decoding options (`FORMAT`, `INCLUDE`, and `ENVELOPE`) move to the [`CREATE TABLE
-... FROM SOURCE`](/sql/create-table/) statement.
+## Prerequisites
 
-Unlike other source types, `CREATE TABLE ... FROM SOURCE` does not need a
-`(REFERENCE ...)` clause. A Kafka source exposes a single topic, and the table
-reads from it automatically.
-
-{{< note >}}
-The `TEXT COLUMNS` and `EXCLUDE COLUMNS` options are not supported for Kafka
-`CREATE TABLE ... FROM SOURCE`. A Kafka table's columns are determined entirely
-by its format (for Avro, the reader schema). To exclude or recast a field,
-project or cast it in a view on top of the table.
-{{< /note >}}
+To create a source from Kafka/Redpanda broker, you first need to [create a
+connection](/sql/create-connection/#kafka). Once created, a connection is
+**reusable** across multiple `CREATE SOURCE` and `CREATE SINK` statements.
 
 ## Syntax
 
-{{< tabs >}}
+The `CREATE SOURCE` statement connects to a Kafka/Redpanda topic.
 
-{{< tab "Format Avro" >}}
-### Format Avro
-
-Materialize can decode Avro messages by integrating with a schema registry to
-retrieve a schema, and automatically determine the columns and data types to use
-in the table.
-
-{{% include-syntax file="examples/create_source_kafka_v2" example="syntax-avro" %}}
-
-{{< include-md file="shared-content/kafka-format-avro-details.md" >}}
-
-{{< /tab >}}
-
-{{< tab "Format JSON" >}}
-### Format JSON
-
-Materialize can decode JSON messages into a single column named `data` with type
-`jsonb`. Refer to the [`jsonb` type](/sql/types/jsonb) documentation for the
-supported operations on this type.
-
-{{% include-syntax file="examples/create_source_kafka_v2" example="syntax-json" %}}
-
-{{< include-md file="shared-content/kafka-format-json-details.md" >}}
-
-{{< /tab >}}
-
-{{< tab "Format TEXT/BYTES" >}}
-### Format Text/Bytes
-
-Materialize can:
-- Parse **new-line delimited** data as plain text. Data is assumed to be **valid
-  unicode** (UTF-8), and discarded if it cannot be converted to UTF-8.
-  Text-formatted tables have a single column, by default named `text`. For details on casting, check the [`text`](/sql/types/text/) documentation.
-
-- Read raw bytes without applying any formatting or decoding. Raw byte-formatted
-tables have a single column, by default named `data`. For details on encodings
-and casting, check the [`bytea`](/sql/types/bytea/) documentation.
-
-{{% include-syntax file="examples/create_source_kafka_v2" example="syntax-text-bytes" %}}
-
-{{< /tab >}}
-
-{{< tab "Format CSV" >}}
-### Format CSV
-
-Materialize can parse CSV-formatted data. The data in CSV tables is read as
-[`text`](/sql/types/text).
-
-{{% include-syntax file="examples/create_source_kafka_v2" example="syntax-csv" %}}
-
-{{< /tab >}}
-
-{{< tab "Format Protobuf" >}}
-### Format Protobuf
-
-Materialize can decode Protobuf messages by integrating with a schema registry
-or parsing an inline schema to retrieve a `.proto` schema definition. It can
-then automatically define the columns and data types to use in the table.
-
-{{% include-syntax file="examples/create_source_kafka_v2" example="syntax-protobuf" %}}
-
-{{< include-md file="shared-content/kafka-format-protobuf-details.md" >}}
-
-{{< /tab >}}
-
-{{< tab "KEY FORMAT VALUE FORMAT" >}}
-### KEY FORMAT VALUE FORMAT
-By default, the message key is decoded using the same format as the message
-value. However, you can set the key and value encodings explicitly using the
-`KEY FORMAT ... VALUE FORMAT`.
-
-{{% include-syntax file="examples/create_source_kafka_v2" example="syntax-key-value-format" %}}
-
-{{< /tab >}}
-
-{{< /tabs >}}
-
-## Envelopes
-
-{{< include-md file="shared-content/kafka-envelopes.md" >}}
+{{% include-syntax file="examples/create_source_kafka_v2" example="syntax" %}}
 
 ## Details
 
 ### Ingesting data
 
 After the source is created, each [`CREATE TABLE ... FROM
-SOURCE`](/sql/create-table/) statement creates a table that decodes the topic and
-starts ingesting data. You can create multiple tables from the same source, each
-with its own format and envelope.
+SOURCE`](/sql/create-table/kafka/) statement creates a table that decodes the
+topic and starts ingesting data. You can create multiple tables from the same
+source, each with its own format and envelope.
 
 ### Handling schema changes
 
@@ -155,16 +59,21 @@ procedure.
 
 ## Features
 
-### Exposing source metadata
+{{% include-headless "/headless/kafka-start-offsets.md" %}}
 
-{{< include-md file="shared-content/kafka-include-metadata.md" >}}
+{{% include-headless "/headless/kafka-monitoring-source-progress.md" %}}
 
-For spilling to disk, setting start offsets, and monitoring source progress and
-consumer lag, see the [Features section of the Kafka/Redpanda reference
-page](/sql/create-source/kafka/#features). These features are configured on the
-`CREATE SOURCE` statement and behave the same regardless of syntax.
+{{% include-headless "/headless/kafka-monitoring-consumer-lag.md" %}}
+
+For spilling to disk, see the [Features section of the Kafka/Redpanda reference
+page](/sql/create-source/kafka/#spilling-to-disk). This feature is configured on
+the `CREATE SOURCE` statement and behaves the same regardless of syntax.
 
 ## Examples
+
+### Prerequisite: Creating a connection
+
+{{% include-headless "/headless/kafka-create-connection" %}}
 
 ### Create a source and table
 
