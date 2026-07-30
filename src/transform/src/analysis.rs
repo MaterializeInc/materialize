@@ -2248,27 +2248,36 @@ mod cardinality {
                     inputs,
                     ..
                 } => {
-                    let mut input_results = Vec::with_capacity(inputs.len());
+                    // `results` is in post-order, so walking back from `index` visits the
+                    // inputs right to left. Columns in `equivalences` are numbered left to
+                    // right, so collect the inputs first and flip them before laying out
+                    // column offsets. Mixing the two orders credits an input's unique key to
+                    // a different input, which divides the wrong factor out of the product
+                    // and can underestimate the join.
+                    let mut per_input = Vec::with_capacity(inputs.len());
+                    let mut offset = 1;
+                    for _ in 0..inputs.len() {
+                        per_input.push((
+                            results[index - offset],
+                            arity[index - offset],
+                            &keys[index - offset],
+                        ));
+                        offset += &sizes[index - offset];
+                    }
+                    per_input.reverse();
 
+                    let mut input_results = Vec::with_capacity(inputs.len());
                     // maps a column to the index in `inputs` that it belongs to
                     let mut unique_columns = BTreeMap::new();
                     let mut key_offset = 0;
-
-                    let mut offset = 1;
-                    for idx in 0..inputs.len() {
-                        let input = results[index - offset];
+                    for (idx, (input, arity, keys)) in per_input.into_iter().enumerate() {
                         input_results.push(input);
-
-                        let arity = arity[index - offset];
-                        let keys = &keys[index - offset];
                         for key in keys {
                             if key.len() == 1 {
                                 unique_columns.insert(key_offset + key[0], idx);
                             }
                         }
                         key_offset += arity;
-
-                        offset += &sizes[index - offset];
                     }
 
                     self.join(equivalences, implementation, unique_columns, input_results)
@@ -2458,6 +2467,66 @@ mod cardinality {
                 bounding().topk(&group, &Some(int64(5)), &None, rows(100.0)),
                 rows(100.0)
             );
+        }
+
+        /// A `Get` of `id` with `arity` columns, `keys` unique keys, and `count` rows.
+        fn source(
+            id: u64,
+            arity: usize,
+            keys: Vec<Vec<usize>>,
+            count: usize,
+            stats: &mut BTreeMap<GlobalId, usize>,
+        ) -> MirRelationExpr {
+            let id = GlobalId::User(id);
+            stats.insert(id, count);
+            let typ =
+                mz_repr::ReprRelationType::new(vec![ReprScalarType::Int64.nullable(false); arity])
+                    .with_keys(keys);
+            MirRelationExpr::Get {
+                id: Id::Global(id),
+                typ,
+                access_strategy: mz_expr::AccessStrategy::UnknownOrLocal,
+            }
+        }
+
+        /// Runs the bounding estimator over a whole expression, rather than one operator.
+        fn bound_of(
+            expr: &MirRelationExpr,
+            stats: BTreeMap<GlobalId, usize>,
+        ) -> CardinalityEstimate {
+            let features = mz_repr::optimize::OptimizerFeatures::default();
+            let mut builder = crate::analysis::DerivedBuilder::new(&features);
+            builder.require(Cardinality::upper_bound(stats));
+            let derived = builder.visit(expr);
+            *derived.as_view().value::<Cardinality>().unwrap()
+        }
+
+        /// Join inputs are numbered left to right, but the analysis walks them in post-order,
+        /// which is right to left. Crediting a unique key to the wrong input divides the wrong
+        /// factor out of the product, which underestimates whenever the input that really has
+        /// the key is the smaller one.
+        #[mz_ore::test]
+        fn join_credits_a_unique_key_to_the_input_that_owns_it() {
+            let mut stats = BTreeMap::new();
+            // Columns 0..1 from the first input, 2..3 from the second, 4..5 from the third.
+            let inputs = vec![
+                source(1, 2, vec![vec![0]], 7, &mut stats),
+                source(2, 2, vec![], 100, &mut stats),
+                source(3, 2, vec![vec![0]], 1000, &mut stats),
+            ];
+            // Only the first input's key covers this equivalence, so it is the factor that
+            // drops out: 1 * 100 * 1000.
+            let expr = MirRelationExpr::join(inputs, vec![vec![(0, 0), (1, 0)]]);
+            assert_eq!(bound_of(&expr, stats.clone()), rows(100_000.0));
+
+            // Equating the third input's key instead drops its factor: 7 * 100 * 1.
+            let inputs = vec![
+                source(1, 2, vec![vec![0]], 7, &mut stats),
+                source(2, 2, vec![], 100, &mut stats),
+                source(3, 2, vec![vec![0]], 1000, &mut stats),
+            ];
+            let expr = MirRelationExpr::join(inputs, vec![vec![(1, 0), (2, 0)]]);
+            assert_eq!(bound_of(&expr, stats), rows(700.0));
         }
     }
 }
