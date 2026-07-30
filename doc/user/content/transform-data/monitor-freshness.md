@@ -72,17 +72,13 @@ query has a large impact on performance.
 
 ## Summarize freshness with a CCDF
 
-A raw lag time series is hard to summarize. A **complementary cumulative
-distribution function (CCDF)** compresses a whole window of lag observations
-into a single curve that answers one question: for a given lag threshold `X`,
-what fraction of the time was the object's lag at or above `X`? It is the
-complement of the ordinary cumulative distribution, so `CCDF(X) = 1 - CDF(X)`.
+A raw time series is hard to summarize. A **complementary cumulative
+distribution function (CCDF)** compresses a whole window of freshness observations
+into a single curve that answers one question: for a given threshold `X`,
+what fraction of the time was the object's freshness at or above `X`? 
 
 This is the compact way to describe a freshness distribution. Instead of staring
-at a time series, you can make statements like "lag exceeded 10 seconds only 1%
-of the time". Because latency spans many orders of magnitude, the threshold is
-bucketed on a log scale so the tail (the rare, large lags you care about most)
-stays visible.
+at a time series, you can make statements like "the p99 freshness was 1s". 
 
 The following query builds a freshness CCDF for a single object from the last 24
 hours of history. It reads the fast, indexed
