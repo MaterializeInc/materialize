@@ -26,6 +26,7 @@ check_all_files_referenced_in_ci() {
         -not -wholename "./test/console/mzcompose.py" `# Only run manually` \
         -not -wholename "./test/mzcompose_examples/mzcompose.py" `# Example only` \
         -not -wholename "./test/get-cloud-hostname/mzcompose.py" `# Utility, no test` \
+        -not -wholename "./test/pipeline-benchmark/mzcompose.py" `# Only run manually` \
         | sed -e "s|.*/\([^/]*\)/mzcompose.py|\1|")
     while read -r composition; do
         # Anchor at end of line, otherwise a composition whose name prefixes

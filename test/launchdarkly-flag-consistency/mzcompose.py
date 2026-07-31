@@ -270,6 +270,8 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_paused_cluster_readhold_downgrade
     enable_persist_streaming_compaction
     enable_persist_streaming_snapshot_and_fetch
+    enable_pipelined_peek_overlap
+    enable_pipelined_peek_shared_timestamp
     enable_primary_key_not_enforced
     enable_projection_pushdown_after_relation_cse
     enable_public_metrics_endpoint

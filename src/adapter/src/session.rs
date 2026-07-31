@@ -1151,6 +1151,23 @@ impl TransactionStatus {
         }
     }
 
+    /// Whether the pgwire layer may gather pipelined statements into a shared
+    /// burst while the session is in this state.
+    ///
+    /// True only for the autocommit extended-query states: `Default` (idle,
+    /// before a statement's transaction starts) and `Started` (a single-query
+    /// implicit transaction). An explicit transaction (`InTransaction`,
+    /// `Failed`) or a multi-statement implicit query (`InTransactionImplicit`)
+    /// may resume a portal across statements (a partial `Execute`, a cursor
+    /// `FETCH`), which a burst that defers row streaming cannot preserve, so
+    /// those run serially.
+    pub fn allows_pipeline_burst(&self) -> bool {
+        matches!(
+            self,
+            TransactionStatus::Default | TransactionStatus::Started(_)
+        )
+    }
+
     /// Whether the transaction's ops are DDL.
     pub fn is_ddl(&self) -> bool {
         match self {
