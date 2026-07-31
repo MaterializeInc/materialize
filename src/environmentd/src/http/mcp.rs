@@ -42,7 +42,7 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::{APPLICATION_NAME, Var, VarInput};
 use mz_sql_parser::ast::display::{AstDisplay, escaped_string_literal};
 use mz_sql_parser::ast::visit::{self, Visit};
-use mz_sql_parser::ast::{Raw, RawItemName};
+use mz_sql_parser::ast::{Raw, RawItemName, UnresolvedItemName};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use thiserror::Error;
@@ -1112,6 +1112,10 @@ async fn get_data_product_details(
 ) -> Result<McpResult, McpRequestError> {
     debug!(name = %name, "Executing get_data_product_details");
 
+    // Validate before touching SQL. The comparison below is against the raw
+    // name, since `object_name` in the view already holds the quoted form.
+    validate_data_product_name(name)?;
+
     let query = format!("{}{}", DETAILS_QUERY_PREFIX, escaped_string_literal(name));
 
     let rows = execute_sql(client, &query).await?;
@@ -1123,13 +1127,11 @@ async fn get_data_product_details(
     format_rows_response(rows, max_response_size)
 }
 
-/// Parses a data product name and returns it safely quoted for SQL interpolation.
+/// Rejects an empty data product name and parses it as an `UnresolvedItemName`.
 ///
-/// Uses the SQL parser to validate the name as an `UnresolvedItemName`, then
-/// formats it with `FormatMode::Stable` so every identifier part is
-/// double-quoted with proper escaping. This prevents SQL injection regardless
-/// of the input.
-fn safe_data_product_name(name: &str) -> Result<String, McpRequestError> {
+/// Every tool that accepts a caller-supplied name runs this first, so the 1 MB
+/// input guard (DEX-64) applies before any lexing.
+fn validate_data_product_name(name: &str) -> Result<UnresolvedItemName, McpRequestError> {
     let name = name.trim();
     if name.is_empty() {
         return Err(McpRequestError::QueryValidationFailed(
@@ -1137,9 +1139,7 @@ fn safe_data_product_name(name: &str) -> Result<String, McpRequestError> {
         ));
     }
 
-    // `parse_item_name_with_limit` enforces the 1 MB guard on the raw input
-    // (DEX-64) before lexing.
-    let parsed = parse_item_name_with_limit(name)
+    parse_item_name_with_limit(name)
         .map_err(McpRequestError::QueryValidationFailed)?
         .map_err(|_| {
             McpRequestError::QueryValidationFailed(format!(
@@ -1147,7 +1147,16 @@ fn safe_data_product_name(name: &str) -> Result<String, McpRequestError> {
                  e.g. '\"database\".\"schema\".\"name\"' or 'my_view'",
                 name
             ))
-        })?;
+        })
+}
+
+/// Parses a data product name and returns it safely quoted for SQL interpolation.
+///
+/// Formats the validated name with `FormatMode::Stable` so every identifier
+/// part is double-quoted with proper escaping. This prevents SQL injection
+/// regardless of the input.
+fn safe_data_product_name(name: &str) -> Result<String, McpRequestError> {
+    let parsed = validate_data_product_name(name)?;
 
     // Stable formatting forces all identifiers to be double-quoted,
     // so SQL keywords and special characters cannot escape.
@@ -2318,6 +2327,27 @@ mod tests {
         assert!(
             msg.contains("statement batch size cannot exceed"),
             "expected size-guard error, got: {msg}"
+        );
+    }
+
+    /// `get_data_product_details` shares this guard with `read_data_product`,
+    /// so both reject oversized and empty names before reaching SQL.
+    #[mz_ore::test]
+    fn test_validate_data_product_name_guards_empty_and_oversized() {
+        use mz_sql_parser::parser::MAX_STATEMENT_BATCH_SIZE;
+
+        let err = validate_data_product_name("   ").expect_err("empty should be rejected");
+        assert!(
+            err.to_string().contains("cannot be empty"),
+            "expected empty-name error, got: {err}"
+        );
+
+        let oversized: String = "a".repeat(MAX_STATEMENT_BATCH_SIZE + 1);
+        let err = validate_data_product_name(&oversized).expect_err("oversized should be rejected");
+        assert!(
+            err.to_string()
+                .contains("statement batch size cannot exceed"),
+            "expected size-guard error, got: {err}"
         );
     }
 

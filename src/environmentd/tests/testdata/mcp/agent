@@ -61,6 +61,21 @@ mcp-agent
 200 OK
 {"jsonrpc":"2.0","id":11,"error":{"code":-32602,"message":"Data product not found: nonexistent_product","data":{"error_type":"DataProductNotFound"}}}
 
+# A name that does not parse as a single object name is rejected by validation
+# rather than interpolated into SQL, mirroring `read_data_product`.
+mcp-agent
+{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"get_data_product_details","arguments":{"name":"users\"; DROP TABLE users; --"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":12,"error":{"code":-32602,"message":"Query validation failed: Invalid data product name: users\"; DROP TABLE users; --. Expected a valid object name, e.g. '\"database\".\"schema\".\"name\"' or 'my_view'","data":{"error_type":"ValidationError"}}}
+
+# An empty name is rejected before reaching SQL.
+mcp-agent
+{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"get_data_product_details","arguments":{"name":"   "}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":13,"error":{"code":-32602,"message":"Query validation failed: Data product name cannot be empty","data":{"error_type":"ValidationError"}}}
+
 # =============================================================================
 # read_data_product - nonexistent product
 # =============================================================================

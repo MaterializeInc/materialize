@@ -6532,7 +6532,8 @@ fn test_mcp_agent_with_data_product() {
     let rows: serde_json::Value = serde_json::from_str(rows_text).unwrap();
     assert_eq!(rows.as_array().unwrap().len(), 1);
 
-    // SQL injection attempt in data product name: should return DataProductNotFound, not execute.
+    // SQL injection attempt in data product name: rejected by name validation
+    // before reaching SQL, rather than interpolated and missing the lookup.
     let (status, body) = mcp_post(
         &agents_url,
         serde_json::json!({
@@ -6550,8 +6551,8 @@ fn test_mcp_agent_with_data_product() {
         body["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("Data product not found"),
-        "SQL injection in name should be safely handled"
+            .contains("Invalid data product name"),
+        "SQL injection in name should be rejected by validation"
     );
 
     // SQL injection attempt in read_data_product name.
