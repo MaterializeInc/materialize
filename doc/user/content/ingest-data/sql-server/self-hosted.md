@@ -253,12 +253,7 @@ are receiving write queries, snapshotting may take up to an additional 5 minutes
 to complete. For details, see [snapshot latency for inactive databases](#snapshot-latency-for-inactive-databases)
 {{</ note >}}
 
-{{% include-example file="examples/ingest_data/sql_server/create_source_cloud" example="create-source" %}}
-
-{{% include-example file="examples/ingest_data/sql_server/create_source_cloud" example="create-source-options" %}}
-
-{{% include-example file="examples/ingest_data/sql_server/create_source_cloud"
-example="schema-changes" %}}
+{{% include-example file="examples/ingest_data/sql_server/create_source_cloud" example="ingest-data-step" %}}
 
 ### 4. Right-size the cluster
 

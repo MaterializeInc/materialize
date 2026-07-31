@@ -32,14 +32,24 @@ guide](/ingest-data/sql-server/source-versioning/).
 
 #### Incompatible schema changes
 
-All other schema changes to upstream tables will set the corresponding subsource
-into an error state, which prevents you from reading from the source.
+All other schema changes to upstream tables will set the corresponding
+Materialize table (new syntax) or subsource (legacy syntax) into an error state,
+which prevents you from reading from the source.
 
-To handle incompatible [schema changes](#schema-changes), use [`DROP SOURCE`](/sql/alter-source/#context)
-and [`ALTER SOURCE...ADD SUBSOURCE`](/sql/alter-source/) to first drop the
-affected subsource, and then add the table back to the source. When you add the
-subsource, it will have the updated schema from the corresponding upstream
-table.
+To handle incompatible [schema changes](#schema-changes), the recovery steps
+depend on the syntax used to create the source:
+
+- With the new [`CREATE SOURCE`](/sql/create-source/sql-server-v2/) and [`CREATE
+  TABLE FROM SOURCE`](/sql/create-table/) syntax, drop the affected table with
+  [`DROP TABLE`](/sql/drop-table/), and then [`CREATE TABLE FROM
+  SOURCE`](/sql/create-table/) to recreate the table with the updated schema
+  from the corresponding upstream table.
+
+- With the legacy [`CREATE SOURCE ... FOR ...`](/sql/create-source/sql-server/)
+  syntax, use [`DROP SOURCE`](/sql/alter-source/#context) to drop the affected
+  subsource, and then [`ALTER SOURCE...ADD SUBSOURCE`](/sql/alter-source/) to add
+  the table back to the source. When you add the subsource, it will have the
+  updated schema from the corresponding upstream table.
 
 
 ### Supported types
