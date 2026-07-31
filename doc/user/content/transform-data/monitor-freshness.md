@@ -1,5 +1,5 @@
 ---
-title: "Monitor freshness"
+title: "How to monitor freshness in Materialize"
 description: "How to monitor freshness for an object over time in Materialize."
 menu:
   main:
