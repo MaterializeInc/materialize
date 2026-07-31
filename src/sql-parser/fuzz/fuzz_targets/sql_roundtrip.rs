@@ -71,7 +71,9 @@ use libfuzzer_sys::arbitrary::{Arbitrary, Unstructured};
 use libfuzzer_sys::fuzz_target;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
-use mz_sql_parser::ast::{AlterRoleOption, AstInfo, Expr, Raw, RoleAttribute, Statement};
+use mz_sql_parser::ast::{
+    AlterRoleOption, AstInfo, Expr, Op, Raw, RoleAttribute, Statement, Value,
+};
 use mz_sql_parser::parser::parse_statements;
 use mz_sql_pretty::pretty_str_simple;
 
@@ -80,8 +82,12 @@ use mz_sql_pretty::pretty_str_simple;
 // ---------------------------------------------------------------------------
 
 /// Strip syntactic noise so AST equality reflects *semantic* fidelity:
-/// `Declare`/`Prepare` capture raw text, and `Expr::Nested` records parens that
-/// the printer is free to add or drop. See `parse_pretty_roundtrip` for detail.
+/// `Declare`/`Prepare` capture raw text, `Expr::Nested` records parens that the
+/// printer is free to add or drop, and a negative numeric literal is the same
+/// value whether the parser folded the sign in (`Number("-1")`) or left a unary
+/// op (`- 1`). The parser chooses by *context* (a leading `- 1` folds, `a + - 1`
+/// does not), so the two forms must compare equal. See `parse_pretty_roundtrip`
+/// for detail.
 fn normalize(stmt: &mut Statement<Raw>) {
     match stmt {
         Statement::Declare(d) => {
@@ -136,6 +142,19 @@ impl<'a, T: AstInfo> VisitMut<'a, T> for RemoveParens {
         visit_mut::visit_expr_mut(self, expr);
         if let Expr::Nested(inner) = expr {
             *expr = (**inner).clone();
+        }
+        // Canonicalize a negative numeric literal to a unary minus over the bare
+        // number, so it compares equal to the unfolded `- <number>` form the
+        // parser produces in non-leading position. (Positive literals are never
+        // sign-prefixed by the parser, so only `-` needs handling.)
+        if let Expr::Value(Value::Number(n)) = expr {
+            if let Some(rest) = n.strip_prefix('-') {
+                *expr = Expr::Op {
+                    op: Op::bare("-"),
+                    expr1: Box::new(Expr::Value(Value::Number(rest.to_string()))),
+                    expr2: None,
+                };
+            }
         }
     }
 }
