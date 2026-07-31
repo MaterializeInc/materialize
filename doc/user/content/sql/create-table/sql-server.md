@@ -51,6 +51,13 @@ columns in the upstream tables, without downtime. For details, see [SQL Server:
 Handling upstream schema changes with zero
 downtime](/ingest-data/sql-server/source-versioning/).
 
+See also [Handling upstream operations](#handling-upstream-operations) for
+additional upstream operation considerations.
+
+## Handling upstream operations
+
+{{% upstream-schema-change-behavior connector="sql-server" %}}
+
 ## Privileges
 
 The privileges required to execute this statement are:
