@@ -78,7 +78,7 @@ recommend **Premium block blob** storage accounts.
 
 ## Recommended metadata database sizing
 
-{{< include-md file="shared-content/self-managed/metadata-database-sizing.md" >}}
+{{< include-md file="content/headless/self-managed-deployments/metadata-database-sizing.md" >}}
 
 ### Flexible Server SKUs
 

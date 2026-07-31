@@ -61,7 +61,7 @@ If deploying `v25.2`, Materialize clusters will not automatically use swap unles
 
 ## Recommended metadata database sizing
 
-{{< include-md file="shared-content/self-managed/metadata-database-sizing.md" >}}
+{{< include-md file="content/headless/self-managed-deployments/metadata-database-sizing.md" >}}
 
 ### RDS instance types
 

@@ -109,7 +109,7 @@ to substantially improve the performance of compute-bound workloads.
 
 ## Recommended metadata database sizing
 
-{{< include-md file="shared-content/self-managed/metadata-database-sizing.md" >}}
+{{< include-md file="content/headless/self-managed-deployments/metadata-database-sizing.md" >}}
 
 ### Cloud SQL machine types
 
