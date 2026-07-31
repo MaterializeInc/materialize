@@ -139,13 +139,6 @@ single object, add a join to `mz_catalog.mz_objects` and a name filter to the
       AND wl.lag > INTERVAL '0'
 ```
 
-Each threshold row tells you what fraction of the window the object's freshness
-was at or above that many seconds. A **healthy** object has a fraction at or near
-zero for the higher thresholds (10 and 100 seconds), meaning its freshness rarely
-exceeds a second or two. An **unhealthy** object has a meaningful fraction of the
-window at or above the larger thresholds, meaning its freshness is frequently
-many seconds or minutes behind.
-
 To compare against an SLO, pick your target freshness (say 10 seconds) and read
 the fraction of time at or above it. That fraction is how often the object was
 violating the SLO over the window.
