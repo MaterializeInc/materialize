@@ -74,7 +74,6 @@ enum McpRequestError {
     #[error("Invalid JSON-RPC version: expected 2.0")]
     InvalidJsonRpcVersion,
     #[error("Method not found: {0}")]
-    #[allow(dead_code)] // Handled by serde deserialization, kept for error mapping
     MethodNotFound(String),
     #[error("Tool not found: {0}")]
     ToolNotFound(String),
