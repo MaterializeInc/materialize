@@ -30,8 +30,7 @@ or Cursor) to the MCP server to:
 
 ## Connect to the MCP server
 
-How you connect to the `materialize-developer` MCP server depends on your
-deployment:
+There are two ways to authenticate to the `materialize-developer` MCP server:
 
 - **OAuth**: Starting in v26.30, your MCP client can sign you in through your
   browser; no token to generate or store. Available for **Cloud** and for
@@ -39,9 +38,6 @@ deployment:
 
 - **Token-based**: You provide Base64-encoded credentials (the MCP token) to the
   client. Available for **Cloud** and **Self-Managed**.
-
-- **No authentication**: The **Emulator** does not require authentication. Your
-  MCP client only needs the MCP server URL.
 
 ### Method 1: OAuth
 
