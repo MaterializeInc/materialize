@@ -23,6 +23,69 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-07-29* <br>
 *Released to Materialize Self-Managed: 2026-07-30* <br>
 
+### Graceful Cluster Reconfiguration {#v26.35-background-cluster-reconfiguration}
+`ALTER CLUSTER` for configuration changes (such as resizing) now returns immediately and runs in the background, rather than blocking until the new replica set is ready.
+
+Because the command is now asynchronous, you can monitor the
+progress of an in-flight reconfiguration using `SHOW CLUSTERS`.
+
+```mzsql
+SHOW CLUSTERS;
+```
+```nofmt
+    name    | replicas   |           activity           | comment
+------------+------------+------------------------------+---------
+ my_cluster | r1 (400cc) | reconfiguring size to 1600cc |
+```
+
+For detailed status, query
+[`mz_internal.mz_cluster_reconfigurations`](/reference/system-catalog/mz_internal/#mz_cluster_reconfigurations),
+which reports the target shape, the deadline, and the reconfiguration's
+lifecycle `status` (`in-progress`, then a terminal `finalized`, `timed-out`,
+`cancelled`, or `resource-exhausted`):
+
+```mzsql
+SELECT cluster_id, status, deadline, on_timeout, target, changes
+FROM mz_internal.mz_cluster_reconfigurations;
+```
+
+For more information, see [`ALTER CLUSTER`: Resizing process](/sql/alter-cluster/#resizing-process).
+
+### AWS Glue Schema Registry Support for Sinks {#v26.35-aws-glue-schema-registry-support-sinks}
+
+{{< public-preview />}}
+
+Kafka sinks can now use [AWS Glue Schema
+Registry](/sql/create-connection/#aws-glue-schema-registry) for Avro schema
+management, via the new `FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY` syntax on
+[`CREATE SINK`](/sql/create-sink/kafka/).
+
+```mzsql
+-- Authenticate to AWS Glue through an AWS connection.
+CREATE CONNECTION aws_connection TO AWS (
+    ASSUME ROLE ARN = 'arn:aws:iam::123456789000:role/MaterializeGlue'
+);
+
+CREATE CONNECTION glue_connection TO AWS GLUE SCHEMA REGISTRY (
+    AWS CONNECTION = aws_connection,
+    REGISTRY = 'default-registry'
+);
+
+-- Write Avro-encoded output, registering schemas with AWS Glue.
+CREATE SINK avro_sink
+  IN CLUSTER my_io_cluster
+  FROM my_materialized_view
+  INTO KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
+  KEY (key)
+  FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_connection (
+    KEY SCHEMA NAME = 'test_topic-key',
+    VALUE SCHEMA NAME = 'test_topic-value'
+  )
+  ENVELOPE UPSERT;
+```
+
+For more information, see [`CREATE SINK`: Using AWS Glue Schema Registry](/sql/create-sink/kafka/#using-aws-glue-schema-registry).
+
 ### Improvements {#v26.35-improvements}
 - **Faster read queries under write load**: Read-only queries (e.g., `SELECT 1`) are no longer blocked by concurrent write transactions; under high write load, victim query latency drops from multiple seconds to single-digit milliseconds.
 - **Better query plans for correlated subqueries**: Queries using patterns like `1 IN (SELECT 1 WHERE p)` and `NOT EXISTS (SELECT 1 WHERE p)` are now optimized to a simple filter, eliminating unnecessary semi/anti-joins.
@@ -44,6 +107,37 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 
 ## v26.34.1
 *Released to Materialize Self-Managed: 2026-07-24* <br>
+
+### Graceful Cluster Reconfiguration {#v26.34.1-graceful-cluster-reconfiguration}
+
+<red>*Materialize Self-Managed only*</red>
+
+`ALTER CLUSTER` for configuration changes (such as resizing) now returns immediately and runs in the background, rather than blocking until the new replica set is ready.
+
+Because the command is now asynchronous, you can monitor the
+progress of an in-flight reconfiguration using `SHOW CLUSTERS`.
+
+```mzsql
+SHOW CLUSTERS;
+```
+```nofmt
+    name    | replicas   |           activity           | comment
+------------+------------+------------------------------+---------
+ my_cluster | r1 (400cc) | reconfiguring size to 1600cc |
+```
+
+For detailed status, query
+[`mz_internal.mz_cluster_reconfigurations`](/reference/system-catalog/mz_internal/#mz_cluster_reconfigurations),
+which reports the target shape, the deadline, and the reconfiguration's
+lifecycle `status` (`in-progress`, then a terminal `finalized`, `timed-out`,
+`cancelled`, or `resource-exhausted`):
+
+```mzsql
+SELECT cluster_id, status, deadline, on_timeout, target, changes
+FROM mz_internal.mz_cluster_reconfigurations;
+```
+
+For more information, see [`ALTER CLUSTER`: Resizing process](/sql/alter-cluster/#resizing-process).
 
 ### Bug Fixes {#v26.34.1-bug-fixes}
 - Fixed an issue where `ALTER CLUSTER ... WITH (WAIT UNTIL READY ...)` would deadlock on clusters hosting single-replica sources (Postgres, MySQL, SQL Server), causing graceful reconfiguration to time out and roll back without resizing.
@@ -83,43 +177,6 @@ ALTER CLUSTER my_cluster SET (
 For more information, see the `AUTO SCALING STRATEGY` option on
 [`CREATE CLUSTER`](/sql/create-cluster/#autoscaling) and
 [`ALTER CLUSTER`](/sql/alter-cluster/#speed-up-hydration-by-autoscaling-to-a-larger-size).
-
-### AWS Glue Schema Registry Support for Sinks {#v26.34-aws-glue-schema-registry-support-sinks}
-
-{{< public-preview />}}
-
-<red>*Materialize Cloud only*</red>
-
-Kafka sinks can now use [AWS Glue Schema
-Registry](/sql/create-connection/#aws-glue-schema-registry) for Avro schema
-management, via the new `FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY` syntax on
-[`CREATE SINK`](/sql/create-sink/kafka/).
-
-```mzsql
--- Authenticate to AWS Glue through an AWS connection.
-CREATE CONNECTION aws_connection TO AWS (
-    ASSUME ROLE ARN = 'arn:aws:iam::123456789000:role/MaterializeGlue'
-);
-
-CREATE CONNECTION glue_connection TO AWS GLUE SCHEMA REGISTRY (
-    AWS CONNECTION = aws_connection,
-    REGISTRY = 'default-registry'
-);
-
--- Write Avro-encoded output, registering schemas with AWS Glue.
-CREATE SINK avro_sink
-  IN CLUSTER my_io_cluster
-  FROM my_materialized_view
-  INTO KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
-  KEY (key)
-  FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_connection (
-    KEY SCHEMA NAME = 'test_topic-key',
-    VALUE SCHEMA NAME = 'test_topic-value'
-  )
-  ENVELOPE UPSERT;
-```
-
-For more information, see [`CREATE SINK`: Using AWS Glue Schema Registry](/sql/create-sink/kafka/#using-aws-glue-schema-registry).
 
 ### Role Mapping via SCIM {#v26.34-role-mapping-scim}
 
