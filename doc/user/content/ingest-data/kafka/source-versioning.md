@@ -19,7 +19,7 @@ downtime in Materialize, using a blue/green cutover:
 
 - Create a new table that reads the evolved schema.
 - Recreate the downstream objects against the new table.
-- Swap the new objects into place with [`ALTER SCHEMA ... SWAP WITH`](/sql/alter-schema/#swap-with).
+- Swap the new objects into place with [`ALTER SCHEMA ... SWAP WITH`](/sql/alter-schema/).
 
 Consumers keep referencing the same object names, and the cutover is atomic.
 

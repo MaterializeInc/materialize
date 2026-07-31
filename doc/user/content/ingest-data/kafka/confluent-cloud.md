@@ -23,7 +23,7 @@ Cloud Kafka cluster.
 {{< /tip >}}
 
 If you already have a Confluent Cloud Kafka cluster, you can skip step 1 and
-directly move on to [Create an API Key](#create-an-api-key). You can also skip
+directly move on to [Create an API Key](#2-create-an-api-key). You can also skip
 step 3 if you already have a Confluent Cloud Kafka cluster up and running, and
 have created a topic that you want to create a source for.
 
