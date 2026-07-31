@@ -19,7 +19,9 @@
 // limitations under the License.
 
 use mz_ore::str::StrExt;
-use mz_sql_lexer::keywords::{ALL, ANY, AS, DISTINCT, INTO, Keyword, LIST, PREPARE, SOME, WHEN};
+use mz_sql_lexer::keywords::{
+    ALL, ANY, AS, DISTINCT, INTO, Keyword, LIST, MAP, PREPARE, SOME, WHEN,
+};
 use mz_sql_lexer::lexer::{IdentString, MAX_IDENTIFIER_LENGTH};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -332,11 +334,17 @@ impl Ident {
                         // `LIST` followed by `[` re-lexes as a `LIST[...]` literal
                         // (`list[1]` is a valid one-element list), so a bare `list`
                         // identifier that gets subscripted — `"list"[1]` — would
-                        // reparse as a list literal instead of a subscript. (`ARRAY`
-                        // is reserved-in-scalar-expression and so already quoted;
-                        // `MAP[...]` requires `=>`, so `map[1]` is unambiguously a
-                        // subscript.)
+                        // reparse as a list literal instead of a subscript.
+                        // (`ARRAY` is reserved-in-scalar-expression and so already
+                        // quoted.)
                         || kw == LIST
+                        // An option value may be a `MAP[k => v]` literal, and that
+                        // grammar commits to the map form on the `MAP` keyword
+                        // alone, then demands `[`. So a bare `map` option value —
+                        // `CREATE SINK … (TOPIC = map)` — fails to reparse rather
+                        // than staying an identifier. Unlike expression position,
+                        // there is no next-token lookahead to fall back on.
+                        || kw == MAP
                         // `DEALLOCATE [PREPARE] <name>` accepts an optional
                         // `PREPARE` keyword before the name, so a bare `prepare`
                         // name is consumed as that keyword on reparse, leaving no

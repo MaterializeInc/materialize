@@ -880,6 +880,28 @@ fn test_list_keyword_bare_identifier_subscript_display_roundtrip() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn test_map_keyword_bare_identifier_option_value_display_roundtrip() {
+    // An option value may be a `MAP[k => v]` literal, and that grammar commits to
+    // the map form on the `MAP` keyword alone and then demands `[` — with no
+    // next-token lookahead to fall back on, unlike expression position. So a bare
+    // `map` option value fails to reparse ("Expected left square bracket") and
+    // `can_be_printed_bare` must quote it. Regression for the sql_roundtrip fuzz
+    // finding `CREATE SINK … (TOPIC = "map")`.
+    for sql in [
+        r#"CREATE SINK s FROM t INTO KAFKA CONNECTION c (TOPIC = "map") FORMAT BYTES ENVELOPE DEBEZIUM"#,
+        r#"CREATE SOURCE s FROM KAFKA CONNECTION c (TOPIC = "map") FORMAT BYTES"#,
+        r#"CREATE MATERIALIZED VIEW v WITH (PARTITION BY = "map") AS SELECT 1"#,
+        r#"SELECT "map""#,
+        r#"SELECT "map"[1]"#,
+        // The map literal itself still prints as the special form.
+        r#"SELECT map['a' => 1]"#,
+    ] {
+        assert_display_roundtrips(sql);
+    }
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn test_table_function_special_name_display_roundtrip() {
     // `extract`/`position` carry a special `extract(a FROM b)` / `position(a IN
     // b)` display that only reparses in scalar-expression position. As table

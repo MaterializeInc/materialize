@@ -128,7 +128,7 @@ SELECT
     "null",
     "array",
     "list",
-    map,
+    "map",
     "case",
     "cast",
     coalesce,

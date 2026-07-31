@@ -364,7 +364,7 @@ SELECT quote_ident('true'), quote_ident('false'), quote_ident('null'), quote_ide
 "null"
 "array"
 "list"
-map
+"map"
 "case"
 "cast"
 coalesce
