@@ -417,7 +417,7 @@ def launch(
     # caller didn't provide explicitly.
     tags.setdefault("owner", tags.get("LaunchedBy") or whoami())
     tags.setdefault("reason", "scratch instance")
-    tags.setdefault("team", "unknown")
+    tags.setdefault("team", "engineering")
     tags.setdefault(
         "deleteAfter",
         delete_after.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
