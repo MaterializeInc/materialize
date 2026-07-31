@@ -122,9 +122,9 @@ Skills](/integrations/coding-agent-skills/).
 #### Connect to the MCP server
 
 The Materialize Emulator includes a built-in `materialize-developer` [MCP
-server](/integrations/mcp-server/mcp-developer/) (port `6876`) for
-troubleshooting and observability. The Emulator does not require
-authentication, so your MCP client only needs the MCP server URL
+server](/integrations/mcp-server/mcp-developer/) for troubleshooting and
+observability. The Emulator does not require authentication, so your MCP
+client only needs the MCP server URL
 `http://localhost:6876/api/mcp/developer`.
 
 1. Configure your MCP client with the Emulator's MCP server URL. For example,
