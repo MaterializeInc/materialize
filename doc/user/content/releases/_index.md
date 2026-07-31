@@ -1728,7 +1728,7 @@ See also Upgrade Notes for release specific notes.
 
 #### Upgrade notes for v26.0.0
 
-{{< include-md file="shared-content/self-managed/upgrade-notes/v26.0.md" >}}
+{{% include-headless "/headless/self-managed-deployments/upgrade-notes/v26.0" %}}
 
 See also [Version-specific upgrade
 notes](/self-managed-deployments/upgrading/version-notes/).

@@ -10,13 +10,11 @@ menu:
         weight: 15
 ---
 
-{{< public-preview />}}
-
 {{< source-versioning-disambiguation is_new=true
 other_ref="[old reference page](/sql/create-source/mysql/)" include_blurb=true >}}
 
 {{% create-source-intro external_source="MySQL" version="8.0.1+"
-create_table="/sql/create-table/" %}}
+create_table="/sql/create-table/mysql/" %}}
 
 ## Prerequisites
 

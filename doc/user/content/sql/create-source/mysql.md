@@ -4,7 +4,7 @@ description: "Connecting Materialize to a MySQL database for Change Data Capture
 pagerank: 40
 menu:
     main:
-        parent: "create-source"
+        parent: "create-source-legacy"
         identifier: cs_mysql
         name: MySQL (Legacy Syntax)
         weight: 16

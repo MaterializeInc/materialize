@@ -84,7 +84,7 @@
     the referenced table names.
 
     - For supported PostgreSQL data types, refer to [supported
-    types](/sql/create-table/#supported-data-types).
+    types](/sql/create-table/postgres/#supported-data-types).
 
     {{< /note >}}
 
