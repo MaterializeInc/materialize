@@ -124,7 +124,7 @@ Read this as: freshness was at or above 1 second 100% of the time and never
 reached 10 seconds or 100 seconds (0% at or above each). This is the healthy
 pattern for a lightly loaded instance whose objects all sit at a low,
 near-constant lag, so the 10-second and 100-second thresholds are zero here. A
-busier instance under real load would show non-zero fractions at those higher
+busier instance under real load might show non-zero fractions at those higher
 thresholds.
 
 By default this query aggregates across every object. To scope the CCDF to a
