@@ -23,8 +23,8 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-07-29* <br>
 *Released to Materialize Self-Managed: 2026-07-30* <br>
 
-### Graceful Cluster Reconfiguration {#v26.35-background-cluster-reconfiguration}
-`ALTER CLUSTER` for configuration changes (such as resizing) now returns immediately and runs in the background, rather than blocking until the new replica set is ready.
+### Asynchronous Cluster Reconfiguration {#v26.35-background-cluster-reconfiguration}
+`ALTER CLUSTER` now runs configuration changes (such as resizing) in the background, rather than blocking until the new replica set is ready. This means you can start a reconfiguration and move on to other tasks while the process completes.
 
 Because the command is now asynchronous, you can monitor the
 progress of an in-flight reconfiguration using `SHOW CLUSTERS`.
@@ -58,7 +58,7 @@ For more information, see [`ALTER CLUSTER`: Resizing process](/sql/alter-cluster
 Kafka sinks can now use [AWS Glue Schema
 Registry](/sql/create-connection/#aws-glue-schema-registry) for Avro schema
 management, via the new `FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY` syntax on
-[`CREATE SINK`](/sql/create-sink/kafka/).
+[`CREATE SINK`](/sql/create-sink/kafka/). With Glue now supported on both sources and sinks, you can manage your Kafka schemas end to end on AWS.
 
 ```mzsql
 -- Authenticate to AWS Glue through an AWS connection.
@@ -88,16 +88,9 @@ For more information, see [`CREATE SINK`: Using AWS Glue Schema Registry](/sql/c
 
 ### Kafka: Source versioning {#v26.35-kafka-source-versioning}
 
-For Kafka sources, we've introduced new syntax for [`CREATE
-SOURCE`](/sql/create-source/kafka-v2/) and [`CREATE TABLE ... FROM
-SOURCE`](/sql/create-table/kafka/). This is the same source versioning syntax
-already available for PostgreSQL, MySQL, and SQL Server sources, and it allows
-you to better handle Avro schema changes in your Kafka topics.
+Kafka sources now support source versioning, so you can adopt upstream Avro schema changes without downtime. This uses the same mechanism already available for PostgreSQL, MySQL, and SQL Server sources, by creating a new table with the evolved schema and swapping it into place with a blue/green cutover.
 
-Materialize resolves the latest registered Avro schema when the `CREATE TABLE`
-statement runs, and pins it as the table's reader schema. To pick up an
-upstream schema change with zero downtime, create a new table that reads the
-evolved schema and swap it into place with a blue/green cutover.
+There is new syntax for [`CREATE SOURCE`](/sql/create-source/kafka-v2/) and [`CREATE TABLE ... FROM SOURCE`](/sql/create-table/kafka/) for creating and versioning tables independently. Materialize resolves the latest registered Avro schema when the `CREATE TABLE` statement runs, and pins it as the table's reader schema.
 
 For more information, refer to:
 - [Guide: Handling upstream schema changes with zero
@@ -107,7 +100,7 @@ For more information, refer to:
 
 ### Improvements {#v26.35-improvements}
 - **Faster read queries under write load**: Read-only queries (e.g., `SELECT 1`) are no longer blocked by concurrent write transactions; under high write load, victim query latency drops from multiple seconds to single-digit milliseconds.
-- **Better query plans for correlated subqueries**: Queries using patterns like `1 IN (SELECT 1 WHERE p)` and `NOT EXISTS (SELECT 1 WHERE p)` are now optimized to a simple filter, eliminating unnecessary semi/anti-joins.
+- **Better query plans for correlated subqueries**: Queries using patterns like `1 IN (SELECT 1 WHERE p)` and `NOT EXISTS (SELECT 1 WHERE p)` are now optimized to a simple filter, eliminating unnecessary semi/anti-joins for faster queries.
 - **Account hierarchy billing**: Organizations running multiple Materialize accounts under one parent (e.g., separate production and staging accounts) can now see consolidated billing and usage at the parent level, broken out per child account; each child account sees only its own usage. Available on request — talk to your account executive to see if you qualify.
 - **`mz-debug` CPU profiling**: The `mz-debug` diagnostic tool now automatically collects CPU profiles alongside memory profiles for Self-Managed deployments.
 
@@ -127,11 +120,11 @@ For more information, refer to:
 ## v26.34.1
 *Released to Materialize Self-Managed: 2026-07-24* <br>
 
-### Graceful Cluster Reconfiguration {#v26.34.1-graceful-cluster-reconfiguration}
+### Asynchronous Cluster Reconfiguration {#v26.34.1-graceful-cluster-reconfiguration}
 
 <red>*Materialize Self-Managed only*</red>
 
-`ALTER CLUSTER` for configuration changes (such as resizing) now returns immediately and runs in the background, rather than blocking until the new replica set is ready.
+`ALTER CLUSTER` now runs configuration changes (such as resizing) in the background, rather than blocking until the new replica set is ready. This means you can start a reconfiguration and move on to other tasks while the process completes.
 
 Because the command is now asynchronous, you can monitor the
 progress of an in-flight reconfiguration using `SHOW CLUSTERS`.
