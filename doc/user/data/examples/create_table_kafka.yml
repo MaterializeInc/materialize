@@ -145,7 +145,7 @@
         | `NONE` | Append-only envelope (default). Each message is inserted as a new row. |
         | `DEBEZIUM` | Decode Kafka messages produced by [Debezium](https://debezium.io/). |
         | `UPSERT [ ( VALUE DECODING ERRORS = INLINE [AS <name>] ) ]` | Use the standard key-value convention to support inserts, updates, and deletes. Required to consume [log compacted topics](https://docs.confluent.io/platform/current/kafka/design.html#log-compaction). |
-  
+
 - name: "syntax-json"
   description: |
     Materialize can decode JSON messages into a single column named `data` with
@@ -285,7 +285,7 @@
 
         The name of the [Kafka source](/sql/create-source/kafka-v2/) to read
         from.
-  
+
     - name: "`<n>` **COLUMNS**"
       description: |
         The number of columns in the CSV message.

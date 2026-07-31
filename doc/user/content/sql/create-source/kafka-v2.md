@@ -13,7 +13,7 @@ menu:
 {{< source-versioning-disambiguation is_new=true
 other_ref="[old reference page](/sql/create-source/kafka/)" >}}
 
-{{% create-source-intro external_source="Kafka or Redpanda broker" 
+{{% create-source-intro external_source="Kafka or Redpanda broker"
 create_table="/sql/create-table/kafka" %}}
 
 The decoding options (`FORMAT`, `INCLUDE`, and `ENVELOPE`) are set on the
