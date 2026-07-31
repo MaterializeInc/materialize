@@ -13,7 +13,7 @@ your IdP is connected.
 
 ## Add additional OAuth2 clients
 
-By default the example registers a single OAuth2Client in Hydra for the
+By default the ory-stack module registers a single OAuth2Client in Hydra for the
 Materialize console. If you have other internal applications that
 should authenticate through the same Hydra instance, you can register
 additional clients using Hydra Maester's `OAuth2Client` CRDs.

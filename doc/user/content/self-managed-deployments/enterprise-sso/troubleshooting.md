@@ -36,7 +36,7 @@ you can see which component rejected the flow.
 |---|---|---|
 | Pods stuck in `ImagePullBackOff` | License key JWT missing the `ory` entitlement, or expired | Update `license_key` in tfvars, re-apply, restart the Ory pods |
 | `curl https://polis.example.com` times out, LB has zero endpoints | Service selector doesn't match polis pod labels | Confirm the LoadBalancer Service selector targets `app.kubernetes.io/name=polis, instance=polis` |
-| TLS handshake fails on polis hostname | Polis doesn't terminate TLS, the LB target is plain HTTP | The example deploys a pingap TLS proxy in front of Polis automatically; check that the `polis-tls-proxy` Deployment is running |
+| TLS handshake fails on polis hostname | Polis serves plain HTTP internally; the Polis chart's TLS sidecar terminates HTTPS | Check the Polis pod's TLS sidecar container is running and the `polis-tls` certificate secret exists |
 | Polis SCIM endpoint URLs return `http://localhost:5225/...` | `EXTERNAL_URL` env var not set on Polis | Module sets it automatically from `external_url`; re-run `terraform apply` |
 | Polis logs `OAuth server not configured correctly for openid flow, check if JWT signing keys are loaded` | `OPENID_RSA_PRIVATE_KEY` and `OPENID_RSA_PUBLIC_KEY` missing | Module auto-generates and injects them; re-run `terraform apply` |
 | Polis logs `"pkcs8" must be PKCS#8 formatted string` | RSA private key was PKCS#1 | Module uses the PKCS#8 form; re-run `terraform apply` |

@@ -58,7 +58,7 @@ additions below.
 | Ory Hydra | Helm release in the `ory` namespace. OAuth2 / OIDC provider that the Materialize console trusts. Hydra Maester is enabled. |
 | Ory Selfservice UI | Helm release in the `ory` namespace. Renders the Kratos login, consent, and recovery pages. |
 | Ory Polis (optional) | Helm release in the `ory` namespace when `enable_polis = true`. SAML-to-OIDC bridge plus SCIM endpoint. |
-| Polis TLS Proxy (optional) | `polis-tls-proxy` Deployment fronting Polis. Polis itself only speaks plain HTTP, so a pingap-based TLS terminator is deployed alongside it when Polis is enabled. |
+| Polis TLS termination (optional) | Polis serves plain HTTP internally. The Polis chart runs a TLS-terminating sidecar that presents HTTPS on the public port, using the cert-manager certificate mounted into it. |
 | cert-manager `ClusterIssuer` | Defaults to the in-cluster self-signed issuer. Override via `cert_issuer_ref` to plug in a real one (corporate CA, Let's Encrypt, etc.). |
 
 ### Materialize
