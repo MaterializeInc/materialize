@@ -300,14 +300,17 @@ fn test_unmanaged_builtin_cluster_is_left_alone() {
         assert_eq!(declared_and_actual(&server, "mz_support"), (1, 1));
         // The conversion adopts the existing `r1`. Adding a second replica then
         // makes the set one that no replication factor would produce.
+        //
+        // As `mz_support`, not `mz_system`: altering a cluster requires being its
+        // owner, and `mz_support` owns this one.
         execute_as(
             &server,
-            "mz_system",
+            "mz_support",
             "ALTER CLUSTER mz_support SET (MANAGED = false)",
         );
         execute_as(
             &server,
-            "mz_system",
+            "mz_support",
             "CREATE CLUSTER REPLICA mz_support.extra SIZE 'scale=1,workers=1'",
         );
         assert_eq!(
