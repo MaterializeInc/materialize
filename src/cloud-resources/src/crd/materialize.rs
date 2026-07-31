@@ -2788,6 +2788,7 @@ mod tests {
     use super::{DEFAULT_ROLLOUT_REQUEST_TIMEOUT, FORCE_ROLLOUT_ANNOTATION, RolloutRequestTimeout};
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `sha256_compress` on OS `linux`
     fn force_rollout_annotation_forces_new_generation() {
         // The force-rollout annotation must feed into both the v1 rollout
         // hash (so that a rollout is requested) and the v1alpha1 force
