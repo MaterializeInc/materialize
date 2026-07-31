@@ -86,6 +86,17 @@ CREATE SINK avro_sink
 
 For more information, see [`CREATE SINK`: Using AWS Glue Schema Registry](/sql/create-sink/kafka/#using-aws-glue-schema-registry).
 
+### Handling Avro schema changes in Kafka sources {#v26.35-kafka-avro-schema-changes}
+
+Materialize pins a table's Avro reader schema when the table is created, so
+fields added upstream later don't appear automatically. A new guide walks
+through picking up an upstream schema change with zero downtime, using a
+blue/green cutover with [`ALTER SCHEMA ... SWAP WITH`](/sql/alter-schema/).
+
+For more information, refer to:
+- [Guide: Handling upstream schema changes with zero
+  downtime](/ingest-data/kafka/source-versioning/)
+
 ### Improvements {#v26.35-improvements}
 - **Faster read queries under write load**: Read-only queries (e.g., `SELECT 1`) are no longer blocked by concurrent write transactions; under high write load, victim query latency drops from multiple seconds to single-digit milliseconds.
 - **Better query plans for correlated subqueries**: Queries using patterns like `1 IN (SELECT 1 WHERE p)` and `NOT EXISTS (SELECT 1 WHERE p)` are now optimized to a simple filter, eliminating unnecessary semi/anti-joins.
