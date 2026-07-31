@@ -42,7 +42,7 @@ after the source was created, or columns that are excluded) is supported. As
 these columns were never ingested, you can drop them without issue.
 
 If your Materialize source ingests a column, dropping that column from your
-upstream table causes ingestion to stall.
+upstream table puts the affected table into an error state.
 
 - If using the new [`CREATE SOURCE` and `CREATE TABLE FROM
 SOURCE`](/sql/create-source/{{ $connector }}-v2/) syntax, you can safely drop a
@@ -134,8 +134,8 @@ in Materialize to resume ingestion.
 SQL Server allows up to two capture instances to exist for a table at once.
 Materialize ingests from one of them.
 
-Removing the capture instance that Materialize is using causes ingestion to
-stall. Removing a capture instance that Materialize is not using does not affect
+Removing the capture instance that Materialize is using puts the affected table
+into an error state. Removing a capture instance that Materialize is not using does not affect
 ingestion.
 
 {{ end -}}
