@@ -12,7 +12,7 @@ menu:
 [Freshness](/concepts/reaction-time/#freshness) measures the time from when a
 change occurs in an upstream system to when it becomes visible in the results of
 a query. This guide shows how to track freshness for an object over time and how
-to summarize a whole window of freshness observations into a single curve.
+to summarize a whole window of freshness observations with a CCDF.
 
 If freshness is worse than expected, see [Freshness
 troubleshooting](/transform-data/freshness-troubleshooting/) to diagnose and
@@ -74,7 +74,7 @@ query has a large impact on performance.
 
 A raw time series is hard to summarize. A **complementary cumulative
 distribution function (CCDF)** compresses a whole window of freshness observations
-into a single curve that answers one question: for a given threshold `X`,
+into a compact summary that answers one question: for a given threshold `X`,
 what fraction of the time was the object's freshness at or above `X`?
 
 This is the compact way to describe a freshness distribution. Instead of staring
@@ -120,17 +120,12 @@ The query returns output like the following:
 (3 rows)
 ```
 
-Read this as: freshness was at or above 1 second 100% of the time and never reached 10
-seconds or 100 seconds (0% at or above each). The curve drops off sharply after
-1 second, the healthy shape for an instance whose objects all sit at a low,
-near-constant lag.
-
-![Freshness CCDF plotted from the sample output at the 1-, 10-, and 100-second thresholds: the fraction of time at or above is 1.0 at 1 second and 0 at both 10 and 100 seconds](/images/freshness-ccdf-sample.png)
-
-The chart above is generated from the sample output, captured on a lightly
-loaded local instance where freshness stayed under 10 seconds, so the 10-second
-and 100-second thresholds sit at zero. A production instance under real load
-would show non-zero fractions at those higher thresholds.
+Read this as: freshness was at or above 1 second 100% of the time and never
+reached 10 seconds or 100 seconds (0% at or above each). This is the healthy
+pattern for a lightly loaded instance whose objects all sit at a low,
+near-constant lag, so the 10-second and 100-second thresholds are zero here. A
+busier instance under real load would show non-zero fractions at those higher
+thresholds.
 
 By default this query aggregates across every object. To scope the CCDF to a
 single object, add a join to `mz_catalog.mz_objects` and a name filter to the
@@ -144,16 +139,14 @@ single object, add a join to `mz_catalog.mz_objects` and a name filter to the
       AND wl.lag > INTERVAL '0'
 ```
 
-Reading a freshness CCDF is straightforward once you know what the axes mean.
-The **x-axis** is the lag threshold in seconds, on a log scale, and the
-**y-axis** is the fraction of the window the object spent at or above that threshold.
+Each threshold row tells you what fraction of the window the object's freshness
+was at or above that many seconds. A **healthy** object has a fraction at or near
+zero for the higher thresholds (10 and 100 seconds), meaning its freshness rarely
+exceeds a second or two. An **unhealthy** object has a meaningful fraction of the
+window at or above the larger thresholds, meaning its freshness is frequently
+many seconds or minutes behind.
 
-A **healthy** object produces a curve that drops off early and hugs low lag
-values, so almost all of the time its lag is small. An **unhealthy** object
-produces a long, flat tail that extends into minutes or hours, which means the
-object is frequently far behind.
-
-To read the curve against an SLO, pick your target freshness (say 10 seconds) and read
+To compare against an SLO, pick your target freshness (say 10 seconds) and read
 the fraction of time at or above it. That fraction is how often the object was
 violating the SLO over the window.
 
@@ -161,4 +154,4 @@ Expect a few artifacts in the data. NULL lag rows are unhydrated observations,
 and the query above already filters them out. If a spurious shelf appears far
 out at roughly `1.76e9` seconds (about 56 years), it comes from unhydrated
 collections reported at the Unix epoch, so filter it out (for example with `AND
-wl.lag < INTERVAL '1 year'`) so it does not distort the curve.
+wl.lag < INTERVAL '1 year'`) so it does not distort the fractions.
