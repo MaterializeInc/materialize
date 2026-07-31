@@ -78,6 +78,10 @@ CREATE TABLE table_char(val char(17));
 INSERT INTO table_char VALUES ('i need to be 17 c'), ('so do i !!!!!!!!!'), (NULL);
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'table_char', @role_name = 'SA', @supports_net_changes = 0;
 
+CREATE TABLE table_char_utf8(val char(10));
+INSERT INTO table_char_utf8 VALUES (N'café'), (N'naïve'), (NULL);
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'table_char_utf8', @role_name = 'SA', @supports_net_changes = 0;
+
 CREATE TABLE table_varchar(val varchar(999));
 INSERT INTO table_varchar VALUES ('I dont need to be 999 characters'), ('because we are variable length'), (NULL);
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'table_varchar', @role_name = 'SA', @supports_net_changes = 0;
@@ -252,6 +256,11 @@ true
 > SELECT * FROM table_char ORDER BY val ASC;
 "i need to be 17 c"
 "so do i !!!!!!!!!"
+<null>
+
+> SELECT * FROM table_char_utf8 ORDER BY val ASC;
+"café     "
+"naïve    "
 <null>
 
 > SELECT * FROM table_varchar ORDER BY val ASC;

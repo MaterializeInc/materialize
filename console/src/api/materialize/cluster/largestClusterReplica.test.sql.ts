@@ -35,10 +35,10 @@ describe("buildLargestClusterReplicaQuery", () => {
           heap_bytes double,
           heap_limit double
         );
-      > CREATE TABLE mz_hydration_statuses (
+      > CREATE TABLE mz_compute_hydration_times (
           object_id TEXT NOT NULL,
           replica_id TEXT NOT NULL,
-          hydrated boolean NOT NULL
+          time_ns bigint
         );
     `);
 
@@ -59,29 +59,48 @@ describe("buildLargestClusterReplicaQuery", () => {
         ('${r3.id}', 0, 0, 0, 0, 0, 4294967296)
     `);
 
-    // Mock hydration statuses - all replicas are hydrated
+    // All replicas fully hydrated.
     await client.query(`
-      INSERT INTO internal_test.mz_hydration_statuses VALUES
-        ('u1', '${r1.id}', true),
-        ('u2', '${r2.id}', true),
-        ('u3', '${r3.id}', true)
+      INSERT INTO internal_test.mz_compute_hydration_times VALUES
+        ('u1', '${r1.id}', 1),
+        ('u1', '${r2.id}', 1),
+        ('u1', '${r3.id}', 1)
     `);
 
     await client.query(`SET search_path TO ${mockedSearchPath};`);
 
     const query = buildLargestClusterReplicaQuery(cluster.id).compile();
-    const result = (
-      await executeSqlHttp(query, {
-        sessionVariables: {
-          search_path: mockedSearchPath,
-          cluster: QUICKSTART_CLUSTER,
-        },
-      })
-    ).rows[0];
+    const fetchLargest = async () =>
+      (
+        await executeSqlHttp(query, {
+          sessionVariables: {
+            search_path: mockedSearchPath,
+            cluster: QUICKSTART_CLUSTER,
+          },
+        })
+      ).rows[0];
 
+    const result = await fetchLargest();
     expect(result.name).toBe("r2");
     expect(result.size).toBe("scale=1,workers=1,mem=8GiB");
     expect(result.heapLimit).toBe("8589934592");
-    expect(result.isHydrated).toBe(true);
+
+    // A hydrated replica is preferred over a larger, still-hydrating one
+    // (its object is present but has no hydration time yet).
+    await client.query(`
+      UPDATE internal_test.mz_compute_hydration_times
+      SET time_ns = NULL WHERE replica_id = '${r2.id}'
+    `);
+    expect([r1.name, r3.name]).toContain((await fetchLargest()).name);
+
+    // A replica with no hydration rows at all, such as one just added, is
+    // likewise not preferred over a hydrated one. Without the `count > 0`
+    // guard its zero rows would read as fully hydrated and the largest empty
+    // replica would win.
+    await client.query(`
+      DELETE FROM internal_test.mz_compute_hydration_times
+      WHERE replica_id = '${r2.id}'
+    `);
+    expect([r1.name, r3.name]).toContain((await fetchLargest()).name);
   });
 });

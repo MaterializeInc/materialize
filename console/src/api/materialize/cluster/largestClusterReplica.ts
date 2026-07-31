@@ -17,41 +17,34 @@ export function buildLargestClusterReplicaQuery(clusterId: string) {
   return (
     queryBuilder
       .selectFrom("mz_cluster_replicas as cr")
-      .innerJoin("mz_cluster_replica_sizes as crs", "cr.size", "crs.size")
-      .leftJoin(
-        // Sometimes system indexes on user clusters (e.g. introspection indexes)
-        // do not hydrate. Thus we filter them out first.
-        queryBuilder
-          .selectFrom("mz_hydration_statuses")
-          .select(["replica_id", "hydrated"])
-          .where("object_id", "not like", "s%")
-          .as("hs"),
-        "cr.id",
-        "hs.replica_id",
-      )
       .leftJoin(
         buildClusterReplicaHeapMetricsTable().as("crhm"),
         "crhm.replica_id",
         "cr.id",
       )
+      // Prefer a fully-hydrated replica, whose reported sizes are stable.
+      // Joining mz_compute_hydration_times before aggregating lets its
+      // replica_id index bound the scan to this cluster's replicas, unlike an
+      // aggregation over the whole environment's mz_hydration_statuses.
+      .leftJoin("mz_compute_hydration_times as ht", (join) =>
+        join
+          .onRef("ht.replica_id", "=", "cr.id")
+          // System introspection indexes may never report hydrated.
+          .on("ht.object_id", "not like", "s%"),
+      )
       .select([
         "cr.name",
         "cr.size",
         sql<string | null>`crhm.heap_limit::text`.as("heapLimit"),
-        sql<boolean>`bool_and(hs.hydrated)`.as("isHydrated"),
       ])
       .where("cr.cluster_id", "=", clusterId)
-      .groupBy([
-        "cr.name",
-        "cr.size",
-        "crs.memory_bytes",
-        "crs.disk_bytes",
-        "crs.processes",
-        "crhm.heap_limit",
-      ])
-      // Prioritize fully hydrated clusters first, then order by memory
-      .orderBy("isHydrated", sql`desc NULLS LAST`)
-      .orderBy("heapLimit", sql`desc NULLS LAST`)
+      .groupBy(["cr.id", "cr.name", "cr.size", "crhm.heap_limit"])
+      // Prefer a replica whose compute objects are all hydrated, so its
+      // reported sizes are stable. time_ns is NULL until an object hydrates. A
+      // replica with no hydration rows, such as one just added, has bool_and
+      // over an all-NULL row and so sorts last. Then order by heap limit.
+      .orderBy(sql`bool_and(ht.time_ns IS NOT NULL) DESC`)
+      .orderBy(sql`crhm.heap_limit DESC NULLS LAST`)
       .limit(1)
   );
 }

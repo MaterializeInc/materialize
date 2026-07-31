@@ -73,6 +73,16 @@ identifier = "sql"
 name = "SQL Reference"
 weight = 75
 
+#
+# Legacy Create Source
+#
+
+[[menu.main]]
+name = "Legacy Syntax"
+parent = 'create-source'
+identifier = 'create-source-legacy'
+weight = 90
+
 
 [[menu.main]]
 identifier = "reference"
