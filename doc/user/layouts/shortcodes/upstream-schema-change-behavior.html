@@ -71,9 +71,15 @@ Dropping a `NOT NULL`, `UNIQUE`, or `PRIMARY KEY` constraint that existed when
 the table was created puts the affected table into an error state.
 
 {{ else -}}
-Materialize ignores the following constraint changes: foreign key, `CHECK`,
-`UNIQUE`, and `PRIMARY KEY` constraints. As such, you can add or drop them
-without affecting ingestion.
+Materialize ignores foreign key and `CHECK` constraint changes. You can add or
+drop them without affecting ingestion.
+
+Adding a `UNIQUE` constraint does not affect ingestion. Dropping a `UNIQUE`
+constraint puts the affected table into an error state.
+
+SQL Server does not allow dropping a `PRIMARY KEY` from a table while change data
+capture is enabled on it. A primary key that existed when Materialize began
+ingesting the table therefore cannot be dropped upstream.
 
 Adding or removing a `NOT NULL` constraint on an ingested column requires an
 upstream `ALTER COLUMN`, which puts the affected table into an error state. See
@@ -122,6 +128,17 @@ Renaming a column that Materialize ingests puts the affected table into an error
 state. Ingestion for that table stops, and you must drop and recreate the table
 in Materialize to resume ingestion.
 
+{{ if eq $connector "sql-server" -}}
+### Removing a capture instance
+
+SQL Server allows up to two capture instances to exist for a table at once.
+Materialize ingests from one of them.
+
+Removing the capture instance that Materialize is using causes ingestion to
+stall. Removing a capture instance that Materialize is not using does not affect
+ingestion.
+
+{{ end -}}
 ### Table-level operations
 
 The following upstream operations put the affected table into an error state.
