@@ -33,8 +33,8 @@
     Once you have created the connection, you can:
     - use the connection in the [`CREATE SOURCE`](/sql/create-source/mysql-v2/)
     command to connect to your MySQL instance, and
-    - use the source in [`CREATE TABLE FROM SOURCE`](/sql/create-table/) to
-    create tables in Materialize and start ingesting data:
+    - use the source in [`CREATE TABLE FROM SOURCE`](/sql/create-table/mysql/)
+    to create tables in Materialize and start ingesting data:
 
   test_setup: |
     > DROP SOURCE mz_source CASCADE
