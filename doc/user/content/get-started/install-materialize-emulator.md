@@ -38,7 +38,7 @@ not suitable for full feature set evaluations or production workloads.
 - Docker. If [Docker](https://www.docker.com/) is not installed, refer to its
 [official documentation](https://docs.docker.com/get-docker/) to install.
 
-### Run Materialize Emulator
+### Install and run the Materialize Emulator
 
 {{< note >}}
 
@@ -69,9 +69,8 @@ not suitable for full feature set evaluations or production workloads.
 
    Open the Materialize Console in your browser at [http://localhost:6874](http://localhost:6874).
 
-   To streamline development and troubleshooting, we recommend configuring our
-   [MCP
-   Server](https://materialize.com/docs/integrations/mcp-server/mcp-developer/).
+   To streamline development and troubleshooting, we recommend [setting up
+   your coding agents](#setup-your-coding-agents).
 
    You can also connect to the Materialize Emulator using your
    preferred SQL client, using the following connection field values:
@@ -91,6 +90,67 @@ not suitable for full feature set evaluations or production workloads.
 
 1. Once connected, you can get started with the
    [Quickstart](/get-started/quickstart).
+
+### Setup your coding agents
+
+To streamline development and troubleshooting, you can set up coding agents
+like [Claude Code](https://docs.anthropic.com/en/docs/claude-code),
+[Codex](https://openai.com/index/codex/), and [Cursor](https://www.cursor.com/)
+to work with your Materialize Emulator.
+
+#### Install the Materialize agent skills
+
+Materialize provides open-source [agent
+skills](/integrations/coding-agent-skills/) that give your coding agent access
+to Materialize documentation and reference material, so it can provide more
+accurate assistance when writing queries, setting up sources, creating
+materialized views, and more.
+
+1. If [Node.js](https://nodejs.org/) (v16 or later) is not installed, refer to
+   its [official documentation](https://nodejs.org/en/download) to install.
+
+1. In a terminal, issue the following command to install the Materialize agent
+   skills:
+
+   ```bash
+   npx skills add MaterializeInc/agent-skills
+   ```
+
+For more details on the available skills, see [Agent
+Skills](/integrations/coding-agent-skills/).
+
+#### Connect to the MCP server
+
+The Materialize Emulator includes a built-in `materialize-developer` [MCP
+server](/integrations/mcp-server/mcp-developer/) (port `6876`) for
+troubleshooting and observability. To connect, your MCP client needs an MCP
+token and the MCP server URL.
+
+1. Generate the MCP token by Base64-encoding the credentials of the default
+   `materialize` user (the Emulator does not support passwords):
+
+   ```sh
+   printf 'materialize:' | base64
+   ```
+
+1. Configure your MCP client with the MCP token and the Emulator's MCP server
+   URL `http://localhost:6876/api/mcp/developer`. For example, if using [Claude
+   Code](https://docs.anthropic.com/en/docs/claude-code):
+
+   ```sh
+   claude mcp add --transport http materialize-developer \
+     http://localhost:6876/api/mcp/developer \
+     --header "Authorization: Basic <mcp-token>"
+   ```
+
+   Replace `<mcp-token>` with the token generated in the previous step.
+
+1. Restart your MCP client to pick up the new setting. Once connected, you can
+   ask questions like *Why is my materialized view stale?* or *How much memory
+   is my cluster using?*
+
+For more details, including instructions for other MCP clients, see [MCP Server
+for Developers](/integrations/mcp-server/mcp-developer/).
 
 ### Next steps
 
