@@ -1,6 +1,6 @@
 ---
 title: "How to monitor freshness in Materialize"
-description: "How to monitor freshness for an object over time in Materialize."
+description: "How to monitor data freshness across your environment and for specific objects in Materialize."
 menu:
   main:
     name: "Monitor freshness"
