@@ -34,6 +34,7 @@ _shtab_scratch_claude_options=(
   "--instance-type[Override the EC2 instance type. The AMI is derived from its architecture. May be used without a machine config.]:instance_type:"
   "--size-gb[Override the root volume size in GiB.]:size_gb:"
   "--max-age-days[Maximum age for scratch instance in days. Defaults to 1.5]:max_age_days:"
+  "--team[Value for the \`team\` tag required by the scratch account. Defaults to \`engineering\`.]:team:"
   ":Machine config name from misc\/scratch (e.g. dev-box).:"
 )
 
@@ -54,6 +55,7 @@ _shtab_scratch_create_options=(
   "--key-name[Optional EC2 Key Pair name]:key_name:"
   "--security-group-name[EC2 Security Group name. Defaults to Materialize scratch account.]:security_group_name:"
   "--extra-tags[Additional tags\/labels for created instance. Format\: \{\"key\"\: \"value\"\}]:extra_tags:"
+  "--team[Value for the \`team\` tag required by the scratch account. Defaults to \`engineering\`.]:team:"
   "--instance-profile[EC2 instance profile \/ IAM role. Defaults to \`admin-instance\`.]:instance_profile:"
   "--output-format[]:output_format:(table csv)"
   "--git-rev[Git revision of \`materialize\` codebase to push to scratch instance. Defaults to \`HEAD\`]:git_rev:"
@@ -92,6 +94,7 @@ _shtab_scratch_go_options=(
   "--instance-type[Override the EC2 instance type. The AMI is derived from its architecture. May be used without a machine config.]:instance_type:"
   "--size-gb[Override the root volume size in GiB.]:size_gb:"
   "--max-age-days[Maximum age for scratch instance in days. Defaults to 1.5]:max_age_days:"
+  "--team[Value for the \`team\` tag required by the scratch account. Defaults to \`engineering\`.]:team:"
   ":Machine config name from misc\/scratch (e.g. dev-box). Used only when creating a new instance.:"
 )
 
