@@ -37,7 +37,7 @@ There are two ways to authenticate to the `materialize-developer` MCP server:
   **Self-Managed** [using SSO](/security/self-managed/sso/).
 
 - **Token-based**: You provide Base64-encoded credentials (the MCP token) to the
-  client. Available for **Cloud** and **Self-Managed**.
+  client. Available for **Cloud**, **Self-Managed**, and the **Emulator**.
 
 ### Method 1: OAuth
 
@@ -257,6 +257,31 @@ base64-encoded and not encrypted.
 
 {{< /tab >}}
 
+{{< tab "Emulator" >}}
+
+The Emulator [does not require
+authentication](#method-3-no-authentication-emulator). You can still pass a
+role's credentials as an MCP token to run the agent's queries as that role:
+
+1. Connect to the Emulator with a [SQL
+   client](/get-started/install-materialize-emulator/#materialize-emulator-connect-client)
+   and create the role, if it does not already exist:
+
+   ```mzsql
+   CREATE ROLE my_agent;
+   ```
+
+1. Base64-encode the role's credentials `<role>:` to create the MCP token.
+   Unlike Materialize Cloud and Materialize Self-Managed, the Emulator does
+   not support passwords, so the credentials do not include a password after
+   the `:`:
+
+   ```bash
+   printf 'my_agent:' | base64
+   ```
+
+{{< /tab >}}
+
 {{< /tabs >}}
 
 #### Step 2. Get your MCP server URL
@@ -343,6 +368,18 @@ server URL: `<baseURL>/api/mcp/developer`.
 {{< /tab >}}
 {{< /tabs >}}
 {{< /tab >}}
+{{< tab "Emulator" >}}
+
+For the Emulator, your MCP URL is:
+
+```
+http://localhost:6876/api/mcp/developer
+```
+
+where `http://localhost:6876` is your base URL.
+
+{{< /tab >}}
+
 {{< /tabs >}}
 
 #### Step 3. Configure your MCP client
@@ -550,40 +587,10 @@ curl -X POST http://localhost:6876/api/mcp/developer \
 {{< /tab >}}
 {{< /tabs >}}
 
-#### Run the agent as a specific role
-
 Unauthenticated requests run as the `anonymous_http_user` role. To run the
-agent's queries as a specific role instead, pass that role's credentials as an
-MCP token:
-
-1. Connect to the Emulator with a [SQL
-   client](/get-started/install-materialize-emulator/#materialize-emulator-connect-client)
-   and create the role, if it does not already exist:
-
-   ```mzsql
-   CREATE ROLE my_agent;
-   ```
-
-1. Base64-encode the role's credentials `<role>:` to create the MCP token.
-   Unlike Materialize Cloud and Materialize Self-Managed, the Emulator does
-   not support passwords, so the credentials do not include a password after
-   the `:`:
-
-   ```bash
-   printf 'my_agent:' | base64
-   ```
-
-1. Configure your MCP client with the MCP token, as described in [Method 2,
-   Step 3. Configure your MCP client](#step-3-configure-your-mcp-client). For
-   example, if using Claude Code:
-
-   ```sh
-   claude mcp add --transport http materialize-developer \
-     http://localhost:6876/api/mcp/developer \
-     --header "Authorization: Basic <mcp-token>"
-   ```
-
-   Replace `<mcp-token>` with the token generated in the previous step.
+agent's queries as a specific role instead, pass the role's credentials as an
+MCP token, as described in [Method 2: Token-based
+authentication](#method-2-token-based-authentication).
 
 ## Start asking questions
 
