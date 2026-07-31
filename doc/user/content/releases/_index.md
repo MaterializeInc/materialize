@@ -100,7 +100,7 @@ For more information, refer to:
 ### Improvements {#v26.35-improvements}
 - **Faster read queries under write load**: Read-only queries (e.g., `SELECT 1`) are no longer blocked by concurrent write transactions; under high write load, victim query latency drops from multiple seconds to single-digit milliseconds.
 - **Better query plans for correlated subqueries**: Queries using patterns like `1 IN (SELECT 1 WHERE p)` and `NOT EXISTS (SELECT 1 WHERE p)` are now optimized to a simple filter, eliminating unnecessary semi/anti-joins.
-- **Console billing breakdown by account and cluster**: The billing page now shows a per-account and per-cluster cost breakdown with a stacked bar chart and expandable ledger, displaying account display names and real per-cluster usage figures.
+- **Account hierarchy billing**: Organizations running multiple Materialize accounts under one parent (e.g., separate production and staging accounts) can now see consolidated billing and usage at the parent level, broken out per child account; each child account sees only its own usage. Available on request — talk to your account executive to see if you qualify.
 - **`mz-debug` CPU profiling**: The `mz-debug` diagnostic tool now automatically collects CPU profiles alongside memory profiles for Self-Managed deployments.
 
 ### Bug Fixes {#v26.35-bug-fixes}
