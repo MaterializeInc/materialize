@@ -918,6 +918,16 @@ impl Value {
             }
             Type::Numeric { constraints } => {
                 let n = Numeric::from_sql(ty.inner(), raw)?;
+                // The wire format's `0xD000`/`0xF000` sign words spell
+                // `±Infinity`, which `Numeric::from_sql` decodes because it also
+                // decodes query *results*, where an infinite numeric is
+                // legitimate (aggregation overflow produces one). As a parameter
+                // it must be rejected: the text path rejects `'Infinity'::numeric`
+                // (`strconv::parse_numeric`), so accepting the binary spelling
+                // would let a client smuggle in a value no SQL literal can name.
+                if n.0.0.is_infinite() {
+                    return Err("numeric infinity is not supported".into());
+                }
                 Ok(Value::Numeric(Numeric(rescale_numeric(
                     n.0,
                     constraints.as_ref(),
@@ -1238,6 +1248,38 @@ mod tests {
             panic!("decode_text of a numeric must yield Value::Numeric");
         };
         assert_eq!(text, expected, "text decode did not rescale to scale 2");
+    }
+
+    /// The numeric wire format's `±Infinity` sign words must be rejected as a
+    /// parameter, matching the text path, which rejects `'Infinity'::numeric`.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // numeric/decimal contexts unsupported under miri
+    fn decode_binary_numeric_rejects_infinity() {
+        let ty = Type::Numeric { constraints: None };
+        // units = 0, weight = 0, sign, dscale = 0.
+        let header = |sign: u16| {
+            let mut b = Vec::new();
+            b.extend_from_slice(&0i16.to_be_bytes());
+            b.extend_from_slice(&0i16.to_be_bytes());
+            b.extend_from_slice(&sign.to_be_bytes());
+            b.extend_from_slice(&0i16.to_be_bytes());
+            b
+        };
+        // +Infinity and -Infinity.
+        for sign in [0xD000, 0xF000] {
+            let res = Value::decode_binary(&ty, &header(sign));
+            assert_eq!(
+                res.map(|_| ()).map_err(|e| e.to_string()).unwrap_err(),
+                "numeric infinity is not supported",
+                "sign {sign:#x} must be rejected",
+            );
+        }
+        // NaN, which the text path does accept, still decodes.
+        let Value::Numeric(Numeric(nan)) = Value::decode_binary(&ty, &header(0xC000)).unwrap()
+        else {
+            panic!("decode_binary of a numeric must yield Value::Numeric");
+        };
+        assert_eq!(nan, strconv::parse_numeric("NaN").unwrap());
     }
 
     /// Binary time values are microseconds since midnight. Out-of-range
