@@ -28,13 +28,17 @@ That splits reads into two populations with opposite outcomes.
   arrangement. This is the whole win, and it covers stale reads, serializable reads, and
   introspection read at a lagging timestamp.
 * A read whose timestamp is not yet sealed waits either way, but waiting on the
-  interactive runtime is slightly *worse* than waiting on maintenance. On maintenance the
-  peek is retried by the every-step `process_peeks` poll and is answered in the same step
-  that advances the frontier past `T`. On interactive the wake arrives only after the
-  maintenance sink advances `upper` and releases the publication lock, then crosses a
-  thread boundary through a `SyncActivator`, then re-walks the arrangement. Strict
-  serializable reads, which take their timestamp at the write frontier, are in this
-  population by construction.
+  interactive runtime is *worse* by one interactive step. On maintenance the peek is retried
+  by the every-step `process_peeks` poll and is answered in the same step that advances the
+  frontier past `T`. On interactive the wake arrives only after the maintenance sink advances
+  `upper` and releases the publication lock, then crosses a thread boundary through a
+  `SyncActivator`, then re-walks the arrangement. Strict serializable reads, which take their
+  timestamp at the write frontier, are in this population by construction.
+
+  One interactive step is small when the interactive lane is quiet and unbounded when it is
+  not, because the lane is a single step loop with no admission control. So the size of this
+  penalty is really a question about interactive-lane congestion rather than about routing,
+  and it is a tail phenomenon rather than a median one. `benchmark-plan.md` B-B measures it.
 
 So unconditional routing makes the default isolation level marginally worse in exchange
 for making stale reads dramatically better, and it pays that cost on every read rather
@@ -66,15 +70,38 @@ route an index peek to interactive only when the tracked frontier is beyond
 No protocol change, no controller change, and the data needed is already passing through
 the component that makes the decision.
 
-Caveats:
+The two error directions are not symmetric, and working out which is which narrows the
+question a lot.
 
-* The view is per process. Each process runs its own multiplexer, and only process 0 ever
-  receives a `Peek` (commands other than `Hello` and `UpdateConfiguration` go to process 0
-  and reach other processes through the intra-runtime command channel). So the hint is
-  computed from process 0's frontier view while the peek is answered by every worker of
-  every process. On a multi-process replica the hint can be wrong in either direction.
-* The tracked frontier lags by whatever the worker reporting interval is, so it is
-  conservative in the common case and optimistic right after a frontier advance.
+* **False negatives come from report lag, and are the only error on a single-process
+  replica.** Reported frontiers never regress, so the tracked frontier is never ahead of that
+  process's true frontier, and "tracked beyond `T`" therefore implies "true beyond `T`". A
+  false negative costs a lost isolation opportunity, not a park.
+* **False positives come only from the cross-process meet.** Each process runs its own
+  multiplexer and only process 0 ever receives a `Peek` (commands other than `Hello` and
+  `UpdateConfiguration` go to process 0 and reach other processes through the intra-runtime
+  command channel). So the hint is computed from process 0's meet while the peek is answered
+  by every worker of every process, and process 0 can be ahead of process 3.
+
+There is a further structural result that may make the hint nearly free. The multiplexer sees
+the same response stream the controller does and sees it earlier, being upstream. So for any
+read whose timestamp is taken from the controller's read frontier (serializable, stale,
+introspection), the tracked frontier is at or beyond the controller's view, which is at or
+beyond the chosen `T`. **The hint is positive by construction for exactly the population that
+benefits.** Strict serializable reads take their timestamp at the write frontier, ahead of
+what has been reported, so their hint is negative, which is also the correct answer since
+they must wait for sealing regardless.
+
+If that holds, the dynamic hint earns its keep only by catching strict-serializable reads
+whose timestamp got sealed during the flight from timestamp selection to the replica, and
+everything else is served by a static classification. Under load that flight is long, so the
+fraction could be large enough to justify the hint or small enough to drop it. That fraction
+is a measurement, not a judgement call. See `benchmark-plan.md` B-C.
+
+It also means the obvious worry, that a frontier-derived hint self-defeats under saturation
+because the same stalled workers emit the reports, does not apply to the reads that matter.
+Their timestamps derive from the same stalled reports, so hint and timestamp move together.
+B-D confirms rather than assumes this.
 
 ### P2: controller hint on the `Peek` command
 
@@ -110,6 +137,9 @@ Orthogonal to P1 through P3 and layers on top of any of them. Deferred.
 
 ## Recommendation
 
+This section is a starting hypothesis, not a conclusion. `benchmark-plan.md` B-C is designed
+to overturn it, and its result decides rather than the reasoning here.
+
 Adopt P1 first, because it is a change to one component with no protocol surface, and
 measure how often its hint is wrong on a multi-process replica. Move to P2 if the
 process-local view proves too weak. Hold P3 for the case where prediction turns out not to
@@ -119,6 +149,16 @@ be good enough, and note that it is the option that best preserves reversibility
 This keeps the maintenance peek path exercised by real traffic, which is what makes the
 feature reversible per read rather than per replica, and it means peek stash and the peek
 introspection relations keep working for the reads that use them.
+
+The case that overturns this: if misroute penalties concentrate in the tail, so that the
+occasional false negative under saturation costs a full maintenance step and drags p99.9 and
+max, then all-interactive with the collateral losses fixed beats a hinted policy that is
+right on average. Reversibility is a real consideration but it does not outrank a measured
+tail regression.
+
+The case that simplifies it away: if the structural argument above holds and the flight-time
+fraction is small, there is no hint, only a static classification of strict serializable
+versus everything else, and no frontier tracking at all.
 
 Gate the policy on a dyncfg with three settings so the rollout is stepwise and the revert
 is a config change rather than a deploy.
@@ -138,12 +178,18 @@ a peek and the query dataflow feeding it do not land on different sides of the p
 
 ## Open questions
 
+Each of these is settled by an experiment in `benchmark-plan.md` rather than by discussion.
+
 * How stale is the tracked frontier in practice, and how often does P1's hint disagree with
-  ground truth on a multi-process replica?
+  ground truth on a multi-process replica? (B-C, B-D.)
+* What fraction of strict-serializable reads are already sealed on arrival? This one number
+  decides whether the dynamic hint is worth building at all. (B-C.)
 * If a hinted-interactive read turns out to produce a result above the peek stash
   threshold, the interactive path errors today rather than stashing. Either the stash works
   on both paths or the policy has to exclude stash-eligible reads, which is a per-peek
   property (`RowSetFinishing::is_streamable`) available at routing time.
 * Should introspection reads be forced to interactive regardless of the hint? They are the
   motivating case, they are explicitly tolerated to be stale, and they are exactly the
-  reads that must not queue behind a saturated maintenance runtime.
+  reads that must not queue behind a saturated maintenance runtime. The answer turns on the
+  staleness distribution, not on the latency win, because an introspection answer that is
+  fast and 90 seconds out of date does not resolve an incident. (B-E.)
