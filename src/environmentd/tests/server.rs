@@ -5544,6 +5544,61 @@ fn test_mcp_developer_response_size_limit() {
     run_mcp_datadriven("tests/testdata/mcp/developer_response_limit", harness);
 }
 
+/// Tests that a request exceeding `mcp_request_timeout` is answered with a
+/// timeout error rather than hanging. The timeout is set to 1ms so any request
+/// trips it, which avoids depending on a deliberately slow query.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_mcp_developer_request_timeout() {
+    let server = test_util::TestHarness::default()
+        .with_mcp_routes(false, true)
+        .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string())
+        .start_blocking();
+
+    // Set the timeout with `ALTER SYSTEM SET` rather than a system parameter
+    // default: the statement commits to the catalog before it returns, so the
+    // per-request catalog snapshot is guaranteed to observe it.
+    {
+        let mut system_client = server
+            .pg_config_internal()
+            .user(&SYSTEM_USER.name)
+            .connect(postgres::NoTls)
+            .unwrap();
+        system_client
+            .batch_execute("ALTER SYSTEM SET mcp_request_timeout = '1ms'")
+            .unwrap();
+    }
+
+    let developer_url = format!("http://{}/api/mcp/developer", server.http_local_addr());
+    let (status, body) = mcp_post(
+        &developer_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "query_system_catalog",
+                "arguments": {"sql_query": "SELECT name FROM mz_databases"}
+            }
+        }),
+    );
+
+    // The request is still answered: a timeout is a JSON-RPC error, not a hang
+    // and not a 5xx.
+    assert_eq!(status, StatusCode::OK);
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("timed out"),
+        "expected a timeout error, got: {body}"
+    );
+    assert_eq!(body["error"]["code"].as_i64(), Some(-32603), "{body}");
+    assert_eq!(
+        body["error"]["data"]["error_type"].as_str(),
+        Some("ExecutionError"),
+        "{body}"
+    );
+}
+
 /// Regression test for database-issues#11320.
 ///
 /// The developer endpoint validator allows unqualified `mz_*` and `pg_*` table
