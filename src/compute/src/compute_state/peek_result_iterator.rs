@@ -36,6 +36,7 @@ where
     row_builder: Row,
     datum_vec: DatumVec,
     literals: Option<Literals<Tr>>,
+    rows_processed: usize,
 }
 
 /// Helper to handle literals in peeks
@@ -140,7 +141,13 @@ where
             row_builder: Row::default(),
             datum_vec: DatumVec::new(),
             literals,
+            rows_processed: 0,
         }
+    }
+
+    /// Returns the number of rows evaluated by the iterator.
+    pub fn rows_processed(&self) -> usize {
+        self.rows_processed
     }
 
     /// Returns `true` if the iterator has no more literals to process, or if there are no literals at all.
@@ -192,6 +199,7 @@ where
                 }
             }
 
+            self.rows_processed = self.rows_processed.saturating_add(1);
             match self.extract_current_row() {
                 Ok(Some(row)) => break Ok(row),
                 Ok(None) => {
