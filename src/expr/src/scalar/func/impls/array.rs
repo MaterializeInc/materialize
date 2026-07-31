@@ -10,7 +10,6 @@
 use std::fmt;
 
 use mz_expr_derive::sqlfunc;
-use mz_lowertest::MzReflect;
 use mz_repr::adt::array::{Array, ArrayDimension};
 use mz_repr::{Datum, DatumList, Row, RowArena, RowPacker, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
@@ -46,8 +45,7 @@ fn cast_array_to_list_one_dim<'a, T>(a: Array<'a, T>) -> Result<DatumList<'a, T>
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct CastArrayToString {
     pub ty: SqlScalarType,
@@ -115,8 +113,7 @@ impl fmt::Display for CastArrayToString {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct CastArrayToJsonb {
     pub cast_element: Box<MirScalarExpr>,
@@ -229,8 +226,7 @@ impl fmt::Display for CastArrayToJsonb {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct CastArrayToArray {
     pub return_ty: SqlScalarType,

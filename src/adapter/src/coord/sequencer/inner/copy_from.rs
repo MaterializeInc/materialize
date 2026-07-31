@@ -52,7 +52,7 @@ const COPY_FROM_STDIN_MAX_WORKERS: usize = 8;
 impl Coordinator {
     pub(crate) async fn sequence_copy_from(
         &mut self,
-        ctx: ExecuteContext,
+        mut ctx: ExecuteContext,
         plan: plan::CopyFromPlan,
         target_cluster: TargetCluster,
     ) {
@@ -69,24 +69,16 @@ impl Coordinator {
         // CopyData/CopyDone exchange. URL/S3 sources stage a one-shot ingestion
         // server-side and fall through to the rest of this function.
         if let CopyFromSource::Stdin = plan.source {
-            let (tx, _, session, ctx_extra, response_barriers) = ctx.into_parts();
-            let response = Ok(ExecuteResponse::CopyFrom {
+            // The statement-logging obligation moves into the response, pgwire carries it onward.
+            // `ctx` stays intact so `retire` can wait out any response barriers safely.
+            let ctx_extra = std::mem::take(ctx.extra_mut());
+            ctx.retire(Ok(ExecuteResponse::CopyFrom {
                 target_id: plan.target_id,
                 target_name: plan.target_name,
                 columns: plan.columns,
                 params: plan.params,
                 ctx_extra,
-            });
-            if response_barriers.is_empty() {
-                tx.send(response, session);
-            } else {
-                mz_ore::task::spawn(|| "copy_from_stdin_after_response_barriers", async move {
-                    for barrier in response_barriers {
-                        barrier.await;
-                    }
-                    tx.send(response, session);
-                });
-            }
+            }));
             return;
         }
 

@@ -18,7 +18,6 @@ use std::sync::LazyLock;
 
 use anyhow::bail;
 use dec::{Context, Decimal};
-use mz_lowertest::MzReflect;
 use mz_ore::cast;
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
@@ -112,8 +111,7 @@ pub mod str_serde {
     PartialOrd,
     Hash,
     Serialize,
-    Deserialize,
-    MzReflect
+    Deserialize
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct NumericMaxScale(pub(crate) u8);

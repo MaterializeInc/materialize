@@ -13,7 +13,6 @@ workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true
 itertools.workspace = true
-mz-lowertest = { path = "../lowertest", default-features = false }
 mz-ore = { path = "../ore", features = ["test"], default-features = false }
 phf.workspace = true
 serde.workspace = true

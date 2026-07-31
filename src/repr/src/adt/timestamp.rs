@@ -27,7 +27,6 @@ use ::chrono::{
     DateTime, Datelike, Days, Duration, Months, NaiveDate, NaiveDateTime, NaiveTime, Utc,
 };
 use chrono::Timelike;
-use mz_lowertest::MzReflect;
 use mz_ore::cast::{self, CastFrom};
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::chrono::ProtoNaiveDateTime;
@@ -78,8 +77,7 @@ pub const MAX_PRECISION: u8 = 6;
     PartialOrd,
     Hash,
     Serialize,
-    Deserialize,
-    MzReflect
+    Deserialize
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct TimestampPrecision(pub(crate) u8);

@@ -20,7 +20,7 @@ Source defined as t0
 
 
 # Factor out common subexpressions.
-apply pipeline=relation_cse
+apply pipeline=RelationCSE
 Union
   Map (null::bigint)
     Get t0
@@ -42,7 +42,7 @@ Return
 
 
 # Recursive queries.
-apply pipeline=relation_cse
+apply pipeline=RelationCSE
 Return
   Return
     Union

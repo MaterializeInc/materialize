@@ -5480,6 +5480,24 @@ fn test_mcp_agent_query_tool() {
     run_mcp_datadriven("tests/testdata/mcp/agent_query_tool", harness);
 }
 
+/// Tests the MCP agent endpoint with `read_data_product` disabled and the
+/// `query` tool left on, the configuration that routes agent reads through
+/// `query` instead.
+#[mz_ore::test]
+fn test_mcp_agent_read_data_product_disabled() {
+    let harness = test_util::TestHarness::default()
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .with_system_parameter_default(
+            "enable_mcp_agent_read_data_product_tool".to_string(),
+            "false".to_string(),
+        );
+    run_mcp_datadriven(
+        "tests/testdata/mcp/agent_read_data_product_disabled",
+        harness,
+    );
+}
+
 /// Tests the MCP agent endpoint under `restrict_to_user_objects = true`,
 /// the setting clients use to scope sessions down to user objects only.
 /// Covers a small, focused set of cases; broader agent coverage lives in

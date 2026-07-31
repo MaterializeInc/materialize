@@ -166,67 +166,6 @@
     downtime. See [Handling upstream schema changes with zero
     downtime](/ingest-data/postgres/source-versioning/) for more details.
 
-- name: postgres-compatible-schema-changes-legacy
-  content: |
-
-    {{< note >}}
-
-    This section refer to the legacy [`CREATE SOURCE ... FOR
-    ...`](/sql/create-source/postgres/) that creates subsources as part of the
-    `CREATE SOURCE` operation.  To be able to handle the upstream column
-    additions and drops, see [`CREATE SOURCE (New
-    Syntax)`](/sql/create-source/postgres-v2/) and [`CREATE TABLE FROM
-    SOURCE`](/sql/create-table).
-
-    {{< /note >}}
-
-    - Adding columns to tables. Materialize will **not ingest** new columns
-    added upstream unless you use [`DROP SOURCE`](/sql/alter-source/#context) to
-    first drop the affected subsource, and then add the table back to the source
-    using [`ALTER SOURCE...ADD SUBSOURCE`](/sql/alter-source/).
-
-    - Dropping columns that were added after the source was created. These
-    columns are never ingested, so you can drop them without issue.
-
-    - Adding or removing `NOT NULL` constraints to tables that were nullable
-    when the source was created.
-
-- name: postgres-incompatible-schema-changes-legacy
-  content: |
-    All other schema changes to upstream tables will set the corresponding
-    subsource into an error state, which prevents you from reading from the
-    source.
-
-    To handle incompatible [schema changes](#schema-changes), use [`DROP
-    SOURCE`](/sql/alter-source/#context) and [`ALTER SOURCE...ADD
-    SUBSOURCE`](/sql/alter-source/) to first drop the affected subsource, and
-    then add the table back to the source. When you add the subsource, it will
-    have the updated schema from the corresponding upstream table.
-
-- name: postgres-incompatible-schema-changes
-  content: |
-    All other schema changes to upstream tables will set the corresponding
-    Materialize tables into an error state, preventing reads from these tables.
-
-    To handle [incompatible schema changes](#incompatible-schema-changes), drop
-    the affected table [`DROP TABLE`](/sql/drop-table/) , and then, [`CREATE
-    TABLE FROM SOURCE`](/sql/create-table/) to recreate the table with the
-    updated schema.
-
-- name: postgres-truncation-restriction
-  content: |
-    Avoid truncating upstream tables that are being replicated into Materialize.
-    If a replicated upstream table is truncated, the corresponding
-    subsource(s)/table(s) in Materialize becomes inaccessible and will not
-    produce any data until it is recreated.
-
-    Instead of truncating, use an unqualified `DELETE` to remove all rows from
-    the upstream table:
-
-    ```mzsql
-    DELETE FROM t;
-    ```
-
 - name: postgres-snapshot-behavior
   content: |
     The PostgreSQL source performs parallel snapshotting of tables by distributing rows among
@@ -243,23 +182,11 @@
 
 - name: postgres-considerations
   content: |
-    ### Schema changes
-
-    Materialize supports schema changes in the upstream database as follows:
-
-    #### Compatible schema changes (Legacy syntax)
-
     {{% include-from-yaml data="postgres_source_details"
-    name="postgres-compatible-schema-changes-legacy" %}}
+    name="postgres-considerations-body" %}}
 
-    #### Incompatible schema changes
-
-    {{% include-from-yaml data="postgres_source_details"
-    name="postgres-incompatible-schema-changes" %}}
-
-    {{% include-from-yaml data="postgres_source_details"
-    name="postgres-incompatible-schema-changes-handling-legacy" %}}
-
+- name: postgres-considerations-body
+  content: |
     ### Publication membership
 
     {{% include-from-yaml data="postgres_source_details"
@@ -275,11 +202,6 @@
 
     {{% include-from-yaml data="postgres_source_details"
     name="postgres-unsupported-types" %}}
-
-    ### Truncation
-
-    {{% include-from-yaml data="postgres_source_details"
-    name="postgres-truncation-restriction" %}}
 
     ### Inherited tables
 

@@ -42,7 +42,6 @@ members = [
     "src/expr-derive",
     "src/expr-derive-impl",
     "src/expr-parser",
-    "src/expr-test-util",
     "src/fivetran-destination",
     "src/foundationdb",
     "src/frontegg-auth",
@@ -52,8 +51,6 @@ members = [
     "src/interchange",
     "src/kafka-util",
     "src/license-keys",
-    "src/lowertest",
-    "src/lowertest-derive",
     "src/materialized",
     "src/materialized",
     "src/metabase",
@@ -93,7 +90,6 @@ members = [
     "src/proto",
     "src/regexp",
     "src/repr",
-    "src/repr-test-util",
     "src/rocksdb",
     "src/rocksdb-types",
     "src/row-spine",
@@ -175,7 +171,6 @@ default-members = [
     "src/expr-derive",
     "src/expr-derive-impl",
     "src/expr-parser",
-    "src/expr-test-util",
     "src/foundationdb",
     "src/frontegg-auth",
     "src/frontegg-client",
@@ -184,8 +179,6 @@ default-members = [
     "src/interchange",
     "src/kafka-util",
     "src/license-keys",
-    "src/lowertest",
-    "src/lowertest-derive",
     "src/materialized",
     "src/metabase",
     "src/metrics",
@@ -224,7 +217,6 @@ default-members = [
     "src/proto",
     "src/regexp",
     "src/repr",
-    "src/repr-test-util",
     "src/rocksdb",
     "src/rocksdb-types",
     "src/row-spine",
@@ -344,7 +336,7 @@ crossterm = { version = "0.28.1", default-features = false }
 csv = "1.4.0"
 csv-async = { version = "1.3.1", features = ["tokio"] }
 csv-core = "0.1.13"
-ctor = "0.9.1"
+ctor = "1.0.10"
 custom-labels = "0.4.6"
 darling = "0.23.0"
 datadriven = "0.9.0"
@@ -523,7 +515,7 @@ static_assertions = "1.1"
 strsim = "0.11.1"
 subtle = "2.6.1"
 supports-color = "3.0.2"
-syn = { version = "2.0.117", features = ["extra-traits", "full", "parsing", "printing"] }
+syn = { version = "2.0.119", features = ["extra-traits", "full", "parsing", "printing"] }
 sysctl = "0.7.1"
 sysinfo = "0.29.11"
 tabled = "0.20.0"

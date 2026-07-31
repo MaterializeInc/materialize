@@ -57,7 +57,7 @@ use std::sync::atomic::AtomicBool;
 // because Rust does not explicitly support constructors. But a scan of the
 // stdlib suggests that reading environment variables is safe enough.
 #[cfg(not(any(miri, target_arch = "wasm32")))]
-#[ctor::ctor]
+#[ctor::ctor(unsafe)]
 pub static SOFT_ASSERTIONS: AtomicBool = {
     let default = cfg!(debug_assertions) || crate::env::is_var_truthy("MZ_SOFT_ASSERTIONS");
     AtomicBool::new(default)
