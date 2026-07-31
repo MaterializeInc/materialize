@@ -4868,6 +4868,8 @@ pub enum ExplainStage {
     Trace,
     /// Insights about the plan
     PlanInsights,
+    /// A static upper bound on the memory each physical-plan node will hold.
+    MemoryBound,
 }
 
 impl ExplainStage {
@@ -4882,6 +4884,9 @@ impl ExplainStage {
             Self::PhysicalPlan => Some(smallvec![Physical]),
             Self::Trace => None,
             Self::PlanInsights => Some(smallvec![Raw, Global, FastPath]),
+            // The bound is computed from the optimized MIR, which is re-lowered with type
+            // collection, so this is the plan the trace must retain.
+            Self::MemoryBound => Some(smallvec![Global]),
         }
     }
 
@@ -4896,6 +4901,9 @@ impl ExplainStage {
             Self::PhysicalPlan => true,
             Self::Trace => false,
             Self::PlanInsights => false,
+            // The bound describes arrangements a dataflow builds. A fast-path peek builds none,
+            // so substituting that plan would answer a different question than the one asked.
+            Self::MemoryBound => false,
         }
     }
 }
@@ -4910,6 +4918,7 @@ impl AstDisplay for ExplainStage {
             Self::PhysicalPlan => f.write_str("PHYSICAL PLAN"),
             Self::Trace => f.write_str("OPTIMIZER TRACE"),
             Self::PlanInsights => f.write_str("PLAN INSIGHTS"),
+            Self::MemoryBound => f.write_str("MEMORY BOUND"),
         }
     }
 }

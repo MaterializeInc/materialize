@@ -17,8 +17,8 @@ pub use self::dictionary::DatumContainer;
 pub use self::dictionary::DatumSeq;
 pub use self::offset_opt::OffsetOptimized;
 pub use self::spines::{
-    RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowRowColPagedBuilder, RowRowSpine,
-    RowSpine, RowValBatcher, RowValBuilder, RowValSpine, ValRowBatcher, ValRowBuilder,
+    RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowRowColPagedBuilder, RowRowLayout,
+    RowRowSpine, RowSpine, RowValBatcher, RowValBuilder, RowValSpine, ValRowBatcher, ValRowBuilder,
     ValRowColPagedBuilder, ValRowSpine,
 };
 use differential_dataflow::trace::implementations::OffsetList;
@@ -159,6 +159,42 @@ mod tests {
     use mz_repr::adt::date::Date;
     use mz_repr::adt::interval::Interval;
     use mz_repr::{Datum, Row, SqlScalarType};
+
+    /// Serializes tests that read or write the process-wide `DICTIONARY_COMPRESSION`
+    /// flag. The flag itself has no synchronization, so under a shared-process test
+    /// harness (plain `cargo test`'s default of running all tests as threads in one
+    /// process) two tests setting it to different values could otherwise interleave,
+    /// corrupting whichever test observes the wrong value mid-run.
+    static DICTIONARY_COMPRESSION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Holds `DICTIONARY_COMPRESSION_TEST_LOCK` and restores the flag's prior value on
+    /// drop, so a test that sets the flag cannot affect any test that runs after it,
+    /// regardless of test order or whether the setting test panics.
+    struct DictionaryCompressionGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        prior: bool,
+    }
+
+    impl Drop for DictionaryCompressionGuard {
+        fn drop(&mut self) {
+            crate::DICTIONARY_COMPRESSION.store(self.prior, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// Sets `DICTIONARY_COMPRESSION` to `value` for the lifetime of the returned guard.
+    ///
+    /// A poisoned lock only means some earlier guarded test panicked while holding it;
+    /// the guarded state is a single `AtomicBool`, so there is no invalid data to
+    /// recover from, and we take the lock anyway rather than letting the poison fail
+    /// every later test that touches the flag.
+    #[must_use]
+    fn with_dictionary_compression(value: bool) -> DictionaryCompressionGuard {
+        let lock = DICTIONARY_COMPRESSION_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let prior = crate::DICTIONARY_COMPRESSION.swap(value, std::sync::atomic::Ordering::Relaxed);
+        DictionaryCompressionGuard { _lock: lock, prior }
+    }
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: integer-to-pointer casts and `ptr::with_exposed_provenance` are not supported
@@ -393,12 +429,11 @@ mod tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // integer-to-pointer casts in row decoding are unsupported under miri
     fn push_done_promotion_avoids_merge_poison() {
-        use std::sync::atomic::Ordering;
         use timely::container::PushInto;
 
-        // Gate the dictionary path on. Safe for other tests: the flag only controls
-        // whether `DatumContainer` gathers stats; it never changes decode results.
-        crate::DICTIONARY_COMPRESSION.store(true, Ordering::Relaxed);
+        // Gate the dictionary path on for this test. The guard serializes against
+        // other tests that touch the flag and restores its prior value on drop.
+        let _guard = with_dictionary_compression(true);
 
         // Low-cardinality rows, well under `STATS_THRESHOLD` (64Ki): a repeated
         // multi-byte string the dictionary compresses, plus an integer column that

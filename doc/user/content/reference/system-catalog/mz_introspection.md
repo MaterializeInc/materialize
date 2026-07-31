@@ -85,6 +85,19 @@ Specifically, reductions can use more memory than we show here.
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_arrangement_heap_capacity_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_arrangement_heap_size_raw -->
 
+## `mz_arrangement_distinct_keys`
+
+The `mz_arrangement_distinct_keys` view describes an upper bound on the number of distinct keys in each [arrangement] in the system.
+
+<!-- RELATION_SPEC mz_introspection.mz_arrangement_distinct_keys -->
+| Field           | Type       | Meaning                                                                                                                                                                                                                                                                    |
+|-----------------|------------| --------                                                                                                                                                                                                                                                                   |
+| `operator_id`   | [`uint8`]  | The ID of the operator that created the arrangement. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).                                                                                                                                                 |
+| `distinct_keys` | [`bigint`] | An upper bound on the number of distinct keys in the arrangement, not the exact count: a key present in more than one live batch is counted once per batch, which happens normally across the spine's batch pyramid and during in-progress merges. Treating this value as exact would understate memory usage. |
+
+<!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_arrangement_distinct_keys_per_worker -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_arrangement_distinct_keys_raw -->
+
 ## `mz_compute_error_counts`
 
 The `mz_compute_error_counts` view describes the counts of errors in objects exported by [dataflows][dataflow] in the system.
@@ -99,6 +112,22 @@ Dataflow exports that don't have any errors are not included in this view.
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_error_counts_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_error_counts_raw -->
+
+## `mz_compute_export_arrangements`
+
+The `mz_compute_export_arrangements` view describes which [dataflow] operator holds the arrangement that each index serves.
+
+An index whose plan reuses an already-arranged collection builds no arrangement of its own, and points at the operator whose arrangement it reuses. That operator can belong to another object's part of the dataflow, so this mapping cannot be derived from [`mz_lir_mapping`](#mz_lir_mapping).
+
+The indexes on introspection sources are not listed. Their arrangements live in the logging dataflow, which does not report arrangement sizes.
+
+<!-- RELATION_SPEC mz_introspection.mz_compute_export_arrangements -->
+| Field         | Type      | Meaning                                                                                                             |
+| ------------- | --------- | --------                                                                                                            |
+| `export_id`   | [`text`]  | The ID of the index exported by the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).  |
+| `operator_id` | [`uint8`] | The ID of the operator holding the arrangement. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators). |
+
+<!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_export_arrangements_per_worker -->
 
 ## `mz_compute_exports`
 

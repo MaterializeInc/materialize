@@ -40,7 +40,7 @@ impl Analysis for Equivalences {
     // unconstrained recursive terms.
     type Value = Option<EquivalenceClasses>;
 
-    fn announce_dependencies(builder: &mut DerivedBuilder) {
+    fn announce_dependencies(&self, builder: &mut DerivedBuilder) {
         builder.require(Arity);
         builder.require(ReprRelationType); // needed for expression reduction.
     }

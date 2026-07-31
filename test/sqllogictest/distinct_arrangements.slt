@@ -981,12 +981,14 @@ SELECT mz_unsafe.mz_sleep(4)
 query T
 SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 ----
+Arrange Compute(ArrangementDistinctKeys)
 Arrange Compute(ArrangementHeapAllocations)
 Arrange Compute(ArrangementHeapCapacity)
 Arrange Compute(ArrangementHeapSize)
 Arrange Compute(DataflowCurrent)
 Arrange Compute(DataflowGlobal)
 Arrange Compute(ErrorCount)
+Arrange Compute(ExportArrangement)
 Arrange Compute(FrontierCurrent)
 Arrange Compute(HydrationTime)
 Arrange Compute(ImportFrontierCurrent)
@@ -1056,12 +1058,16 @@ JOIN mz_introspection.mz_dataflow_operator_dataflows mdod ON mash.operator_id = 
 GROUP BY mdod.name
 ORDER BY mdod.name
 ----
-AccumulableErrorCheck  4
+AccumulableErrorCheck  5
 Arrange␠ReduceMinsMaxes  1
-ArrangeAccumulable␠[val:␠empty]  4
-ArrangeBy[[Column(0,␠"operator_id")]]  2
+ArrangeAccumulable␠[val:␠empty]  5
+ArrangeBy[[Column(0,␠"operator_id")]]  3
 ArrangeBy[[Column(1,␠"dataflow_id")]]  2
-ReduceAccumulable  4
+ArrangeBy[[Column(1,␠"operator_id")]]  2
+Arranged␠DistinctBy  1
+DistinctBy  1
+DistinctByErrorCheck  1
+ReduceAccumulable  5
 ReduceMinsMaxes  1
 ReduceMinsMaxes␠Error␠Check  1
 

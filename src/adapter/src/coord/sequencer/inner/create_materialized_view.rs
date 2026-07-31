@@ -216,7 +216,7 @@ impl Coordinator {
     }
 
     #[instrument]
-    pub(super) fn explain_materialized_view(
+    pub(super) async fn explain_materialized_view(
         &self,
         ctx: &ExecuteContext,
         plan::ExplainPlanPlan {
@@ -304,6 +304,19 @@ impl Coordinator {
                     Some(target_cluster.name.as_str()),
                     dataflow_metainfo,
                 )?
+            }
+            ExplainStage::MemoryBound => {
+                let Some(plan) = self.catalog().try_get_optimized_plan(&gid).cloned() else {
+                    tracing::error!("cannot find {stage} for materialized view {id} in catalog");
+                    coord_bail!("cannot find {stage} for materialized view in catalog");
+                };
+                // The rest of EXPLAIN runs without statistics. This stage needs them, because
+                // the row term is the whole point of the bound.
+                let stats = self
+                    .dataflow_cardinality_stats(ctx.session(), &plan, view.cluster_id)
+                    .await;
+                let rows = crate::explain::memory_bound_rows(plan, &features, stats)?;
+                return Ok(Self::send_immediate_rows(rows));
             }
             _ => {
                 coord_bail!("cannot EXPLAIN {} FOR MATERIALIZED VIEW", stage);
@@ -969,6 +982,10 @@ impl Coordinator {
             .override_from(&self.cluster_scoped_optimizer_overrides(cluster_id))
             .override_from(&config.features);
 
+        let cardinality_stats = self
+            .explain_cardinality_stats(session, &stage, &optimizer_trace, cluster_id)
+            .await;
+
         let rows = optimizer_trace
             .into_rows(
                 format,
@@ -981,6 +998,7 @@ impl Coordinator {
                 stage,
                 plan::ExplaineeStatementKind::CreateMaterializedView,
                 None,
+                cardinality_stats,
             )
             .await?;
 

@@ -68,6 +68,7 @@ Billed
 Body
 Boolean
 Both
+Bound
 Bpchar
 Broken
 Broker

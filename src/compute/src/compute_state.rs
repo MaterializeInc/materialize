@@ -95,6 +95,13 @@ pub struct ComputeState {
     pub collections: BTreeMap<GlobalId, CollectionState>,
     /// The traces available for sharing across dataflows.
     pub traces: TraceManager,
+    /// The dataflow operator holding each index export's arrangement.
+    ///
+    /// An export whose plan reuses an already-arranged collection renders no
+    /// operators of its own, so it resolves its operator through the export it
+    /// reuses. That export lives in another dataflow, which is why this outlives
+    /// any single dataflow build.
+    pub export_arrangement_operators: BTreeMap<GlobalId, usize>,
     /// Shared buffer with SUBSCRIBE operator instances by which they can respond.
     ///
     /// The entries are pairs of sink identifier (to identify the subscribe instance)
@@ -191,6 +198,7 @@ impl ComputeState {
 
         Self {
             collections: Default::default(),
+            export_arrangement_operators: Default::default(),
             traces,
             subscribe_response_buffer: Default::default(),
             copy_to_response_buffer: Default::default(),
@@ -797,6 +805,7 @@ impl<'a> ActiveComputeState<'a> {
 
         // If this collection is an index, remove its trace.
         self.compute_state.traces.remove(&id);
+        self.compute_state.export_arrangement_operators.remove(&id);
         // If the collection is unscheduled, remove it from the list of waiting collections.
         self.compute_state.suspended_collections.remove(&id);
 
@@ -856,6 +865,12 @@ impl<'a> ActiveComputeState<'a> {
             let id = log_index_ids
                 .remove(&log)
                 .expect("`logging::initialize` does not invent logs");
+
+            // NOTE: logging indexes are deliberately absent from
+            // `mz_compute_export_arrangements`. Their arrangements live in the logging
+            // dataflow, which does not report record counts while `log_logging` is
+            // false, so announcing them would report every logging index as empty
+            // rather than as unmeasured.
             self.compute_state.traces.set(id, trace);
 
             // Initialize compute and logging state for the logging index.

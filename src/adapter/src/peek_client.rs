@@ -75,6 +75,8 @@ pub struct PeekClient {
     persist_client: PersistClient,
     /// Statement logging state for frontend peek sequencing.
     pub statement_logging_frontend: StatementLoggingFrontend,
+    /// Index arrangement record counts, maintained by the Coordinator.
+    pub index_arrangement_stats: Arc<crate::index_arrangement_stats::IndexArrangementStats>,
 }
 
 impl PeekClient {
@@ -90,6 +92,7 @@ impl PeekClient {
         optimizer_metrics: OptimizerMetrics,
         persist_client: PersistClient,
         statement_logging_frontend: StatementLoggingFrontend,
+        index_arrangement_stats: Arc<crate::index_arrangement_stats::IndexArrangementStats>,
     ) -> Self {
         Self {
             coordinator_client,
@@ -101,6 +104,7 @@ impl PeekClient {
             statement_logging_frontend,
             oracles: Default::default(), // lazily populated
             persist_client,
+            index_arrangement_stats,
         }
     }
 

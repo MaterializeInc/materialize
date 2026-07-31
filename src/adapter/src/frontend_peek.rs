@@ -838,6 +838,10 @@ impl PeekClient {
 
         // # From peek_optimize
 
+        // `EXPLAIN MEMORY BOUND` needs statistics even when the session has not enabled
+        // them for optimization, since its row and byte columns are the whole output.
+        let force_stats = explain_ctx.needs_cardinality_stats()
+            && session.vars().enable_memory_bound_cardinality_estimates();
         let stats = statistics_oracle(
             session,
             &source_ids,
@@ -845,9 +849,31 @@ impl PeekClient {
             true,
             catalog.system_config(),
             &*self.storage_collections,
+            catalog.state(),
+            target_cluster_id,
+            &self.index_arrangement_stats,
+            force_stats,
         )
         .await
         .unwrap_or_else(|_| Box::new(EmptyStatisticsOracle));
+
+        // Snapshot the oracle before it moves into the optimizer task. `EXPLAIN MEMORY BOUND`
+        // needs the same row counts the optimizer saw, and re-querying persist afterwards would
+        // both cost a second round trip and risk disagreeing with the plan being explained.
+        let cardinality_stats = crate::explain::MemoryBoundStats {
+            rows: stats.as_map(),
+            // TODO: resolve index key bounds here too. The reduce tightening needs the
+            // catalog's indexes for the plan's cluster plus a hydration check, and this
+            // point runs before optimization, so the plan's inputs are not settled yet.
+            // `EXPLAIN MEMORY BOUND FOR SELECT` therefore keeps the row bound only.
+            index_key_bounds: Default::default(),
+            // Widths need neither a cluster nor a hydration check, only the declared types,
+            // so they are available this early.
+            declared_widths: crate::coord::sequencer::declared_column_widths(
+                catalog.state(),
+                source_ids.iter().copied(),
+            ),
+        };
 
         // Generate data structures that can be moved to another task where we will perform possibly
         // expensive optimizations.
@@ -1213,6 +1239,7 @@ impl PeekClient {
                     explain_ctx,
                     optimizer,
                     insights_ctx,
+                    cardinality_stats,
                 )
                 .await?;
 

@@ -327,6 +327,19 @@ pub fn describe_explain_plan(
             let name = "Plan Insights";
             relation_desc = relation_desc.with_column(name, SqlScalarType::String.nullable(false));
         }
+        ExplainStage::MemoryBound => {
+            // Width and bytes are nullable because a column with no static ceiling has no
+            // answer, and reporting a number there would claim a bound that does not hold.
+            relation_desc = relation_desc
+                .with_column("Node Id", SqlScalarType::UInt64.nullable(false))
+                .with_column("Operator", SqlScalarType::String.nullable(false))
+                .with_column("Arrangements", SqlScalarType::UInt64.nullable(false))
+                .with_column("Row Width", SqlScalarType::UInt64.nullable(true))
+                .with_column("Bytes Per Row", SqlScalarType::UInt64.nullable(true))
+                .with_column("Max Rows", SqlScalarType::UInt64.nullable(true))
+                .with_column("Max Bytes", SqlScalarType::UInt64.nullable(true))
+                .with_column("Note", SqlScalarType::String.nullable(true));
+        }
     };
     let relation_desc = relation_desc.finish();
 

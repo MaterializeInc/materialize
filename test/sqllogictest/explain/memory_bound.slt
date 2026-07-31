@@ -1,0 +1,171 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# `EXPLAIN MEMORY BOUND` factors its bound into arrangements * width * rows. The first
+# two need no statistics and are exact. The row and byte columns need cardinality
+# statistics, which the CI configuration supplies by defaulting
+# `enable_memory_bound_cardinality_estimates` on. That flag collects statistics for this
+# stage only, so it neither moves a join order nor makes any other query in the session
+# await persist.
+#
+# The fixtures are deliberately tiny, two and three rows, so the statistics they depend
+# on are available immediately. Should this ever flake on a loaded machine the failure is
+# a NULL where a number is expected, which is a visible mismatch rather than a silently
+# wrong bound.
+
+statement ok
+CREATE TABLE t (a INT NOT NULL, b INT NOT NULL)
+
+statement ok
+CREATE TABLE u (x INT NOT NULL, y INT NOT NULL)
+
+statement ok
+CREATE TABLE s (k TEXT NOT NULL)
+
+statement ok
+INSERT INTO t VALUES (1, 10), (2, 20), (3, 30)
+
+statement ok
+INSERT INTO u VALUES (1, 100), (2, 200)
+
+statement ok
+INSERT INTO s VALUES ('a'), ('b')
+
+# A one-shot peek reads a snapshot, so its input is statically monotonic and the reduce
+# needs no bucket hierarchy. An accumulable reduce threads one accumulator per aggregate
+# through the difference position, so its bytes per row far exceed the row width.
+query ITIIIIIT
+EXPLAIN MEMORY BOUND FOR SELECT a, count(*) FROM t GROUP BY a
+----
+1  Get  0  5  0  3  0  NULL
+2  Reduce␠(accumulable,␠1␠aggregates)  2  14  364  3  1092  NULL
+
+# A `text` column has no static size ceiling, so the width and every column derived
+# from it must be NULL rather than a number that does not bound anything.
+query ITIIIIIT
+EXPLAIN MEMORY BOUND FOR SELECT k, count(*) FROM s GROUP BY k
+----
+1  Get  0  NULL  0  2  0  NULL
+2  Reduce␠(accumulable,␠1␠aggregates)  2  NULL  NULL  2  NULL  NULL
+
+# A constant needs no statistics to settle its row count, so this is the one shape whose
+# row column is populated even with cardinality estimates off.
+query ITIIIIIT
+EXPLAIN MEMORY BOUND FOR SELECT 1
+----
+1  Constant  0  2  0  1  0  NULL
+
+# A differential join arranges each stage whose input is not already arranged, and the
+# join node itself then holds nothing. Reporting per node rather than per plan is what
+# makes that split visible.
+query ITIIIIIT
+EXPLAIN MEMORY BOUND FOR SELECT t.a, u.y FROM t, u WHERE t.a = u.x
+----
+1  Get  0  5  0  3  0  NULL
+2  ArrangeBy␠(1␠forms)  1  5  37  3  111  may␠reuse␠an␠already-available␠arrangement
+3  Get  0  10  0  2  0  NULL
+4  ArrangeBy␠(1␠forms)  1  10  42  2  84  may␠reuse␠an␠already-available␠arrangement
+5  Differential␠Join␠(1␠stages)  0  10  0  6  0  assumes␠the␠source␠arrangement␠is␠available
+
+# A materialized view's input is not monotonic, so `max` lowers to the bucket hierarchy.
+# The level count comes from `bucketing_of_expected_group_size`, which yields 7 rather
+# than 8 at the default group size because the loop stops once 16^n exceeds its limit.
+statement ok
+CREATE MATERIALIZED VIEW mv_max AS SELECT a, max(b) FROM t GROUP BY a
+
+query ITIIIIIT
+EXPLAIN MEMORY BOUND FOR MATERIALIZED VIEW mv_max
+----
+1  Get  0  10  0  3  0  NULL
+2  Reduce␠(hierarchical,␠7␠levels)  16  10  672  3  2016  NULL
+
+# An `OFFSET` with no `LIMIT` skips the bucket hierarchy entirely, so it must not be
+# charged for the levels a `LIMIT` would build. In a one-shot peek `OFFSET` is applied by
+# the row-set finishing and no operator is rendered at all, so this needs a view to reach
+# the top-k plan.
+statement ok
+CREATE MATERIALIZED VIEW mv_offset AS SELECT * FROM (SELECT * FROM t ORDER BY a OFFSET 1)
+
+query ITIIIIIT
+EXPLAIN MEMORY BOUND FOR MATERIALIZED VIEW mv_offset
+----
+1  Get  0  10  0  3  0  NULL
+2  TopK␠(0␠levels)  2  10  84  3  252  NULL
+
+statement ok
+CREATE INDEX t_a ON t (a)
+
+query ITIIIIIT
+EXPLAIN MEMORY BOUND FOR INDEX t_a
+----
+1  Get  0  10  0  3  0  NULL
+2  ArrangeBy␠(1␠forms)  1  10  42  3  126  may␠reuse␠an␠already-available␠arrangement
+
+# An index over a reduce's input can bound it, because a reduce emits one row per distinct
+# group key and projecting columns off a set of distinct tuples can only merge them. The
+# cases below pin the two shapes that must NOT be bounded that way, and they are
+# deterministic whether or not the index's key count has reached the coordinator: both
+# decline, so both report the input row count either way.
+#
+# Getting this direction backwards would understate the rows rather than overstate them,
+# which is the difference between a wasted reservation and an out-of-memory kill, and no
+# amount of golden output would reveal it. Hence a test for the refusal, not just the use.
+
+statement ok
+CREATE TABLE d (g INT NOT NULL, v INT NOT NULL)
+
+statement ok
+INSERT INTO d VALUES (1, 10), (1, 20), (2, 30)
+
+statement ok
+CREATE INDEX d_g ON d (g)
+
+# Group key is a strict superset of the index key. One `g` carries arbitrarily many `(g, v)`
+# pairs, so the index bounds nothing here and the input row count stands.
+query ITIIIIIT
+EXPLAIN MEMORY BOUND FOR SELECT g, v, count(*) FROM d GROUP BY g, v
+----
+1  Get  0  10  0  3  0  NULL
+2  Reduce␠(accumulable,␠1␠aggregates)  2  19  374  3  1122  NULL
+
+# Group key the index does not cover at all.
+query ITIIIIIT
+EXPLAIN MEMORY BOUND FOR SELECT v, count(*) FROM d GROUP BY v
+----
+1  Get  0  5  0  3  0  NULL
+2  Reduce␠(accumulable,␠1␠aggregates)  2  14  364  3  1092  NULL
+
+# An expression over an aggregate puts a `Map`/`Project` above the reduce, which lowering
+# lifts off as a separate MFP stage. The reduce is still the node holding the arrangements,
+# so it must carry its own row bound rather than surrendering it to the stage lifted above
+# it. A plan whose only stateful operator reports no bound has no bound at all.
+query ITIIIIIT
+EXPLAIN MEMORY BOUND FOR SELECT a, count(*) * 2 FROM t GROUP BY a
+----
+1  Get  0  5  0  3  0  NULL
+2  Reduce␠(accumulable,␠1␠aggregates)  2  14  364  3  1092  NULL
+3  Map/Filter/Project  0  14  0  3  0  NULL
+
+# A declared length bounds a string column, where `text` does not. The plan carries repr
+# types, which unify `char(n)`, `varchar(n)` and `text` into one unbounded `String`, so a
+# width here proves the declared type reached the bound from the catalog rather than from
+# the plan. `char(4)` is four characters, and UTF-8 spends up to four bytes on each.
+statement ok
+CREATE TABLE c (fixed CHAR(4) NOT NULL, capped VARCHAR(10) NOT NULL)
+
+statement ok
+INSERT INTO c VALUES ('ab', 'cd')
+
+query ITIIIIIT
+EXPLAIN MEMORY BOUND FOR SELECT fixed, count(*) FROM c GROUP BY fixed
+----
+1  Get  0  18  0  1  0  NULL
+2  Reduce␠(accumulable,␠1␠aggregates)  2  27  390  1  390  NULL

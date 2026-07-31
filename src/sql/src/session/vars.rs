@@ -454,6 +454,7 @@ impl SessionVars {
             &ENABLE_SESSION_RBAC_CHECKS,
             &RESTRICT_TO_USER_OBJECTS,
             &ENABLE_SESSION_CARDINALITY_ESTIMATES,
+            &ENABLE_MEMORY_BOUND_CARDINALITY_ESTIMATES,
             &MAX_IDENTIFIER_LENGTH,
             &STATEMENT_LOGGING_SAMPLE_RATE,
             &EMIT_INTROSPECTION_QUERY_NOTICE,
@@ -915,6 +916,11 @@ impl SessionVars {
     /// Returns the value of `enable_session_cardinality_estimates` configuration parameter.
     pub fn enable_session_cardinality_estimates(&self) -> bool {
         *self.expect_value(&ENABLE_SESSION_CARDINALITY_ESTIMATES)
+    }
+
+    /// Returns the value of `enable_memory_bound_cardinality_estimates` configuration parameter.
+    pub fn enable_memory_bound_cardinality_estimates(&self) -> bool {
+        *self.expect_value(&ENABLE_MEMORY_BOUND_CARDINALITY_ESTIMATES)
     }
 
     /// Returns the value of `is_superuser` configuration parameter.
@@ -2484,6 +2490,10 @@ static SESSION_SYSTEM_VARS: LazyLock<BTreeMap<&'static UncasedStr, &'static VarD
             &TIMEZONE,
             &TRANSACTION_ISOLATION,
             &MAX_QUERY_RESULT_SIZE,
+            // Needs a system default so the CI configuration can turn it on for the whole
+            // suite. Without membership here `ALTER SYSTEM SET` and
+            // `--system-parameter-default` are silently accepted and have no effect.
+            &ENABLE_MEMORY_BOUND_CARDINALITY_ESTIMATES,
         ]
         .into_iter()
         .map(|var| (UncasedStr::new(var.name()), var))

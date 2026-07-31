@@ -124,6 +124,19 @@ pub struct ArrangementHeapAllocations {
     pub delta_allocations: isize,
 }
 
+/// A change in an arrangement's upper-bound distinct-key count.
+///
+/// This is a sum over live batches of each batch's exact key count, so it double-counts a key
+/// that occupies a slot in more than one batch. See the comment at the summation site in
+/// `extensions::arrange::log_arrangement_size_inner` for when that happens.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
+pub struct ArrangementDistinctKeys {
+    /// Operator index
+    pub operator_id: usize,
+    /// Delta of the upper-bound distinct-key count of the arrangement.
+    pub delta_keys: isize,
+}
+
 /// Announcing an operator that manages an arrangement.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub struct ArrangementHeapSizeOperator {
@@ -198,6 +211,27 @@ pub struct DataflowGlobal {
     pub global_id: GlobalId,
 }
 
+/// Announce which dataflow operator holds the arrangement an index export serves.
+///
+/// This cannot be derived from `ComputeEvent::LirMapping`. An index whose plan
+/// reuses an already-arranged collection renders no operators of its own, so its
+/// LIR node spans an empty operator range and the arrangement it serves belongs
+/// to a different `GlobalId`'s subtree.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
+pub struct ExportArrangement {
+    /// The index export.
+    pub export_id: GlobalId,
+    /// The operator holding the records, which may sit outside `export_id`'s own
+    /// LIR node.
+    ///
+    /// This is the arranging operator's `OperatorInfo::global_id`, taken from the
+    /// trace, which is the same identifier differential's arrangement logging uses.
+    /// It is deliberately not derived from the stream: a stream only exposes a
+    /// scope-local index, and the stream visible at export time belongs to an
+    /// enclosing region rather than to the arranging operator itself.
+    pub operator_id: u64,
+}
+
 /// A logged compute event.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub enum ComputeEvent {
@@ -217,6 +251,8 @@ pub enum ComputeEvent {
     ArrangementHeapCapacity(ArrangementHeapCapacity),
     /// Arrangement heap size update
     ArrangementHeapAllocations(ArrangementHeapAllocations),
+    /// Arrangement upper-bound distinct-key count update
+    ArrangementDistinctKeys(ArrangementDistinctKeys),
     /// Arrangement size operator address
     ArrangementHeapSizeOperator(ArrangementHeapSizeOperator),
     /// Arrangement size operator dropped
@@ -234,6 +270,10 @@ pub enum ComputeEvent {
     /// Cf. `ComputeLog::LirMaping`
     LirMapping(LirMapping),
     DataflowGlobal(DataflowGlobal),
+    /// An index export was mapped to the operator holding its arrangement.
+    ///
+    /// Cf. `ComputeLog::ExportArrangement`
+    ExportArrangement(ExportArrangement),
 }
 
 /// A peek type distinguishing between index and persist peeks.
@@ -345,6 +385,8 @@ pub(super) fn construct<'scope>(
         let (arrangement_heap_allocations_out, arrangement_heap_allocations) = demux.new_output();
         let mut arrangement_heap_allocations_out =
             OutputBuilder::from(arrangement_heap_allocations_out);
+        let (arrangement_distinct_keys_out, arrangement_distinct_keys) = demux.new_output();
+        let mut arrangement_distinct_keys_out = OutputBuilder::from(arrangement_distinct_keys_out);
         let (error_count_out, error_count) = demux.new_output();
         let mut error_count_out = OutputBuilder::from(error_count_out);
         let (hydration_time_out, hydration_time) = demux.new_output();
@@ -355,6 +397,8 @@ pub(super) fn construct<'scope>(
         let mut lir_mapping_out = OutputBuilder::from(lir_mapping_out);
         let (dataflow_global_ids_out, dataflow_global_ids) = demux.new_output();
         let mut dataflow_global_ids_out = OutputBuilder::from(dataflow_global_ids_out);
+        let (export_arrangement_out, export_arrangement) = demux.new_output();
+        let mut export_arrangement_out = OutputBuilder::from(export_arrangement_out);
 
         let mut demux_state = DemuxState::new(activations, scope.index());
         demux.build(move |_capability| {
@@ -367,11 +411,13 @@ pub(super) fn construct<'scope>(
                 let mut arrangement_heap_size = arrangement_heap_size_out.activate();
                 let mut arrangement_heap_capacity = arrangement_heap_capacity_out.activate();
                 let mut arrangement_heap_allocations = arrangement_heap_allocations_out.activate();
+                let mut arrangement_distinct_keys = arrangement_distinct_keys_out.activate();
                 let mut error_count = error_count_out.activate();
                 let mut hydration_time = hydration_time_out.activate();
                 let mut operator_hydration_status = operator_hydration_status_out.activate();
                 let mut lir_mapping = lir_mapping_out.activate();
                 let mut dataflow_global_ids = dataflow_global_ids_out.activate();
+                let mut export_arrangement = export_arrangement_out.activate();
 
                 input.for_each(|cap, data| {
                     let mut output_sessions = DemuxOutput {
@@ -385,12 +431,15 @@ pub(super) fn construct<'scope>(
                         arrangement_heap_capacity: arrangement_heap_capacity
                             .session_with_builder(&cap),
                         arrangement_heap_size: arrangement_heap_size.session_with_builder(&cap),
+                        arrangement_distinct_keys: arrangement_distinct_keys
+                            .session_with_builder(&cap),
                         error_count: error_count.session_with_builder(&cap),
                         hydration_time: hydration_time.session_with_builder(&cap),
                         operator_hydration_status: operator_hydration_status
                             .session_with_builder(&cap),
                         lir_mapping: lir_mapping.session_with_builder(&cap),
                         dataflow_global_ids: dataflow_global_ids.session_with_builder(&cap),
+                        export_arrangement: export_arrangement.session_with_builder(&cap),
                     };
 
                     let shared_state = &mut shared_state.borrow_mut();
@@ -410,11 +459,13 @@ pub(super) fn construct<'scope>(
 
         use ComputeLog::*;
         let logs = [
+            (ArrangementDistinctKeys, arrangement_distinct_keys),
             (ArrangementHeapAllocations, arrangement_heap_allocations),
             (ArrangementHeapCapacity, arrangement_heap_capacity),
             (ArrangementHeapSize, arrangement_heap_size),
             (DataflowCurrent, export),
             (DataflowGlobal, dataflow_global_ids),
+            (ExportArrangement, export_arrangement),
             (ErrorCount, error_count),
             (FrontierCurrent, frontier),
             (HydrationTime, hydration_time),
@@ -488,14 +539,20 @@ struct DemuxState {
     lir_mapping: BTreeMap<GlobalId, BTreeMap<LirId, LirMetadata>>,
     /// Dataflow -> `GlobalId` mapping (many-to-one).
     dataflow_global_ids: BTreeMap<usize, BTreeSet<GlobalId>>,
+    /// Index export -> operator holding its arrangement.
+    export_arrangement: BTreeMap<GlobalId, u64>,
     /// A row packer for the arrangement heap allocations output.
     arrangement_heap_allocations_packer: PermutedRowPacker,
     /// A row packer for the arrangement heap capacity output.
     arrangement_heap_capacity_packer: PermutedRowPacker,
     /// A row packer for the arrangement heap size output.
     arrangement_heap_size_packer: PermutedRowPacker,
+    /// A row packer for the arrangement upper-bound distinct-key count output.
+    arrangement_distinct_keys_packer: PermutedRowPacker,
     /// A row packer for the dataflow global output.
     dataflow_global_packer: PermutedRowPacker,
+    /// A row packer for the export arrangement output.
+    export_arrangement_packer: PermutedRowPacker,
     /// A row packer for the error count output.
     error_count_packer: PermutedRowPacker,
     /// A row packer for the exports output.
@@ -528,6 +585,7 @@ impl DemuxState {
             arrangement_size: Default::default(),
             lir_mapping: Default::default(),
             dataflow_global_ids: Default::default(),
+            export_arrangement: Default::default(),
             arrangement_heap_allocations_packer: PermutedRowPacker::new(
                 ComputeLog::ArrangementHeapAllocations,
             ),
@@ -535,7 +593,11 @@ impl DemuxState {
                 ComputeLog::ArrangementHeapCapacity,
             ),
             arrangement_heap_size_packer: PermutedRowPacker::new(ComputeLog::ArrangementHeapSize),
+            arrangement_distinct_keys_packer: PermutedRowPacker::new(
+                ComputeLog::ArrangementDistinctKeys,
+            ),
             dataflow_global_packer: PermutedRowPacker::new(ComputeLog::DataflowGlobal),
+            export_arrangement_packer: PermutedRowPacker::new(ComputeLog::ExportArrangement),
             error_count_packer: PermutedRowPacker::new(ComputeLog::ErrorCount),
             export_packer: PermutedRowPacker::new(ComputeLog::DataflowCurrent),
             frontier_packer: PermutedRowPacker::new(ComputeLog::FrontierCurrent),
@@ -577,6 +639,14 @@ impl DemuxState {
         ])
     }
 
+    /// Pack an arrangement upper-bound distinct-key count update key-value for the given operator.
+    fn pack_arrangement_distinct_keys_update(&mut self, operator_id: usize) -> (&RowRef, &RowRef) {
+        self.arrangement_distinct_keys_packer.pack_slice(&[
+            Datum::UInt64(operator_id.try_into().expect("operator_id too big")),
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+        ])
+    }
+
     /// Pack a dataflow global update key-value for the given dataflow index and global ID.
     fn pack_dataflow_global_update(
         &mut self,
@@ -587,6 +657,19 @@ impl DemuxState {
             Datum::UInt64(u64::cast_from(dataflow_index)),
             Datum::UInt64(u64::cast_from(self.worker_id)),
             make_string_datum(global_id, &mut self.scratch_string_a),
+        ])
+    }
+
+    /// Pack an export arrangement update key-value for the given export ID and operator.
+    fn pack_export_arrangement_update(
+        &mut self,
+        export_id: GlobalId,
+        operator_id: u64,
+    ) -> (&RowRef, &RowRef) {
+        self.export_arrangement_packer.pack_slice(&[
+            make_string_datum(export_id, &mut self.scratch_string_a),
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+            Datum::UInt64(operator_id),
         ])
     }
 
@@ -756,6 +839,7 @@ struct ArrangementSizeState {
     size: isize,
     capacity: isize,
     count: isize,
+    keys: isize,
 }
 
 /// Bundled output sessions used by the demux operator.
@@ -768,11 +852,13 @@ struct DemuxOutput<'a, 'b> {
     arrangement_heap_allocations: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     arrangement_heap_capacity: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     arrangement_heap_size: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
+    arrangement_distinct_keys: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     hydration_time: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     operator_hydration_status: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     error_count: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     lir_mapping: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     dataflow_global_ids: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
+    export_arrangement: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
 }
 
 /// Event handler of the demux operator.
@@ -812,6 +898,7 @@ impl DemuxHandler<'_, '_, '_> {
             ArrangementHeapSize(inner) => self.handle_arrangement_heap_size(inner),
             ArrangementHeapCapacity(inner) => self.handle_arrangement_heap_capacity(inner),
             ArrangementHeapAllocations(inner) => self.handle_arrangement_heap_allocations(inner),
+            ArrangementDistinctKeys(inner) => self.handle_arrangement_distinct_keys(inner),
             ArrangementHeapSizeOperator(inner) => self.handle_arrangement_heap_size_operator(inner),
             ArrangementHeapSizeOperatorDrop(inner) => {
                 self.handle_arrangement_heap_size_operator_dropped(inner)
@@ -822,6 +909,9 @@ impl DemuxHandler<'_, '_, '_> {
             OperatorHydration(hydration) => self.handle_operator_hydration(hydration),
             LirMapping(mapping) => self.handle_lir_mapping(mapping),
             DataflowGlobal(global) => self.handle_dataflow_global(global),
+            ExportArrangement(export_arrangement) => {
+                self.handle_export_arrangement(export_arrangement)
+            }
         }
     }
 
@@ -932,6 +1022,16 @@ impl DemuxHandler<'_, '_, '_> {
                         );
                         self.output.lir_mapping.give((datum, ts, Diff::MINUS_ONE));
                     }
+                }
+
+                // Remove the export -> arrangement operator mapping.
+                if let Some(operator_id) = self.state.export_arrangement.remove(&global_id) {
+                    let datum = self
+                        .state
+                        .pack_export_arrangement_update(global_id, operator_id);
+                    self.output
+                        .export_arrangement
+                        .give((datum, ts, Diff::MINUS_ONE));
                 }
             }
         }
@@ -1180,6 +1280,30 @@ impl DemuxHandler<'_, '_, '_> {
             .give((datum, ts, diff));
     }
 
+    /// Update the upper-bound distinct-key count for an arrangement.
+    fn handle_arrangement_distinct_keys(
+        &mut self,
+        ArrangementDistinctKeysReference {
+            operator_id,
+            delta_keys,
+        }: Ref<'_, ArrangementDistinctKeys>,
+    ) {
+        let ts = self.ts();
+        let Some(state) = self.state.arrangement_size.get_mut(&operator_id) else {
+            return;
+        };
+
+        state.keys += delta_keys;
+
+        let datum = self
+            .state
+            .pack_arrangement_distinct_keys_update(operator_id);
+        let diff = Diff::cast_from(delta_keys);
+        self.output
+            .arrangement_distinct_keys
+            .give((datum, ts, diff));
+    }
+
     /// Indicate that a new arrangement exists, start maintaining the heap size state.
     fn handle_arrangement_heap_size_operator(
         &mut self,
@@ -1235,6 +1359,12 @@ impl DemuxHandler<'_, '_, '_> {
             let size = self.state.pack_arrangement_heap_size_update(operator_id);
             let diff = -Diff::cast_from(state.size);
             self.output.arrangement_heap_size.give((size, ts, diff));
+
+            let keys = self
+                .state
+                .pack_arrangement_distinct_keys_update(operator_id);
+            let diff = -Diff::cast_from(state.keys);
+            self.output.arrangement_distinct_keys.give((keys, ts, diff));
         }
         self.shared_state
             .arrangement_size_activators
@@ -1294,6 +1424,34 @@ impl DemuxHandler<'_, '_, '_> {
             .state
             .pack_dataflow_global_update(dataflow_index, global_id);
         self.output.dataflow_global_ids.give((datum, ts, Diff::ONE));
+    }
+
+    fn handle_export_arrangement(
+        &mut self,
+        ExportArrangementReference {
+            export_id,
+            operator_id,
+        }: Ref<'_, ExportArrangement>,
+    ) {
+        let export_id = Columnar::into_owned(export_id);
+        let operator_id = Columnar::into_owned(operator_id);
+
+        // An export is rendered once, and its shutdown retracts this mapping, so a
+        // second announcement means the retraction was missed. Emitting again would
+        // leave an un-retractable row behind, so drop it and report instead.
+        if let Some(previous) = self.state.export_arrangement.insert(export_id, operator_id) {
+            error!(
+                %export_id, %operator_id, %previous,
+                "export arrangement mapping already known",
+            );
+            return;
+        }
+
+        let ts = self.ts();
+        let datum = self
+            .state
+            .pack_export_arrangement_update(export_id, operator_id);
+        self.output.export_arrangement.give((datum, ts, Diff::ONE));
     }
 }
 

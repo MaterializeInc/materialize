@@ -39,8 +39,12 @@ use crate::plan::transform::{Transform, TransformConfig};
 
 mod lowering;
 
+pub use lowering::{IndexKeyBound, NodeBounds, NodeBoundsFn};
+
+pub mod arrangement_count;
 pub mod interpret;
 pub mod join;
+pub mod memory_bound;
 pub mod reduce;
 pub mod render_plan;
 pub mod scalar;
@@ -585,8 +589,14 @@ impl LirRelationExpr {
         // First, we lower the dataflow description from MIR to LIR. Lowering
         // also moves common parts of the MFPs pushed onto each source's reads into the source
         // itself (see `Context::refine_source_mfps`).
-        let mut dataflow = Self::lower_dataflow(desc, features, metrics)?;
+        let dataflow = Self::lower_dataflow(desc, features, metrics)?;
+        Self::finalize_lowered(dataflow)
+    }
 
+    /// Applies the post-lowering refinements shared by every `finalize_dataflow` entry point.
+    fn finalize_lowered(
+        mut dataflow: DataflowDescription<Self>,
+    ) -> Result<DataflowDescription<Self>, String> {
         // Note: `consolidate_output` for `Union` and per-input
         // `temporal_bucketing_strategies` are decided at lowering time (see the
         // `Union` arm of `lower_mir_expr_stack_safe`). The pre-existing
@@ -744,6 +754,40 @@ impl LirRelationExpr {
         Ok(dataflow)
     }
 
+    /// Like [`Self::finalize_dataflow`], but also returns the output type of each LIR node.
+    ///
+    /// Collecting types costs an `MirRelationExpr::typ()` per node, so the plain
+    /// [`Self::finalize_dataflow`] stays off that path.
+    pub fn finalize_dataflow_with_node_types(
+        desc: DataflowDescription<OptimizedMirRelationExpr>,
+        features: &OptimizerFeatures,
+        metrics: Option<&LoweringMetrics>,
+        node_bounds: Option<NodeBoundsFn>,
+        index_key_bounds: BTreeMap<GlobalId, Vec<IndexKeyBound>>,
+    ) -> Result<
+        (
+            DataflowDescription<Self>,
+            BTreeMap<LirId, mz_repr::ReprRelationType>,
+            BTreeMap<LirId, NodeBounds>,
+        ),
+        String,
+    > {
+        let (dataflow, types, bounds) = Self::lower_dataflow_inner(
+            desc,
+            features,
+            metrics,
+            true,
+            node_bounds,
+            index_key_bounds,
+        )?;
+        let types = types.expect("collection requested");
+        Ok((
+            Self::finalize_lowered(dataflow)?,
+            types,
+            bounds.unwrap_or_default(),
+        ))
+    }
+
     /// Lowers the dataflow description from MIR to LIR. To this end, the
     /// method collects all available arrangements and based on this information
     /// creates plans for every object to be built for the dataflow.
@@ -757,12 +801,39 @@ impl LirRelationExpr {
         features: &OptimizerFeatures,
         metrics: Option<&LoweringMetrics>,
     ) -> Result<DataflowDescription<Self>, String> {
-        let context = lowering::Context::new(desc.debug_name.clone(), features, metrics);
-        let dataflow = context.lower(desc)?;
+        let (dataflow, _types, _bounds) =
+            Self::lower_dataflow_inner(desc, features, metrics, false, None, BTreeMap::new())?;
+        Ok(dataflow)
+    }
+
+    fn lower_dataflow_inner(
+        desc: DataflowDescription<OptimizedMirRelationExpr>,
+        features: &OptimizerFeatures,
+        metrics: Option<&LoweringMetrics>,
+        collect_node_types: bool,
+        node_bounds: Option<NodeBoundsFn>,
+        index_key_bounds: BTreeMap<GlobalId, Vec<IndexKeyBound>>,
+    ) -> Result<
+        (
+            DataflowDescription<Self>,
+            Option<BTreeMap<LirId, mz_repr::ReprRelationType>>,
+            Option<BTreeMap<LirId, NodeBounds>>,
+        ),
+        String,
+    > {
+        let mut context = lowering::Context::new(desc.debug_name.clone(), features, metrics);
+        if collect_node_types {
+            context.collect_node_types();
+        }
+        if let Some(node_bounds) = node_bounds {
+            context.collect_node_bounds(node_bounds);
+            context.set_index_key_bounds(index_key_bounds);
+        }
+        let (dataflow, types, bounds) = context.lower_collecting(desc)?;
 
         mz_repr::explain::trace_plan(&dataflow);
 
-        Ok(dataflow)
+        Ok((dataflow, types, bounds))
     }
 
     /// Refines the plans of objects to be built as part of a single-time `dataflow` to relax

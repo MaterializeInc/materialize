@@ -190,7 +190,7 @@ impl Coordinator {
     }
 
     #[instrument]
-    pub(crate) fn explain_index(
+    pub(crate) async fn explain_index(
         &self,
         ctx: &ExecuteContext,
         plan::ExplainPlanPlan {
@@ -266,6 +266,23 @@ impl Coordinator {
                     Some(target_cluster.name.as_str()),
                     dataflow_metainfo,
                 )?
+            }
+            ExplainStage::MemoryBound => {
+                let Some(plan) = self
+                    .catalog()
+                    .try_get_optimized_plan(&index.global_id())
+                    .cloned()
+                else {
+                    tracing::error!("cannot find {stage} for index {id} in catalog");
+                    coord_bail!("cannot find {stage} for index in catalog");
+                };
+                // The rest of EXPLAIN runs without statistics. This stage needs them, because
+                // the row term is the whole point of the bound.
+                let stats = self
+                    .dataflow_cardinality_stats(ctx.session(), &plan, index.cluster_id)
+                    .await;
+                let rows = crate::explain::memory_bound_rows(plan, &features, stats)?;
+                return Ok(Self::send_immediate_rows(rows));
             }
             _ => {
                 coord_bail!("cannot EXPLAIN {} FOR INDEX", stage);
@@ -649,6 +666,10 @@ impl Coordinator {
             .override_from(&self.cluster_scoped_optimizer_overrides(index.cluster_id))
             .override_from(&config.features);
 
+        let cardinality_stats = self
+            .explain_cardinality_stats(session, &stage, &optimizer_trace, index.cluster_id)
+            .await;
+
         let rows = optimizer_trace
             .into_rows(
                 format,
@@ -661,6 +682,7 @@ impl Coordinator {
                 stage,
                 plan::ExplaineeStatementKind::CreateIndex,
                 None,
+                cardinality_stats,
             )
             .await?;
 

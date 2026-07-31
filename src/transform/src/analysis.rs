@@ -17,7 +17,9 @@ use mz_expr::MirRelationExpr;
 pub use arity::Arity;
 pub use cardinality::Cardinality;
 pub use column_names::{ColumnName, ColumnNames};
+pub use column_width::ColumnMaxWidth;
 pub use common::{Derived, DerivedBuilder, DerivedView};
+pub use distinct_count::ColumnDistinctCount;
 pub use explain::annotate_plan;
 pub use non_negative::NonNegative;
 pub use repr_types::ReprRelationType;
@@ -30,9 +32,15 @@ pub trait Analysis: 'static {
     type Value: std::fmt::Debug;
     /// Announce any dependencies this analysis has on other analyses.
     ///
-    /// The method should invoke `builder.require::<Foo>()` for each other
-    /// analysis `Foo` this analysis depends upon.
-    fn announce_dependencies(_builder: &mut DerivedBuilder) {}
+    /// The method should invoke `builder.require(Foo)` for each other analysis `Foo` this
+    /// analysis depends upon.
+    ///
+    /// Takes `&self` so an analysis can pass its own configuration to what it requires. An
+    /// analysis holding statistics, for example, can hand them to a dependency that needs them.
+    /// Whoever requires a type first supplies its instance, and `require` silently ignores later
+    /// instances of the same type, so a dependency configured here must not also be required with
+    /// different configuration elsewhere.
+    fn announce_dependencies(&self, _builder: &mut DerivedBuilder) {}
     /// The analysis value derived for an expression, given other analysis results.
     ///
     /// The other analysis results include the results of this analysis for all children,
@@ -74,11 +82,497 @@ pub trait Lattice<T> {
     fn meet_assign(&self, a: &mut T, b: T) -> bool;
 }
 
+/// Upper bounds on the number of distinct values in each column.
+mod distinct_count {
+
+    use std::collections::BTreeMap;
+
+    use mz_expr::{Id, MirRelationExpr, MirScalarExpr};
+    use mz_ore::cast::CastFrom;
+    use mz_repr::{GlobalId, ReprColumnType, ReprScalarType};
+
+    use super::{Analysis, Arity, Derived};
+
+    /// An upper bound on the distinct values each column can take, or `None` where none is known.
+    ///
+    /// Exists to tighten `Reduce`, whose output is one row per distinct group key. Without this the
+    /// only sound bound is the input itself, which assumes every row forms its own group.
+    ///
+    /// Every rule may only over-state. A bound that is too small would make the memory bound built
+    /// on it unsound, which is the direction that matters.
+    #[allow(missing_debug_implementations)]
+    pub struct ColumnDistinctCount {
+        /// Cardinalities for globally named entities.
+        ///
+        /// A column holds at most as many distinct values as its relation has rows, so these
+        /// seed the leaves. Without them only small-typed columns are bounded at all, and the
+        /// equi-join rule has nothing to propagate.
+        pub stats: BTreeMap<GlobalId, usize>,
+    }
+
+    impl ColumnDistinctCount {
+        /// An analysis using the provided statistics for global identifiers.
+        pub fn with_stats(stats: BTreeMap<GlobalId, usize>) -> Self {
+            ColumnDistinctCount { stats }
+        }
+    }
+
+    /// The tighter of two bounds, where `None` is no bound at all.
+    fn tighten(a: Option<u64>, b: Option<u64>) -> Option<u64> {
+        match (a, b) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (Some(a), None) | (None, Some(a)) => Some(a),
+            (None, None) => None,
+        }
+    }
+
+    /// How many values a column's type can hold, where that is few enough to be worth knowing.
+    ///
+    /// Only the types small enough to bind in practice. An `int4` domain never constrains anything
+    /// a real query groups by, so pretending to know it would only cost cycles.
+    fn domain_bound(typ: &ReprColumnType) -> Option<u64> {
+        let values = match typ.scalar_type {
+            ReprScalarType::Bool => 2,
+            ReprScalarType::UInt8 => 1 << 8,
+            ReprScalarType::Int16 | ReprScalarType::UInt16 => 1 << 16,
+            _ => return None,
+        };
+        Some(values + u64::from(typ.nullable))
+    }
+
+    /// An upper bound on the distinct values `expr` can take over rows described by `input`.
+    ///
+    /// A function of one column takes at most as many values as that column, and a function of
+    /// several takes at most their product.
+    pub fn expr_distinct_count(expr: &MirScalarExpr, input: &[Option<u64>]) -> Option<u64> {
+        mz_ore::stack::maybe_grow(|| match expr {
+            MirScalarExpr::Column(col, _) => input.get(*col).copied().flatten(),
+            MirScalarExpr::Literal(..) => Some(1),
+            MirScalarExpr::CallUnmaterializable(_) => None,
+            MirScalarExpr::CallUnary { expr, .. } => expr_distinct_count(expr, input),
+            MirScalarExpr::CallBinary { expr1, expr2, .. } => {
+                let a = expr_distinct_count(expr1, input)?;
+                let b = expr_distinct_count(expr2, input)?;
+                a.checked_mul(b)
+            }
+            MirScalarExpr::CallVariadic { exprs, .. } => exprs.iter().try_fold(1u64, |acc, e| {
+                acc.checked_mul(expr_distinct_count(e, input)?)
+            }),
+            // The result comes from one branch or the other, so at most their sum.
+            MirScalarExpr::If { cond: _, then, els } => {
+                let a = expr_distinct_count(then, input)?;
+                let b = expr_distinct_count(els, input)?;
+                a.checked_add(b)
+            }
+        })
+    }
+
+    impl Analysis for ColumnDistinctCount {
+        type Value = Vec<Option<u64>>;
+
+        fn announce_dependencies(&self, builder: &mut crate::analysis::DerivedBuilder) {
+            builder.require(Arity);
+            builder.require(super::ReprRelationType);
+        }
+
+        fn derive(
+            &self,
+            expr: &MirRelationExpr,
+            index: usize,
+            results: &[Self::Value],
+            depends: &Derived,
+        ) -> Self::Value {
+            use MirRelationExpr::*;
+
+            let arity = depends.as_view().results::<Arity>()[index];
+            let unknown = vec![None; arity];
+
+            let mut out = match expr {
+                Constant { rows, .. } => {
+                    let rows = rows.as_ref().map_or(0, |rows| u64::cast_from(rows.len()));
+                    vec![Some(rows); arity]
+                }
+                Get { id, typ, .. } => match id {
+                    // A column cannot hold more distinct values than its relation has rows.
+                    Id::Global(id) => {
+                        vec![self.stats.get(id).map(|n| u64::cast_from(*n)); typ.arity()]
+                    }
+                    // A forward or self reference inside a `LetRec` has no result yet, which
+                    // `get` reports as absent rather than as a bound.
+                    Id::Local(id) => {
+                        let binding = depends.bindings().get(id).copied();
+                        match binding.and_then(|index| results.get(index)) {
+                            Some(bound) => bound.clone(),
+                            None => vec![None; typ.arity()],
+                        }
+                    }
+                },
+                // Structurally transparent: the rows are unchanged, or only removed.
+                Let { .. }
+                | Filter { .. }
+                | Negate { .. }
+                | Threshold { .. }
+                | ArrangeBy { .. }
+                | TopK { .. } => results[index - 1].clone(),
+                Project { outputs, .. } => {
+                    let input = &results[index - 1];
+                    outputs.iter().map(|col| input[*col]).collect()
+                }
+                Map { scalars, .. } => {
+                    let mut out = results[index - 1].clone();
+                    for scalar in scalars {
+                        // Each scalar may refer to columns this `Map` already added.
+                        out.push(expr_distinct_count(scalar, &out));
+                    }
+                    out
+                }
+                FlatMap { .. } => {
+                    // The input columns survive, but the table function's own columns do not
+                    // relate to them in any way this analysis can bound.
+                    let input = &results[index - 1];
+                    let mut out = input.clone();
+                    out.resize(arity, None);
+                    out
+                }
+                Union { .. } => {
+                    let mut out = vec![Some(0u64); arity];
+                    for child in depends.children_of_rev(index, expr.children().count()) {
+                        // Indexed rather than zipped: a `LetRec` binding can be visited before
+                        // its value is known, so the lengths need not agree.
+                        let child = &results[child];
+                        for (col, slot) in out.iter_mut().enumerate() {
+                            *slot = match (*slot, child.get(col).copied().flatten()) {
+                                (Some(a), Some(b)) => a.checked_add(b),
+                                _ => None,
+                            };
+                        }
+                    }
+                    out
+                }
+                Join { equivalences, .. } => {
+                    let mut out = Vec::with_capacity(arity);
+                    let mut children = depends
+                        .children_of_rev(index, expr.children().count())
+                        .collect::<Vec<_>>();
+                    children.reverse();
+                    for child in children {
+                        out.extend(results[child].iter().copied());
+                    }
+                    out.resize(arity, None);
+                    // An equi-join keeps only values present on every side, so each member of an
+                    // equivalence class is bounded by the tightest bound in that class.
+                    for equivalence in equivalences {
+                        let mut bound = None;
+                        for member in equivalence {
+                            bound = tighten(bound, expr_distinct_count(member, &out));
+                        }
+                        for member in equivalence {
+                            if let MirScalarExpr::Column(col, _) = member {
+                                if let Some(slot) = out.get_mut(*col) {
+                                    *slot = tighten(*slot, bound);
+                                }
+                            }
+                        }
+                    }
+                    out
+                }
+                Reduce {
+                    group_key,
+                    aggregates,
+                    ..
+                } => {
+                    let input = &results[index - 1];
+                    let mut out = group_key
+                        .iter()
+                        .map(|key| expr_distinct_count(key, input))
+                        .collect::<Vec<_>>();
+                    // An aggregate's value is not bounded by anything this analysis tracks.
+                    out.extend(std::iter::repeat(None).take(aggregates.len()));
+                    out
+                }
+                // A binding may be revisited before its value is known.
+                LetRec { .. } => unknown.clone(),
+            };
+
+            out.resize(arity, None);
+
+            // A column can never hold more distinct values than its type admits, whatever the
+            // structural rules concluded.
+            let types = depends.as_view().results::<super::ReprRelationType>();
+            if let Some(Some(types)) = types.get(index) {
+                for (col, slot) in out.iter_mut().enumerate() {
+                    if let Some(typ) = types.get(col) {
+                        *slot = tighten(*slot, domain_bound(typ));
+                    }
+                }
+            }
+            out
+        }
+    }
+}
+
+mod column_width {
+
+    use std::collections::BTreeMap;
+
+    use mz_expr::{Id, MirRelationExpr, MirScalarExpr};
+    use mz_repr::{GlobalId, datums_size, max_datum_size};
+
+    use super::{Analysis, Arity, Derived};
+
+    /// An upper bound on the bytes one datum of each column occupies in a `Row`.
+    ///
+    /// Exists so a memory bound can multiply rows by a width. The repr type alone is not enough:
+    /// it collapses `char(n)` and `varchar(n)` into `String`, which has no ceiling, so a schema
+    /// that does declare its string lengths would still report an unbounded row.
+    ///
+    /// Every rule may only over-state. A width that is too small understates the memory a
+    /// dataflow holds, which is the direction that ends in an out-of-memory kill.
+    #[allow(missing_debug_implementations)]
+    pub struct ColumnMaxWidth {
+        /// Per-column byte ceilings for globally named entities, from their declared SQL types.
+        ///
+        /// Supplied by the caller, since only the catalog knows the declared type. Absent
+        /// entries and absent columns both mean the repr type is all there is to go on.
+        pub declared: BTreeMap<GlobalId, Vec<Option<usize>>>,
+    }
+
+    impl ColumnMaxWidth {
+        /// An analysis using the provided declared widths for global identifiers.
+        pub fn with_declared(declared: BTreeMap<GlobalId, Vec<Option<usize>>>) -> Self {
+            ColumnMaxWidth { declared }
+        }
+    }
+
+    /// The tighter of two bounds, where `None` is no bound at all.
+    fn tighten(a: Option<usize>, b: Option<usize>) -> Option<usize> {
+        match (a, b) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (Some(a), None) | (None, Some(a)) => Some(a),
+            (None, None) => None,
+        }
+    }
+
+    /// An upper bound on the bytes `expr` evaluates to, over rows whose column widths are `input`.
+    ///
+    /// Only the forms that carry a width through. A computed value is left to the repr type of the
+    /// column it lands in, which the analysis applies to every column anyway.
+    fn expr_max_width(expr: &MirScalarExpr, input: &[Option<usize>]) -> Option<usize> {
+        mz_ore::stack::maybe_grow(|| match expr {
+            MirScalarExpr::Column(col, _) => input.get(*col).copied().flatten(),
+            MirScalarExpr::Literal(Ok(row), _) => Some(datums_size(row.iter())),
+            // The result is one branch or the other, so the wider of the two bounds both.
+            MirScalarExpr::If { cond: _, then, els } => {
+                let a = expr_max_width(then, input)?;
+                let b = expr_max_width(els, input)?;
+                Some(a.max(b))
+            }
+            _ => None,
+        })
+    }
+
+    impl Analysis for ColumnMaxWidth {
+        type Value = Vec<Option<usize>>;
+
+        fn announce_dependencies(&self, builder: &mut crate::analysis::DerivedBuilder) {
+            builder.require(Arity);
+            builder.require(super::ReprRelationType);
+        }
+
+        fn derive(
+            &self,
+            expr: &MirRelationExpr,
+            index: usize,
+            results: &[Self::Value],
+            depends: &Derived,
+        ) -> Self::Value {
+            use MirRelationExpr::*;
+
+            let arity = depends.as_view().results::<Arity>()[index];
+
+            let mut out = match expr {
+                Constant { rows, .. } => {
+                    let mut out = vec![Some(0); arity];
+                    // A literal relation is its own tightest bound, so read it off the rows.
+                    // `Err` carries no rows and leaves every column to its type.
+                    match rows {
+                        Ok(rows) => {
+                            for (row, _diff) in rows {
+                                // Indexed rather than zipped: a row shorter than the arity
+                                // would silently leave the tail columns claiming zero.
+                                for (col, datum) in row.iter().enumerate() {
+                                    let Some(slot) = out.get_mut(col) else {
+                                        break;
+                                    };
+                                    let width = datums_size(std::iter::once(datum));
+                                    *slot = Some(slot.unwrap_or(0).max(width));
+                                }
+                            }
+                            out
+                        }
+                        Err(_) => vec![None; arity],
+                    }
+                }
+                Get { id, typ, .. } => match id {
+                    Id::Global(id) => match self.declared.get(id) {
+                        Some(declared) => {
+                            let mut declared = declared.clone();
+                            declared.resize(typ.arity(), None);
+                            declared
+                        }
+                        None => vec![None; typ.arity()],
+                    },
+                    // A forward or self reference inside a `LetRec` has no result yet, which
+                    // `get` reports as absent rather than as a bound.
+                    Id::Local(id) => {
+                        let binding = depends.bindings().get(id).copied();
+                        match binding.and_then(|index| results.get(index)) {
+                            Some(widths) => widths.clone(),
+                            None => vec![None; typ.arity()],
+                        }
+                    }
+                },
+                // Structurally transparent: the columns are unchanged, or rows only removed.
+                Let { .. }
+                | Filter { .. }
+                | Negate { .. }
+                | Threshold { .. }
+                | ArrangeBy { .. }
+                | TopK { .. } => results[index - 1].clone(),
+                Project { outputs, .. } => {
+                    let input = &results[index - 1];
+                    outputs.iter().map(|col| input[*col]).collect()
+                }
+                Map { scalars, .. } => {
+                    let mut out = results[index - 1].clone();
+                    for scalar in scalars {
+                        // Each scalar may refer to columns this `Map` already added.
+                        out.push(expr_max_width(scalar, &out));
+                    }
+                    out
+                }
+                FlatMap { .. } => {
+                    // The input columns survive; the table function's own are left to their types.
+                    let mut out = results[index - 1].clone();
+                    out.resize(arity, None);
+                    out
+                }
+                Union { .. } => {
+                    let mut out = vec![Some(0); arity];
+                    for child in depends.children_of_rev(index, expr.children().count()) {
+                        // Indexed rather than zipped: a `LetRec` binding can be visited before
+                        // its value is known, so the lengths need not agree.
+                        let child = &results[child];
+                        for (col, slot) in out.iter_mut().enumerate() {
+                            *slot = match (*slot, child.get(col).copied().flatten()) {
+                                (Some(a), Some(b)) => Some(a.max(b)),
+                                _ => None,
+                            };
+                        }
+                    }
+                    out
+                }
+                Join { .. } => {
+                    // Left to right, matching how the join numbers its columns.
+                    let mut children = depends
+                        .children_of_rev(index, expr.children().count())
+                        .collect::<Vec<_>>();
+                    children.reverse();
+                    let mut out = Vec::with_capacity(arity);
+                    for child in children {
+                        out.extend(results[child].iter().copied());
+                    }
+                    out
+                }
+                Reduce {
+                    group_key,
+                    aggregates,
+                    ..
+                } => {
+                    let input = &results[index - 1];
+                    let mut out = group_key
+                        .iter()
+                        .map(|key| expr_max_width(key, input))
+                        .collect::<Vec<_>>();
+                    // An aggregate's width is left to the type of the column it produces.
+                    out.extend(std::iter::repeat(None).take(aggregates.len()));
+                    out
+                }
+                // A binding may be revisited before its value is known.
+                LetRec { .. } => vec![None; arity],
+            };
+
+            out.resize(arity, None);
+
+            // Whatever the structural rules concluded, a column is never wider than its own type
+            // admits. This is where every column whose type is bounded gets its width, so the
+            // rules above only have to be tighter than the type, never as complete as it.
+            let types = depends.as_view().results::<super::ReprRelationType>();
+            if let Some(Some(types)) = types.get(index) {
+                for (col, slot) in out.iter_mut().enumerate() {
+                    if let Some(typ) = types.get(col) {
+                        *slot = tighten(*slot, max_datum_size(&typ.scalar_type));
+                    }
+                }
+            }
+            out
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use mz_repr::{ReprScalarType, SqlScalarType, max_sql_datum_size};
+
+        use super::*;
+
+        /// The width a caller declares for a leaf has to survive the operators above it, or a
+        /// bound can only ever describe a plan that reads a table and does nothing.
+        #[mz_ore::test]
+        fn declared_width_propagates_through_a_plan() {
+            let id = GlobalId::User(1);
+            let declared = max_sql_datum_size(&SqlScalarType::Char {
+                length: Some(mz_repr::adt::char::CharLength::try_from(4i64).expect("valid")),
+            });
+            assert!(declared.is_some(), "a declared length is a bound");
+
+            let typ = mz_repr::ReprRelationType::new(vec![
+                ReprScalarType::String.nullable(false),
+                ReprScalarType::Int64.nullable(false),
+            ]);
+            let get = MirRelationExpr::Get {
+                id: Id::Global(id),
+                typ,
+                access_strategy: mz_expr::AccessStrategy::UnknownOrLocal,
+            };
+            // Group by the string column, which puts it above a `Reduce` and a `Project`.
+            let expr = get.project(vec![1, 0]).reduce(vec![1], vec![], None);
+
+            let features = mz_repr::optimize::OptimizerFeatures::default();
+            let mut builder = crate::analysis::DerivedBuilder::new(&features);
+            builder.require(ColumnMaxWidth::with_declared(BTreeMap::from([(
+                id,
+                vec![declared, None],
+            )])));
+            let derived = builder.visit(&expr);
+            let widths = derived.as_view().value::<ColumnMaxWidth>().unwrap();
+            assert_eq!(widths, &vec![declared]);
+
+            // Declaring nothing leaves the column to its repr type, which for a string is no
+            // bound at all. Reporting a number here would claim one that does not hold.
+            let mut builder = crate::analysis::DerivedBuilder::new(&features);
+            builder.require(ColumnMaxWidth::with_declared(BTreeMap::new()));
+            let derived = builder.visit(&expr);
+            let widths = derived.as_view().value::<ColumnMaxWidth>().unwrap();
+            assert_eq!(widths, &vec![None]);
+        }
+    }
+}
+
 /// Types common across multiple analyses
 pub mod common {
 
     use std::any::{Any, TypeId};
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use itertools::Itertools;
     use mz_expr::LocalId;
@@ -261,6 +755,11 @@ pub mod common {
     pub struct DerivedBuilder<'a> {
         result: Derived,
         features: &'a OptimizerFeatures,
+        /// Analyses whose dependencies are being resolved, for cycle detection.
+        ///
+        /// Kept separately from `result.analyses` because an analysis now announces its
+        /// dependencies before it is installed, so presence there no longer marks "in progress".
+        in_progress: BTreeSet<TypeId>,
     }
 
     impl<'a> DerivedBuilder<'a> {
@@ -268,6 +767,7 @@ pub mod common {
         pub fn new(features: &'a OptimizerFeatures) -> Self {
             // The default builder should include `SubtreeSize` to facilitate navigation.
             let mut builder = DerivedBuilder {
+                in_progress: BTreeSet::new(),
                 result: Derived::default(),
                 features,
             };
@@ -288,12 +788,12 @@ pub mod common {
             // found a cycle in dependencies.
             let type_id = TypeId::of::<Bundle<A>>();
             if !self.result.order.contains(&type_id) {
-                // If we have not sequenced `type_id` but have a bundle, it means
-                // we are in the process of fulfilling its requirements: a cycle.
-                if self.result.analyses.contains_key(&type_id) {
+                // Re-entering an analysis whose dependencies we are still resolving is a cycle.
+                if !self.in_progress.insert(type_id) {
                     panic!("Cyclic dependency detected: {}", std::any::type_name::<A>());
                 }
-                // Insert the analysis bundle first, so that we can detect cycles.
+                // Announce before installing, so the analysis can configure what it requires.
+                analysis.announce_dependencies(self);
                 self.result.analyses.insert(
                     type_id,
                     Box::new(Bundle::<A> {
@@ -303,7 +803,7 @@ pub mod common {
                         allow_optimistic: self.features.enable_letrec_fixpoint_analysis,
                     }),
                 );
-                A::announce_dependencies(self);
+                self.in_progress.remove(&type_id);
                 // All dependencies are successfully sequenced; sequence `type_id`.
                 self.result.order.push(type_id);
             }
@@ -692,7 +1192,7 @@ mod unique_keys {
     impl Analysis for UniqueKeys {
         type Value = Vec<Vec<usize>>;
 
-        fn announce_dependencies(builder: &mut DerivedBuilder) {
+        fn announce_dependencies(&self, builder: &mut DerivedBuilder) {
             builder.require(Arity);
         }
 
@@ -1413,19 +1913,54 @@ mod cardinality {
     use ordered_float::OrderedFloat;
     use tracing::{error, warn};
 
-    use super::{Analysis, Arity, SubtreeSize, UniqueKeys};
+    use super::distinct_count::expr_distinct_count;
+    use super::{Analysis, Arity, ColumnDistinctCount, SubtreeSize, UniqueKeys};
+
+    /// Which semantics the estimator produces.
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    pub enum CardinalityMode {
+        /// Point estimates, using guessed selectivities and trusting `expected_group_size`.
+        ///
+        /// An estimate may fall arbitrarily far on either side of the truth. This is what the
+        /// join orderer consumes.
+        #[default]
+        Heuristic,
+        /// Sound upper bounds: an estimate is never below the true cardinality.
+        ///
+        /// Every guessed constant is replaced by the worst case an operator can produce, and
+        /// anything not boundable from the plan becomes `Unknown`. Estimates get much looser in
+        /// exchange for never claiming a relation is smaller than it is.
+        UpperBound,
+    }
 
     /// Compute the estimated cardinality of each subtree of a [MirRelationExpr] from the bottom up.
     #[allow(missing_debug_implementations)]
     pub struct Cardinality {
         /// Cardinalities for globally named entities
         pub stats: BTreeMap<GlobalId, usize>,
+        /// Whether to produce point estimates or sound upper bounds.
+        pub mode: CardinalityMode,
     }
 
     impl Cardinality {
         /// A cardinality estimator with provided statistics for the given global identifiers
         pub fn with_stats(stats: BTreeMap<GlobalId, usize>) -> Self {
-            Cardinality { stats }
+            Cardinality {
+                stats,
+                mode: CardinalityMode::Heuristic,
+            }
+        }
+
+        /// An estimator that produces sound upper bounds rather than point estimates.
+        pub fn upper_bound(stats: BTreeMap<GlobalId, usize>) -> Self {
+            Cardinality {
+                stats,
+                mode: CardinalityMode::UpperBound,
+            }
+        }
+
+        fn bounding(&self) -> bool {
+            self.mode == CardinalityMode::UpperBound
         }
     }
 
@@ -1433,6 +1968,7 @@ mod cardinality {
         fn default() -> Self {
             Cardinality {
                 stats: BTreeMap::new(),
+                mode: CardinalityMode::Heuristic,
             }
         }
     }
@@ -1592,19 +2128,40 @@ mod cardinality {
     //
     // We split it up into functions to make it all a bit more tractable to work with.
     impl Cardinality {
-        fn flat_map(&self, tf: &TableFunc, input: CardinalityEstimate) -> CardinalityEstimate {
+        fn flat_map(
+            &self,
+            tf: &TableFunc,
+            exprs: &[MirScalarExpr],
+            input: CardinalityEstimate,
+        ) -> CardinalityEstimate {
             match tf {
                 TableFunc::Wrap { types, width } => {
                     // DBZ is harmless (produces inf, empty estimate), but still a broken invariant
                     if *width == 0 {
                         error!("cardinality estimation encountered TableFunc::Wrap with width 0");
+                        return CardinalityEstimate::Unknown;
                     }
 
-                    input * (f64::cast_lossy(types.len()) / f64::cast_lossy(*width))
+                    if self.bounding() {
+                        // `wrap` chunks the *argument* list, emitting `ceil(exprs / width)` rows
+                        // per input row. `types` describes one output row, so `types.len()` equals
+                        // `width` at every construction site and the ratio below is always 1.
+                        let rows_per_input = exprs.len().div_ceil(*width);
+                        input * f64::cast_lossy(rows_per_input)
+                    } else {
+                        // TODO(database-issues): this is always `input * 1.0`. Retained so that
+                        // changing it does not perturb join ordering; fix alongside the goldens.
+                        input * (f64::cast_lossy(types.len()) / f64::cast_lossy(*width))
+                    }
                 }
                 _ => {
-                    // TODO(mgree) what explosion factor should we make up?
-                    input * CardinalityEstimate::from(4.0)
+                    if self.bounding() {
+                        // A table function may produce unboundedly many rows per input row.
+                        CardinalityEstimate::Unknown
+                    } else {
+                        // TODO(mgree) what explosion factor should we make up?
+                        input * CardinalityEstimate::from(4.0)
+                    }
                 }
             }
         }
@@ -1721,6 +2278,12 @@ mod cardinality {
                 }
             }
 
+            if self.bounding() {
+                // A predicate can only remove rows, so the input is already an upper bound. Every
+                // selectivity below is a guess, and guesses are exactly what a bound must not use.
+                return input;
+            }
+
             let mut estimate = input;
             for expr in predicates {
                 let selectivity = self.predicate(expr, &unique_columns);
@@ -1806,16 +2369,21 @@ mod cardinality {
             &self,
             group_key: &Vec<MirScalarExpr>,
             expected_group_size: &Option<u64>,
+            group_ndv: Option<u64>,
             input: CardinalityEstimate,
         ) -> CardinalityEstimate {
             // TODO(mgree): if no `group_key` is present, we can do way better
 
-            if let Some(expected_group_size) = expected_group_size {
+            if let Some(expected_group_size) = expected_group_size.filter(|_| !self.bounding()) {
                 // if expected group size is 0, treat it as 1 (to avoid DBZ/+inf estimates)
-                let group_size = u64::max(*expected_group_size, 1);
+                let group_size = u64::max(expected_group_size, 1);
                 input / f64::cast_lossy(group_size)
             } else if group_key.is_empty() {
                 CardinalityEstimate::from(1.0)
+            } else if let Some(ndv) = group_ndv.filter(|_| self.bounding()) {
+                // One row per distinct group key. Without a distinct-value bound the only sound
+                // answer is the input, which assumes every row forms its own group.
+                CardinalityEstimate::min(input, CardinalityEstimate::from(f64::cast_lossy(ndv)))
             } else {
                 // in the worst case, every row is its own group
                 input
@@ -1830,10 +2398,25 @@ mod cardinality {
             input: CardinalityEstimate,
         ) -> CardinalityEstimate {
             // TODO: support simple arithmetic expressions
-            let k = limit
-                .as_ref()
-                .and_then(|l| l.as_literal_int64())
-                .map_or(1, |l| std::cmp::max(0, l));
+            let literal_k = limit.as_ref().and_then(|l| l.as_literal_int64());
+
+            if self.bounding() {
+                // A top-k only ever discards rows, so the input always bounds it. The limit
+                // tightens that only when there is a single group.
+                //
+                // `limit: None` means *no* limit, and a non-literal limit is unknown at plan time.
+                // Defaulting either to 1, as the heuristic below does, silently claims a
+                // pure-`OFFSET` top-k emits a single row.
+                return match literal_k {
+                    Some(k) if group_key.is_empty() => CardinalityEstimate::min(
+                        input,
+                        CardinalityEstimate::from(f64::cast_lossy(k)),
+                    ),
+                    _ => input,
+                };
+            }
+
+            let k = literal_k.map_or(1, |l| std::cmp::max(0, l));
 
             if let Some(expected_group_size) = expected_group_size {
                 // if expected group size is 0, treat it as 1 (to avoid DBZ/+inf estimates)
@@ -1856,9 +2439,12 @@ mod cardinality {
     impl Analysis for Cardinality {
         type Value = CardinalityEstimate;
 
-        fn announce_dependencies(builder: &mut crate::analysis::DerivedBuilder) {
+        fn announce_dependencies(&self, builder: &mut crate::analysis::DerivedBuilder) {
             builder.require(crate::analysis::Arity);
             builder.require(crate::analysis::UniqueKeys);
+            builder.require(crate::analysis::ColumnDistinctCount::with_stats(
+                self.stats.clone(),
+            ));
         }
 
         fn derive(
@@ -1904,9 +2490,9 @@ mod cardinality {
                     .children_of_rev(index, expr.children().count())
                     .map(|off| results[off].clone())
                     .sum(),
-                FlatMap { func, .. } => {
+                FlatMap { func, exprs, .. } => {
                     let input = results[index - 1];
-                    self.flat_map(func, input)
+                    self.flat_map(func, exprs, input)
                 }
                 Filter { predicates, .. } => {
                     let input = results[index - 1];
@@ -1920,27 +2506,36 @@ mod cardinality {
                     inputs,
                     ..
                 } => {
-                    let mut input_results = Vec::with_capacity(inputs.len());
+                    // `results` is in post-order, so walking back from `index` visits the
+                    // inputs right to left. Columns in `equivalences` are numbered left to
+                    // right, so collect the inputs first and flip them before laying out
+                    // column offsets. Mixing the two orders credits an input's unique key to
+                    // a different input, which divides the wrong factor out of the product
+                    // and can underestimate the join.
+                    let mut per_input = Vec::with_capacity(inputs.len());
+                    let mut offset = 1;
+                    for _ in 0..inputs.len() {
+                        per_input.push((
+                            results[index - offset],
+                            arity[index - offset],
+                            &keys[index - offset],
+                        ));
+                        offset += &sizes[index - offset];
+                    }
+                    per_input.reverse();
 
+                    let mut input_results = Vec::with_capacity(inputs.len());
                     // maps a column to the index in `inputs` that it belongs to
                     let mut unique_columns = BTreeMap::new();
                     let mut key_offset = 0;
-
-                    let mut offset = 1;
-                    for idx in 0..inputs.len() {
-                        let input = results[index - offset];
+                    for (idx, (input, arity, keys)) in per_input.into_iter().enumerate() {
                         input_results.push(input);
-
-                        let arity = arity[index - offset];
-                        let keys = &keys[index - offset];
                         for key in keys {
                             if key.len() == 1 {
                                 unique_columns.insert(key_offset + key[0], idx);
                             }
                         }
                         key_offset += arity;
-
-                        offset += &sizes[index - offset];
                     }
 
                     self.join(equivalences, implementation, unique_columns, input_results)
@@ -1951,7 +2546,15 @@ mod cardinality {
                     ..
                 } => {
                     let input = results[index - 1];
-                    self.reduce(group_key, expected_group_size, input)
+                    // One output row per distinct group key, so the number of distinct keys
+                    // bounds the output whenever it is known and smaller than the input.
+                    let ndv = depends.results::<ColumnDistinctCount>();
+                    let group_ndv = ndv.get(index - 1).and_then(|input_ndv| {
+                        group_key.iter().try_fold(1u64, |acc, key| {
+                            acc.checked_mul(expr_distinct_count(key, input_ndv)?)
+                        })
+                    });
+                    self.reduce(group_key, expected_group_size, group_ndv, input)
                 }
                 TopK {
                     group_key,
@@ -1976,6 +2579,212 @@ mod cardinality {
                 CardinalityEstimate::Estimate(OrderedFloat(estimate)) => write!(f, "{estimate}"),
                 CardinalityEstimate::Unknown => write!(f, "<UNKNOWN>"),
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use mz_repr::{Datum, ReprScalarType, SqlScalarType};
+
+        use super::*;
+
+        fn bounding() -> Cardinality {
+            Cardinality::upper_bound(BTreeMap::new())
+        }
+
+        fn heuristic() -> Cardinality {
+            Cardinality::with_stats(BTreeMap::new())
+        }
+
+        fn rows(n: f64) -> CardinalityEstimate {
+            CardinalityEstimate::from(n)
+        }
+
+        fn int64(n: i64) -> MirScalarExpr {
+            MirScalarExpr::literal_ok(Datum::Int64(n), ReprScalarType::Int64)
+        }
+
+        /// A predicate can only remove rows, so the sound bound is the input. The heuristic
+        /// applies a guessed selectivity instead.
+        #[mz_ore::test]
+        fn filter_is_the_identity_when_bounding() {
+            // `IS NULL` is one of the predicates the heuristic assigns a guessed selectivity.
+            let predicates = vec![MirScalarExpr::column(0).call_is_null()];
+            let keys = vec![];
+            assert_eq!(
+                bounding().filter(&predicates, &keys, rows(100.0)),
+                rows(100.0)
+            );
+            assert_eq!(
+                heuristic().filter(&predicates, &keys, rows(100.0)),
+                rows(10.0)
+            );
+        }
+
+        /// A general table function has no static bound on rows produced per input row.
+        #[mz_ore::test]
+        fn unbounded_flat_map_is_unknown_when_bounding() {
+            let tf = TableFunc::GenerateSeriesInt64;
+            assert_eq!(
+                bounding().flat_map(&tf, &[], rows(10.0)),
+                CardinalityEstimate::Unknown
+            );
+            assert_eq!(heuristic().flat_map(&tf, &[], rows(10.0)), rows(40.0));
+        }
+
+        /// `wrap` chunks the argument list, so a two-argument wrap of width one doubles the input.
+        /// The heuristic divides `types.len()` by `width`, which is always one.
+        #[mz_ore::test]
+        fn wrap_counts_arguments_not_output_columns() {
+            let tf = TableFunc::Wrap {
+                types: vec![SqlScalarType::Int64.nullable(false)],
+                width: 1,
+            };
+            let exprs = vec![MirScalarExpr::column(0), MirScalarExpr::column(1)];
+            assert_eq!(bounding().flat_map(&tf, &exprs, rows(10.0)), rows(20.0));
+            assert_eq!(heuristic().flat_map(&tf, &exprs, rows(10.0)), rows(10.0));
+        }
+
+        /// `expected_group_size` is a user hint, so a bound cannot divide by it.
+        #[mz_ore::test]
+        fn reduce_ignores_the_group_size_hint_when_bounding() {
+            let group_key = vec![MirScalarExpr::column(0)];
+            let egs = Some(10);
+            assert_eq!(
+                bounding().reduce(&group_key, &egs, None, rows(100.0)),
+                rows(100.0)
+            );
+            assert_eq!(
+                heuristic().reduce(&group_key, &egs, None, rows(100.0)),
+                rows(10.0)
+            );
+        }
+
+        /// One row per distinct group key, so a distinct-value bound tightens the reduce. Without
+        /// one the only sound answer is the input, which assumes every row is its own group.
+        #[mz_ore::test]
+        fn reduce_uses_a_distinct_value_bound_when_it_has_one() {
+            let group_key = vec![MirScalarExpr::column(0)];
+            assert_eq!(
+                bounding().reduce(&group_key, &None, Some(7), rows(100.0)),
+                rows(7.0)
+            );
+            // Never above the input: a group cannot exist without a row in it.
+            assert_eq!(
+                bounding().reduce(&group_key, &None, Some(500), rows(100.0)),
+                rows(100.0)
+            );
+            assert_eq!(
+                bounding().reduce(&group_key, &None, None, rows(100.0)),
+                rows(100.0)
+            );
+            // The heuristic is unchanged by it.
+            assert_eq!(
+                heuristic().reduce(&group_key, &None, Some(7), rows(100.0)),
+                rows(100.0)
+            );
+        }
+
+        /// `limit: None` means no limit at all. Treating it as one row is an unbounded
+        /// underestimate for a pure-`OFFSET` top-k.
+        #[mz_ore::test]
+        fn top_k_without_a_literal_limit_is_bounded_by_its_input() {
+            let no_group = vec![];
+            assert_eq!(
+                bounding().topk(&no_group, &None, &None, rows(100.0)),
+                rows(100.0)
+            );
+            assert_eq!(
+                heuristic().topk(&no_group, &None, &None, rows(100.0)),
+                rows(1.0)
+            );
+
+            // A non-literal limit is equally unknown at plan time.
+            let computed = MirScalarExpr::column(0);
+            assert_eq!(
+                bounding().topk(&no_group, &Some(computed), &None, rows(100.0)),
+                rows(100.0)
+            );
+        }
+
+        /// With a single group the limit bounds the output, but never above the input.
+        #[mz_ore::test]
+        fn top_k_with_a_literal_limit_takes_the_smaller_of_limit_and_input() {
+            let no_group = vec![];
+            let group = vec![0];
+            assert_eq!(
+                bounding().topk(&no_group, &Some(int64(5)), &None, rows(100.0)),
+                rows(5.0)
+            );
+            assert_eq!(
+                bounding().topk(&no_group, &Some(int64(500)), &None, rows(100.0)),
+                rows(100.0)
+            );
+            // Many groups: every input row could be its own group, so only the input bounds it.
+            assert_eq!(
+                bounding().topk(&group, &Some(int64(5)), &None, rows(100.0)),
+                rows(100.0)
+            );
+        }
+
+        /// A `Get` of `id` with `arity` columns, `keys` unique keys, and `count` rows.
+        fn source(
+            id: u64,
+            arity: usize,
+            keys: Vec<Vec<usize>>,
+            count: usize,
+            stats: &mut BTreeMap<GlobalId, usize>,
+        ) -> MirRelationExpr {
+            let id = GlobalId::User(id);
+            stats.insert(id, count);
+            let typ =
+                mz_repr::ReprRelationType::new(vec![ReprScalarType::Int64.nullable(false); arity])
+                    .with_keys(keys);
+            MirRelationExpr::Get {
+                id: Id::Global(id),
+                typ,
+                access_strategy: mz_expr::AccessStrategy::UnknownOrLocal,
+            }
+        }
+
+        /// Runs the bounding estimator over a whole expression, rather than one operator.
+        fn bound_of(
+            expr: &MirRelationExpr,
+            stats: BTreeMap<GlobalId, usize>,
+        ) -> CardinalityEstimate {
+            let features = mz_repr::optimize::OptimizerFeatures::default();
+            let mut builder = crate::analysis::DerivedBuilder::new(&features);
+            builder.require(Cardinality::upper_bound(stats));
+            let derived = builder.visit(expr);
+            *derived.as_view().value::<Cardinality>().unwrap()
+        }
+
+        /// Join inputs are numbered left to right, but the analysis walks them in post-order,
+        /// which is right to left. Crediting a unique key to the wrong input divides the wrong
+        /// factor out of the product, which underestimates whenever the input that really has
+        /// the key is the smaller one.
+        #[mz_ore::test]
+        fn join_credits_a_unique_key_to_the_input_that_owns_it() {
+            let mut stats = BTreeMap::new();
+            // Columns 0..1 from the first input, 2..3 from the second, 4..5 from the third.
+            let inputs = vec![
+                source(1, 2, vec![vec![0]], 7, &mut stats),
+                source(2, 2, vec![], 100, &mut stats),
+                source(3, 2, vec![vec![0]], 1000, &mut stats),
+            ];
+            // Only the first input's key covers this equivalence, so it is the factor that
+            // drops out: 1 * 100 * 1000.
+            let expr = MirRelationExpr::join(inputs, vec![vec![(0, 0), (1, 0)]]);
+            assert_eq!(bound_of(&expr, stats.clone()), rows(100_000.0));
+
+            // Equating the third input's key instead drops its factor: 7 * 100 * 1.
+            let inputs = vec![
+                source(1, 2, vec![vec![0]], 7, &mut stats),
+                source(2, 2, vec![], 100, &mut stats),
+                source(3, 2, vec![vec![0]], 1000, &mut stats),
+            ];
+            let expr = MirRelationExpr::join(inputs, vec![vec![(1, 0), (2, 0)]]);
+            assert_eq!(bound_of(&expr, stats), rows(700.0));
         }
     }
 }

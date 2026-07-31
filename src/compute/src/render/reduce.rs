@@ -2723,3 +2723,9 @@ mod tests {
         assert_eq!(datum, Datum::from(0.0_f64));
     }
 }
+
+/// The memory bound in `mz_compute_types` charges every accumulable update for an [`Accum`], and
+/// cannot see this type. Keep the two in step: if `Accum` outgrows the constant, the bound stops
+/// being one.
+const _: () =
+    assert!(std::mem::size_of::<Accum>() <= mz_compute_types::plan::memory_bound::MAX_ACCUM_BYTES);

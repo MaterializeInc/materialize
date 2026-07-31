@@ -483,6 +483,10 @@ impl Coordinator {
         let features =
             OptimizerFeatures::from(self.catalog().system_config()).override_from(&config.features);
 
+        // A view is not a dataflow and has no cluster, so no stage reaches a global plan here and
+        // there is nothing to attribute statistics to.
+        let cardinality_stats = crate::explain::MemoryBoundStats::default();
+
         let rows = optimizer_trace
             .into_rows(
                 format,
@@ -495,6 +499,7 @@ impl Coordinator {
                 stage,
                 plan::ExplaineeStatementKind::CreateView,
                 None,
+                cardinality_stats,
             )
             .await?;
 

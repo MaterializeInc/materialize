@@ -18,6 +18,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::plan::IndexKeyBound;
 use mz_expr::explain::ExplainContext;
 use mz_repr::GlobalId;
 use mz_repr::explain::{Explain, ExplainConfig, ExplainError, ExplainFormat, ExprHumanizer};
@@ -117,4 +118,147 @@ where
     };
 
     Ok(Explainable::new(&mut plan).explain(&format, &context)?)
+}
+
+/// Statistics `EXPLAIN MEMORY BOUND` needs to populate its row and byte columns.
+///
+/// Empty for every other stage, and empty is always sound: it leaves those columns unknown
+/// rather than guessing.
+#[derive(Debug, Default, Clone)]
+pub struct MemoryBoundStats {
+    /// Row counts, keyed by the relation they describe.
+    pub rows: BTreeMap<GlobalId, usize>,
+    /// Distinct-key bounds per relation, already resolved and vetted by the caller.
+    pub index_key_bounds: BTreeMap<GlobalId, Vec<IndexKeyBound>>,
+    /// Per-column byte ceilings from each relation's declared SQL types.
+    ///
+    /// Only the catalog knows a column was declared `char(n)` rather than `text`, and the repr
+    /// type the plan carries has already erased the difference.
+    pub declared_widths: BTreeMap<GlobalId, Vec<Option<usize>>>,
+}
+
+/// Renders the static memory bound for each node of a physical plan.
+///
+/// Takes the optimized MIR rather than the lowered plan, because the widths need each node's
+/// output type and LIR is type-erased. Lowering again here is what makes those types available;
+/// it also means the reported plan is the one current optimizer features produce, which can
+/// differ from a plan lowered before a feature flag moved.
+pub(crate) fn memory_bound_rows(
+    dataflow: mz_compute_types::dataflows::DataflowDescription<mz_expr::OptimizedMirRelationExpr>,
+    features: &mz_repr::optimize::OptimizerFeatures,
+    stats: MemoryBoundStats,
+) -> Result<Vec<mz_repr::Row>, AdapterError> {
+    use mz_compute_types::plan::LirRelationExpr;
+    use mz_compute_types::plan::NodeBounds;
+    use mz_compute_types::plan::arrangement_count::Caveat;
+    use mz_compute_types::plan::memory_bound::{bytes_per_row, node_label, nodes_by_id};
+    use mz_ore::cast::CastFrom;
+    use mz_repr::{Datum, Row};
+
+    let index_key_bounds = stats.index_key_bounds;
+    let declared_widths = stats.declared_widths;
+    let stats = stats.rows;
+
+    // Sound upper bounds rather than heuristic estimates: an underestimate here would
+    // understate the memory a plan needs, which is the dangerous direction.
+    //
+    // Invoked once per object to build, on that object's root, so a node inside a `Let` body
+    // can still resolve the binding it refers to.
+    let bound_features = features.clone();
+    let node_bounds: mz_compute_types::plan::NodeBoundsFn =
+        Box::new(move |root: &mz_expr::MirRelationExpr| {
+            use mz_expr::visit::Visit;
+
+            let mut builder = mz_transform::analysis::DerivedBuilder::new(&bound_features);
+            builder.require(mz_transform::analysis::Cardinality::upper_bound(
+                stats.clone(),
+            ));
+            builder.require(mz_transform::analysis::ColumnMaxWidth::with_declared(
+                declared_widths.clone(),
+            ));
+            let derived = builder.visit(root);
+            let estimates = derived.results::<mz_transform::analysis::Cardinality>();
+            let widths = derived.results::<mz_transform::analysis::ColumnMaxWidth>();
+
+            // Each analysis stores one result per node in post-order, so walking the tree the
+            // same way lines addresses up with results positionally.
+            let mut order = Vec::with_capacity(estimates.len());
+            root.visit_post(&mut |node: &mz_expr::MirRelationExpr| {
+                order.push(std::ptr::from_ref(node).addr());
+            });
+            // A length mismatch would mean the traversals disagree, and pairing them anyway
+            // would attribute one node's bound to another. Better no bounds than wrong ones,
+            // since a wrong one here understates memory.
+            if order.len() != estimates.len() || order.len() != widths.len() {
+                return BTreeMap::new();
+            }
+
+            order
+                .into_iter()
+                .enumerate()
+                .map(|(index, addr)| {
+                    let bounds = NodeBounds {
+                        rows: estimates[index].rounded().map(u64::cast_from),
+                        column_widths: Some(widths[index].clone()),
+                    };
+                    (addr, bounds)
+                })
+                .collect()
+        });
+
+    let (dataflow, node_types, node_bounds) = LirRelationExpr::finalize_dataflow_with_node_types(
+        dataflow,
+        features,
+        None,
+        Some(node_bounds),
+        index_key_bounds,
+    )
+    .map_err(|e| AdapterError::Internal(format!("cannot lower plan: {e}")))?;
+
+    let mut rows = Vec::new();
+    for build in &dataflow.objects_to_build {
+        let nodes = nodes_by_id(&build.plan);
+        for (lir_id, entry) in bytes_per_row(&build.plan, &node_types, &node_bounds) {
+            let label = nodes
+                .get(&lir_id)
+                .map_or_else(|| "<unknown>".to_string(), |node| node_label(node));
+            // A caveat means the plan alone does not settle the count, so name it rather than
+            // presenting a guess as exact.
+            let note = entry.caveat.map(|caveat| match caveat {
+                Caveat::ArrangeByMayReuse => "may reuse an already-available arrangement",
+                Caveat::ThresholdFlavorUnknown => {
+                    "one more error arrangement if the input is an imported trace"
+                }
+                Caveat::JoinSourceMayReuse => "assumes the source arrangement is available",
+            });
+            // A width of `None` means some column has no static ceiling. Reporting a number
+            // there would claim a bound that does not hold.
+            let width = entry
+                .row_width
+                .map_or(Datum::Null, |w| Datum::UInt64(u64::cast_from(w)));
+            let bytes = entry
+                .bytes_per_row
+                .map_or(Datum::Null, |b| Datum::UInt64(u64::cast_from(b)));
+            // Total bytes needs every factor: unknown width or unknown rows means unknown
+            // total, not a smaller one.
+            let node_rows = node_bounds.get(&lir_id).and_then(|bounds| bounds.rows);
+            let total = match (entry.bytes_per_row, node_rows) {
+                (Some(per_row), Some(n)) => u64::try_from(per_row)
+                    .ok()
+                    .and_then(|per_row| per_row.checked_mul(n)),
+                _ => None,
+            };
+            rows.push(Row::pack_slice(&[
+                Datum::UInt64(lir_id.into()),
+                Datum::String(&label),
+                Datum::UInt64(u64::cast_from(entry.arrangements)),
+                width,
+                bytes,
+                node_rows.map_or(Datum::Null, Datum::UInt64),
+                total.map_or(Datum::Null, Datum::UInt64),
+                note.map_or(Datum::Null, Datum::String),
+            ]));
+        }
+    }
+    Ok(rows)
 }

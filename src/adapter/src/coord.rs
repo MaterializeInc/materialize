@@ -206,6 +206,7 @@ use crate::coord::validity::PlanValidity;
 use crate::error::AdapterError;
 use crate::explain::insights::PlanInsightsContext;
 use crate::explain::optimizer_trace::{DispatchGuard, OptimizerTrace};
+use crate::index_arrangement_stats::IndexArrangementStats;
 use crate::metrics::Metrics;
 use crate::optimize::dataflows::{ComputeInstanceSnapshot, DataflowBuilder};
 use crate::optimize::{self, Optimize, OptimizerConfig};
@@ -744,6 +745,9 @@ pub struct PeekStageExplainPlan {
     df_meta: DataflowMetainfo,
     explain_ctx: ExplainPlanContext,
     insights_ctx: Option<Box<PlanInsightsContext>>,
+    /// Statistics the optimizer saw, carried forward so `EXPLAIN MEMORY BOUND` bounds its
+    /// leaves against the same numbers rather than querying persist a second time.
+    cardinality_stats: crate::explain::MemoryBoundStats,
 }
 
 #[derive(Debug)]
@@ -969,6 +973,20 @@ impl ExplainContext {
                 stage: ExplainStage::PlanInsights,
                 ..
             }) | ExplainContext::PlanInsightsNotice(_)
+        )
+    }
+
+    /// Whether this is the one stage whose output depends on cardinality statistics.
+    ///
+    /// The peek path builds its statistics oracle before optimizing, so the decision to
+    /// collect has to be made from here rather than at the point the bound is rendered.
+    pub(crate) fn needs_cardinality_stats(&self) -> bool {
+        matches!(
+            self,
+            ExplainContext::Plan(ExplainPlanContext {
+                stage: ExplainStage::MemoryBound,
+                ..
+            })
         )
     }
 }
@@ -2065,6 +2083,9 @@ pub struct Coordinator {
     connection_cancel_watches: BTreeMap<ConnectionId, (watch::Sender<bool>, watch::Receiver<bool>)>,
     /// Active introspection subscribes.
     introspection_subscribes: BTreeMap<GlobalId, IntrospectionSubscribe>,
+    /// Record counts of index arrangements, fed by the index cardinality
+    /// introspection subscribes and read by the optimizer off this thread.
+    index_arrangement_stats: Arc<IndexArrangementStats>,
 
     /// Locks that grant access to a specific object, populated lazily as objects are written to.
     write_locks: BTreeMap<CatalogItemId, Arc<tokio::sync::Mutex<()>>>,
@@ -5101,6 +5122,7 @@ pub fn serve(
                     active_copies: BTreeMap::new(),
                     connection_cancel_watches: BTreeMap::new(),
                     introspection_subscribes: BTreeMap::new(),
+                    index_arrangement_stats: Arc::new(IndexArrangementStats::new()),
                     write_locks: BTreeMap::new(),
                     deferred_write_ops: BTreeMap::new(),
                     pending_writes: Vec::new(),

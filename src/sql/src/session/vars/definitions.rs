@@ -1325,6 +1325,22 @@ pub static ENABLE_SESSION_CARDINALITY_ESTIMATES: VarDefinition = VarDefinition::
 )
 .with_feature_flag(&ENABLE_CARDINALITY_ESTIMATES);
 
+/// Whether `EXPLAIN MEMORY BOUND` may collect cardinality statistics of its own.
+///
+/// Deliberately not gated behind `enable_cardinality_estimates`, and deliberately not
+/// folded into `enable_session_cardinality_estimates`. The latter makes every peek in the
+/// session await statistics, which is both a latency cost a user running one `EXPLAIN` did
+/// not ask for and the source of the timeout flakiness that keeps `cardinality.slt`
+/// halted. This flag scopes the collection to the one stage that consumes it, so it can
+/// default on in CI. Join planning reads `enable_cardinality_estimates` and never this.
+pub static ENABLE_MEMORY_BOUND_CARDINALITY_ESTIMATES: VarDefinition = VarDefinition::new(
+    "enable_memory_bound_cardinality_estimates",
+    value!(bool; false),
+    "Whether EXPLAIN MEMORY BOUND collects cardinality statistics to populate its row and \
+        byte columns; does not affect join planning (Materialize).",
+    true,
+);
+
 pub static OPTIMIZER_STATS_TIMEOUT: VarDefinition = VarDefinition::new(
     "optimizer_stats_timeout",
     value!(Duration; Duration::from_millis(250)),
@@ -2000,6 +2016,12 @@ feature_flags!(
     {
         name: enable_cardinality_estimates,
         desc: "join planning with cardinality estimates",
+        default: false,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_index_cardinality_estimates,
+        desc: "index arrangement record counts as a source of cardinality estimates",
         default: false,
         enable_for_item_parsing: false,
     },

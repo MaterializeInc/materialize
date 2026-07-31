@@ -510,6 +510,8 @@ pub struct StartupResponse {
     pub optimizer_metrics: OptimizerMetrics,
     pub persist_client: PersistClient,
     pub statement_logging_frontend: StatementLoggingFrontend,
+    /// Index arrangement record counts, shared with the Coordinator that maintains them.
+    pub index_arrangement_stats: Arc<crate::index_arrangement_stats::IndexArrangementStats>,
 }
 
 #[derive(Derivative)]

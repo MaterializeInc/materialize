@@ -1147,7 +1147,7 @@ impl ExplaineeStatementKind {
         use ExplainStage::*;
         match self {
             Self::Select => true,
-            Self::CreateView => ![GlobalPlan, PhysicalPlan].contains(stage),
+            Self::CreateView => ![GlobalPlan, PhysicalPlan, MemoryBound].contains(stage),
             Self::CreateMaterializedView => true,
             Self::CreateIndex => ![RawPlan, DecorrelatedPlan, LocalPlan].contains(stage),
             // SUBSCRIBE doesn't support RAW, DECORRELATED, or LOCAL stages because

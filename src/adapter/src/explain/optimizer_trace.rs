@@ -132,6 +132,9 @@ impl OptimizerTrace {
 
     /// Convert the optimizer trace into a vector or rows that can be returned
     /// to the client.
+    ///
+    /// Only [`ExplainStage::MemoryBound`] reads `cardinality_stats`; every other stage may pass
+    /// the default. Empty is always sound, it just leaves the estimated columns unknown.
     pub async fn into_rows(
         self,
         format: ExplainFormat,
@@ -144,6 +147,7 @@ impl OptimizerTrace {
         stage: ExplainStage,
         stmt_kind: plan::ExplaineeStatementKind,
         insights_ctx: Option<Box<PlanInsightsContext>>,
+        cardinality_stats: crate::explain::MemoryBoundStats,
     ) -> Result<Vec<Row>, AdapterError> {
         let collect_all = |format| {
             self.collect_all(
@@ -175,6 +179,12 @@ impl OptimizerTrace {
                     })
                     .collect();
                 rows
+            }
+            ExplainStage::MemoryBound => {
+                let Some(dataflow) = self.collect_global_plan() else {
+                    coord_bail!("EXPLAIN MEMORY BOUND requires a dataflow plan");
+                };
+                crate::explain::memory_bound_rows(dataflow, features, cardinality_stats)?
             }
             ExplainStage::PlanInsights => {
                 if format != ExplainFormat::Json {
@@ -324,6 +334,7 @@ impl OptimizerTrace {
                 ExplainStage::PlanInsights,
                 plan::ExplaineeStatementKind::Select,
                 insights_ctx,
+                Default::default(),
             )
             .await?;
 
@@ -416,7 +427,9 @@ impl OptimizerTrace {
     }
 
     /// Collects the global optimized plan from the trace, if it exists.
-    fn collect_global_plan(&self) -> Option<DataflowDescription<OptimizedMirRelationExpr>> {
+    pub(crate) fn collect_global_plan(
+        &self,
+    ) -> Option<DataflowDescription<OptimizedMirRelationExpr>> {
         self.0
             .downcast_ref::<PlanTrace<DataflowDescription<OptimizedMirRelationExpr>>>()
             .and_then(|trace| trace.find(NamedPlan::Global.path()))

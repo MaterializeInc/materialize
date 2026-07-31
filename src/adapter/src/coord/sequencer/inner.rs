@@ -25,6 +25,7 @@ use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{
     CatalogItem, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
 };
+use mz_controller_types::ClusterId;
 use mz_expr::{
     CollectionPlan, Eval, MapFilterProject, OptimizedMirRelationExpr, ResultSpec, RowSetFinishing,
 };
@@ -67,6 +68,7 @@ use mz_sql::pure::{PurifiedSourceExport, generate_subsource_statements};
 use mz_storage_types::sinks::StorageSinkDesc;
 use mz_timestamp_oracle::TimestampOracle;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
+use mz_compute_types::dataflows::DataflowDescription;
 use mz_sql::plan::{
     AlterConnectionAction, AlterConnectionPlan, CreateSourcePlanBundle, ExplainSinkSchemaPlan,
     Explainee, ExplaineeStatement, MutationKind, Params, Plan, PlannedAlterRoleOption,
@@ -81,7 +83,7 @@ use mz_sql::session::vars::{
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    ConnectionOption, ConnectionOptionName, CreateSourceConnection, DeferredItemName,
+    ConnectionOption, ConnectionOptionName, CreateSourceConnection, DeferredItemName, ExplainStage,
     MySqlConfigOption, PgConfigOption, PgConfigOptionName, Statement, TransactionMode,
     WithOptionValue,
 };
@@ -112,6 +114,9 @@ use crate::coord::{
     WatchSetResponse, validate_ip_with_policy_rules,
 };
 use crate::error::AdapterError;
+use crate::explain::MemoryBoundStats;
+use crate::explain::optimizer_trace::OptimizerTrace;
+use crate::index_arrangement_stats::ArrangementStats;
 use crate::notice::{AdapterNotice, DroppedInUseIndex};
 use crate::optimize::dataflows::{EvalTime, ExprPrep, ExprPrepOneShot};
 use crate::optimize::{self, Optimize};
@@ -121,6 +126,7 @@ use crate::session::{
 };
 use crate::util::{ClientTransmitter, ResultExt, viewable_variables};
 use crate::{PeekResponseUnary, ReadHolds};
+use mz_compute_types::plan::IndexKeyBound;
 
 /// A future that resolves to a real-time recency timestamp.
 type RtrTimestampFuture = BoxFuture<'static, Result<Timestamp, StorageError>>;
@@ -2486,11 +2492,11 @@ impl Coordinator {
                 ctx.retire(result);
             }
             plan::Explainee::MaterializedView(_) => {
-                let result = self.explain_materialized_view(&ctx, plan);
+                let result = self.explain_materialized_view(&ctx, plan).await;
                 ctx.retire(result);
             }
             plan::Explainee::Index(_) => {
-                let result = self.explain_index(&ctx, plan);
+                let result = self.explain_index(&ctx, plan).await;
                 ctx.retire(result);
             }
             plan::Explainee::ReplanView(_) => {
@@ -2503,6 +2509,194 @@ impl Coordinator {
                 self.explain_replan_index(ctx, plan).await;
             }
         };
+    }
+
+    /// Row counts for the leaves of `stage`'s plan, empty for every stage that does not use them.
+    ///
+    /// [`ExplainStage::MemoryBound`] is the only consumer, so no other stage pays a persist
+    /// round trip. An empty map is always sound, it just leaves the estimated columns unknown.
+    pub(super) async fn explain_cardinality_stats(
+        &self,
+        session: &Session,
+        stage: &ExplainStage,
+        optimizer_trace: &OptimizerTrace,
+        cluster_id: ClusterId,
+    ) -> MemoryBoundStats {
+        if !matches!(stage, ExplainStage::MemoryBound) {
+            return MemoryBoundStats::default();
+        }
+        match optimizer_trace.collect_global_plan() {
+            Some(plan) => {
+                self.dataflow_cardinality_stats(session, &plan, cluster_id)
+                    .await
+            }
+            // A pipeline that never reached the global stage, for instance under `EXPLAIN BROKEN`,
+            // has no leaves to attribute statistics to.
+            None => MemoryBoundStats::default(),
+        }
+    }
+
+    /// Row counts for the leaves of `plan`, as the plan's own cluster sees them.
+    ///
+    /// Gated on `enable_memory_bound_cardinality_estimates`, and degrades to no statistics
+    /// rather than failing the EXPLAIN. An input reached through an index still has
+    /// statistics on the object the index is built on, so both import kinds contribute.
+    /// Taking only `source_imports` misses every dataflow whose inputs happen to be
+    /// indexed, which is most of them.
+    ///
+    /// `cluster_id` must be the cluster the plan will run on. Index-derived counts are
+    /// cluster-scoped, since a view indexed only on another cluster is inlined here and
+    /// contributes no `Get` to attribute a count to.
+    pub(super) async fn dataflow_cardinality_stats(
+        &self,
+        session: &Session,
+        plan: &DataflowDescription<OptimizedMirRelationExpr>,
+        cluster_id: ClusterId,
+    ) -> MemoryBoundStats {
+        if !session.vars().enable_memory_bound_cardinality_estimates() {
+            return MemoryBoundStats::default();
+        }
+        let source_ids = plan
+            .source_imports
+            .keys()
+            .copied()
+            .chain(plan.index_imports.values().map(|import| import.desc.on_id))
+            .collect();
+        let as_of = Antichain::from_elem(mz_repr::Timestamp::MIN);
+        // Forced, because this stage's whole output is the bound. The session flag above is
+        // the gate; `enable_session_cardinality_estimates` governs query optimization and
+        // is deliberately not consulted here.
+        let mut rows = self
+            .statistics_oracle(session, &source_ids, &as_of, true, cluster_id, true)
+            .await
+            .map_or_else(|_| BTreeMap::new(), |oracle| oracle.as_map());
+
+        let hydrated = self.hydrated_index_stats(plan, cluster_id).await;
+
+        // The oracle's own index layer does not check hydration, so a relation whose every
+        // index is still catching up can reach here with a count of zero. Zero is not a bound,
+        // it is the absence of one, and believing it understates the memory bound. Raising each
+        // count to what the hydrated indexes report repairs that: an ungated zero can then only
+        // lose to a vetted count, never replace one.
+        for (relation, indexes) in hydrated.iter() {
+            let Some(records) = indexes.iter().map(|(_, stats)| stats.records).max() else {
+                continue;
+            };
+            let records = usize::cast_from(records);
+            let entry = rows.entry(*relation).or_insert(records);
+            *entry = (*entry).max(records);
+        }
+
+        MemoryBoundStats {
+            rows,
+            index_key_bounds: Self::index_key_bounds(&hydrated),
+            declared_widths: crate::coord::sequencer::declared_column_widths(
+                self.catalog().state(),
+                source_ids.iter().copied(),
+            ),
+        }
+    }
+
+    /// Arrangement statistics per relation the plan reads, from every index over it whose
+    /// numbers can be trusted.
+    ///
+    /// Resolved from the catalog rather than from the plan's `index_imports`, and that
+    /// distinction is the whole point. The optimizer imports whichever index it wants for the
+    /// read, which is typically the primary key, and a primary key's distinct-key count is
+    /// close to its row count and so bounds nothing. The useful index is often a different one
+    /// on the same relation: on TPC-H `lineitem`, the imported
+    /// `pk_lineitem_orderkey_linenumber` reports 61631 keys against 62409 records, while
+    /// `fk_lineitem_orderkey` reports 15271, a 4x tightening. The bound describes the indexed
+    /// collection, not the path the plan reads it by, so any index over the relation qualifies.
+    ///
+    /// Declined rather than approximated:
+    ///
+    /// * an index whose key is not a list of plain columns, since matching an expression key
+    ///   would mean comparing it against the group key's expressions;
+    /// * an index that may not have caught up. **A hydrating index reports fewer keys and fewer
+    ///   records than its collection holds**, and an under-count would understate the bound,
+    ///   which is the direction that ends in an out-of-memory kill. The controller is asked
+    ///   directly.
+    async fn hydrated_index_stats(
+        &self,
+        plan: &DataflowDescription<OptimizedMirRelationExpr>,
+        cluster_id: ClusterId,
+    ) -> BTreeMap<GlobalId, Vec<(BTreeSet<usize>, ArrangementStats)>> {
+        let snapshot = self.index_arrangement_stats.snapshot();
+        if snapshot.is_empty() {
+            return BTreeMap::new();
+        }
+        // Every relation the plan reads appears either as a source import or as some index
+        // import's on-id, so this is the full set of `Get` targets.
+        let relations: BTreeSet<_> = plan
+            .source_imports
+            .keys()
+            .copied()
+            .chain(plan.index_imports.values().map(|i| i.desc.on_id))
+            .collect();
+
+        let mut bounds: BTreeMap<_, Vec<_>> = BTreeMap::new();
+        for relation in relations {
+            let candidates: Vec<_> = self
+                .catalog()
+                .state()
+                .get_indexes_on(relation, cluster_id)
+                .map(|(index_id, index)| (index_id, Arc::clone(&index.keys)))
+                .collect();
+            for (index_id, keys) in candidates {
+                let Some(stats) = snapshot.get(&index_id) else {
+                    continue;
+                };
+                let mut key_columns = BTreeSet::new();
+                for key in keys.iter() {
+                    match key {
+                        mz_expr::MirScalarExpr::Column(col, _) => {
+                            key_columns.insert(*col);
+                        }
+                        _ => {
+                            key_columns.clear();
+                            break;
+                        }
+                    }
+                }
+                if key_columns.is_empty() {
+                    continue;
+                }
+                if !matches!(
+                    self.controller
+                        .compute
+                        .collection_hydrated(cluster_id, index_id)
+                        .await,
+                    Ok(true)
+                ) {
+                    continue;
+                }
+                bounds
+                    .entry(relation)
+                    .or_default()
+                    .push((key_columns, *stats));
+            }
+        }
+        bounds
+    }
+
+    /// Reads the distinct-key bound out of each vetted index's statistics.
+    fn index_key_bounds(
+        hydrated: &BTreeMap<GlobalId, Vec<(BTreeSet<usize>, ArrangementStats)>>,
+    ) -> BTreeMap<GlobalId, Vec<IndexKeyBound>> {
+        hydrated
+            .iter()
+            .map(|(relation, indexes)| {
+                let bounds = indexes
+                    .iter()
+                    .map(|(key_columns, stats)| IndexKeyBound {
+                        key_columns: key_columns.clone(),
+                        distinct_keys: stats.distinct_keys,
+                    })
+                    .collect();
+                (*relation, bounds)
+            })
+            .collect()
     }
 
     pub(super) async fn sequence_explain_pushdown(
@@ -4916,6 +5110,8 @@ impl Coordinator {
         source_ids: &BTreeSet<GlobalId>,
         query_as_of: &Antichain<Timestamp>,
         is_oneshot: bool,
+        cluster_id: ClusterId,
+        force: bool,
     ) -> Result<Box<dyn mz_transform::StatisticsOracle>, AdapterError> {
         super::statistics_oracle(
             session,
@@ -4924,6 +5120,10 @@ impl Coordinator {
             is_oneshot,
             self.catalog().system_config(),
             self.controller.storage_collections.as_ref(),
+            self.catalog().state(),
+            cluster_id,
+            &self.index_arrangement_stats,
+            force,
         )
         .await
     }

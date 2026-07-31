@@ -1122,6 +1122,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Log(&MZ_ARRANGEMENT_HEAP_CAPACITY_RAW),
         Builtin::Log(&MZ_ARRANGEMENT_HEAP_ALLOCATIONS_RAW),
         Builtin::Log(&MZ_ARRANGEMENT_HEAP_SIZE_RAW),
+        Builtin::Log(&MZ_ARRANGEMENT_DISTINCT_KEYS_RAW),
         Builtin::Log(&MZ_SCHEDULING_ELAPSED_RAW),
         Builtin::Log(&MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_RAW),
         Builtin::Log(&MZ_SCHEDULING_PARKS_HISTOGRAM_RAW),
@@ -1214,6 +1215,8 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_ARRANGEMENT_SHARING),
         Builtin::View(&MZ_ARRANGEMENT_SIZES_PER_WORKER),
         Builtin::View(&MZ_ARRANGEMENT_SIZES),
+        Builtin::View(&MZ_ARRANGEMENT_DISTINCT_KEYS_PER_WORKER),
+        Builtin::View(&MZ_ARRANGEMENT_DISTINCT_KEYS),
         Builtin::View(&MZ_DATAFLOWS_PER_WORKER),
         Builtin::View(&MZ_DATAFLOWS),
         Builtin::View(&MZ_DATAFLOW_ADDRESSES),
@@ -1486,6 +1489,11 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_INDEX_ADVICE),
         Builtin::View(&MZ_MCP_DATA_PRODUCTS),
         Builtin::View(&MZ_MCP_DATA_PRODUCT_DETAILS),
+        // Appended rather than grouped with the other compute logs: item IDs
+        // follow this list's order, so inserting mid-list renumbers every item
+        // after the insertion point.
+        Builtin::Log(&MZ_COMPUTE_EXPORT_ARRANGEMENTS_PER_WORKER),
+        Builtin::View(&MZ_COMPUTE_EXPORT_ARRANGEMENTS),
     ];
 
     builtin_items.extend(notice::builtins());

@@ -461,3 +461,10 @@ EXPLAIN OPTIMIZER TRACE FOR SUBSCRIBE t
 EXPLAIN OPTIMIZER TRACE FOR SUBSCRIBE t
 =>
 ExplainPlan(ExplainPlanStatement { stage: Some(Trace), with_options: [], format: None, explainee: Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [], as_of: None, up_to: None, output: Diffs }, false) })
+
+parse-statement
+EXPLAIN MEMORY BOUND FOR MATERIALIZED VIEW mv
+----
+EXPLAIN MEMORY BOUND FOR MATERIALIZED VIEW mv
+=>
+ExplainPlan(ExplainPlanStatement { stage: Some(MemoryBound), with_options: [], format: None, explainee: MaterializedView(Name(UnresolvedItemName([Ident("mv")]))) })
