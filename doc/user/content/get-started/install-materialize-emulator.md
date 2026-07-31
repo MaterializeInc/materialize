@@ -123,27 +123,17 @@ Skills](/integrations/coding-agent-skills/).
 
 The Materialize Emulator includes a built-in `materialize-developer` [MCP
 server](/integrations/mcp-server/mcp-developer/) (port `6876`) for
-troubleshooting and observability. To connect, your MCP client needs an MCP
-token and the MCP server URL.
+troubleshooting and observability. The Emulator does not require
+authentication, so your MCP client only needs the MCP server URL
+`http://localhost:6876/api/mcp/developer`.
 
-1. Generate the MCP token by Base64-encoding the credentials of the default
-   `materialize` user (the Emulator does not support passwords):
-
-   ```sh
-   printf 'materialize:' | base64
-   ```
-
-1. Configure your MCP client with the MCP token and the Emulator's MCP server
-   URL `http://localhost:6876/api/mcp/developer`. For example, if using [Claude
-   Code](https://docs.anthropic.com/en/docs/claude-code):
+1. Configure your MCP client with the Emulator's MCP server URL. For example,
+   if using [Claude Code](https://docs.anthropic.com/en/docs/claude-code):
 
    ```sh
    claude mcp add --transport http materialize-developer \
-     http://localhost:6876/api/mcp/developer \
-     --header "Authorization: Basic <mcp-token>"
+     http://localhost:6876/api/mcp/developer
    ```
-
-   Replace `<mcp-token>` with the token generated in the previous step.
 
 1. Restart your MCP client to pick up the new setting. Once connected, you can
    ask questions like *Why is my materialized view stale?* or *How much memory

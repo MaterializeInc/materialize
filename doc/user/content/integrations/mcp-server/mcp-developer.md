@@ -30,14 +30,18 @@ or Cursor) to the MCP server to:
 
 ## Connect to the MCP server
 
-There are two ways to authenticate to the `materialize-developer` MCP server:
+How you connect to the `materialize-developer` MCP server depends on your
+deployment:
 
 - **OAuth**: Starting in v26.30, your MCP client can sign you in through your
   browser; no token to generate or store. Available for **Cloud** and for
   **Self-Managed** [using SSO](/security/self-managed/sso/).
 
 - **Token-based**: You provide Base64-encoded credentials (the MCP token) to the
-  client. Available for **Cloud**, **Self-Managed**, and the **Emulator**.
+  client. Available for **Cloud** and **Self-Managed**.
+
+- **No authentication**: The **Emulator** does not require authentication. Your
+  MCP client only needs the MCP server URL.
 
 ### Method 1: OAuth
 
@@ -46,9 +50,10 @@ There are two ways to authenticate to the `materialize-developer` MCP server:
 {{< note >}}
 
 The OAuth method is available for **Cloud** and for **Self-Managed** deployments
-using [SSO](/security/self-managed/sso/). For the **Emulator** (or Self-Managed
-not using SSO), use [Method 2: Token-based
-authentication](#method-2-token-based-authentication).
+using [SSO](/security/self-managed/sso/). For Self-Managed deployments not using
+SSO, use [Method 2: Token-based
+authentication](#method-2-token-based-authentication). For the **Emulator**, use
+[Method 3: No authentication](#method-3-no-authentication-emulator).
 
 {{< /note >}}
 
@@ -256,26 +261,6 @@ base64-encoded and not encrypted.
 
 {{< /tab >}}
 
-{{< tab "Emulator" >}}
-
-To connect to the MCP server for your Emulator, you can create a role for your
-specific AI agent or use the default `materialize` user:
-
-1. You can create a role for your specific AI agent (the Emulator does not
-   support the `LOGIN PASSWORD` option):
-
-   ```mzsql
-   CREATE ROLE my_dev_agent;
-   ```
-
-1. Base64-encode your agent role's credentials `<role>:<password>` to create the
-   MCP token (the Emulator does not support passwords):
-
-   ```bash
-   printf 'my_dev_agent:' | base64
-   ```
-
-{{< /tab >}}
 {{< /tabs >}}
 
 #### Step 2. Get your MCP server URL
@@ -362,18 +347,6 @@ server URL: `<baseURL>/api/mcp/developer`.
 {{< /tab >}}
 {{< /tabs >}}
 {{< /tab >}}
-{{< tab "Emulator" >}}
-
-For the Emulator, your MCP URL is:
-
-```
-http://localhost:6876/api/mcp/developer
-```
-
-where `http://localhost:6876` is your base URL.
-
-{{< /tab >}}
-
 {{< /tabs >}}
 
 #### Step 3. Configure your MCP client
@@ -509,6 +482,83 @@ curl -X POST <baseURL>/api/mcp/developer \
 
 {{< /tab >}}
 {{< /tabs >}}
+
+### Method 3: No authentication (Emulator)
+
+The [Materialize Emulator](/get-started/install-materialize-emulator/) does not
+require authentication. Your MCP client only needs the `materialize-developer`
+MCP server URL:
+
+```
+http://localhost:6876/api/mcp/developer
+```
+
+{{< tabs >}}
+{{< tab "Claude Code" >}}
+
+1. Add the `materialize-developer` MCP server as [local-scoped
+   server](https://code.claude.com/docs/en/mcp#local-scope) (i.e., the
+   configurations are stored in `~/.claude.json`):
+
+   ```sh
+   claude mcp add --transport http materialize-developer \
+     http://localhost:6876/api/mcp/developer
+   ```
+
+1. Restart Claude Code to pick up the new setting.
+
+1. Upon successful connection, you can [Start asking
+   questions](#start-asking-questions).
+
+{{< /tab >}}
+
+{{< tab "Cursor" >}}
+
+1. Add the `materialize-developer` MCP server entry to your local MCP settings
+   file (`~/.cursor/mcp.json`).
+   - When merging into an existing `mcpServers` object, remember to add commas
+     between entries.
+   - If the `mcpServers` field does not already exist, add it as well.
+
+   ```json {hl_lines="3-5"}
+   {
+     "mcpServers": {
+       "materialize-developer": {
+         "url": "http://localhost:6876/api/mcp/developer"
+       }
+     }
+   }
+   ```
+
+1. Restart Cursor to pick up the new setting.
+
+1. Upon successful connection, you can [Start asking
+   questions](#start-asking-questions).
+
+{{< /tab >}}
+
+{{< tab "Generic HTTP" >}}
+
+Any MCP-compatible client can connect by sending JSON-RPC 2.0 requests:
+
+```bash
+curl -X POST http://localhost:6876/api/mcp/developer \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/list"
+  }'
+```
+
+{{< /tab >}}
+{{< /tabs >}}
+
+Unauthenticated requests run as the `anonymous_http_user` role. To run the
+agent's queries as a specific role instead, pass the role's Base64-encoded
+credentials (`printf '<role>:' | base64`, the Emulator does not support
+passwords) as an MCP token, as in [Method 2: Token-based
+authentication](#method-2-token-based-authentication).
 
 ## Start asking questions
 
