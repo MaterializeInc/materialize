@@ -133,6 +133,7 @@ use mz_compute_types::plan::render_plan::{
 use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_compute_types::plan::{ArrangementStrategy, LirId};
 use mz_expr::{EvalError, Id, LocalId, permutation_for_arrangement};
+use mz_ore::cast::CastFrom;
 use mz_persist_client::operators::shard_source::{ErrorHandler, SnapshotMode};
 use mz_repr::explain::DummyHumanizer;
 use mz_repr::fixed_length::ExtendDatums;
@@ -162,7 +163,8 @@ use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::extensions::temporal_bucket::TemporalBucketing;
 use crate::logging::compute::{
-    ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors, OperatorHydration,
+    ComputeEvent, DataflowGlobal, ExportArrangement, LirMapping, LirMetadata, LogDataflowErrors,
+    OperatorHydration,
 };
 use crate::render::columnar::CollectionEdge;
 use crate::render::context::{ArrangementFlavor, Context};
@@ -711,6 +713,22 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
         let key = &idx.key;
         match bundle.arrangement(key) {
             Some(ArrangementFlavor::Local(mut oks, mut errs)) => {
+                // Read the operator before the rewrites below, which replace
+                // `oks.stream` with passthrough operators that hold no records.
+                //
+                // When this index's plan reuses an already-arranged collection it
+                // renders no arrange operator of its own, so this resolves to an
+                // operator in another `GlobalId`'s LIR subtree. That is precisely
+                // the mapping `mz_lir_mapping` cannot express, because the index's
+                // own LIR node spans an empty operator range.
+                // Take the identifier from the trace, not the stream. A stream only
+                // exposes a scope-local index, and the stream visible here belongs to
+                // an enclosing region rather than to the arranging operator, so it
+                // resolves to the wrong operator. The trace carries the arranging
+                // operator's `global_id`, which is what arrangement logging keys on.
+                let operator_id = oks.trace.operator().global_id;
+                record_export_arrangement(compute_state, idx_id, operator_id);
+
                 // Ensure that the frontier does not advance past the expiration time, if set.
                 // Otherwise, we might write down incorrect data.
                 if let Some(&expiration) = self.dataflow_expiration.as_option() {
@@ -741,6 +759,13 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
                 // just create another handle to that arrangement.
                 let trace = compute_state.traces.get(&gid).unwrap().clone();
                 compute_state.traces.set(idx_id, trace);
+
+                // The arrangement lives in the dataflow that exported `gid`, so
+                // resolve through that export rather than through any operator in
+                // this dataflow. The import operator here holds no records.
+                if let Some(&operator_id) = compute_state.export_arrangement_operators.get(&gid) {
+                    record_export_arrangement(compute_state, idx_id, operator_id);
+                }
             }
             None => {
                 println!("collection available: {:?}", bundle.collection.is_none());
@@ -756,6 +781,28 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
             }
         };
     }
+}
+
+/// Records which dataflow operator holds `idx_id`'s arrangement.
+///
+/// The mapping is kept in `ComputeState` as well as logged, because an export whose
+/// plan reuses this arrangement renders no operator of its own and resolves its
+/// operator by looking this one up.
+fn record_export_arrangement(
+    compute_state: &mut ComputeState,
+    idx_id: GlobalId,
+    operator_id: usize,
+) {
+    if let Some(logger) = &compute_state.compute_logger {
+        logger.log(&ComputeEvent::ExportArrangement(ExportArrangement {
+            export_id: idx_id,
+            operator_id: u64::cast_from(operator_id),
+        }));
+    }
+
+    compute_state
+        .export_arrangement_operators
+        .insert(idx_id, operator_id);
 }
 
 // This implementation block requires the scopes have the same timestamp as the trace manager.
@@ -813,6 +860,18 @@ where
                         "Arrange export iterative err",
                     );
 
+                // Read the operator before the rewrites below, which replace
+                // `oks.stream` with passthrough operators that hold no records.
+                // Unlike the non-iterative path this arrangement was just built
+                // here, so it is always this export's own operator.
+                // Take the identifier from the trace, not the stream. A stream only
+                // exposes a scope-local index, and the stream visible here belongs to
+                // an enclosing region rather than to the arranging operator, so it
+                // resolves to the wrong operator. The trace carries the arranging
+                // operator's `global_id`, which is what arrangement logging keys on.
+                let operator_id = oks.trace.operator().global_id;
+                record_export_arrangement(compute_state, idx_id, operator_id);
+
                 // Ensure that the frontier does not advance past the expiration time, if set.
                 // Otherwise, we might write down incorrect data.
                 if let Some(&expiration) = self.dataflow_expiration.as_option() {
@@ -843,6 +902,13 @@ where
                 // just create another handle to that arrangement.
                 let trace = compute_state.traces.get(&gid).unwrap().clone();
                 compute_state.traces.set(idx_id, trace);
+
+                // The arrangement lives in the dataflow that exported `gid`, so
+                // resolve through that export rather than through any operator in
+                // this dataflow. The import operator here holds no records.
+                if let Some(&operator_id) = compute_state.export_arrangement_operators.get(&gid) {
+                    record_export_arrangement(compute_state, idx_id, operator_id);
+                }
             }
             None => {
                 println!("collection available: {:?}", bundle.collection.is_none());

@@ -24,7 +24,7 @@ use http::Uri;
 use inner::return_if_err;
 use maplit::btreemap;
 use mz_catalog::memory::objects::Cluster;
-use mz_controller_types::ReplicaId;
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::row::RowCollection;
 use mz_expr::{Eval, MapFilterProject, MirRelationExpr, ResultSpec, RowSetFinishing};
 use mz_ore::cast::CastFrom;
@@ -66,6 +66,7 @@ use crate::coord::{
 };
 use crate::error::AdapterError;
 use crate::explain::insights::PlanInsightsContext;
+use crate::index_cardinalities::IndexCardinalities;
 use crate::notice::AdapterNotice;
 use crate::optimize::dataflows::{EvalTime, ExprPrep, ExprPrepOneShot};
 use crate::optimize::peek;
@@ -1255,11 +1256,22 @@ pub(crate) async fn statistics_oracle(
     is_oneshot: bool,
     system_config: &vars::SystemVars,
     storage_collections: &dyn StorageCollections,
+    catalog: &CatalogState,
+    cluster_id: ClusterId,
+    index_cardinalities: &IndexCardinalities,
 ) -> Result<Box<dyn StatisticsOracle>, AdapterError> {
     if !session.vars().enable_session_cardinality_estimates() {
         let stats: Box<dyn StatisticsOracle> = Box::new(EmptyStatisticsOracle);
         return Ok(stats);
     }
+
+    // Estimates from index arrangements, which need no await. These cover indexed
+    // views, which persist cannot cover at all because a view has no shard.
+    let index_estimates = if system_config.enable_index_cardinality_estimates() {
+        index_cardinality_estimates(source_ids, catalog, cluster_id, index_cardinalities)
+    } else {
+        BTreeMap::new()
+    };
 
     let timeout = if is_oneshot {
         // TODO(mgree): ideally, we would shorten the timeout even more if we think the query could take the fast path
@@ -1274,8 +1286,8 @@ pub(crate) async fn statistics_oracle(
     )
     .await;
 
-    match cached_stats {
-        Ok(stats) => Ok(Box::new(stats)),
+    let persist_estimates = match cached_stats {
+        Ok(stats) => stats.cache,
         Err(mz_ore::future::TimeoutError::DeadlineElapsed) => {
             warn!(
                 is_oneshot = is_oneshot,
@@ -1283,9 +1295,105 @@ pub(crate) async fn statistics_oracle(
                 timeout.as_millis()
             );
 
-            Ok(Box::new(EmptyStatisticsOracle))
+            BTreeMap::new()
         }
-        Err(mz_ore::future::TimeoutError::Inner(e)) => Err(AdapterError::Storage(e)),
+        Err(mz_ore::future::TimeoutError::Inner(e)) => return Err(AdapterError::Storage(e)),
+    };
+
+    Ok(Box::new(LayeredStatisticsOracle::new(
+        persist_estimates,
+        index_estimates,
+    )))
+}
+
+/// Estimates drawn from index arrangements, keyed by the indexed object.
+///
+/// Indexes are cluster-scoped, so this resolves against the query's cluster. An
+/// index that exists only on another cluster is not the one the optimizer will
+/// read, and the object is inlined on this cluster instead.
+///
+/// Resolution covers the transitive dependencies of `source_ids`, not just
+/// `source_ids` themselves. `source_ids` comes from the plan before optimization,
+/// so it names the views a query references. Optimization then inlines any view
+/// that is not indexed, and the `Get`s that survive into the plan the analysis
+/// runs over are on those views' own dependencies. Keying only on `source_ids`
+/// files the estimate under an ID the analysis never looks up, which is why a
+/// query reaching an indexed collection through an unindexed view used to get no
+/// estimate at all.
+///
+/// Extra IDs cost a lookup in an in-memory map, and an ID whose `Get` does not
+/// survive is simply never consulted.
+fn index_cardinality_estimates(
+    source_ids: &BTreeSet<GlobalId>,
+    catalog: &CatalogState,
+    cluster_id: ClusterId,
+    index_cardinalities: &IndexCardinalities,
+) -> BTreeMap<GlobalId, usize> {
+    let snapshot = index_cardinalities.snapshot();
+    if snapshot.is_empty() {
+        return BTreeMap::new();
+    }
+
+    let mut candidates: BTreeSet<GlobalId> = source_ids.clone();
+    for id in source_ids {
+        let item_id = catalog.get_entry_by_global_id(id).id();
+        for dependency in catalog.transitive_uses(item_id) {
+            candidates.extend(catalog.get_entry(&dependency).global_ids());
+        }
+    }
+
+    let mut estimates = BTreeMap::new();
+    for id in candidates {
+        // Several indexes on one object should agree. Where they do not, the
+        // laggard is the one still hydrating, so take the largest.
+        let records = catalog
+            .get_indexes_on(id, cluster_id)
+            .filter_map(|(index_id, _)| snapshot.get(&index_id).copied())
+            .max();
+        if let Some(records) = records {
+            estimates.insert(id, usize::cast_from(records));
+        }
+    }
+    estimates
+}
+
+/// A [`StatisticsOracle`] combining persist statistics with index record counts.
+///
+/// The two sources cover overlapping but distinct domains. Persist covers any
+/// object with a shard whether indexed or not, and index counts additionally
+/// cover indexed views, which have no shard.
+///
+/// Where both have a value the larger wins. Preferring the index count would be
+/// wrong: it trails writes by at least a replica logging interval while persist
+/// does not, so a preference rule would confidently serve a stale count in place
+/// of a correct one that was already available. Taking the maximum never
+/// under-estimates, and under-estimating is the dangerous direction, since it
+/// leads a join with a relation believed small that is not.
+#[derive(Debug)]
+struct LayeredStatisticsOracle {
+    cache: BTreeMap<GlobalId, usize>,
+}
+
+impl LayeredStatisticsOracle {
+    fn new(
+        mut cache: BTreeMap<GlobalId, usize>,
+        index_estimates: BTreeMap<GlobalId, usize>,
+    ) -> Self {
+        for (id, records) in index_estimates {
+            let entry = cache.entry(id).or_insert(0);
+            *entry = (*entry).max(records);
+        }
+        Self { cache }
+    }
+}
+
+impl StatisticsOracle for LayeredStatisticsOracle {
+    fn cardinality_estimate(&self, id: GlobalId) -> Option<usize> {
+        self.cache.get(&id).copied()
+    }
+
+    fn as_map(&self) -> BTreeMap<GlobalId, usize> {
+        self.cache.clone()
     }
 }
 

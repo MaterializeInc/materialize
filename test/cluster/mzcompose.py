@@ -345,6 +345,9 @@ def workflow_test_github_4443(c: Composition) -> None:
 
         # Obtain initial history size and dataflow count.
         # Dataflow count can plausibly be more than 1, if compaction is delayed.
+        # The bound also has to cover the introspection subscribes, which are
+        # installed on every replica and stay in the history for its lifetime.
+        # Adding one raises the floor for every count checked here.
         (
             controller_command_count,
             controller_dataflow_count,
@@ -356,14 +359,14 @@ def workflow_test_github_4443(c: Composition) -> None:
             controller_dataflow_count > 0
         ), "at least one dataflow expected in controller history"
         assert (
-            controller_dataflow_count < 6
+            controller_dataflow_count < 7
         ), "more dataflows than expected in controller history"
         assert replica_command_count > 0, "replica history cannot be empty"
         assert (
             replica_dataflow_count > 0
         ), "at least one dataflow expected in replica history"
         assert (
-            replica_dataflow_count < 6
+            replica_dataflow_count < 7
         ), "more dataflows than expected in replica history"
 
         # execute 400 fast- and slow-path peeks
@@ -396,6 +399,9 @@ def workflow_test_github_4443(c: Composition) -> None:
 
         # Check that history size and dataflow count are well-behaved.
         # Dataflow count can plausibly be more than 1, if compaction is delayed.
+        # The bound also has to cover the introspection subscribes, which are
+        # installed on every replica and stay in the history for its lifetime.
+        # Adding one raises the floor for every count checked here.
         (
             controller_command_count,
             controller_dataflow_count,
@@ -409,7 +415,7 @@ def workflow_test_github_4443(c: Composition) -> None:
             controller_dataflow_count > 0
         ), f"at least one dataflow expected in controller history, got {controller_dataflow_count}"
         assert (
-            controller_dataflow_count < 6
+            controller_dataflow_count < 7
         ), f"more dataflows than expected in controller history, got {controller_dataflow_count}"
         assert (
             replica_command_count < 100
@@ -418,7 +424,7 @@ def workflow_test_github_4443(c: Composition) -> None:
             replica_dataflow_count > 0
         ), f"at least one dataflow expected in replica history, got {replica_dataflow_count}"
         assert (
-            replica_dataflow_count < 6
+            replica_dataflow_count < 7
         ), f"more dataflows than expected in replica history, got {replica_dataflow_count}"
 
 

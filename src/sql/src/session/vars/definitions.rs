@@ -2004,6 +2004,12 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
+        name: enable_index_cardinality_estimates,
+        desc: "index arrangement record counts as a source of cardinality estimates",
+        default: false,
+        enable_for_item_parsing: false,
+    },
+    {
         name: enable_connection_validation_syntax,
         desc: "CREATE CONNECTION .. WITH (VALIDATE) and VALIDATE CONNECTION syntax",
         default: true,

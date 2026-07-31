@@ -484,7 +484,13 @@ impl Coordinator {
         // expensive optimizations.
         let timestamp_context = determination.timestamp_context.clone();
         let stats = self
-            .statistics_oracle(session, &source_ids, &timestamp_context.antichain(), true)
+            .statistics_oracle(
+                session,
+                &source_ids,
+                &timestamp_context.antichain(),
+                true,
+                optimizer.cluster_id(),
+            )
             .await
             .unwrap_or_else(|_| Box::new(EmptyStatisticsOracle));
         let session = session.meta();

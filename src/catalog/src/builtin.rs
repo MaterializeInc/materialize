@@ -1486,6 +1486,11 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_INDEX_ADVICE),
         Builtin::View(&MZ_MCP_DATA_PRODUCTS),
         Builtin::View(&MZ_MCP_DATA_PRODUCT_DETAILS),
+        // Appended rather than grouped with the other compute logs: item IDs
+        // follow this list's order, so inserting mid-list renumbers every item
+        // after the insertion point.
+        Builtin::Log(&MZ_COMPUTE_EXPORT_ARRANGEMENTS_PER_WORKER),
+        Builtin::View(&MZ_COMPUTE_EXPORT_ARRANGEMENTS),
     ];
 
     builtin_items.extend(notice::builtins());
