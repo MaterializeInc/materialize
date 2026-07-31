@@ -47,6 +47,25 @@ fn execute_as(server: &TestServerWithRuntime, user: &str, stmt: &str) {
     client.batch_execute(stmt).unwrap();
 }
 
+/// A cluster's replica names, sorted.
+///
+/// Stronger than a count when the point is which replicas survived, and usable on
+/// an unmanaged cluster, where `replication_factor` is null.
+fn replica_names(server: &TestServerWithRuntime, cluster: &str) -> Vec<String> {
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client
+        .query(
+            "SELECT r.name FROM mz_cluster_replicas r
+             JOIN mz_clusters c ON c.id = r.cluster_id
+             WHERE c.name = $1 ORDER BY r.name",
+            &[&cluster],
+        )
+        .unwrap()
+        .iter()
+        .map(|row| row.get::<_, String>(0))
+        .collect()
+}
+
 // A cluster with a replication factor of 0 should not create any replicas.
 #[mz_ore::test]
 fn test_zero_replication_factor_no_replicas() {
@@ -232,4 +251,74 @@ fn test_restart_is_idempotent() {
 
     let server = harness.start_blocking();
     assert_eq!(replica_ids(&server), before);
+}
+
+// An internal replica on a builtin cluster survives a restart. `CREATE CLUSTER
+// REPLICA ... INTERNAL` is allowed on a managed cluster, and its name is barred
+// from matching the derived `r1..rN` pattern, so it coexists with the derived
+// replicas instead of being one of them. It is the break-glass way to attach a
+// replica to a builtin cluster, and `ALTER CLUSTER` already preserves it, so
+// reconciling has to leave it alone too while still converging the derived set.
+#[mz_ore::test]
+fn test_internal_replica_survives_restart() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let harness = TestHarness::default().data_directory(data_dir.path());
+
+    {
+        let server = harness.clone().start_blocking();
+        assert_eq!(declared_and_actual(&server, "mz_system"), (1, 1));
+        execute_as(
+            &server,
+            "mz_system",
+            "CREATE CLUSTER REPLICA mz_system.breakglass SIZE 'scale=1,workers=1', INTERNAL",
+        );
+        // An internal replica is not derived from the factor, so it adds a replica
+        // without changing what the cluster declares.
+        assert_eq!(declared_and_actual(&server, "mz_system"), (1, 2));
+    }
+
+    let server = harness.start_blocking();
+    assert_eq!(declared_and_actual(&server, "mz_system"), (1, 2));
+    assert_eq!(
+        replica_names(&server, "mz_system"),
+        vec!["breakglass".to_string(), "r1".to_string()]
+    );
+}
+
+// An unmanaged builtin cluster's replica set belongs to whoever made it. There is
+// no replication factor to derive a target from, so reconciling has to skip the
+// cluster rather than treat all of its replicas as surplus.
+#[mz_ore::test]
+fn test_unmanaged_builtin_cluster_is_left_alone() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let harness = TestHarness::default()
+        .with_builtin_support_cluster_replication_factor(1)
+        .data_directory(data_dir.path());
+
+    {
+        let server = harness.clone().start_blocking();
+        assert_eq!(declared_and_actual(&server, "mz_support"), (1, 1));
+        // The conversion adopts the existing `r1`. Adding a second replica then
+        // makes the set one that no replication factor would produce.
+        execute_as(
+            &server,
+            "mz_system",
+            "ALTER CLUSTER mz_support SET (MANAGED = false)",
+        );
+        execute_as(
+            &server,
+            "mz_system",
+            "CREATE CLUSTER REPLICA mz_support.extra SIZE 'scale=1,workers=1'",
+        );
+        assert_eq!(
+            replica_names(&server, "mz_support"),
+            vec!["extra".to_string(), "r1".to_string()]
+        );
+    }
+
+    let server = harness.start_blocking();
+    assert_eq!(
+        replica_names(&server, "mz_support"),
+        vec!["extra".to_string(), "r1".to_string()]
+    );
 }

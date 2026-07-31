@@ -1127,7 +1127,8 @@ fn add_new_remove_old_builtin_roles_migration(
 ///
 /// Replicas this creates are shaped from the cluster's config. An existing replica
 /// is matched by name alone and left untouched, so this converges cardinality and
-/// names rather than shape.
+/// names rather than shape. An internal replica is never derived state and is left
+/// alone entirely.
 ///
 /// The bootstrap flags seed `replication_factor` and `size` when a cluster is
 /// first created (see [`add_new_remove_old_builtin_clusters_migration`]) and are
@@ -1167,12 +1168,21 @@ fn reconcile_builtin_cluster_replicas(
 
     // Only the builtin clusters' replicas. An environment can have thousands of
     // user replicas and none of them are in scope here.
+    //
+    // An internal replica is deliberately out of scope. `CREATE CLUSTER REPLICA ...
+    // INTERNAL` is allowed on a managed cluster, and its name is barred from
+    // matching the derived `r1..rN` pattern so it cannot collide with one. It is a
+    // break-glass replica an operator added rather than derived state, so reaping it
+    // would undo that. The `ALTER CLUSTER` path skips it for the same reason.
     let mut replicas_by_cluster: BTreeMap<ClusterId, BTreeMap<String, ClusterReplica>> =
         BTreeMap::new();
-    for replica in txn
-        .get_cluster_replicas()
-        .filter(|replica| builtin_cluster_ids.contains(&replica.cluster_id))
-    {
+    for replica in txn.get_cluster_replicas().filter(|replica| {
+        builtin_cluster_ids.contains(&replica.cluster_id)
+            && !matches!(
+                replica.config.location,
+                ReplicaLocation::Managed { internal: true, .. }
+            )
+    }) {
         replicas_by_cluster
             .entry(replica.cluster_id)
             .or_default()
