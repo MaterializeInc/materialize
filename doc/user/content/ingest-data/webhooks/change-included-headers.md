@@ -14,7 +14,7 @@ request headers it exposes through [`INCLUDE HEADER` /
 the header configuration of an existing webhook source in place. To change it,
 create a new source with the header configuration you want in a separate schema,
 then swap it into place with [`ALTER SCHEMA ...
-SWAP WITH`](/sql/alter-schema/#swap-with). Because the swap only renames schemas,
+SWAP WITH`](/sql/alter-schema/). Because the swap only renames schemas,
 the [webhook endpoint URL](/sql/create-source/webhook/#webhook-url) that your
 senders post to stays the same.
 
@@ -144,5 +144,5 @@ in place and query it as needed.
 ## See also
 
 - [`CREATE SOURCE: Webhook`](/sql/create-source/webhook/)
-- [`ALTER SCHEMA ... SWAP WITH`](/sql/alter-schema/#swap-with)
+- [`ALTER SCHEMA ... SWAP WITH`](/sql/alter-schema/)
 - [Webhooks quickstart](/ingest-data/webhooks/webhook-quickstart/)
