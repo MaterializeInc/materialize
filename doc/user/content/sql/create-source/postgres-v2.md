@@ -46,6 +46,9 @@ changes without downtime.
 See [`CREATE TABLE FROM
 SOURCE`](/sql/create-table/postgres/#handling-table-schema-changes) for details.
 
+See also [Handling upstream operations](#handling-upstream-operations) for
+additional upstream operation considerations.
+
 #### Supported types
 
 With the new syntax, after a PostgreSQL source is created, you [`CREATE TABLE
@@ -57,13 +60,6 @@ name="postgres-supported-types" %}}
 
 For more information, including strategies for handling unsupported types,
 see [`CREATE TABLE FROM SOURCE`](/sql/create-table/).
-
-#### Upstream table truncation restrictions
-
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-truncation-restriction" %}}
-
-For additional considerations, see also [`CREATE TABLE`](/sql/create-table/).
 
 ### Publication membership
 
@@ -109,6 +105,10 @@ name="postgres-replication-slots-tip-list" %}}
 
 {{% include-from-yaml data="postgres_source_details"
 name="postgres-physical-standby" %}}
+
+## Handling upstream operations
+
+{{% upstream-schema-change-behavior connector="postgres" %}}
 
 ## Examples
 

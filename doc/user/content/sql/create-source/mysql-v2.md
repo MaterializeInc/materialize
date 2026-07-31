@@ -36,12 +36,15 @@ details.
 ### Handling table schema changes
 
 The use of `CREATE SOURCE` with the new [`CREATE TABLE FROM
-SOURCE`](/sql/create-table/) allows for the handling of certain upstream DDL
+SOURCE`](/sql/create-table/) allows for the handling of certain upstream schema
 changes, specifically adding or dropping columns in the upstream tables, without
 downtime.
 
 See [Guide: Handle upstream schema
 changes](/ingest-data/mysql/source-versioning/) for details.
+
+See also [Handling upstream operations](#handling-upstream-operations) for
+additional upstream operation considerations.
 
 ### Supported types
 
@@ -57,13 +60,6 @@ name="mysql-unsupported-types" %}}
 
 For more information, including strategies for handling unsupported types,
 see [`CREATE TABLE FROM SOURCE`](/sql/create-table/).
-
-### Upstream table truncation restrictions
-
-{{% include-from-yaml data="mysql_source_details"
-name="mysql-truncation-restriction" %}}
-
-For additional considerations, see also [`CREATE TABLE`](/sql/create-table/).
 
 ### Change data capture
 
@@ -159,6 +155,10 @@ of future possible GTIDs, which is similar to the
 system variable on a MySQL replica. The reported `transaction_id` should
 increase as Materialize consumes **new** binlog records from the upstream MySQL
 database. For more information, see [Troubleshooting](/ops/troubleshooting/).
+
+## Handling upstream operations
+
+{{% upstream-schema-change-behavior connector="mysql" %}}
 
 ## Example
 
