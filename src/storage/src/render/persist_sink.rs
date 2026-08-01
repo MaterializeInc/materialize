@@ -161,6 +161,8 @@ impl AddAssign<&BatchMetrics> for BatchMetrics {
 }
 
 /// Manages batches and metrics.
+///
+/// `Debug` is implemented manually because [`BatchBuilder`] is not `Debug`.
 struct BatchBuilderAndMetadata<K, V, T, D>
 where
     K: Codec,
@@ -168,7 +170,9 @@ where
     T: Timestamp + Lattice + Codec64,
 {
     builder: BatchBuilder<K, V, T, D>,
-    data_ts: T,
+    /// Inclusive bounds on the timestamps of the updates in the batch.
+    data_min_ts: T,
+    data_max_ts: T,
     metrics: BatchMetrics,
 }
 
@@ -179,29 +183,20 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Monoid + Codec64,
 {
-    /// Creates a new batch.
-    ///
-    /// NOTE(benesch): temporary restriction: all updates added to the batch
-    /// must be at the specified timestamp `data_ts`.
+    /// Creates a new batch whose first update is at `data_ts`.
     fn new(builder: BatchBuilder<K, V, T, D>, data_ts: T) -> Self {
         BatchBuilderAndMetadata {
             builder,
-            data_ts,
+            data_min_ts: data_ts.clone(),
+            data_max_ts: data_ts,
             metrics: Default::default(),
         }
     }
 
     /// Adds an update to the batch.
-    ///
-    /// NOTE(benesch): temporary restriction: all updates added to the batch
-    /// must be at the timestamp specified during creation.
     async fn add(&mut self, k: &K, v: &V, t: &T, d: &D) {
-        assert_eq!(
-            self.data_ts, *t,
-            "BatchBuilderAndMetadata::add called with a timestamp {t:?} that does not match creation timestamp {:?}",
-            self.data_ts
-        );
-
+        self.data_min_ts.meet_assign(t);
+        self.data_max_ts.join_assign(t);
         self.builder.add(k, v, t, d).await.expect("invalid usage");
     }
 
@@ -214,10 +209,50 @@ where
         HollowBatchAndMetadata {
             lower,
             upper,
-            data_ts: self.data_ts,
+            data_max_ts: self.data_max_ts,
             batch: batch.into_transmittable_batch(),
             metrics: self.metrics,
         }
+    }
+}
+
+impl<K, V, T, D> Debug for BatchBuilderAndMetadata<K, V, T, D>
+where
+    K: Codec,
+    V: Codec,
+    T: Timestamp + Lattice + Codec64 + Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BatchBuilderAndMetadata")
+            .field("data_min_ts", &self.data_min_ts)
+            .field("data_max_ts", &self.data_max_ts)
+            .field("metrics", &self.metrics)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The concrete builder type staged by the storage `persist_sink`.
+type SourceBatchBuilder = BatchBuilderAndMetadata<SourceData, (), mz_repr::Timestamp, StorageDiff>;
+
+/// Stages one source update into `builder` and records it in the builder's metrics.
+///
+/// Assumes `diff` is +1 or -1, anything else is a logic bug that the metrics layer cannot
+/// represent. Also assumes the metrics additions do not overflow.
+async fn stage_update(
+    builder: &mut SourceBatchBuilder,
+    row: Result<Row, DataflowError>,
+    ts: mz_repr::Timestamp,
+    diff: Diff,
+) {
+    let is_value = row.is_ok();
+    builder
+        .add(&SourceData(row), &(), &ts, &diff.into_inner())
+        .await;
+    match (is_value, diff.is_positive()) {
+        (true, true) => builder.metrics.inserts += diff.unsigned_abs(),
+        (true, false) => builder.metrics.retractions += diff.unsigned_abs(),
+        (false, true) => builder.metrics.error_inserts += diff.unsigned_abs(),
+        (false, false) => builder.metrics.error_retractions += diff.unsigned_abs(),
     }
 }
 
@@ -230,7 +265,9 @@ where
 struct HollowBatchAndMetadata<T> {
     lower: Antichain<T>,
     upper: Antichain<T>,
-    data_ts: T,
+    /// The largest update timestamp in the batch, used to decide whether the batch still
+    /// holds relevant data when an append's lower advances past the batch description's.
+    data_max_ts: T,
     batch: ProtoBatch,
     metrics: BatchMetrics,
 }
@@ -245,7 +282,7 @@ struct BatchSet {
 #[derive(Debug)]
 struct FinishedBatch {
     batch: Batch<SourceData, (), mz_repr::Timestamp, StorageDiff>,
-    data_ts: mz_repr::Timestamp,
+    data_max_ts: mz_repr::Timestamp,
 }
 
 /// Continuously writes the `desired_stream` into persist
@@ -554,6 +591,18 @@ fn write_batches<'scope>(
         .expect("statistics initialized")
         .clone();
 
+    // Milliseconds of lag behind the largest observed update timestamp after which updates
+    // are routed into shared coalesced builders instead of per-timestamp builders. `None`
+    // disables coalescing.
+    let stash_coalesce_lag = dyncfgs::STORAGE_PERSIST_SINK_STASH_COALESCE_LAG
+        .get(storage_state.storage_configuration.config_set());
+    let stash_coalesce_lag: Option<u64> = (!stash_coalesce_lag.is_zero()).then(|| {
+        stash_coalesce_lag
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX)
+    });
+
     let mut write_op =
         AsyncOperatorBuilder::new(format!("{} write_batches", operator_name), scope.clone());
 
@@ -569,19 +618,40 @@ fn write_batches<'scope>(
     // upper_.
 
     let shutdown_button = write_op.build(move |_capabilities| async move {
-        // In-progress batches of data, keyed by timestamp.
+        // In-progress batches of data, keyed by timestamp, used only when stash coalescing
+        // is disabled.
         let mut stashed_batches = BTreeMap::new();
 
+        // Updates within the coalesce lag of the largest observed update timestamp, staged
+        // as raw rows and keyed by timestamp. Future batch description boundaries can land
+        // among these times, and a builder cannot be split, so these updates must not enter
+        // a shared builder yet. They move into a coalesced builder once they age past the
+        // horizon or once a batch description covering them becomes ready.
+        let mut raw_stash: BTreeMap<mz_repr::Timestamp, Vec<(Result<Row, DataflowError>, Diff)>> =
+            BTreeMap::new();
+
+        // A shared builder for updates that aged past the coalesce horizon but fall beyond
+        // every received batch description. It is moved into a description's slot in
+        // `in_flight_batches` once a description covering its contents arrives. While a
+        // collection's frontier stalls, for example while another export of the same source
+        // snapshots, no descriptions are minted and this builder absorbs all aging updates,
+        // uploading its parts to blob storage incrementally.
+        let mut open_coalesced: Option<SourceBatchBuilder> = None;
+        // Updates with timestamps below this horizon are coalesced. Maintained as the largest
+        // observed update timestamp minus the configured lag, and never retreats.
+        let mut coalesce_horizon: Option<mz_repr::Timestamp> = None;
+
         // Contains descriptions of batches for which we know that we can
-        // write data. We got these from the "centralized" operator that
-        // determines batch descriptions for all writers.
+        // write data, along with an optional coalesced builder holding updates that fall
+        // within the description's bounds. We got the descriptions from the "centralized"
+        // operator that determines batch descriptions for all writers.
         //
         // `Antichain` does not implement `Ord`, so we cannot use a `BTreeMap`. We need to search
         // through the map, so we cannot use the `mz_ore` wrapper either.
         #[allow(clippy::disallowed_types)]
         let mut in_flight_batches = std::collections::HashMap::<
             (Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>),
-            Capability<mz_repr::Timestamp>,
+            (Capability<mz_repr::Timestamp>, Option<SourceBatchBuilder>),
         >::new();
 
         // TODO(aljoscha): We need to figure out what to do with error results from these calls.
@@ -640,13 +710,47 @@ fn write_batches<'scope>(
                                     description, desired_frontier, batch_descriptions_frontier,
                                 );
                             }
+                            // If the open coalesced builder's contents fall within this
+                            // description, move it into the description's slot so it is
+                            // finished with the description's bounds. Contents entirely
+                            // beyond the description keep accumulating for a later one.
+                            let rotated = match open_coalesced.take() {
+                                Some(builder)
+                                    if !description.1.less_equal(&builder.data_max_ts) =>
+                                {
+                                    Some(builder)
+                                }
+                                Some(builder) if description.1.less_equal(&builder.data_min_ts) => {
+                                    open_coalesced = Some(builder);
+                                    None
+                                }
+                                Some(builder) => {
+                                    // Updates this description covers share a builder with
+                                    // updates beyond it, so the builder can be finished with
+                                    // neither this description's bounds nor a later one's.
+                                    // This can only happen when updates beyond the
+                                    // description outran it by more than the coalesce lag.
+                                    panic!(
+                                        "write_batches: sink {}: the open coalesced stash \
+                                            (times [{:?}, {:?}]) straddles batch description \
+                                            {:?}. storage_persist_sink_stash_coalesce_lag is \
+                                            not large enough to cover the in-flight delay \
+                                            between this operator's inputs.",
+                                        collection_id,
+                                        builder.data_min_ts,
+                                        builder.data_max_ts,
+                                        description,
+                                    );
+                                }
+                                None => None,
+                            };
                             match in_flight_batches.entry(description) {
                                 std::collections::hash_map::Entry::Vacant(v) => {
                                     // This _should_ be `.retain`, but rust
                                     // currently thinks we can't use `cap`
                                     // as an owned value when using the
                                     // match guard `Some(event)`
-                                    v.insert(cap.delayed(cap.time()));
+                                    v.insert((cap.delayed(cap.time()), rotated));
                                 }
                                 std::collections::hash_map::Entry::Occupied(o) => {
                                     let (description, _) = o.remove_entry();
@@ -691,34 +795,57 @@ fn write_batches<'scope>(
 
                         for (row, ts, diff) in data {
                             if write.upper().less_equal(&ts) {
-                                let builder = stashed_batches.entry(ts).or_insert_with(|| {
-                                    BatchBuilderAndMetadata::new(
-                                        write.builder(operator_batch_lower.clone()),
-                                        ts,
-                                    )
-                                });
-
-                                let is_value = row.is_ok();
-
-                                builder
-                                    .add(&SourceData(row), &(), &ts, &diff.into_inner())
-                                    .await;
-
                                 source_statistics.inc_updates_staged_by(1);
 
-                                // Note that we assume `diff` is either +1 or -1 here, being anything
-                                // else is a logic bug we can't handle at the metric layer. We also
-                                // assume this addition doesn't overflow.
-                                match (is_value, diff.is_positive()) {
-                                    (true, true) => builder.metrics.inserts += diff.unsigned_abs(),
-                                    (true, false) => {
-                                        builder.metrics.retractions += diff.unsigned_abs()
+                                let Some(lag) = stash_coalesce_lag else {
+                                    let builder = stashed_batches.entry(ts).or_insert_with(|| {
+                                        BatchBuilderAndMetadata::new(
+                                            write.builder(operator_batch_lower.clone()),
+                                            ts,
+                                        )
+                                    });
+                                    stage_update(builder, row, ts, diff).await;
+                                    continue;
+                                };
+
+                                let candidate =
+                                    mz_repr::Timestamp::from(u64::from(ts).saturating_sub(lag));
+                                if coalesce_horizon.is_none_or(|h| h < candidate) {
+                                    coalesce_horizon = Some(candidate);
+                                }
+
+                                // An update covered by a received batch description joins
+                                // that description's coalesced builder. An uncovered update
+                                // that aged past the horizon joins the open builder. Any
+                                // other update is stashed raw until it ages past the
+                                // horizon or a description covering it becomes ready.
+                                let covering = in_flight_batches
+                                    .iter_mut()
+                                    .find(|((lower, upper), _)| {
+                                        lower.less_equal(&ts) && !upper.less_equal(&ts)
+                                    })
+                                    .map(|(_, (_, slot))| slot);
+                                match covering {
+                                    Some(slot) => {
+                                        let builder = slot.get_or_insert_with(|| {
+                                            BatchBuilderAndMetadata::new(
+                                                write.builder(operator_batch_lower.clone()),
+                                                ts,
+                                            )
+                                        });
+                                        stage_update(builder, row, ts, diff).await;
                                     }
-                                    (false, true) => {
-                                        builder.metrics.error_inserts += diff.unsigned_abs()
+                                    None if coalesce_horizon.is_some_and(|h| ts < h) => {
+                                        let builder = open_coalesced.get_or_insert_with(|| {
+                                            BatchBuilderAndMetadata::new(
+                                                write.builder(operator_batch_lower.clone()),
+                                                ts,
+                                            )
+                                        });
+                                        stage_update(builder, row, ts, diff).await;
                                     }
-                                    (false, false) => {
-                                        builder.metrics.error_retractions += diff.unsigned_abs()
+                                    None => {
+                                        raw_stash.entry(ts).or_default().push((row, diff));
                                     }
                                 }
                             }
@@ -729,6 +856,34 @@ fn write_batches<'scope>(
                     }
                 }
             }
+
+            // Move raw-stashed updates that aged past the horizon into the coalesced tier,
+            // so the raw stash only ever spans the trailing lag window.
+            if let Some(horizon) = coalesce_horizon {
+                let aged: Vec<_> = raw_stash
+                    .keys()
+                    .take_while(|ts| **ts < horizon)
+                    .copied()
+                    .collect();
+                for ts in aged {
+                    let updates = raw_stash.remove(&ts).unwrap();
+                    let covering = in_flight_batches
+                        .iter_mut()
+                        .find(|((lower, upper), _)| lower.less_equal(&ts) && !upper.less_equal(&ts))
+                        .map(|(_, (_, slot))| slot);
+                    let slot = covering.unwrap_or(&mut open_coalesced);
+                    let builder = slot.get_or_insert_with(|| {
+                        BatchBuilderAndMetadata::new(
+                            write.builder(operator_batch_lower.clone()),
+                            ts,
+                        )
+                    });
+                    for (row, diff) in updates {
+                        stage_update(builder, row, ts, diff).await;
+                    }
+                }
+            }
+
             // We may have the opportunity to commit updates, if either frontier
             // has moved
             if PartialOrder::less_equal(&processed_desired_frontier, &desired_frontier)
@@ -778,7 +933,8 @@ fn write_batches<'scope>(
                 );
 
                 for batch_description in ready_batches {
-                    let cap = in_flight_batches.remove(&batch_description).unwrap();
+                    let (cap, mut coalesced_builder) =
+                        in_flight_batches.remove(&batch_description).unwrap();
 
                     if collection_id.is_user() {
                         trace!(
@@ -825,6 +981,46 @@ fn write_batches<'scope>(
                         // It is impossible to emit a batch description that is
                         // beyond a not-yet emitted description in `in_flight_batches`, as
                         // a that description would also have been chosen as ready above.
+                        operator_batch_lower = operator_batch_lower.join(&batch_upper);
+                        batch_tokens.push(batch);
+                    }
+
+                    // Move raw-stashed updates the description covers into its coalesced
+                    // builder. These are the updates that are still within the lag of the
+                    // largest observed timestamp, which the now-ready description proves
+                    // fall within its bounds.
+                    let raw_timestamps: Vec<_> = raw_stash
+                        .keys()
+                        .filter(|time| {
+                            batch_lower.less_equal(time) && !batch_upper.less_equal(time)
+                        })
+                        .copied()
+                        .collect();
+                    for ts in raw_timestamps {
+                        let updates = raw_stash.remove(&ts).unwrap();
+                        let builder = coalesced_builder.get_or_insert_with(|| {
+                            BatchBuilderAndMetadata::new(
+                                write.builder(operator_batch_lower.clone()),
+                                ts,
+                            )
+                        });
+                        for (row, diff) in updates {
+                            stage_update(builder, row, ts, diff).await;
+                        }
+                    }
+
+                    if let Some(builder) = coalesced_builder {
+                        if collection_id.is_user() {
+                            trace!(
+                                "persist_sink {collection_id}/{shard_id}: \
+                                    wrote coalesced batch from worker {}: ({:?}, {:?}),
+                                    containing {:?}",
+                                worker_index, batch_lower, batch_upper, builder.metrics
+                            );
+                        }
+                        let batch = builder
+                            .finish(batch_lower.clone(), batch_upper.clone())
+                            .await;
                         operator_batch_lower = operator_batch_lower.join(&batch_upper);
                         batch_tokens.push(batch);
                     }
@@ -1070,7 +1266,7 @@ fn append_batches<'scope>(
 
                                 batches.finished.push(FinishedBatch {
                                     batch: write.batch_from_transmittable_batch(batch.batch),
-                                    data_ts: batch.data_ts,
+                                    data_max_ts: batch.data_max_ts,
                                 });
                                 batches.batch_metrics += &batch.metrics;
                             }
@@ -1370,13 +1566,16 @@ fn append_batches<'scope>(
                             let new_done_batch_metadata =
                                 (new_batch_lower.clone(), batch_upper.clone());
 
-                            // Retain any batches that are still in advance of
-                            // the new lower, and delete any batches that are
-                            // not.
+                            // Retain any batches that still hold data at or beyond the new
+                            // lower, and delete any batches that do not. A retained batch may
+                            // also hold data below the new lower, which is fine:
+                            // `compare_and_append_batch` truncates updates outside the append
+                            // bounds, and that data is already in the shard, appended by
+                            // whoever advanced the upper past our batch description's lower.
                             let mut batch_delete_futures = vec![];
                             let mut new_batch_set = BatchSet::default();
                             for batch in batches {
-                                if new_batch_lower.less_equal(&batch.data_ts) {
+                                if new_batch_lower.less_equal(&batch.data_max_ts) {
                                     new_batch_set.finished.push(batch);
                                 } else {
                                     batch_delete_futures.push(batch.batch.delete());

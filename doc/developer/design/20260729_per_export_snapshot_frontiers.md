@@ -161,52 +161,74 @@ only when a single builder reaches `blob_target_size`. Reclocked CDC
 arrives at many distinct fine-grained timestamps, so resident memory grows
 with the number of distinct timestamps rather than with data volume.
 
-The sink change is a two-tier stash in `write_batches`. The tier is chosen
-per update when the update is added:
+The sink change is a two-tier stash in `write_batches`, gated by the
+`storage_persist_sink_stash_coalesce_lag` configuration (a zero lag
+disables it and keeps today's per-timestamp builders):
 
-- Each worker keeps one long-lived coalesced `BatchBuilder`, created with
-  the minimum lower bound. `BatchBuilder::add` accepts each update at its
-  exact timestamp and the upper bound is supplied only at `finish`, so one
-  builder absorbs updates at any number of distinct timestamps and uploads
-  a part to blob storage every time its buffer reaches `blob_target_size`.
-  This capability exists today, the current code just never uses it across
-  timestamps.
 - The operator maintains a horizon `H`, defined as the maximum timestamp
-  observed on its data input minus a configured lag `L`. `H` never
-  retreats. An arriving update at time `t` is added to the coalesced
-  builder when `t < H` and to today's per-timestamp builder for `t`
-  otherwise.
-- When the batch description `[minimum, T)` arrives after the rewind
-  resolves, the coalesced builder is finished at `T`. `finish(T)` requires
-  that the builder contain no update at or beyond `T`, which holds exactly
-  when `H <= T`. Per-timestamp builders with times below `T` are finished
-  with the description bounds as today. Builders at or beyond `T` are
-  retained for the next description, which is also existing behavior.
+  observed on its data input minus the configured lag `L`. `H` never
+  retreats. An arriving update at time `t` is stashed as a raw row when
+  `t >= H` and no received batch description covers `t`. Batch description
+  boundaries are frontier values, and frontier values trail the newest
+  data, so boundaries can land among these near-maximum times. A builder
+  cannot be split at a boundary, which is why fresh uncovered updates must
+  not enter a shared builder yet.
+- Updates covered by a received description, updates that age past `H`,
+  and raw-stashed rows whose time ages past `H` all move into coalesced
+  builders: one per received batch description, plus one open builder for
+  aged updates beyond every received description. `BatchBuilder::add`
+  accepts each update at its exact timestamp and the upper bound is
+  supplied only at `finish`, so one builder absorbs updates at any number
+  of distinct timestamps and uploads a part to blob storage every time its
+  buffer reaches `blob_target_size`. The open builder is the one that
+  fills during hydration, when the frontier is pinned and no description
+  is minted, absorbing the snapshot rows, the rewind negations, and the
+  concurrently staged CDC alike.
+- When a description `[l, u)` arrives, the open builder rotates: if its
+  contents all fall below `u` it becomes that description's builder, if
+  they all fall at or beyond `u` it stays open for a later description.
+  During hydration the description is `[minimum, T)` minted when the
+  rewind resolves, and the open builder's contents fall below `T` exactly
+  when `H <= T`.
+- When a description is finished (today's logic, once the data frontier
+  passes its upper), the raw-stashed rows it covers are drained into its
+  coalesced builder, and the builder is finished with the description
+  bounds. Each worker therefore contributes at most one batch per
+  description.
 
 `H <= T` is not structurally guaranteed. Timely gives no ordering between
 data delivery and frontier propagation, so updates at or beyond `T` can
 arrive before the description does and, with too small a lag, age into the
-coalesced builder. Such an update is emitted by the reader only after it
+open builder. Such an update is emitted by the reader only after it
 downgrades its capability past `T`, so its timestamp exceeds `T` by at
-most the reclocked time that elapses while the description is in flight.
-`H` therefore exceeds `T` only if that propagation delay exceeds `L`, and
-`L` is chosen orders of magnitude larger (minutes of reclocked time
-against in-flight delays of at most seconds). The failure is detected when
-the description arrives. The builder cannot be split, so the sink raises
-an error and the dataflow restarts, discarding the unlinked batch.
-Correctness is never at risk, only progress, and the same restart path
-already exists for snapshot errors.
+most the time that elapses while the description is in flight. `H`
+therefore exceeds `T` only if that propagation delay exceeds `L`. The
+failure is detected at rotation: the open builder's contents straddle `u`,
+the builder cannot be split, so the sink panics with a message naming the
+lag. The panic halts the cluster process, restarting every dataflow on the
+replica and discarding the unlinked batches. Correctness is never at risk,
+only progress.
 
-Resident memory is then bounded on both tiers. The coalesced builder holds
-at most `blob_target_size` plus one part upload in flight. The
-per-timestamp tier only ever spans the trailing window `L`, so its builder
-count is bounded by `L` divided by the reclock interval rather than by
-snapshot duration. With descriptions arriving regularly (the steady state)
-builders are finished before their times age past `H`, the coalesced
-builder stays empty, and behavior is unchanged. The coalesced tier fills
-only when the frontier stalls for longer than `L`, which is the hydration
-case. No persist API changes are required, and the crash leak behavior of
-eagerly uploaded parts is unchanged from today.
+A retained subtlety on the append side: `append_batches` trims batches
+when another writer advanced the shard upper past a batch description's
+lower. A batch carries its largest update timestamp, is deleted when that
+falls below the new lower, and is otherwise kept whole:
+`compare_and_append_batch` truncates updates outside the append bounds,
+and the truncated data is already in the shard, written by whoever
+advanced the upper.
+
+Resident memory is then bounded on both tiers. Each coalesced builder
+holds at most `blob_target_size` plus one part upload in flight, and there
+are at most as many as there are in-flight descriptions plus one. The raw
+tier only ever spans the trailing window `L`, since rows leave it as soon
+as they age past `H`, so its size is bounded by `L` times the ingest rate
+rather than by snapshot duration. With descriptions arriving regularly
+(the steady state) updates enter their description's builder on arrival or
+drain into it when the description finishes, and the open builder stays
+empty. The open builder fills only when the frontier stalls for longer
+than `L`, which is the hydration case. No persist API changes are
+required, and the crash leak behavior of eagerly uploaded parts is
+unchanged from today.
 
 ### Kafka: backfill consumer with offset handoff
 

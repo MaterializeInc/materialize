@@ -398,6 +398,24 @@ pub const SINK_ENSURE_TOPIC_CONFIG: Config<&'static str> = Config::new(
     match the expected configs.",
 );
 
+/// Lag behind the largest observed update timestamp after which updates staged in the
+/// storage persist sink move from a raw stash into shared coalesced batch builders, one
+/// per batch description plus one open builder for times no received description covers
+/// yet. Coalesced builders upload their parts to blob storage incrementally, so while a
+/// collection's frontier stalls (for example while another export of the same source
+/// snapshots) stash memory is bounded by the raw stash, which only ever spans this lag,
+/// plus the buffers of the coalesced builders. The lag must exceed the in-flight delay
+/// between the sink's data and batch description inputs, or the sink panics and the
+/// process restarts. A zero value disables coalescing and stages one batch builder per
+/// distinct timestamp instead.
+pub const STORAGE_PERSIST_SINK_STASH_COALESCE_LAG: Config<Duration> = Config::new(
+    "storage_persist_sink_stash_coalesce_lag",
+    Duration::ZERO,
+    "Lag behind the largest observed timestamp after which updates staged in the storage \
+    persist sink move from a raw stash into shared coalesced batch builders. Zero disables \
+    coalescing.",
+);
+
 /// Whether source snapshot operators emit rewind requests as soon as the snapshot bound is
 /// known instead of after the snapshot completes. This lets the replication operator read
 /// the upstream stream while the snapshot runs. Replication data received during the
@@ -459,6 +477,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&SINK_PROGRESS_SEARCH)
         .add(&SQL_SERVER_SOURCE_VALIDATE_RESTORE_HISTORY)
         .add(&STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION)
+        .add(&STORAGE_PERSIST_SINK_STASH_COALESCE_LAG)
         .add(&STORAGE_ROCKSDB_CLEANUP_TRIES)
         .add(&STORAGE_ROCKSDB_USE_MERGE_OPERATOR)
         .add(&STORAGE_SERVER_MAINTENANCE_INTERVAL)
