@@ -1,6 +1,6 @@
 ---
 source: src/cloud-resources/src/crd/materialize.rs
-revision: 0f8d369b92
+revision: f5669fe128
 ---
 
 # cloud-resources::crd::materialize
