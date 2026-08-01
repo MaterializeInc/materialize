@@ -31,5 +31,9 @@ sysinfo.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 
+[dev-dependencies]
+mz-ore = { path = "../ore", default-features = false, features = ["test"] }
+tempfile.workspace = true
+
 [features]
 default = []
