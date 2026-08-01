@@ -182,6 +182,12 @@ impl SecretsReader for CachingSecretsReader {
 
         Ok(value)
     }
+
+    /// Internal secrets are not cached: they are read rarely (typically once, at process
+    /// startup), so caching them would only extend the lifetime of key material in memory.
+    async fn read_internal(&self, name: &str) -> Result<Vec<u8>, anyhow::Error> {
+        self.inner.read_internal(name).await
+    }
 }
 
 #[cfg(test)]
@@ -405,6 +411,10 @@ mod test {
             let result = self.reader.read(id).await;
             self.record(id);
             result
+        }
+
+        async fn read_internal(&self, name: &str) -> Result<Vec<u8>, anyhow::Error> {
+            self.reader.read_internal(name).await
         }
     }
 }
