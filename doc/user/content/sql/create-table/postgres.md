@@ -51,15 +51,8 @@ columns in the upstream tables, without downtime. For details, see [PostgreSQL:
 Handling upstream schema changes with zero
 downtime](/ingest-data/postgres/source-versioning/).
 
-#### Incompatible schema changes
-
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-incompatible-schema-changes" %}}
-
-### Upstream table truncation restrictions
-
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-truncation-restriction" %}}
+See also [Handling upstream operations](#handling-upstream-operations) for
+additional upstream operation considerations.
 
 ### Inherited tables
 
@@ -68,6 +61,10 @@ name="postgres-inherited-tables" %}}
 
 {{% include-from-yaml data="postgres_source_details"
 name="postgres-inherited-tables-action" %}}
+
+## Handling upstream operations
+
+{{% upstream-schema-change-behavior connector="postgres" %}}
 
 ## Privileges
 

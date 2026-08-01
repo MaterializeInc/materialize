@@ -19,8 +19,137 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.35.0
+*Released to Materialize Cloud: 2026-07-29* <br>
+*Released to Materialize Self-Managed: 2026-07-30* <br>
+
+### Asynchronous Cluster Reconfiguration {#v26.35-background-cluster-reconfiguration}
+`ALTER CLUSTER` now runs configuration changes (such as resizing) in the background, rather than blocking until the new replica set is ready. This means you can start a reconfiguration and move on to other tasks while the process completes.
+
+Because the command is now asynchronous, you can monitor the
+progress of an in-flight reconfiguration using `SHOW CLUSTERS`.
+
+```mzsql
+SHOW CLUSTERS;
+```
+```nofmt
+    name    | replicas   |           activity           | comment
+------------+------------+------------------------------+---------
+ my_cluster | r1 (400cc) | reconfiguring size to 1600cc |
+```
+
+For detailed status, query
+[`mz_internal.mz_cluster_reconfigurations`](/reference/system-catalog/mz_internal/#mz_cluster_reconfigurations),
+which reports the target shape, the deadline, and the reconfiguration's
+lifecycle `status` (`in-progress`, then a terminal `finalized`, `timed-out`,
+`cancelled`, or `resource-exhausted`):
+
+```mzsql
+SELECT cluster_id, status, deadline, on_timeout, target, changes
+FROM mz_internal.mz_cluster_reconfigurations;
+```
+
+For more information, see [`ALTER CLUSTER`: Resizing process](/sql/alter-cluster/#resizing-process).
+
+### AWS Glue Schema Registry Support for Sinks {#v26.35-aws-glue-schema-registry-support-sinks}
+
+{{< public-preview />}}
+
+Kafka sinks can now use [AWS Glue Schema
+Registry](/sql/create-connection/#aws-glue-schema-registry) for Avro schema
+management, via the new `FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY` syntax on
+[`CREATE SINK`](/sql/create-sink/kafka/). With Glue now supported on both sources and sinks, you can manage your Kafka schemas end to end on AWS.
+
+```mzsql
+-- Authenticate to AWS Glue through an AWS connection.
+CREATE CONNECTION aws_connection TO AWS (
+    ASSUME ROLE ARN = 'arn:aws:iam::123456789000:role/MaterializeGlue'
+);
+
+CREATE CONNECTION glue_connection TO AWS GLUE SCHEMA REGISTRY (
+    AWS CONNECTION = aws_connection,
+    REGISTRY = 'default-registry'
+);
+
+-- Write Avro-encoded output, registering schemas with AWS Glue.
+CREATE SINK avro_sink
+  IN CLUSTER my_io_cluster
+  FROM my_materialized_view
+  INTO KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
+  KEY (key)
+  FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_connection (
+    KEY SCHEMA NAME = 'test_topic-key',
+    VALUE SCHEMA NAME = 'test_topic-value'
+  )
+  ENVELOPE UPSERT;
+```
+
+For more information, see [`CREATE SINK`: Using AWS Glue Schema Registry](/sql/create-sink/kafka/#using-aws-glue-schema-registry).
+
+### Kafka: Source versioning {#v26.35-kafka-source-versioning}
+
+Kafka sources now support source versioning, so you can adopt upstream Avro schema changes without downtime. This uses the same mechanism already available for PostgreSQL, MySQL, and SQL Server sources, by creating a new table with the evolved schema and swapping it into place with a blue/green cutover.
+
+There is new syntax for [`CREATE SOURCE`](/sql/create-source/kafka-v2/) and [`CREATE TABLE ... FROM SOURCE`](/sql/create-table/kafka/) for creating and versioning tables independently. Materialize resolves the latest registered Avro schema when the `CREATE TABLE` statement runs, and pins it as the table's reader schema.
+
+For more information, refer to:
+- [Guide: Handling upstream schema changes with zero
+  downtime](/ingest-data/kafka/source-versioning/)
+- [Syntax: `CREATE SOURCE`](/sql/create-source/kafka-v2/)
+- [Syntax: `CREATE TABLE`](/sql/create-table/kafka/)
+
+### Improvements {#v26.35-improvements}
+- **Faster read queries under write load**: Read-only queries (e.g., `SELECT 1`) are no longer blocked by concurrent write transactions; under high write load, victim query latency drops from multiple seconds to single-digit milliseconds.
+- **Better query plans for correlated subqueries**: Queries using patterns like `1 IN (SELECT 1 WHERE p)` and `NOT EXISTS (SELECT 1 WHERE p)` are now optimized to a simple filter, eliminating unnecessary semi/anti-joins for faster queries.
+- **Account hierarchy billing**: Organizations running multiple Materialize accounts under one parent (e.g., separate production and staging accounts) can now see consolidated billing and usage at the parent level, broken out per child account; each child account sees only its own usage. Available on request — talk to your account executive to see if you qualify.
+- **`mz-debug` CPU profiling**: The `mz-debug` diagnostic tool now automatically collects CPU profiles alongside memory profiles for Self-Managed deployments.
+
+### Bug Fixes {#v26.35-bug-fixes}
+- Fixed queries with many chained `INTERSECT` operations (e.g., 35+ inputs) exhausting environmentd memory during planning, causing the environment to become unresponsive.
+- Fixed a MySQL source stalling entirely when one of its tables was dropped while the initial snapshot was running; the dropped table now reports an error on its own and the rest of the snapshot proceeds.
+- Fixed a critical bug where a pending replacement materialized view could destroy the data of its live target materialized view after an environmentd restart.
+- Fixed `COPY FROM PARQUET` failing for columns of types `oid`, `time`, `timestamptz`, `char`, `varchar`, and `mz_timestamp`.
+- Fixed incorrect results for `variance`, `stddev`, and related aggregate functions when used with `DISTINCT` on inputs containing values that differ only in sign (e.g., `-2` and `2`).
+- Fixed `ALTER CLUSTER ... WITH (WAIT UNTIL READY ...)` hanging indefinitely and rolling back when the cluster hosts a single-replica source (PostgreSQL, MySQL, or SQL Server).
+- Fixed `mz_object_arrangement_sizes` silently omitting arrangements smaller than 10 MiB and showing stale sizes after an environmentd restart.
+- Fixed `EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW` crashing environmentd when the materialized view's cached plan referenced a since-dropped index.
+- Fixed array literals with empty dimensions (e.g., `'{{},{}}'::text[]`) and multi-dimensional `array_fill` calls silently producing incorrect results instead of returning errors matching PostgreSQL behavior.
+- Fixed replica utilization charts in the Console failing to load on initial page render and flashing a loading spinner when switching time filters.
+- Fixed replica crash and OOM markers not appearing in the "Last hour" and "Last 3 hours" Console utilization chart windows.
+
 ## v26.34.1
 *Released to Materialize Self-Managed: 2026-07-24* <br>
+
+### Asynchronous Cluster Reconfiguration {#v26.34.1-graceful-cluster-reconfiguration}
+
+<red>*Materialize Self-Managed only*</red>
+
+`ALTER CLUSTER` now runs configuration changes (such as resizing) in the background, rather than blocking until the new replica set is ready. This means you can start a reconfiguration and move on to other tasks while the process completes.
+
+Because the command is now asynchronous, you can monitor the
+progress of an in-flight reconfiguration using `SHOW CLUSTERS`.
+
+```mzsql
+SHOW CLUSTERS;
+```
+```nofmt
+    name    | replicas   |           activity           | comment
+------------+------------+------------------------------+---------
+ my_cluster | r1 (400cc) | reconfiguring size to 1600cc |
+```
+
+For detailed status, query
+[`mz_internal.mz_cluster_reconfigurations`](/reference/system-catalog/mz_internal/#mz_cluster_reconfigurations),
+which reports the target shape, the deadline, and the reconfiguration's
+lifecycle `status` (`in-progress`, then a terminal `finalized`, `timed-out`,
+`cancelled`, or `resource-exhausted`):
+
+```mzsql
+SELECT cluster_id, status, deadline, on_timeout, target, changes
+FROM mz_internal.mz_cluster_reconfigurations;
+```
+
+For more information, see [`ALTER CLUSTER`: Resizing process](/sql/alter-cluster/#resizing-process).
 
 ### Bug Fixes {#v26.34.1-bug-fixes}
 - Fixed an issue where `ALTER CLUSTER ... WITH (WAIT UNTIL READY ...)` would deadlock on clusters hosting single-replica sources (Postgres, MySQL, SQL Server), causing graceful reconfiguration to time out and roll back without resizing.
@@ -60,43 +189,6 @@ ALTER CLUSTER my_cluster SET (
 For more information, see the `AUTO SCALING STRATEGY` option on
 [`CREATE CLUSTER`](/sql/create-cluster/#autoscaling) and
 [`ALTER CLUSTER`](/sql/alter-cluster/#speed-up-hydration-by-autoscaling-to-a-larger-size).
-
-### AWS Glue Schema Registry Support for Sinks {#v26.34-aws-glue-schema-registry-support-sinks}
-
-{{< public-preview />}}
-
-<red>*Materialize Cloud only*</red>
-
-Kafka sinks can now use [AWS Glue Schema
-Registry](/sql/create-connection/#aws-glue-schema-registry) for Avro schema
-management, via the new `FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY` syntax on
-[`CREATE SINK`](/sql/create-sink/kafka/).
-
-```mzsql
--- Authenticate to AWS Glue through an AWS connection.
-CREATE CONNECTION aws_connection TO AWS (
-    ASSUME ROLE ARN = 'arn:aws:iam::123456789000:role/MaterializeGlue'
-);
-
-CREATE CONNECTION glue_connection TO AWS GLUE SCHEMA REGISTRY (
-    AWS CONNECTION = aws_connection,
-    REGISTRY = 'default-registry'
-);
-
--- Write Avro-encoded output, registering schemas with AWS Glue.
-CREATE SINK avro_sink
-  IN CLUSTER my_io_cluster
-  FROM my_materialized_view
-  INTO KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
-  KEY (key)
-  FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_connection (
-    KEY SCHEMA NAME = 'test_topic-key',
-    VALUE SCHEMA NAME = 'test_topic-value'
-  )
-  ENVELOPE UPSERT;
-```
-
-For more information, see [`CREATE SINK`: Using AWS Glue Schema Registry](/sql/create-sink/kafka/#using-aws-glue-schema-registry).
 
 ### Role Mapping via SCIM {#v26.34-role-mapping-scim}
 

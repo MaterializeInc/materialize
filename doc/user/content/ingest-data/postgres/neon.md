@@ -323,3 +323,7 @@ your networking configuration.
 
 {{% include-from-yaml data="postgres_source_details"
 name="postgres-considerations" %}}
+
+## Handling upstream operations
+
+{{% upstream-schema-change-behavior connector="postgres" %}}

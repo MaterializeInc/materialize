@@ -110,6 +110,10 @@ ingestion progress and debugging related issues, see [Troubleshooting](/ops/trou
 
 {{% include-headless "/headless/sql-server-considerations" %}}
 
+## Handling upstream operations
+
+{{% upstream-schema-change-behavior connector="sql-server" %}}
+
 ## Examples
 
 {{< important >}}
@@ -212,7 +216,7 @@ CREATE SOURCE mz_source
 
 {{% include-headless "/headless/schema-changes-in-progress" %}}
 
-To handle upstream [schema changes](#schema-changes) or errored subsources, use
+To handle upstream [schema changes](#handling-upstream-operations) or errored subsources, use
 the [`DROP SOURCE`](/sql/alter-source/#context) syntax to drop the affected
 subsource, and then [`ALTER SOURCE...ADD SUBSOURCE`](/sql/alter-source/) to add
 the subsource back to the source.

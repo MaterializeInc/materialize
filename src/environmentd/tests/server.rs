@@ -30,7 +30,9 @@ use futures::FutureExt;
 use http::Request;
 use itertools::Itertools;
 use jsonwebtoken::{DecodingKey, EncodingKey};
+use mz_adapter::session::SessionConfig;
 use mz_auth::password::Password;
+use mz_auth::{Authenticated, AuthenticatorKind};
 use mz_environmentd::test_util::{self, Ca, KAFKA_ADDRS, PostgresErrorExt, make_pg_tls};
 use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::{
@@ -2754,10 +2756,14 @@ async fn test_max_connections_limits() {
     }
 }
 
+// Exercises races between session termination and connection startup: a
+// terminating connection must not tear down another session's state via a
+// reused connection ID, and a client abandoning a failed startup must not
+// panic the Coordinator.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
 #[allow(clippy::disallowed_methods)]
-async fn test_concurrent_id_reuse() {
+async fn test_termination_races() {
     let server = test_util::TestHarness::default().start().await;
 
     {
@@ -2806,6 +2812,67 @@ async fn test_concurrent_id_reuse() {
 
     let client = server.connect().await.unwrap();
     client.batch_execute("SELECT 1").await.unwrap();
+
+    // Reuse the running server to also exercise a second connection-lifecycle
+    // regression: a client abandoning a failed startup. When startup fails,
+    // the Coordinator never registers the connection in `active_conns`, so
+    // the cleanup guard in `Client::startup` must not send a `Terminate`
+    // command for it when the startup future is dropped without observing the
+    // error response. A Terminate for an unknown connection panics the
+    // Coordinator.
+
+    // This phase does not prepare statements, disable the failpoint anyway to
+    // keep the phases independent.
+    fail::cfg("async_prepare", "off").unwrap();
+
+    // Make startup fail deterministically for user roles.
+    let system_client = server.connect().internal().await.unwrap();
+    system_client
+        .batch_execute("ALTER SYSTEM SET allow_user_sessions = false")
+        .await
+        .unwrap();
+
+    let adapter_client = server.inner.adapter_client();
+    let conn_id = adapter_client.new_conn_id().unwrap();
+    let session = adapter_client.new_session(
+        SessionConfig {
+            conn_id,
+            uuid: Uuid::new_v4(),
+            user: "materialize".to_string(),
+            client_ip: None,
+            external_metadata_rx: None,
+            helm_chart_version: None,
+            authenticator_kind: AuthenticatorKind::None,
+            groups: None,
+        },
+        Authenticated,
+    );
+
+    // Box the future so that dropping it below drops the future itself, not
+    // just a reference to it.
+    let mut fut = Box::pin(adapter_client.startup(session));
+    // The first poll sends the Startup command to the Coordinator and installs
+    // the cleanup guard around the response channel.
+    assert!(futures::poll!(&mut fut).is_pending());
+    // Wait for the Coordinator to process the Startup command and place the
+    // startup error in the response channel. Commands on the client channel
+    // are processed in order, so a completed round trip implies the Startup
+    // command has been processed.
+    let _ = adapter_client.get_system_vars().await;
+    // Drop the future without observing the response. The cleanup guard must
+    // not send a Terminate command for the never-registered connection.
+    drop(fut);
+
+    // The Coordinator must be unharmed. System sessions are exempt from
+    // `allow_user_sessions`, so a working internal connection shows the
+    // Coordinator is still alive.
+    let check = async {
+        let client = server.connect().internal().await.unwrap();
+        client.batch_execute("SELECT 1").await.unwrap();
+    };
+    tokio::time::timeout(Duration::from_secs(30), check)
+        .await
+        .expect("coordinator did not survive an abandoned failed startup");
 }
 
 #[mz_ore::test]
@@ -5478,6 +5545,24 @@ fn test_mcp_agent_query_tool() {
         .with_mcp_routes(true, false)
         .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string());
     run_mcp_datadriven("tests/testdata/mcp/agent_query_tool", harness);
+}
+
+/// Tests the MCP agent endpoint with `read_data_product` disabled and the
+/// `query` tool left on, the configuration that routes agent reads through
+/// `query` instead.
+#[mz_ore::test]
+fn test_mcp_agent_read_data_product_disabled() {
+    let harness = test_util::TestHarness::default()
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .with_system_parameter_default(
+            "enable_mcp_agent_read_data_product_tool".to_string(),
+            "false".to_string(),
+        );
+    run_mcp_datadriven(
+        "tests/testdata/mcp/agent_read_data_product_disabled",
+        harness,
+    );
 }
 
 /// Tests the MCP agent endpoint under `restrict_to_user_objects = true`,

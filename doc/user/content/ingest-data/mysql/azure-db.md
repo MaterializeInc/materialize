@@ -214,3 +214,7 @@ your networking configuration.
 ## Considerations
 
 {{% include-headless "/headless/mysql-considerations" %}}
+
+## Handling upstream operations
+
+{{% upstream-schema-change-behavior connector="mysql" %}}

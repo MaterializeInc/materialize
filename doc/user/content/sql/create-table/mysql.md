@@ -52,6 +52,13 @@ columns in the upstream tables, without downtime. For details, see [MySQL:
 Handling upstream schema changes with zero
 downtime](/ingest-data/mysql/source-versioning/).
 
+See also [Handling upstream operations](#handling-upstream-operations) for
+additional upstream operation considerations.
+
+## Handling upstream operations
+
+{{% upstream-schema-change-behavior connector="mysql" %}}
+
 ## Privileges
 
 The privileges required to execute this statement are:

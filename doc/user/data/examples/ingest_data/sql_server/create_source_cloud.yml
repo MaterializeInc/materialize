@@ -51,4 +51,4 @@
 - name: "schema-changes"
   description: |
     After source creation, refer to [schema changes
-    considerations](#schema-changes) for information on handling upstream schema changes.
+    considerations](#handling-upstream-operations) for information on handling upstream schema changes.
