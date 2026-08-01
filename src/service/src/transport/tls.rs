@@ -342,3 +342,172 @@ impl CertificateAuthority {
         })
     }
 }
+
+/// The internal secret name under which the environment CA is persisted.
+pub const CA_SECRET_NAME: &str = "ctp-ca";
+
+/// The certificate identity presented by controllers.
+///
+/// There is one identity for all controllers of an environment (rather than per-controller
+/// identities) because every controller has the same authority over replicas. Environment
+/// scoping comes from the per-environment CA, not from the identity name.
+pub const CONTROLLER_IDENTITY: &str = "ctp-controller";
+
+/// The internal secret name holding the credentials of the replica with the given service name.
+pub fn replica_secret_name(service_name: &str) -> String {
+    format!("ctp-{service_name}")
+}
+
+/// The JSON representation of persisted credentials.
+///
+/// Used both for the CA secret (where `cert_pem` is the CA's own certificate and `ca_cert_pem`
+/// is empty) and for replica credential secrets. `not_after` records the certificate's expiry as
+/// seconds since the Unix epoch, so that holders can report expiry without parsing X.509.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PersistedCredentials {
+    ca_cert_pem: String,
+    cert_pem: String,
+    key_pem: String,
+    not_after: u64,
+}
+
+/// TLS state for the controller side of an environment: the environment CA, the controller's
+/// own client credentials, and the handle for distributing replica credentials.
+pub struct ClusterTlsContext {
+    ca: CertificateAuthority,
+    client_credentials: TlsCredentials,
+    secrets: Arc<dyn mz_secrets::SecretsController>,
+}
+
+impl fmt::Debug for ClusterTlsContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ClusterTlsContext").finish_non_exhaustive()
+    }
+}
+
+/// The validity of certificates issued for cluster transport.
+///
+/// Deliberately long: replica certificates are re-minted whenever a replica process is created
+/// (and controller certificates on every controller boot), so rotation rides process lifecycle
+/// rather than expiry. Expiry of a live credential would break replica reconnects with no
+/// automated recovery short of a replica restart, so it functions as a backstop, not as the
+/// rotation mechanism.
+const CERT_VALIDITY: Duration = Duration::from_secs(5 * 365 * 24 * 60 * 60);
+
+impl ClusterTlsContext {
+    /// Load the environment CA from the secrets controller, creating it if it does not exist,
+    /// and mint this controller's client credentials.
+    ///
+    /// `ca_common_name` scopes the CA and must be stable across controller restarts (e.g. the
+    /// environment ID). See [`CertificateAuthority::from_pem`] for the reconstruction contract.
+    ///
+    /// NOTE: Creation is not atomic. Two processes bootstrapping a brand-new environment
+    /// concurrently can each create a CA, with one overwriting the other. Restarting the loser's
+    /// replicas recovers, since every process re-reads the CA at boot. In practice only one
+    /// controller bootstraps a new environment.
+    pub async fn bootstrap(
+        secrets: Arc<dyn mz_secrets::SecretsController>,
+        ca_common_name: &str,
+    ) -> anyhow::Result<Self> {
+        let reader = secrets.reader();
+        let ca = match reader.read_internal(CA_SECRET_NAME).await {
+            Ok(bytes) => {
+                let persisted: PersistedCredentials =
+                    serde_json::from_slice(&bytes).context("decoding CA secret")?;
+                CertificateAuthority::from_pem(
+                    ca_common_name,
+                    &persisted.cert_pem,
+                    persisted.key_pem.into(),
+                )?
+            }
+            Err(_) => {
+                // The CA does not exist yet (or is unreadable, in which case regenerating it is
+                // the self-healing move: replicas re-read their credentials on restart).
+                let ca = CertificateAuthority::generate(ca_common_name)?;
+                let persisted = PersistedCredentials {
+                    ca_cert_pem: String::new(),
+                    cert_pem: ca.cert_pem().to_string(),
+                    key_pem: ca.key_pem().unsecure().to_string(),
+                    not_after: 0,
+                };
+                let bytes = serde_json::to_vec(&persisted).expect("serializable");
+                secrets
+                    .ensure_internal(CA_SECRET_NAME, &bytes)
+                    .await
+                    .context("persisting CA")?;
+                ca
+            }
+        };
+
+        let issued = ca.issue(CONTROLLER_IDENTITY, CERT_VALIDITY)?;
+        let client_credentials = TlsCredentials {
+            ca_cert_pem: ca.cert_pem().to_string(),
+            cert_pem: issued.cert_pem,
+            key_pem: issued.key_pem,
+        };
+
+        Ok(Self {
+            ca,
+            client_credentials,
+            secrets,
+        })
+    }
+
+    /// Build the client TLS config for connecting to the replica with the given service name.
+    pub fn client_config(&self, replica_service_name: &str) -> anyhow::Result<ClientTlsConfig> {
+        ClientTlsConfig::new(&self.client_credentials, replica_service_name)
+    }
+
+    /// Mint credentials for the replica with the given service name and write them to the
+    /// replica's internal secret.
+    ///
+    /// Runs asynchronously relative to replica creation. The replica retries reading its secret
+    /// at boot, so it converges once the write lands.
+    pub async fn mint_replica_credentials(&self, service_name: &str) -> anyhow::Result<()> {
+        let issued = self.ca.issue(service_name, CERT_VALIDITY)?;
+        let not_after = u64::try_from(time::OffsetDateTime::now_utc().unix_timestamp())
+            .expect("post-1970")
+            + u64::try_from(CERT_VALIDITY.as_secs()).expect("fits");
+        let persisted = PersistedCredentials {
+            ca_cert_pem: self.ca.cert_pem().to_string(),
+            cert_pem: issued.cert_pem,
+            key_pem: issued.key_pem.unsecure().to_string(),
+            not_after,
+        };
+        let bytes = serde_json::to_vec(&persisted).expect("serializable");
+        self.secrets
+            .ensure_internal(&replica_secret_name(service_name), &bytes)
+            .await
+    }
+
+    /// Delete the credentials of the replica with the given service name.
+    pub async fn delete_replica_credentials(&self, service_name: &str) -> anyhow::Result<()> {
+        self.secrets
+            .delete_internal(&replica_secret_name(service_name))
+            .await
+    }
+}
+
+/// A replica's server TLS configuration, as loaded from its credential secret.
+pub struct LoadedServerTls {
+    /// The server TLS config, expecting clients with the controller identity.
+    pub config: ServerTlsConfig,
+    /// The expiry of the server's certificate, as seconds since the Unix epoch.
+    pub cert_not_after: u64,
+}
+
+/// Build a replica's server TLS config from the contents of its credential secret.
+pub fn server_tls_from_secret(bytes: &[u8]) -> anyhow::Result<LoadedServerTls> {
+    let persisted: PersistedCredentials =
+        serde_json::from_slice(bytes).context("decoding credential secret")?;
+    let credentials = TlsCredentials {
+        ca_cert_pem: persisted.ca_cert_pem,
+        cert_pem: persisted.cert_pem,
+        key_pem: persisted.key_pem.into(),
+    };
+    let config = ServerTlsConfig::new(&credentials, CONTROLLER_IDENTITY)?;
+    Ok(LoadedServerTls {
+        config,
+        cert_not_after: persisted.not_after,
+    })
+}

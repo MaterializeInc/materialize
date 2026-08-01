@@ -8476,6 +8476,7 @@ dependencies = [
  "semver",
  "sentry-tracing",
  "serde",
+ "serde_json",
  "sysinfo",
  "time",
  "tokio",
