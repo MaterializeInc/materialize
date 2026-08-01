@@ -91,8 +91,14 @@ pub trait SecretsReader: Debug + Send + Sync {
     /// Returns the binary contents of the specified secret.
     async fn read(&self, id: CatalogItemId) -> Result<Vec<u8>, anyhow::Error>;
 
-    /// Returns the binary contents of the specified internal secret.
-    async fn read_internal(&self, name: &str) -> Result<Vec<u8>, anyhow::Error>;
+    /// Returns the binary contents of the specified internal secret, or `None` if the secret
+    /// does not exist.
+    ///
+    /// Nonexistence is reported in-band (rather than as an error) because callers bootstrapping
+    /// credentials must distinguish "not created yet" from transient read failures. Treating a
+    /// transient failure as nonexistence could cause a caller to regenerate and overwrite live
+    /// key material.
+    async fn read_internal(&self, name: &str) -> Result<Option<Vec<u8>>, anyhow::Error>;
 
     /// Returns the string contents of the specified secret.
     ///
@@ -163,9 +169,8 @@ impl SecretsReader for InMemorySecretsController {
         contents.ok_or_else(|| anyhow::anyhow!("secret does not exist"))
     }
 
-    async fn read_internal(&self, name: &str) -> Result<Vec<u8>, anyhow::Error> {
-        let contents = self.internal_data.lock().unwrap().get(name).cloned();
-        contents.ok_or_else(|| anyhow::anyhow!("secret does not exist"))
+    async fn read_internal(&self, name: &str) -> Result<Option<Vec<u8>>, anyhow::Error> {
+        Ok(self.internal_data.lock().unwrap().get(name).cloned())
     }
 }
 
@@ -183,8 +188,8 @@ mod tests {
             .unwrap();
         let reader = controller.reader();
         assert_eq!(
-            reader.read_internal("ctp-ca").await.unwrap(),
-            b"key material"
+            reader.read_internal("ctp-ca").await.unwrap().as_deref(),
+            Some(b"key material".as_slice())
         );
 
         // Internal secrets do not appear in the user secret listing, and do not collide with
@@ -195,7 +200,7 @@ mod tests {
         assert_eq!(reader.read(id).await.unwrap(), b"user");
 
         controller.delete_internal("ctp-ca").await.unwrap();
-        assert!(reader.read_internal("ctp-ca").await.is_err());
+        assert_eq!(reader.read_internal("ctp-ca").await.unwrap(), None);
         // Deleting a nonexistent internal secret is not an error.
         controller.delete_internal("ctp-ca").await.unwrap();
     }

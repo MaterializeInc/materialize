@@ -17,6 +17,7 @@ use aws_config::SdkConfig;
 use aws_sdk_secretsmanager::Client;
 use aws_sdk_secretsmanager::config::Builder as SecretsManagerConfigBuilder;
 use aws_sdk_secretsmanager::error::SdkError;
+use aws_sdk_secretsmanager::operation::get_secret_value::GetSecretValueError;
 use aws_sdk_secretsmanager::primitives::Blob;
 use aws_sdk_secretsmanager::types::{Filter, FilterNameStringType, Tag};
 use mz_repr::CatalogItemId;
@@ -267,7 +268,15 @@ impl SecretsReader for AwsSecretsClient {
         self.read_by_name(self.secret_name(id)).await
     }
 
-    async fn read_internal(&self, name: &str) -> Result<Vec<u8>, anyhow::Error> {
-        self.read_by_name(self.internal_secret_name(name)).await
+    async fn read_internal(&self, name: &str) -> Result<Option<Vec<u8>>, anyhow::Error> {
+        match self.read_by_name(self.internal_secret_name(name)).await {
+            Ok(contents) => Ok(Some(contents)),
+            Err(e) => match e.downcast_ref::<SdkError<GetSecretValueError>>() {
+                Some(SdkError::ServiceError(e)) if e.err().is_resource_not_found_exception() => {
+                    Ok(None)
+                }
+                _ => Err(e),
+            },
+        }
     }
 }

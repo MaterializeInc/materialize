@@ -124,10 +124,11 @@ impl SecretsReader for ProcessSecretsReader {
         Ok(contents)
     }
 
-    async fn read_internal(&self, name: &str) -> Result<Vec<u8>, anyhow::Error> {
-        let contents = fs::read(self.secrets_dir.join(internal_secret_file_name(name)))
-            .await
-            .with_context(|| format!("reading secret {name}"))?;
-        Ok(contents)
+    async fn read_internal(&self, name: &str) -> Result<Option<Vec<u8>>, anyhow::Error> {
+        match fs::read(self.secrets_dir.join(internal_secret_file_name(name))).await {
+            Ok(contents) => Ok(Some(contents)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e).with_context(|| format!("reading secret {name}")),
+        }
     }
 }

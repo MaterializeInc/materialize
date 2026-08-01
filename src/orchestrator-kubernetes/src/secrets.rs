@@ -160,12 +160,15 @@ impl SecretsReader for KubernetesSecretsReader {
         read_secret(&self.secret_api, &secret_name(id, &self.name_prefix)).await
     }
 
-    async fn read_internal(&self, name: &str) -> Result<Vec<u8>, anyhow::Error> {
-        read_secret(
-            &self.secret_api,
-            &internal_secret_name(name, &self.name_prefix),
-        )
-        .await
+    async fn read_internal(&self, name: &str) -> Result<Option<Vec<u8>>, anyhow::Error> {
+        let name = internal_secret_name(name, &self.name_prefix);
+        match read_secret(&self.secret_api, &name).await {
+            Ok(contents) => Ok(Some(contents)),
+            Err(e) => match e.downcast_ref::<kube::Error>() {
+                Some(kube::Error::Api(e)) if e.code == 404 => Ok(None),
+                _ => Err(e),
+            },
+        }
     }
 }
 

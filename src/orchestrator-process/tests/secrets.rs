@@ -51,8 +51,8 @@ async fn test_secrets_roundtrip_and_listing() {
     let reader = orchestrator.reader();
     assert_eq!(reader.read(user_id).await.unwrap(), b"user contents");
     assert_eq!(
-        reader.read_internal("ctp-ca").await.unwrap(),
-        b"internal contents"
+        reader.read_internal("ctp-ca").await.unwrap().as_deref(),
+        Some(b"internal contents".as_slice())
     );
 
     // Updates overwrite.
@@ -60,12 +60,15 @@ async fn test_secrets_roundtrip_and_listing() {
         .ensure_internal("ctp-ca", b"rotated")
         .await
         .unwrap();
-    assert_eq!(reader.read_internal("ctp-ca").await.unwrap(), b"rotated");
+    assert_eq!(
+        reader.read_internal("ctp-ca").await.unwrap().as_deref(),
+        Some(b"rotated".as_slice())
+    );
 
     // Deletion is idempotent, and a deleted secret is unreadable.
     orchestrator.delete_internal("ctp-ca").await.unwrap();
     orchestrator.delete_internal("ctp-ca").await.unwrap();
-    assert!(reader.read_internal("ctp-ca").await.is_err());
+    assert_eq!(reader.read_internal("ctp-ca").await.unwrap(), None);
 
     // Invalid internal names are rejected, in particular names that could escape the secrets
     // directory.
