@@ -135,8 +135,10 @@ early rewind requests which exports need dual emission.
 
 ### 3. Per-export capability policy
 
-Snapshot operator: ports of exports whose resume upper is past the minimum
-are closed immediately. A hydrating export's port holds at the minimum
+Snapshot operator: ports of exports the operator will not emit snapshot
+data on are closed immediately. That covers exports whose resume upper is
+past the minimum and exports that carry no snapshot data at all, such as a
+source's primary relation. A hydrating export's port holds at the minimum
 until its snapshot (e.g. `COPY`) completes, then closes.
 
 Replication operator: ports of hydrated exports downgrade freely with the
