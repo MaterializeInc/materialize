@@ -26,10 +26,15 @@ mz-ore = { path = "../ore", default-features = false }
 os_info.workspace = true
 pin-project.workspace = true
 prometheus.workspace = true
+rcgen.workspace = true
+rustls.workspace = true
+rustls-pki-types.workspace = true
 semver = { workspace = true, features = ["serde"] }
 serde.workspace = true
 sysinfo.workspace = true
+time.workspace = true
 tokio.workspace = true
+tokio-rustls.workspace = true
 tokio-stream.workspace = true
 tracing.workspace = true
 sentry-tracing.workspace = true
