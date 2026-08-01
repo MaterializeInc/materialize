@@ -351,8 +351,10 @@ pub(crate) fn render<'scope>(
 
     let (feedback_handle, feedback_data) = scope.feedback(Default::default());
 
-    // One data output port per source export, in output index order. All data port capabilities
-    // are managed in lockstep, so every export observes the same frontier.
+    // One data output port per source export, in output index order. With concurrent
+    // replication enabled each port is held at the minimum only while this operator still has
+    // snapshot data to emit for that export. When disabled all ports are held until the
+    // entire snapshot completes, so every export observes the same frontier.
     let export_count = config.source_exports.len();
     let mut raw_handles = Vec::with_capacity(export_count);
     let mut raw_streams = Vec::with_capacity(export_count);
@@ -422,6 +424,21 @@ pub(crate) fn render<'scope>(
                 snapshot_cap_set,
                 definite_error_cap_set,
             ]: &mut [_; 4] = caps.try_into().unwrap();
+            let concurrent_replication =
+                STORAGE_SOURCE_SNAPSHOT_CONCURRENT_REPLICATION.get(config.config.config_set());
+
+            // This operator only ever emits snapshot data for the exports it snapshots. With
+            // concurrent replication the ports of all other exports are closed up front, so
+            // their frontiers are determined by the replication operator alone and they make
+            // progress while the snapshot runs. Ports of snapshotted exports close one by one
+            // as each export's copy finishes on this worker.
+            if concurrent_replication {
+                for (output_index, cap_set) in data_cap_sets.iter_mut().enumerate() {
+                    if !all_outputs.contains(&output_index) {
+                        *cap_set = CapabilitySet::new();
+                    }
+                }
+            }
 
             trace!(
                 %id,
@@ -654,8 +671,6 @@ pub(crate) fn render<'scope>(
             // while the snapshot runs, staging its data in the dataflow until the snapshot
             // completes. Otherwise they are emitted after the snapshot, which keeps the two
             // phases serial and avoids that staging cost.
-            let concurrent_replication =
-                STORAGE_SOURCE_SNAPSHOT_CONCURRENT_REPLICATION.get(config.config.config_set());
             if concurrent_replication {
                 emit_rewinds(rewind_cap_set);
             }
@@ -672,6 +687,9 @@ pub(crate) fn render<'scope>(
                         raw_handles[output_index]
                             .give_fueled(&data_cap_sets[output_index][0], update, size)
                             .await;
+                        if concurrent_replication {
+                            data_cap_sets[output_index] = CapabilitySet::new();
+                        }
                         continue;
                     }
 
@@ -688,6 +706,9 @@ pub(crate) fn render<'scope>(
                             "timely-{worker_id} no ctid range assigned for table {:?}({oid})",
                             info.desc.name
                         );
+                        if concurrent_replication {
+                            data_cap_sets[output_index] = CapabilitySet::new();
+                        }
                         continue;
                     };
 
@@ -746,6 +767,9 @@ pub(crate) fn render<'scope>(
                     // values as the total is an estimate
                     let stat = &export_statistics[&(oid, output_index)];
                     stat.set_snapshot_records_staged(snapshot_staged);
+                    if concurrent_replication {
+                        data_cap_sets[output_index] = CapabilitySet::new();
+                    }
                 }
             }
 
