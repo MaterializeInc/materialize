@@ -268,8 +268,9 @@ snapshot transaction is established, so the same three operator changes
 apply. Kafka follows, since its backfill consumer is new machinery rather
 than an adaptation of the rewind changes.
 
-The capability policy change is gated by a feature flag, default off in
-production and default on in CI so the new path is exercised by the test
+The behavior change (steps 2 and 3) is gated by the
+`storage_source_snapshot_concurrent_replication` feature flag, default off
+in production and default on in CI so the new path is exercised by the test
 suites before it is enabled.
 
 In general, a connector supports independent export frontiers when it can
