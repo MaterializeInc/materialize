@@ -42,6 +42,7 @@ pub async fn connect_and_hello(compute_addr: &str) -> anyhow::Result<ComputeCtpC
     let mut client = Client::<ComputeCommand, ComputeResponse>::connect(
         compute_addr,
         version,
+        None,
         Duration::from_secs(30),
         Duration::from_secs(60),
         NoopMetrics,

@@ -21,6 +21,7 @@
 //! is already established, the previous connection is canceled.
 
 mod metrics;
+pub mod tls;
 
 use std::convert::Infallible;
 use std::fmt::Debug;
@@ -41,6 +42,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tracing::{Instrument, debug, info, trace, warn};
 
 use crate::client::{GenericClient, Partitionable, Partitioned};
+use crate::transport::tls::{ClientTlsConfig, ServerTlsConfig};
 
 pub use metrics::{ClusterServerMetrics, Metrics, NoopMetrics, PerClusterServerMetrics};
 
@@ -59,9 +61,14 @@ impl<Out: Message, In: Message> Client<Out, In> {
     ///
     /// This call resolves once a connection with the server host was either established, was
     /// rejected, or timed out.
+    ///
+    /// If `tls` is set, a mutual TLS handshake is performed before any CTP bytes are exchanged.
+    /// `connect_timeout` bounds the stream connect and the TLS handshake individually, not
+    /// jointly.
     pub async fn connect(
         address: &str,
         version: Version,
+        tls: Option<ClientTlsConfig>,
         connect_timeout: Duration,
         idle_timeout: Duration,
         metrics: impl Metrics<Out, In>,
@@ -70,7 +77,18 @@ impl<Out: Message, In: Message> Client<Out, In> {
         let stream = mz_ore::future::timeout(connect_timeout, Stream::connect(address)).await?;
         info!(%address, "ctp: connected to server");
 
-        let conn = Connection::start(stream, version, dest_host, idle_timeout, metrics).await?;
+        let conn = match tls {
+            None => {
+                let (reader, writer) = stream.split();
+                Connection::start(reader, writer, version, dest_host, idle_timeout, metrics).await?
+            }
+            Some(tls) => {
+                let stream = mz_ore::future::timeout(connect_timeout, tls.connect(stream)).await?;
+                info!(%address, "ctp: TLS handshake with server complete");
+                let (reader, writer) = tokio::io::split(stream);
+                Connection::start(reader, writer, version, dest_host, idle_timeout, metrics).await?
+            }
+        };
         Ok(Self { conn })
     }
 }
@@ -98,9 +116,13 @@ where
     (Out, In): Partitionable<Out, In>,
 {
     /// Create a `Partitioned` client that connects through CTP.
+    ///
+    /// All partitions share the same TLS config: the processes of a replica present a single
+    /// replica-level identity.
     pub async fn connect_partitioned(
         addresses: Vec<String>,
         version: Version,
+        tls: Option<ClientTlsConfig>,
         connect_timeout: Duration,
         idle_timeout: Duration,
         metrics: impl Metrics<Out, In>,
@@ -109,6 +131,7 @@ where
             Self::connect(
                 addr,
                 version.clone(),
+                tls.clone(),
                 connect_timeout,
                 idle_timeout,
                 metrics.clone(),
@@ -135,10 +158,14 @@ impl<Out: Message, In: Message> GenericClient<Out, In> for Client<Out, In> {
 }
 
 /// Spawn a CTP server that serves connections at the given address.
+///
+/// If `tls` is set, each connection must complete a mutual TLS handshake, including client
+/// identity verification, before any CTP bytes are exchanged.
 pub async fn serve<In, Out, H>(
     address: SocketAddr,
     version: Version,
     server_fqdn: Option<String>,
+    tls: Option<ServerTlsConfig>,
     idle_timeout: Duration,
     handler_fn: impl Fn() -> H,
     metrics: impl Metrics<Out, In>,
@@ -172,6 +199,7 @@ where
         let handler = handler_fn();
         let version = version.clone();
         let server_fqdn = server_fqdn.clone();
+        let tls = tls.clone();
         let metrics = metrics.clone();
         let (cancel_tx, cancel_rx) = oneshot::channel();
 
@@ -184,6 +212,7 @@ where
                     handler,
                     version,
                     server_fqdn,
+                    tls,
                     idle_timeout,
                     cancel_rx,
                     metrics,
@@ -198,12 +227,19 @@ where
     }
 }
 
+/// The time within which a client must complete the TLS handshake.
+///
+/// Bounded separately from the idle timeout (which may be unlimited on servers) so a stalled or
+/// non-TLS peer cannot occupy the single connection slot indefinitely.
+const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Serve a single CTP connection.
 async fn serve_connection<In, Out, H>(
     stream: Stream,
-    mut handler: H,
+    handler: H,
     version: Version,
     server_fqdn: Option<String>,
+    tls: Option<ServerTlsConfig>,
     timeout: Duration,
     cancel_rx: oneshot::Receiver<()>,
     metrics: impl Metrics<Out, In>,
@@ -213,8 +249,33 @@ where
     Out: Message,
     H: GenericClient<In, Out>,
 {
-    let mut conn = Connection::start(stream, version, server_fqdn, timeout, metrics).await?;
+    let conn = match tls {
+        None => {
+            let (reader, writer) = stream.split();
+            Connection::start(reader, writer, version, server_fqdn, timeout, metrics).await?
+        }
+        Some(tls) => {
+            let stream = tls.accept(stream, TLS_HANDSHAKE_TIMEOUT).await?;
+            info!("ctp: TLS handshake with client complete");
+            let (reader, writer) = tokio::io::split(stream);
+            Connection::start(reader, writer, version, server_fqdn, timeout, metrics).await?
+        }
+    };
 
+    handle_connection(conn, handler, cancel_rx).await
+}
+
+/// Drive an established CTP connection with the given handler.
+async fn handle_connection<In, Out, H>(
+    mut conn: Connection<Out, In>,
+    mut handler: H,
+    cancel_rx: oneshot::Receiver<()>,
+) -> anyhow::Result<Infallible>
+where
+    In: Message,
+    Out: Message,
+    H: GenericClient<In, Out>,
+{
     let mut cancel_rx = cancel_rx;
     loop {
         tokio::select! {
@@ -267,14 +328,23 @@ impl<Out: Message, In: Message> Connection<Out, In> {
     /// getting canceled unnecessarily.
     const MIN_TIMEOUT: Duration = Duration::from_secs(2);
 
-    /// Start a new connection wrapping the given stream.
-    async fn start(
-        stream: Stream,
+    /// Start a new connection wrapping the given stream halves.
+    ///
+    /// The halves may come from a plain [`Stream`] or from a TLS stream wrapped around one. Any
+    /// transport security handshake must have completed already. The CTP handshake runs here, on
+    /// (and, with TLS, inside) the secured stream.
+    async fn start<R, W>(
+        reader: R,
+        writer: W,
         version: Version,
         server_fqdn: Option<String>,
         mut timeout: Duration,
         metrics: impl Metrics<Out, In>,
-    ) -> anyhow::Result<Self> {
+    ) -> anyhow::Result<Self>
+    where
+        R: AsyncRead + Send + Unpin + 'static,
+        W: AsyncWrite + Send + Unpin + 'static,
+    {
         if timeout < Self::MIN_TIMEOUT {
             warn!(
                 ?timeout,
@@ -282,8 +352,6 @@ impl<Out: Message, In: Message> Connection<Out, In> {
             );
             timeout = Self::MIN_TIMEOUT;
         }
-
-        let (reader, writer) = stream.split();
 
         // Apply the timeout to all connection reads and writes.
         let reader = TimedReader::new(reader, timeout);
