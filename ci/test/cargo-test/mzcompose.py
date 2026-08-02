@@ -24,8 +24,9 @@ from typing import Any, Literal
 from materialize import MZ_ROOT, buildkite, rustc_flags, spawn, ui
 from materialize.cli.run import SANITIZER_TARGET
 from materialize.mzbuild import (
+    CargoRegistryFetchFailure,
     RustIncrementalBuildFailure,
-    run_and_detect_rust_incremental_build_failure,
+    run_and_detect_retryable_build_failure,
 )
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.service import Service as MzComposeService
@@ -425,7 +426,7 @@ def run_cargo_nextest(
         clusterd_thread = PropagatingThread(target=worker)
         clusterd_thread.start()
         try:
-            run_and_detect_rust_incremental_build_failure(
+            run_and_detect_retryable_build_failure(
                 [
                     "cargo",
                     "nextest",
@@ -439,10 +440,12 @@ def run_cargo_nextest(
             )
         except RustIncrementalBuildFailure:
             _handle_incremental_build_failure()
+        except CargoRegistryFetchFailure:
+            _handle_registry_fetch_failure()
         clusterd_thread.join()
 
     try:
-        run_and_detect_rust_incremental_build_failure(
+        run_and_detect_retryable_build_failure(
             [
                 "cargo",
                 "nextest",
@@ -462,6 +465,8 @@ def run_cargo_nextest(
         )
     except RustIncrementalBuildFailure:
         _handle_incremental_build_failure()
+    except CargoRegistryFetchFailure:
+        _handle_registry_fetch_failure()
 
 
 def _handle_incremental_build_failure() -> None:
@@ -469,4 +474,9 @@ def _handle_incremental_build_failure() -> None:
     for dir in ["target", "target-xcompile"]:
         if os.path.exists(dir):
             shutil.rmtree(dir, ignore_errors=True)
+    sys.exit(199)
+
+
+def _handle_registry_fetch_failure() -> None:
+    print("--- Detected transient cargo registry failure, retrying")
     sys.exit(199)

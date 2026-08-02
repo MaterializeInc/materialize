@@ -196,6 +196,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             ALTER SYSTEM SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
             ALTER SYSTEM SET CLUSTER_REPLICA TO 'r1';
             ALTER SYSTEM SET enable_rbac_checks TO true;
+            ALTER SYSTEM SET statement_logging_max_sample_rate TO 0;
             """,
             service=mz_server,
             port=6877,
