@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/statement/ddl.rs
-revision: 42a4392d36
+revision: 9c2b3951fe
 ---
 
 # mz-sql::plan::statement::ddl
@@ -8,7 +8,7 @@ revision: 42a4392d36
 Plans all DDL statements; the root file covers the full breadth of catalog-modifying statements, while the `connection` submodule focuses on connection-type-specific option parsing and validation.
 Iceberg sinks support `MODE UPSERT` and `MODE APPEND`; append mode prohibits a KEY and rejects source columns that conflict with system-managed append columns. Range types are permitted as Iceberg sink key columns.
 The `iceberg_sink_builder` function accepts an optional `storage_connection: Option<ResolvedItemName>` for the AWS storage credentials; when present it must resolve to a `Connection::Aws` item; when absent the resulting `IcebergSinkConnection` carries `storage_connection_id: None`.
-`REFRESH EVERY` intervals are validated to be at least 1 ms; intervals smaller than 1 ms produce a `PlanError`.
+`REFRESH EVERY` intervals are validated to be at least 1 ms; intervals smaller than 1 ms produce a `PlanError`. `REFRESH AT` and `REFRESH EVERY ... ALIGNED TO` timestamps are validated to be representable as a `timestamptz`; timestamps too large produce a `PlanError`.
 `TOPIC METADATA REFRESH INTERVAL` for Kafka sources and sinks is validated to be between 1 second and 1 hour (inclusive); intervals outside this range produce a planning error.
 `SourceExportStatementDetails::Postgres` carries a `cast_oid_full_range: bool` field; `plan_create_subsource` passes it through to `generate_column_casts` to control whether OID-based casts cover the full range.
 `plan_view` and `plan_create_materialized_view` call `plan_utils::maybe_rename_columns_exact` instead of `maybe_rename_columns`, so a column-name list shorter than the query's arity is rejected unless `unsafe_enable_incomplete_view_column_lists` is active (force-enabled during bootstrap).

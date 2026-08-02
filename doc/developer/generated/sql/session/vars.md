@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/session/vars.rs
-revision: d0e1746c64
+revision: 10a94621ed
 ---
 
 # mz-sql::session::vars
@@ -11,6 +11,7 @@ The `Var` trait includes a `scope()` method returning a `ParameterScope` (from `
 Delegates to `definitions` for all variable declarations, `value` for parsing/formatting, `constraints` for validation, and `errors` for error types.
 `set_default` (used by `ALTER ROLE ... SET`) skips `check_read_only` for variables listed in `allow_role_default`; currently only `restrict_to_user_objects` is listed there, pairing with a superuser RBAC check in `rbac.rs`. `set_default` calls `self.parse` (which applies domain constraints) rather than `self.definition.parse` (which does not), so constraint violations are caught when setting defaults.
 `restrict_to_user_objects()` returns the value of the `restrict_to_user_objects` session variable.
+`text_encode_settings()` packages the session's `extra_float_digits` (and any future text-encoding session parameters) into a `mz_pgrepr::TextEncodeSettings` value that can be forwarded to encoding calls.
 All dyncfg-backed system variables are internal-only and not reachable via `ALTER SYSTEM SET` by environment superusers.
 The public `check_transaction_isolation_feature_flag(name, input, system_vars)` function enforces feature-flag gating for `transaction_isolation` levels that require a flag (`bounded staleness <duration>` requires `ENABLE_BOUNDED_STALENESS_ISOLATION`; `strong session serializable` requires `ENABLE_SESSION_TIMELINES`); it returns `Ok(())` for all other variables and for unparseable values. This function is shared across all assignment paths (`SET`, `SET TRANSACTION`, `ALTER ROLE ... SET`, connection options) so the gate cannot be bypassed by choosing a different syntax or letter case.
 Adding a new variant to `VarInput` or `OwnedVarInput` requires extending the `mz_catalog.mz_role_parameters` materialized view in `src/catalog/src/builtin/mz_catalog.rs`, which discriminates on the externally-tagged JSON shape of `OwnedVarInput` to format `parameter_value`.

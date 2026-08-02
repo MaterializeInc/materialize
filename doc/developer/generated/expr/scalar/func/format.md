@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/format.rs
-revision: 4267863081
+revision: 94ee2d5448
 ---
 
 # mz-expr::scalar::func::format

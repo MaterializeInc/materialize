@@ -1,6 +1,6 @@
 ---
 source: src/repr/src/catalog_item_id.rs
-revision: d434a9e3de
+revision: 94ee2d5448
 ---
 
 # mz-repr::catalog_item_id
