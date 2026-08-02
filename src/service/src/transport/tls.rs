@@ -410,8 +410,8 @@ impl ClusterTlsContext {
         ca_common_name: &str,
     ) -> anyhow::Result<Self> {
         let reader = secrets.reader();
-        let ca = match reader.read_internal(CA_SECRET_NAME).await {
-            Ok(bytes) => {
+        let ca = match reader.read_internal(CA_SECRET_NAME).await? {
+            Some(bytes) => {
                 let persisted: PersistedCredentials =
                     serde_json::from_slice(&bytes).context("decoding CA secret")?;
                 CertificateAuthority::from_pem(
@@ -420,9 +420,7 @@ impl ClusterTlsContext {
                     persisted.key_pem.into(),
                 )?
             }
-            Err(_) => {
-                // The CA does not exist yet (or is unreadable, in which case regenerating it is
-                // the self-healing move: replicas re-read their credentials on restart).
+            None => {
                 let ca = CertificateAuthority::generate(ca_common_name)?;
                 let persisted = PersistedCredentials {
                     ca_cert_pem: String::new(),
@@ -467,7 +465,7 @@ impl ClusterTlsContext {
         let issued = self.ca.issue(service_name, CERT_VALIDITY)?;
         let not_after = u64::try_from(time::OffsetDateTime::now_utc().unix_timestamp())
             .expect("post-1970")
-            + u64::try_from(CERT_VALIDITY.as_secs()).expect("fits");
+            + CERT_VALIDITY.as_secs();
         let persisted = PersistedCredentials {
             ca_cert_pem: self.ca.cert_pem().to_string(),
             cert_pem: issued.cert_pem,

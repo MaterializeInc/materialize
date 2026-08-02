@@ -18,7 +18,8 @@
 //! length prefix.
 //!
 //! A CTP server only serves a single client at a time. If a new client connects while a connection
-//! is already established, the previous connection is canceled.
+//! is already established, the previous connection is canceled once the new client has passed
+//! transport security (see [`tls`]).
 
 mod metrics;
 pub mod tls;
@@ -157,10 +158,27 @@ impl<Out: Message, In: Message> GenericClient<Out, In> for Client<Out, In> {
     }
 }
 
+/// The time within which a client must complete the TLS handshake.
+///
+/// Bounded separately from the idle timeout (which may be unlimited on servers) so a stalled or
+/// non-TLS peer cannot hold handshake state indefinitely.
+const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// A stream that has passed transport security, ready for CTP.
+enum SecuredStream {
+    Plain(Stream),
+    Tls(Box<tokio_rustls::server::TlsStream<Stream>>),
+}
+
 /// Spawn a CTP server that serves connections at the given address.
 ///
 /// If `tls` is set, each connection must complete a mutual TLS handshake, including client
 /// identity verification, before any CTP bytes are exchanged.
+///
+/// A new client displaces the current one only once it has passed transport security. With TLS
+/// enabled, an unauthenticated peer reaching the listen port can thus not interrupt the
+/// established connection. Without TLS, displacement happens at accept time, as there is no
+/// authentication to wait for.
 pub async fn serve<In, Out, H>(
     address: SocketAddr,
     version: Version,
@@ -186,9 +204,52 @@ where
     let listener = Listener::bind(&address).await?;
     info!(%address, "ctp: listening for client connections");
 
+    // Channel over which TLS handshake tasks deliver authenticated streams.
+    let (secured_tx, mut secured_rx) = mpsc::unbounded_channel();
+
     loop {
-        let (stream, peer) = listener.accept().await?;
-        info!(%peer, "ctp: accepted client connection");
+        let secured = tokio::select! {
+            // `Listener::accept` wraps `tokio` accepts, which are cancel safe.
+            accepted = listener.accept() => {
+                let (stream, peer) = accepted?;
+                info!(%peer, "ctp: accepted client connection");
+
+                match &tls {
+                    None => SecuredStream::Plain(stream),
+                    Some(tls) => {
+                        // Perform the handshake in a task, so a slow or stalled handshake never
+                        // blocks the accept loop or the established connection. Multiple
+                        // handshakes may be in flight at once; each is bounded by the handshake
+                        // timeout.
+                        let tls = tls.clone();
+                        let secured_tx = secured_tx.clone();
+                        let mut metrics = metrics.clone();
+                        let span = tracing::Span::current();
+                        mz_ore::task::spawn(
+                            || "ctp::tls_handshake",
+                            async move {
+                                match tls.accept(stream, TLS_HANDSHAKE_TIMEOUT).await {
+                                    Ok(stream) => {
+                                        info!(%peer, "ctp: TLS handshake with client complete");
+                                        let _ = secured_tx
+                                            .send(SecuredStream::Tls(Box::new(stream)));
+                                    }
+                                    Err(error) => {
+                                        metrics.tls_handshake_failure();
+                                        info!(%peer, "ctp: TLS handshake failed: {error:#}");
+                                    }
+                                }
+                            }
+                            .instrument(span),
+                        );
+                        continue;
+                    }
+                }
+            }
+            // `mpsc::UnboundedReceiver::recv` is cancel safe. The channel can never be closed
+            // because we hold on to a sender above.
+            secured = secured_rx.recv() => secured.expect("sender exists"),
+        };
 
         // Cancel any existing connection before starting to serve the new one.
         if let Some((task, token)) = connection_task.take() {
@@ -199,7 +260,6 @@ where
         let handler = handler_fn();
         let version = version.clone();
         let server_fqdn = server_fqdn.clone();
-        let tls = tls.clone();
         let metrics = metrics.clone();
         let (cancel_tx, cancel_rx) = oneshot::channel();
 
@@ -208,11 +268,10 @@ where
             || "ctp::connection",
             async move {
                 let Err(error) = serve_connection(
-                    stream,
+                    secured,
                     handler,
                     version,
                     server_fqdn,
-                    tls,
                     idle_timeout,
                     cancel_rx,
                     metrics,
@@ -227,19 +286,12 @@ where
     }
 }
 
-/// The time within which a client must complete the TLS handshake.
-///
-/// Bounded separately from the idle timeout (which may be unlimited on servers) so a stalled or
-/// non-TLS peer cannot occupy the single connection slot indefinitely.
-const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
-
 /// Serve a single CTP connection.
 async fn serve_connection<In, Out, H>(
-    stream: Stream,
+    stream: SecuredStream,
     handler: H,
     version: Version,
     server_fqdn: Option<String>,
-    tls: Option<ServerTlsConfig>,
     timeout: Duration,
     cancel_rx: oneshot::Receiver<()>,
     metrics: impl Metrics<Out, In>,
@@ -249,15 +301,13 @@ where
     Out: Message,
     H: GenericClient<In, Out>,
 {
-    let conn = match tls {
-        None => {
+    let conn = match stream {
+        SecuredStream::Plain(stream) => {
             let (reader, writer) = stream.split();
             Connection::start(reader, writer, version, server_fqdn, timeout, metrics).await?
         }
-        Some(tls) => {
-            let stream = tls.accept(stream, TLS_HANDSHAKE_TIMEOUT).await?;
-            info!("ctp: TLS handshake with client complete");
-            let (reader, writer) = tokio::io::split(stream);
+        SecuredStream::Tls(stream) => {
+            let (reader, writer) = tokio::io::split(*stream);
             Connection::start(reader, writer, version, server_fqdn, timeout, metrics).await?
         }
     };
@@ -557,6 +607,12 @@ where
     let len = bytes.len().cast_into();
     writer.write_u64(len).await?;
     writer.write_all(bytes).await?;
+
+    // NOTE: The flush is load-bearing for TLS connections and must not be dropped as redundant.
+    // A raw socket write reaches the peer on its own, but a TLS writer buffers plaintext into
+    // records and is not obliged to emit them until flushed. Without this, a message (including
+    // the CTP handshake) can sit in the TLS buffer indefinitely and both endpoints wait forever.
+    writer.flush().await?;
 
     Ok(())
 }

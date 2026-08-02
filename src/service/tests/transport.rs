@@ -1302,6 +1302,77 @@ fn test_tls_connection_cancelation() {
     sim.run().unwrap();
 }
 
+#[test] // allow(test-attribute)
+#[cfg_attr(miri, ignore)] // too slow
+fn test_tls_unauthenticated_peer_does_not_displace() {
+    let mut sim = setup();
+
+    let (client_tls, server_tls) = tls_configs();
+
+    sim.host("server", move || {
+        let server_tls = server_tls.clone();
+        async {
+            let (out_tx, mut in_rx) = spawn_tls_server::<i32, i32>(server_tls);
+
+            out_tx.send(1)?;
+            // The authenticated client's connection must survive the attacker's attempt: this
+            // message arrives on the original connection. A displacement would panic the server
+            // instead, since the one-shot handler factory cannot serve a second connection.
+            assert_eq!(in_rx.recv().await, Some(42));
+
+            // Confirm, so the client can terminate.
+            out_tx.send(2)?;
+            future::pending().await
+        }
+    });
+
+    let (connected_tx, connected_rx) = oneshot::channel();
+    let (attacked_tx, attacked_rx) = oneshot::channel();
+
+    sim.client("client", async move {
+        let mut client = connect_ctp::<i32, i32>(
+            "turmoil:server:7777",
+            VERSION,
+            Some(client_tls),
+            TIMEOUT,
+            NoopMetrics,
+        )
+        .await;
+
+        assert_eq!(client.recv().await?, Some(1));
+        connected_tx.send(()).unwrap();
+
+        // Wait for the attacker to have been rejected, then prove the connection still works.
+        attacked_rx.await?;
+        client.send(42).await?;
+        assert_eq!(client.recv().await?, Some(2));
+
+        Ok(())
+    });
+
+    sim.client("attacker", async move {
+        connected_rx.await?;
+
+        // An unauthenticated (plaintext) peer completes the TCP connect, but fails the TLS
+        // handshake and must not displace the established connection.
+        let result = transport::Client::<i32, i32>::connect(
+            "turmoil:server:7777",
+            VERSION,
+            None,
+            TIMEOUT,
+            TIMEOUT,
+            NoopMetrics,
+        )
+        .await;
+        assert!(result.is_err(), "unauthenticated connect must fail");
+
+        attacked_tx.send(()).unwrap();
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
 /// A connection handler that simply forwards messages over channels.
 #[derive(Debug)]
 pub struct ChannelHandler<In, Out> {

@@ -866,6 +866,7 @@ impl Listeners {
                         secrets_reader_name_prefix: None,
                     },
                     connection_context,
+                    cluster_tls: None,
                     replica_http_locator: Default::default(),
                 },
                 secrets_controller,
