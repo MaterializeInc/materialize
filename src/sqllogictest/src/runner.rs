@@ -1231,6 +1231,7 @@ impl<'a> RunnerInner<'a> {
         let persist_clients = Arc::new(persist_clients);
 
         let secrets_controller = Arc::clone(&orchestrator);
+        let secrets_controller: Arc<dyn SecretsController> = secrets_controller;
         let connection_context = ConnectionContext::for_tests(orchestrator.reader());
         let orchestrator = Arc::new(TracingOrchestrator::new(
             orchestrator,
@@ -1330,7 +1331,15 @@ impl<'a> RunnerInner<'a> {
                     secrets_reader_name_prefix: None,
                 },
                 connection_context,
-                cluster_tls: None,
+                // Enabled so sqllogictest exercises the TLS path, while production deployments
+                // opt in explicitly.
+                cluster_tls: Some(Arc::new(
+                    mz_service::transport::tls::ClusterTlsContext::bootstrap(
+                        Arc::clone(&secrets_controller),
+                        "sqllogictest",
+                    )
+                    .await?,
+                )),
                 replica_http_locator: Arc::new(ReplicaHttpLocator::default()),
             },
             secrets_controller,

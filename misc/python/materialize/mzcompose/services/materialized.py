@@ -309,6 +309,11 @@ class Materialized(Service):
             "--orchestrator-process-prometheus-service-discovery-directory=/mzdata/prometheus",
         ]
 
+        # Enable cluster transport TLS so CI exercises the TLS path. Production deployments opt
+        # in explicitly. Older images do not know the flag.
+        if image_version is None or image_version >= MzVersion.parse_mz("v26.37.0"):
+            command += ["--cluster-transport-tls"]
+
         command += options
 
         config: ServiceConfig = {
