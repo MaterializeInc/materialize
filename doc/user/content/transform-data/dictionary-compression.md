@@ -35,9 +35,9 @@ team](/support/) if you have questions about whether it suits your workload.
 
 - Columns that hold a **small set of longer values that repeat often**. Status
   strings, enum-like labels, country codes, and tenant IDs are typical examples.
-  Essentially all of the savings come from columns like these. See [How many
-  distinct values a column should
-  have](#how-many-distinct-values-a-column-should-have) for a rule of thumb.
+  Essentially all of the savings come from columns like these. See [How distinct
+  values affect the benefit](#how-distinct-values-affect-the-benefit) for how the
+  benefit changes as that set grows.
 - **Large** arrangements. The larger the arrangement, the more occurrences of
   each repeated value there are to collapse.
 
@@ -52,8 +52,8 @@ arrangements a dataflow builds internally for joins and aggregations (`GROUP BY`
   dictionary, so such a column sees no memory savings. Materialize has no
   heuristic that detects this and skips the column. It inspects every column of
   every row regardless, so a near-unique column pays the full CPU cost for zero
-  memory benefit. If your large arrangements are dominated by unique
-  identifiers, timestamps, or free-form text, expect cost without benefit.
+  memory benefit. Large arrangements dominated by unique identifiers,
+  timestamps, or free-form text therefore carry the cost without the benefit.
 - **Columns of short values.** Booleans, `NULL`s, and small integers are already
   stored compactly enough that a dictionary reference cannot beat storing the
   value itself. They are never compressed.
@@ -73,18 +73,17 @@ Reads pay a smaller but ongoing cost. Resolving a compressed value requires an
 extra indirection, and comparing compressed rows cannot use the fast path that
 uncompressed rows use.
 
-## How many distinct values a column should have
+## How distinct values affect the benefit
 
-As a rule of thumb, dictionary compression helps most when a column holds fewer
-than about 64 distinct values. Beyond roughly that many, the benefit tapers off,
-and as the number of distinct values keeps growing the feature trends toward pure
-CPU overhead with no memory saving.
+The memory benefit is largest when a column repeats a small set of values across
+many rows. It tapers off as the number of distinct values in a column grows past
+roughly 64, and with enough distinct values the bookkeeping becomes overhead that
+buys no memory saving at all.
 
-Treat this as guidance about where the feature pays off, not as a limit,
-threshold, or capacity. Nothing breaks when a column holds more distinct values.
-Values that are not worth storing in a dictionary, including values that appear
-only once, are simply stored as-is. You see less memory savings and nothing else
-changes.
+None of this is a limit, threshold, or capacity. Nothing breaks when a column
+holds more distinct values than that. Values that are not worth storing in a
+dictionary, including values that appear only once, are stored as-is. The result
+is less memory saved, and nothing else changes.
 
 ## Enable dictionary compression
 
