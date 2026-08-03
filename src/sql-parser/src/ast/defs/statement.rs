@@ -1438,7 +1438,7 @@ impl_display_t!(CreateSinkStatement);
 /// `CREATE METRIC SINK`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateMetricSinkStatement<T: AstInfo> {
-    pub name: Option<UnresolvedItemName>,
+    pub name: UnresolvedItemName,
     pub in_cluster: Option<T::ClusterName>,
     pub if_not_exists: bool,
     pub from: T::ItemName,
@@ -1450,10 +1450,8 @@ impl<T: AstInfo> AstDisplay for CreateMetricSinkStatement<T> {
         if self.if_not_exists {
             f.write_str("IF NOT EXISTS ");
         }
-        if let Some(name) = &self.name {
-            f.write_node(name);
-            f.write_str(" ");
-        }
+        f.write_node(&self.name);
+        f.write_str(" ");
         if let Some(cluster) = &self.in_cluster {
             f.write_str("IN CLUSTER ");
             f.write_node(cluster);
