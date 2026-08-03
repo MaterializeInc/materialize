@@ -2016,6 +2016,12 @@ class FlipFlagsAction(Action):
             "0.5",
         ]
         self.flags_with_values["enable_upsert_paged_spill"] = BOOLEAN_FLAG_VALUES
+        # 0 forces the estimated-size path for every table, the default forces
+        # the exact COUNT(*) path for workload-sized tables.
+        self.flags_with_values["mysql_source_snapshot_exact_count_max_rows"] = [
+            "0",
+            "1000000",
+        ]
         self.flags_with_values["webhook_max_request_size_bytes"] = [
             # 1 MiB, 5 MiB (default), 10 MiB
             "1048576",
@@ -2785,10 +2791,20 @@ class ReconfigureClusterAction(Action):
                 f"WHERE c.name = '{name_literal}'"
             )
             status = None
+            seen = False
             deadline = time.time() + 180
             while time.time() < deadline:
                 exe.execute(query)
-                size, status = exe.cur.fetchall()[0]
+                rows = exe.cur.fetchall()
+                if not rows:
+                    # `mz_clusters` is a builtin table, so the read can lag a
+                    # concurrent rename or swap of this cluster and not show
+                    # the polled name yet. Keep polling and let the deadline
+                    # below decide, rather than indexing an empty result.
+                    time.sleep(1)
+                    continue
+                seen = True
+                size, status = rows[0]
                 if size == new_size:
                     cluster.size = new_size
                     return True
@@ -2798,6 +2814,12 @@ class ReconfigureClusterAction(Action):
                 ):
                     return True
                 time.sleep(1)
+            if not seen:
+                raise ValueError(
+                    f"Cluster {cluster} was never observed in mz_clusters under the "
+                    f"name the reconfiguration to size {new_size} polled for, so the "
+                    f"name the workload holds does not match the catalog"
+                )
             raise ValueError(
                 f"Graceful reconfiguration of cluster {cluster} to size {new_size} "
                 f"did not complete (reconfiguration status: {status})"

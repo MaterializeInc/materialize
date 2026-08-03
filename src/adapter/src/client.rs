@@ -250,11 +250,18 @@ impl Client {
         // This guard prevents a race where the startup command finishes, but the Future returned
         // by this function is concurrently dropped, so we never create a `SessionClient` and thus
         // never cleanup the initialized Session.
-        let rx = rx.with_guard(|_| {
-            self.send(Command::Terminate {
-                conn_id: conn_id.clone(),
-                tx: None,
-            });
+        //
+        // NOTE: Terminate must only be sent for a successful startup. On a failed startup the
+        // Coordinator never registered the connection, so a Terminate for it would trip the
+        // Coordinator's "unknown connection" assertion. There is also nothing that needs
+        // cleaning up, see the invariant on `Coordinator::handle_startup_inner`.
+        let rx = rx.with_guard(|resp: Result<StartupResponse, _>| {
+            if resp.is_ok() {
+                self.send(Command::Terminate {
+                    conn_id: conn_id.clone(),
+                    tx: None,
+                });
+            }
         });
 
         self.send(Command::Startup {
@@ -1126,6 +1133,16 @@ impl SessionClient {
     pub async fn statement_arrival_logging_enabled(&mut self) -> bool {
         let catalog = self.catalog_snapshot("statement_arrival_logging").await;
         catalog.system_config().enable_statement_arrival_logging()
+    }
+
+    /// Reports whether `enable_extended_protocol_implicit_transaction` is on.
+    pub async fn extended_protocol_implicit_transaction_enabled(&mut self) -> bool {
+        let catalog = self
+            .catalog_snapshot("extended_protocol_implicit_transaction")
+            .await;
+        catalog
+            .system_config()
+            .enable_extended_protocol_implicit_transaction()
     }
 
     /// Dumps the catalog to a JSON string.

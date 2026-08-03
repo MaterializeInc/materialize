@@ -85,7 +85,7 @@
     the referenced table names.
 
     - For supported MySQL data types, refer to [supported
-    types](/sql/create-table/#supported-data-types).
+    types](/sql/create-table/mysql/#supported-data-types).
 
     {{< /note >}}
 

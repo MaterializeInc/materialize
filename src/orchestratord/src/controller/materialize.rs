@@ -54,6 +54,7 @@ use mz_ore::{cast::CastFrom, cli::KeyValueArg, instrument};
 pub mod generation;
 pub mod global;
 
+#[derive(Clone)]
 pub struct Config {
     pub cloud_provider: CloudProvider,
     pub region: String,

@@ -46,7 +46,7 @@ Source defined as t3
 
 # Infer and apply constant value knowledge.
 # Cases: Map, FlatMap, Filter, Project, Reduce, Let/Get.
-apply pipeline=equivalence_propagation
+apply pipeline=EquivalencePropagation
 Return
   FlatMap generate_series(#1, #0 + 3, 1)
     Project (#2, #0)
@@ -76,7 +76,7 @@ Return
 # Cases: Map, Filter, Project, Reduce, Let/Get.
 # TODO: The type of `(#1) IS NULL` in the map is `BOOLEAN NOT NULL`,
 #       so the first group_by key component should be reduced to `false`.
-apply pipeline=equivalence_propagation
+apply pipeline=EquivalencePropagation
 Return
   Filter (#0) IS NULL
     Project (#2)
@@ -102,7 +102,7 @@ Return
 
 # Infer and apply constant value knowledge.
 # Cases: Union.
-apply pipeline=equivalence_propagation
+apply pipeline=EquivalencePropagation
 Return
   Filter #1 > 1 AND #2 IS NULL
     Union
@@ -134,7 +134,7 @@ Return
 
 # Infer and apply constant value knowledge.
 # Cases: Join.
-apply pipeline=equivalence_propagation
+apply pipeline=EquivalencePropagation
 Return
   Map (#0 + #1 + #2, #2 * #3)
     Join on=((#0 + #1) = #2)
@@ -158,7 +158,7 @@ Return
 
 # Apply knowledge to TopK limit
 # Cases: TopK.
-apply pipeline=equivalence_propagation
+apply pipeline=EquivalencePropagation
 TopK group_by=[#0] order_by=[#1 asc nulls_first] limit=(#1 + 2) offset=1
   Filter (#1 = 5)
     Get t0
@@ -172,7 +172,7 @@ TopK group_by=[#0] order_by=[#1 asc nulls_first] limit=7 offset=1
 # Here #0 = 5 from the outer Filter must NOT propagate into the Constant below the TopK
 # (group_key is [#1], so only #1 equivalences should pass through).
 # Regression test for https://github.com/MaterializeInc/database-issues/issues/11282
-apply pipeline=equivalence_propagation
+apply pipeline=EquivalencePropagation
 Filter (#0 = 5)
   TopK group_by=[#1] order_by=[#2 asc nulls_last] limit=1 offset=0
     Constant // { types: "(bigint, bigint, bigint)" }
@@ -193,7 +193,7 @@ Filter (#0 = 5)
 
 
 # Single binding, value knowledge
-apply pipeline=equivalence_propagation
+apply pipeline=EquivalencePropagation
 Return
   Project (#0, #1, #3, #4, #5, #6)
     Map ((#0) IS NULL, (#0) IS NULL, (#2) IS NULL)
@@ -243,7 +243,7 @@ Return
 ## ------------
 
 # Single binding, value knowledge
-apply pipeline=equivalence_propagation
+apply pipeline=EquivalencePropagation
 Return
   Get l0
 With Mutually Recursive
@@ -268,7 +268,7 @@ Return
 
 
 # Single binding, value knowledge
-apply pipeline=equivalence_propagation
+apply pipeline=EquivalencePropagation
 Return
   Map (#0 + #1)
     Get l0
@@ -293,7 +293,7 @@ Return
 
 
 # Single binding, NOT NULL knowledge
-apply pipeline=equivalence_propagation
+apply pipeline=EquivalencePropagation
 Return
   Map (#1 IS NOT NULL)
     Get l0
@@ -318,7 +318,7 @@ Return
 
 
 # Multiple bindings, value knowledge
-apply pipeline=equivalence_propagation
+apply pipeline=EquivalencePropagation
 Return
   Get l1
 With Mutually Recursive
@@ -365,7 +365,7 @@ Return
 #
 # This also illustrates a missed opportunity here, because if we are a bit
 # smarter we will know that l1 can only have 'false' in its first component.
-apply pipeline=equivalence_propagation
+apply pipeline=EquivalencePropagation
 Return
   Get l1
 With Mutually Recursive
@@ -409,7 +409,7 @@ Return
 
 
 # # TODO
-# apply pipeline=equivalence_propagation
+# apply pipeline=EquivalencePropagation
 # Return
 #   Map (#0 + #1)
 #     Get l1

@@ -123,6 +123,30 @@ users                   ""
 > SELECT count(*) FROM bids
 255
 
+# CTFS: omitting REFERENCE for a multi-output source is ambiguous, since
+# Materialize cannot determine which upstream table you mean.
+! CREATE TABLE ambiguous_tbl FROM SOURCE auction_house;
+contains:is ambiguous
+
+# CTFS: multiple tables can reference the same external table.
+> CREATE TABLE bids_2 FROM SOURCE auction_house (REFERENCE bids);
+
+> SELECT count(*) FROM bids_2
+255
+
+> DROP TABLE bids_2;
+
+# CTFS: EXCLUDE COLUMNS has no effect on load generator tables; the
+# "excluded" column is still ingested.
+> CREATE TABLE accounts_exclude FROM SOURCE auction_house (REFERENCE accounts) WITH (EXCLUDE COLUMNS (balance));
+
+> SHOW COLUMNS FROM accounts_exclude
+balance false bigint ""
+id false bigint ""
+org_id false bigint ""
+
+> DROP TABLE accounts_exclude;
+
 ! CREATE SOURCE auction_house
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR AUCTION FOR TABLES (user);

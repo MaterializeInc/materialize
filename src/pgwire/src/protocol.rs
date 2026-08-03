@@ -644,7 +644,7 @@ where
 
     select! {
         r = machine.run() => {
-            // Errors produced internally (like MAX_REQUEST_SIZE being exceeded) should send an
+            // Errors produced internally (like a malformed frame header) should send an
             // error to the client informing them why the connection was closed. We still want to
             // return the original error up the stack, though, so we skip error checking during conn
             // operations.
@@ -1009,17 +1009,28 @@ where
                 // trigger an eager commit of the current implicit transaction,
                 // see: <https://git.postgresql.org/gitweb/?p=postgresql.git&a=commitdiff&h=f92944137>.
                 //
-                // In Materialize, however, we eagerly commit every statement outside of an explicit
-                // transaction when using the extended query protocol. This allows us to eliminate
-                // the possibility of a multiple statement implicit transaction, which in turn
-                // allows us to apply single-statement optimizations to queries issued in implicit
-                // transactions in the extended query protocol.
+                // In Materialize we instead eagerly commit every implicit transaction that
+                // cannot take on further statements of the same pipeline, which keeps the
+                // single-statement optimizations available to queries issued in the extended
+                // query protocol. The ones that can stay open, so that the pipeline commits
+                // or rolls back as a unit. See `TransactionStatus::may_span_pipeline`.
                 //
                 // We don't immediately commit here to allow users to page through the portal if
                 // necessary. Committing the transaction would destroy the portal before the next
                 // Execute command has a chance to resume it. So we instead mark the transaction
                 // for commit the next time that `ensure_transaction` is called.
-                if self.adapter_client.session().transaction().is_implicit() {
+                let (is_implicit, may_span_pipeline) = {
+                    let txn = self.adapter_client.session().transaction();
+                    (txn.is_implicit(), txn.may_span_pipeline())
+                };
+                // Ordered so that only a write reads the flag, keeping the catalog
+                // snapshot off the read path.
+                let spans_pipeline = may_span_pipeline
+                    && self
+                        .adapter_client
+                        .extended_protocol_implicit_transaction_enabled()
+                        .await;
+                if is_implicit && !spans_pipeline {
                     self.txn_needs_commit = true;
                 }
                 state
@@ -2986,9 +2997,6 @@ where
             }
         };
 
-        // Enable copy mode on the codec to skip aggregate buffer size checks.
-        self.conn.set_copy_mode(true);
-
         // Batch size for splitting raw data across parallel workers (~32MB).
         const BATCH_SIZE: usize = 32 * 1024 * 1024;
         let max_copy_from_row_size = self
@@ -3079,7 +3087,6 @@ where
                     );
                     // Drop the writer to signal cancellation to the background tasks.
                     drop(writer);
-                    self.conn.set_copy_mode(false);
                     return self
                         .send_error_and_get_state(ErrorResponse::error(
                             SqlState::QUERY_CANCELED,
@@ -3097,7 +3104,6 @@ where
                         },
                     );
                     drop(writer);
-                    self.conn.set_copy_mode(false);
                     return self
                         .send_error_and_get_state(ErrorResponse::error(
                             SqlState::PROTOCOL_VIOLATION,
@@ -3107,7 +3113,6 @@ where
                 }
                 None => {
                     drop(writer);
-                    self.conn.set_copy_mode(false);
                     return Ok(State::Done);
                 }
             }
@@ -3133,7 +3138,6 @@ where
                             },
                         );
                         drop(writer);
-                        self.conn.set_copy_mode(false);
                         return self
                             .send_error_and_get_state(ErrorResponse::error(
                                 SqlState::PROTOCOL_VIOLATION,
@@ -3143,7 +3147,6 @@ where
                     }
                     None => {
                         drop(writer);
-                        self.conn.set_copy_mode(false);
                         return Ok(State::Done);
                     }
                 }
@@ -3156,13 +3159,10 @@ where
                 StatementEndedExecutionReason::Errored { error: msg.clone() },
             );
             drop(writer);
-            self.conn.set_copy_mode(false);
             return self
                 .send_error_and_get_state(ErrorResponse::error(code, msg))
                 .await;
         }
-
-        self.conn.set_copy_mode(false);
 
         // Drop all senders to signal EOF to the background batch builders.
         // If copy_err is set, a worker already failed — dropping the senders

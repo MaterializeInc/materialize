@@ -4,7 +4,7 @@ description: "Connecting Materialize to a MySQL database for Change Data Capture
 pagerank: 40
 menu:
     main:
-        parent: "create-source"
+        parent: "create-source-legacy"
         identifier: cs_mysql
         name: MySQL (Legacy Syntax)
         weight: 16
@@ -184,6 +184,10 @@ debugging related issues, see [Troubleshooting](/ops/troubleshooting/).
 
 {{% include-headless "/headless/mysql-considerations" %}}
 
+## Handling upstream operations
+
+{{% upstream-schema-change-behavior connector="mysql" %}}
+
 ## Examples
 
 {{< important >}}
@@ -331,7 +335,7 @@ CREATE SOURCE mz_source
 
 {{% include-headless "/headless/schema-changes-in-progress" %}}
 
-To handle upstream [schema changes](#schema-changes) or errored subsources, use
+To handle upstream [schema changes](#handling-upstream-operations) or errored subsources, use
 the [`DROP SOURCE`](/sql/alter-source/#context) syntax to drop the affected
 subsource, and then [`ALTER SOURCE...ADD SUBSOURCE`](/sql/alter-source/) to add
 the subsource back to the source.

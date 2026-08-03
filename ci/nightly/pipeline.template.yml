@@ -769,7 +769,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
@@ -2640,6 +2640,20 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
               run: rollout-timeout
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
+      - id: orchestratord-leader-failover
+        topics: [self-managed]
+        label: Orchestratord leader election failover
+        artifact_paths: ["mz_debug_*.zip"]
+        depends_on: devel-docker-tags
+        timeout_in_minutes: 60
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              run: leader-failover
               ci-builder: stable
         agents:
           queue: hetzner-aarch64-16cpu-32gb

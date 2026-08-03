@@ -28,6 +28,7 @@ export const clustersFetchColumns = [
   buildColumn({ name: "name" }),
   buildColumn({ name: "managed", type_oid: MzDataType.bool }),
   buildColumn({ name: "size" }),
+  buildColumn({ name: "ownerId" }),
   buildColumn({ name: "replicas", type_oid: MzDataType.jsonb }),
   buildColumn({ name: "latestStatusUpdate", type_oid: MzDataType.timestamptz }),
 ];
@@ -58,6 +59,7 @@ export function buildClusterServerResponse(
     name: "default",
     size: "small",
     managed: true,
+    ownerId: "u1",
     replicas: replicas,
     latestStatusUpdate: "2024-01-01T00:00:00.000Z",
     ...overrides,

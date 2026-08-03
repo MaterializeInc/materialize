@@ -422,7 +422,7 @@ MATERIALIZED VIEW
 materialize
 mz_internal
 mz_kafka_source_tables
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_license_keys
@@ -454,7 +454,7 @@ VIEW
 materialize
 mz_internal
 mz_mysql_source_tables
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_network_policies
@@ -542,7 +542,7 @@ MATERIALIZED VIEW
 materialize
 mz_internal
 mz_postgres_source_tables
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_postgres_sources
@@ -762,7 +762,7 @@ VIEW
 materialize
 mz_internal
 mz_sql_server_source_tables
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_sql_text

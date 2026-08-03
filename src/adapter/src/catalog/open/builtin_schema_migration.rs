@@ -301,11 +301,38 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_CATALOG_SCHEMA,
             "mz_kafka_sources",
         ),
+        // Converting the four mz_*_source_tables from builtin tables to
+        // materialized views changes their catalog fingerprint, so each needs an
+        // explicit replacement step.
+        MigrationStep::replacement(
+            "26.37.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_postgres_source_tables",
+        ),
+        MigrationStep::replacement(
+            "26.37.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_mysql_source_tables",
+        ),
+        MigrationStep::replacement(
+            "26.37.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_sql_server_source_tables",
+        ),
+        MigrationStep::replacement(
+            "26.37.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_kafka_source_tables",
+        ),
         // `mz_type_pg_metadata` gained a trailing `typsend` column. See the NOTE
         // above: this version must stay at the workspace's current dev version
         // until the change ships.
         MigrationStep::replacement(
-            "26.36.0-dev.0",
+            "26.37.0-dev.0",
             CatalogItemType::Table,
             MZ_INTERNAL_SCHEMA,
             "mz_type_pg_metadata",

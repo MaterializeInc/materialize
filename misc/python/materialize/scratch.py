@@ -411,6 +411,18 @@ def launch(
     tags["git_ref"] = git.describe()
     tags["ami-user"] = ami_user
 
+    # The scratch account denies resource creation unless the `owner`,
+    # `reason`, `team`, and `deleteAfter` tags are all present (see the
+    # RequireTagsScratch SCP in MaterializeInc/i2). Default any that the
+    # caller didn't provide explicitly.
+    tags.setdefault("owner", tags.get("LaunchedBy") or whoami())
+    tags.setdefault("reason", "scratch instance")
+    tags.setdefault("team", "engineering")
+    tags.setdefault(
+        "deleteAfter",
+        delete_after.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    )
+
     ec2 = boto3.client("ec2")
     groups = ec2.describe_security_groups()
     security_group_id = None
@@ -462,7 +474,13 @@ def launch(
             {
                 "ResourceType": "instance",
                 "Tags": [{"Key": k, "Value": v} for (k, v) in tags.items()],
-            }
+            },
+            # Tag the root volume too: the RequireTagsScratch SCP applies to
+            # the volumes created by RunInstances, not just the instance.
+            {
+                "ResourceType": "volume",
+                "Tags": [{"Key": k, "Value": v} for (k, v) in tags.items()],
+            },
         ],
         "NetworkInterfaces": [network_interface],
         "BlockDeviceMappings": [

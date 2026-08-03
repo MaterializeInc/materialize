@@ -55,17 +55,23 @@ GHCR_PREFIX = "ghcr.io/materializeinc/"
 
 
 class RustIncrementalBuildFailure(Exception):
-    pass
+    """A build failure that corrupted incremental artifacts explain. Recovering
+    requires clearing the cargo target directories before retrying."""
 
 
-def run_and_detect_rust_incremental_build_failure(
+class CargoRegistryFetchFailure(Exception):
+    """A crates.io fetch that failed for transport reasons. Retrying recovers,
+    and the target directories must be kept: nothing in them is corrupted."""
+
+
+def run_and_detect_retryable_build_failure(
     cmd: list[str],
     cwd: str | Path,
     env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
     """This function is complex since it prints out each line immediately to
     stdout/stderr, but still records them at the same time so that we can scan
-    for known incremental build failures."""
+    for known retryable build failures."""
     stdout_result = io.StringIO()
     stderr_result = io.StringIO()
     base_env = env if env is not None else os.environ
@@ -132,9 +138,14 @@ def run_and_detect_rust_incremental_build_failure(
             "ld.lld: error: undefined symbol",
             "signal: 11, SIGSEGV",
         ]
+        registry_fetch_failure_msgs = [
+            "unable to update registry",
+        ]
         combined = stdout_contents + stderr_contents
         if any(msg in combined for msg in incremental_build_failure_msgs):
             raise RustIncrementalBuildFailure()
+        if any(msg in combined for msg in registry_fetch_failure_msgs):
+            raise CargoRegistryFetchFailure()
 
         raise subprocess.CalledProcessError(
             retcode, p.args, output=stdout_contents, stderr=stderr_contents
@@ -772,7 +783,7 @@ class CargoBuild(CargoPreImage):
             rd, list(bins), list(examples), list(features) if features else None
         )
 
-        run_and_detect_rust_incremental_build_failure(cargo_build, cwd=rd.root)
+        run_and_detect_retryable_build_failure(cargo_build, cwd=rd.root)
 
         # Re-run with JSON-formatted messages and capture the output so we can
         # later analyze the build artifacts in `run`. This should be nearly

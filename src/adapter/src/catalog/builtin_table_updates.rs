@@ -19,12 +19,11 @@ use mz_catalog::builtin::{
     MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_SIZE_INTERNAL,
     MZ_CLUSTER_REPLICA_SIZES, MZ_COLUMNS, MZ_EGRESS_IPS, MZ_FUNCTIONS,
     MZ_HISTORY_RETENTION_STRATEGIES, MZ_ICEBERG_SINKS, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS,
-    MZ_KAFKA_SINKS, MZ_KAFKA_SOURCE_TABLES, MZ_LICENSE_KEYS, MZ_LIST_TYPES, MZ_MAP_TYPES,
-    MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_MYSQL_SOURCE_TABLES, MZ_OBJECT_DEPENDENCIES,
-    MZ_OBJECT_GLOBAL_IDS, MZ_OPERATORS, MZ_POSTGRES_SOURCE_TABLES, MZ_PSEUDO_TYPES,
-    MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_SESSIONS, MZ_SINKS, MZ_SOURCE_REFERENCES,
-    MZ_SQL_SERVER_SOURCE_TABLES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD,
-    MZ_SUBSCRIPTIONS, MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
+    MZ_KAFKA_SINKS, MZ_LICENSE_KEYS, MZ_LIST_TYPES, MZ_MAP_TYPES,
+    MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_OBJECT_DEPENDENCIES, MZ_OBJECT_GLOBAL_IDS,
+    MZ_OPERATORS, MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_SESSIONS, MZ_SINKS,
+    MZ_SOURCE_REFERENCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS,
+    MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::durable::SourceReferences;
@@ -48,7 +47,7 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{
     CatalogItemId, Datum, Diff, GlobalId, ReprColumnType, Row, RowPacker, SqlScalarType, Timestamp,
 };
-use mz_sql::ast::{CreateIndexStatement, Statement, UnresolvedItemName};
+use mz_sql::ast::{CreateIndexStatement, Statement};
 use mz_sql::catalog::{CatalogType, TypeCategory};
 use mz_sql::func::FuncImplCatalogDetails;
 use mz_sql::names::SchemaSpecifier;
@@ -60,7 +59,6 @@ use mz_storage_types::connections::aws::{AwsAuth, AwsConnection};
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::string_or_secret::StringOrSecret;
 use mz_storage_types::sinks::{IcebergSinkConnection, KafkaSinkConnection, StorageSinkConnection};
-use mz_storage_types::sources::SourceConnection;
 use smallvec::smallvec;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
@@ -174,177 +172,24 @@ impl CatalogState {
         let mut updates = match entry.item() {
             CatalogItem::Index(index) => self.pack_index_update(id, index, diff),
             CatalogItem::Table(table) => {
-                let mut updates = self
-                    .pack_table_update(id, oid, schema_id, name, owner_id, privileges, diff, table);
-
-                if let TableDataSource::DataSource {
-                    desc: data_source,
-                    timeline: _,
-                } = &table.data_source
-                {
-                    updates.extend(match data_source {
-                        DataSourceDesc::IngestionExport {
-                            ingestion_id,
-                            external_reference: UnresolvedItemName(external_reference),
-                            details: _,
-                            data_config: _,
-                        } => {
-                            let ingestion_entry = self
-                                .get_entry(ingestion_id)
-                                .source_desc()
-                                .expect("primary source exists")
-                                .expect("primary source is a source");
-
-                            match ingestion_entry.connection.name() {
-                                "postgres" => {
-                                    mz_ore::soft_assert_eq_no_log!(external_reference.len(), 3);
-                                    // The left-most qualification of Postgres
-                                    // tables is the database, but this
-                                    // information is redundant because each
-                                    // Postgres connection connects to only one
-                                    // database.
-                                    let schema_name = external_reference[1].as_str();
-                                    let table_name = external_reference[2].as_str();
-
-                                    self.pack_postgres_source_tables_update(
-                                        id,
-                                        schema_name,
-                                        table_name,
-                                        diff,
-                                    )
-                                }
-                                "mysql" => {
-                                    mz_ore::soft_assert_eq_no_log!(external_reference.len(), 2);
-                                    let schema_name = external_reference[0].as_str();
-                                    let table_name = external_reference[1].as_str();
-
-                                    self.pack_mysql_source_tables_update(
-                                        id,
-                                        schema_name,
-                                        table_name,
-                                        diff,
-                                    )
-                                }
-                                "sql-server" => {
-                                    mz_ore::soft_assert_eq_no_log!(external_reference.len(), 3);
-                                    // The left-most qualification of SQL Server tables is
-                                    // the database, but this information is redundant
-                                    // because each SQL Server connection connects to
-                                    // only one database.
-                                    let schema_name = external_reference[1].as_str();
-                                    let table_name = external_reference[2].as_str();
-
-                                    self.pack_sql_server_source_table_update(
-                                        id,
-                                        schema_name,
-                                        table_name,
-                                        diff,
-                                    )
-                                }
-                                // Load generator sources don't have any special
-                                // updates.
-                                "load-generator" => vec![],
-                                "kafka" => {
-                                    mz_ore::soft_assert_eq_no_log!(external_reference.len(), 1);
-                                    let topic = external_reference[0].as_str();
-                                    let envelope = data_source.envelope();
-                                    let (key_format, value_format) = data_source.formats();
-
-                                    self.pack_kafka_source_tables_update(
-                                        id,
-                                        topic,
-                                        envelope,
-                                        key_format,
-                                        value_format,
-                                        diff,
-                                    )
-                                }
-                                s => unreachable!("{s} sources do not have tables"),
-                            }
-                        }
-                        DataSourceDesc::Ingestion { .. }
-                        | DataSourceDesc::OldSyntaxIngestion { .. }
-                        | DataSourceDesc::Introspection(_)
-                        | DataSourceDesc::Progress
-                        | DataSourceDesc::Webhook { .. }
-                        | DataSourceDesc::Catalog => vec![],
-                    });
-                }
-
-                updates
+                // Source-table metadata (mz_postgres/mysql/sql_server/kafka_source_tables)
+                // is now derived from the persisted create_sql by materialized
+                // views over mz_catalog_raw, so ingestion-export tables need no
+                // special packing here.
+                self.pack_table_update(id, oid, schema_id, name, owner_id, privileges, diff, table)
             }
             CatalogItem::Source(source) => {
                 match &source.data_source {
-                    DataSourceDesc::Ingestion { .. }
-                    | DataSourceDesc::OldSyntaxIngestion { .. } => vec![],
-                    DataSourceDesc::IngestionExport {
-                        ingestion_id,
-                        external_reference: UnresolvedItemName(external_reference),
-                        details: _,
-                        data_config: _,
-                    } => {
-                        let ingestion_entry = self
-                            .get_entry(ingestion_id)
-                            .source_desc()
-                            .expect("primary source exists")
-                            .expect("primary source is a source");
-
-                        match ingestion_entry.connection.name() {
-                            "postgres" => {
-                                mz_ore::soft_assert_eq_no_log!(external_reference.len(), 3);
-                                // The left-most qualification of Postgres
-                                // tables is the database, but this
-                                // information is redundant because each
-                                // Postgres connection connects to only one
-                                // database.
-                                let schema_name = external_reference[1].as_str();
-                                let table_name = external_reference[2].as_str();
-
-                                self.pack_postgres_source_tables_update(
-                                    id,
-                                    schema_name,
-                                    table_name,
-                                    diff,
-                                )
-                            }
-                            "mysql" => {
-                                mz_ore::soft_assert_eq_no_log!(external_reference.len(), 2);
-                                let schema_name = external_reference[0].as_str();
-                                let table_name = external_reference[1].as_str();
-
-                                self.pack_mysql_source_tables_update(
-                                    id,
-                                    schema_name,
-                                    table_name,
-                                    diff,
-                                )
-                            }
-                            "sql-server" => {
-                                mz_ore::soft_assert_eq_no_log!(external_reference.len(), 3);
-                                // The left-most qualification of SQL Server tables is
-                                // the database, but this information is redundant
-                                // because each SQL Server connection connects to
-                                // only one database.
-                                let schema_name = external_reference[1].as_str();
-                                let table_name = external_reference[2].as_str();
-
-                                self.pack_sql_server_source_table_update(
-                                    id,
-                                    schema_name,
-                                    table_name,
-                                    diff,
-                                )
-                            }
-                            // Load generator sources don't have any special
-                            // updates.
-                            "load-generator" => vec![],
-                            s => unreachable!("{s} sources do not have subsources"),
-                        }
-                    }
                     DataSourceDesc::Webhook { .. } => {
                         vec![self.pack_webhook_source_update(id, diff)]
                     }
-                    DataSourceDesc::Introspection(_)
+                    // Old-syntax subsource metadata (mz_postgres/mysql/sql_server_source_tables)
+                    // is now derived from create_sql by materialized views over
+                    // mz_catalog_raw, so ingestion exports need no special packing.
+                    DataSourceDesc::Ingestion { .. }
+                    | DataSourceDesc::OldSyntaxIngestion { .. }
+                    | DataSourceDesc::IngestionExport { .. }
+                    | DataSourceDesc::Introspection(_)
                     | DataSourceDesc::Progress
                     | DataSourceDesc::Catalog => vec![],
                 }
@@ -543,82 +388,6 @@ impl CatalogState {
                 } else {
                     Datum::Null
                 },
-            ]),
-            diff,
-        )]
-    }
-
-    fn pack_postgres_source_tables_update(
-        &self,
-        id: CatalogItemId,
-        schema_name: &str,
-        table_name: &str,
-        diff: Diff,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        vec![BuiltinTableUpdate::row(
-            &*MZ_POSTGRES_SOURCE_TABLES,
-            Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                Datum::String(schema_name),
-                Datum::String(table_name),
-            ]),
-            diff,
-        )]
-    }
-
-    fn pack_mysql_source_tables_update(
-        &self,
-        id: CatalogItemId,
-        schema_name: &str,
-        table_name: &str,
-        diff: Diff,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        vec![BuiltinTableUpdate::row(
-            &*MZ_MYSQL_SOURCE_TABLES,
-            Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                Datum::String(schema_name),
-                Datum::String(table_name),
-            ]),
-            diff,
-        )]
-    }
-
-    fn pack_sql_server_source_table_update(
-        &self,
-        id: CatalogItemId,
-        schema_name: &str,
-        table_name: &str,
-        diff: Diff,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        vec![BuiltinTableUpdate::row(
-            &*MZ_SQL_SERVER_SOURCE_TABLES,
-            Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                Datum::String(schema_name),
-                Datum::String(table_name),
-            ]),
-            diff,
-        )]
-    }
-
-    fn pack_kafka_source_tables_update(
-        &self,
-        id: CatalogItemId,
-        topic: &str,
-        envelope: Option<&str>,
-        key_format: Option<&str>,
-        value_format: Option<&str>,
-        diff: Diff,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        vec![BuiltinTableUpdate::row(
-            &*MZ_KAFKA_SOURCE_TABLES,
-            Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                Datum::String(topic),
-                Datum::from(envelope),
-                Datum::from(key_format),
-                Datum::from(value_format),
             ]),
             diff,
         )]

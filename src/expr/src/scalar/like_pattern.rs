@@ -11,7 +11,6 @@ use std::mem;
 use std::str::FromStr;
 
 use derivative::Derivative;
-use mz_lowertest::MzReflect;
 use mz_ore::fmt::FormatBuffer;
 use mz_repr::adt::regex::{Regex, RegexCompilationError};
 use serde::{Deserialize, Serialize};
@@ -106,7 +105,7 @@ mod matcher {
     use super::*;
 
     /// An object that can test whether a string matches a LIKE or ILIKE pattern.
-    #[derive(Debug, Clone, Deserialize, Serialize, Derivative, MzReflect)]
+    #[derive(Debug, Clone, Deserialize, Serialize, Derivative)]
     #[derivative(Eq, PartialEq, Ord, PartialOrd, Hash)]
     pub struct Matcher {
         pub pattern: String,
@@ -129,7 +128,7 @@ mod matcher {
         }
     }
 
-    #[derive(Debug, Clone, Deserialize, Serialize, MzReflect)]
+    #[derive(Debug, Clone, Deserialize, Serialize)]
     pub(super) enum MatcherImpl {
         String(Vec<Subpattern>),
         Regex(Regex),
@@ -208,7 +207,7 @@ pub fn compile(pattern: &str, case_insensitive: bool) -> Result<Matcher, EvalErr
 //     "__%__" = (4, many)
 //     "%%%_"  = (1, many)
 
-#[derive(Debug, Default, Clone, Deserialize, Serialize, MzReflect)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
 struct Subpattern {
     /// The minimum number of characters that can be consumed by the wildcard expression.
     consume: usize,

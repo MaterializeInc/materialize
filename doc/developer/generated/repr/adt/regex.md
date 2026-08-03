@@ -1,6 +1,6 @@
 ---
 source: src/repr/src/adt/regex.rs
-revision: 931f79a1d8
+revision: 94ee2d5448
 ---
 
 # mz-repr::adt::regex

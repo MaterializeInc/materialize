@@ -11,7 +11,6 @@ use std::fmt;
 
 use dec::{OrderedDecimal, Rounding};
 use mz_expr_derive::sqlfunc;
-use mz_lowertest::MzReflect;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::{SqlColumnType, SqlScalarType, strconv};
 use serde::{Deserialize, Serialize};
@@ -318,8 +317,7 @@ fn pg_size_pretty(mut a: Numeric) -> Result<String, EvalError> {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct AdjustNumericScale(pub NumericMaxScale);
 

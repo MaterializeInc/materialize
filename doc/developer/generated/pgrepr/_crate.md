@@ -1,6 +1,6 @@
 ---
 source: src/pgrepr/src/lib.rs
-revision: f147b1341a
+revision: 10a94621ed
 ---
 
 # mz-pgrepr
@@ -17,6 +17,7 @@ Provides representation and serialization of PostgreSQL data types for use in Ma
 
 * `Value` — a PostgreSQL datum; supports text and binary encoding via `mz_pgwire_common::Format`.
 * `Type` — the type of a `Value`, with typmod encoding/decoding.
+* `TextEncodeSettings` — session parameters that govern text encoding (e.g. `extra_float_digits`); `TextEncodeSettings::STABLE` is used by all non-session callers.
 * `values_from_row` — converts an `mz_repr::RowRef` to a vector of `Option<Value>` for pgwire responses.
 * `NulCharacterError` — error returned when a decoded text value contains a NUL character.
 * `IntoDatumError` — error for fallible `Value`-to-`Datum` conversions.

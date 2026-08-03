@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/binary.rs
-revision: d08f8f74a0
+revision: 94ee2d5448
 ---
 
 # mz-expr::scalar::func::binary

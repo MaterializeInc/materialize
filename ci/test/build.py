@@ -22,6 +22,7 @@ from materialize.ci_util.upload_debug_symbols_to_s3 import (
 )
 from materialize.mzbuild import (
     CargoBuild,
+    CargoRegistryFetchFailure,
     Repository,
     ResolvedImage,
     RustIncrementalBuildFailure,
@@ -70,9 +71,7 @@ def main() -> None:
         set_build_status("success")
         annotate_buildkite_with_tags(repo.rd.arch, deps)
     except RustIncrementalBuildFailure:
-        # We retry twice automatically, see mkpipeline.py
-        if int(os.getenv("BUILDKITE_RETRY_COUNT", "0")) >= 2:
-            set_build_status("failed")
+        mark_failed_after_last_retry()
         print(
             "--- Detected incremental build failure, clearing cargo target directories"
         )
@@ -80,9 +79,22 @@ def main() -> None:
             if os.path.exists(dir):
                 shutil.rmtree(dir, ignore_errors=True)
         sys.exit(199)
+    except CargoRegistryFetchFailure:
+        mark_failed_after_last_retry()
+        print("--- Detected transient cargo registry failure, retrying")
+        sys.exit(199)
     except:
         set_build_status("failed")
         raise
+
+
+def mark_failed_after_last_retry() -> None:
+    """Report the build as failed only once its automatic retries are used up.
+
+    Exit code 199 gets two automatic retries, see mkpipeline.py.
+    """
+    if int(os.getenv("BUILDKITE_RETRY_COUNT", "0")) >= 2:
+        set_build_status("failed")
 
 
 def set_build_status(status: str) -> None:

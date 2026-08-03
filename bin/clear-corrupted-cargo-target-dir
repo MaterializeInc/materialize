@@ -9,23 +9,34 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# clear-corrupted-cargo-target-dir - Remove Cargo target directories when a
-# failure caused by corrupted incremental build artifacts is detected.
+# clear-corrupted-cargo-target-dir - Detect build failures that a retry
+# recovers from in the given log, and remove the Cargo target directories when
+# corrupted incremental build artifacts are to blame. Exits 199 on a match,
+# which Buildkite retries automatically, see mkpipeline.py.
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 # Keep these signatures in sync with
-# run_and_detect_rust_incremental_build_failure in materialize.mzbuild.
+# run_and_detect_retryable_build_failure in materialize.mzbuild.
 incremental_build_failure_pattern="panicked at compiler/rustc_metadata/src/rmeta/def_path_hash_map.rs"
 incremental_build_failure_pattern+="|Found unstable fingerprints for"
 incremental_build_failure_pattern+="|ld\.lld: error: undefined symbol"
 incremental_build_failure_pattern+="|signal: 11, SIGSEGV"
-if ! grep -qE "$incremental_build_failure_pattern" "$1"; then
-  exit
+
+registry_fetch_failure_pattern="unable to update registry"
+
+if grep -qE "$incremental_build_failure_pattern" "$1"; then
+  echo "--- Detected incremental build failure, clearing cargo target directories"
+  rm -rf target target-xcompile || true
+  exit 199
 fi
 
-echo "--- Detected incremental build failure, clearing cargo target directories"
-rm -rf target target-xcompile || true
-exit 199
+# Nothing on disk is corrupted, so keep the target directories. Wiping them
+# would turn a network blip into a full rebuild of the workspace, here and in
+# every later job that shares the agent's target directory.
+if grep -qE "$registry_fetch_failure_pattern" "$1"; then
+  echo "--- Detected transient cargo registry failure, retrying"
+  exit 199
+fi

@@ -250,6 +250,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_dequadratic_eqprop_map
     enable_envelope_materialize
     enable_eq_classes_withholding_errors
+    enable_extended_protocol_implicit_transaction
     enable_fixed_correlated_cte_lowering
     enable_frontend_subscribes
     enable_hydration_burst

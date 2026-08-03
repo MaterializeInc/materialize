@@ -337,6 +337,13 @@ class UpgradeV80Migration(Scenario):
         print(
             "Upgrade path: v26.17.1 -> initialize -> v26.18.0 -> manipulate#1 -> restart -> manipulate#2 -> v26.24.0 (v82_to_v83) -> current (v83_to_v84) -> restart -> validate"
         )
+        # The factor-0 override below only applies to the boots that pass it, but
+        # it is durable: the cluster row is seeded once and a later boot honors the
+        # row rather than its own flag. So mz_system has no replica for the whole
+        # run, including the final unoverridden boots. Nothing here needs one,
+        # since the checks peek as `materialize` on `quickstart` and the mz_system
+        # connection only issues DDL. A check that peeked at a non-catalog object
+        # as `mz_system` would hang, and would need this override lifted.
         return [
             StartMz(
                 self,

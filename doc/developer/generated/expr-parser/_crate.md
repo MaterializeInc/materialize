@@ -1,6 +1,6 @@
 ---
 source: src/expr-parser/src/lib.rs
-revision: e757b4d11b
+revision: 94ee2d5448
 ---
 
 # mz-expr-parser
@@ -13,6 +13,11 @@ It is used exclusively in datadriven tests to write and round-trip MIR expressio
 * `catalog` — `TestCatalog` (in-memory relation registry implementing `ExprHumanizer`).
 * `command` — `handle_define` and `handle_roundtrip` datadriven command handlers.
 * `parser` — `syn`-based `MirRelationExpr` text parser and `Def` type.
+* `printer` — `print_scalar` for rendering a `MirScalarExpr` back to text.
+
+## Key exports
+
+`try_parse_mir`, `try_parse_scalar`, `try_parse_scalars`, `try_parse_column_types`, `try_parse_def`, `Def`, `TestCatalog`, `handle_define`, `handle_roundtrip`, `print_scalar`.
 
 ## Key dependencies
 
