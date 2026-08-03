@@ -21,7 +21,7 @@ everything else is stored as-is, exactly as it would be without compression.
 Compression is applied per column, so a wide row can have one column compressed
 and the rest untouched.
 
-Dictionary compression is **alpha** and is **off by default**. You opt in per
+Dictionary compression is **alpha** and is off by default. You opt in per
 cluster with the `EXPERIMENTAL ARRANGEMENT COMPRESSION` option. See [Enable
 dictionary compression](#enable-dictionary-compression).
 
@@ -33,13 +33,13 @@ team](/support/) if you have questions about whether it suits your workload.
 
 ### What it helps
 
-- Columns that hold a **small set of longer values that repeat often**. Status
+- Columns that hold a small set of longer values that repeat often. Status
   strings, enum-like labels, country codes, and tenant IDs are typical examples.
   Essentially all of the savings come from columns like these. See [How distinct
   values affect the benefit](#how-distinct-values-affect-the-benefit) for how the
   benefit changes as that set grows.
-- **Large** arrangements. The larger the arrangement, the more occurrences of
-  each repeated value there are to collapse.
+- Large arrangements. The larger the arrangement, the more occurrences of each
+  repeated value there are to collapse.
 
 Only data held in an arrangement is affected. That means [indexes] and the
 arrangements a dataflow builds internally for joins and aggregations (`GROUP BY`,
@@ -47,27 +47,27 @@ arrangements a dataflow builds internally for joins and aggregations (`GROUP BY`
 
 ### What it does not help
 
-- **High-cardinality or near-unique columns.** This is the most important caveat
-  on this page. A value that never repeats is never worth storing in a
-  dictionary, so such a column sees no memory savings. Materialize has no
-  heuristic that detects this and skips the column. It inspects every column of
-  every row regardless, so a near-unique column pays the full CPU cost for zero
-  memory benefit. Large arrangements dominated by unique identifiers,
-  timestamps, or free-form text therefore carry the cost without the benefit.
+- **High-cardinality or near-unique columns.** A value that never repeats is
+  never worth storing in a dictionary, so such a column sees no memory savings.
+  Materialize has no heuristic that detects this and skips the column. It
+  inspects every column of every row regardless, so a near-unique column pays
+  the full CPU cost for zero memory benefit. Large arrangements dominated by
+  unique identifiers, timestamps, or free-form text carry the cost without the
+  benefit.
 - **Columns of short values.** Booleans, `NULL`s, and small integers are already
   stored compactly enough that a dictionary reference cannot beat storing the
   value itself. They are never compressed.
 - **Small arrangements.** An arrangement built from scratch does not install a
   dictionary until it has seen on the order of 65,000 rows. Small arrangements
-  are effectively unaffected, for better or worse.
+  are effectively unaffected.
 
 ### The CPU cost
 
-The cost falls mainly on the **write path**. As updates arrive, Materialize has
-to track which values in each column repeat and maintain the dictionary. The
-most visible symptom is **slower arrangement hydration**. A replica in a cluster
-with compression enabled takes longer to build its arrangements after it is
-created, restarted, or resized.
+The cost falls mainly on the write path. As updates arrive, Materialize has to
+track which values in each column repeat and maintain the dictionary. The most
+visible symptom is slower arrangement hydration. A replica in a cluster with
+compression enabled takes longer to build its arrangements after it is created,
+restarted, or resized.
 
 Reads pay a smaller but ongoing cost. Resolving a compressed value requires an
 extra indirection, and comparing compressed rows cannot use the fast path that
@@ -80,10 +80,10 @@ many rows. It tapers off as the number of distinct values in a column grows past
 roughly 64, and with enough distinct values the bookkeeping becomes overhead that
 buys no memory saving at all.
 
-None of this is a limit, threshold, or capacity. Nothing breaks when a column
-holds more distinct values than that. Values that are not worth storing in a
-dictionary, including values that appear only once, are stored as-is. The result
-is less memory saved, and nothing else changes.
+This is not a limit. Nothing breaks when a column holds more distinct values
+than that. Values that are not worth storing in a dictionary, including values
+that appear only once, are stored as-is. The result is less memory saved, and
+nothing else changes.
 
 ## Enable dictionary compression
 
@@ -117,8 +117,8 @@ ALTER CLUSTER my_cluster RESET (EXPERIMENTAL ARRANGEMENT COMPRESSION);
 [`SHOW CREATE CLUSTER`] reports the configured value.
 
 {{< warning >}}
-Changing `EXPERIMENTAL ARRANGEMENT COMPRESSION` on a cluster **replaces the
-cluster's replicas**, so the cluster re-hydrates. Plan for this the same way you
+Changing `EXPERIMENTAL ARRANGEMENT COMPRESSION` on a cluster replaces the
+cluster's replicas, so the cluster re-hydrates. Plan for this the same way you
 would plan for resizing a cluster. The new replicas have to rebuild their
 arrangements before the cluster is fully caught up again, and hydration is
 slower with compression enabled.
