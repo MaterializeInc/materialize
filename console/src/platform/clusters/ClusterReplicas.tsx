@@ -73,13 +73,8 @@ const ClusterReplicasInner = () => {
   assert(clusterId);
   const { getClusterById } = useAllClusters();
   const cluster = getClusterById(clusterId);
-  const { data: ownersById, isPending: isOwnersPending } = useOwners();
-  // Treat an in-flight owners query as non-owner so owner-only controls stay
-  // hidden until ownership is known.
-  const isClusterOwner =
-    !isOwnersPending && cluster
-      ? (ownersById?.get(cluster.ownerId) ?? false)
-      : false;
+  const { isOwner } = useOwners();
+  const isClusterOwner = cluster ? isOwner(cluster.ownerId) : false;
   const { data: replicas, refetch } = useClusterReplicasWithUtilization({
     clusterId,
   });

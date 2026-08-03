@@ -218,17 +218,12 @@ const ClustersListContent = ({
   showSystemObjects: boolean;
 }) => {
   const { data: clusters, snapshotComplete, isError } = useAllClusters();
-  const { data: ownersById, isPending: isOwnersPending } = useOwners();
+  const { isOwner } = useOwners();
 
   const orderedClusters = React.useMemo(() => {
     const visibleClusters = clusters
       .filter((c) => showSystemObjects || !isSystemCluster(c.id))
-      .map((c) => ({
-        ...c,
-        // Treat an in-flight owners query as non-owner so owner-only menu items
-        // stay hidden until ownership is known.
-        isOwner: !isOwnersPending && (ownersById?.get(c.ownerId) ?? false),
-      }));
+      .map((c) => ({ ...c, isOwner: isOwner(c.ownerId) }));
     // The subscribe upserts by id, so the atom's order is arbitrary. Sort each
     // group by name and keep system clusters at the end.
     const byName = (a: ClusterWithOwnership, b: ClusterWithOwnership) =>
@@ -240,7 +235,7 @@ const ClustersListContent = ({
       .filter((c) => !isSystemCluster(c.id))
       .sort(byName);
     return [...nonSystemClusters, ...systemClusters];
-  }, [clusters, isOwnersPending, ownersById, showSystemObjects]);
+  }, [clusters, isOwner, showSystemObjects]);
 
   if (isError) {
     return <ErrorBox message={CLUSTERS_FETCH_ERROR_MESSAGE} />;
