@@ -1266,6 +1266,10 @@ impl Coordinator {
         //    DDL. If the lock could not be acquired, the DDL is put into the VecDeque where it
         //    awaits dequeuing caused by the lock being released.
 
+        // For `Started`, this separates the first statement of an extended-protocol
+        // pipeline from a later one that joins the ops staged before it.
+        let txn_contains_ops = ctx.session().transaction().contains_ops();
+
         // Verify that this statement type can be executed in the current
         // transaction state.
         match ctx.session().transaction() {
@@ -1283,7 +1287,7 @@ impl Coordinator {
             // being executed, but there might be others after it before the Sync (commit)
             // message. Postgres handles this by teaching Started to eagerly commit certain
             // statements that can't be run in a transaction block.
-            TransactionStatus::Started(_) => {
+            TransactionStatus::Started(_) if !txn_contains_ops => {
                 if let Statement::Declare(_) = &*stmt {
                     // Declare is an exception. Although it's not against any spec to execute
                     // it, it will always result in nothing happening, since all portals will be
@@ -1304,7 +1308,13 @@ impl Coordinator {
             // transactions can do unless there's some additional checking to make sure
             // something disallowed in explicit transactions did not previously take place
             // in the implicit portion.
-            TransactionStatus::InTransactionImplicit(_) | TransactionStatus::InTransaction(_) => {
+            //
+            // A `Started` transaction with staged ops belongs here too: this statement
+            // runs alongside them, so a DDL or read-then-write that cannot see them must
+            // be rejected rather than run against a state that lacks them.
+            TransactionStatus::Started(_)
+            | TransactionStatus::InTransactionImplicit(_)
+            | TransactionStatus::InTransaction(_) => {
                 match &*stmt {
                     // Statements that are safe in a transaction. We still need to verify that we
                     // don't interleave reads and writes since we can't perform those serializably.

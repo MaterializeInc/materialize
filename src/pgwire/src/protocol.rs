@@ -1009,17 +1009,28 @@ where
                 // trigger an eager commit of the current implicit transaction,
                 // see: <https://git.postgresql.org/gitweb/?p=postgresql.git&a=commitdiff&h=f92944137>.
                 //
-                // In Materialize, however, we eagerly commit every statement outside of an explicit
-                // transaction when using the extended query protocol. This allows us to eliminate
-                // the possibility of a multiple statement implicit transaction, which in turn
-                // allows us to apply single-statement optimizations to queries issued in implicit
-                // transactions in the extended query protocol.
+                // In Materialize we instead eagerly commit every implicit transaction that
+                // cannot take on further statements of the same pipeline, which keeps the
+                // single-statement optimizations available to queries issued in the extended
+                // query protocol. The ones that can stay open, so that the pipeline commits
+                // or rolls back as a unit. See `TransactionStatus::may_span_pipeline`.
                 //
                 // We don't immediately commit here to allow users to page through the portal if
                 // necessary. Committing the transaction would destroy the portal before the next
                 // Execute command has a chance to resume it. So we instead mark the transaction
                 // for commit the next time that `ensure_transaction` is called.
-                if self.adapter_client.session().transaction().is_implicit() {
+                let (is_implicit, may_span_pipeline) = {
+                    let txn = self.adapter_client.session().transaction();
+                    (txn.is_implicit(), txn.may_span_pipeline())
+                };
+                // Ordered so that only a write reads the flag, keeping the catalog
+                // snapshot off the read path.
+                let spans_pipeline = may_span_pipeline
+                    && self
+                        .adapter_client
+                        .extended_protocol_implicit_transaction_enabled()
+                        .await;
+                if is_implicit && !spans_pipeline {
                     self.txn_needs_commit = true;
                 }
                 state

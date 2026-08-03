@@ -1426,6 +1426,19 @@ pub static ENABLE_STATEMENT_ARRIVAL_LOGGING: VarDefinition = VarDefinition::new(
     false,
 );
 
+/// Off is the escape hatch for clients that pipeline statements Materialize
+/// cannot run in one transaction, for example a read or a DDL after a write.
+/// Those fail while this is on, rather than silently committing the writes
+/// staged before them.
+pub static ENABLE_EXTENDED_PROTOCOL_IMPLICIT_TRANSACTION: VarDefinition = VarDefinition::new(
+    "enable_extended_protocol_implicit_transaction",
+    value!(bool; true),
+    "Whether an implicit write transaction started by the extended query \
+    protocol spans the whole pipeline up to the client's Sync, so that the \
+    pipeline commits or rolls back atomically as in PostgreSQL (Materialize).",
+    false,
+);
+
 pub static AUTO_ROUTE_CATALOG_QUERIES: VarDefinition = VarDefinition::new(
     "auto_route_catalog_queries",
     value!(bool; true),
