@@ -222,7 +222,10 @@ fn default_read_limit() -> u32 {
 
 #[derive(Debug, Deserialize)]
 struct QueryParams {
-    cluster: String,
+    /// Omitted means "read on the session's default cluster". Discovery nulls
+    /// the cluster of a product whose index cluster the role cannot use, so
+    /// requiring this would leave such a product unreadable (DEX-71).
+    cluster: Option<String>,
     /// Only honored on the developer endpoint. The agent endpoint's dispatch
     /// arm drops it, since replica pinning is not part of the agent surface.
     cluster_replica: Option<String>,
@@ -865,20 +868,20 @@ fn handle_tools_list(
                 tools.push(ToolDefinition {
                     name: "query".to_string(),
                     title: Some("Query Data Products".to_string()),
-                    description: format!("Execute SQL queries against real-time data products to retrieve current business information. Use standard PostgreSQL syntax. You can JOIN multiple data products together, but ONLY if they are all hosted on the same cluster. Always specify the cluster parameter from the data product details. This provides fresh, up-to-date results from materialized views. {size_hint}"),
+                    description: format!("Execute SQL queries against real-time data products to retrieve current business information. Use standard PostgreSQL syntax. You can JOIN multiple data products together, but ONLY if they are all hosted on the same cluster. Pass the cluster from the data product details so indexed reads hit the arrangement; omit it when the data product reports a null cluster. This provides fresh, up-to-date results from materialized views. {size_hint}"),
                     input_schema: json!({
                         "type": "object",
                         "properties": {
                             "cluster": {
                                 "type": "string",
-                                "description": "Exact cluster name from the data product details - required for query execution"
+                                "description": "Exact cluster name from the data product details. Omit it when the data product's cluster is null, which means your role lacks USAGE on that cluster: the query then runs on your session's default cluster and still returns correct results, just without the index arrangement."
                             },
                             "sql_query": {
                                 "type": "string",
                                 "description": "PostgreSQL-compatible SELECT statement to retrieve data. Use the fully qualified data product name exactly as provided (with double quotes). You can JOIN multiple data products, but only those on the same cluster."
                             }
                         },
-                        "required": ["cluster", "sql_query"]
+                        "required": ["sql_query"]
                     }),
                     annotations: Some(READ_ONLY_ANNOTATIONS),
                 });
@@ -911,14 +914,14 @@ fn handle_tools_list(
                     name: "query".to_string(),
                     title: Some("Query".to_string()),
                     description: format!(
-                        "Execute a read-only SQL query (SELECT, SHOW, or EXPLAIN) against any object the role can access, including system catalog and user objects. Requires a cluster, which is what enables EXPLAIN ANALYZE and queries against indexed user objects. For pure system catalog lookups that do not need a cluster, prefer `query_system_catalog`. {size_hint}",
+                        "Execute a read-only SQL query (SELECT, SHOW, or EXPLAIN) against any object the role can access, including system catalog and user objects. Naming a cluster is what enables EXPLAIN ANALYZE and queries against indexed user objects. For pure system catalog lookups that do not need a cluster, prefer `query_system_catalog`. {size_hint}",
                     ),
                     input_schema: json!({
                         "type": "object",
                         "properties": {
                             "cluster": {
                                 "type": "string",
-                                "description": "Exact cluster name the query should run on. Required: EXPLAIN ANALYZE and queries against indexed user objects need a specific cluster to execute on."
+                                "description": "Exact cluster name the query should run on. Omitting it runs the query on your session's default cluster, which is only appropriate for reads that do not need a specific cluster: EXPLAIN ANALYZE and queries against indexed user objects require naming the cluster that holds the dataflow."
                             },
                             "cluster_replica": {
                                 "type": "string",
@@ -929,7 +932,7 @@ fn handle_tools_list(
                                 "description": "PostgreSQL-compatible SELECT, SHOW, or EXPLAIN statement. Multi-statement queries are rejected."
                             }
                         },
-                        "required": ["cluster", "sql_query"]
+                        "required": ["sql_query"]
                     }),
                     annotations: Some(READ_ONLY_ANNOTATIONS),
                 });
@@ -986,7 +989,14 @@ async fn handle_tools_call(
         (McpEndpointType::Agent, ToolsCallParams::Query(p)) => {
             // Replica pinning is deliberately not part of the agent surface:
             // drop `cluster_replica` even if a client supplies it.
-            execute_query(client, &p.cluster, None, &p.sql_query, max_response_size).await
+            execute_query(
+                client,
+                p.cluster.as_deref(),
+                None,
+                &p.sql_query,
+                max_response_size,
+            )
+            .await
         }
         (McpEndpointType::Developer, ToolsCallParams::QuerySystemCatalog(p)) => {
             query_system_catalog(client, &p.sql_query, max_response_size).await
@@ -999,7 +1009,7 @@ async fn handle_tools_call(
         (McpEndpointType::Developer, ToolsCallParams::Query(p)) => {
             execute_query(
                 client,
-                &p.cluster,
+                p.cluster.as_deref(),
                 p.cluster_replica.as_deref(),
                 &p.sql_query,
                 max_response_size,
@@ -1248,13 +1258,7 @@ async fn read_data_product(
 /// the read runs on the session's default (serving) cluster.
 fn build_read_query(safe_name: &str, limit: u32, target_cluster: Option<&str>) -> String {
     let body = format!("SELECT * FROM {safe_name} LIMIT {limit}");
-    match target_cluster {
-        Some(cluster) => read_only_txn(
-            &format!("SET CLUSTER = {}", escaped_string_literal(cluster)),
-            &body,
-        ),
-        None => format!("BEGIN READ ONLY; {body}\n; COMMIT;"),
-    }
+    maybe_read_only_txn(query_set_clause(target_cluster, None).as_deref(), &body)
 }
 
 /// Wraps `body` in a `BEGIN READ ONLY; <set_clause>; <body>; COMMIT;` frame so
@@ -1264,6 +1268,15 @@ fn build_read_query(safe_name: &str, limit: u32, target_cluster: Option<&str>) -
 /// from swallowing the `COMMIT`.
 fn read_only_txn(set_clause: &str, body: &str) -> String {
     format!("BEGIN READ ONLY; {set_clause}; {body}\n; COMMIT;")
+}
+
+/// Like [`read_only_txn`], but omits the `SET` when there is nothing to set,
+/// which leaves the read on the session's default cluster.
+fn maybe_read_only_txn(set_clause: Option<&str>, body: &str) -> String {
+    match set_clause {
+        Some(set_clause) => read_only_txn(set_clause, body),
+        None => format!("BEGIN READ ONLY; {body}\n; COMMIT;"),
+    }
 }
 
 /// Validates query is a single SELECT, SHOW, or EXPLAIN statement.
@@ -1317,39 +1330,50 @@ fn validate_readonly_query(sql: &str) -> Result<(), McpRequestError> {
 
 async fn execute_query(
     client: &mut AuthedClient,
-    cluster: &str,
+    cluster: Option<&str>,
     cluster_replica: Option<&str>,
     sql_query: &str,
     max_response_size: usize,
 ) -> Result<McpResult, McpRequestError> {
-    debug!(cluster = %cluster, cluster_replica = ?cluster_replica, "Executing user query");
+    debug!(cluster = ?cluster, cluster_replica = ?cluster_replica, "Executing user query");
 
     validate_readonly_query(sql_query)?;
+    validate_cluster(cluster)?;
     validate_cluster_replica(cluster_replica)?;
 
     // READ ONLY prevents mutations; SET CLUSTER (and, when requested,
-    // SET CLUSTER_REPLICA) scope the placement to this read.
-    let combined_query = read_only_txn(&query_set_clause(cluster, cluster_replica), sql_query);
+    // SET CLUSTER_REPLICA) scope the placement to this read. With no cluster
+    // named the read runs on the session's default cluster.
+    let combined_query = maybe_read_only_txn(
+        query_set_clause(cluster, cluster_replica).as_deref(),
+        sql_query,
+    );
 
     let rows = execute_sql(client, &combined_query).await?;
 
     format_rows_response(rows, max_response_size)
 }
 
-/// Builds the `SET` clause for `execute_query`: always `SET CLUSTER`, plus
-/// `SET CLUSTER_REPLICA` when a replica is requested (e.g. for
+/// Builds the `SET` clause for `execute_query`: `SET CLUSTER` when a cluster is
+/// named, plus `SET CLUSTER_REPLICA` when a replica is requested (e.g. for
 /// `EXPLAIN ANALYZE` on a cluster with multiple replicas). Both names pass
 /// through `escaped_string_literal` since they are interpolated into SQL
 /// string literals.
-fn query_set_clause(cluster: &str, cluster_replica: Option<&str>) -> String {
-    let mut set_clause = format!("SET CLUSTER = {}", escaped_string_literal(cluster));
+///
+/// Returns `None` when neither is requested, which leaves the read on the
+/// session's default cluster.
+fn query_set_clause(cluster: Option<&str>, cluster_replica: Option<&str>) -> Option<String> {
+    let mut clauses = Vec::new();
+    if let Some(cluster) = cluster {
+        clauses.push(format!("SET CLUSTER = {}", escaped_string_literal(cluster)));
+    }
     if let Some(replica) = cluster_replica {
-        set_clause.push_str(&format!(
-            "; SET CLUSTER_REPLICA = {}",
+        clauses.push(format!(
+            "SET CLUSTER_REPLICA = {}",
             escaped_string_literal(replica)
         ));
     }
-    set_clause
+    (!clauses.is_empty()).then(|| clauses.join("; "))
 }
 
 /// Rejects an empty or whitespace-only `cluster_replica`. Such a name would
@@ -1361,6 +1385,20 @@ fn validate_cluster_replica(cluster_replica: Option<&str>) -> Result<(), McpRequ
         if replica.trim().is_empty() {
             return Err(McpRequestError::QueryValidationFailed(
                 "cluster_replica must not be empty or whitespace-only".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Rejects an explicitly empty or whitespace-only `cluster`. Omitting the field
+/// is valid and reads on the session's default cluster, but an empty string
+/// would produce `SET CLUSTER = ''` and fail deep in the engine.
+fn validate_cluster(cluster: Option<&str>) -> Result<(), McpRequestError> {
+    if let Some(cluster) = cluster {
+        if cluster.trim().is_empty() {
+            return Err(McpRequestError::QueryValidationFailed(
+                "cluster must not be empty or whitespace-only".to_string(),
             ));
         }
     }
@@ -2351,8 +2389,8 @@ mod tests {
     /// Without a replica, only `SET CLUSTER` is emitted.
     #[mz_ore::test]
     fn test_query_set_clause_without_replica() {
-        let clause = query_set_clause("prod_cluster", None);
-        assert_eq!(clause, "SET CLUSTER = 'prod_cluster'");
+        let clause = query_set_clause(Some("prod_cluster"), None);
+        assert_eq!(clause.as_deref(), Some("SET CLUSTER = 'prod_cluster'"));
     }
 
     /// With a replica, `SET CLUSTER_REPLICA` follows `SET CLUSTER`, scoping
@@ -2360,10 +2398,10 @@ mod tests {
     /// clusters with multiple replicas).
     #[mz_ore::test]
     fn test_query_set_clause_with_replica() {
-        let clause = query_set_clause("prod_cluster", Some("r1"));
+        let clause = query_set_clause(Some("prod_cluster"), Some("r1"));
         assert_eq!(
-            clause,
-            "SET CLUSTER = 'prod_cluster'; SET CLUSTER_REPLICA = 'r1'"
+            clause.as_deref(),
+            Some("SET CLUSTER = 'prod_cluster'; SET CLUSTER_REPLICA = 'r1'")
         );
     }
 
@@ -2372,11 +2410,41 @@ mod tests {
     /// injection via adversarial replica names.
     #[mz_ore::test]
     fn test_query_set_clause_escapes_replica_name() {
-        let clause = query_set_clause("c", Some("evil'; DROP TABLE secrets; --"));
+        let clause = query_set_clause(Some("c"), Some("evil'; DROP TABLE secrets; --"));
         assert_eq!(
-            clause,
-            "SET CLUSTER = 'c'; SET CLUSTER_REPLICA = 'evil''; DROP TABLE secrets; --'"
+            clause.as_deref(),
+            Some("SET CLUSTER = 'c'; SET CLUSTER_REPLICA = 'evil''; DROP TABLE secrets; --'")
         );
+    }
+
+    /// With no cluster named, no `SET` is emitted at all so the read lands on
+    /// the session's default cluster. This is what makes a null-cluster data
+    /// product readable through the `query` tool (DEX-71).
+    #[mz_ore::test]
+    fn test_query_set_clause_without_cluster() {
+        assert_eq!(query_set_clause(None, None), None);
+    }
+
+    /// A replica can still be pinned without naming a cluster.
+    #[mz_ore::test]
+    fn test_query_set_clause_replica_without_cluster() {
+        let clause = query_set_clause(None, Some("r1"));
+        assert_eq!(clause.as_deref(), Some("SET CLUSTER_REPLICA = 'r1'"));
+    }
+
+    /// An omitted cluster is valid; an explicitly empty one is not, since it
+    /// would produce `SET CLUSTER = ''` and fail deep in the engine.
+    #[mz_ore::test]
+    fn test_validate_cluster_rejects_empty_but_allows_none() {
+        assert!(validate_cluster(None).is_ok());
+        assert!(validate_cluster(Some("quickstart")).is_ok());
+        for bad in ["", "   ", "\t"] {
+            let err = validate_cluster(Some(bad)).expect_err("should be rejected");
+            assert!(
+                err.to_string().contains("must not be empty"),
+                "unexpected error for {bad:?}: {err}"
+            );
+        }
     }
 
     /// A `None` replica (no pinning requested) is always valid, and a normal
