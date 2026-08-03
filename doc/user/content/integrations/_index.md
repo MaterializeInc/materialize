@@ -25,20 +25,8 @@ menu:
 
 ## Agent skills and MCP servers
 
-### Agent skills
-
-Materialize provides the following open-source [agent
-skills](https://github.com/MaterializeInc/agent-skills) to help developers build
-with Materialize.
-
-{{% include-headless "/headless/agent-skills-table" %}}
-
-### MCP servers
-
-Materialize providesthe following built-in Model Context Protocol (MCP) servers
-that AI agents can use.
-
-{{% include-headless "/headless/mcp-servers-table" %}}
+For Materialize's open-source agent skills and built-in Model Context Protocol
+(MCP) servers, see [AI & agents](/integrations/mcp-server/).
 
 ## SQL clients/client libraries
 
