@@ -32,10 +32,10 @@ RUN groupadd --system --gid=999 materialize \
     && mkdir /mzdata /scratch \
     && chown materialize:materialize /mzdata /scratch
 
-# `debug` variant of the same distroless build id as the plain `nonroot` pin. It
-# adds a busybox shell (`/busybox/sh`), kept intentionally so entrypoint.sh and
-# `kubectl exec` keep working. A later step can drop to the shell-less variant.
-FROM gcr.io/distroless/cc-debian13:debug-nonroot-28078d2e5e77671d2046dcc9e2c75334e31efa4d
+# `debug-nonroot` adds a busybox shell (`/busybox/sh`), kept intentionally so
+# entrypoint.sh and `kubectl exec` keep working. A later step can drop to the
+# shell-less variant. The digest pin is bumped by dependabot.
+FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:0501a0f4bf6e8b6b2b72d6cbd7271d851c834053d2ae825595be0359fbb0e1ad
 
 # Ensure any Rust binaries that crash print a backtrace.
 ENV RUST_BACKTRACE=1
