@@ -3444,7 +3444,9 @@ def cloud_disable_enable_and_wait(target: "BenchTarget") -> None:
     wait_for_envd(target)
 
 
-def cloud_recreate_region_with_envd_cpus(target: "CloudTarget", envd_cpus: int) -> None:
+def cloud_recreate_region_with_envd_cpus(
+    target: "CloudTarget", envd_cpus: int, attempts: int = 3
+) -> None:
     """
     Recreate the Cloud region from scratch, with the given environmentd CPU allocation.
 
@@ -3459,20 +3461,33 @@ def cloud_recreate_region_with_envd_cpus(target: "CloudTarget", envd_cpus: int) 
     away. A hard disable leaves no predecessor generation to catch up with, so the new envd
     promotes as soon as it has booted, in about a minute.
     """
-    disable_region(target.composition, hard=True)
-
     version_args = ["--version", target.version] if target.version is not None else []
 
-    target.composition.run(
-        "mz",
-        "region",
-        "enable",
-        "--environmentd-cpu-allocation",
-        str(envd_cpus),
-        *enable_extra_args(target),
-        *version_args,
-        rm=True,
-    )
+    for attempt in range(1, attempts + 1):
+        disable_region(target.composition, hard=True)
+        try:
+            target.composition.run(
+                "mz",
+                "region",
+                "enable",
+                "--environmentd-cpu-allocation",
+                str(envd_cpus),
+                *enable_extra_args(target),
+                *version_args,
+                rm=True,
+            )
+            break
+        except UIError as e:
+            # A sweep does a dozen of these calls and the staging Cloud API returns the
+            # occasional 502, which `mz region enable` does not retry on its own. We
+            # disable again before retrying, so that a half-finished enable can't leave
+            # the region running with the previous allocation.
+            if attempt == attempts:
+                raise
+            print(
+                f"WARNING: 'mz region enable' failed (attempt {attempt}/{attempts}): {e}"
+            )
+            time.sleep(30)
 
     assert "materialize.cloud" in target.composition.cloud_hostname()
     wait_for_envd(target)
