@@ -32,6 +32,10 @@ impl<'a, Q: Queryable> KeyProber<'a, Q> {
         }
     }
 
+    /// Estimates the row count for the given range. These estimates can vary pretty widely. They
+    /// will generally never be more than half the size of the full row count reported by
+    /// `information_schema.tables`. In some tests these have been over-estimates in practice,
+    /// where the sum of all table ranges has been ~2x as large as the estimate or table size.
     pub async fn estimate_range_rows(
         &mut self,
         start: &str,
@@ -48,6 +52,17 @@ impl<'a, Q: Queryable> KeyProber<'a, Q> {
         Ok(estimate.unwrap_or(0))
     }
 
+    /// Grabs a prefix of length `len` for the first row in the given range. If the string is
+    /// shorter than `len`, it will return that shorter value.
+    ///
+    /// The query will generally look something like:
+    ///
+    /// ```sql
+    /// SELECT LEFT(pk_col, 3) FROM table
+    /// WHERE pk_col >= 'ab' AND pk_col < 'ac'
+    /// ORDER BY pk_col
+    /// LIMIT 1
+    /// ```
     pub async fn first_prefix(
         &mut self,
         start: &str,
@@ -64,6 +79,25 @@ impl<'a, Q: Queryable> KeyProber<'a, Q> {
         self.query_string(sql, params).await
     }
 
+    /// Grabs the next prefix of length `len` after the prefix `cur`, from keys below `end`.
+    ///
+    /// The query will generally look something like:
+    ///
+    /// ```sql
+    /// SELECT LEFT(pk_col, 3) FROM table
+    /// WHERE pk_col > (
+    ///     SELECT pk_col FROM table
+    ///     WHERE pk_col LIKE 'abc%' AND pk_col < 'ac'
+    ///     ORDER BY pk_col DESC
+    ///     LIMIT 1
+    /// ) AND pk_col < 'ac'
+    /// ORDER BY pk_col
+    /// LIMIT 1
+    /// ```
+    ///
+    /// In this case it would likely return something like `abd` or `abe`, but not `aca`. It's
+    /// useful for finding the next prefix of a given primary key at the provided depth. If the
+    /// next key is shorter than the given prefix, it will return a shorter key.
     pub async fn next_prefix(
         &mut self,
         cur: &str,
