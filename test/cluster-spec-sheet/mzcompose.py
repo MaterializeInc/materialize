@@ -22,8 +22,9 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from functools import partial
 from textwrap import dedent
-from typing import Any, TextIO
+from typing import Any, LiteralString, TextIO
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -3364,9 +3365,8 @@ class EnvdObjectsSweep(Scenario):
         self._workload.teardown(runner)
 
 
-# TODO: We should factor out the below
-# `disable_region`, `cloud_disable_enable_and_wait`, `reconfigure_envd_cpus`, `wait_for_envd`
-# functions into a separate module. (Similar `disable_region` functions also occur in other tests.)
+# TODO: We should factor the region helpers below out into a separate module.
+# (Similar `disable_region` functions also occur in other tests.)
 def disable_region(composition: Composition, hard: bool) -> None:
     print("Shutting down region ...")
 
@@ -3380,26 +3380,32 @@ def disable_region(composition: Composition, hard: bool) -> None:
         pass
 
 
-# Enabling a region whose catalog already exists is a 0dt deployment: the new envd
-# boots read-only and only promotes (and starts serving) once the caught-up check
-# passes. Since #37255 that check includes a stability soak with a production
-# default of 10 minutes, during which a soft-disabled region serves nothing. Keep
-# the soak out of the critical path for test regions, like mzcompose does for
-# Docker-based tests.
-_STABILITY_SOAK_OVERRIDE = [
-    "--environmentd-extra-arg=--system-parameter-default=with_0dt_caught_up_check_stability_period=0s",
-]
-
-
-def enable_extra_args(target: "CloudTarget") -> list[str]:
+def enable_region(target: "CloudTarget", envd_cpus: int | None = None) -> None:
     """
-    Extra `mz region enable` args, applied to staging only.
+    Run `mz region enable`, pinning environmentd's CPU allocation when one is given.
 
-    Production Cloud forbids callers from injecting environmentd args and rejects
-    `--environmentd-extra-arg` with a 403 Forbidden, so the stability-soak override
-    cannot be used there.
+    Enabling a region whose catalog still exists is a 0dt deployment: the new envd boots
+    read-only and only promotes, and starts serving, once the caught-up check passes. That
+    check includes a stability soak whose production default is ten minutes, during which a
+    soft-disabled region serves nothing at all. We turn the soak off for test regions, like
+    mzcompose does for Docker-based tests.
     """
-    return _STABILITY_SOAK_OVERRIDE if target.is_staging else []
+    args = []
+
+    if envd_cpus is not None:
+        args += ["--environmentd-cpu-allocation", str(envd_cpus)]
+
+    if target.is_staging:
+        # Production Cloud forbids callers from injecting environmentd args and rejects
+        # `--environmentd-extra-arg` with a 403 Forbidden, so this is staging-only.
+        args += [
+            "--environmentd-extra-arg=--system-parameter-default=with_0dt_caught_up_check_stability_period=0s"
+        ]
+
+    if target.version is not None:
+        args += ["--version", target.version]
+
+    target.composition.run("mz", "region", "enable", *args, rm=True)
 
 
 def cloud_disable_enable_and_wait(target: "BenchTarget") -> None:
@@ -3432,11 +3438,7 @@ def cloud_disable_enable_and_wait(target: "BenchTarget") -> None:
     if host is not None:
         wait_for_envd_down(target, host)
 
-    version_args = ["--version", target.version] if target.version is not None else []
-
-    target.composition.run(
-        "mz", "region", "enable", *enable_extra_args(target), *version_args, rm=True
-    )
+    enable_region(target)
 
     time.sleep(10)
 
@@ -3454,28 +3456,15 @@ def cloud_recreate_region_with_envd_cpus(
     needs again.
 
     We hard-disable rather than soft-disable on purpose. Enabling a region that still has
-    durable state is a 0dt rollout: the new environmentd comes up in read-only mode and
-    only promotes once every cluster has been caught up *and stable* for
-    `with_0dt_caught_up_check_stability_period`, which is ten minutes fleet-wide. Nothing
-    serves SQL while we wait that out, because the soft disable already took the old envd
-    away. A hard disable leaves no predecessor generation to catch up with, so the new envd
-    promotes as soon as it has booted, in about a minute.
+    durable state is a 0dt rollout, and nothing serves SQL while we wait for the new envd to
+    catch up and promote, because the soft disable already took the old envd away. A hard
+    disable leaves no predecessor generation to catch up with, so the new envd promotes as
+    soon as it has booted, in about a minute.
     """
-    version_args = ["--version", target.version] if target.version is not None else []
-
     for attempt in range(1, attempts + 1):
         disable_region(target.composition, hard=True)
         try:
-            target.composition.run(
-                "mz",
-                "region",
-                "enable",
-                "--environmentd-cpu-allocation",
-                str(envd_cpus),
-                *enable_extra_args(target),
-                *version_args,
-                rm=True,
-            )
+            enable_region(target, envd_cpus=envd_cpus)
             break
         except UIError as e:
             # A sweep does a dozen of these calls and the staging Cloud API returns the
@@ -3503,18 +3492,13 @@ def assert_region_is_empty(target: "CloudTarget") -> None:
     `mz region enable` (which only checks that something answers on the SQL port) nor a
     successful query on its own can tell the two apart.
     """
-    conn = target.new_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT count(*) FROM mz_tables WHERE id LIKE 'u%'")
-            row = cur.fetchone()
-    finally:
-        conn.close()
+    host = target.composition.cloud_hostname()
+    rows = cloud_sql(target, host, "SELECT count(*) FROM mz_tables WHERE id LIKE 'u%'")
 
-    assert row is not None, "could not count user tables in recreated region"
+    assert rows, "could not count user tables in recreated region"
     assert (
-        row[0] == 0
-    ), f"recreated region still has {row[0]} user table(s), we are talking to a stale environmentd"
+        rows[0][0] == 0
+    ), f"recreated region still has {rows[0][0]} user table(s), we are talking to a stale environmentd"
 
 
 def reconfigure_envd_cpus(
@@ -3574,126 +3558,129 @@ def reconfigure_envd_cpus(
         pass
 
 
-def wait_for_envd(
-    target: "BenchTarget", timeout_secs: int = 600, sustain_probes: int = 3
-) -> None:
+def cloud_sql(
+    target: "CloudTarget", host: str, query: LiteralString
+) -> list[tuple[Any, ...]]:
     """
-    Wait until the environmentd SQL endpoint is ready.
+    Run `query` against the environmentd at `host` on a fresh connection and return its rows.
 
-    - Cloud: uses cloud hostname:6875, sslmode=require, and prefers the per-run
-      app password if available; falls back to MZ_CLI_APP_PASSWORD. Requires
-      `sustain_probes` consecutive successful probes, because a single one can land on an
-      environmentd that is about to go away, for example the previous generation while the
-      region is still rolling over.
-    - Docker: probes SQL readiness via Composition.sql_query
+    Takes an explicit host rather than looking it up, because a recreated region gets a new
+    hostname and callers that probe for the *old* envd need to keep talking to the old one.
+    """
+    conn = psycopg.connect(
+        host=host,
+        port=6875,
+        user=target.username,
+        # Prefer the newly created app password when present, fall back to the CLI one.
+        password=target.new_app_password or target.app_password or "",
+        dbname="materialize",
+        sslmode="require",
+        connect_timeout=10,
+    )
+    try:
+        with conn.cursor() as cur:
+            cur.execute(query)
+            return cur.fetchall()
+    finally:
+        conn.close()
+
+
+def _err_detail(err: Exception | None) -> str:
+    return f": {err}" if err is not None else ""
+
+
+def _await_probe(
+    probe: Callable[[], object],
+    what: str,
+    *,
+    until_ok: bool,
+    timeout_secs: int,
+    sustain_probes: int = 3,
+) -> float:
+    """
+    Poll `probe` until it has either succeeded or failed, per `until_ok`, `sustain_probes`
+    times in a row, and return how long that took. Raises `UIError` on timeout.
+
+    A single probe decides nothing in either direction. While a region rolls over, a
+    connection can land on the generation that is about to go away, and a single failure can
+    be a transient network error against an envd that is still serving fine.
+
+    `what` completes the sentence "waiting for ...", e.g. "environmentd to serve SQL".
+    """
+    start = time.time()
+    deadline = start + timeout_secs
+    last_report = start
+    streak = 0
+    last_err: Exception | None = None
+
+    while time.time() < deadline:
+        try:
+            probe()
+            ok = True
+            last_err = None
+        except Exception as e:
+            last_err = e
+            ok = False
+
+        streak = streak + 1 if ok == until_ok else 0
+        if streak >= sustain_probes:
+            return time.time() - start
+
+        now = time.time()
+        if now - last_report >= 30:
+            print(
+                f"  still waiting for {what} ({now - start:.0f}s){_err_detail(last_err)}"
+            )
+            last_report = now
+        time.sleep(2)
+
+    raise UIError(
+        f"timed out after {timeout_secs}s waiting for {what}{_err_detail(last_err)}"
+    )
+
+
+def wait_for_envd(target: "BenchTarget", timeout_secs: int = 600) -> None:
+    """
+    Wait until environmentd serves SQL, and report how long that took.
+
+    The elapsed time is worth printing: a region that only comes back after minutes is
+    promoting out of read-only mode, which none of the callers here expect.
     """
     if isinstance(target, CloudTarget):
         host = target.composition.cloud_hostname()
-        user = target.username
-        # Prefer the newly created app password when present; fall back to the CLI password.
-        password = target.new_app_password or target.app_password or ""
-        print(
-            f"Waiting for cloud environmentd at {host}:6875 to come up with username {user} ..."
-        )
-        start = time.time()
-        deadline = start + timeout_secs
-        last_report = start
-        successes = 0
-        last_err: Exception | None = None
-        while time.time() < deadline:
-            try:
-                conn = psycopg.connect(
-                    host=host,
-                    port=6875,
-                    user=user,
-                    password=password,
-                    dbname="materialize",
-                    sslmode="require",
-                    connect_timeout=10,
-                )
-                try:
-                    with conn.cursor() as cur:
-                        cur.execute("SELECT 1")
-                        answered = cur.fetchall() == [(1,)]
-                finally:
-                    conn.close()
-                successes = successes + 1 if answered else 0
-            except Exception as e:
-                last_err = e
-                successes = 0
-
-            if successes >= sustain_probes:
-                # Elapsed time is worth reporting: a region that only comes back after
-                # minutes is doing a 0dt rollover, which we don't expect here.
-                print(
-                    f"Cloud environmentd at {host}:6875 is serving SQL, "
-                    f"after {time.time() - start:.0f}s"
-                )
-                return
-
-            now = time.time()
-            if now - last_report >= 30:
-                print(f"  still waiting ({now - start:.0f}s elapsed): {last_err}")
-                last_report = now
-            time.sleep(2)
-        raise UIError(
-            f"cloud environmentd at {host}:6875 did not serve SQL within {timeout_secs}s: {last_err}"
-        )
+        who = f"cloud environmentd at {host}:6875"
+        probe: Callable[[], object] = partial(cloud_sql, target, host, "SELECT 1")
     else:
-        # Docker target: use the composition helper to query the service via the
-        # host-mapped port on 127.0.0.1; the container hostname "materialized"
-        # is not resolvable from the host network when using psycopg directly.
-        print("Waiting for local environmentd (docker) at materialized:6875 ...")
-        deadline = time.time() + timeout_secs
-        last_err: Exception | None = None
-        while time.time() < deadline:
-            try:
-                target.composition.sql_query("SELECT 1", service="materialized")
-                return
-            except Exception as e:
-                last_err = e
-                time.sleep(1)
-        raise UIError(
-            f"materialized did not accept SQL connections within {timeout_secs}s after restart: {last_err}"
+        # The container hostname "materialized" does not resolve from the host network, so
+        # we go through the composition instead of connecting with psycopg.
+        who = "local environmentd (docker)"
+        probe = partial(
+            target.composition.sql_query, "SELECT 1", service="materialized"
         )
+
+    print(f"Waiting for {who} to come up ...")
+    elapsed = _await_probe(
+        probe, f"{who} to serve SQL", until_ok=True, timeout_secs=timeout_secs
+    )
+    print(f"{who} is serving SQL, after {elapsed:.0f}s")
 
 
 def wait_for_envd_down(
     target: "CloudTarget", host: str, timeout_secs: int = 600
 ) -> None:
     """
-    Wait until the environmentd SQL endpoint at `host` stops accepting connections.
+    Wait until the environmentd at `host` stops serving SQL.
 
-    Used after a soft `mz region disable` to observe that the teardown has reached the
-    data plane before the region is enabled again.
+    Used after a soft `mz region disable` to observe that the teardown has reached the data
+    plane before the region is enabled again.
     """
-    print(f"Waiting for cloud environmentd at {host}:6875 to go down ...")
-    password = target.new_app_password or target.app_password or ""
-    deadline = time.time() + timeout_secs
-    consecutive_failures = 0
-    while time.time() < deadline:
-        try:
-            conn = psycopg.connect(
-                host=host,
-                port=6875,
-                user=target.username,
-                password=password,
-                dbname="materialize",
-                sslmode="require",
-                connect_timeout=10,
-            )
-            conn.close()
-            consecutive_failures = 0
-        except psycopg.Error:
-            # A single failed attempt could be a transient network error against a
-            # live envd. Only treat repeated failures as the teardown having landed.
-            consecutive_failures += 1
-            if consecutive_failures >= 3:
-                return
-        time.sleep(1)
-    raise UIError(
-        f"environmentd at {host}:6875 still accepting SQL connections "
-        f"{timeout_secs}s after region disable"
+    who = f"cloud environmentd at {host}:6875"
+    print(f"Waiting for {who} to go down ...")
+    _await_probe(
+        partial(cloud_sql, target, host, "SELECT 1"),
+        f"{who} to stop serving SQL",
+        until_ok=False,
+        timeout_secs=timeout_secs,
     )
 
 
