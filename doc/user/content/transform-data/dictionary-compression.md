@@ -34,7 +34,9 @@ on every workload. Read this section before asking to have it turned on.
 
 - Columns that hold a **small set of longer values that repeat often**. Status
   strings, enum-like labels, country codes, and tenant IDs are typical examples.
-  Essentially all of the savings come from columns like these.
+  Essentially all of the savings come from columns like these. See [How many
+  distinct values a column should
+  have](#how-many-distinct-values-a-column-should-have) for a rule of thumb.
 - **Large** arrangements. The larger the arrangement, the more occurrences of
   each repeated value there are to collapse.
 
@@ -70,16 +72,18 @@ Reads pay a smaller but ongoing cost. Resolving a compressed value requires an
 extra indirection, and comparing compressed rows cannot use the fast path that
 uncompressed rows use.
 
-## How many distinct values are compressed
+## How many distinct values a column should have
 
-Materialize compresses roughly the 130 most frequently repeated values per
-column within a batch of updates. Treat this as an approximate, conservative
-floor rather than a contract. It depends on internal implementation details, and
-the effective number is often higher.
+As a rule of thumb, dictionary compression helps most when a column holds fewer
+than about 64 distinct values. Beyond roughly that many, the benefit tapers off,
+and as the number of distinct values keeps growing the feature trends toward pure
+CPU overhead with no memory saving.
 
-Exceeding this number is not an error and does not disable compression. Values
-that do not get a dictionary entry, including values that appear only once, are
-simply stored as-is. You see less memory savings and nothing else changes.
+Treat this as guidance about where the feature pays off, not as a limit,
+threshold, or capacity. Nothing breaks when a column holds more distinct values.
+Values that are not worth storing in a dictionary, including values that appear
+only once, are simply stored as-is. You see less memory savings and nothing else
+changes.
 
 ## Enable dictionary compression
 
