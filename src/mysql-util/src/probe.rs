@@ -41,7 +41,7 @@ impl<'a, Q: Queryable> KeyProber<'a, Q> {
         start: &str,
         end: Option<&str>,
     ) -> Result<u64, MySqlError> {
-        let (clause, params) = self.range_filter(start, end);
+        let (clause, params) = self.range_filter(start, true, end);
         let select = format!(
             "SELECT {col} FROM {table} WHERE {clause}",
             col = self.col,
@@ -69,7 +69,7 @@ impl<'a, Q: Queryable> KeyProber<'a, Q> {
         end: Option<&str>,
         len: usize,
     ) -> Result<Option<String>, MySqlError> {
-        let (clause, mut params) = self.range_filter(start, end);
+        let (clause, mut params) = self.range_filter(start, true, end);
         let sql = format!(
             "SELECT LEFT({col}, ?) FROM {table} WHERE {clause} ORDER BY {col} LIMIT 1",
             col = self.col,
@@ -96,14 +96,32 @@ impl<'a, Q: Queryable> KeyProber<'a, Q> {
     /// ```
     ///
     /// In this case it would likely return something like `abd` or `abe`, but not `aca`. It's
-    /// useful for finding the next prefix of a given primary key at the provided depth. If the
-    /// next key is shorter than the given prefix, it will return a shorter key.
+    /// useful for finding the next prefix of a given length. If the next key is shorter than the given
+    /// length it will return the shorter key. In MySQL shorter keys are ordered before keys with the same
+    /// prefix, and this holds for all collations.
+    ///
+    /// When `cur` has fewer than `len` characters it names an exact key rather than a truncation,
+    /// and the anchor would skip every key extending it. The walk instead steps just past that one
+    /// key, so extensions of `cur` become prefixes of their own.
     pub async fn next_prefix(
         &mut self,
         cur: &str,
         end: Option<&str>,
         len: usize,
     ) -> Result<Option<String>, MySqlError> {
+        // chars().count() counts Unicode code points, which is also what one
+        // "character" means to LEFT and CHAR_LENGTH for utf8mb4 data, so the
+        // short-key check agrees with how the prefix was produced.
+        if cur.chars().count() < len {
+            let (clause, mut params) = self.range_filter(cur, false, end);
+            let sql = format!(
+                "SELECT LEFT({col}, ?) FROM {table} WHERE {clause} ORDER BY {col} LIMIT 1",
+                col = self.col,
+                table = self.table,
+            );
+            params.insert(0, u64::cast_from(len).into());
+            return self.query_string(sql, params).await;
+        }
         let col = &self.col;
         let table = &self.table;
         let mut sql = format!(
@@ -125,9 +143,15 @@ impl<'a, Q: Queryable> KeyProber<'a, Q> {
         self.query_string(sql, params).await
     }
 
-    fn range_filter(&self, start: &str, end: Option<&str>) -> (String, Vec<Value>) {
+    fn range_filter(
+        &self,
+        start: &str,
+        inclusive: bool,
+        end: Option<&str>,
+    ) -> (String, Vec<Value>) {
         let col = &self.col;
-        let mut clause = format!("{col} >= ?");
+        let op = if inclusive { ">=" } else { ">" };
+        let mut clause = format!("{col} {op} ?");
         let mut params: Vec<Value> = vec![start.into()];
         if let Some(end) = end {
             clause.push_str(&format!(" AND {col} < ?"));
@@ -197,6 +221,456 @@ mod tests {
         assert_eq!(like_prefix_pattern("héllo"), "héllo%");
     }
 
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_basic_prefix_traversal() -> Result<(), anyhow::Error> {
+        let Some(mut conn) = connect().await? else {
+            return Ok(());
+        };
+        const DB: &str = "mz_probe_basic";
+        let keys = ["aa", "ab", "b", "bb", "bbb", "c"];
+        let table = setup_table(&mut conn, DB, "utf8mb4_0900_ai_ci", &keys).await?;
+
+        let p = &mut KeyProber::new(&mut conn, table, "id");
+        assert_eq!(first(p, "", None, 1).await, some("a"));
+        assert_eq!(next(p, "a", None, 1).await, some("b"));
+        assert_eq!(next(p, "b", None, 1).await, some("c"));
+        assert_eq!(next(p, "c", None, 1).await, None);
+
+        assert_eq!(first(p, "a", Some("b"), 2).await, some("aa"));
+        assert_eq!(next(p, "aa", Some("b"), 2).await, some("ab"));
+        assert_eq!(next(p, "ab", Some("b"), 2).await, None);
+
+        // The key "b" is shorter than the prefix length, so the walk steps
+        // past it as an exact key: bb becomes its own prefix, which then
+        // subsumes bbb.
+        assert_eq!(first(p, "b", Some("c"), 2).await, some("b"));
+        assert_eq!(next(p, "b", Some("c"), 2).await, some("bb"));
+        assert_eq!(next(p, "bb", Some("c"), 2).await, None);
+
+        assert_eq!(first(p, "c", None, 2).await, some("c"));
+        assert_eq!(next(p, "c", None, 2).await, None);
+
+        drop_db(&mut conn, DB).await?;
+        conn.disconnect().await?;
+        Ok(())
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_case_insensitive_prefix_traversal() -> Result<(), anyhow::Error> {
+        let Some(mut conn) = connect().await? else {
+            return Ok(());
+        };
+        const DB: &str = "mz_probe_case_insensitive";
+        let keys = ["Aa", "ab", "b", "Bb", "bbb", "C"];
+        let table = setup_table(&mut conn, DB, "utf8mb4_0900_ai_ci", &keys).await?;
+
+        let p = &mut KeyProber::new(&mut conn, table, "id");
+        // Although the sorting is case-insensitive the values returned by mysql are not normalized, so
+        // we need to use the correct character representation here to get the tests to pass.
+        assert_eq!(first(p, "", None, 1).await, some("A"));
+        assert_eq!(next(p, "A", None, 1).await, some("b"));
+        assert_eq!(next(p, "b", None, 1).await, some("C"));
+        assert_eq!(next(p, "C", None, 1).await, None);
+
+        assert_eq!(first(p, "A", Some("b"), 2).await, some("Aa"));
+        assert_eq!(next(p, "Aa", Some("b"), 2).await, some("ab"));
+        assert_eq!(next(p, "ab", Some("b"), 2).await, None);
+
+        // Stepping past the exact key "b" lands on Bb, whose prefix then
+        // subsumes bbb under this case-insensitive collation.
+        assert_eq!(first(p, "b", Some("C"), 2).await, some("b"));
+        assert_eq!(next(p, "b", Some("C"), 2).await, some("Bb"));
+        assert_eq!(next(p, "Bb", Some("C"), 2).await, None);
+
+        assert_eq!(first(p, "C", None, 2).await, some("C"));
+        assert_eq!(next(p, "C", None, 2).await, None);
+
+        drop_db(&mut conn, DB).await?;
+        conn.disconnect().await?;
+        Ok(())
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_wild_card_char_in_data() -> Result<(), anyhow::Error> {
+        let Some(mut conn) = connect().await? else {
+            return Ok(());
+        };
+        const DB: &str = "mz_probe_wildcard_test";
+        // Keys are a_1, a\2, a\3, a%4. The utf8mb4_0900_ai_ci collation
+        // orders them a_1 < a\2 < a\3 < a%4.
+        let keys = ["a_1", "a\\2", "a\\3", "a%4"];
+        let table = setup_table(&mut conn, DB, "utf8mb4_0900_ai_ci", &keys).await?;
+
+        let p = &mut KeyProber::new(&mut conn, table, "id");
+        assert_eq!(first(p, "", None, 1).await, some("a"));
+        assert_eq!(next(p, "a", None, 1).await, None);
+        assert_eq!(first(p, "a", None, 2).await, some("a_"));
+        assert_eq!(next(p, "a_", None, 2).await, some("a\\"));
+        assert_eq!(next(p, "a\\", None, 2).await, some("a%"));
+        assert_eq!(next(p, "a%", None, 2).await, None);
+
+        // Range bounds that are themselves wildcard characters.
+        assert_eq!(first(p, "a_", Some("a\\"), 3).await, some("a_1"));
+        assert_eq!(next(p, "a_1", Some("a\\"), 3).await, None);
+        assert_eq!(first(p, "a\\", Some("a%"), 3).await, some("a\\2"));
+        assert_eq!(next(p, "a\\2", Some("a%"), 3).await, some("a\\3"));
+        assert_eq!(next(p, "a\\3", Some("a%"), 3).await, None);
+        assert_eq!(first(p, "a%", None, 3).await, some("a%4"));
+        assert_eq!(next(p, "a%4", None, 3).await, None);
+
+        drop_db(&mut conn, DB).await?;
+        conn.disconnect().await?;
+        Ok(())
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_multibyte_chars_in_data() -> Result<(), anyhow::Error> {
+        let Some(mut conn) = connect().await? else {
+            return Ok(());
+        };
+        const DB: &str = "mz_probe_multibyte_test";
+        // utf8mb4_0900_ai_ci orders symbols before letters and Han after
+        // Latin: 😀 < 😀😀 < 😀a < a < a😀 < 日本 < 日本語.
+        let keys = ["a", "a😀", "😀", "😀a", "😀😀", "日本", "日本語"];
+        let table = setup_table(&mut conn, DB, "utf8mb4_0900_ai_ci", &keys).await?;
+
+        let p = &mut KeyProber::new(&mut conn, table, "id");
+        // Prefix lengths count characters, not bytes: a one-char prefix of a
+        // four-byte emoji is the whole emoji, never a broken fragment.
+        assert_eq!(first(p, "", None, 1).await, some("😀"));
+        assert_eq!(next(p, "😀", None, 1).await, some("a"));
+        assert_eq!(next(p, "a", None, 1).await, some("日"));
+        assert_eq!(next(p, "日", None, 1).await, None);
+
+        // Both walk modes work mid-multibyte: the exact-key step past 😀 and
+        // 日本, and the anchor past everything sharing 😀😀.
+        assert_eq!(next(p, "😀", None, 2).await, some("😀😀"));
+        assert_eq!(next(p, "😀😀", None, 2).await, some("😀a"));
+        assert_eq!(next(p, "日本", None, 3).await, some("日本語"));
+
+        drop_db(&mut conn, DB).await?;
+        conn.disconnect().await?;
+        Ok(())
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_live_mysql_ulid_pk() -> Result<(), anyhow::Error> {
+        let Some(mut conn) = connect().await? else {
+            return Ok(());
+        };
+        const DB: &str = "mz_probe_ulid_test";
+        // ULIDs minted around the same time share a long timestamp prefix,
+        // here chars 11 and 12 are the first that differ.
+        const CROCKFORD: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+        let ids: Vec<String> = (0..1000)
+            .map(|i| {
+                format!(
+                    "01J8ZXABCD{}{}00000000000000",
+                    char::from(CROCKFORD[i / 32]),
+                    char::from(CROCKFORD[i % 32]),
+                )
+            })
+            .collect();
+        let table = setup_table(&mut conn, DB, "utf8mb4_0900_ai_ci", &ids).await?;
+        let mut prober = KeyProber::new(&mut conn, table, "id");
+
+        // Every key shares the timestamp prefix, so short prefixes cannot
+        // split the key space at all.
+        assert_eq!(first(&mut prober, "", None, 1).await, some("0"));
+        assert_eq!(next(&mut prober, "0", None, 1).await, None);
+        assert_eq!(next(&mut prober, "01J8ZXABCD", None, 10).await, None);
+
+        // One character past the shared prefix distinguishes the keys.
+        let walked = walk_prefixes(&mut prober, 11).await?;
+        let expected: Vec<String> = (0..32)
+            .map(|i| format!("01J8ZXABCD{}", char::from(CROCKFORD[i])))
+            .collect();
+        assert_eq!(walked, expected);
+
+        let all = prober.estimate_range_rows("", None).await?;
+        assert!(all > 0, "all={all}");
+
+        drop_db(&mut conn, DB).await?;
+        conn.disconnect().await?;
+        Ok(())
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_live_mysql_uuid_pk() -> Result<(), anyhow::Error> {
+        let Some(mut conn) = connect().await? else {
+            return Ok(());
+        };
+        const DB: &str = "mz_probe_uuid_test";
+        // Hyphenated lowercase v4-shaped UUIDs, unique via the last group,
+        // with the leading group scattered like random UUIDs.
+        let ids: Vec<String> = (0..1000u64)
+            .map(|i| {
+                let h = i.wrapping_mul(2654435761) % 0x1_0000_0000;
+                format!("{h:08x}-0000-4000-8000-{i:012x}")
+            })
+            .collect();
+        let table = setup_table(&mut conn, DB, "utf8mb4_0900_ai_ci", &ids).await?;
+        let mut p = KeyProber::new(&mut conn, table, "id");
+
+        // Lowercase hex order matches byte order under this collation.
+        assert_eq!(first(&mut p, "", None, 36).await, ids.iter().min().cloned());
+
+        let walked = walk_prefixes(&mut p, 1).await?;
+        let expected: BTreeSet<String> = ids.iter().map(|id| id[..1].to_string()).collect();
+        assert_eq!(walked.iter().cloned().collect::<BTreeSet<_>>(), expected);
+
+        let all = p.estimate_range_rows("", None).await?;
+        assert!(all > 0, "all={all}");
+
+        drop_db(&mut conn, DB).await?;
+        conn.disconnect().await?;
+        Ok(())
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_live_mysql_like_metacharacters() -> Result<(), anyhow::Error> {
+        let Some(mut conn) = connect().await? else {
+            return Ok(());
+        };
+        const DB: &str = "mz_probe_like_test";
+        // Every next_prefix step anchors on `LIKE '<prefix>%'`, so keys whose
+        // prefixes are LIKE metacharacters exercise the escaping.
+        let ids = [
+            "%",
+            "%%",
+            "_",
+            "__",
+            "\\",
+            "\\\\",
+            "a%",
+            "a%b",
+            "a_",
+            "a_b",
+            "a\\",
+            "a\\b",
+            "ab",
+            "a b",
+            "100%",
+            "50%off",
+            "under_score",
+            "back\\slash",
+        ];
+        let table = setup_table(&mut conn, DB, "utf8mb4_0900_ai_ci", &ids).await?;
+
+        // The collation dictates both the visit order and how short keys
+        // interleave with their extensions, so assert the property that
+        // matters instead of exact prefixes: the walked prefixes are range
+        // boundaries that partition the table, every key falls in exactly
+        // one interval. The server does the interval counting, under the
+        // column's own collation.
+        for len in [1, 2] {
+            let walked =
+                walk_prefixes(&mut KeyProber::new(&mut conn, table.clone(), "id"), len).await?;
+            let mut total = 0;
+            for (i, lo) in walked.iter().enumerate() {
+                total += count_range(&mut conn, DB, lo, walked.get(i + 1)).await?;
+            }
+            assert_eq!(
+                total,
+                u64::cast_from(ids.len()),
+                "len={len} walked={walked:?}"
+            );
+        }
+
+        drop_db(&mut conn, DB).await?;
+        conn.disconnect().await?;
+        Ok(())
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_live_mysql_collations() -> Result<(), anyhow::Error> {
+        let Some(mut conn) = connect().await? else {
+            return Ok(());
+        };
+        const CI_DB: &str = "mz_probe_collation_ci_test";
+        const BIN_DB: &str = "mz_probe_collation_bin_test";
+
+        // Case-insensitive collation: case variants of one key collide, so
+        // keys differ by letter, in mixed case.
+        let ci_keys = ["Apple", "apricot", "banana", "Cherry"];
+        let t_ci = setup_table(&mut conn, CI_DB, "utf8mb4_0900_ai_ci", &ci_keys).await?;
+        let mut prober = KeyProber::new(&mut conn, t_ci, "id");
+        // 'A' anchors past 'apricot' too: LIKE is case-insensitive here, so a
+        // returned prefix covers every case variant of it.
+        assert_eq!(walk_prefixes(&mut prober, 1).await?, ["A", "b", "C"]);
+        assert_eq!(walk_prefixes(&mut prober, 32).await?, ci_keys);
+
+        // Binary collation: case variants coexist and order by byte value.
+        let bin_keys = ["ABC", "ABD", "abc", "abd"];
+        let t_bin = setup_table(&mut conn, BIN_DB, "utf8mb4_bin", &bin_keys).await?;
+        let mut prober = KeyProber::new(&mut conn, t_bin, "id");
+        // Uppercase sorts before lowercase in byte order, and case variants
+        // are distinct prefixes.
+        assert_eq!(walk_prefixes(&mut prober, 1).await?, ["A", "a"]);
+        assert_eq!(walk_prefixes(&mut prober, 32).await?, bin_keys);
+
+        drop_db(&mut conn, CI_DB).await?;
+        drop_db(&mut conn, BIN_DB).await?;
+        conn.disconnect().await?;
+        Ok(())
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_live_mysql_stale_statistics() -> Result<(), anyhow::Error> {
+        let Some(mut conn) = connect().await? else {
+            return Ok(());
+        };
+        const DB: &str = "mz_probe_stale_test";
+        recreate_db(&mut conn, DB).await?;
+        // This setup stays bespoke: STATS_AUTO_RECALC=0 plus an ANALYZE while
+        // empty pins the persisted statistics at zero rows, no matter what is
+        // inserted afterwards.
+        #[allow(clippy::disallowed_methods)]
+        {
+            conn.query_drop(format!(
+                "CREATE TABLE {DB}.t (id VARCHAR(36) CHARACTER SET utf8mb4 \
+                 COLLATE utf8mb4_0900_ai_ci PRIMARY KEY NOT NULL) \
+                 STATS_AUTO_RECALC=0, STATS_PERSISTENT=1"
+            ))
+            .await?;
+            conn.query_drop(format!("ANALYZE TABLE {DB}.t")).await?;
+        }
+        let ids: Vec<String> = (0..1000).map(|i| format!("a{i:05}")).collect();
+        conn.exec_batch(
+            format!("INSERT INTO {DB}.t VALUES (?)"),
+            ids.iter().map(|id| (id.as_str(),)),
+        )
+        .await?;
+
+        // The staleness this test is about: table_rows reports 0.
+        let table_rows: Option<u64> = conn
+            .exec_first(
+                "SELECT table_rows FROM information_schema.tables \
+                 WHERE table_schema = ? AND table_name = 't'",
+                (DB,),
+            )
+            .await?;
+        assert_eq!(table_rows, Some(0));
+
+        let table = QualifiedTableRef {
+            schema_name: DB,
+            table_name: "t",
+        };
+        let mut prober = KeyProber::new(&mut conn, table, "id");
+
+        // Range estimates come from index dives on the real B-tree, not the
+        // stale table statistics, so they still reflect the actual data.
+        let all = prober.estimate_range_rows("", None).await?;
+        assert!((500..=2000).contains(&all), "all={all}");
+        let range = prober.estimate_range_rows("a00100", Some("a00200")).await?;
+        assert!((50..=200).contains(&range), "range={range}");
+
+        drop_db(&mut conn, DB).await?;
+        conn.disconnect().await?;
+        Ok(())
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_explain_row_estimate_sizing() -> Result<(), anyhow::Error> {
+        let Some(mut conn) = connect().await? else {
+            return Ok(());
+        };
+        const DB: &str = "mz_probe_explain_test";
+        let ids: Vec<String> = (0..1000).map(|i| format!("a{i:05}")).collect();
+        let table = setup_table(&mut conn, DB, "utf8mb4_0900_ai_ci", &ids).await?;
+        let mut p = KeyProber::new(&mut conn, table, "id");
+
+        // Estimates are index dives, near reality but never exact by
+        // contract, so the bounds are deliberately loose.
+        let all = p.estimate_range_rows("", None).await?;
+        assert!((500..=2000).contains(&all), "all={all}");
+        let half = p.estimate_range_rows("a00500", None).await?;
+        assert!((250..=1000).contains(&half), "half={half}");
+        let none = p.estimate_range_rows("zzz", None).await?;
+        assert!(none <= 5, "none={none}");
+
+        drop_db(&mut conn, DB).await?;
+        conn.disconnect().await?;
+        Ok(())
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_probe_sargability() -> Result<(), anyhow::Error> {
+        let Some(mut conn) = connect().await? else {
+            return Ok(());
+        };
+        const DB: &str = "mz_probe_sargable_test";
+        let ids: Vec<String> = (0..1000).map(|i| format!("a{i:05}")).collect();
+        let table = setup_table(&mut conn, DB, "utf8mb4_0900_ai_ci", &ids).await?;
+
+        // Prove the methodology first: a deliberately non-sargable predicate
+        // reads every row, and the session handler counters see it.
+        let before = handler_reads(&mut conn).await?;
+        let _: Option<u64> = conn
+            .exec_first(
+                format!("SELECT COUNT(*) FROM {DB}.t WHERE LEFT(id, 2) = 'a0'"),
+                (),
+            )
+            .await?;
+        let scan_reads = handler_reads(&mut conn).await? - before;
+        assert!(scan_reads >= 1000, "scan_reads={scan_reads}");
+
+        // Every probe must stay a handful of index operations. A regression
+        // to a scan costs >= 1000 reads, far past the generous bound.
+        let before = handler_reads(&mut conn).await?;
+        let got = first(
+            &mut KeyProber::new(&mut conn, table.clone(), "id"),
+            "a00500",
+            None,
+            6,
+        )
+        .await;
+        let reads = handler_reads(&mut conn).await? - before;
+        assert_eq!(got, some("a00500"));
+        assert!(reads < 50, "first_prefix reads={reads}");
+
+        let before = handler_reads(&mut conn).await?;
+        let got = next(
+            &mut KeyProber::new(&mut conn, table.clone(), "id"),
+            "a00500",
+            None,
+            6,
+        )
+        .await;
+        let reads = handler_reads(&mut conn).await? - before;
+        assert_eq!(got, some("a00501"));
+        assert!(reads < 50, "next_prefix anchor reads={reads}");
+
+        let before = handler_reads(&mut conn).await?;
+        let got = next(
+            &mut KeyProber::new(&mut conn, table.clone(), "id"),
+            "a0",
+            None,
+            6,
+        )
+        .await;
+        let reads = handler_reads(&mut conn).await? - before;
+        assert_eq!(got, some("a00000"));
+        assert!(reads < 50, "next_prefix exact-key step reads={reads}");
+
+        drop_db(&mut conn, DB).await?;
+        conn.disconnect().await?;
+        Ok(())
+    }
+
+    // Test helpers.
+
     /// Connects to the server named by `MZ_TEST_MYSQL_URL`, or `None` to skip
     /// the test when it is unset. Skipping is a local-only convenience, CI
     /// must always provide the URL.
@@ -225,6 +699,106 @@ mod tests {
         Ok(())
     }
 
+    /// Recreates scratch database `db` holding one table `t` whose string
+    /// primary key `id` is pinned to the given utf8mb4 `collation`, containing
+    /// `keys`, with fresh statistics. Returns a ref for [`KeyProber::new`].
+    async fn setup_table<'a>(
+        conn: &mut mysql_async::Conn,
+        db: &'a str,
+        collation: &str,
+        keys: &[impl AsRef<str> + Sync],
+    ) -> Result<QualifiedTableRef<'a>, anyhow::Error> {
+        recreate_db(conn, db).await?;
+        #[allow(clippy::disallowed_methods)]
+        conn.query_drop(format!(
+            "CREATE TABLE {db}.t (id VARCHAR(36) CHARACTER SET utf8mb4 \
+             COLLATE {collation} PRIMARY KEY NOT NULL)"
+        ))
+        .await?;
+        conn.exec_batch(
+            format!("INSERT INTO {db}.t VALUES (?)"),
+            keys.iter().map(|id| (id.as_ref(),)),
+        )
+        .await?;
+        #[allow(clippy::disallowed_methods)]
+        conn.query_drop(format!("ANALYZE TABLE {db}.t")).await?;
+        Ok(QualifiedTableRef {
+            schema_name: db,
+            table_name: "t",
+        })
+    }
+
+    /// Drops the scratch database `db`.
+    async fn drop_db(conn: &mut mysql_async::Conn, db: &str) -> Result<(), anyhow::Error> {
+        #[allow(clippy::disallowed_methods)]
+        conn.query_drop(format!("DROP DATABASE {db}")).await?;
+        Ok(())
+    }
+
+    /// Number of keys in `[lo, hi)` of `db`'s table, counted by the server so
+    /// the comparison happens under the column's collation.
+    async fn count_range(
+        conn: &mut mysql_async::Conn,
+        db: &str,
+        lo: &str,
+        hi: Option<&String>,
+    ) -> Result<u64, anyhow::Error> {
+        let mut clause = "id >= ?".to_string();
+        let mut params: Vec<Value> = vec![lo.into()];
+        if let Some(hi) = hi {
+            clause.push_str(" AND id < ?");
+            params.push(hi.as_str().into());
+        }
+        let count: Option<u64> = conn
+            .exec_first(
+                format!("SELECT COUNT(*) FROM {db}.t WHERE {clause}"),
+                Params::Positional(params),
+            )
+            .await?;
+        Ok(count.expect("COUNT returns a row"))
+    }
+
+    /// Sum of this session's `Handler_read_*` counters: how many index or row
+    /// read operations the connection has performed so far.
+    async fn handler_reads(conn: &mut mysql_async::Conn) -> Result<u64, anyhow::Error> {
+        let rows: Vec<(String, String)> = conn
+            .exec("SHOW SESSION STATUS LIKE 'Handler_read%'", ())
+            .await?;
+        Ok(rows.into_iter().map(|(_, v)| v.parse().unwrap_or(0)).sum())
+    }
+
+    /// [`KeyProber::first_prefix`], unwrapped so assertions stay one-liners.
+    async fn first(
+        prober: &mut KeyProber<'_, mysql_async::Conn>,
+        start: &str,
+        end: Option<&str>,
+        len: usize,
+    ) -> Option<String> {
+        prober
+            .first_prefix(start, end, len)
+            .await
+            .expect("first_prefix failed")
+    }
+
+    /// [`KeyProber::next_prefix`], unwrapped so assertions stay one-liners.
+    async fn next(
+        prober: &mut KeyProber<'_, mysql_async::Conn>,
+        cur: &str,
+        end: Option<&str>,
+        len: usize,
+    ) -> Option<String> {
+        prober
+            .next_prefix(cur, end, len)
+            .await
+            .expect("next_prefix failed")
+    }
+
+    /// `Some` for comparing against [`first`]/[`next`] results without
+    /// `as_deref` noise at every assertion.
+    fn some(s: &str) -> Option<String> {
+        Some(s.into())
+    }
+
     /// Walks the whole key space at prefix length `len`, panicking if the
     /// walk revisits a prefix.
     async fn walk_prefixes(
@@ -247,414 +821,5 @@ mod tests {
             }
         }
         Ok(walked)
-    }
-
-    #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)]
-    async fn test_live_mysql() -> Result<(), anyhow::Error> {
-        let Some(mut conn) = connect().await? else {
-            return Ok(());
-        };
-
-        #[allow(clippy::disallowed_methods)]
-        {
-            conn.query_drop("DROP DATABASE IF EXISTS mz_probe_test")
-                .await?;
-            conn.query_drop("CREATE DATABASE mz_probe_test").await?;
-            conn.query_drop("CREATE TABLE mz_probe_test.t (id VARCHAR(32) PRIMARY KEY NOT NULL)")
-                .await?;
-            conn.query_drop(
-                "INSERT INTO mz_probe_test.t \
-                 WITH RECURSIVE n AS (SELECT 1 x UNION ALL SELECT x+1 FROM n WHERE x < 900) \
-                 SELECT CONCAT('a', LPAD(x, 5, '0')) FROM n",
-            )
-            .await?;
-            conn.query_drop(
-                "INSERT INTO mz_probe_test.t \
-                 WITH RECURSIVE n AS (SELECT 1 x UNION ALL SELECT x+1 FROM n WHERE x < 100) \
-                 SELECT CONCAT('b', LPAD(x, 5, '0')) FROM n",
-            )
-            .await?;
-            conn.query_drop("INSERT INTO mz_probe_test.t VALUES ('c_1'), ('c%2'), ('c\\\\3')")
-                .await?;
-            conn.query_drop("ANALYZE TABLE mz_probe_test.t").await?;
-        }
-
-        let table = QualifiedTableRef {
-            schema_name: "mz_probe_test",
-            table_name: "t",
-        };
-        let mut prober = KeyProber::new(&mut conn, table, "id");
-
-        assert_eq!(
-            prober.first_prefix("", None, 1).await?.as_deref(),
-            Some("a")
-        );
-        assert_eq!(
-            prober.next_prefix("a", None, 1).await?.as_deref(),
-            Some("b")
-        );
-        assert_eq!(
-            prober.next_prefix("b", None, 1).await?.as_deref(),
-            Some("c")
-        );
-        assert_eq!(prober.next_prefix("c", None, 1).await?, None);
-
-        assert_eq!(
-            prober
-                .first_prefix("b", Some("b00002"), 6)
-                .await?
-                .as_deref(),
-            Some("b00001")
-        );
-        assert_eq!(prober.next_prefix("a", Some("b"), 1).await?, None);
-        assert_eq!(prober.first_prefix("zzz", None, 1).await?, None);
-
-        let mut walked = BTreeSet::new();
-        let mut cur = prober
-            .first_prefix("c", None, 3)
-            .await?
-            .expect("c keys exist");
-        loop {
-            assert!(walked.insert(cur.clone()), "prefix repeated: {cur:?}");
-            match prober.next_prefix(&cur, None, 3).await? {
-                Some(next) => cur = next,
-                None => break,
-            }
-        }
-        let expected: BTreeSet<String> = ["c_1", "c%2", "c\\3"]
-            .into_iter()
-            .map(String::from)
-            .collect();
-        assert_eq!(walked, expected);
-
-        let all = prober.estimate_range_rows("", None).await?;
-        let b_range = prober.estimate_range_rows("b", Some("c")).await?;
-        assert!(all > b_range, "all={all} b_range={b_range}");
-        assert!(b_range > 0);
-
-        #[allow(clippy::disallowed_methods)]
-        conn.query_drop("DROP DATABASE mz_probe_test").await?;
-        conn.disconnect().await?;
-        Ok(())
-    }
-
-    #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)]
-    async fn test_live_mysql_ulid_pk() -> Result<(), anyhow::Error> {
-        let Some(mut conn) = connect().await? else {
-            return Ok(());
-        };
-        recreate_db(&mut conn, "mz_probe_ulid_test").await?;
-        #[allow(clippy::disallowed_methods)]
-        conn.query_drop("CREATE TABLE mz_probe_ulid_test.t (id VARCHAR(32) PRIMARY KEY NOT NULL)")
-            .await?;
-
-        // ULIDs minted around the same time share a long timestamp prefix,
-        // here chars 11 and 12 are the first that differ.
-        const CROCKFORD: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-        let ids: Vec<String> = (0..1000)
-            .map(|i| {
-                format!(
-                    "01J8ZXABCD{}{}00000000000000",
-                    char::from(CROCKFORD[i / 32]),
-                    char::from(CROCKFORD[i % 32]),
-                )
-            })
-            .collect();
-        conn.exec_batch(
-            "INSERT INTO mz_probe_ulid_test.t VALUES (?)",
-            ids.iter().map(|id| (id.as_str(),)),
-        )
-        .await?;
-        #[allow(clippy::disallowed_methods)]
-        conn.query_drop("ANALYZE TABLE mz_probe_ulid_test.t")
-            .await?;
-
-        let table = QualifiedTableRef {
-            schema_name: "mz_probe_ulid_test",
-            table_name: "t",
-        };
-        let mut prober = KeyProber::new(&mut conn, table, "id");
-
-        // Every key shares the timestamp prefix, so short prefixes cannot
-        // split the key space at all.
-        assert_eq!(
-            prober.first_prefix("", None, 1).await?.as_deref(),
-            Some("0")
-        );
-        assert_eq!(prober.next_prefix("0", None, 1).await?, None);
-        assert_eq!(prober.next_prefix("01J8ZXABCD", None, 10).await?, None);
-
-        // One character past the shared prefix distinguishes the keys.
-        let walked = walk_prefixes(&mut prober, 11).await?;
-        let expected: Vec<String> = (0..32)
-            .map(|i| format!("01J8ZXABCD{}", char::from(CROCKFORD[i])))
-            .collect();
-        assert_eq!(walked, expected);
-
-        let all = prober.estimate_range_rows("", None).await?;
-        assert!(all > 0, "all={all}");
-
-        #[allow(clippy::disallowed_methods)]
-        conn.query_drop("DROP DATABASE mz_probe_ulid_test").await?;
-        conn.disconnect().await?;
-        Ok(())
-    }
-
-    #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)]
-    async fn test_live_mysql_uuid_pk() -> Result<(), anyhow::Error> {
-        let Some(mut conn) = connect().await? else {
-            return Ok(());
-        };
-        recreate_db(&mut conn, "mz_probe_uuid_test").await?;
-        #[allow(clippy::disallowed_methods)]
-        conn.query_drop("CREATE TABLE mz_probe_uuid_test.t (id VARCHAR(36) PRIMARY KEY NOT NULL)")
-            .await?;
-
-        // Hyphenated lowercase v4-shaped UUIDs, unique via the last group,
-        // with the leading group scattered like random UUIDs.
-        let ids: Vec<String> = (0..1000u64)
-            .map(|i| {
-                let h = i.wrapping_mul(2654435761) % 0x1_0000_0000;
-                format!("{h:08x}-0000-4000-8000-{i:012x}")
-            })
-            .collect();
-        conn.exec_batch(
-            "INSERT INTO mz_probe_uuid_test.t VALUES (?)",
-            ids.iter().map(|id| (id.as_str(),)),
-        )
-        .await?;
-        #[allow(clippy::disallowed_methods)]
-        conn.query_drop("ANALYZE TABLE mz_probe_uuid_test.t")
-            .await?;
-
-        let table = QualifiedTableRef {
-            schema_name: "mz_probe_uuid_test",
-            table_name: "t",
-        };
-        let mut prober = KeyProber::new(&mut conn, table, "id");
-
-        // Lowercase hex order matches byte order under the default collation.
-        assert_eq!(
-            prober.first_prefix("", None, 36).await?.as_deref(),
-            ids.iter().min().map(String::as_str)
-        );
-
-        let walked = walk_prefixes(&mut prober, 1).await?;
-        let expected: BTreeSet<String> = ids.iter().map(|id| id[..1].to_string()).collect();
-        assert_eq!(walked.iter().cloned().collect::<BTreeSet<_>>(), expected);
-
-        let all = prober.estimate_range_rows("", None).await?;
-        assert!(all > 0, "all={all}");
-
-        #[allow(clippy::disallowed_methods)]
-        conn.query_drop("DROP DATABASE mz_probe_uuid_test").await?;
-        conn.disconnect().await?;
-        Ok(())
-    }
-
-    #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)]
-    async fn test_live_mysql_like_metacharacters() -> Result<(), anyhow::Error> {
-        let Some(mut conn) = connect().await? else {
-            return Ok(());
-        };
-        recreate_db(&mut conn, "mz_probe_like_test").await?;
-        #[allow(clippy::disallowed_methods)]
-        conn.query_drop("CREATE TABLE mz_probe_like_test.t (id VARCHAR(32) PRIMARY KEY NOT NULL)")
-            .await?;
-
-        // Every next_prefix step anchors on `LIKE '<prefix>%'`, so keys whose
-        // prefixes are LIKE metacharacters exercise the escaping.
-        let ids = [
-            "%",
-            "%%",
-            "_",
-            "__",
-            "\\",
-            "\\\\",
-            "a%",
-            "a%b",
-            "a_",
-            "a_b",
-            "a\\",
-            "a\\b",
-            "ab",
-            "a b",
-            "100%",
-            "50%off",
-            "under_score",
-            "back\\slash",
-        ];
-        conn.exec_batch(
-            "INSERT INTO mz_probe_like_test.t VALUES (?)",
-            ids.iter().map(|id| (*id,)),
-        )
-        .await?;
-        #[allow(clippy::disallowed_methods)]
-        conn.query_drop("ANALYZE TABLE mz_probe_like_test.t")
-            .await?;
-
-        let table = QualifiedTableRef {
-            schema_name: "mz_probe_like_test",
-            table_name: "t",
-        };
-        let mut prober = KeyProber::new(&mut conn, table, "id");
-
-        // A key shorter than `len` yields a short prefix that subsumes longer
-        // keys sharing it (the walk skips past everything `LIKE '<prefix>%'`),
-        // so instead of comparing exact prefixes, assert the walk partitions
-        // the keys: every key starts with exactly one walked prefix.
-        for len in [1, 2] {
-            let walked = walk_prefixes(&mut prober, len).await?;
-            for id in ids {
-                let covering: Vec<_> = walked
-                    .iter()
-                    .filter(|p| id.starts_with(p.as_str()))
-                    .collect();
-                assert_eq!(
-                    covering.len(),
-                    1,
-                    "id={id:?} len={len} covering={covering:?} walked={walked:?}"
-                );
-            }
-        }
-
-        #[allow(clippy::disallowed_methods)]
-        conn.query_drop("DROP DATABASE mz_probe_like_test").await?;
-        conn.disconnect().await?;
-        Ok(())
-    }
-
-    #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)]
-    async fn test_live_mysql_collations() -> Result<(), anyhow::Error> {
-        let Some(mut conn) = connect().await? else {
-            return Ok(());
-        };
-        recreate_db(&mut conn, "mz_probe_collation_test").await?;
-        #[allow(clippy::disallowed_methods)]
-        {
-            conn.query_drop(
-                "CREATE TABLE mz_probe_collation_test.t_ci \
-                 (id VARCHAR(32) COLLATE utf8mb4_0900_ai_ci PRIMARY KEY NOT NULL)",
-            )
-            .await?;
-            conn.query_drop(
-                "CREATE TABLE mz_probe_collation_test.t_bin \
-                 (id VARCHAR(32) COLLATE utf8mb4_bin PRIMARY KEY NOT NULL)",
-            )
-            .await?;
-        }
-        // Case-insensitive collation: case variants of one key collide, so
-        // keys differ by letter, in mixed case.
-        conn.exec_batch(
-            "INSERT INTO mz_probe_collation_test.t_ci VALUES (?)",
-            ["Apple", "apricot", "banana", "Cherry"].map(|id| (id,)),
-        )
-        .await?;
-        // Binary collation: case variants coexist and order by byte value.
-        conn.exec_batch(
-            "INSERT INTO mz_probe_collation_test.t_bin VALUES (?)",
-            ["ABC", "ABD", "abc", "abd"].map(|id| (id,)),
-        )
-        .await?;
-        #[allow(clippy::disallowed_methods)]
-        {
-            conn.query_drop("ANALYZE TABLE mz_probe_collation_test.t_ci")
-                .await?;
-            conn.query_drop("ANALYZE TABLE mz_probe_collation_test.t_bin")
-                .await?;
-        }
-
-        let t_ci = QualifiedTableRef {
-            schema_name: "mz_probe_collation_test",
-            table_name: "t_ci",
-        };
-        let mut prober = KeyProber::new(&mut conn, t_ci, "id");
-        // 'A' anchors past 'apricot' too: LIKE is case-insensitive here, so a
-        // returned prefix covers every case variant of it.
-        assert_eq!(walk_prefixes(&mut prober, 1).await?, ["A", "b", "C"]);
-        assert_eq!(
-            walk_prefixes(&mut prober, 32).await?,
-            ["Apple", "apricot", "banana", "Cherry"]
-        );
-
-        let t_bin = QualifiedTableRef {
-            schema_name: "mz_probe_collation_test",
-            table_name: "t_bin",
-        };
-        let mut prober = KeyProber::new(&mut conn, t_bin, "id");
-        // Uppercase sorts before lowercase in byte order, and case variants
-        // are distinct prefixes.
-        assert_eq!(walk_prefixes(&mut prober, 1).await?, ["A", "a"]);
-        assert_eq!(
-            walk_prefixes(&mut prober, 32).await?,
-            ["ABC", "ABD", "abc", "abd"]
-        );
-
-        #[allow(clippy::disallowed_methods)]
-        conn.query_drop("DROP DATABASE mz_probe_collation_test")
-            .await?;
-        conn.disconnect().await?;
-        Ok(())
-    }
-
-    #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)]
-    async fn test_live_mysql_stale_statistics() -> Result<(), anyhow::Error> {
-        let Some(mut conn) = connect().await? else {
-            return Ok(());
-        };
-        recreate_db(&mut conn, "mz_probe_stale_test").await?;
-        // STATS_AUTO_RECALC=0 plus an ANALYZE while empty pins the persisted
-        // statistics at zero rows, no matter what is inserted afterwards.
-        #[allow(clippy::disallowed_methods)]
-        {
-            conn.query_drop(
-                "CREATE TABLE mz_probe_stale_test.t \
-                 (id VARCHAR(32) PRIMARY KEY NOT NULL) \
-                 STATS_AUTO_RECALC=0, STATS_PERSISTENT=1",
-            )
-            .await?;
-            conn.query_drop("ANALYZE TABLE mz_probe_stale_test.t")
-                .await?;
-        }
-        let ids: Vec<String> = (0..1000).map(|i| format!("a{i:05}")).collect();
-        conn.exec_batch(
-            "INSERT INTO mz_probe_stale_test.t VALUES (?)",
-            ids.iter().map(|id| (id.as_str(),)),
-        )
-        .await?;
-
-        // The staleness this test is about: table_rows reports 0.
-        let table_rows: Option<u64> = conn
-            .exec_first(
-                "SELECT table_rows FROM information_schema.tables \
-                 WHERE table_schema = 'mz_probe_stale_test' AND table_name = 't'",
-                (),
-            )
-            .await?;
-        assert_eq!(table_rows, Some(0));
-
-        let table = QualifiedTableRef {
-            schema_name: "mz_probe_stale_test",
-            table_name: "t",
-        };
-        let mut prober = KeyProber::new(&mut conn, table, "id");
-
-        // Range estimates come from index dives on the real B-tree, not the
-        // stale table statistics, so they still reflect the actual data.
-        let all = prober.estimate_range_rows("", None).await?;
-        assert!((500..=2000).contains(&all), "all={all}");
-        let range = prober.estimate_range_rows("a00100", Some("a00200")).await?;
-        assert!((50..=200).contains(&range), "range={range}");
-
-        #[allow(clippy::disallowed_methods)]
-        conn.query_drop("DROP DATABASE mz_probe_stale_test").await?;
-        conn.disconnect().await?;
-        Ok(())
     }
 }
