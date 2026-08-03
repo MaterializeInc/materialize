@@ -592,6 +592,15 @@ impl TestHarness {
         self
     }
 
+    pub fn with_builtin_support_cluster_replication_factor(
+        mut self,
+        builtin_support_cluster_replication_factor: u32,
+    ) -> Self {
+        self.builtin_support_cluster_config.replication_factor =
+            builtin_support_cluster_replication_factor;
+        self
+    }
+
     pub fn with_builtin_catalog_server_cluster_replica_size(
         mut self,
         builtin_catalog_server_cluster_replica_size: String,
