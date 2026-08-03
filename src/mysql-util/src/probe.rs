@@ -99,10 +99,6 @@ impl<'a, Q: Queryable> KeyProber<'a, Q> {
     /// useful for finding the next prefix of a given length. If the next key is shorter than the given
     /// length it will return the shorter key. In MySQL shorter keys are ordered before keys with the same
     /// prefix, and this holds for all collations.
-    ///
-    /// When `cur` has fewer than `len` characters it names an exact key rather than a truncation,
-    /// and the anchor would skip every key extending it. The walk instead steps just past that one
-    /// key, so extensions of `cur` become prefixes of their own.
     pub async fn next_prefix(
         &mut self,
         cur: &str,
@@ -111,8 +107,15 @@ impl<'a, Q: Queryable> KeyProber<'a, Q> {
     ) -> Result<Option<String>, MySqlError> {
         // chars().count() counts Unicode code points, which is also what one
         // "character" means to LEFT and CHAR_LENGTH for utf8mb4 data, so the
-        // short-key check agrees with how the prefix was produced.
+        // short-key check agrees with how the prefix was produced. Data from
+        // MySQL is already decoded as Unicode -- anything not matching should have
+        // caused a failure. We could move towards explicitly querying/storing
+        // MySQL's reported length if it diverges or we fear it may diverge.
         if cur.chars().count() < len {
+            // When `cur` has fewer than `len` characters it names an exact key
+            // rather than a truncation, and the anchor would skip every key extending
+            // it. The walk instead steps just past that one key, so extensions of
+            // `cur` become prefixes of their own.
             let (clause, mut params) = self.range_filter(cur, false, end);
             let sql = format!(
                 "SELECT LEFT({col}, ?) FROM {table} WHERE {clause} ORDER BY {col} LIMIT 1",
