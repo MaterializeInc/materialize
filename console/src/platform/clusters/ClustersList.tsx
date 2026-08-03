@@ -27,6 +27,7 @@ import useLatestOfflineReplica, {
 import { AppErrorBoundary } from "~/components/AppErrorBoundary";
 import { CodeBlock } from "~/components/copyableComponents";
 import DeleteObjectMenuItem from "~/components/DeleteObjectMenuItem";
+import ErrorBox from "~/components/ErrorBox";
 import { LoadingContainer } from "~/components/LoadingContainer";
 import OverflowMenu, { OVERFLOW_BUTTON_WIDTH } from "~/components/OverflowMenu";
 import { sortingFunctions } from "~/components/Table/tableColumnBuilders";
@@ -50,6 +51,7 @@ import {
 } from "~/layouts/listPageComponents";
 import docUrls from "~/mz-doc-urls.json";
 import { relativeClusterPath } from "~/platform/routeHelpers";
+import { useAllClusters } from "~/store/allClusters";
 import WarningIcon from "~/svg/WarningIcon";
 import { truncateMaxWidth } from "~/theme/components/Table";
 import {
@@ -59,7 +61,7 @@ import {
 
 import AlterClusterMenuItem from "./AlterClusterMenuItem";
 import { CLUSTERS_FETCH_ERROR_MESSAGE } from "./constants";
-import { useClusters } from "./queries";
+import { useOwners } from "./queries";
 import { useShowSystemObjects } from "./useShowSystemObjects";
 
 const createClusterSuggestion = {
@@ -73,7 +75,6 @@ const createClusterSuggestion = {
  * Read from `info.table.options.meta` and cast to this shape inside cells.
  */
 interface ClusterTableMeta {
-  refetchClusters: () => void;
   offlineReplicaMap: LatestOfflineReplicaMap | undefined;
 }
 
@@ -137,13 +138,7 @@ const LastStatusChangeCell = ({
   );
 };
 
-const ClusterActionsCell = ({
-  cluster,
-  refetchClusters,
-}: {
-  cluster: ClusterWithOwnership;
-  refetchClusters: () => void;
-}) => (
+const ClusterActionsCell = ({ cluster }: { cluster: ClusterWithOwnership }) => (
   <OverflowMenu
     items={[
       {
@@ -154,7 +149,8 @@ const ClusterActionsCell = ({
             <DeleteObjectMenuItem
               key="delete-object"
               selectedObject={cluster}
-              onSuccessAction={refetchClusters}
+              // the subscribe drops the row from our list
+              onSuccessAction={() => undefined}
               objectType="CLUSTER"
             />
           </>
@@ -210,15 +206,7 @@ const columns = [
   columnHelper.display({
     id: "actions",
     header: "",
-    cell: (info) => {
-      const meta = info.table.options.meta as ClusterTableMeta;
-      return (
-        <ClusterActionsCell
-          cluster={info.row.original}
-          refetchClusters={meta.refetchClusters}
-        />
-      );
-    },
+    cell: (info) => <ClusterActionsCell cluster={info.row.original} />,
     enableSorting: false,
     size: OVERFLOW_BUTTON_WIDTH,
   }),
@@ -229,20 +217,42 @@ const ClustersListContent = ({
 }: {
   showSystemObjects: boolean;
 }) => {
-  const { data: clusters, refetch } = useClusters({
-    includeSystemObjects: showSystemObjects,
-  });
+  const { data: clusters, snapshotComplete, isError } = useAllClusters();
+  const { data: ownersById, isPending: isOwnersPending } = useOwners();
 
   const orderedClusters = React.useMemo(() => {
-    if (!clusters) return [];
-    const systemClusters = clusters.filter((c) => isSystemCluster(c.id));
-    const nonSystemClusters = clusters
+    const visibleClusters = clusters
+      .filter((c) => showSystemObjects || !isSystemCluster(c.id))
+      .map((c) => ({
+        ...c,
+        // Treat an in-flight owners query as non-owner so owner-only menu items
+        // stay hidden until ownership is known.
+        isOwner: !isOwnersPending && (ownersById?.get(c.ownerId) ?? false),
+      }));
+    // The subscribe upserts by id, so the atom's order is arbitrary. Sort each
+    // group by name and keep system clusters at the end.
+    const byName = (a: ClusterWithOwnership, b: ClusterWithOwnership) =>
+      a.name.localeCompare(b.name);
+    const systemClusters = visibleClusters
+      .filter((c) => isSystemCluster(c.id))
+      .sort(byName);
+    const nonSystemClusters = visibleClusters
       .filter((c) => !isSystemCluster(c.id))
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .sort(byName);
     return [...nonSystemClusters, ...systemClusters];
-  }, [clusters]);
+  }, [clusters, isOwnersPending, ownersById, showSystemObjects]);
 
-  if (clusters !== null && clusters.length === 0) {
+  if (isError) {
+    return <ErrorBox message={CLUSTERS_FETCH_ERROR_MESSAGE} />;
+  }
+
+  // The atom starts out empty, so the empty state has to wait for the snapshot
+  // or it would flash before the first rows arrive.
+  if (!snapshotComplete) {
+    return <LoadingContainer />;
+  }
+
+  if (orderedClusters.length === 0) {
     return (
       <EmptyListWrapper>
         <EmptyListHeader>
@@ -270,19 +280,18 @@ const ClustersListContent = ({
     );
   }
 
-  return <ClusterTable clusters={orderedClusters} refetchClusters={refetch} />;
+  return <ClusterTable clusters={orderedClusters} />;
 };
 
 interface ClusterTableProps {
   clusters: ClusterWithOwnership[];
-  refetchClusters: () => void;
 }
 
-const ClusterTable = ({ clusters, refetchClusters }: ClusterTableProps) => {
+const ClusterTable = ({ clusters }: ClusterTableProps) => {
   const { data: offlineReplicaMap, error: offlineReplicaError } =
     useLatestOfflineReplica();
 
-  const meta: ClusterTableMeta = { refetchClusters, offlineReplicaMap };
+  const meta: ClusterTableMeta = { offlineReplicaMap };
 
   const table = useUniversalTable({
     data: clusters,
