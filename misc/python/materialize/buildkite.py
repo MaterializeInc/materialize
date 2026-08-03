@@ -10,7 +10,6 @@
 """Buildkite utilities."""
 
 import os
-import subprocess
 from collections.abc import Callable
 from enum import Enum, auto
 from pathlib import Path
@@ -326,10 +325,3 @@ def get_job_url_from_pipeline_and_build(
 ) -> str:
     build_url = f"https://buildkite.com/materialize/{pipeline}/builds/{build_number}"
     return get_job_url_from_build_url(build_url, build_job_id)
-
-
-def get_build_status(build: str) -> str:
-    return spawn.capture(
-        ["buildkite-agent", "meta-data", "get", build],
-        stderr=subprocess.DEVNULL,
-    )

@@ -393,15 +393,7 @@ so it is executed.""",
     move_build_to_lto(pipeline, lto)
     trim_builds_prep_thread.join()
     trim_builds(pipeline, hash_check)
-    add_cargo_test_dependency(
-        pipeline,
-        args.pipeline,
-        args.coverage,
-        args.sanitizer,
-        lto,
-    )
     add_nightly_deploy_dependency(pipeline, args.pipeline)
-    remove_dependencies_on_prs(pipeline, args.pipeline, hash_check)
     remove_mz_specific_keys(pipeline)
 
     print("--- Uploading new pipeline:")
@@ -563,7 +555,7 @@ def increase_agents_timeouts(
                 step["name"] = "Build aarch64 with coverage"
             if step.get("id") == "cargo-test":
                 step["agents"]["queue"] = "hetzner-x86-64-dedi-32cpu-128gb"
-                del step["parallelism"]
+                step.pop("parallelism", None)
     else:
         for step in steps(pipeline):
             if step.get("coverage") == "only":
@@ -1205,90 +1197,6 @@ def add_nightly_deploy_dependency(pipeline: Any, pipeline_name: str) -> None:
             step["depends_on"] = "deploy"
 
         previous_step = step
-
-
-def add_cargo_test_dependency(
-    pipeline: Any,
-    pipeline_name: str,
-    coverage: bool,
-    sanitizer: Sanitizer,
-    lto: bool,
-) -> None:
-    """Cargo Test normally doesn't have to wait for the build to complete, but it requires a few images (debian-base, postgres), which are rarely changed. So only add a dependency when those images are not on Dockerhub yet."""
-    if pipeline_name not in ("test", "nightly"):
-        return
-    if ui.env_is_truthy("BUILDKITE_PULL_REQUEST") and pipeline_name == "test":
-        for step in steps(pipeline):
-            if step.get("id") == "cargo-test":
-                step["depends_on"] = "build-x86_64"
-        return
-
-    repo = mzbuild.Repository(
-        Path("."),
-        arch=Arch.X86_64,
-        profile=mzbuild.Profile.RELEASE if lto else mzbuild.Profile.OPTIMIZED,
-        coverage=coverage,
-        sanitizer=sanitizer,
-    )
-    composition = Composition(repo, name="cargo-test")
-    deps = composition.dependencies
-    if deps.check():
-        # We already have the dependencies available, no need to add a build dependency
-        return
-
-    for step in steps(pipeline):
-        if step.get("id") in ("cargo-test", "miri-test"):
-            step["depends_on"] = (
-                "build-x86_64" if "x86" in step["agents"]["queue"] else "build-aarch64"
-            )
-
-
-def remove_dependencies_on_prs(
-    pipeline: Any,
-    pipeline_name: str,
-    hash_check: dict[Arch, tuple[str, bool]],
-) -> None:
-    """On test-pipeline PRs, let single-architecture consumers retry for their image instead of waiting for its build."""
-    if pipeline_name != "test":
-        return
-    if (
-        not ui.env_is_truthy("BUILDKITE_PULL_REQUEST")
-        or os.environ["BUILDKITE_TAG"]
-        or ui.env_is_truthy("CI_RELEASE_LTO_BUILD")
-        or os.environ["BUILDKITE_BRANCH"].startswith("dependabot/")
-    ):
-        return
-    build_image_exists = {
-        "build-x86_64": hash_check[Arch.X86_64][1],
-        "build-aarch64": hash_check[Arch.AARCH64][1],
-    }
-    for step in steps(pipeline):
-        if step.get("id") in (
-            "upload-debug-symbols-x86_64",
-            "upload-debug-symbols-aarch64",
-        ):
-            continue
-        d = step.get("depends_on")
-        if d is None:
-            continue
-        deps = [d] if isinstance(d, str) else list(d)
-        build_deps = [dep for dep in deps if dep in build_image_exists]
-        # CI_WAITING_FOR_BUILD tracks one build's status. A multi-architecture
-        # consumer needs every build, so it cannot safely use that contract.
-        if len(build_deps) > 1:
-            continue
-        # Drop the build dependency whose image isn't published yet, so the
-        # consumer starts immediately and keeps retrying for the Docker image.
-        missing_build_deps = [dep for dep in build_deps if not build_image_exists[dep]]
-        if not missing_build_deps:
-            continue
-        waiting_for_build = missing_build_deps[0]
-        step.setdefault("env", {})["CI_WAITING_FOR_BUILD"] = waiting_for_build
-        remaining = [dep for dep in deps if dep != waiting_for_build]
-        if remaining:
-            step["depends_on"] = remaining
-        else:
-            del step["depends_on"]
 
 
 def move_build_to_lto(pipeline: Any, lto: bool) -> None:
