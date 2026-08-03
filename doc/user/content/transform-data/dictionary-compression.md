@@ -9,7 +9,7 @@ menu:
     weight: 35
 ---
 
-{{< private-preview >}}
+{{< private-preview enabled-by-default="true" >}}
 Arrangement dictionary compression
 {{< /private-preview >}}
 
@@ -21,14 +21,15 @@ everything else is stored as-is, exactly as it would be without compression.
 Compression is applied per column, so a wide row can have one column compressed
 and the rest untouched.
 
-Dictionary compression is **alpha** and is **off by default at every layer**. It
-requires both an environment-wide feature flag that only Materialize can set and
-a per-cluster (or per-replica) option, so you cannot enable it on your own.
+Dictionary compression is **alpha** and is **off by default**. You opt in per
+cluster with the `EXPERIMENTAL ARRANGEMENT COMPRESSION` option. See [Enable
+dictionary compression](#enable-dictionary-compression).
 
 ## The tradeoff
 
 Dictionary compression trades CPU for memory, and it does **not** reduce memory
-on every workload. Read this section before asking to have it turned on.
+on every workload. Read this section before you turn it on, and [contact our
+team](/support/) if you have questions about whether it suits your workload.
 
 ### What it helps
 
@@ -40,9 +41,9 @@ on every workload. Read this section before asking to have it turned on.
 - **Large** arrangements. The larger the arrangement, the more occurrences of
   each repeated value there are to collapse.
 
-Only data held in an arrangement is affected. That means [indexes], materialized
-views, and the arrangements that joins and aggregations (`GROUP BY`, `DISTINCT`)
-build. Data that is not arranged is untouched.
+Only data held in an arrangement is affected. That means [indexes] and the
+arrangements a dataflow builds internally for joins and aggregations (`GROUP BY`,
+`DISTINCT`). Data that is not arranged is untouched.
 
 ### What it does not help
 
@@ -64,9 +65,9 @@ build. Data that is not arranged is untouched.
 
 The cost falls mainly on the **write path**. As updates arrive, Materialize has
 to track which values in each column repeat and maintain the dictionary. The
-most visible symptom is **slower arrangement hydration**. A cluster with
-compression enabled takes longer to bring its indexes and materialized views up
-to date after it is created, restarted, or resized.
+most visible symptom is **slower arrangement hydration**. A replica in a cluster
+with compression enabled takes longer to build its arrangements after it is
+created, restarted, or resized.
 
 Reads pay a smaller but ongoing cost. Resolving a compressed value requires an
 extra indirection, and comparing compressed rows cannot use the fast path that
@@ -87,22 +88,9 @@ changes.
 
 ## Enable dictionary compression
 
-Two settings are required, and compression happens only when **both** are on.
-
-1. **The environment-wide feature flag**
-   `enable_arrangement_dictionary_compression_alpha`. It defaults to off and is
-   not user-settable. It can only be changed with `ALTER SYSTEM SET` as the
-   `mz_system` user, and it applies to your whole Materialize environment rather
-   than to a single cluster. Ask Materialize support or your field engineer to
-   enable it.
-
-2. **The per-cluster or per-replica option**
-   `EXPERIMENTAL ARRANGEMENT COMPRESSION`, which also defaults to off. This is
-   the setting that decides *which* clusters use compression once the flag is
-   on.
-
-Because both layers must be on, having the flag enabled for your environment
-does not change any cluster until you also request compression on that cluster.
+Dictionary compression is controlled by the cluster option `EXPERIMENTAL
+ARRANGEMENT COMPRESSION`, which defaults to off. Set it on each cluster whose
+arrangements you want compressed. No other setting is involved.
 
 ### Set the option on a cluster
 
@@ -127,23 +115,19 @@ To go back to the default:
 ALTER CLUSTER my_cluster RESET (EXPERIMENTAL ARRANGEMENT COMPRESSION);
 ```
 
-The same option is available on [`CREATE CLUSTER REPLICA`]. It is not supported
-on unmanaged clusters. [`SHOW CREATE CLUSTER`] reports the configured value.
+[`SHOW CREATE CLUSTER`] reports the configured value.
 
 {{< warning >}}
 Changing `EXPERIMENTAL ARRANGEMENT COMPRESSION` on a cluster **replaces the
 cluster's replicas**, so the cluster re-hydrates. Plan for this the same way you
-would plan for resizing a cluster. The cluster has to rebuild its indexes and
-materialized views before it is fully caught up again, and hydration is slower
-with compression enabled.
+would plan for resizing a cluster. The new replicas have to rebuild their
+arrangements before the cluster is fully caught up again, and hydration is
+slower with compression enabled.
 {{< /warning >}}
 
-The option is accepted and stored whether or not the environment-wide flag is
-enabled. The flag decides whether a replica actually honors the value. A replica
-captures the setting once, when it is created, and holds it for its lifetime, so
-turning the flag on or off changes behavior only for replicas created
-afterwards. For the same reason, a single cluster can hold a mix of compressed
-and uncompressed arrangements.
+The option is configured on the cluster, but the arrangements it applies to live
+in the cluster's replicas, in each replica's memory. A replica picks up the
+configured value when it is created and holds it for its lifetime.
 
 ## Observe the effect
 
@@ -172,14 +156,12 @@ re-hydrates the cluster, wait until hydration has completed before you measure.
 - [Query optimization](/transform-data/optimization/)
 - [Dataflow troubleshooting](/transform-data/dataflow-troubleshooting/)
 - [`CREATE CLUSTER`](/sql/create-cluster/)
-- [`CREATE CLUSTER REPLICA`]
 - [`ALTER CLUSTER`](/sql/alter-cluster/)
 - [`SHOW CREATE CLUSTER`]
 
 [arrangements]: /get-started/arrangements/#arrangements
 [Arrangements]: /get-started/arrangements/
 [indexes]: /concepts/indexes/
-[`CREATE CLUSTER REPLICA`]: /sql/create-cluster-replica/
 [`SHOW CREATE CLUSTER`]: /sql/show-create-cluster/
 [`mz_introspection.mz_arrangement_sizes`]: /reference/system-catalog/mz_introspection/#mz_arrangement_sizes
 [`mz_introspection.mz_dataflow_arrangement_sizes`]: /reference/system-catalog/mz_introspection/#mz_dataflow_arrangement_sizes
