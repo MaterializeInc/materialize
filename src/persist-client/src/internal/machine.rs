@@ -25,7 +25,6 @@ use mz_ore::error::ErrorExt;
 use mz_ore::fmt::FormatBuffer;
 use mz_ore::{assert_none, soft_assert_no_log};
 use mz_persist::location::{ExternalError, Indeterminate, SeqNo};
-use mz_persist::retry::Retry;
 use mz_persist_types::schema::SchemaId;
 use mz_persist_types::{Codec, Codec64};
 use semver::Version;
@@ -478,7 +477,11 @@ where
             .metrics
             .retries
             .compare_and_append_idempotent
-            .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
+            .stream(
+                consensus_retry_params(&self.applier.cfg)
+                    .into_retry(SystemTime::now())
+                    .into_retry_stream(),
+            );
         let mut writer_was_present = false;
         loop {
             let cmd_res = self
@@ -753,12 +756,11 @@ where
 
     async fn tombstone_step(&self) -> Result<(bool, RoutineMaintenance), InvalidUsage<T>> {
         let metrics = Arc::clone(&self.applier.metrics);
-        let mut retry = self
-            .applier
-            .metrics
-            .retries
-            .idempotent_cmd
-            .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
+        let mut retry = self.applier.metrics.retries.idempotent_cmd.stream(
+            consensus_retry_params(&self.applier.cfg)
+                .into_retry(SystemTime::now())
+                .into_retry_stream(),
+        );
         loop {
             let res = self
                 .applier
@@ -1003,12 +1005,11 @@ where
         cmd: &CmdMetrics,
         mut work_fn: WorkFn,
     ) -> (SeqNo, R, RoutineMaintenance) {
-        let mut retry = self
-            .applier
-            .metrics
-            .retries
-            .idempotent_cmd
-            .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
+        let mut retry = self.applier.metrics.retries.idempotent_cmd.stream(
+            consensus_retry_params(&self.applier.cfg)
+                .into_retry(SystemTime::now())
+                .into_retry_stream(),
+        );
         loop {
             match self.applier.apply_unbatched_cmd(cmd, &mut work_fn).await {
                 Ok((seqno, x, maintenance)) => match x {
@@ -1174,20 +1175,78 @@ pub(crate) fn next_listen_batch_retry_params(cfg: &ConfigSet) -> RetryParameters
     }
 }
 
+pub(crate) const CONSENSUS_RETRYER_INITIAL_BACKOFF: Config<Duration> = Config::new(
+    "persist_consensus_retryer_initial_backoff",
+    Duration::from_millis(4),
+    "The initial backoff when retrying consensus (Postgres/CRDB) operations.",
+);
+
+pub(crate) const CONSENSUS_RETRYER_MULTIPLIER: Config<u32> = Config::new(
+    "persist_consensus_retryer_multiplier",
+    2,
+    "The backoff multiplier when retrying consensus (Postgres/CRDB) operations.",
+);
+
+pub(crate) const CONSENSUS_RETRYER_CLAMP: Config<Duration> = Config::new(
+    "persist_consensus_retryer_clamp",
+    // Consensus unavailability is typically brief (lease movement while the
+    // backing database restarts a node), and a retry against a recovered
+    // backend is a cheap, fast-failing single statement. A low clamp bounds
+    // how long a recovered backend sits idle waiting out our sleep ladder,
+    // which directly bounds the frontier stall (and thus freshness impact) a
+    // brief outage can cause. Blob operations keep the larger shared default:
+    // their dominant transient failure is throttling, which wants patience.
+    Duration::from_secs(1),
+    "The backoff clamp duration when retrying consensus (Postgres/CRDB) operations.",
+);
+
+/// Retry parameters for consensus operations, i.e. the latency-critical path
+/// that advances shard frontiers.
+pub(crate) fn consensus_retry_params(cfg: &ConfigSet) -> RetryParameters {
+    RetryParameters {
+        fixed_sleep: Duration::ZERO,
+        initial_backoff: CONSENSUS_RETRYER_INITIAL_BACKOFF.get(cfg),
+        multiplier: CONSENSUS_RETRYER_MULTIPLIER.get(cfg),
+        clamp: CONSENSUS_RETRYER_CLAMP.get(cfg),
+    }
+}
+
 pub const INFO_MIN_ATTEMPTS: usize = 3;
 
 /// Attempts after which a still-failing retry loop escalates from INFO to WARN.
-/// `retry_external` always uses the persist backoff (clamped at 16s), so this
-/// is roughly five minutes of continuous failure: well past transient retries,
-/// and a sign the operation (e.g. a blob whose GET never returns) is wedged.
+/// With the default persist backoff (clamped at 16s) this is roughly five
+/// minutes of continuous failure: well past transient retries, and a sign the
+/// operation (e.g. a blob whose GET never returns) is wedged. Retry loops
+/// running with a lower clamp reach this attempt count much sooner, so
+/// `retry_external_with` additionally scales its warn cadence by the clamp to
+/// keep log volume comparable across configurations.
 pub const WARN_MIN_ATTEMPTS: usize = 30;
 
-pub async fn retry_external<R, F, WorkFn>(metrics: &RetryMetrics, mut work_fn: WorkFn) -> R
+pub async fn retry_external<R, F, WorkFn>(metrics: &RetryMetrics, work_fn: WorkFn) -> R
 where
     F: std::future::Future<Output = Result<R, ExternalError>>,
     WorkFn: FnMut() -> F,
 {
-    let mut retry = metrics.stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
+    retry_external_with(RetryParameters::persist_defaults(), metrics, work_fn).await
+}
+
+pub async fn retry_external_with<R, F, WorkFn>(
+    params: RetryParameters,
+    metrics: &RetryMetrics,
+    mut work_fn: WorkFn,
+) -> R
+where
+    F: std::future::Future<Output = Result<R, ExternalError>>,
+    WorkFn: FnMut() -> F,
+{
+    // Keep escalation and log cadence roughly time-based across retry
+    // configurations: escalate to WARN after ~5 minutes of continuous failure
+    // and warn roughly every 16s thereafter. With the default 16s clamp both
+    // factors resolve to the historical behavior (attempt 30, every attempt).
+    let clamp_secs = params.clamp.as_secs().max(1);
+    let warn_after = WARN_MIN_ATTEMPTS.max(usize::try_from(300 / clamp_secs).expect("small"));
+    let log_every = usize::try_from((16 / clamp_secs).max(1)).expect("small");
+    let mut retry = metrics.stream(params.into_retry(SystemTime::now()).into_retry_stream());
     loop {
         match work_fn().await {
             Ok(x) => {
@@ -1200,7 +1259,8 @@ where
                 return x;
             }
             Err(err) => {
-                if retry.attempt() >= WARN_MIN_ATTEMPTS {
+                if retry.attempt() >= warn_after && (retry.attempt() - warn_after) % log_every == 0
+                {
                     warn!(
                         "external operation {} has failed {} times, retrying in {:?}: {}",
                         metrics.name,
@@ -1208,7 +1268,9 @@ where
                         retry.next_sleep(),
                         err.display_with_causes()
                     );
-                } else if retry.attempt() >= INFO_MIN_ATTEMPTS {
+                } else if retry.attempt() >= INFO_MIN_ATTEMPTS
+                    && (retry.attempt() - INFO_MIN_ATTEMPTS) % log_every == 0
+                {
                     info!(
                         "external operation {} failed, retrying in {:?}: {}",
                         metrics.name,
@@ -1229,7 +1291,8 @@ where
     }
 }
 
-pub async fn retry_determinate<R, F, WorkFn>(
+pub async fn retry_determinate_with<R, F, WorkFn>(
+    params: RetryParameters,
     metrics: &RetryMetrics,
     mut work_fn: WorkFn,
 ) -> Result<R, Indeterminate>
@@ -1237,7 +1300,7 @@ where
     F: std::future::Future<Output = Result<R, ExternalError>>,
     WorkFn: FnMut() -> F,
 {
-    let mut retry = metrics.stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
+    let mut retry = metrics.stream(params.into_retry(SystemTime::now()).into_retry_stream());
     loop {
         match work_fn().await {
             Ok(x) => {

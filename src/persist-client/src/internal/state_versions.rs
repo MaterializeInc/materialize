@@ -34,7 +34,9 @@ use tracing::{Instrument, debug, debug_span, trace, warn};
 use crate::cfg::STATE_VERSIONS_RECENT_LIVE_DIFFS_LIMIT;
 use crate::error::{CodecMismatch, CodecMismatchT};
 use crate::internal::encoding::{Rollup, UntypedState};
-use crate::internal::machine::{retry_determinate, retry_external};
+use crate::internal::machine::{
+    consensus_retry_params, retry_determinate_with, retry_external, retry_external_with,
+};
 use crate::internal::metrics::ShardMetrics;
 use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey, RollupId};
 #[cfg(debug_assertions)]
@@ -169,8 +171,10 @@ impl StateVersions {
             SeqNo::minimum(),
             "initial state should have the initial seqno"
         );
-        let (cas_res, _diff) =
-            retry_external(&self.metrics.retries.external.maybe_init_cas, || async {
+        let (cas_res, _diff) = retry_external_with(
+            consensus_retry_params(&self.cfg),
+            &self.metrics.retries.external.maybe_init_cas,
+            || async {
                 self.try_compare_and_set_current(
                     "maybe_init_shard",
                     shard_metrics,
@@ -179,8 +183,9 @@ impl StateVersions {
                 )
                 .await
                 .map_err(|err| err.into())
-            })
-            .await;
+            },
+        )
+        .await;
         match cas_res {
             CaSResult::Committed => Ok(initial_state),
             CaSResult::ExpectationMismatch => {
@@ -254,7 +259,8 @@ impl StateVersions {
         assert_eq!(new.seqno, diff.seqno_to);
 
         let payload_len = new.data.len();
-        let cas_res = retry_determinate(
+        let cas_res = retry_determinate_with(
+            consensus_retry_params(&self.cfg),
             &self.metrics.retries.determinate.apply_unbatched_cmd_cas,
             || async { self.consensus.compare_and_set(&path, new.clone()).await },
         )
@@ -547,9 +553,11 @@ impl StateVersions {
     /// Returns an empty Vec iff called on an uninitialized shard.
     pub async fn fetch_all_live_diffs(&self, shard_id: &ShardId) -> Vec<VersionedData> {
         let path = shard_id.to_string();
-        let diffs = retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
-            self.consensus.scan(&path, SeqNo::minimum(), SCAN_ALL).await
-        })
+        let diffs = retry_external_with(
+            consensus_retry_params(&self.cfg),
+            &self.metrics.retries.external.fetch_state_scan,
+            || async { self.consensus.scan(&path, SeqNo::minimum(), SCAN_ALL).await },
+        )
         .instrument(debug_span!("fetch_state::scan"))
         .await;
         diffs
@@ -564,9 +572,11 @@ impl StateVersions {
         limit: usize,
     ) -> Vec<VersionedData> {
         let path = shard_id.to_string();
-        retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
-            self.consensus.scan(&path, from, limit).await
-        })
+        retry_external_with(
+            consensus_retry_params(&self.cfg),
+            &self.metrics.retries.external.fetch_state_scan,
+            || async { self.consensus.scan(&path, from, limit).await },
+        )
         .instrument(debug_span!("fetch_state::scan"))
         .await
     }
@@ -625,14 +635,17 @@ impl StateVersions {
     {
         let path = shard_id.to_string();
         let scan_limit = STATE_VERSIONS_RECENT_LIVE_DIFFS_LIMIT.get(&self.cfg);
-        let oldest_diffs =
-            retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
+        let oldest_diffs = retry_external_with(
+            consensus_retry_params(&self.cfg),
+            &self.metrics.retries.external.fetch_state_scan,
+            || async {
                 self.consensus
                     .scan(&path, SeqNo::minimum(), scan_limit)
                     .await
-            })
-            .instrument(debug_span!("fetch_state::scan"))
-            .await;
+            },
+        )
+        .instrument(debug_span!("fetch_state::scan"))
+        .await;
 
         // fast-path: we found all known diffs in a single page of our scan. we expect almost all
         // calls to go down this path, unless a reader has a very long seqno-hold on the shard.
@@ -651,9 +664,11 @@ impl StateVersions {
         // and use only bounded calls to Consensus. additionally, if `limit` is adequately tuned,
         // this path will only be invoked when there's an excess number of states in Consensus and
         // it might be slower to do a single long scan over unneeded rows.
-        let head = retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
-            self.consensus.head(&path).await
-        })
+        let head = retry_external_with(
+            consensus_retry_params(&self.cfg),
+            &self.metrics.retries.external.fetch_state_scan,
+            || async { self.consensus.head(&path).await },
+        )
         .instrument(debug_span!("fetch_state::slow_path::head"))
         .await
         .expect("initialized shard should have at least 1 diff");
@@ -667,15 +682,18 @@ impl StateVersions {
         match BlobKey::parse_ids(&latest_diff.latest_rollup_key.complete(shard_id)) {
             Ok((_shard_id, PartialBlobKey::Rollup(seqno, _rollup))) => {
                 self.metrics.state.fetch_recent_live_diffs_slow_path.inc();
-                let diffs =
-                    retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
+                let diffs = retry_external_with(
+                    consensus_retry_params(&self.cfg),
+                    &self.metrics.retries.external.fetch_state_scan,
+                    || async {
                         // (pedantry) this call is technically unbounded, but something very strange
                         // would have had to happen to have accumulated so many states between our
                         // call to `head` and this invocation for it to become problematic
                         self.consensus.scan(&path, seqno, SCAN_ALL).await
-                    })
-                    .instrument(debug_span!("fetch_state::slow_path::scan"))
-                    .await;
+                    },
+                )
+                .instrument(debug_span!("fetch_state::slow_path::scan"))
+                .await;
                 RecentLiveDiffs(diffs)
             }
             Ok(_) => panic!(
@@ -696,9 +714,11 @@ impl StateVersions {
         seqno: SeqNo,
     ) -> Vec<VersionedData> {
         let path = shard_id.to_string();
-        retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
-            self.consensus.scan(&path, seqno.next(), SCAN_ALL).await
-        })
+        retry_external_with(
+            consensus_retry_params(&self.cfg),
+            &self.metrics.retries.external.fetch_state_scan,
+            || async { self.consensus.scan(&path, seqno.next(), SCAN_ALL).await },
+        )
         .instrument(debug_span!("fetch_state::scan"))
         .await
     }
@@ -706,9 +726,11 @@ impl StateVersions {
     /// Truncates any diffs in consensus less than the given seqno.
     pub async fn truncate_diffs(&self, shard_id: &ShardId, seqno: SeqNo) {
         let path = shard_id.to_string();
-        let _deleted_count = retry_external(&self.metrics.retries.external.gc_truncate, || async {
-            self.consensus.truncate(&path, seqno).await
-        })
+        let _deleted_count = retry_external_with(
+            consensus_retry_params(&self.cfg),
+            &self.metrics.retries.external.gc_truncate,
+            || async { self.consensus.truncate(&path, seqno).await },
+        )
         .instrument(debug_span!("gc::truncate"))
         .await;
     }
