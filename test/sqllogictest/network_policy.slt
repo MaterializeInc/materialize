@@ -271,3 +271,109 @@ simple conn=mz_system,user=mz_system
 DROP ROLE np_owner
 ----
 COMPLETE 0
+
+# Regression test: ALTER NETWORK POLICY must correctly resolve quoted
+# (hyphenated) names. Previously, plan_alter_network_policy passed the
+# display-quoted form (via Ident::to_string) to resolve_network_policy,
+# causing "np-x" to be looked up as "\"np-x\"" and fail.
+
+simple conn=mz_system,user=mz_system
+CREATE NETWORK POLICY "np-x" (RULES (r0 (action='allow', direction='ingress', address='0.0.0.0/0')))
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER NETWORK POLICY "np-x" SET (RULES (r1 (action='allow', direction='ingress', address='1.1.1.1/32')))
+----
+COMPLETE 0
+
+query TTTT colnames
+SELECT name, action, address, direction FROM mz_internal.mz_network_policy_rules WHERE policy_id = (SELECT id FROM mz_internal.mz_network_policies WHERE name = 'np-x')
+----
+name action address direction
+r1
+allow
+1.1.1.1/32
+ingress
+
+simple conn=mz_system,user=mz_system
+DROP NETWORK POLICY "np-x"
+----
+COMPLETE 0
+
+# Regression test: GRANT/REVOKE on a hyphenated network policy name. The
+# fold_network_policy_name function had the same bug with quoted identifiers.
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE np_hyphen_grantee
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE NETWORK POLICY "np-hyphen" (RULES (r0 (action='allow', direction='ingress', address='0.0.0.0/0')))
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON NETWORK POLICY "np-hyphen" TO np_hyphen_grantee
+----
+COMPLETE 0
+
+query TT rowsort
+SELECT np.name, mz_internal.mz_aclitem_privileges(priv)
+FROM mz_internal.mz_network_policies np,
+     unnest(np.privileges) AS priv,
+     mz_roles r
+WHERE mz_internal.mz_aclitem_grantee(priv) = r.id AND r.name = 'np_hyphen_grantee'
+----
+np-hyphen
+U
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON NETWORK POLICY "np-hyphen" FROM np_hyphen_grantee
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP NETWORK POLICY "np-hyphen"
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP ROLE np_hyphen_grantee
+----
+COMPLETE 0
+
+# Regression test: ALTER OWNER on a hyphenated network policy name. The
+# resolve_network_policy helper had the same bug with quoted identifiers.
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE np_owner_role
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE NETWORK POLICY "np-owner-test" (RULES (r0 (action='allow', direction='ingress', address='0.0.0.0/0')))
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER NETWORK POLICY "np-owner-test" OWNER TO np_owner_role
+----
+COMPLETE 0
+
+query TT
+SELECT name, (SELECT r.name FROM mz_roles r WHERE r.id = np.owner_id) as owner FROM mz_internal.mz_network_policies np WHERE np.name = 'np-owner-test'
+----
+np-owner-test
+np_owner_role
+
+simple conn=mz_system,user=mz_system
+DROP NETWORK POLICY "np-owner-test"
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP ROLE np_owner_role
+----
+COMPLETE 0
