@@ -34,7 +34,6 @@ from psycopg import sql as psycopg_sql
 from materialize import MZ_ROOT, buildkite
 from materialize.mz_env_util import print_environment_id
 from materialize.mz_version import MzVersion
-from materialize.mzcompose import _wait_for_pg
 from materialize.mzcompose.composition import (
     Composition,
     WorkflowArgumentParser,
@@ -3237,9 +3236,11 @@ class WeakScalingSweep(_ClusterSizeSweepBase):
 
 class EnvdCpuSweep(Scenario):
     """Sweep environmentd's CPU allocation at a fixed compute cluster size.
-    Wraps a `ClusterScalingScenario` workload. On Cloud, we reset envd's
-    CPU allocation to the default in ``teardown`` regardless of outcome to
-    avoid accidentally burning credits."""
+    Wraps a `ClusterScalingScenario` workload. On Cloud, each scale point
+    recreates the region, so every point measures a freshly set up
+    environment. We reset envd's CPU allocation to the default in
+    ``teardown`` regardless of outcome to avoid accidentally burning
+    credits."""
 
     # (So far, I haven't seen a difference between 16 and 32 in manual
     # testing in cloud. When we start seeing a difference, consider
@@ -3283,6 +3284,10 @@ class EnvdCpuSweep(Scenario):
         assert point.envd_cpus is not None
         assert self._fixed_replica_size is not None
         reconfigure_envd_cpus(runner.target, point.envd_cpus, runner)
+        # On Cloud the CPU change recreates the region, which drops the state that
+        # `prepare` set up. Re-preparing is cheap, and harmless on Docker, where the
+        # state survives the restart.
+        runner.connection.retryable(lambda: self.prepare(runner))
         fixed_size = self._fixed_replica_size
 
         def recreate() -> None:
@@ -3301,20 +3306,10 @@ class EnvdCpuSweep(Scenario):
     def teardown(self, runner: ScenarioRunner) -> None:
         if isinstance(runner.target, CloudTarget):
             print("--- Resetting Cloud environmentd CPUs to the default")
-            target = runner.target
-            version_args = (
-                ["--version", target.version] if target.version is not None else []
-            )
-            target.composition.run(
-                "mz",
-                "region",
-                "enable",
-                "--environmentd-cpu-allocation",
-                "2",
-                *enable_extra_args(target),
-                *version_args,
-                rm=True,
-            )
+            # Recreating rather than enabling on top of the existing region keeps the
+            # region out of the read-only limbo that a 0dt rollover would put it in, so
+            # whatever runs after this scenario finds a usable region.
+            cloud_recreate_region_with_envd_cpus(runner.target, 2)
 
 
 class EnvdObjectsSweep(Scenario):
@@ -3407,10 +3402,7 @@ def enable_extra_args(target: "CloudTarget") -> list[str]:
     return _STABILITY_SOAK_OVERRIDE if target.is_staging else []
 
 
-def cloud_disable_enable_and_wait(
-    target: "BenchTarget",
-    environmentd_cpu_allocation: int | None = None,
-) -> None:
+def cloud_disable_enable_and_wait(target: "BenchTarget") -> None:
     """
     Soft-disable and then enable the Cloud region, then wait for environmentd readiness.
 
@@ -3424,9 +3416,6 @@ def cloud_disable_enable_and_wait(
     envd were still serving, both `mz region enable`'s readiness check and our
     `wait_for_envd` could pass against the old envd. Waiting for the old envd to stop
     serving first makes a later successful connection prove that the new envd is up.
-
-    When `environmentd_cpu_allocation` is provided, it is passed to `mz region enable` via
-    `--environmentd-cpu-allocation` to reconfigure environmentd's CPU allocation.
     """
     assert isinstance(target, CloudTarget)
 
@@ -3443,32 +3432,74 @@ def cloud_disable_enable_and_wait(
     if host is not None:
         wait_for_envd_down(target, host)
 
-    version_args = (
-        ["--version", target.version]
-        if isinstance(target, CloudTarget) and target.version is not None
-        else []
-    )
+    version_args = ["--version", target.version] if target.version is not None else []
 
-    if environmentd_cpu_allocation is None:
-        target.composition.run(
-            "mz", "region", "enable", *enable_extra_args(target), *version_args, rm=True
-        )
-    else:
-        target.composition.run(
-            "mz",
-            "region",
-            "enable",
-            "--environmentd-cpu-allocation",
-            str(environmentd_cpu_allocation),
-            *enable_extra_args(target),
-            *version_args,
-            rm=True,
-        )
+    target.composition.run(
+        "mz", "region", "enable", *enable_extra_args(target), *version_args, rm=True
+    )
 
     time.sleep(10)
 
     assert "materialize.cloud" in target.composition.cloud_hostname()
     wait_for_envd(target)
+
+
+def cloud_recreate_region_with_envd_cpus(target: "CloudTarget", envd_cpus: int) -> None:
+    """
+    Recreate the Cloud region from scratch, with the given environmentd CPU allocation.
+
+    All state in the region is dropped, so the caller has to set up whatever the scenario
+    needs again.
+
+    We hard-disable rather than soft-disable on purpose. Enabling a region that still has
+    durable state is a 0dt rollout: the new environmentd comes up in read-only mode and
+    only promotes once every cluster has been caught up *and stable* for
+    `with_0dt_caught_up_check_stability_period`, which is ten minutes fleet-wide. Nothing
+    serves SQL while we wait that out, because the soft disable already took the old envd
+    away. A hard disable leaves no predecessor generation to catch up with, so the new envd
+    promotes as soon as it has booted, in about a minute.
+    """
+    disable_region(target.composition, hard=True)
+
+    version_args = ["--version", target.version] if target.version is not None else []
+
+    target.composition.run(
+        "mz",
+        "region",
+        "enable",
+        "--environmentd-cpu-allocation",
+        str(envd_cpus),
+        *enable_extra_args(target),
+        *version_args,
+        rm=True,
+    )
+
+    assert "materialize.cloud" in target.composition.cloud_hostname()
+    wait_for_envd(target)
+    assert_region_is_empty(target)
+
+
+def assert_region_is_empty(target: "CloudTarget") -> None:
+    """
+    Assert that the region we can talk to has no user tables.
+
+    Proves that we reached the freshly created region rather than an environmentd that
+    outlived the recreate: a leftover envd still has the scenario's tables. Neither
+    `mz region enable` (which only checks that something answers on the SQL port) nor a
+    successful query on its own can tell the two apart.
+    """
+    conn = target.new_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM mz_tables WHERE id LIKE 'u%'")
+            row = cur.fetchone()
+    finally:
+        conn.close()
+
+    assert row is not None, "could not count user tables in recreated region"
+    assert (
+        row[0] == 0
+    ), f"recreated region still has {row[0]} user table(s), we are talking to a stale environmentd"
 
 
 def reconfigure_envd_cpus(
@@ -3479,8 +3510,9 @@ def reconfigure_envd_cpus(
 
     - Docker target: recreate the local `materialized` container with a CPU limit equal to envd_cpus,
       wait for SQL readiness, and force the benchmark connection to reconnect.
-    - Cloud target: soft-disable/enable the region with the desired envd CPU allocation, wait for
-      SQL readiness, and force the benchmark connection to reconnect.
+    - Cloud target: recreate the region with the desired envd CPU allocation, wait for SQL
+      readiness, and force the benchmark connection to reconnect. The recreate drops all
+      state in the region, see `cloud_recreate_region_with_envd_cpus`.
     """
     if isinstance(target, DockerTarget):
         # For Docker target: restart `materialized` with a CPU limit equal to envd_cpus.
@@ -3511,9 +3543,10 @@ def reconfigure_envd_cpus(
             raise UIError(f"failed to apply Docker CPU override for environmentd: {e}")
     else:
         # Cloud target: reconfigure environmentd CPUs via `mz region`.
+        assert isinstance(target, CloudTarget)
         try:
             print(f"--- Reconfiguring Cloud environmentd CPUs to {envd_cpus}")
-            cloud_disable_enable_and_wait(target, environmentd_cpu_allocation=envd_cpus)
+            cloud_recreate_region_with_envd_cpus(target, envd_cpus)
         except Exception as e:
             raise UIError(
                 f"failed to apply Cloud CPU override for environmentd via 'mz region': {e}"
@@ -3526,12 +3559,17 @@ def reconfigure_envd_cpus(
         pass
 
 
-def wait_for_envd(target: "BenchTarget", timeout_secs: int = 300) -> None:
+def wait_for_envd(
+    target: "BenchTarget", timeout_secs: int = 600, sustain_probes: int = 3
+) -> None:
     """
     Wait until the environmentd SQL endpoint is ready.
 
     - Cloud: uses cloud hostname:6875, sslmode=require, and prefers the per-run
-      app password if available; falls back to MZ_CLI_APP_PASSWORD.
+      app password if available; falls back to MZ_CLI_APP_PASSWORD. Requires
+      `sustain_probes` consecutive successful probes, because a single one can land on an
+      environmentd that is about to go away, for example the previous generation while the
+      region is still rolling over.
     - Docker: probes SQL readiness via Composition.sql_query
     """
     if isinstance(target, CloudTarget):
@@ -3539,20 +3577,52 @@ def wait_for_envd(target: "BenchTarget", timeout_secs: int = 300) -> None:
         user = target.username
         # Prefer the newly created app password when present; fall back to the CLI password.
         password = target.new_app_password or target.app_password or ""
-        sslmode = "require"
         print(
             f"Waiting for cloud environmentd at {host}:6875 to come up with username {user} ..."
         )
-        _wait_for_pg(
-            host=host,
-            user=user,
-            password=password,
-            port=6875,
-            query="SELECT 1",
-            expected=[(1,)],
-            timeout_secs=timeout_secs,
-            dbname="materialize",
-            sslmode=sslmode,
+        start = time.time()
+        deadline = start + timeout_secs
+        last_report = start
+        successes = 0
+        last_err: Exception | None = None
+        while time.time() < deadline:
+            try:
+                conn = psycopg.connect(
+                    host=host,
+                    port=6875,
+                    user=user,
+                    password=password,
+                    dbname="materialize",
+                    sslmode="require",
+                    connect_timeout=10,
+                )
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT 1")
+                        answered = cur.fetchall() == [(1,)]
+                finally:
+                    conn.close()
+                successes = successes + 1 if answered else 0
+            except Exception as e:
+                last_err = e
+                successes = 0
+
+            if successes >= sustain_probes:
+                # Elapsed time is worth reporting: a region that only comes back after
+                # minutes is doing a 0dt rollover, which we don't expect here.
+                print(
+                    f"Cloud environmentd at {host}:6875 is serving SQL, "
+                    f"after {time.time() - start:.0f}s"
+                )
+                return
+
+            now = time.time()
+            if now - last_report >= 30:
+                print(f"  still waiting ({now - start:.0f}s elapsed): {last_err}")
+                last_report = now
+            time.sleep(2)
+        raise UIError(
+            f"cloud environmentd at {host}:6875 did not serve SQL within {timeout_secs}s: {last_err}"
         )
     else:
         # Docker target: use the composition helper to query the service via the
