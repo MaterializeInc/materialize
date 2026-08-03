@@ -158,9 +158,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         KAFKA_ADDRS="localhost:30123",
         SCHEMA_REGISTRY_URL=f"http://localhost:{c.default_port('schema-registry')}",
         POSTGRES_URL=postgres_url,
-        # Tests sharing this server run concurrently under nextest, so each
-        # test must confine itself to a scratch database it creates itself,
-        # with a name unique to the test.
         MZ_TEST_MYSQL_URL=mysql_url,
         METADATA_BACKEND_URL=metadata_backend_url,
         MZ_SOFT_ASSERTIONS="1",
