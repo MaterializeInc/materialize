@@ -3647,7 +3647,7 @@ impl<'a> Parser<'a> {
     fn parse_create_metric_sink(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keywords(&[METRIC, SINK])?;
         let if_not_exists = self.parse_if_not_exists()?;
-        let name = Some(self.parse_item_name()?);
+        let name = self.parse_item_name()?;
         let in_cluster = self.parse_optional_in_cluster()?;
         self.expect_keyword(FROM)?;
         let from = self.parse_raw_name()?;

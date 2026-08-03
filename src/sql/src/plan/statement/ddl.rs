@@ -4283,13 +4283,8 @@ pub fn plan_create_metric_sink(
         from,
     } = &mut stmt;
 
-    // The parser always fills the name in. `Option` is here only because the AST shape is
-    // shared with `CreateSinkStatement`, where a sink can be created unnamed.
-    let Some(name) = name.clone() else {
-        return Err(PlanError::MissingName(CatalogItemType::MetricSink));
-    };
     let if_not_exists = *if_not_exists;
-    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
+    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name.clone())?)?;
     let full_name = scx.catalog.resolve_full_name(&name);
     let partial_name = PartialItemName::from(full_name.clone());
     if let (false, Ok(item)) = (if_not_exists, scx.catalog.resolve_item(&partial_name)) {
@@ -4300,25 +4295,16 @@ pub fn plan_create_metric_sink(
     }
 
     let from_item = scx.get_item_by_resolved_name(from)?;
-    {
-        use CatalogItemType::*;
-        // `Index` belongs with the rejects even though it lives on a cluster: it has no
-        // relation description, so letting it through here only buys a vaguer error below.
-        match from_item.item_type() {
-            Table | Source | View | MaterializedView => {}
-            Sink | MetricSink | Index | Type | Func | Secret | Connection => {
-                sql_bail!(
-                    "cannot create metric sink from {} because it is a {}",
-                    scx.catalog.minimal_qualification(from_item.name()),
-                    from_item.item_type(),
-                );
-            }
-        }
-    }
-
-    let desc = from_item
-        .relation_desc()
-        .ok_or_else(|| sql_err!("item does not have a relation description"))?;
+    // `relation_desc()` returns `None` for exactly the item types a metric sink cannot read
+    // from (including `Index`, which lives on a cluster but exposes no relation description), so
+    // its `None` branch doubles as the reject filter. Fold the per-type error message in here.
+    let desc = from_item.relation_desc().ok_or_else(|| {
+        sql_err!(
+            "cannot create metric sink from {} because it is a {}",
+            scx.catalog.minimal_qualification(from_item.name()),
+            from_item.item_type(),
+        )
+    })?;
     validate_metric_sink_desc(&desc)?;
 
     let cluster_id = match in_cluster {
