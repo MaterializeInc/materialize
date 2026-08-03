@@ -39,9 +39,12 @@
 //!    (possibly fallible) map expressions, and it is allowed to *introduce* one,
 //!    because sorting predicates by position can surface an error the raw order
 //!    rejected the row before reaching. So when either side errors we assert
-//!    nothing. Otherwise: a row the raw MFP passes cleanly with output `out` the
-//!    optimized plan must pass with the byte-identical `out`, and a row the raw
-//!    MFP cleanly filters the optimized plan must not pass.
+//!    nothing. A row whose lazy evaluation absorbs an `AND`/`OR` operand error
+//!    is skipped outright, because `optimize` may legally surface that error or
+//!    fold on it (see `absorbs_and_or_operand_error`). Otherwise: a row the raw
+//!    MFP passes cleanly with output `out` the optimized plan must pass with
+//!    the byte-identical `out`, and a row the raw MFP cleanly filters the
+//!    optimized plan must not pass.
 //!
 //!  * **Temporal lowering.** Add predicates of the form `mz_now() <cmp> e` (and
 //!    conjunctions of them) over a bounded `mz_timestamp` expression `e`, then
@@ -68,7 +71,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use libfuzzer_sys::arbitrary::{self, Arbitrary, Unstructured};
 use libfuzzer_sys::fuzz_target;
 use mz_expr::{
-    Eval, EvalError, MapFilterProject, MirScalarExpr, SafeMfpPlan, UnmaterializableFunc, func,
+    Eval, EvalError, MapFilterProject, MirScalarExpr, SafeMfpPlan, UnmaterializableFunc,
+    VariadicFunc, func,
 };
 use mz_repr::{Datum, Diff, ReprScalarType, Row, RowArena, Timestamp};
 
@@ -430,6 +434,96 @@ fn eval_raw(mfp: &MapFilterProject, row: &Row) -> Option<Option<Row>> {
     Some(Some(out))
 }
 
+/// Does evaluating `expr` on this row absorb an `And`/`Or` operand error?
+///
+/// This is `mir_scalar_reduce`'s `absorbs_and_or_operand_error`, the per-row
+/// refinement of `MirScalarExpr::could_hit_nonstrict_error_fold`, minus the
+/// `ErrorIfNull` arm for a function this target's vocabulary lacks. Rows it
+/// reports are skipped: reduce's error propagation may fold the absorbed error
+/// into the plan (CLU-137), and memoization may hoist a fallible subexpression
+/// shared under the `And`/`Or` into a mapped column that is evaluated eagerly,
+/// surfacing the error. Both outcomes are legal for `optimize`, because
+/// `AND`/`OR` evaluation order is undefined (STG-54), so such a row constrains
+/// nothing. See `run` for the two mechanisms side by side.
+///
+/// NOTE: this deliberately evaluates *every* operand of an `And`/`Or`, even
+/// though `And::eval` short-circuits on the first `false` and so may never
+/// reach a later erroring operand. Error propagation and memoization are both
+/// position-insensitive, so a short-circuit-aware version would report "no
+/// absorption" for rows the optimized plan nonetheless errors on.
+fn absorbs_and_or_operand_error<'a>(
+    expr: &'a MirScalarExpr,
+    datums: &[Datum<'a>],
+    arena: &'a RowArena,
+) -> bool {
+    match expr {
+        MirScalarExpr::Column(..)
+        | MirScalarExpr::Literal(..)
+        | MirScalarExpr::CallUnmaterializable(_) => false,
+        MirScalarExpr::CallUnary { expr, .. } => absorbs_and_or_operand_error(expr, datums, arena),
+        MirScalarExpr::CallBinary { expr1, expr2, .. } => {
+            absorbs_and_or_operand_error(expr1, datums, arena)
+                || absorbs_and_or_operand_error(expr2, datums, arena)
+        }
+        MirScalarExpr::CallVariadic { func, exprs } => {
+            let nested = exprs
+                .iter()
+                .any(|expr| absorbs_and_or_operand_error(expr, datums, arena));
+
+            if !matches!(func, VariadicFunc::And(_) | VariadicFunc::Or(_)) {
+                return nested;
+            }
+
+            let is_and = matches!(func, VariadicFunc::And(_));
+            let mut has_absorbing_value = false;
+            let mut has_error = false;
+            for expr in exprs {
+                match expr.eval(datums, arena) {
+                    Ok(Datum::False) if is_and => has_absorbing_value = true,
+                    Ok(Datum::True) if !is_and => has_absorbing_value = true,
+                    Err(_) => has_error = true,
+                    _ => {}
+                }
+            }
+
+            nested || (has_absorbing_value && has_error)
+        }
+        MirScalarExpr::If { cond, then, els } => {
+            if absorbs_and_or_operand_error(cond, datums, arena) {
+                return true;
+            }
+            match cond.eval(datums, arena) {
+                Ok(Datum::True) => absorbs_and_or_operand_error(then, datums, arena),
+                Ok(Datum::False | Datum::Null) => absorbs_and_or_operand_error(els, datums, arena),
+                _ => false,
+            }
+        }
+    }
+}
+
+/// `absorbs_and_or_operand_error` over every map and predicate of `mfp`, in the
+/// column context `eval_raw` evaluates them in.
+///
+/// A map expression that fails to re-evaluate counts as absorbing. That arm is
+/// reachable only for a row `eval_raw` filtered before reaching the map, and
+/// "assert nothing" is the safe answer for a row this function cannot model.
+fn mfp_absorbs_and_or_operand_error(mfp: &MapFilterProject, row: &Row) -> bool {
+    let arena = RowArena::new();
+    let mut datums: Vec<Datum> = row.iter().collect();
+    for expr in &mfp.expressions {
+        if absorbs_and_or_operand_error(expr, &datums, &arena) {
+            return true;
+        }
+        match expr.eval(&datums, &arena) {
+            Ok(datum) => datums.push(datum),
+            Err(_) => return true,
+        }
+    }
+    mfp.predicates
+        .iter()
+        .any(|(_, predicate)| absorbs_and_or_operand_error(predicate, &datums, &arena))
+}
+
 /// Non-temporal preservation: raw unoptimized MFP semantics vs. the `optimize`d
 /// plan's output.
 fn run_nontemporal(
@@ -455,6 +549,13 @@ fn run_nontemporal(
         let Some(raw) = eval_raw(&mfp, &row) else {
             continue;
         };
+
+        // Neither does a row that absorbs an `And`/`Or` operand error: optimize
+        // may legally turn its outcome into an error, a different value, or a
+        // different pass/fail. See `run`.
+        if mfp_absorbs_and_or_operand_error(&mfp, &row) {
+            continue;
+        }
 
         let arena = RowArena::new();
         let mut datums_p: Vec<Datum> = row.iter().collect();
@@ -617,20 +718,32 @@ fn run(u: &mut Unstructured) -> arbitrary::Result<()> {
         .filter(filters)
         .project(projection);
 
-    // Skip the shape of the open bug CLU-137. `optimize` reduces every map
-    // expression and predicate, and reduce's generic error propagation replaces a
-    // non-strict `And`/`Or`/`ErrorIfNull` with any operand's literal error even
-    // though `eval` would have absorbed it. All three of this oracle's arms are
-    // exposed: the folded error makes a passing row error, the literal is typed
-    // non-nullable so a nullability-dependent rewrite above it can yield a
-    // different projected value, and a predicate folded that way can drop a row
-    // outright. This target's existing tolerance does not cover any of that, since
-    // it only forgives an error on a row the raw MFP *filtered*.
-    if mfp
-        .expressions
-        .iter()
-        .chain(mfp.predicates.iter().map(|(_, p)| p))
-        .any(|e| e.could_hit_nonstrict_error_fold())
+    // Two mechanisms let `optimize` legally change what a row yields once lazy
+    // `And`/`Or` evaluation absorbs an operand error (`Or::eval` returns `true`
+    // the moment it sees one, dropping any error it collected, and `And::eval`
+    // does the same for `false`). Reduce's generic error propagation, run by
+    // `optimize` on every expression, replaces the whole call with any
+    // operand's literal error even though `eval` would have absorbed it (the
+    // open bug CLU-137), and the folded literal's non-nullable type can license
+    // a rewrite above it into a different projected value or a dropped row. And
+    // memoization hoists a fallible subexpression shared under an `And`/`Or`
+    // into a mapped column that `evaluate_inner` runs eagerly, surfacing the
+    // absorbed error. The latter is not a bug: `AND`/`OR` evaluation order is
+    // undefined, in Materialize as in Postgres (STG-54), so the surfaced error
+    // is a legal outcome of the same plan.
+    //
+    // Non-temporal mode handles both row-precisely, skipping exactly the rows
+    // that absorb an operand error (see `absorbs_and_or_operand_error`).
+    // Temporal mode skips the whole MFP on the coarse, expression-level
+    // predicate: its reference side substitutes a literal for `mz_now()` and
+    // re-runs `optimize` per probed time, so "absorbs on this row" has no
+    // single answer there.
+    if temporal
+        && mfp
+            .expressions
+            .iter()
+            .chain(mfp.predicates.iter().map(|(_, p)| p))
+            .any(|e| e.could_hit_nonstrict_error_fold())
     {
         return Ok(());
     }
