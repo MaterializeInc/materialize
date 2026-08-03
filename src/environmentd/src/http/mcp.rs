@@ -475,7 +475,22 @@ async fn handle_mcp_request(
         |status: McpCallStatus| metrics.record_request(endpoint_label, &method_label, status);
 
     // Check the per-endpoint feature flag via a catalog snapshot, similar to frontend_peek.rs.
-    let catalog = client.client.catalog_snapshot("mcp").await;
+    // The configured `MCP_REQUEST_TIMEOUT` lives in the snapshot we are about
+    // to fetch, so bound this phase with the compiled-in default. Without it a
+    // stalled snapshot would hang the request past any configured timeout.
+    let catalog = match tokio::time::timeout(
+        *MCP_REQUEST_TIMEOUT.default(),
+        client.client.catalog_snapshot("mcp"),
+    )
+    .await
+    {
+        Ok(catalog) => catalog,
+        Err(_elapsed) => {
+            warn!(endpoint = %endpoint_type, "MCP catalog snapshot timed out");
+            record_request(McpCallStatus::Timeout);
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
+    };
     let dyncfgs = catalog.system_config().dyncfgs();
     let enabled = match endpoint_type {
         McpEndpointType::Agent => ENABLE_MCP_AGENT.get(dyncfgs),
