@@ -277,7 +277,7 @@ steps:
       - "**/*.pt"
       - "**/*.proto"
       - "**/testdata/**"
-    depends_on: []
+    depends_on: build-x86_64
     env:
       AWS_DEFAULT_REGION: "us-east-1"
       # cargo-test's coverage is handled separately by cargo-llvm-cov
