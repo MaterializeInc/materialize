@@ -159,6 +159,80 @@ id price
 --------
 6 10
 
+# Regression: the accumulable reduce must reject a negative record count rather
+# than returning it as an aggregate result.
+#
+# `AccumulableErrorCheck` accumulates a record count per key and `finalize_accum`
+# returns it directly for `count(*)`. The check used to compare that count
+# against zero only, so a NEGATIVE count passed every arm and surfaced as a
+# user-visible negative number with no error and no log, and an MV over such an
+# aggregate persisted the nonsense value with a positive multiplicity.
+#
+# ENVELOPE MATERIALIZE is the injection primitive here because it is the only
+# source envelope that passes upstream diffs through verbatim. The check itself
+# is source-agnostic.
+#
+# NOTE: the check fires on a key whose own record count is negative, so what it
+# catches depends on the grouping. A global aggregate puts every record under one
+# empty key, so an unmatched retraction is masked whenever the rest of the
+# collection outweighs it, and is caught only once the whole collection goes
+# net-negative. Grouping isolates the corrupt record in its own key, which is
+# what makes it visible here regardless of the other keys.
+#
+# A separate topic and source keep the injected corruption away from
+# data_schema_inline_tbl, which the assertions below still read.
+
+$ kafka-create-topic topic=negative
+
+> BEGIN
+> CREATE SOURCE negative_multiplicity
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-negative-${testdrive.seed}')
+
+> CREATE TABLE negative_multiplicity_tbl
+  FROM SOURCE negative_multiplicity (REFERENCE "testdrive-negative-${testdrive.seed}")
+  FORMAT AVRO USING SCHEMA '${schema}'
+  ENVELOPE MATERIALIZE
+> COMMIT
+
+# Positive control: real retractions must NOT trip the check. id=1 is retracted
+# and reinserted at time 2.
+
+$ kafka-ingest format=avro topic=negative schema=${schema}
+{"array":[{"data":{"id":1,"price":{"int":10}},"time":1,"diff":1}]}
+{"array":[{"data":{"id":2,"price":{"int":20}},"time":1,"diff":1}]}
+{"array":[{"data":{"id":1,"price":{"int":10}},"time":2,"diff":-1}]}
+{"array":[{"data":{"id":1,"price":{"int":11}},"time":2,"diff":1}]}
+{"com.materialize.cdc.progress":{"lower":[0],"upper":[3],"counts":[{"time":1,"count":2},{"time":2,"count":2}]}}
+
+> SELECT id, count(*) FROM negative_multiplicity_tbl GROUP BY id
+id count
+--------
+1  1
+2  1
+
+# Inject an unmatched retraction, giving key id=99 a net record count of -1.
+
+$ kafka-ingest format=avro topic=negative schema=${schema}
+{"array":[{"data":{"id":99,"price":{"int":999}},"time":3,"diff":-1}]}
+{"com.materialize.cdc.progress":{"lower":[3],"upper":[10],"counts":[{"time":3,"count":1}]}}
+
+! SELECT id, count(*) FROM negative_multiplicity_tbl GROUP BY id
+contains:saw negative record count
+
+# The error must propagate into a materialized view over that aggregate rather
+# than the negative value becoming durable in the derived shard.
+
+> CREATE MATERIALIZED VIEW negative_multiplicity_counts
+  IN CLUSTER ${arg.single-replica-cluster} AS
+  SELECT id, count(*) AS n FROM negative_multiplicity_tbl GROUP BY id
+
+! SELECT * FROM negative_multiplicity_counts
+contains:saw negative record count
+
+> DROP MATERIALIZED VIEW negative_multiplicity_counts
+> DROP SOURCE negative_multiplicity CASCADE
+
 # Test that tails report progress messages even without new data
 
 # The ouput of SUBSCRIBE is dependent on the replica size

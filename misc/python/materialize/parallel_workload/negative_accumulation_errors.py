@@ -35,6 +35,7 @@ NEGATIVE_ACCUMULATION_ERRORS: list[str] = [
     "Non-positive accumulation",
     "Invalid negative unsigned aggregation in ReduceAccumulable",
     "saw negative accumulation",
+    "saw negative record count",
     # Peek handling
     "Invalid data in source, saw retractions",
     "index peek encountered negative multiplicities in ok trace",

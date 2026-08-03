@@ -1523,6 +1523,29 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 "AccumulableErrorCheck",
                 move |key, input, output| {
                     let (ref accums, total) = input[0].1;
+
+                    // A well formed collection has non-negative multiplicities, so a negative
+                    // record count means the input is already corrupt. This is checked per key
+                    // rather than per aggregate, because it is a property of the input records.
+                    //
+                    // NOTE: none of the per-aggregate checks below cover this. The net-zero check
+                    // tests `total == 0` specifically, and the unsigned check inspects
+                    // accumulators rather than the count. Left unchecked, `finalize_accum` hands
+                    // `total` straight to `AggregateFunc::Count`, so `count(*)` returns a negative
+                    // number as an ordinary result with no error and no log.
+                    if total.is_negative() {
+                        error_logger.log(
+                            "Negative record count in ReduceAccumulable",
+                            &format!("total={total}"),
+                        );
+                        let key = key.to_row();
+                        let message = format!(
+                            "Invalid data in source, saw negative record count for key {key} \
+                             in accumulable aggregate"
+                        );
+                        output.push((EvalError::Internal(message.into()).into(), Diff::ONE));
+                    }
+
                     for (aggr, accum) in err_full_aggrs.iter().zip_eq(accums) {
                         // We first test here if inputs without net-positive records are present,
                         // producing an error to the logs and to the query output if that is the case.
