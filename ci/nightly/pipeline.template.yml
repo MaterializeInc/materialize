@@ -222,7 +222,6 @@ steps:
         label: "Scalability benchmark (DDL) against merge base or 'latest'"
         depends_on: build-x86_64
         timeout_in_minutes: 120
-        parallelism: 2
         env:
           # Runs against Dockerhub directly
           MZ_GHCR: 0
@@ -494,7 +493,7 @@ steps:
               composition: limits
               run: main
         timeout_in_minutes: 60
-        parallelism: 3
+        parallelism: 2
 
       - id: limits-instance-size
         topics: [cockroach, iceberg, kafka, kafka-sink, mysql, postgres, sql-server]
@@ -513,7 +512,7 @@ steps:
         label: "Bounded Memory"
         depends_on: build-aarch64
         timeout_in_minutes: 60
-        parallelism: 3
+        parallelism: 2
         agents:
           queue: hetzner-aarch64-4cpu-8gb
         plugins:
@@ -804,7 +803,6 @@ steps:
       - id: mysql-cdc-resumption
         topics: [mysql]
         label: MySQL CDC resumption
-        parallelism: 2
         depends_on: build-aarch64
         timeout_in_minutes: 60
         inputs: [test/mysql-cdc-resumption]
@@ -817,7 +815,6 @@ steps:
       - id: pg-cdc-resumption
         topics: [postgres]
         label: Postgres CDC resumption
-        parallelism: 2
         depends_on: build-aarch64
         timeout_in_minutes: 60
         inputs: [test/pg-cdc-resumption]
@@ -874,7 +871,6 @@ steps:
         label: MySQL CDC resumption (before source versioning)
         depends_on: build-aarch64
         timeout_in_minutes: 60
-        parallelism: 2
         plugins:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc-resumption-old-syntax
@@ -909,7 +905,6 @@ steps:
         label: Postgres CDC source-versioning migration
         depends_on: build-aarch64
         timeout_in_minutes: 60
-        parallelism: 2
         plugins:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc-old-syntax
@@ -1208,7 +1203,7 @@ steps:
         label: "Checks Self-Managed upgrade, whole-Mz restart"
         depends_on: build-x86_64
         timeout_in_minutes: 60
-        parallelism: 4
+        parallelism: 2
         agents:
           queue: hetzner-x86-64-12cpu-24gb
         plugins:
@@ -1221,7 +1216,7 @@ steps:
         label: "Checks Self-Managed upgrade from previous, whole-Mz restart"
         depends_on: build-x86_64
         timeout_in_minutes: 60
-        parallelism: 4
+        parallelism: 2
         agents:
           queue: hetzner-x86-64-12cpu-24gb
         plugins:
@@ -1234,7 +1229,7 @@ steps:
         label: "Checks upgrade v80 migration"
         depends_on: build-x86_64
         timeout_in_minutes: 60
-        parallelism: 4
+        parallelism: 2
         agents:
           queue: hetzner-x86-64-12cpu-24gb
         plugins:
@@ -1261,7 +1256,7 @@ steps:
         label: "Checks 0dt restart of the entire Mz with forced migrations"
         depends_on: build-x86_64
         timeout_in_minutes: 60
-        parallelism: 4
+        parallelism: 2
         agents:
           queue: hetzner-x86-64-12cpu-24gb
         plugins:
@@ -2387,7 +2382,6 @@ steps:
     label: "Txn-wal fencing with :azure: blob store"
     depends_on: build-aarch64
     timeout_in_minutes: 60
-    parallelism: 2
     plugins:
       - ./ci/plugins/mzcompose:
           composition: txn-wal-fencing
@@ -2461,7 +2455,7 @@ steps:
     label: Zero downtime
     depends_on: build-x86_64
     timeout_in_minutes: 60
-    parallelism: 4
+    parallelism: 2
     plugins:
       - ./ci/plugins/mzcompose:
           composition: 0dt
@@ -2537,7 +2531,6 @@ steps:
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
         timeout_in_minutes: 60
-        parallelism: 2
         plugins:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
