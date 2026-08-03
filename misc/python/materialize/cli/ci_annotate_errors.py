@@ -1081,9 +1081,17 @@ def _get_failures_on_main_from_buildkite(
         branch="main",
         # also include builds that are still running (the relevant build step may already have completed)
         build_states=["running", "passed", "failing", "failed"],
-        # assume and account that at most one build is still running
-        items_per_page=5 + 1,
+        # Only a fraction of the main builds run the tests (see below), so fetch
+        # a whole page rather than just the handful we want to end up with.
+        items_per_page=100,
     )
+    # A push to main only builds and publishes images, it runs no test step at
+    # all (see the `BUILDKITE_SOURCE` check in ci/mkpipeline.py). Those builds
+    # would fill the whole window below without ever matching the step, leaving
+    # the history empty, so keep only the builds that ran the full suite.
+    builds_data = [build for build in builds_data if build["source"] != "webhook"]
+    # assume and account that at most one build is still running
+    del builds_data[5 + 1 :]
 
     no_entries_result = BuildHistory(
         pipeline=pipeline_slug, branch="main", last_build_step_outcomes=[]

@@ -13,7 +13,9 @@ This script takes pipeline.template.yml as input, possibly trims out jobs
 whose inputs have not changed relative to the code on main, and uploads the
 resulting pipeline to the Buildkite job that triggers this script.
 
-On main and tags, all jobs are always run.
+On tags, all jobs are always run. A push to main only builds and publishes
+images; its test suite runs in the scheduled builds of the test pipeline
+instead, which arrive with a BUILDKITE_SOURCE other than "webhook".
 
 For details about how steps are trimmed, see the comment at the top of
 pipeline.template.yml and the docstring on `trim_tests_pipeline` below.
@@ -291,6 +293,21 @@ so it is executed.""",
         # The build steps are exempt from this trim, so they still run.
         trim_test_selection_id(pipeline, set())
         fail_build_reason = "ci-no-test"
+    elif (
+        args.pipeline == "test"
+        and os.environ["BUILDKITE_BRANCH"] == "main"
+        and not os.environ["BUILDKITE_TAG"]
+        and os.getenv("BUILDKITE_SOURCE") == "webhook"
+        and not os.getenv("CI_TEST_IDS")
+        and not os.getenv("CI_TEST_SELECTION")
+        and not args.coverage
+        and args.sanitizer == Sanitizer.none
+        and fail_build_reason is None
+    ):
+        trim_test_selection_id(pipeline, set())
+        for step in steps(pipeline):
+            if step.get("id") == "lint-docs":
+                step.pop("skip", None)
 
     # Surface label-driven changes as a Buildkite annotation, since otherwise
     # they are only visible buried in this step's log. Skipped under --dry-run
