@@ -112,7 +112,8 @@ generator](/sql/create-source/load-generator/#auction) to create the source.
 
    For the [sample `Auction` load
    generator](/sql/create-source/load-generator/#auction), the quickstart uses
-   [`CREATE SOURCE`](/sql/create-source/) with the `FROM LOAD GENERATOR` clause
+   [`CREATE SOURCE` with the `FROM LOAD
+   GENERATOR` clause](/sql/create-source/load-generator/#creating-an-auction-load-generator)
    that works specifically with Materialize's sample data generators. The
    tutorial specifies that the generator should emit new data every 1s.
 
@@ -126,10 +127,11 @@ generator](/sql/create-source/load-generator/#auction) to create the source.
     yet. To start ingesting data, you create a table from the source for each
     relation you want to ingest.
 
-1. Use [`CREATE TABLE ... FROM SOURCE`](/sql/create-table/) in a [DDL
-   transaction block](/sql/begin/#ddl-only-transactions) to create **read-only**
-   tables for the `auctions` and `bids` relations, the two relations this
-   quickstart uses:
+1. Use [`CREATE TABLE ... FROM
+   SOURCE`](/sql/create-source/load-generator/#creating-an-auction-load-generator)
+   in a [DDL transaction block](/sql/begin/#ddl-only-transactions) to create
+   **read-only** tables for the `auctions` and `bids` relations, the two
+   relations this quickstart uses:
 
     ```mzsql
     BEGIN;
@@ -138,7 +140,7 @@ generator](/sql/create-source/load-generator/#auction) to create the source.
     COMMIT;
     ```
 
-    Tables created from a source have the following properties:
+    Tables created from a source are read-only; that is:
 
     - Only the source can write to the table; in this case, the load
       generator.
