@@ -41,8 +41,8 @@ from materialize.mzcompose.composition import (
     Service,
     WorkflowArgumentParser,
 )
+from materialize.mzcompose.service import Service as ServiceDefinition
 from materialize.mzcompose.services.balancerd import Balancerd
-from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.environmentd import Environmentd
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.mz_debug import MzDebug
@@ -65,7 +65,15 @@ SERVICES = [
     Testdrive(),
     Orchestratord(),
     Environmentd(),
-    Clusterd(),
+    # orchestratord deploys clusterd and console pods with the standalone
+    # materialize/clusterd and materialize/console images (at the same tag
+    # as environmentd), so those exact images must be built and loaded into
+    # kind. The Clusterd compose service would resolve to the `materialized`
+    # fat image instead, leaving materialize/clusterd:<tag> nowhere to be
+    # found when the tag was never published (e.g. when running against a
+    # local commit).
+    ServiceDefinition(name="clusterd", config={"mzbuild": "clusterd"}),
+    ServiceDefinition(name="console", config={"mzbuild": "console"}),
     Balancerd(),
     MzDebug(),
     Mz(app_password=""),
@@ -161,11 +169,79 @@ def get_pod_data(
     )
 
 
+def get_current_operator_pod_template_hash() -> str | None:
+    """The `pod-template-hash` of the operator deployment's current revision,
+    or None if it can't be determined because the operator isn't installed.
+
+    A Deployment records the revision it is currently rolling out in an
+    annotation, and each ReplicaSet it owns records the revision it was created
+    for, so the ReplicaSet whose revision matches is the current one. The
+    deployment is looked up by label rather than by name so that this keeps
+    working across the chart versions the upgrade tests install.
+    """
+
+    def get_operator_resources(kind: str) -> list[dict[str, Any]]:
+        return json.loads(
+            spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    kind,
+                    "-l",
+                    "app.kubernetes.io/instance=operator",
+                    "-n",
+                    "materialize",
+                    "-o",
+                    "json",
+                ]
+            )
+        )["items"]
+
+    def revision(resource: dict[str, Any]) -> str | None:
+        annotations = resource["metadata"].get("annotations") or {}
+        return annotations.get("deployment.kubernetes.io/revision")
+
+    deployments = get_operator_resources("deployment")
+    if len(deployments) != 1:
+        return None
+    current_revision = revision(deployments[0])
+    if current_revision is None:
+        return None
+
+    for replicaset in get_operator_resources("replicaset"):
+        if revision(replicaset) == current_revision:
+            return replicaset["metadata"]["labels"].get("pod-template-hash")
+    return None
+
+
 def get_orchestratord_data() -> dict[str, Any]:
-    return get_pod_data(
+    data = get_pod_data(
         labels={"app.kubernetes.io/instance": "operator"},
         namespace="materialize",
     )
+    # A rollout of the operator leaves pods of the previous generation around,
+    # both terminating ones and (while the replacements come up) ones that are
+    # still running. Callers only care about the pods that are here to stay, so
+    # keep only the current generation. Falling back to dropping just the
+    # terminating pods keeps this usable before the deployment exists.
+    pod_template_hash = get_current_operator_pod_template_hash()
+    data["items"] = [
+        pod
+        for pod in data["items"]
+        if pod["metadata"].get("deletionTimestamp") is None
+        and (
+            pod_template_hash is None
+            or pod["metadata"]["labels"].get("pod-template-hash") == pod_template_hash
+        )
+    ]
+    # Callers index into the pods, and the filtering above can transiently leave
+    # nothing behind: a new ReplicaSet carries the deployment's revision before
+    # its pods exist. Fail with something readable rather than an IndexError.
+    assert data["items"], (
+        "found no operator pods of the current deployment revision "
+        f"(pod-template-hash {pod_template_hash})"
+    )
+    return data
 
 
 def get_balancerd_data() -> dict[str, Any]:
@@ -3445,16 +3521,21 @@ def workflow_orchestratord_upgrade(
     def check_orchestratord_version(version: MzVersion):
         def check():
             data = get_orchestratord_data()
-            assert len(data["items"]) == 1, f"got {len(data['items'])} items"
-
-            got_image = data["items"][0]["spec"]["containers"][0]["image"]
+            # The number of operator replicas differs between chart versions,
+            # so we require that all of the pods that exist run the expected
+            # image rather than pinning an exact pod count. Pods of the
+            # previous version linger while they terminate, so this also waits
+            # for the rollout to finish. get_orchestratord_data() already
+            # rejects an empty set of pods, so this can't pass vacuously.
             expected_image = get_image(
                 c.compose["services"]["orchestratord"]["image"],
                 str(version),
             )
-            assert image_tag(got_image) == image_tag(
-                expected_image
-            ), f"{got_image} != {expected_image}"
+            for pod in data["items"]:
+                got_image = pod["spec"]["containers"][0]["image"]
+                assert image_tag(got_image) == image_tag(
+                    expected_image
+                ), f"{got_image} != {expected_image}"
 
         retry(check, 60)
 
@@ -3973,6 +4054,375 @@ def workflow_rollout_timeout(c: Composition, parser: WorkflowArgumentParser) -> 
     retry(check_single_generation, 120)
 
 
+OPERATOR_DEPLOYMENT = "operator-materialize-operator"
+# The lease name is fixed in the orchestratord binary. A single lease guards
+# all of its controllers, in the namespace orchestratord runs in.
+LEADER_ELECTION_LEASE = "orchestratord"
+
+
+def get_operator_pod_names() -> list[str]:
+    """Names of the ready orchestratord pods of the current generation.
+
+    Readiness rather than the `Running` phase, because only ready pods are in
+    the webhook service's endpoints, and a pod whose readiness probe fails
+    stays in the `Running` phase.
+    """
+    return [
+        pod["metadata"]["name"]
+        for pod in get_orchestratord_data()["items"]
+        if any(
+            condition["type"] == "Ready" and condition["status"] == "True"
+            for condition in pod["status"].get("conditions") or []
+        )
+    ]
+
+
+def get_operator_pod_restart_counts() -> dict[str, int]:
+    """Container restart count per orchestratord pod of the current generation."""
+    return {
+        pod["metadata"]["name"]: sum(
+            container["restartCount"]
+            for container in pod["status"].get("containerStatuses") or []
+        )
+        for pod in get_orchestratord_data()["items"]
+    }
+
+
+def get_lease_holder(lease_name: str) -> str | None:
+    """The holderIdentity of a lease, or None if the lease doesn't exist or
+    has no holder. orchestratord uses its pod name as the identity."""
+    try:
+        holder = spawn.capture(
+            [
+                "kubectl",
+                "get",
+                "lease",
+                lease_name,
+                "-n",
+                "materialize",
+                "-o",
+                "jsonpath={.spec.holderIdentity}",
+            ],
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except subprocess.CalledProcessError:
+        return None
+    return holder or None
+
+
+def get_lease_transitions(lease_name: str) -> int:
+    """How many times a lease has changed hands, or 0 if the lease doesn't
+    exist yet.
+
+    Every takeover increments this and renewals by the incumbent leave it
+    alone, so requiring it to grow across an event proves that leadership
+    really moved, rather than that the incumbent simply held on.
+    """
+    try:
+        transitions = spawn.capture(
+            [
+                "kubectl",
+                "get",
+                "lease",
+                lease_name,
+                "-n",
+                "materialize",
+                "-o",
+                "jsonpath={.spec.leaseTransitions}",
+            ],
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except subprocess.CalledProcessError:
+        return 0
+    return int(transitions) if transitions else 0
+
+
+def get_operator_is_leader_metric(pod: str) -> float:
+    """The `orchestratord_is_leader` gauge scraped from an operator pod.
+
+    Scraped through the API server's pod proxy rather than a port-forward,
+    since the operator image has no shell or HTTP client to exec into.
+    """
+    metrics = spawn.capture(
+        [
+            "kubectl",
+            "get",
+            "--raw",
+            f"/api/v1/namespaces/materialize/pods/{pod}:3100/proxy/metrics",
+        ]
+    )
+    for line in metrics.splitlines():
+        if line.startswith("orchestratord_is_leader "):
+            return float(line.split(" ", 1)[1])
+    raise AssertionError(f"operator pod {pod} does not report orchestratord_is_leader")
+
+
+def check_is_leader_metric_agrees_with_lease() -> None:
+    """Assert that exactly the lease holder reports itself as the leader.
+
+    The metric is what alerting keys off, so it has to track the lease rather
+    than merely be present. A total of zero across the replicas means nobody
+    is reconciling, which is otherwise only visible in the operator's logs.
+    """
+    holder = get_lease_holder(LEADER_ELECTION_LEASE)
+    reported = {
+        pod: get_operator_is_leader_metric(pod) for pod in get_operator_pod_names()
+    }
+    assert holder is not None and reported.get(holder) == 1, (
+        f"lease {LEADER_ELECTION_LEASE} is held by {holder!r}, "
+        f"but the replicas report {reported}"
+    )
+    assert (
+        sum(reported.values()) == 1
+    ), f"expected exactly one operator replica to report itself leader, got {reported}"
+
+
+def check_lease_held_by_operator_pod() -> None:
+    """Assert that the controller lease is held by a running operator pod."""
+    pods = get_operator_pod_names()
+    holder = get_lease_holder(LEADER_ELECTION_LEASE)
+    assert (
+        holder in pods
+    ), f"lease {LEADER_ELECTION_LEASE} is held by {holder!r}, expected one of {pods}"
+
+
+def request_rollout_via_v1(definition: dict[str, Any]) -> None:
+    """Change the v1 spec so the next apply triggers a rollout.
+
+    The v1 CRD has no requestRollout field (setting it would be silently
+    pruned by the API server). Instead the conversion webhook derives
+    requestRollout from a hash of the v1 spec, so changing any hashed field
+    (environmentdExtraEnv here) requests a new rollout.
+    """
+    definition["materialize"]["spec"]["environmentdExtraEnv"] = [
+        {"name": "LEADER_FAILOVER_TEST_NONCE", "value": str(uuid.uuid4())}
+    ]
+
+
+def workflow_leader_failover(
+    c: Composition,
+    parser: WorkflowArgumentParser,
+) -> None:
+    """Test that orchestratord leader election fails over between replicas.
+
+    orchestratord runs with multiple replicas (the chart default), and its
+    controllers (materialize, balancer, console) are all guarded by a single
+    coordination.k8s.io Lease so that only one replica reconciles at a time,
+    while the other replicas wait to take the lease over. The conversion
+    webhook is served by every replica (that's the motivation for running
+    more than one), so the v1 CRD is enabled and the webhook must stay
+    functional across both failover paths:
+
+      1. Leader pod deletion: the lease stops being renewed, so a standby
+         replica must take it over after the lease expires and then actually
+         reconcile (proven by driving a rollout to completion), while the
+         surviving replica keeps serving the conversion webhook.
+
+      2. Rolling restart of the operator deployment (the production rollout
+         scenario that motivates running multiple replicas): after the
+         rollout the lease must be held by a new pod, reconciliation must
+         still work, and the webhook must still work.
+
+      3. Losing the lease to another candidate: the replica that lost it must
+         rejoin the election in process rather than restarting, so that it
+         keeps serving the conversion webhook throughout.
+    """
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        help="Custom version tag to use",
+    )
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+
+    definition = setup(c, args)
+    replicas = definition["operator"]["operator"]["replicas"]
+    assert (
+        replicas >= 2
+    ), f"leader failover requires at least 2 operator replicas, chart default is {replicas}"
+
+    # Serve the v1 CRD and apply the Materialize resource at v1, so that
+    # writes go through the conversion webhook and webhook availability
+    # across failovers is actually exercised.
+    enable_v1_crd(definition)
+    definition["materialize"]["apiVersion"] = "materialize.cloud/v1"
+
+    init(definition)
+    run(definition, expect_fail=False)
+
+    def webhook_works() -> None:
+        assert conversion_webhook_works(), "conversion webhook is not working"
+
+    retry(webhook_works, 120)
+    print("Conversion webhook works")
+
+    # The balancer and console controllers must have reconciled their pods
+    # into a running state, proving all three controllers work under the
+    # lease. run() already proved this for the materialize controller.
+    def balancer_and_console_running() -> None:
+        for name, data in (
+            ("balancerd", get_balancerd_data()),
+            ("console", get_console_data()),
+        ):
+            pods = data["items"]
+            assert pods and all(
+                pod["status"]["phase"] == "Running" for pod in pods
+            ), f"expected all {name} pods to be running, got {[(pod['metadata']['name'], pod['status']['phase']) for pod in pods]}"
+
+    retry(balancer_and_console_running, 300)
+    print("Balancerd and console pods are running")
+
+    # The chart must create a PodDisruptionBudget so that node drains can't
+    # take down all operator replicas at once.
+    spawn.runv(["kubectl", "get", "pdb", OPERATOR_DEPLOYMENT, "-n", "materialize"])
+
+    def all_replicas_ready() -> None:
+        pods = get_operator_pod_names()
+        assert (
+            len(pods) == replicas
+        ), f"expected {replicas} ready operator pods, got {pods}"
+
+    retry(all_replicas_ready, 120)
+    retry(check_lease_held_by_operator_pod, 120)
+    # Retried because the leader sets the gauge when it starts running the
+    # controllers, which is just after it writes the lease.
+    retry(check_is_leader_metric_agrees_with_lease, 60)
+    print(
+        "The controller lease is held by an operator pod, which reports itself leader"
+    )
+
+    # --- Case 1: leader pod deletion -----------------------------------------
+    old_leader = get_lease_holder(LEADER_ELECTION_LEASE)
+    assert old_leader is not None
+    print(f"Deleting leader pod {old_leader}")
+    spawn.runv(
+        ["kubectl", "delete", "pod", old_leader, "-n", "materialize", "--wait=false"]
+    )
+
+    # The dead leader stops renewing, so after the lease duration (15s by
+    # default) a standby replica (or the replacement pod) must take over.
+    def new_leader_elected() -> None:
+        holder = get_lease_holder(LEADER_ELECTION_LEASE)
+        pods = get_operator_pod_names()
+        assert (
+            holder != old_leader and holder in pods
+        ), f"lease {LEADER_ELECTION_LEASE} is held by {holder!r}, expected a pod other than {old_leader} among {pods}"
+
+    retry(new_leader_elected, 120)
+    print(f"New leader elected: {get_lease_holder(LEADER_ELECTION_LEASE)}")
+
+    # The surviving replica must keep serving the conversion webhook while
+    # the deleted pod's replacement comes up.
+    retry(webhook_works, 60)
+
+    # Prove the new leader actually reconciles: request a fresh rollout and
+    # wait for it to complete.
+    request_rollout_via_v1(definition)
+    run(definition, expect_fail=False)
+    print("Reconciliation works after leader pod deletion")
+
+    # --- Case 2: rolling restart of the operator deployment ------------------
+    spawn.runv(
+        [
+            "kubectl",
+            "rollout",
+            "restart",
+            f"deployment/{OPERATOR_DEPLOYMENT}",
+            "-n",
+            "materialize",
+        ]
+    )
+    spawn.runv(
+        [
+            "kubectl",
+            "rollout",
+            "status",
+            f"deployment/{OPERATOR_DEPLOYMENT}",
+            "-n",
+            "materialize",
+            "--timeout=300s",
+        ]
+    )
+
+    # All pods were replaced, so the lease must be taken over by a new pod
+    # once the old holder's lease expires, and the webhook must be served by
+    # the new pods.
+    retry(check_lease_held_by_operator_pod, 120)
+    retry(webhook_works, 60)
+    request_rollout_via_v1(definition)
+    run(definition, expect_fail=False)
+    print("Reconciliation works after a rolling restart of the operator")
+
+    # --- Case 3: losing the lease to another candidate -----------------------
+    # Hand the lease to an identity that belongs to nobody. The leader notices
+    # on its next renewal that it is no longer the holder and gives leadership
+    # up, and since the fake holder never renews, the lease is taken over
+    # again once it expires.
+    restarts_before = get_operator_pod_restart_counts()
+    transitions_before = get_lease_transitions(LEADER_ELECTION_LEASE)
+    spawn.runv(
+        [
+            "kubectl",
+            "patch",
+            "lease",
+            LEADER_ELECTION_LEASE,
+            "-n",
+            "materialize",
+            "--type=merge",
+            "-p",
+            json.dumps({"spec": {"holderIdentity": "not-a-real-candidate"}}),
+        ]
+    )
+
+    # An operator pod holding the lease is not enough here: unlike the cases
+    # above, the incumbent leader is still running and eligible, so it could
+    # satisfy that without ever having noticed the patch. Requiring a new
+    # transition proves leadership was actually given up and taken back.
+    def lease_taken_over_again() -> None:
+        check_lease_held_by_operator_pod()
+        transitions = get_lease_transitions(LEADER_ELECTION_LEASE)
+        assert transitions > transitions_before, (
+            f"lease {LEADER_ELECTION_LEASE} is at {transitions} transitions, "
+            f"expected more than {transitions_before}"
+        )
+
+    retry(lease_taken_over_again, 120)
+    retry(webhook_works, 60)
+    # This is the case that exercises clearing the gauge: unlike the failovers
+    # above, the replica that gave leadership up is still running, so it has to
+    # stop reporting itself leader rather than being replaced by a fresh pod.
+    retry(check_is_leader_metric_agrees_with_lease, 60)
+    request_rollout_via_v1(definition)
+    run(definition, expect_fail=False)
+
+    # Losing the lease must not restart the process: the replica rejoins the
+    # election in place, which is what keeps it serving the conversion webhook
+    # the whole time.
+    restarts_after = get_operator_pod_restart_counts()
+    for pod, restarts in restarts_before.items():
+        # A pod that vanished entirely is a failure too, so require that every
+        # pod is still there rather than defaulting a missing one to a pass.
+        assert (
+            pod in restarts_after
+        ), f"operator pod {pod} disappeared after losing the lease"
+        assert restarts_after[pod] == restarts, (
+            f"operator pod {pod} restarted after losing the lease "
+            f"({restarts} -> {restarts_after[pod]})"
+        )
+    print("Reconciliation works after losing the lease, without a restart")
+    print("leader failover test PASSED")
+
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--recreate-cluster",
@@ -4135,6 +4585,7 @@ def setup(c: Composition, args) -> dict[str, Any]:
             "orchestratord",
             "environmentd",
             "clusterd",
+            "console",
             "balancerd",
         ]
         c.pull_images(*services)

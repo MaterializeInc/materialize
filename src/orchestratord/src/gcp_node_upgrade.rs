@@ -50,6 +50,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, bail};
+use futures::future;
 use k8s_openapi::api::core::v1::{Node, Pod};
 use kube::{
     Api, Client,
@@ -213,6 +214,11 @@ impl ArmedPools {
 }
 
 /// Runs the GCP node upgrade watcher forever. Errors are logged and retried.
+///
+/// Never returns. Dropping this future aborts all of its work, which it must,
+/// since it triggers rollouts and only the replica holding the leadership
+/// lease may do that. The abort is not synchronous with the drop: a task
+/// caught mid-poll runs until its next await point.
 pub async fn run(client: Client, config: Config) {
     info!(
         subscription = config.notification_subscription,
@@ -226,13 +232,36 @@ pub async fn run(client: Client, config: Config) {
 
     let gcp = Arc::new(GcpApiClient::new().await);
 
-    mz_ore::task::spawn(|| "gcp node upgrade notification subscriber", {
-        let config = config.clone();
-        let armed = Arc::clone(&armed);
-        let gcp = Arc::clone(&gcp);
-        async move { subscriber_loop(gcp, config, armed).await }
-    });
+    // The two loops run as separate tasks, so that they are scheduled
+    // independently and neither can hold the other's poll up. Their handles
+    // are held here and abort the tasks when dropped, so neither loop
+    // outlives this future. A subscriber that did would keep pulling
+    // notifications, and acking them, out from under whichever replica holds
+    // the lease next.
+    future::join(
+        mz_ore::task::spawn(
+            || "gcp node upgrade notification subscriber",
+            subscriber_loop(Arc::clone(&gcp), config.clone(), Arc::clone(&armed)),
+        )
+        .abort_on_drop(),
+        mz_ore::task::spawn(
+            || "gcp node upgrade scan",
+            scan_loop(client, gcp, config, armed),
+        )
+        .abort_on_drop(),
+    )
+    .await;
+}
 
+/// Polls the armed node pools, and the GKE API for pools that should be
+/// armed, triggering rollouts for the instances on pools whose blue nodes
+/// have all been cordoned. Never returns.
+async fn scan_loop(
+    client: Client,
+    gcp: Arc<GcpApiClient>,
+    config: Config,
+    armed: Arc<Mutex<ArmedPools>>,
+) {
     let mut scan_interval = tokio::time::interval(config.scan_interval);
     scan_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut last_gke_poll: Option<Instant> = None;

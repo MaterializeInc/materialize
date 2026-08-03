@@ -16,7 +16,7 @@ metadata:
   labels:
     {{- include "materialize-operator.labels" . | nindent 4 }}
 spec:
-  replicas: 1
+  replicas: {{ .Values.operator.replicas }}
   selector:
     matchLabels:
       {{- include "materialize-operator.selectorLabels" . | nindent 6 }}
@@ -32,6 +32,14 @@ spec:
         runAsUser: 65532
         runAsNonRoot: true
       serviceAccountName: {{ include "materialize-operator.serviceAccountName" . }}
+      # On SIGTERM the operator releases its leadership lease, then keeps
+      # serving the conversion webhook for a few seconds while Kubernetes
+      # removes it from the webhook service's endpoints, then drains the
+      # in-flight conversion requests. Those steps run in sequence and are
+      # individually bounded in the binary, adding up to 15 seconds. This is
+      # set explicitly, rather than left to the Kubernetes default, so that the
+      # budget the binary assumes cannot drift away from what it is given.
+      terminationGracePeriodSeconds: 30
       {{- if .Values.operator.nodeSelector }}
       nodeSelector:
         {{- toYaml .Values.operator.nodeSelector | nindent 8 }}
@@ -39,6 +47,20 @@ spec:
       {{- if .Values.operator.affinity }}
       affinity:
         {{- toYaml .Values.operator.affinity | nindent 8 }}
+      {{- else if gt (int .Values.operator.replicas) 1 }}
+      # Spread the replicas across nodes by default, so that losing a single
+      # node can't take down every replica of the conversion webhook. This is
+      # a preference rather than a requirement, so that the operator still
+      # schedules on single-node clusters.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  {{- include "materialize-operator.selectorLabels" . | nindent 18 }}
       {{- end }}
       {{- if .Values.operator.tolerations }}
       tolerations:
@@ -271,6 +293,13 @@ spec:
         - "--webhook-service-namespace"
         - {{ .Release.Namespace }}
         {{- end }}
+        env:
+        # Sets the operator's --leader-election-identity, which must be unique
+        # per replica.
+        - name: ORCHESTRATORD_LEADER_ELECTION_IDENTITY
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
         ports:
         - containerPort: 3100
           name: metrics

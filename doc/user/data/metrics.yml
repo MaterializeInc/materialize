@@ -67,7 +67,7 @@ metrics:
   source: src/environmentd/src/http/metrics.rs
   visibility: internal
 - name: environmentd_needs_update
-  help: Count of organizations in this cluster which are running outdated pod templates
+  help: Count of organizations in this cluster which are running outdated pod templates. Only the operator replica holding the leadership lease reconciles, so the others report zero.
   source: src/orchestratord/src/metrics.rs
   visibility: internal
 - name: jemalloc_active
@@ -4278,6 +4278,10 @@ metrics:
   labels:
   - reason
   source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: orchestratord_is_leader
+  help: Whether this operator replica holds the controller leadership lease, and is therefore the replica reconciling. Summed across the replicas this should be 1. A sustained 0 means no replica can take the lease, for instance because the service account lacks permission on leases, and the operator is reconciling nothing.
+  source: src/orchestratord/src/metrics.rs
   visibility: internal
 - name: outer_join_lowering_cases
   help: How many times the different outer join lowering cases happened.
