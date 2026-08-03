@@ -265,7 +265,7 @@ steps:
 
 
   - id: cargo-test
-    topics: [kafka, postgres]
+    topics: [kafka, mysql, postgres]
     label: ":rust: Cargo test"
     timeout_in_minutes: 60
     inputs:

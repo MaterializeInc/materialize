@@ -236,6 +236,12 @@ mod tests {
     #[cfg_attr(miri, ignore)] // needs a network connection
     async fn test_live_mysql() -> Result<(), anyhow::Error> {
         let Ok(url) = std::env::var("MZ_TEST_MYSQL_URL") else {
+            // The cargo-test CI composition provides the URL. Skipping must
+            // stay a local-only convenience, or a wiring regression would
+            // silently retire this test while CI stays green.
+            if mz_ore::env::is_var_truthy("CI") {
+                panic!("CI is supposed to run this test but something has gone wrong!");
+            }
             tracing::info!("MZ_TEST_MYSQL_URL not set: skipping live MySQL test");
             return Ok(());
         };
