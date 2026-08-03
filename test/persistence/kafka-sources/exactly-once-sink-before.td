@@ -64,10 +64,13 @@ $ kafka-ingest format=avro topic=exactly-once key-format=avro key-schema=${keysc
 $ kafka-ingest format=avro topic=exactly-once key-format=avro key-schema=${keyschema} schema=${schema} repeat=2 start-iteration=30
 {"f1": ${kafka-ingest.iteration}} {"f2": ${kafka-ingest.iteration}}
 
-# Make sure that we have produced stuff to the sink before we restart
+# Make sure that we have produced stuff to the sink before we restart.
+#
+# The records ingested above with start-iteration 20 and 30 may or may not have
+# reached the sink topic by now, so exempt the topic from the end-of-file
+# exhaustion check. exactly-once-sink-after.td verifies them.
 
-
-$ kafka-verify-data format=avro sink=materialize.public.exactly_once_sink sort-messages=true
+$ kafka-verify-data format=avro sink=materialize.public.exactly_once_sink sort-messages=true exhaustive=false
 {"before":null,"after":{"row":{"f1":0,"f2":0}}}
 {"before":null,"after":{"row":{"f1":1,"f2":1}}}
 {"before":null,"after":{"row":{"f1":10,"f2":10}}}

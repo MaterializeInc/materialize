@@ -117,6 +117,7 @@ ERROR_RE = re.compile(
     # rdkafka assertions
     | Assertion\ `.*'\ failed\.
     | Invalid\ data\ in\ source\ errors,\ saw\ retractions
+    | \+\+\+\ Expected\ builds\ to\ be\ available,\ the\ build\ probably\ failed
     )
     .* $
     """,
