@@ -1108,14 +1108,14 @@ CREATE METRIC SINK m IN CLUSTER c FROM v
 ----
 CREATE METRIC SINK m IN CLUSTER c FROM v
 =>
-CreateMetricSink(CreateMetricSinkStatement { name: Some(UnresolvedItemName([Ident("m")])), in_cluster: Some(Unresolved(Ident("c"))), if_not_exists: false, from: Name(UnresolvedItemName([Ident("v")])) })
+CreateMetricSink(CreateMetricSinkStatement { name: UnresolvedItemName([Ident("m")]), in_cluster: Some(Unresolved(Ident("c"))), if_not_exists: false, from: Name(UnresolvedItemName([Ident("v")])) })
 
 parse-statement
 CREATE METRIC SINK IF NOT EXISTS m FROM v
 ----
 CREATE METRIC SINK IF NOT EXISTS m FROM v
 =>
-CreateMetricSink(CreateMetricSinkStatement { name: Some(UnresolvedItemName([Ident("m")])), in_cluster: None, if_not_exists: true, from: Name(UnresolvedItemName([Ident("v")])) })
+CreateMetricSink(CreateMetricSinkStatement { name: UnresolvedItemName([Ident("m")]), in_cluster: None, if_not_exists: true, from: Name(UnresolvedItemName([Ident("v")])) })
 
 parse-statement
 CREATE INDEX foo ON myschema.bar (a, b)
