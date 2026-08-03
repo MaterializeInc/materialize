@@ -41,6 +41,10 @@ pub use privileges::validate_source_privileges;
 
 pub mod decoding;
 pub use decoding::pack_mysql_row;
+
+pub mod probe;
+pub use probe::{KeyProber, explain_row_estimate, like_prefix_pattern};
+
 mod aws_rds;
 
 #[derive(Debug, Clone)]
