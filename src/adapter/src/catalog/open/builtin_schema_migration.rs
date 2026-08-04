@@ -392,6 +392,17 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_CATALOG_SCHEMA,
             "mz_audit_events",
         ),
+        // Converting mz_object_dependencies from a builtin table to a
+        // materialized view over mz_catalog_raw changes its catalog
+        // fingerprint, so it needs an explicit replacement step. See the
+        // NOTE above: this version must stay at the workspace's current dev
+        // version until the change ships.
+        MigrationStep::replacement(
+            "26.39.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_object_dependencies",
+        ),
     ]
 });
 

@@ -29,6 +29,7 @@ use mz_storage_client::controller::IntrospectionType;
 use super::{
     BuiltinIndex, BuiltinLog, BuiltinMaterializedView, BuiltinSource, BuiltinTable, BuiltinType,
     BuiltinView, Cardinality, LinkProperties, Ontology, OntologyLink, PUBLIC_SELECT,
+    assert_safe_builtin_name,
 };
 
 pub const TYPE_LIST: BuiltinType<NameReference> = BuiltinType {
@@ -674,19 +675,6 @@ pub static MZ_COLUMNS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     }),
 });
 // mz_indexes is generated dynamically in BUILTINS_STATIC via mz_catalog::make_mz_indexes()
-
-/// Asserts that `name` is safe to embed unquoted inside a `'...'`-quoted SQL literal
-/// or inside a `"..."`-quoted SQL identifier. Builtin index/log/object names are
-/// concatenated into SQL fragments below, so a quote or backslash would produce
-/// malformed SQL. Builtin names should always be plain ASCII identifiers.
-fn assert_safe_builtin_name(name: &str, kind: &str) {
-    assert!(
-        !name.contains('\'') && !name.contains('"') && !name.contains('\\'),
-        "builtin {kind} name {name:?} contains an unsupported character; \
-         mz_indexes reconstructs SQL via string concatenation and assumes \
-         names contain no quotes or backslashes"
-    );
-}
 
 /// User-created indexes, sourced from `mz_catalog_raw` `Item` entries with
 /// `parse_catalog_create_sql(...)` yielding `type = 'index'`.
