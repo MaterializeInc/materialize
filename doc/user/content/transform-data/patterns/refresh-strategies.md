@@ -149,7 +149,7 @@ Because the materialized view is hosted on a scheduled cluster that is
 configured to **turn on ahead of any scheduled refreshes**, you can expect
 `my_scheduled_cluster` to be provisioned at 11PM UTC — or, 1 hour ahead of the
 scheduled refresh time for `mv_refresh_every`. This means that the cluster can
-backfill the view with pre-existing data — a process known as [_hydration_](/transform-data/troubleshooting/#hydrating-upstream-objects)
+backfill the view with pre-existing data — a process known as [_hydration_](/transform-data/troubleshooting/#hydrating-objects)
 — ahead of the refresh operation, which **reduces the total unavailability window
 of the view** to just the duration of the refresh.
 
