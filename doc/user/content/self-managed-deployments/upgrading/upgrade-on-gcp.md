@@ -1,6 +1,6 @@
 ---
 title: "Upgrade on GCP"
-description: "Upgrade Materialize on GCP using the new Terraform module."
+description: "Upgrade Materialize on GCP using the Terraform module."
 menu:
   main:
     parent: "upgrading"

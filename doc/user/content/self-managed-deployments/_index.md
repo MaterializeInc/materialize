@@ -4,7 +4,6 @@ description: "Learn about the key components and architecture of self-managed Ma
 disable_list: true
 aliases:
   - /self-hosted/concepts/
-  - /self-managed-deployments/appendix/legacy/appendix-legacy-terraform-releases/
   - /self-managed/
   - /self-managed/v25.2/
   - /self-managed/v25.2/installation/
@@ -61,21 +60,11 @@ name="installation-landing-guides-helm" %}}
 
 {{< /note >}}
 
-{{< tabs level=4 >}}
-{{< tab "Terraform Modules (New!)" >}}
-
 Materialize provides [**Terraform
 modules**](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main?tab=readme-ov-file#materialize-self-managed-terraform-modules),
 which provides concrete examples and an opinionated model for deploying Materialize.
 
 {{< yaml-table data="self_managed/terraform_list" >}}
-
-{{< /tab >}}
-{{< tab "Legacy Terraform Modules" >}}
-
-{{< yaml-table data="self_managed/terraform_list_legacy" >}}
-{{< /tab >}}
-{{< /tabs >}}
 
 ## Architecture layers
 

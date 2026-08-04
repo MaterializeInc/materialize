@@ -82,9 +82,9 @@ For instructions on completing the prerequisites, select the tab that matches
 your deployment method:
 
 {{< tabs >}}
-{{< tab "Supported Terraform" >}}
+{{< tab "Terraform" >}}
 
-If you are using the [supported Terraform
+If you are using the [Terraform
 modules](https://github.com/MaterializeInc/materialize-terraform-self-managed),
 the required infrastructure changes (cert-manager and network ingress) and
 enabling of `v1` CRD will be handled for you automatically starting in TF
@@ -95,7 +95,7 @@ modules (**v3.1.1 or greater**). Starting in TF modules **v4.0.0**, the
   prerequisites are handled automatically.
 
 - If you are on earlier TF modules, use the same [procedure to perform version
-  upgrades](/self-managed-deployments/upgrading/#upgrade-using-the-new-terraform-modules)
+  upgrades](/self-managed-deployments/upgrading/#upgrade-using-terraform-modules)
   to upgrade to **v3.1.1 or greater**; i.e., update each module's `source` to
   point to the new release tag (v3.1.1 or greater), then run `terraform init &&
   terraform plan && terraform apply`.
@@ -107,28 +107,6 @@ modules (**v3.1.1 or greater**). Starting in TF modules **v4.0.0**, the
   - [Upgrade on AWS](/self-managed-deployments/upgrading/upgrade-on-aws/)
   - [Upgrade on Azure](/self-managed-deployments/upgrading/upgrade-on-azure/)
   - [Upgrade on GCP](/self-managed-deployments/upgrading/upgrade-on-gcp/)
-
-{{< /tab >}}
-{{< tab "Legacy Terraform" >}}
-
-If you are using the legacy Terraform modules
-([AWS](https://github.com/MaterializeInc/terraform-aws-materialize),
-[GCP](https://github.com/MaterializeInc/terraform-gcp-materialize), or
-[Azure](https://github.com/MaterializeInc/terraform-azure-materialize)),
-we recommend migrating to the [new supported Terraform
-modules](https://github.com/MaterializeInc/materialize-terraform-self-managed)
-before opting in to the `v1` CRD.
-
-The new modules include built-in support for the conversion webhooks used by
-the `v1` CRD, including cert-manager installation and network policy
-configuration. The legacy modules do not include these changes, so you would
-need to apply them manually (see the **Manual** tab).
-
-For migration guidance, see the documentation for your cloud provider:
-
-- [AWS migration guide](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/aws/examples/migration)
-- [GCP migration guide](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/gcp/examples/migration)
-- [Azure migration guide](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/azure/examples/migration)
 
 {{< /tab >}}
 {{< tab "Manual" >}}
@@ -240,7 +218,7 @@ if nothing else in the spec changed.
 {{< /important >}}
 
 {{< tabs >}}
-{{< tab "Supported Terraform" >}}
+{{< tab "Terraform" >}}
 
 If you are managing your Materialize instance with the [Materialize Terraform
 modules](https://github.com/MaterializeInc/materialize-terraform-self-managed),

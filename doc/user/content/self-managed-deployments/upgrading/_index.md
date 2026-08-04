@@ -34,9 +34,6 @@ name="upgrade-landing-guides-helm" %}}
 {{% include-from-yaml data="self_managed/upgrades"
 name="upgrade-landing-guides-unified" %}}
 
-{{% include-from-yaml data="self_managed/upgrades"
-name="upgrade-landing-guides-legacy" %}}
-
 ## Upgrading the Helm Chart and Materialize Operator
 
 {{< important >}}
