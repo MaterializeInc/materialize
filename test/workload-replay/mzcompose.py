@@ -508,23 +508,32 @@ def workflow_console_scalability(
                 f"it only collects timing data: {e}"
             )
 
-    test(
-        c,
-        workload,
-        file,
-        args.factor_initial_data,
-        args.factor_ingestions,
-        args.factor_queries,
-        0,  # runtime is unused, the suite governs the continuous phase
-        args.verbose,
-        True,  # create_objects
-        True,  # initial_data
-        True,  # early_initial_data
-        True,  # run_ingestions
-        True,  # run_queries
-        args.max_concurrent_queries,
-        during_continuous=run_suite,
-    )
+    try:
+        test(
+            c,
+            workload,
+            file,
+            args.factor_initial_data,
+            args.factor_ingestions,
+            args.factor_queries,
+            0,  # runtime is unused, the suite governs the continuous phase
+            args.verbose,
+            True,  # create_objects
+            True,  # initial_data
+            True,  # early_initial_data
+            True,  # run_ingestions
+            True,  # run_queries
+            args.max_concurrent_queries,
+            during_continuous=run_suite,
+        )
+    finally:
+        # The runner idles on sleep infinity, don't let it outlive the
+        # workflow into CI teardown.
+        try:
+            c.kill("console-scalability-runner")
+            c.rm("console-scalability-runner")
+        except Exception:
+            pass
 
 
 def _console_runner_sh(
