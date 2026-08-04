@@ -102,12 +102,6 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             "mz_cluster_replica_metrics_history",
         ),
         MigrationStep::replacement(
-            "0.160.0",
-            CatalogItemType::Table,
-            MZ_CATALOG_SCHEMA,
-            "mz_sinks",
-        ),
-        MigrationStep::replacement(
             "26.18.0-dev.0",
             CatalogItemType::MaterializedView,
             MZ_CATALOG_SCHEMA,
@@ -354,6 +348,29 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             CatalogItemType::MaterializedView,
             MZ_CATALOG_SCHEMA,
             "mz_aws_privatelink_connections",
+        ),
+        // The three sink tables became materialized views, which moves their
+        // fingerprints. The old `0.160.0` `mz_sinks` step had to go at the same
+        // time, because it names the `Table` description and that no longer
+        // resolves. Nothing is lost: anything that needed the old step upgrades
+        // from further back than this one, so this one covers it too.
+        MigrationStep::replacement(
+            "26.37.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_sinks",
+        ),
+        MigrationStep::replacement(
+            "26.37.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_kafka_sinks",
+        ),
+        MigrationStep::replacement(
+            "26.37.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_iceberg_sinks",
         ),
     ]
 });
