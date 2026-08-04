@@ -239,6 +239,7 @@ async fn compute_pk_splits(
     worker_count: usize,
     row_count: u64,
     partition_min_rows: u64,
+    partition_requests_per_billion_rows: u64,
 ) -> Result<Option<PkBoundaries>, TransientError> {
     match scalar_type {
         SqlScalarType::Char { .. } | SqlScalarType::VarChar { .. } | SqlScalarType::String => {}
@@ -265,6 +266,11 @@ async fn compute_pk_splits(
         schema_name: &table.0,
         table_name: &table.1,
     };
+    // Probe budget proportional to the estimated snapshot work, so probing
+    // effort stays negligible next to reading the table. The floor keeps
+    // small tables able to afford their handful of splits.
+    let max_requests =
+        (row_count.saturating_mul(partition_requests_per_billion_rows) / 1_000_000_000).max(256);
     let prefixes = match mz_mysql_util::partition_table(
         conn,
         table_ref,
@@ -272,6 +278,7 @@ async fn compute_pk_splits(
         worker_count,
         row_count,
         partition_min_rows,
+        max_requests,
     )
     .await
     {
@@ -344,6 +351,10 @@ async fn sample_pk_bounds(
         mz_storage_types::dyncfgs::MYSQL_SOURCE_SNAPSHOT_PARTITION_MIN_ROWS
             .get(config.config.config_set()),
     );
+    let partition_requests_per_billion_rows = u64::cast_from(
+        mz_storage_types::dyncfgs::MYSQL_SOURCE_SNAPSHOT_PARTITION_REQUESTS_PER_BILLION_ROWS
+            .get(config.config.config_set()),
+    );
 
     let pooled_conns: Rc<RefCell<Vec<MySqlConn>>> = Rc::new(RefCell::new(Vec::new()));
     // Counting and boundary-sampling each walk a table's index (O(rows)), so run tables
@@ -402,6 +413,7 @@ async fn sample_pk_bounds(
                             worker_count,
                             count,
                             partition_min_rows,
+                            partition_requests_per_billion_rows,
                         )
                         .await?
                     }
