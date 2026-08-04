@@ -733,6 +733,128 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)]
+    async fn test_live_mysql_latin1_charset() -> Result<(), anyhow::Error> {
+        let Some(mut conn) = connect().await? else {
+            return Ok(());
+        };
+        const DB: &str = "mz_probe_latin1_test";
+        // The column charset differs from the utf8mb4 connection charset, so
+        // every value crosses a conversion. é and ñ are one character and one
+        // byte in latin1 but two bytes in the UTF-8 we receive, making
+        // character counts and byte counts diverge. Under latin1_swedish_ci
+        // é collates with e and ñ with n, so no key may be a case or accent
+        // variant of another.
+        let keys = ["a", "é", "éa", "éb", "ñ", "ña", "z"];
+        let table = setup_table(&mut conn, DB, "latin1_swedish_ci", &keys).await?;
+
+        let p = &mut KeyProber::new(&mut conn, table, "id");
+        // Prefixes count characters in the column's charset and come back
+        // converted, so a one-character prefix of é is the whole é.
+        assert_eq!(
+            prefix_of_first_key_in_range(p, None, None, 1).await,
+            some("a")
+        );
+        assert_eq!(
+            prefix_of_first_row_not_matching_prefix(p, "a", None, 1).await,
+            some("é")
+        );
+        assert_eq!(
+            prefix_of_first_row_not_matching_prefix(p, "é", None, 1).await,
+            some("ñ")
+        );
+        assert_eq!(
+            prefix_of_first_row_not_matching_prefix(p, "ñ", None, 1).await,
+            some("z")
+        );
+        assert_eq!(
+            prefix_of_first_row_not_matching_prefix(p, "z", None, 1).await,
+            None
+        );
+
+        // The exclusive bound skips the exact key é (one character in
+        // latin1, two UTF-8 bytes here), and its extensions surface as
+        // their own prefixes.
+        assert_eq!(
+            prefix_of_first_key_in_range(p, Some("é"), Some("ñ"), 2).await,
+            some("éa")
+        );
+        assert_eq!(
+            prefix_of_first_row_not_matching_prefix(p, "éa", Some("ñ"), 2).await,
+            some("éb")
+        );
+        assert_eq!(
+            prefix_of_first_row_not_matching_prefix(p, "éb", Some("ñ"), 2).await,
+            None
+        );
+        // Every key matching 'é%' is covered by the prefix match.
+        assert_eq!(
+            prefix_of_first_row_not_matching_prefix(p, "é", Some("ñ"), 2).await,
+            None
+        );
+
+        drop_db(&mut conn, DB).await?;
+        conn.disconnect().await?;
+        Ok(())
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_live_mysql_invalid_utf8_keys() -> Result<(), anyhow::Error> {
+        let Some(mut conn) = connect().await? else {
+            return Ok(());
+        };
+        const DB: &str = "mz_probe_binary_test";
+        recreate_db(&mut conn, DB).await?;
+        // A binary key column passes bytes through unconverted, so this is
+        // the one way invalid UTF-8 can reach the client. Production filters
+        // these columns out before probing, and falls back to a
+        // single-partition snapshot if one slips through.
+        #[allow(clippy::disallowed_methods)]
+        conn.query_drop(format!(
+            "CREATE TABLE {DB}.t (id VARBINARY(36) PRIMARY KEY NOT NULL)"
+        ))
+        .await?;
+        let keys: Vec<Vec<u8>> = vec![b"a1".to_vec(), b"a2".to_vec(), vec![0xff, 0xfe, 0x31]];
+        conn.exec_batch(
+            format!("INSERT INTO {DB}.t VALUES (?)"),
+            keys.iter().map(|k| (Value::Bytes(k.clone()),)),
+        )
+        .await?;
+        #[allow(clippy::disallowed_methods)]
+        conn.query_drop(format!("ANALYZE TABLE {DB}.t")).await?;
+        let table = QualifiedTableRef {
+            schema_name: DB,
+            table_name: "t",
+        };
+        let mut p = KeyProber::new(&mut conn, table, "id");
+
+        // Estimates never decode key values, they keep working.
+        assert!(p.estimate_range_rows(None, None).await.is_ok());
+
+        // ASCII keys order before the 0xff key and decode fine.
+        assert_eq!(
+            prefix_of_first_key_in_range(&mut p, None, None, 2).await,
+            some("a1")
+        );
+        assert_eq!(
+            prefix_of_first_row_not_matching_prefix(&mut p, "a1", None, 2).await,
+            some("a2")
+        );
+        // The next key is invalid UTF-8. The probe reports it as a named
+        // error so callers can log it and fall back.
+        let err = p
+            .prefix_of_first_row_not_matching_prefix("a2", None, 2)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, MySqlError::NonUtf8KeyValue { .. }), "{err:?}");
+
+        drop_db(&mut conn, DB).await?;
+        conn.disconnect().await?;
+        Ok(())
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
     async fn test_live_mysql_stale_statistics() -> Result<(), anyhow::Error> {
         let Some(mut conn) = connect().await? else {
             return Ok(());
@@ -893,7 +1015,7 @@ mod tests {
     }
 
     /// Recreates scratch database `db` holding one table `t` whose string
-    /// primary key `id` is pinned to the given utf8mb4 `collation`, containing
+    /// primary key `id` is pinned to the given `collation`, containing
     /// `keys`, with fresh statistics. Returns a ref for [`KeyProber::new`].
     async fn setup_table<'a>(
         conn: &mut mysql_async::Conn,
@@ -902,9 +1024,12 @@ mod tests {
         keys: &[impl AsRef<str> + Sync],
     ) -> Result<QualifiedTableRef<'a>, anyhow::Error> {
         recreate_db(conn, db).await?;
+        // MySQL collation names start with their character set's name, so
+        // the charset is pinned explicitly without a second parameter.
+        let charset = collation.split('_').next().expect("nonempty collation");
         #[allow(clippy::disallowed_methods)]
         conn.query_drop(format!(
-            "CREATE TABLE {db}.t (id VARCHAR(36) CHARACTER SET utf8mb4 \
+            "CREATE TABLE {db}.t (id VARCHAR(36) CHARACTER SET {charset} \
              COLLATE {collation} PRIMARY KEY NOT NULL)"
         ))
         .await?;
