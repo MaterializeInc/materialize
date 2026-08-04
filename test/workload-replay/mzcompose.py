@@ -12,14 +12,20 @@ Simulates workloads captured via `bin/mz-workload-capture` in a local run using 
 """
 
 import argparse
+import os
 import pathlib
 import random
 import time
 
 import yaml
 
-from materialize import buildkite
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize import MZ_ROOT, buildkite
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
+from materialize.mzcompose.service import Service as ServiceDefinition
 from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
@@ -87,7 +93,26 @@ SERVICES = [
         ],
     ),
     SqlServer(),
+    # Runs the console Playwright scalability suite against the console
+    # bundled in the materialized image. The image tag must match the
+    # @playwright/test version in console/package.json so the preinstalled
+    # browsers are compatible.
+    ServiceDefinition(
+        name="console-scalability-runner",
+        config={
+            "image": "mcr.microsoft.com/playwright:v1.61.0-noble",
+            "volumes": [f"{MZ_ROOT}:/workdir"],
+            "working_dir": "/workdir/console",
+            "init": True,
+            # Chromium crashes with the 64MB docker default for /dev/shm.
+            "ipc": "host",
+        },
+    ),
 ]
+
+# UID/GID of the host user, used to run yarn commands so they don't create
+# root-owned files in the bind-mounted volume.
+_HOST_UID_GID = f"{os.getuid()}:{os.getgid()}"
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -335,6 +360,156 @@ def workflow_benchmark(c: Composition, parser: WorkflowArgumentParser) -> None:
             args.early_initial_data,
             args.max_concurrent_queries,
         ),
+    )
+
+
+def workflow_console_scalability(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Run the console Playwright scalability suite against a captured workload.
+
+    Boots the workload (objects, initial data, hydration), then runs the
+    suite against the console bundled in the materialized image while
+    continuous ingestions and queries provide background load. The suite
+    only reports timings. Suite failures do not fail the workflow, the runs
+    exist to collect data for determining thresholds.
+    """
+    parser.add_argument(
+        "--factor-initial-data",
+        type=float,
+        default=0.01,
+        help="scale factor for initial data generation",
+    )
+    parser.add_argument(
+        "--factor-ingestions",
+        type=float,
+        default=1,
+        help="scale factor for runtime data ingestion rate",
+    )
+    parser.add_argument(
+        "--factor-queries",
+        type=float,
+        default=1,
+        help="scale factor for runtime queries",
+    )
+    parser.add_argument(
+        "--max-concurrent-queries",
+        type=int,
+        default=1000,
+        help="max. number of concurrent queries during continuous phase",
+    )
+    parser.add_argument(
+        "--seed",
+        metavar="SEED",
+        type=str,
+        default=str(int(time.time())),
+        help="random seed",
+    )
+    parser.add_argument("--verbose", action=argparse.BooleanOptionalAction)
+    parser.add_argument(
+        "files",
+        nargs="*",
+        default=["workload_prod_analytics.yml"],
+        help="the workload to run against (must match exactly one file)",
+    )
+    args = parser.parse_args()
+
+    print(f"-- Random seed is {args.seed}")
+    random.seed(args.seed)
+    update_captured_workloads_repo()
+
+    files = get_paths(args.files)
+    if len(files) != 1:
+        raise ValueError(
+            f"console-scalability expects exactly one workload, got {[str(f) for f in files]}"
+        )
+    file = files[0]
+    workload = load_workload(file)
+    print_workload_stats(file, workload)
+
+    # Reset any state left over from a previous run, like workflow_default.
+    service_names = [s.name for s in SERVICES]
+    try:
+        c.kill(*service_names)
+    except Exception:
+        pass
+    c.rm(*service_names, destroy_volumes=True)
+    c.rm_volumes("mzdata", force=True)
+
+    # Prepare the Playwright runner up front so dependency installation does
+    # not eat into the measurement window.
+    c.up(Service("console-scalability-runner", idle=True))
+    c.exec(
+        "console-scalability-runner",
+        "sh",
+        "-c",
+        "corepack enable",
+        env_extra={"COREPACK_ENABLE_DOWNLOAD_PROMPT": "0"},
+    )
+    _console_runner_sh(
+        c, "yarn install --immutable --network-timeout 30000", user=_HOST_UID_GID
+    )
+    # Fetches matching browsers in case @playwright/test drifted from the
+    # image tag. Runs as root because it writes to /ms-playwright.
+    _console_runner_sh(c, "node_modules/.bin/playwright install chromium")
+
+    def run_suite() -> None:
+        print("+++ Running console scalability suite")
+        try:
+            _console_runner_sh(
+                c,
+                "yarn test:e2e:scalability --workers=1 --trace=off",
+                user=_HOST_UID_GID,
+                env={"BASE_URL": "http://materialized:6874"},
+            )
+        except Exception as e:
+            print(
+                "Console scalability suite failed. Not failing the workflow, "
+                f"the suite only collects timing data: {e}"
+            )
+
+    test(
+        c,
+        workload,
+        file,
+        args.factor_initial_data,
+        args.factor_ingestions,
+        args.factor_queries,
+        0,  # runtime is unused, the suite governs the continuous phase
+        args.verbose,
+        True,  # create_objects
+        True,  # initial_data
+        True,  # early_initial_data
+        True,  # run_ingestions
+        True,  # run_queries
+        args.max_concurrent_queries,
+        during_continuous=run_suite,
+    )
+
+
+def _console_runner_sh(
+    c: Composition,
+    command: str,
+    user: str | None = None,
+    env: dict[str, str] | None = None,
+) -> None:
+    """Run a shell command in the console-scalability-runner service."""
+    full_env = {
+        "COREPACK_ENABLE_DOWNLOAD_PROMPT": "0",
+        # yarn needs a writable HOME when running as the host user.
+        "HOME": "/tmp",
+        **(env or {}),
+    }
+    c.invoke(
+        "exec",
+        *(["--user", user] if user else []),
+        *(f"-e{k}={v}" for k, v in full_env.items()),
+        "-T",
+        "console-scalability-runner",
+        "sh",
+        "-c",
+        command,
     )
 
 

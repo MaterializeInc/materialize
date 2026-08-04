@@ -312,6 +312,22 @@ steps:
         agents:
           queue: hetzner-x86-64-dedi-8cpu-32gb
 
+      - id: console-scalability
+        topics: [iceberg, kafka, mysql, postgres, sql-server, ssh-tunnel]
+        label: "Console scalability (workload replay)"
+        depends_on: build-x86_64
+        timeout_in_minutes: 120
+        artifact_paths:
+          - console/test-results/**/*
+          - console/e2e-tests/k6/queries.json
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: workload-replay
+              run: console-scalability
+        agents:
+          # Larger instance is more stable in performance
+          queue: hetzner-x86-64-dedi-16cpu-64gb
+
   - group: Kafka
     key: kafka
     steps:
