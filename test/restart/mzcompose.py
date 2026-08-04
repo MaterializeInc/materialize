@@ -1257,6 +1257,14 @@ def workflow_temporary_item_cleanup(c: Composition) -> None:
     needs to hold open. A kill -9 also cannot be faked: only a real SIGKILL
     guarantees the close hook did not run, which is what makes the final
     absence assertion evidence that boot-time reclamation happened.
+
+    The crash half also asserts the storage side of reclamation. A temp
+    table's durable StorageCollectionMetadata row is only ever cleaned up by
+    moving its shard into the unfinalized_shards finalization WAL, nothing
+    revisits rows that outlive their item, so reclamation must do that move
+    itself or the persist shard leaks forever. The WAL row is pruned again by
+    the next committed catalog transaction after finalization, so the
+    post-restart assertions must run before any DDL.
     """
 
     def forget_cached_conns() -> None:
@@ -1352,6 +1360,36 @@ def workflow_temporary_item_cleanup(c: Composition) -> None:
     cur_b.execute("SELECT count(*) FROM tv")
     assert cur_b.fetchall() == [(1,)], "session b lost its own temporary items"
 
+    # A comment on a temporary item is a durable catalog row too, and item ids
+    # are reused, so reclamation must drop it or it can re-attach to an
+    # unrelated later object.
+    cur_b.execute("COMMENT ON TABLE tt IS 'crash victim'")
+    temp_comment_count = """
+        SELECT count(*) FROM mz_internal.mz_catalog_raw
+        WHERE data->>'kind' = 'Comment'
+          AND data->'value'->>'comment' = 'crash victim'
+    """
+    comments = c.sql_query(temp_comment_count, port=6877, user="mz_system")
+    assert comments == [(1,)], f"the temp table's comment was not written: {comments}"
+
+    # Capture the shard backing session b's temp table: the metadata row of
+    # the one remaining ephemeral item that has storage (the temp view has
+    # none). It is what boot-time reclamation must clean up after the kill.
+    shards = c.sql_query(
+        """SELECT m.data->'value'->>'shard'
+           FROM mz_internal.mz_catalog_raw m
+           WHERE m.data->>'kind' = 'StorageCollectionMetadata'
+             AND m.data->'key'->'id' IN (
+               SELECT i.data->'value'->'global_id'
+               FROM mz_internal.mz_catalog_raw i
+               WHERE i.data->>'kind' = 'Item'
+                 AND i.data->'value'->>'ephemeral_owner_session' IS NOT NULL)""",
+        port=6877,
+        user="mz_system",
+    )
+    assert len(shards) == 1, f"expected one ephemeral storage mapping: {shards}"
+    temp_shard = shards[0][0]
+
     # --- kill -9, with session b's items still live ---------------------------
 
     c.kill("materialized")
@@ -1383,6 +1421,52 @@ def workflow_temporary_item_cleanup(c: Composition) -> None:
     assert ephemeral == [
         (0,)
     ], f"ephemeral catalog items survived the restart: {ephemeral}"
+
+    # The temp table's storage mapping must have moved to the finalization
+    # WAL in the same reclamation, else the metadata row and its persist
+    # shard would leak forever. Both rows are stable to assert on here: the
+    # metadata deletion is permanent, and the WAL row survives until the
+    # next committed catalog transaction, which cannot have happened because
+    # nothing has run DDL since the restart.
+    metadata = c.sql_query(
+        f"""SELECT count(*) FROM mz_internal.mz_catalog_raw
+            WHERE data->>'kind' = 'StorageCollectionMetadata'
+              AND data->'value'->>'shard' = '{temp_shard}'""",
+        port=6877,
+        user="mz_system",
+    )
+    assert metadata == [
+        (0,)
+    ], f"temp table's storage metadata survived the restart: {temp_shard}"
+    unfinalized = c.sql_query(
+        f"""SELECT count(*) FROM mz_internal.mz_catalog_raw
+            WHERE data->>'kind' = 'UnfinalizedShard'
+              AND data->'key'->>'shard' = '{temp_shard}'""",
+        port=6877,
+        user="mz_system",
+    )
+    assert unfinalized == [
+        (1,)
+    ], f"temp table's shard was not enqueued for finalization: {temp_shard}"
+
+    # The comment row dies with its item.
+    comments = c.sql_query(temp_comment_count, port=6877, user="mz_system")
+    assert comments == [(0,)], f"temp table's comment survived the restart: {comments}"
+
+    # The background task picks the shard up from the WAL and finalizes it.
+    http_port = c.port("materialized", 6878)
+    deadline = time.time() + 120
+    finalized: list[str] = []
+    while time.time() < deadline:
+        resp = requests.get(f"http://localhost:{http_port}/api/coordinator/dump")
+        resp.raise_for_status()
+        finalized = resp.json()["controller"]["storage_collections"]["finalized_shards"]
+        if temp_shard in finalized:
+            break
+        time.sleep(0.5)
+    assert (
+        temp_shard in finalized
+    ), f"shard {temp_shard} was never finalized, last saw {finalized}"
 
     # conn_b's socket died with the process; closing is bookkeeping only.
     try:

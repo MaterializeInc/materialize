@@ -237,6 +237,30 @@ keep the change invisible to session-visible catalog reads (name resolution,
 planning). Otherwise sessions serve stale catalogs where today they would see
 the change.
 
+### Reclamation of durable items must mirror the graceful drop
+
+Storage collection metadata is only cleaned up through the drop path.
+`Op::DropObjects` hands the dropped collections to
+`StorageCollections::prepare_state`, which deletes their
+`storage_collection_metadata` rows and enqueues the backing shards in the
+`unfinalized_shards` WAL, all in the same catalog commit. Nothing revisits
+leftovers. Bootstrap (`initialize_state`) only ever inserts metadata for
+collections present in the catalog, and shard finalization is driven solely
+by the WAL. A metadata row that outlives its item is therefore invisible
+forever and leaks the persist shard permanently.
+
+So any path that deletes durable items outside a normal catalog transaction
+(for example ephemeral-item reclamation at catalog open) must remove the same
+associated state the graceful drop removes: collection metadata rows (moving
+unreferenced shards to the WAL), comments (item ids are reused, so a dangling
+comment can re-attach to a later object), and source references.
+
+Related: txn-wal tolerates finalizing a data shard whose txns-shard
+registration was never forgotten. Every write path to a data shard
+early-returns when the shard's upper is empty (`apply_caa`, `empty_caa`,
+`unblock_read`), and `forget` skips unregistered ids. The dangling
+registration is a small bounded leak, not a correctness hazard.
+
 ### Group commits and generation handover
 
 At runtime, one group committer per `environmentd` serializes txns-shard operations:

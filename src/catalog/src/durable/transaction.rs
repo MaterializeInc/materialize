@@ -802,19 +802,90 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    /// Removes every item owned by an ephemeral session from the transaction.
+    /// Removes every item owned by an ephemeral session from the transaction,
+    /// along with the durable state a graceful drop would have removed with
+    /// it: storage collection metadata (moving the backing shards to the
+    /// finalization WAL), comments, and source references.
     ///
     /// Used to reclaim temporary items when the catalog is opened with write
     /// intent, at which point every session that could own one is dead.
+    ///
+    /// This must mirror everything the graceful `Op::DropObjects` path
+    /// persists for a temporary item, because nothing revisits the leftovers:
+    /// bootstrap only ever inserts collection metadata for items present in
+    /// the catalog, and shard finalization is driven solely by the
+    /// `unfinalized_shards` collection, so a metadata row that outlives its
+    /// item leaks the persist shard permanently.
     pub fn remove_ephemeral_items(&mut self) {
-        let keys: Vec<_> = self
-            .items
-            .items()
-            .into_iter()
-            .filter(|(_, value)| value.ephemeral_owner_session.is_some())
-            .map(|(key, _)| key.clone())
-            .collect();
+        let mut keys = Vec::new();
+        let mut item_ids = BTreeSet::new();
+        let mut global_ids = BTreeSet::new();
+        for (key, value) in self.items.items() {
+            if value.ephemeral_owner_session.is_none() {
+                continue;
+            }
+            item_ids.insert(key.id);
+            global_ids.insert(value.global_id);
+            global_ids.extend(value.extra_versions.values().copied());
+            keys.push(key.clone());
+        }
         self.items.delete_by_keys(keys, self.op_id);
+
+        // Move the items' storage mappings to the finalization WAL, like
+        // `StorageCollections::prepare_state` does for a graceful drop. Every
+        // version of a table maps to the same shard, and a shard that a
+        // remaining mapping still references must not be finalized. No
+        // remaining mapping can reference one today (only replacement
+        // materialized views share shards, and those cannot be temporary),
+        // so this mirrors `prepare_state`'s guard defensively.
+        let dropped_mappings = self.delete_collection_metadata(global_ids);
+        let mut dropped_shards: BTreeSet<_> = dropped_mappings
+            .into_iter()
+            .map(|(_, shard)| shard)
+            .collect();
+        let live_shards: BTreeSet<_> = self.get_collection_metadata().into_values().collect();
+        dropped_shards.retain(|shard| {
+            let live = live_shards.contains(shard);
+            if live {
+                soft_panic_or_log!(
+                    "shard {shard} of a reclaimed ephemeral item is still referenced by a \
+                     live collection, not finalizing it"
+                );
+            }
+            !live
+        });
+        self.insert_unfinalized_shards(dropped_shards).expect(
+            "inserting unfinalized shards only fails on duplicate values, which it ignores",
+        );
+
+        // Comments on ephemeral items would otherwise dangle and, because
+        // item ids are reused, could later re-attach to an unrelated object.
+        self.comments.delete(
+            |key, _value| match key.object_id {
+                CommentObjectId::Table(item_id)
+                | CommentObjectId::View(item_id)
+                | CommentObjectId::MaterializedView(item_id)
+                | CommentObjectId::Source(item_id)
+                | CommentObjectId::Sink(item_id)
+                | CommentObjectId::Index(item_id)
+                | CommentObjectId::Func(item_id)
+                | CommentObjectId::Connection(item_id)
+                | CommentObjectId::Type(item_id)
+                | CommentObjectId::Secret(item_id) => item_ids.contains(&item_id),
+                CommentObjectId::Role(_)
+                | CommentObjectId::Database(_)
+                | CommentObjectId::Schema(_)
+                | CommentObjectId::Cluster(_)
+                | CommentObjectId::ClusterReplica(_)
+                | CommentObjectId::NetworkPolicy(_) => false,
+            },
+            self.op_id,
+        );
+
+        // Only sources hold source references and sources cannot be temporary
+        // today, so this is defensive.
+        self.source_references
+            .delete(|key, _value| item_ids.contains(&key.source_id), self.op_id);
     }
 
     pub fn get_and_increment_id(&mut self, key: String) -> Result<u64, CatalogError> {
