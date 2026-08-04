@@ -105,12 +105,9 @@ impl<'a, Q: Queryable> KeyProber<'a, Q> {
         end: Option<&str>,
         len: usize,
     ) -> Result<Option<String>, MySqlError> {
-        // chars().count() counts Unicode code points, which is also what one
-        // "character" means to LEFT and CHAR_LENGTH for utf8mb4 data, so the
-        // short-key check agrees with how the prefix was produced. Data from
-        // MySQL is already decoded as Unicode -- anything not matching should have
-        // caused a failure. We could move towards explicitly querying/storing
-        // MySQL's reported length if it diverges or we fear it may diverge.
+        // chars().count() counts Unicode code points, the same unit LEFT and
+        // CHAR_LENGTH use for utf8mb4 data, so the short-key check agrees
+        // with how the prefix was produced.
         if cur.chars().count() < len {
             // When `cur` has fewer than `len` characters it names an exact key
             // rather than a truncation, and the anchor would skip every key extending
@@ -176,7 +173,7 @@ impl<'a, Q: Queryable> KeyProber<'a, Q> {
     }
 }
 
-pub fn like_prefix_pattern(prefix: &str) -> String {
+fn like_prefix_pattern(prefix: &str) -> String {
     let mut pattern = String::with_capacity(prefix.len() + 1);
     for c in prefix.chars() {
         if matches!(c, '\\' | '%' | '_') {
