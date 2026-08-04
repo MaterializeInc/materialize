@@ -13,7 +13,9 @@ use mz_ore::str::redact;
 use crate::{KeyProber, MySqlError, QualifiedTableRef};
 
 /// Computes up to `num_workers - 1` partition boundaries that divide the primary key space
-/// into `num_workers` roughly even partitions.
+/// into `num_workers` roughly even partitions. At most `max_probed_prefixes` prefixes are
+/// probed in MySQL to bound the time spent. Each prefix probe costs a few queries that
+/// should each be quick (index dives, instead of table scans).
 ///
 /// Nothing here validates the setup: the caller must abide by these
 /// constraints or undefined/untested behavior could occur, e.g. boundaries
@@ -36,6 +38,7 @@ pub async fn partition_table(
     num_workers: usize,
     estimated_row_count: u64,
     min_split_threshold: u64,
+    max_probed_prefixes: u64,
 ) -> Result<Vec<String>, MySqlError> {
     let (schema_name, table_name) = (table.schema_name, table.table_name);
     let mut db = KeyProber::new(conn, table, pk_col);
@@ -44,6 +47,7 @@ pub async fn partition_table(
         num_workers,
         estimated_row_count,
         min_split_threshold,
+        max_probed_prefixes,
     )
     .await?;
     tracing::trace!(
@@ -73,6 +77,7 @@ async fn partition<D: PrimaryKeyProber>(
     workers: usize,
     estimated_row_count: u64,
     min_split_threshold: u64,
+    max_probed_prefixes: u64,
 ) -> Result<Vec<String>, MySqlError> {
     if workers <= 1 {
         return Ok(Vec::new());
@@ -96,7 +101,14 @@ async fn partition<D: PrimaryKeyProber>(
         .max(min_split_threshold)
         .max(1);
 
-    compute_boundaries(db, workers, estimated_row_count, target_max_rows_per_prefix).await
+    compute_boundaries(
+        db,
+        workers,
+        estimated_row_count,
+        target_max_rows_per_prefix,
+        max_probed_prefixes,
+    )
+    .await
 }
 
 async fn compute_boundaries<D: PrimaryKeyProber>(
@@ -104,7 +116,9 @@ async fn compute_boundaries<D: PrimaryKeyProber>(
     workers: usize,
     estimated_row_count: u64,
     target_rows_per_prefix: u64,
+    max_probed_prefixes: u64,
 ) -> Result<Vec<String>, MySqlError> {
+    let mut budget = max_probed_prefixes;
     // BFS of prefixes, splitting until estimates fall under the target.
     let mut ordered_prefixes = vec![Prefix {
         prefix: String::new(),
@@ -117,12 +131,16 @@ async fn compute_boundaries<D: PrimaryKeyProber>(
         let mut next_ordered_prefixes: Vec<Prefix> = vec![];
         let mut split_any = false;
         for prefix in ordered_prefixes {
-            if prefix.estimated_rows > target_rows_per_prefix {
-                split_any = true;
-                // Partitioning children can drop some rows from the parent prefix range. This
-                // is acceptable given the approximate nature of the algorithm.
-                let children = children_prefixes(db, &prefix).await?;
-                next_ordered_prefixes.extend(children);
+            if prefix.estimated_rows > target_rows_per_prefix && budget > 0 {
+                match children_prefixes(db, &prefix, &mut budget).await? {
+                    Some(children) => {
+                        split_any = true;
+                        next_ordered_prefixes.extend(children);
+                    }
+                    // The probe budget ran out mid-walk: drop the partial
+                    // split and keep the parent as a leaf.
+                    None => next_ordered_prefixes.push(prefix),
+                }
             } else {
                 next_ordered_prefixes.push(prefix);
             }
@@ -165,10 +183,14 @@ async fn compute_boundaries<D: PrimaryKeyProber>(
 ///
 /// Note: This will drop the key "a" on the floor, along with any keys
 /// sorting below their own prefix (below-space characters at this depth).
+///
+/// `budget` is decremented once per prefix probed. Returns None when it
+/// runs out, discarding the partial walk.
 async fn children_prefixes<D: PrimaryKeyProber>(
     db: &mut D,
     parent: &Prefix,
-) -> Result<Vec<Prefix>, MySqlError> {
+    budget: &mut u64,
+) -> Result<Option<Vec<Prefix>>, MySqlError> {
     let depth = parent.depth + 1;
     let mut children = Vec::new();
 
@@ -176,10 +198,14 @@ async fn children_prefixes<D: PrimaryKeyProber>(
         .prefix_of_first_key_in_range(&parent.prefix, parent.end.as_deref(), depth)
         .await?
     else {
-        return Ok(children);
+        return Ok(Some(children));
     };
 
     loop {
+        if *budget == 0 {
+            return Ok(None);
+        }
+        *budget -= 1;
         let next = db
             .prefix_of_first_row_not_matching_prefix(&cur, parent.end.as_deref(), depth)
             .await?;
@@ -193,7 +219,7 @@ async fn children_prefixes<D: PrimaryKeyProber>(
         });
         match next {
             Some(next) => cur = next,
-            None => return Ok(children),
+            None => return Ok(Some(children)),
         }
     }
 }
@@ -265,9 +291,16 @@ mod tests {
     /// cover them.
     struct MockDb {
         keys: Vec<String>,
+        /// Number of requests the real implementation would have made to
+        /// MySQL, per its query pattern at the time of writing.
+        requests: usize,
     }
 
     impl MockDb {
+        fn new(keys: Vec<String>) -> Self {
+            MockDb { keys, requests: 0 }
+        }
+
         fn bounds(&self, start: &str, end: Option<&str>) -> (usize, usize) {
             // The lower bound is exclusive, a key equal to `start` is skipped.
             let lo = self.keys.partition_point(|k| k.as_str() <= start);
@@ -285,6 +318,7 @@ mod tests {
             start: &str,
             end: Option<&str>,
         ) -> Result<u64, MySqlError> {
+            self.requests += 1;
             let (lo, hi) = self.bounds(start, end);
             Ok(u64::cast_from(hi - lo))
         }
@@ -295,6 +329,7 @@ mod tests {
             end: Option<&str>,
             len: usize,
         ) -> Result<Option<String>, MySqlError> {
+            self.requests += 1;
             let (lo, hi) = self.bounds(start, end);
             if lo >= hi {
                 return Ok(None);
@@ -308,6 +343,8 @@ mod tests {
             end: Option<&str>,
             len: usize,
         ) -> Result<Option<String>, MySqlError> {
+            // Two requests in the KeyProber implementation at the time of writing.
+            self.requests += 2;
             let (_, hi) = self.bounds("", end);
             // Find the last key matching `cur`, byte prefixes stand in for
             // the collation's LIKE matching.
@@ -328,9 +365,9 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     async fn single_worker_gets_no_boundaries() -> Result<(), MySqlError> {
-        let mut db = MockDb { keys: keys(1000) };
+        let mut db = MockDb::new(keys(1000));
         let count = u64::cast_from(db.keys.len());
-        let boundaries = partition(&mut db, 1, count, MIN_ROWS_PER_WORKER).await?;
+        let boundaries = partition(&mut db, 1, count, MIN_ROWS_PER_WORKER, u64::MAX).await?;
         assert!(boundaries.is_empty());
         Ok(())
     }
@@ -339,28 +376,26 @@ mod tests {
     async fn small_table_gets_no_boundaries() -> Result<(), MySqlError> {
         // All keys share one depth-1 prefix and fit under `min_rows_per_worker`,
         // so the single open-ended range yields no boundary.
-        let mut db = MockDb { keys: keys(10_000) };
+        let mut db = MockDb::new(keys(10_000));
         let count = u64::cast_from(db.keys.len());
-        let boundaries = partition(&mut db, 4, count, MIN_ROWS_PER_WORKER).await?;
+        let boundaries = partition(&mut db, 4, count, MIN_ROWS_PER_WORKER, u64::MAX).await?;
         assert!(boundaries.is_empty());
         Ok(())
     }
 
     #[mz_ore::test(tokio::test)]
     async fn empty_table_gets_no_boundaries() -> Result<(), MySqlError> {
-        let mut db = MockDb { keys: vec![] };
-        let boundaries = partition(&mut db, 4, 0, MIN_ROWS_PER_WORKER).await?;
+        let mut db = MockDb::new(vec![]);
+        let boundaries = partition(&mut db, 4, 0, MIN_ROWS_PER_WORKER, u64::MAX).await?;
         assert!(boundaries.is_empty());
         Ok(())
     }
 
     #[mz_ore::test(tokio::test)]
     async fn splits_evenly_across_workers() -> Result<(), MySqlError> {
-        let mut db = MockDb {
-            keys: keys(200_000),
-        };
+        let mut db = MockDb::new(keys(200_000));
         let count = u64::cast_from(db.keys.len());
-        let boundaries = partition(&mut db, 4, count, MIN_ROWS_PER_WORKER).await?;
+        let boundaries = partition(&mut db, 4, count, MIN_ROWS_PER_WORKER, u64::MAX).await?;
         assert_eq!(boundaries.len(), 3);
         // Boundaries must be sorted and split the keys into ~50k chunks.
         let mut prev = 0;
@@ -379,9 +414,9 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     async fn low_min_rows_per_worker_splits_small_tables() -> Result<(), MySqlError> {
-        let mut db = MockDb { keys: keys(1000) };
+        let mut db = MockDb::new(keys(1000));
         let count = u64::cast_from(db.keys.len());
-        let boundaries = partition(&mut db, 4, count, 10).await?;
+        let boundaries = partition(&mut db, 4, count, 10, u64::MAX).await?;
         assert_eq!(boundaries.len(), 3);
         let mut prev = 0;
         for b in &boundaries {
@@ -404,9 +439,9 @@ mod tests {
         // stalling on the all-encompassing "U" prefix.
         let mut all_keys = vec!["U".to_string()];
         all_keys.extend((0..1000).map(|i| format!("U{i:06}")));
-        let mut db = MockDb { keys: all_keys };
+        let mut db = MockDb::new(all_keys);
         let count = u64::cast_from(db.keys.len());
-        let boundaries = partition(&mut db, 4, count, 10).await?;
+        let boundaries = partition(&mut db, 4, count, 10, u64::MAX).await?;
         assert_eq!(boundaries.len(), 3);
         for b in &boundaries {
             assert!(
@@ -421,10 +456,74 @@ mod tests {
     async fn fractional_target_still_terminates() -> Result<(), MySqlError> {
         // count / (workers * 4) is fractional and the minimum is zero, so
         // the target floors at one row instead of splitting forever.
-        let mut db = MockDb { keys: keys(3) };
-        let boundaries = partition(&mut db, 4, 3, 0).await?;
+        let mut db = MockDb::new(keys(3));
+        let boundaries = partition(&mut db, 4, 3, 0, u64::MAX).await?;
         assert_eq!(boundaries, vec!["000001", "000002"]);
         Ok(())
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn probe_budget_bounds_requests() -> Result<(), MySqlError> {
+        // Confirms baseline over 200 requests.
+        let mut db = MockDb::new(keys(200_000));
+        let count = u64::cast_from(db.keys.len());
+        partition(&mut db, 16, count, 10, u64::MAX).await?;
+        assert!(db.requests > 200, "baseline requests={}", db.requests);
+
+        // Confirms limit with budget of 20 is under 80 requests. 4x budget
+        // because we make up to 4 requests per prefix: one to get the first
+        // key matching the current prefix (issued once per split parent,
+        // amortized across its children), two to get the next, and one to
+        // estimate the size.
+        let mut db = MockDb::new(keys(200_000));
+        let budget = 20;
+        let boundaries = partition(&mut db, 16, count, 10, budget).await?;
+        assert!(db.requests <= 80, "requests={}", db.requests);
+        for pair in boundaries.windows(2) {
+            assert!(pair[0] < pair[1], "{boundaries:?}");
+        }
+        Ok(())
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn non_advancing_prefixes_terminate() -> Result<(), MySqlError> {
+        // In the unexpected case where there's looping/revisiting we bound the
+        // child walk successfully.
+        let boundaries = partition(&mut WrappingDb, 4, 1_000_000, MIN_ROWS_PER_WORKER, 100).await?;
+        assert!(boundaries.len() <= 3);
+        Ok(())
+    }
+
+    /// A database whose next-prefix wraps around instead of advancing,
+    /// standing in for corruption or other unexpected server behavior. The
+    /// probe budget must still bound the walk.
+    struct WrappingDb;
+
+    impl PrimaryKeyProber for WrappingDb {
+        async fn estimate_range_rows(
+            &mut self,
+            _: &str,
+            _: Option<&str>,
+        ) -> Result<u64, MySqlError> {
+            Ok(1_000_000)
+        }
+        async fn prefix_of_first_key_in_range(
+            &mut self,
+            _: &str,
+            _: Option<&str>,
+            _: usize,
+        ) -> Result<Option<String>, MySqlError> {
+            Ok(Some("9".to_string()))
+        }
+        async fn prefix_of_first_row_not_matching_prefix(
+            &mut self,
+            _: &str,
+            _: Option<&str>,
+            _: usize,
+        ) -> Result<Option<String>, MySqlError> {
+            // Never advances past "9".
+            Ok(Some("1".to_string()))
+        }
     }
 
     // Live tests against MySQL (when available) for more realistic results.
@@ -444,7 +543,8 @@ mod tests {
         let table = setup_table(&mut conn, DB, "utf8mb4_bin", &all_keys).await?;
         let total = u64::cast_from(all_keys.len());
 
-        let bounds = partition_table(&mut conn, table.clone(), "id", 4, total, 100).await?;
+        let bounds =
+            partition_table(&mut conn, table.clone(), "id", 4, total, 100, u64::MAX).await?;
         assert_eq!(bounds.len(), 3, "{bounds:?}");
         assert_bounds_increasing(&mut conn, &bounds, "utf8mb4_bin").await?;
         let counts = partition_counts(&mut conn, DB, &bounds, total).await?;
@@ -482,12 +582,13 @@ mod tests {
         let total = u64::cast_from(all_keys.len());
 
         // A minimum above the table size yields no boundaries at all.
-        let bounds = partition_table(&mut conn, table.clone(), "id", 4, total, 50_000).await?;
+        let bounds =
+            partition_table(&mut conn, table.clone(), "id", 4, total, 50_000, u64::MAX).await?;
         assert!(bounds.is_empty(), "{bounds:?}");
 
         // A low minimum splits inside the 'a' extensions rather than stopping
         // at the exact key.
-        let bounds = partition_table(&mut conn, table, "id", 4, total, 10).await?;
+        let bounds = partition_table(&mut conn, table, "id", 4, total, 10, u64::MAX).await?;
         assert_eq!(bounds.len(), 3, "{bounds:?}");
 
         assert_bounds_increasing(&mut conn, &bounds, "utf8mb4_bin").await?;
@@ -527,7 +628,7 @@ mod tests {
         let total = u64::cast_from(all_keys.len());
 
         // Partition for 4 workers with a minimum split size around 250.
-        let bounds = partition_table(&mut conn, table, "id", 4, total, 250).await?;
+        let bounds = partition_table(&mut conn, table, "id", 4, total, 250, u64::MAX).await?;
         assert_eq!(bounds.len(), 3);
         let counts = partition_counts(&mut conn, DB, &bounds, total).await?;
         // ~8k keys are visible, so each count gets at least 2k under perfect
