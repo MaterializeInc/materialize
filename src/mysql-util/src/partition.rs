@@ -10,48 +10,43 @@
 //! Discovers boundaries that split a table's string primary key space into
 //! ranges of roughly equal row counts, for parallel snapshot reads.
 //!
-//! Ranges are split on character prefixes: a range the optimizer estimates
-//! too large is subdivided at each distinct key prefix one character longer
-//! than the prefix it was last split at, recursively, until every range is
-//! small. Adjacent small ranges are then accumulated back into one bucket per
-//! worker. Row estimates come from `EXPLAIN`, so probing a range costs an
-//! index dive instead of a scan, and inaccurate estimates skew bucket sizes
-//! but never correctness: any ordered boundary list partitions the key space.
-//!
 //! All key matching and ordering happens server-side under the key column's
-//! own collation. Rust never orders the returned prefixes, it only checks
-//! them for byte equality as a termination guard.
+//! own collation. Rust never orders the returned prefixes.
 
 use mz_ore::cast::CastLossy;
 
 use crate::{KeyProber, MySqlError, QualifiedTableRef};
 
-/// When partitioning the data, how many buckets per worker to target to
-/// try to get more even splits.
-const BUCKETS_PER_WORKER: f64 = 8.0;
+/// When partitioning the data, how many ranges per worker should we break the
+/// keyspace into. This helps avoid underestimates for large row counts resulting
+/// in severe skew.
+const TARGET_RANGES_PER_WORKER: f64 = 8.0;
 
-/// Computes up to `workers - 1` exclusive upper bounds, in key order, that
-/// split `table` into per-worker key ranges of roughly equal estimated row
-/// counts. Worker `i` reads keys in `[boundaries[i - 1], boundaries[i])`,
-/// with the first and last range open ended. Returns an empty list when the
-/// table is too small to be worth splitting.
+/// Computes up to `num_workers - 1` partition boundaries that divide the primary key space
+/// into `num_workers` roughly even partitions. The boundaries are ordered according to MySQL's
+/// internal collation rules. This should only be used against a single CHAR(N) or VARCHAR
+/// primary key column.
 ///
-/// `pk_col` is the raw (unquoted) name of the key column. It must be a string
-/// column, prefixes of a numeric column do not order consistently with its
-/// values, and it should be the leading column of an index or every probe
-/// becomes a full table scan. `estimated_row_count` seeds the bucket sizing
-/// and may be approximate. No range is split below `min_bucket_rows` rows.
+/// NOTE: Run this inside a REPEATABLE READ transaction. The underlying probes
+/// read separate snapshots otherwise, and concurrent inserts can make the
+/// prefix walk see the same prefix repeatedly instead of advancing.
 pub async fn partition_table_by_pk_prefix(
     conn: &mut mysql_async::Conn,
     table: QualifiedTableRef<'_>,
     pk_col: &str,
-    workers: usize,
+    num_workers: usize,
     estimated_row_count: u64,
-    min_bucket_rows: u64,
+    min_rows_per_worker: u64,
 ) -> Result<Vec<String>, MySqlError> {
     let (schema_name, table_name) = (table.schema_name, table.table_name);
     let mut db = KeyProber::new(conn, table, pk_col);
-    let boundaries = partition(&mut db, workers, estimated_row_count, min_bucket_rows).await?;
+    let boundaries = partition(
+        &mut db,
+        num_workers,
+        estimated_row_count,
+        min_rows_per_worker,
+    )
+    .await?;
     tracing::trace!(
         schema = schema_name,
         table = table_name,
@@ -77,41 +72,43 @@ async fn partition<D: PartitionDb>(
     db: &mut D,
     workers: usize,
     estimated_row_count: u64,
-    min_bucket_rows: u64,
+    min_rows_per_worker: u64,
 ) -> Result<Vec<String>, MySqlError> {
     if workers <= 1 {
         return Ok(Vec::new());
     }
     let estimated_row_count = f64::cast_lossy(estimated_row_count.max(1));
-    let min_bucket_rows = f64::cast_lossy(min_bucket_rows.max(1));
-    let target_rows_per_bucket = bucket_target_rows(workers, estimated_row_count, min_bucket_rows);
-    let ranges = split_into_ranges(db, estimated_row_count, target_rows_per_bucket).await?;
+    let min_rows_per_worker = f64::cast_lossy(min_rows_per_worker.max(1));
+    let target_max_rows_per_range =
+        get_target_max_rows_per_range(workers, estimated_row_count, min_rows_per_worker);
+    // Should be many more ranges than workers unless the overall row count of the table is quite small.
+    let ranges = split_into_ranges(db, estimated_row_count, target_max_rows_per_range).await?;
     Ok(assign_boundaries(&ranges, workers))
 }
 
-/// The estimated row count a range should be split down to before it stops
-/// being subdivided.
-fn bucket_target_rows(workers: usize, estimated_row_count: f64, min_bucket_rows: f64) -> f64 {
-    // Aim for more buckets than workers. With exactly one bucket per worker
-    // an under-estimated table size could make the whole table look too small
-    // to split. Small buckets are recombined when boundaries are assigned.
+fn get_target_max_rows_per_range(
+    workers: usize,
+    estimated_row_count: f64,
+    min_rows_per_worker: f64,
+) -> f64 {
+    // Break up the key space into smaller ranges to more accurately rebuild the per-worker ranges later with less skew.
     let estimated_rows_per_worker =
-        (estimated_row_count / f64::cast_lossy(workers)).max(min_bucket_rows);
-    let target_rows_per_bucket =
-        (estimated_rows_per_worker / BUCKETS_PER_WORKER).max(min_bucket_rows);
+        (estimated_row_count / f64::cast_lossy(workers)).max(min_rows_per_worker);
+    // Respect min_rows_per_worker as a lower bound for the granularity with which we attempt to break up the table.
+    // No need to add this overhead for small tables. Estimate accuracy isn't super clear for small numbers.
+    let target_rows_per_range =
+        (estimated_rows_per_worker / TARGET_RANGES_PER_WORKER).max(min_rows_per_worker);
 
     tracing::debug!(
         estimated_row_count,
         workers,
         estimated_rows_per_worker,
-        target_rows_per_bucket,
-        "partitioning key space by prefix"
+        target_rows_per_range,
+        "partitioning key space"
     );
-    target_rows_per_bucket
+    target_rows_per_range
 }
 
-/// Splits the whole key space into ranges of at most roughly
-/// `target_rows_per_bucket` estimated rows each, returned in key order.
 async fn split_into_ranges<D: PartitionDb>(
     db: &mut D,
     estimated_row_count: f64,
@@ -129,8 +126,6 @@ async fn split_into_ranges<D: PartitionDb>(
         for range in ranges {
             if range.estimated_rows > target_rows_per_bucket {
                 split_any = true;
-                // An empty child list means the range holds no rows (a
-                // phantom estimate) and is dropped.
                 next.extend(split_range(db, &range, target_rows_per_bucket).await?);
             } else {
                 next.push(range);
@@ -167,12 +162,7 @@ fn assign_boundaries(ranges: &[Range], workers: usize) -> Vec<String> {
         if rows_seen >= f64::cast_lossy(boundaries.len() + 1) * per_worker {
             // The final range's end is None (open), it can never be a boundary.
             if let Some(end) = &range.end {
-                // A server returning non-advancing prefixes can repeat an
-                // end. Skip it, a duplicate boundary would fail the strict
-                // monotonicity check downstream.
-                if boundaries.last() != Some(end) {
-                    boundaries.push(end.clone());
-                }
+                boundaries.push(end.clone());
             }
         }
     }
