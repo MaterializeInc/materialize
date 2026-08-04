@@ -296,6 +296,7 @@ so it is executed.""",
     elif (
         args.pipeline == "test"
         and os.environ["BUILDKITE_BRANCH"] == "main"
+        and not ui.env_is_truthy("BUILDKITE_PULL_REQUEST")
         and not os.environ["BUILDKITE_TAG"]
         and os.getenv("BUILDKITE_SOURCE") == "webhook"
         and not os.getenv("CI_TEST_IDS")
@@ -305,6 +306,7 @@ so it is executed.""",
         and fail_build_reason is None
     ):
         trim_test_selection_id(pipeline, set())
+        # Make the website always deploy
         for step in steps(pipeline):
             if step.get("id") == "lint-docs":
                 step.pop("skip", None)
@@ -393,6 +395,13 @@ so it is executed.""",
     move_build_to_lto(pipeline, lto)
     trim_builds_prep_thread.join()
     trim_builds(pipeline, hash_check)
+    add_cargo_test_dependency(
+        pipeline,
+        args.pipeline,
+        args.coverage,
+        args.sanitizer,
+        lto,
+    )
     add_nightly_deploy_dependency(pipeline, args.pipeline)
     remove_mz_specific_keys(pipeline)
 
@@ -1197,6 +1206,42 @@ def add_nightly_deploy_dependency(pipeline: Any, pipeline_name: str) -> None:
             step["depends_on"] = "deploy"
 
         previous_step = step
+
+
+def add_cargo_test_dependency(
+    pipeline: Any,
+    pipeline_name: str,
+    coverage: bool,
+    sanitizer: Sanitizer,
+    lto: bool,
+) -> None:
+    """Cargo Test normally doesn't have to wait for the build to complete, but it requires a few images (debian-base, postgres), which are rarely changed. So only add a dependency when those images are not on Dockerhub yet."""
+    if pipeline_name not in ("test", "nightly"):
+        return
+    if ui.env_is_truthy("BUILDKITE_PULL_REQUEST") and pipeline_name == "test":
+        for step in steps(pipeline):
+            if step.get("id") == "cargo-test":
+                step["depends_on"] = "build-x86_64"
+        return
+
+    repo = mzbuild.Repository(
+        Path("."),
+        arch=Arch.X86_64,
+        profile=mzbuild.Profile.RELEASE if lto else mzbuild.Profile.OPTIMIZED,
+        coverage=coverage,
+        sanitizer=sanitizer,
+    )
+    composition = Composition(repo, name="cargo-test")
+    deps = composition.dependencies
+    if deps.check():
+        # We already have the dependencies available, no need to add a build dependency
+        return
+
+    for step in steps(pipeline):
+        if step.get("id") in ("cargo-test", "miri-test"):
+            step["depends_on"] = (
+                "build-x86_64" if "x86" in step["agents"]["queue"] else "build-aarch64"
+            )
 
 
 def move_build_to_lto(pipeline: Any, lto: bool) -> None:

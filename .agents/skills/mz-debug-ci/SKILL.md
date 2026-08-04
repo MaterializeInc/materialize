@@ -80,7 +80,7 @@ The response is JSON. Each annotation has:
   - The specific test/job that failed
   - The actual error message or stack trace in `<pre><code>` blocks
   - Links to known flaky test issues (look for GitHub issue links like `database-issues/#NNNN`)
-  - Main branch history showing if this test passes on main (flaky test indicator), only look at scheduled runs since they actually run all tests.
+  - Main branch history showing if this test passes on main (flaky test indicator)
 
 Parse the error annotations to get a quick overview of all failures before fetching any logs.
 

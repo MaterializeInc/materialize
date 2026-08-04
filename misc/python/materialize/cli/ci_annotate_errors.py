@@ -1066,6 +1066,62 @@ def get_failures_on_main(test_analytics: TestAnalyticsDb) -> BuildHistory:
         )
 
 
+# Number of previous main builds the annotation reports on, plus one to account
+# for the current build, which the fetch below cannot exclude.
+BUILD_HISTORY_BUILD_COUNT = 5 + 1
+# Buildkite serializes each build with all of its jobs, so a page of 100 takes
+# tens of seconds. Small pages keep the common case, a pipeline whose main
+# builds are all scheduled, down to a single quick request.
+BUILDS_PER_FETCH = 10
+# The test pipeline runs the suite once per schedule but builds images on every
+# merge, so its scheduled builds are sparse and need several fetches. The bound
+# stops us from paging through all of main when a step key does not occur at all,
+# for instance right after it got renamed.
+MAX_BUILD_FETCHES = 20
+
+
+def _fetch_main_builds_running_tests(pipeline_slug: str) -> list[Any]:
+    """Fetches the most recent main builds that ran the test suite.
+
+    A push to main only builds and publishes images, it runs no test step at all
+    (see the `BUILDKITE_SOURCE` check in ci/mkpipeline.py), so only the scheduled
+    builds carry step outcomes. Buildkite's API cannot filter on the build
+    source, hence the paging until enough scheduled builds are collected.
+
+    Manually triggered main builds do run the suite but are skipped as well.
+    They are too rare to be worth telling apart from the merge builds.
+    """
+    builds = []
+
+    for page in range(1, MAX_BUILD_FETCHES + 1):
+        builds_data = builds_api.get_builds(
+            pipeline_slug=pipeline_slug,
+            max_fetches=1,
+            first_page=page,
+            branch="main",
+            # also include builds that are still running (the relevant build step may already have completed)
+            build_states=["running", "passed", "failing", "failed"],
+            items_per_page=BUILDS_PER_FETCH,
+        )
+
+        if not builds_data:
+            break
+
+        builds.extend(
+            build for build in builds_data if build.get("source") == "schedule"
+        )
+
+        if len(builds) >= BUILD_HISTORY_BUILD_COUNT:
+            break
+    else:
+        print(
+            f"Giving up on finding {BUILD_HISTORY_BUILD_COUNT} scheduled builds of pipeline {pipeline_slug} after {MAX_BUILD_FETCHES} fetches"
+        )
+
+    del builds[BUILD_HISTORY_BUILD_COUNT:]
+    return builds
+
+
 def _get_failures_on_main_from_buildkite(
     pipeline_slug: str, step_key: str, parallel_job: int | None
 ) -> BuildHistory:
@@ -1075,23 +1131,7 @@ def _get_failures_on_main_from_buildkite(
     assert current_build_number is not None
 
     # This is only supposed to be invoked when the build step failed.
-    builds_data = builds_api.get_builds(
-        pipeline_slug=pipeline_slug,
-        max_fetches=1,
-        branch="main",
-        # also include builds that are still running (the relevant build step may already have completed)
-        build_states=["running", "passed", "failing", "failed"],
-        # Only a fraction of the main builds run the tests (see below), so fetch
-        # a whole page rather than just the handful we want to end up with.
-        items_per_page=100,
-    )
-    # A push to main only builds and publishes images, it runs no test step at
-    # all (see the `BUILDKITE_SOURCE` check in ci/mkpipeline.py). Those builds
-    # would fill the whole window below without ever matching the step, leaving
-    # the history empty, so keep only the builds that ran the full suite.
-    builds_data = [build for build in builds_data if build["source"] != "webhook"]
-    # assume and account that at most one build is still running
-    del builds_data[5 + 1 :]
+    builds_data = _fetch_main_builds_running_tests(pipeline_slug)
 
     no_entries_result = BuildHistory(
         pipeline=pipeline_slug, branch="main", last_build_step_outcomes=[]
