@@ -236,6 +236,27 @@ pub const LINEAR_JOIN_YIELDING: Config<&str> = Config::new(
      work, respectively, rather than falling back to some default.",
 );
 
+/// The yielding behavior with which a single index peek should be processed.
+pub const PEEK_YIELDING: Config<&str> = Config::new(
+    "peek_yielding",
+    "work:100000,time:10",
+    "How much work a compute worker may spend on one index peek before moving on to the \
+     next pending peek. Either 'work:<cursor steps>' or 'time:<milliseconds>' or \
+     'work:<cursor steps>,time:<milliseconds>'. Note that omitting one of 'work' or 'time' \
+     will entirely disable peek yielding by time or work, respectively, rather than falling \
+     back to some default.",
+);
+
+/// The yielding behavior with which index peeks as a whole should be processed.
+pub const PEEK_YIELDING_TOTAL: Config<&str> = Config::new(
+    "peek_yielding_total",
+    "work:1000000,time:100",
+    "How much work a compute worker may spend on all index peeks together in one worker \
+     activation, before it goes back to scheduling dataflows and handling commands. Same \
+     format as 'peek_yielding'. Should be larger than 'peek_yielding', which bounds a single \
+     peek's turn within this allowance.",
+);
+
 /// Enable lgalloc.
 pub const ENABLE_LGALLOC: Config<bool> =
     Config::new("enable_lgalloc", true, "Enable lgalloc.").scoped(ParameterScope::Replica);
@@ -556,6 +577,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_COMPUTE_TEMPORAL_BUCKETING)
         .add(&TEMPORAL_BUCKETING_SUMMARY)
         .add(&LINEAR_JOIN_YIELDING)
+        .add(&PEEK_YIELDING)
+        .add(&PEEK_YIELDING_TOTAL)
         .add(&ENABLE_LGALLOC)
         .add(&LGALLOC_BACKGROUND_INTERVAL)
         .add(&LGALLOC_FILE_GROWTH_DAMPENER)

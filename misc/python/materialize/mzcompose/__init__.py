@@ -345,6 +345,19 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "persist_encoding_enable_dictionary", "true", ["true", "false"]
         ),
+        # A small work budget makes nearly every index peek yield at least once,
+        # so CI exercises the resumable scan path rather than just the
+        # scan-completes-in-one-slice path.
+        VariableSystemParameter(
+            "peek_yielding",
+            "work:64,time:10",
+            ["work:16,time:10", "work:64,time:10", "work:100000,time:10"],
+        ),
+        VariableSystemParameter(
+            "peek_yielding_total",
+            "work:1024,time:100",
+            ["work:128,time:100", "work:1024,time:100", "work:1000000,time:100"],
+        ),
         VariableSystemParameter(
             "persist_fast_path_limit",
             "1000",
