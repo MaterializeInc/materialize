@@ -701,6 +701,9 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     # The estimated path is covered explicitly in mysql-cdc/statistics.td and
     # by parallel-workload.
     "mysql_source_snapshot_exact_count_max_rows",
+    # Not varied here because the 256-request floor dominates for test-sized
+    # tables. parallel-workload flips it.
+    "mysql_source_snapshot_partition_requests_per_billion_rows",
     "postgres_fetch_slot_resume_lsn_interval",
     "pg_schema_validation_interval",
     "pg_source_validate_timeline",

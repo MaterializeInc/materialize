@@ -215,6 +215,18 @@ pub static MYSQL_SOURCE_SNAPSHOT_PARALLELISM: Config<bool> = Config::new(
     "Whether to split MySQL snapshot reads across workers by primary-key ranges.",
 );
 
+/// Probe query budget for the MySQL snapshot prefix partitioner, scaled to
+/// the table's estimated size so probing effort stays proportional to the
+/// snapshot work it optimizes. A small floor applies so modest tables can
+/// still afford their handful of splits. When a table's budget runs out,
+/// splitting stops early and buckets come out coarser, never incorrect.
+pub static MYSQL_SOURCE_SNAPSHOT_PARTITION_REQUESTS_PER_BILLION_ROWS: Config<usize> = Config::new(
+    "mysql_source_snapshot_partition_requests_per_billion_rows",
+    2_500,
+    "Cap on MySQL snapshot PK-prefix partitioning probe queries per table, per billion \
+     estimated rows; when exhausted, splitting stops early with coarser buckets.",
+);
+
 /// If the optimizer estimates the table has fewer rows than this, compute the exact row count
 /// with `COUNT(*)`. Otherwise, report the `information_schema` estimate directly.
 pub static MYSQL_SOURCE_SNAPSHOT_EXACT_COUNT_MAX_ROWS: Config<usize> = Config::new(
@@ -438,6 +450,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&MYSQL_REPLICATION_HEARTBEAT_INTERVAL)
         .add(&MYSQL_SOURCE_SNAPSHOT_EXACT_COUNT_MAX_ROWS)
         .add(&MYSQL_SOURCE_SNAPSHOT_PARALLELISM)
+        .add(&MYSQL_SOURCE_SNAPSHOT_PARTITION_REQUESTS_PER_BILLION_ROWS)
         .add(&ORE_OVERFLOWING_BEHAVIOR)
         .add(&PG_FETCH_SLOT_RESUME_LSN_INTERVAL)
         .add(&PG_SCHEMA_VALIDATION_INTERVAL)
