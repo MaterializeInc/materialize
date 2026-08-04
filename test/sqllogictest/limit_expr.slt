@@ -563,3 +563,19 @@ SELECT s.state, c.name FROM
 # A LIMIT at the top level of a SELECT must be a constant.
 query error Invalid LIMIT clause: Expected a constant expression
 SELECT name FROM cities LIMIT (SELECT 1);
+
+# An evaluation error while folding a parameterized LIMIT is reported with LIMIT context.
+# The `::numeric` makes parameter binding wrap the bound value in a fallible cast.
+statement ok
+PREPARE p_limit_fold AS SELECT name FROM cities ORDER BY name LIMIT $1::numeric;
+
+# The numeric-to-bigint cast rounds, so this is LIMIT 3.
+query T
+EXECUTE p_limit_fold(2.6);
+----
+Austin
+Chicago
+Dallas
+
+query error Invalid LIMIT clause: "9999999999999999999999" bigint out of range
+EXECUTE p_limit_fold(9999999999999999999999);

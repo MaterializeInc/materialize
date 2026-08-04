@@ -18,6 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use itertools::Itertools;
 use mz_arrow_util::builder::ArrowBuilder;
 use mz_expr::{ColumnOrder, RowSetFinishing};
+use mz_ore::error::ErrorExt;
 use mz_ore::num::NonNeg;
 use mz_ore::soft_panic_or_log;
 use mz_ore::str::separated;
@@ -241,7 +242,7 @@ fn plan_select_inner(
             // `integer_to_bigint($1)`.
             match limit
                 .try_into_nullable_literal_int64()
-                .map_err(|err| sql_err!("Invalid LIMIT clause: {}", err))?
+                .map_err(|err| PlanError::InvalidLimit(err.to_string_with_causes()))?
             {
                 None => None,
                 Some(v) if v >= 0 => NonNeg::<i64>::try_from(v).ok(),
