@@ -2837,6 +2837,48 @@ def workflow_v1_opt_in(
     print("v1 opt-in test PASSED")
 
 
+WEBHOOK_FAILURE_MARKERS = (
+    # Conversion webhook, reached when a resource is applied or read at a CRD
+    # version other than the stored one.
+    "conversion webhook for",
+    # Validating/mutating admission webhook.
+    "failed calling webhook",
+)
+
+WEBHOOK_READY_TIMEOUT_SECS = 300
+
+
+def kubectl_apply_retrying_webhook(cmd: list[str], yaml_str: str) -> None:
+    """Run a `kubectl apply` that reads `yaml_str` from stdin, retrying while a
+    webhook is still coming up.
+
+    Raises `subprocess.CalledProcessError` for any other failure, and for a
+    webhook failure that outlives `WEBHOOK_READY_TIMEOUT_SECS`.
+    """
+    deadline = time.monotonic() + WEBHOOK_READY_TIMEOUT_SECS
+    attempt = 0
+    while True:
+        attempt += 1
+        result = subprocess.run(cmd, input=yaml_str.encode(), capture_output=True)
+        if result.returncode == 0:
+            return
+        stderr_str = result.stderr.decode(errors="replace")
+        if (
+            any(marker in stderr_str for marker in WEBHOOK_FAILURE_MARKERS)
+            and time.monotonic() < deadline
+        ):
+            print(f"Webhook not yet ready (attempt {attempt}), retrying: {stderr_str}")
+            time.sleep(2)
+            continue
+        print(f"Failed to apply: {result.stdout}\nSTDERR:{result.stderr}")
+        raise subprocess.CalledProcessError(
+            result.returncode,
+            result.args,
+            output=result.stdout,
+            stderr=result.stderr,
+        )
+
+
 def apply_server_side(
     obj: dict[str, Any],
     field_manager: str | None = None,
@@ -2851,30 +2893,7 @@ def apply_server_side(
         cmd.append(f"--field-manager={field_manager}")
     yaml_str = yaml.dump(obj)
     print(f"Attempting to apply server-side:\n{yaml_str}")
-    transient_webhook_errors = (
-        "connection refused",
-        "deadline exceeded",
-        "i/o timeout",
-    )
-    max_attempts = 120
-    for attempt in range(max_attempts):
-        result = subprocess.run(cmd, input=yaml_str.encode(), capture_output=True)
-        if result.returncode == 0:
-            return
-        stderr_str = result.stderr.decode(errors="replace")
-        if attempt < max_attempts - 1 and any(
-            err in stderr_str for err in transient_webhook_errors
-        ):
-            print(f"Webhook not yet ready (attempt {attempt + 1}), retrying...")
-            time.sleep(2)
-            continue
-        print(f"Failed to apply: {result.stdout}\nSTDERR:{result.stderr}")
-        raise subprocess.CalledProcessError(
-            result.returncode,
-            result.args,
-            output=result.stdout,
-            stderr=result.stderr,
-        )
+    kubectl_apply_retrying_webhook(cmd, yaml_str)
 
 
 def workflow_server_side_apply(
@@ -3440,34 +3459,7 @@ def apply_materialize(definition: dict[str, Any]) -> None:
         defs.append(definition["system_params_configmap"])
     yaml_str = yaml.dump_all(defs)
     print(f"Attempting to apply:\n{yaml_str}")
-    transient_webhook_errors = (
-        "connection refused",
-        "deadline exceeded",
-        "i/o timeout",
-    )
-    max_attempts = 120
-    for attempt in range(max_attempts):
-        result = subprocess.run(
-            ["kubectl", "apply", "-f", "-"],
-            input=yaml_str.encode(),
-            capture_output=True,
-        )
-        if result.returncode == 0:
-            break
-        stderr_str = result.stderr.decode(errors="replace")
-        if attempt < max_attempts - 1 and any(
-            err in stderr_str for err in transient_webhook_errors
-        ):
-            print(f"Webhook not yet ready (attempt {attempt + 1}), retrying...")
-            time.sleep(2)
-            continue
-        print(f"Failed to apply: {result.stdout}\nSTDERR:{result.stderr}")
-        raise subprocess.CalledProcessError(
-            result.returncode,
-            result.args,
-            output=result.stdout,
-            stderr=result.stderr,
-        )
+    kubectl_apply_retrying_webhook(["kubectl", "apply", "-f", "-"], yaml_str)
 
 
 def wait_for_ready_to_promote() -> None:
