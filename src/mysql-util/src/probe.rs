@@ -185,8 +185,8 @@ impl<'a, Q: Queryable> KeyProber<'a, Q> {
 
 /// LIKE uses % and _ as wildcard characters. By default MySQL uses a backslash as an escape character
 /// but that can be disabled via config, so we instead specify a specific escape character.
-/// LIKE operator: https://dev.mysql.com/doc/refman/8.0/en/string-comparison-functions.html#operator_like
-/// Backslash escapes: https://dev.mysql.com/doc/refman/8.0/en/sql-mode.html#sqlmode_no_backslash_escapes
+/// LIKE operator: <https://dev.mysql.com/doc/refman/8.0/en/string-comparison-functions.html#operator_like>
+/// Backslash escapes: <https://dev.mysql.com/doc/refman/8.0/en/sql-mode.html#sqlmode_no_backslash_escapes>
 fn like_prefix_pattern(prefix: &str) -> String {
     let mut pattern = String::with_capacity(prefix.len() + 1);
     for c in prefix.chars() {
