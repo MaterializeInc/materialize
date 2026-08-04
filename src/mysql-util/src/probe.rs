@@ -223,6 +223,13 @@ fn like_prefix_pattern(prefix: &str) -> String {
     pattern
 }
 
+/// Runs `EXPLAIN` on `select` and returns the optimizer's estimate of rows
+/// examined, from the `rows` column of the plan.
+///
+/// The caller must pass a single-table `SELECT`. Joins and subqueries produce
+/// multiple plan rows whose estimates do not combine additively, only the
+/// first row is read. Returns `None` when the optimizer reports no estimate.
+/// The estimate can be arbitrarily stale, callers must tolerate inaccuracy.
 async fn explain_row_estimate<P>(
     conn: &mut mysql_async::Conn,
     select: &str,
@@ -231,6 +238,8 @@ async fn explain_row_estimate<P>(
 where
     P: Into<Params> + Send,
 {
+    // NOTE: The format must be pinned because newer MySQL versions default
+    // `explain_format` to `TREE`, which has no `rows` column.
     let plan: Option<mysql_async::Row> = conn
         .exec_first(format!("EXPLAIN FORMAT=TRADITIONAL {select}"), params)
         .await?;

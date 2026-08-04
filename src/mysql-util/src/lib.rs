@@ -45,6 +45,9 @@ pub use decoding::pack_mysql_row;
 pub mod probe;
 pub use probe::KeyProber;
 
+pub mod partition;
+pub use partition::partition_table_by_pk_prefix;
+
 mod aws_rds;
 
 #[derive(Debug, Clone)]
