@@ -737,8 +737,15 @@ impl SessionClient {
             catalog_revision: catalog.transient_revision(),
             session_state_revision: self.session().state_revision(),
         };
-        self.session()
-            .set_prepared_statement(name, stmt, sql, desc, state_revision, now);
+        self.session().set_prepared_statement(
+            name,
+            stmt,
+            sql,
+            desc,
+            state_revision,
+            now,
+            catalog.system_config(),
+        )?;
         Ok(())
     }
 

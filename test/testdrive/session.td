@@ -52,6 +52,8 @@ max_mysql_connections                    1000                    "The maximum nu
 max_network_policies                     25                      "The maximum number of network policies in the region."
 max_objects_per_schema                   1000                    "The maximum number of objects in a schema (Materialize)."
 max_postgres_connections                 1000                    "The maximum number of PostgreSQL connections in the region, across all schemas (Materialize)."
+max_prepared_statements_per_session      10000                   "The maximum number of prepared statements in a single session (Materialize)."
+max_prepared_statements_size_per_session 8MB                     "The maximum total size in bytes of the SQL text of all prepared statements in a single session (Materialize)."
 max_query_result_size                    "1GB"                   "The maximum size in bytes for a single query's result (Materialize)."
 max_replicas_per_cluster                 5                       "The maximum number of replicas of a single cluster (Materialize)."
 max_result_size                          "1GB"                   "The maximum size in bytes for an internal query result (Materialize)."

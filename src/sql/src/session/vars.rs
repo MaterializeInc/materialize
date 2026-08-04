@@ -1222,6 +1222,8 @@ impl SystemVars {
             &MAX_ROLES,
             &MAX_NETWORK_POLICIES,
             &MAX_RULES_PER_NETWORK_POLICY,
+            &MAX_PREPARED_STATEMENTS_PER_SESSION,
+            &MAX_PREPARED_STATEMENTS_SIZE_PER_SESSION,
             &MAX_RESULT_SIZE,
             &MAX_COPY_FROM_ROW_SIZE,
             &ALLOWED_CLUSTER_REPLICA_SIZES,
@@ -1759,6 +1761,18 @@ impl SystemVars {
     /// Returns the value of the `max_network_policies` configuration parameter.
     pub fn max_rules_per_network_policy(&self) -> u32 {
         *self.expect_value(&MAX_RULES_PER_NETWORK_POLICY)
+    }
+
+    /// Returns the value of the `max_prepared_statements_per_session` configuration parameter.
+    pub fn max_prepared_statements_per_session(&self) -> u32 {
+        *self.expect_value(&MAX_PREPARED_STATEMENTS_PER_SESSION)
+    }
+
+    /// Returns the value of the `max_prepared_statements_size_per_session` configuration
+    /// parameter.
+    pub fn max_prepared_statements_size_per_session(&self) -> u64 {
+        self.expect_value::<ByteSize>(&MAX_PREPARED_STATEMENTS_SIZE_PER_SESSION)
+            .as_bytes()
     }
 
     /// Returns the value of the `max_result_size` configuration parameter.

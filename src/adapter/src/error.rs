@@ -789,6 +789,15 @@ impl AdapterError {
                  selection, use `RESET cluster_replica`."
                     .into(),
             ),
+            AdapterError::ResourceExhaustion { resource_type, .. }
+                if resource_type == "prepared statement" =>
+            {
+                Some(
+                    "Deallocate one or more prepared statements or contact support to request a \
+                     limit increase."
+                        .into(),
+                )
+            }
             AdapterError::ResourceExhaustion { resource_type, .. } => Some(format!(
                 "Drop an existing {resource_type} or contact support to request a limit increase."
             )),

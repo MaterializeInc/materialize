@@ -40,8 +40,8 @@ use uncased::UncasedStr;
 
 use crate::session::user::{SUPPORT_USER, SYSTEM_USER, User};
 use crate::session::vars::constraints::{
-    BYTESIZE_AT_LEAST_1MB, DomainConstraint, NON_ZERO_DURATION, NUMERIC_BOUNDED_0_1_INCLUSIVE,
-    NUMERIC_NON_NEGATIVE, ValueConstraint,
+    BYTESIZE_AT_LEAST_1KB, BYTESIZE_AT_LEAST_1MB, DomainConstraint, NON_ZERO_DURATION,
+    NUMERIC_BOUNDED_0_1_INCLUSIVE, NUMERIC_NON_NEGATIVE, ValueConstraint,
 };
 use crate::session::vars::errors::VarError;
 use crate::session::vars::polyfill::{LazyValueFn, lazy_value, value};
@@ -581,6 +581,31 @@ pub static MAX_RULES_PER_NETWORK_POLICY: VarDefinition = VarDefinition::new(
     "The maximum number of rules per network policies.",
     true,
 );
+
+// A session retains each prepared statement's SQL text and parsed AST until
+// the statement is deallocated, and the AST can exceed the SQL text size by
+// more than an order of magnitude (e.g. for statements with large literal
+// lists). These two limits bound the memory a single session can pin this way,
+// so their defaults are deliberately far below environmentd's available memory
+// while remaining well above what client drivers and ORMs keep prepared in
+// normal operation.
+pub static MAX_PREPARED_STATEMENTS_PER_SESSION: VarDefinition = VarDefinition::new(
+    "max_prepared_statements_per_session",
+    value!(u32; 10_000),
+    "The maximum number of prepared statements in a single session (Materialize).",
+    true,
+);
+
+// The 1kB floor keeps an accidental near-zero value from rejecting every
+// statement prepared over the extended protocol, which would lock out all
+// clients in the region, including the Console.
+pub static MAX_PREPARED_STATEMENTS_SIZE_PER_SESSION: VarDefinition = VarDefinition::new(
+    "max_prepared_statements_size_per_session",
+    value!(ByteSize; ByteSize::mb(8)),
+    "The maximum total size in bytes of the SQL text of all prepared statements in a single session (Materialize).",
+    true,
+)
+.with_constraint(&BYTESIZE_AT_LEAST_1KB);
 
 // Cloud environmentd is configured with 4 GiB of RAM, so 1 GiB is a good heuristic for a single
 // query.
