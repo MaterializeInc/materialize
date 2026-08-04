@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/session.rs
-revision: a60edac7f1
+revision: 792095ecf6
 ---
 
 # adapter::session
@@ -10,4 +10,5 @@ A `Session` tracks the connection ID and UUID, the current transaction state (`T
 `SessionConfig` includes an `authenticator_kind: AuthenticatorKind` field that records which authenticator was used for the connection, and a `groups: Option<Vec<String>>` field that carries JWT group claims from OIDC authentication for group-to-role sync; non-OIDC paths set this to `None`.
 `Transaction` holds the current transaction's operations (`TransactionOps`), a plan context, and optional write-lock guards; `TransactionStatus` is the state machine covering `Default`, `Started`, `InTransaction`, `InTransactionImplicit`, and `Failed` states.
 `TransactionStatus::allows_writes` permits adding write operations only when the current ops are `TransactionOps::None` (and the transaction is not explicitly `ReadOnly`) or `TransactionOps::Peeks` whose timestamp context is constant (no timestamp assigned) and whose access mode is not `ReadOnly`. A read-only transaction is rejected even when all prior peeks were constant, preventing a constant-peek transaction from silently transitioning into a write transaction when the transaction was opened with `BEGIN READ ONLY` or an equivalent access-mode constraint.
+`TransactionStatus::may_span_pipeline` returns `true` for a `Started` transaction whose ops are `TransactionOps::Writes`; when true, the extended-protocol pipeline in pgwire keeps the implicit write transaction open until the client's Sync message so the pipeline commits or rolls back as a unit, matching PostgreSQL's behavior. All other states and op kinds return `false`.
 The module also defines `RowBatchStream` (the channel type for streaming subscribe results to pgwire) and `PreparedStatement` (a parsed, described statement with optional logging info).

@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/cluster_controller.rs
-revision: 6eeaca032b
+revision: 9acb77622f
 ---
 
 # adapter::coord::cluster_controller
@@ -9,7 +9,7 @@ Driver and glue for the `mz-cluster-controller` reconciler.
 
 The controller crate is pure and knows nothing about the Coordinator. This module is the half of the `ClusterControllerCtx` boundary that does: it runs the controller as a separate task and implements the ctx by marshaling each pull/apply to the Coordinator over the internal command channel, because the catalog and live compute/storage signals are reachable only from the coordinator loop. The two whole-tick reads are batched; the per-cluster live signals are pulled on demand, so a tick's round-trips scale with the number of managed clusters that need a live signal, not with a constant.
 
-Everything here is gated by `ENABLE_CLUSTER_CONTROLLER` (default on). With the gate off the task does not tick, so the legacy scheduling and graceful paths remain the sole writers of the replica set. With the gate on the controller owns the *user* managed-cluster replica set; the legacy entry points no-op. System/builtin clusters are never controller-owned: the catalog's bootstrap migration owns their replicas.
+Everything here is gated by `ENABLE_CLUSTER_CONTROLLER` (default on). With the gate off the task does not tick, so the legacy scheduling and graceful paths remain the sole writers of the replica set. With the gate on the controller owns the *user* managed-cluster replica set; the legacy entry points no-op. System/builtin clusters are excluded: their config-implied replicas are materialized by `reconcile_builtin_cluster_replicas` at catalog open, which derives the same target from the same cluster config.
 
 Key types and functions:
 

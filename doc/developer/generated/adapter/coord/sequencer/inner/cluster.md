@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/sequencer/inner/cluster.rs
-revision: ac496d5de8
+revision: 9acb77622f
 ---
 
 # adapter::coord::sequencer::inner::cluster

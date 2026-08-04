@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/catalog/open/builtin_schema_migration.rs
-revision: 34813f0a3f
+revision: 5053b7013e
 ---
 
 # adapter::catalog::open::builtin_schema_migration
@@ -15,6 +15,7 @@ A `Replacement` step at version `26.31.0-dev.0` covers `mz_catalog.mz_cluster_re
 A `Replacement` step at version `26.32.0-dev.0` covers `mz_internal.mz_comments`, reflecting its conversion from `BuiltinTable` to `BuiltinMaterializedView`. A second `Replacement` step at version `26.32.0-dev.0` covers `mz_catalog.mz_indexes`, required because adding the console cluster utilization overview builtin indexes changed the VALUES set inlined by `make_mz_indexes`, altering the MV's SQL fingerprint.
 A `Replacement` step at version `26.33.0-dev.0` covers `mz_catalog.mz_audit_events`, reflecting its conversion from `BuiltinTable` to `BuiltinMaterializedView`.
 Three `Replacement` steps at version `26.34.0-dev.0` cover: `mz_catalog.mz_indexes` (because adding the `mz_cluster_reconfigurations_ind` and `mz_cluster_auto_scaling_strategies_ind` builtin indexes changes the VALUES set inlined by `make_mz_indexes`, altering the MV's SQL fingerprint); `mz_internal.mz_postgres_sources` (reflecting its conversion from `BuiltinTable` to `BuiltinMaterializedView`); and `mz_catalog.mz_kafka_sources` (reflecting the same conversion).
+Four `Replacement` steps at version `26.37.0-dev.0` cover `mz_internal.mz_postgres_source_tables`, `mz_internal.mz_mysql_source_tables`, `mz_internal.mz_sql_server_source_tables`, and `mz_internal.mz_kafka_source_tables`, reflecting their conversion from `BuiltinTable` to `BuiltinMaterializedView`.
 When applying replacement migrations, `mz_storage_usage_by_shard` is excluded from data-destroying replacement plans to preserve billing data.
 When the source and target versions differ and the source version is a dev build, `Migration::run` forces evolution-mode migration even without an explicit `force_migration` config, avoiding version-based filter failures in dev environments.
 In forced dev-to-dev migrations, `migrate_evolve_one` skips builtins that do not yet have a shard registered. Brand-new builtins in a given version may not have their shards allocated until the leader completes bootstrap; excluding them avoids "missing shard ID" errors on read-only replicas.

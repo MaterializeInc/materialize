@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/client.rs
-revision: 443b75e6b4
+revision: 792095ecf6
 ---
 
 # adapter::client
@@ -17,4 +17,5 @@ During `startup`, `Client` constructs a `PeekClient` from the `StartupResponse` 
 `RecordFirstRowStream` is an adapter stream that records the timestamp of the first row for metrics.
 `TimeoutType` enumerates session-level timeouts (currently `IdleInTransactionSession`); the `Timeout` struct manages active timeout tasks and delivers expired timeouts through `SessionClient::recv_timeout`.
 `SessionClient::statement_arrival_logging_enabled` checks the `enable_statement_arrival_logging` system variable via the session's catalog snapshot.
+`SessionClient::extended_protocol_implicit_transaction_enabled` checks the `enable_extended_protocol_implicit_transaction` system variable via the session's catalog snapshot; pgwire consults this when deciding whether an implicit write transaction in the extended-protocol pipeline should span to the Sync message.
 `redact_sql_for_logging(sql) -> String` parses SQL and re-serialises it with literals redacted (the same redaction the statement log applies). If the text does not parse or exceeds the statement batch size limit, a placeholder with the byte length is returned instead.
