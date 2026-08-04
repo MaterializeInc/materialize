@@ -3052,6 +3052,14 @@ class FlipFlagsAction(Action):
             "2",
             "50000",
         ]
+        # 0 leaves only the 256-request floor, the default scales with table
+        # size.
+        self.flags_with_values[
+            "mysql_source_snapshot_partition_requests_per_billion_rows"
+        ] = [
+            "0",
+            "2500",
+        ]
 
         # If you are adding a new config flag in Materialize, consider using it
         # here instead of just marking it as uninteresting to silence the
