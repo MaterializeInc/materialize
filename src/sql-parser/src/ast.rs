@@ -23,6 +23,7 @@
 #[macro_use]
 pub mod display;
 pub mod fold;
+pub mod item_refs;
 pub mod visit;
 pub mod visit_mut;
 
