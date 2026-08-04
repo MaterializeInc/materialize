@@ -31,6 +31,8 @@ mod mz_catalog;
 pub use mz_catalog::*;
 mod mz_internal;
 pub use mz_internal::*;
+mod mz_object_dependencies;
+pub use mz_object_dependencies::*;
 mod mz_introspection;
 pub use mz_introspection::*;
 mod information_schema;
@@ -221,25 +223,20 @@ fn is_false(v: &bool) -> bool {
 ///
 /// Choosing the right variant matters:
 ///
-/// - [`LinkProperties::ForeignKey`]: the source entity has a column whose
-///   value is an ID that directly references a row in the target entity.
-///   Use this when there is an explicit FK column (e.g. `schema_id` ->
-///   `schema`).
-/// - [`LinkProperties::DependsOn`]: this entity logically depends on the
-///   target entity via a graph-edge table (e.g. `mz_compute_dependencies`
-///   records that a compute object depends on another object). The
-///   `source_column` is the column **in this entity** that holds the
-///   dependent's ID; `target_column` is the column in the target entity
-///   being depended upon. Use this for dependency-graph tables, **not**
-///   `ForeignKey`.
-/// - [`LinkProperties::Union`]: the source entity is a superset view that
-///   contains the target entity as a subset, optionally filtered by a
-///   discriminator column.
-/// - [`LinkProperties::MapsTo`]: the source entity provides an ID translation
-///   to the target entity, possibly via an intermediate table or across ID
-///   namespaces.
-/// - [`LinkProperties::Measures`]: the source entity records metric
-///   measurements about the target entity.
+/// - [`LinkProperties::ForeignKey`]: the source entity has a column whose value is an ID that
+///   directly references a row in the target entity. Use this when there is an explicit FK column
+///   (e.g. `schema_id` -> `schema`).
+/// - [`LinkProperties::DependsOn`]: this entity logically depends on the target entity via a
+///   graph-edge table (e.g. `mz_compute_dependencies` records that a compute object depends on
+///   another object). The `source_column` is the column **in this entity** that holds the
+///   dependent's ID; `target_column` is the column in the target entity being depended upon. Use
+///   this for dependency-graph tables, **not** `ForeignKey`.
+/// - [`LinkProperties::Union`]: the source entity is a superset view that contains the target
+///   entity as a subset, optionally filtered by a discriminator column.
+/// - [`LinkProperties::MapsTo`]: the source entity provides an ID translation to the target entity,
+///   possibly via an intermediate table or across ID namespaces.
+/// - [`LinkProperties::Measures`]: the source entity records metric measurements about the target
+///   entity.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LinkProperties {
@@ -783,6 +780,20 @@ impl Fingerprint for SqlRelationType {
     }
 }
 
+/// Asserts that `name` is safe to embed unquoted inside a `'...'`-quoted SQL literal
+/// or inside a `"..."`-quoted SQL identifier. Generated builtin relations
+/// (`make_mz_indexes`, `make_mz_object_dependencies_raw`, ...) concatenate builtin names
+/// into SQL fragments, so a quote or backslash would produce malformed SQL. Builtin
+/// names should always be plain ASCII identifiers.
+pub(super) fn assert_safe_builtin_name(name: &str, kind: &str) {
+    assert!(
+        !name.contains('\'') && !name.contains('"') && !name.contains('\\'),
+        "builtin {kind} name {name:?} contains an unsupported character; \
+         generated builtin relations reconstruct SQL via string \
+         concatenation and assume names contain no quotes or backslashes"
+    );
+}
+
 pub(super) const PUBLIC_SELECT: MzAclItem = MzAclItem {
     grantee: RoleId::Public,
     grantor: MZ_SYSTEM_ROLE_ID,
@@ -1137,7 +1148,9 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::MaterializedView(&MZ_KAFKA_SINKS),
         Builtin::MaterializedView(&MZ_KAFKA_CONNECTIONS),
         Builtin::MaterializedView(&MZ_KAFKA_SOURCES),
-        Builtin::Table(&MZ_OBJECT_DEPENDENCIES),
+        // mz_object_dependencies_raw is generated dynamically below with inlined
+        // builtin VALUES and inserted directly before this entry.
+        Builtin::MaterializedView(&MZ_OBJECT_DEPENDENCIES),
         Builtin::MaterializedView(&MZ_ICEBERG_SINKS),
         Builtin::MaterializedView(&MZ_DATABASES),
         Builtin::MaterializedView(&MZ_SCHEMAS),
@@ -1553,6 +1566,38 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
             .position(|b| matches!(b, Builtin::Table(t) if t.name == "mz_index_columns"))
             .expect("mz_index_columns must be present in builtin_items");
         builtin_items.insert(insert_pos, Builtin::MaterializedView(mz_indexes_ref));
+    }
+
+    // Generate mz_object_dependencies_raw, which inlines every builtin's
+    // dependency edges as VALUES.
+    //
+    // It has to run before ontology::generate_views and builtin::builtins, because those consume
+    // mz_object_dependencies. However, because the views those two generators produce
+    // have dependency edges of their own, it must use them as inputs. So this block runs both
+    // generators early, keeps the edges of the views they hand back, and discards the views
+    // themselves. The real ones are built below.
+    {
+        let ontology_preview = ontology::generate_views(&builtin_items);
+        let builtin_reporter_preview: Vec<_> = builtin::builtins(&builtin_items).collect();
+        let generator_input: Vec<_> = builtin_types
+            .iter()
+            .chain(builtin_funcs.iter())
+            .chain(builtin_reporter_preview.iter())
+            .chain(builtin_items.iter())
+            .chain(ontology_preview.iter())
+            .cloned()
+            .collect();
+        let mz_object_dependencies_raw =
+            mz_object_dependencies::make_mz_object_dependencies_raw(&generator_input);
+        let mz_object_dependencies_raw_ref: &'static BuiltinView =
+            Box::leak(Box::new(mz_object_dependencies_raw));
+        // The view goes directly before mz_object_dependencies, which reads it,
+        // because BUILTINS_STATIC must list dependencies before their dependents.
+        let insert_pos = builtin_items
+            .iter()
+            .position(|b| b.name() == "mz_object_dependencies")
+            .expect("mz_object_dependencies must be present in builtin_items");
+        builtin_items.insert(insert_pos, Builtin::View(mz_object_dependencies_raw_ref));
     }
 
     // Generate ontology views by enumerating existing builtins.
@@ -2004,8 +2049,8 @@ mod tests {
         // avoid noise.
         //
         // Exemptions:
-        // - Column at index 0 named "id": almost always the entity's own PK,
-        //   not a FK (e.g. mz_objects.id, mz_functions.id).
+        // - Column at index 0 named "id": almost always the entity's own PK, not a FK (e.g.
+        //   mz_objects.id, mz_functions.id).
         // - Columns in the relation's declared key set.
         //
         // "Reference" types are ID types that imply a FK. Discriminators
@@ -2427,6 +2472,42 @@ mod tests {
             fp_base,
             Fingerprint::fingerprint(&&mv_extra_log),
             "mz_indexes fingerprint must change when a builtin log is added"
+        );
+    }
+
+    /// Because `mz_object_dependencies_raw`` is built from prior copies of the ontology and builtin
+    /// reporter views to get their edges since they must be built afterwards. Thus we test
+    /// that regenerating the view using all builtins (excluding itself) equals the SQL of the real
+    /// view.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // slow: parses every builtin's SQL twice
+    fn test_mz_object_dependencies_raw_sql_is_stable() {
+        let without_self: Vec<Builtin<NameReference>> = BUILTINS_STATIC
+            .iter()
+            .filter(|b| {
+                !matches!(b, Builtin::View(v) if v.name == mz_object_dependencies::MZ_OBJECT_DEPENDENCIES_RAW)
+            })
+            .cloned()
+            .collect();
+
+        let regenerated = mz_object_dependencies::make_mz_object_dependencies_raw(&without_self);
+
+        let from_static = BUILTINS_STATIC
+            .iter()
+            .find_map(|b| match b {
+                Builtin::View(v)
+                    if v.name == mz_object_dependencies::MZ_OBJECT_DEPENDENCIES_RAW =>
+                {
+                    Some(*v)
+                }
+                _ => None,
+            })
+            .expect("mz_object_dependencies_raw must be present in BUILTINS_STATIC");
+
+        assert_eq!(
+            regenerated.sql, from_static.sql,
+            "regenerating mz_object_dependencies_raw from the final builtin \
+             list must reproduce the SQL generated during static init"
         );
     }
 }
