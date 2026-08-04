@@ -13,6 +13,9 @@ use mz_ore::cast::CastFrom;
 
 use crate::{MySqlError, QualifiedTableRef, quote_identifier};
 
+/// The escape character for `LIKE` patterns built by [`like_prefix_pattern`].
+const LIKE_ESCAPE: char = '|';
+
 pub struct KeyProber<'a, Q> {
     conn: &'a mut Q,
     table: String,
@@ -20,6 +23,9 @@ pub struct KeyProber<'a, Q> {
 }
 
 impl<'a, Q: Queryable> KeyProber<'a, Q> {
+    /// NOTE: `conn` is assumed to use a utf8mb4 connection character set (the
+    /// driver's handshake default), so key values arrive converted to UTF-8.
+    /// [`KeyProber::next_prefix`] relies on that for character counting.
     pub fn new(conn: &'a mut Q, table: QualifiedTableRef<'_>, key_col: &str) -> Self {
         Self {
             conn,
@@ -32,24 +38,27 @@ impl<'a, Q: Queryable> KeyProber<'a, Q> {
         }
     }
 
-    /// Estimates the row count for the given range. These estimates can vary pretty widely. They
-    /// will generally never be more than half the size of the full row count reported by
-    /// `information_schema.tables`. In some tests these have been over-estimates in practice,
-    /// where the sum of all table ranges has been ~2x as large as the estimate or table size.
+    /// Estimates the row count for the given range. Estimates vary widely. On a static table
+    /// with 2.2B rows we observed estimates that should be near 2B report exactly half the
+    /// `TABLE_ROWS` reported by `information_schema.tables`. The sum of the row estimates
+    /// from this function were around 4B for the same test case, or about a 2x overcount relative
+    /// to the 2.05B reported by `TABLE_ROWS` reported by `information_schema.tables` and the 2.2B
+    /// actual rows. The underlying estimates are computed by sampling a small number of pages
+    /// after traversing the index (assuming this is a primary key being filtered on), so extrapolated
+    /// row counts can be inaccurate but appear to eventually converge towards more accurate estimates
+    /// as the sampled range shrinks on a static table.
     pub async fn estimate_range_rows(
         &mut self,
         start: &str,
         end: Option<&str>,
-    ) -> Result<u64, MySqlError> {
+    ) -> Result<Option<u64>, MySqlError> {
         let (clause, params) = self.range_filter(start, true, end);
         let select = format!(
             "SELECT {col} FROM {table} WHERE {clause}",
             col = self.col,
             table = self.table,
         );
-        let estimate =
-            explain_row_estimate(&mut *self.conn, &select, Params::Positional(params)).await?;
-        Ok(estimate.unwrap_or(0))
+        explain_row_estimate(&mut *self.conn, &select, Params::Positional(params)).await
     }
 
     /// Grabs a prefix of length `len` for the first row in the given range. If the string is
@@ -84,13 +93,13 @@ impl<'a, Q: Queryable> KeyProber<'a, Q> {
     /// The query will generally look something like:
     ///
     /// ```sql
-    /// SELECT LEFT(pk_col, 3) FROM table
+    /// SELECT LEFT(pk_col, /* len */ 3) FROM table
     /// WHERE pk_col > (
     ///     SELECT pk_col FROM table
-    ///     WHERE pk_col LIKE 'abc%' AND pk_col < 'ac'
+    ///     WHERE pk_col LIKE /* cur% */ 'abc%'  AND pk_col < /* end */ 'ac'
     ///     ORDER BY pk_col DESC
     ///     LIMIT 1
-    /// ) AND pk_col < 'ac'
+    /// ) AND pk_col < /* end */ 'ac'
     /// ORDER BY pk_col
     /// LIMIT 1
     /// ```
@@ -105,14 +114,16 @@ impl<'a, Q: Queryable> KeyProber<'a, Q> {
         end: Option<&str>,
         len: usize,
     ) -> Result<Option<String>, MySqlError> {
-        // chars().count() counts Unicode code points, the same unit LEFT and
-        // CHAR_LENGTH use for utf8mb4 data, so the short-key check agrees
-        // with how the prefix was produced.
+        // chars().count() counts Unicode code points. The column can use any
+        // character set, but the driver handshakes the connection character
+        // set as utf8mb4, so values reach us converted to UTF-8, and every
+        // MySQL character converts to exactly one code point. The count here
+        // therefore agrees with how LEFT counted characters when it produced
+        // the prefix.
         if cur.chars().count() < len {
-            // When `cur` has fewer than `len` characters it names an exact key
-            // rather than a truncation, and the anchor would skip every key extending
-            // it. The walk instead steps just past that one key, so extensions of
-            // `cur` become prefixes of their own.
+            // When `cur` has fewer than `len` characters it likely names an exact key, i.e. imagine strings
+            // "a", "aa", "aaa". If we get "a" with depth 2 we want the next key to be "aa". Without this block,
+            // we'd skip past all of these strings because they match the prefix "a".
             let (clause, mut params) = self.range_filter(cur, false, end);
             let sql = format!(
                 "SELECT LEFT({col}, ?) FROM {table} WHERE {clause} ORDER BY {col} LIMIT 1",
@@ -126,19 +137,13 @@ impl<'a, Q: Queryable> KeyProber<'a, Q> {
         let table = &self.table;
         let mut sql = format!(
             "SELECT LEFT({col}, ?) FROM {table} \
-             WHERE {col} > (SELECT {col} FROM {table} WHERE {col} LIKE ?"
+             WHERE {col} > (SELECT {col} FROM {table} WHERE {col} LIKE ? ESCAPE '{LIKE_ESCAPE}'"
         );
         let mut params: Vec<Value> =
             vec![u64::cast_from(len).into(), like_prefix_pattern(cur).into()];
-        if let Some(end) = end {
-            sql.push_str(&format!(" AND {col} < ?"));
-            params.push(end.into());
-        }
+        self.less_than_end(&mut sql, &mut params, end);
         sql.push_str(&format!(" ORDER BY {col} DESC LIMIT 1)"));
-        if let Some(end) = end {
-            sql.push_str(&format!(" AND {col} < ?"));
-            params.push(end.into());
-        }
+        self.less_than_end(&mut sql, &mut params, end);
         sql.push_str(&format!(" ORDER BY {col} LIMIT 1"));
         self.query_string(sql, params).await
     }
@@ -153,11 +158,16 @@ impl<'a, Q: Queryable> KeyProber<'a, Q> {
         let op = if inclusive { ">=" } else { ">" };
         let mut clause = format!("{col} {op} ?");
         let mut params: Vec<Value> = vec![start.into()];
+        self.less_than_end(&mut clause, &mut params, end);
+        (clause, params)
+    }
+
+    fn less_than_end(&self, sql: &mut String, params: &mut Vec<Value>, end: Option<&str>) {
         if let Some(end) = end {
-            clause.push_str(&format!(" AND {col} < ?"));
+            let col = &self.col;
+            sql.push_str(&format!(" AND {col} < ?"));
             params.push(end.into());
         }
-        (clause, params)
     }
 
     async fn query_string(
@@ -173,11 +183,15 @@ impl<'a, Q: Queryable> KeyProber<'a, Q> {
     }
 }
 
+/// LIKE uses % and _ as wildcard characters. By default MySQL uses a backslash as an escape character
+/// but that can be disabled via config, so we instead specify a specific escape character.
+/// LIKE operator: https://dev.mysql.com/doc/refman/8.0/en/string-comparison-functions.html#operator_like
+/// Backslash escapes: https://dev.mysql.com/doc/refman/8.0/en/sql-mode.html#sqlmode_no_backslash_escapes
 fn like_prefix_pattern(prefix: &str) -> String {
     let mut pattern = String::with_capacity(prefix.len() + 1);
     for c in prefix.chars() {
-        if matches!(c, '\\' | '%' | '_') {
-            pattern.push('\\');
+        if c == LIKE_ESCAPE || matches!(c, '%' | '_') {
+            pattern.push(LIKE_ESCAPE);
         }
         pattern.push(c);
     }
@@ -213,9 +227,11 @@ mod tests {
     fn test_like_prefix_pattern() {
         assert_eq!(like_prefix_pattern("abc"), "abc%");
         assert_eq!(like_prefix_pattern(""), "%");
-        assert_eq!(like_prefix_pattern("a_b"), "a\\_b%");
-        assert_eq!(like_prefix_pattern("50%"), "50\\%%");
-        assert_eq!(like_prefix_pattern("a\\b"), "a\\\\b%");
+        assert_eq!(like_prefix_pattern("a_b"), "a|_b%");
+        assert_eq!(like_prefix_pattern("50%"), "50|%%");
+        assert_eq!(like_prefix_pattern("a|b"), "a||b%");
+        // Backslash has no special meaning under an explicit ESCAPE '|'.
+        assert_eq!(like_prefix_pattern("a\\b"), "a\\b%");
         assert_eq!(like_prefix_pattern("héllo"), "héllo%");
     }
 
@@ -267,11 +283,14 @@ mod tests {
 
         // Estimates are index dives, near reality but never exact by
         // contract, so the bounds are deliberately loose.
-        let all = p.estimate_range_rows("", None).await?;
+        let all = p.estimate_range_rows("", None).await?.expect("estimate");
         assert!((500..=2000).contains(&all), "all={all}");
-        let half = p.estimate_range_rows("a00500", None).await?;
+        let half = p
+            .estimate_range_rows("a00500", None)
+            .await?
+            .expect("estimate");
         assert!((250..=1000).contains(&half), "half={half}");
-        let none = p.estimate_range_rows("zzz", None).await?;
+        let none = p.estimate_range_rows("zzz", None).await?.expect("estimate");
         assert!(none <= 5, "none={none}");
 
         drop_db(&mut conn, DB).await?;
