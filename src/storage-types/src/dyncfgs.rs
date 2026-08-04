@@ -215,6 +215,16 @@ pub static MYSQL_SOURCE_SNAPSHOT_PARALLELISM: Config<bool> = Config::new(
     "Whether to split MySQL snapshot reads across workers by primary-key ranges.",
 );
 
+/// The smallest estimated row count for which the MySQL snapshot prefix
+/// partitioner keeps splitting a string primary key range. Tables estimated
+/// below this stay in a single per-table bucket, i.e. are read by one worker.
+pub static MYSQL_SOURCE_SNAPSHOT_PARTITION_MIN_ROWS: Config<usize> = Config::new(
+    "mysql_source_snapshot_partition_min_rows",
+    50_000,
+    "Minimum estimated rows per range before MySQL snapshot PK-prefix partitioning \
+     stops splitting; also the smallest table considered worth splitting.",
+);
+
 /// Probe query budget for the MySQL snapshot prefix partitioner, scaled to
 /// the table's estimated size so probing effort stays proportional to the
 /// snapshot work it optimizes. A small floor applies so modest tables can
@@ -450,6 +460,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&MYSQL_REPLICATION_HEARTBEAT_INTERVAL)
         .add(&MYSQL_SOURCE_SNAPSHOT_EXACT_COUNT_MAX_ROWS)
         .add(&MYSQL_SOURCE_SNAPSHOT_PARALLELISM)
+        .add(&MYSQL_SOURCE_SNAPSHOT_PARTITION_MIN_ROWS)
         .add(&MYSQL_SOURCE_SNAPSHOT_PARTITION_REQUESTS_PER_BILLION_ROWS)
         .add(&ORE_OVERFLOWING_BEHAVIOR)
         .add(&PG_FETCH_SLOT_RESUME_LSN_INTERVAL)

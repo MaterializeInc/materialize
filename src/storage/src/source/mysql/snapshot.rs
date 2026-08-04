@@ -62,8 +62,10 @@
 //!
 //! ## Parallel PK-range snapshots
 //!
-//! For tables with a suitable primary key, the leader computes `worker_count - 1` boundary keys
-//! that split the key domain into disjoint half-open ranges, and broadcasts them. Each worker
+//! For tables with a suitable single-column string primary key, the leader computes up to
+//! `worker_count - 1` boundary keys that split the key domain into disjoint half-open ranges,
+//! and broadcasts them. Boundaries are discovered by splitting the key space on character
+//! prefixes using optimizer row estimates (see [`mz_mysql_util::partition`]). Each worker
 //! reads only its assigned range. Ranges are assigned round-robin starting from each table's
 //! legacy single-worker owner, so the open-ended ranges (which absorb any rows written past the
 //! last sampled boundary) land on a different worker per table rather than always the last worker.
@@ -116,7 +118,9 @@ use futures::{StreamExt as _, TryStreamExt};
 use itertools::Itertools;
 use mysql_async::prelude::Queryable;
 use mysql_async::{IsolationLevel, Row as MySqlRow, TxOpts};
-use mz_mysql_util::{MySqlConn, MySqlError, pack_mysql_row, query_sys_var, quote_identifier};
+use mz_mysql_util::{
+    MySqlConn, MySqlError, QualifiedTableRef, pack_mysql_row, query_sys_var, quote_identifier,
+};
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
@@ -220,80 +224,87 @@ fn worker_pk_range(
     })
 }
 
-/// Walks the primary key index in steps of about `row_count / worker_count`, taking the key
-/// at each step's `OFFSET`. The per-step OFFSET scans sum to a full index pass, so this
-/// function has a time complexity of O(row_count). Worker count is small, so the OFFSET
-/// scans dominate the runtime. `row_count` can be an optimizer estimate for large tables,
-/// so the partitions are approximate. An overestimate walks off the end of the index and stops
-/// with fewer boundaries, resulting in some workers receiving less or no work. An underestimate
-/// leaves a larger final partition for the last worker, however both still correctly partition
-/// the table. Returns None if the primary key column type is not supported or the table is too
-/// small to split.
-async fn compute_sampled_splits<Q>(
-    conn: &mut Q,
+/// Computes PK-range split boundaries for `table` by partitioning the key
+/// space by character prefix (see [`mz_mysql_util::partition`]) and rendering
+/// the resulting boundaries as SQL string literals via the server's `QUOTE()`,
+/// matching the literal interpolation the range predicates use. Only string
+/// key columns can be split this way, prefixes of other types do not order
+/// consistently with their values. Returns None if the primary key column type
+/// is not supported or the table is not worth splitting.
+async fn compute_pk_splits(
+    conn: &mut mysql_async::Conn,
     table: &MySqlTableName,
-    pk_col: &(String, SqlScalarType),
+    raw_col: &str,
+    scalar_type: &SqlScalarType,
     worker_count: usize,
-    total: u64,
-) -> Result<Option<PkBoundaries>, TransientError>
-where
-    Q: Queryable,
-{
-    let (col, scalar_type) = pk_col;
-    // Render the PK column as text that sorts and compares the same way the range
-    // predicates do: `QUOTE()` under the column's collation for character types,
-    // `CAST(.. AS CHAR)` for integers. Any other type can't be split safely.
-    let (col_literal, integer_path) = match scalar_type {
-        SqlScalarType::Int16
-        | SqlScalarType::Int32
-        | SqlScalarType::Int64
-        | SqlScalarType::UInt16
-        | SqlScalarType::UInt32
-        | SqlScalarType::UInt64 => (format!("CAST({col} AS CHAR)"), true),
-        SqlScalarType::Char { .. } | SqlScalarType::VarChar { .. } | SqlScalarType::String => {
-            (format!("QUOTE({col})"), false)
-        }
+    row_count: u64,
+    partition_min_rows: u64,
+    partition_requests_per_billion_rows: u64,
+) -> Result<Option<PkBoundaries>, TransientError> {
+    match scalar_type {
+        SqlScalarType::Char { .. } | SqlScalarType::VarChar { .. } | SqlScalarType::String => {}
         _ => return Ok(None),
+    }
+    // Contractions (Czech ch), expansions (ß), ignorable characters (NUL),
+    // and NO PAD ordering all break prefix probing, so only split under
+    // utf8mb4_bin, the one collation it is verified against.
+    let collation: Option<String> = conn
+        .exec_first(
+            "SELECT COLLATION_NAME FROM information_schema.columns \
+             WHERE table_schema = ? AND table_name = ? AND column_name = ?",
+            (&table.0, &table.1, raw_col),
+        )
+        .await?;
+    let supported = collation.as_deref().is_some_and(|c| c == "utf8mb4_bin");
+    if !supported {
+        tracing::debug!(?collation, "PK splitting skipped: unsupported collation");
+        return Ok(None);
+    }
+    let table_ref = QualifiedTableRef {
+        schema_name: &table.0,
+        table_name: &table.1,
     };
-
-    let partitions = std::cmp::min(u64::cast_from(worker_count), total);
-    if partitions < 2 {
-        return Ok(None);
-    }
-    let chunk = total / partitions;
-
-    let mut boundaries: Vec<String> = Vec::with_capacity(usize::cast_from(partitions) - 1);
-    for _ in 1..partitions {
-        let (predicate, offset) = match boundaries.last() {
-            Some(prev) => (format!(" WHERE {col} > {prev}"), chunk - 1),
-            None => (String::new(), chunk),
-        };
-        // The identifier is quoted via `quote_identifier`, the previous boundary is
-        // itself a value MySQL rendered as a literal, `table` via Display, and the
-        // offset is an integer, so this interpolation is safe; not parameterizable.
-        #[allow(clippy::disallowed_methods)]
-        let row: Option<MySqlRow> = conn
-            .query_first(format!(
-                "SELECT {col_literal} FROM {table}{predicate} \
-                 ORDER BY {col} LIMIT 1 OFFSET {offset}"
-            ))
-            .await?;
-        // Defensive: if a concurrent write shrank the range out from under us, stop and
-        // use the boundaries found so far. Fewer partitions is still correct.
-        let Some(mut row) = row else { break };
-        // The column is CAST/QUOTE-ed to text, so it decodes as a String that is
-        // already a valid SQL literal. A decode failure (e.g. a non-UTF-8
-        // collation) means we can't safely partition: fall back.
-        match row.take_opt::<String, usize>(0) {
-            Some(Ok(lit)) if !integer_path || is_decimal_literal(&lit) => boundaries.push(lit),
-            _ => return Ok(None),
+    // Probe budget proportional to the estimated snapshot work, so probing
+    // effort stays negligible next to reading the table. The floor keeps
+    // small tables able to afford their handful of splits.
+    let max_requests =
+        (row_count.saturating_mul(partition_requests_per_billion_rows) / 1_000_000_000).max(256);
+    let prefixes = match mz_mysql_util::partition_table(
+        conn,
+        table_ref,
+        raw_col,
+        worker_count,
+        row_count,
+        partition_min_rows,
+        max_requests,
+    )
+    .await
+    {
+        Ok(prefixes) => prefixes,
+        // Correctness never depends on splitting, so unsupported key data or
+        // an optimizer that reports no row estimate falls back to the
+        // single-worker whole-table read instead of failing the snapshot.
+        Err(err @ (MySqlError::NonUtf8KeyValue { .. } | MySqlError::MissingRowEstimate { .. })) => {
+            tracing::warn!(%err, "PK splitting fell back to a single partition");
+            return Ok(None);
         }
-    }
-    if boundaries.is_empty() {
+        Err(err) => return Err(err.into()),
+    };
+    if prefixes.is_empty() {
         return Ok(None);
+    }
+    let mut boundaries = Vec::with_capacity(prefixes.len());
+    for prefix in prefixes {
+        let literal: Option<String> = conn.exec_first("SELECT QUOTE(?)", (prefix,)).await?;
+        // QUOTE of a non-NULL parameter always returns a row, but fall back
+        // rather than panic if the protocol surprises us.
+        let Some(literal) = literal else {
+            return Ok(None);
+        };
+        boundaries.push(literal);
     }
     Ok(Some(PkBoundaries {
-        pk_col: col.clone(),
+        pk_col: quote_identifier(raw_col),
         boundaries,
     }))
 }
@@ -301,11 +312,10 @@ where
 /// For every table, read the row count (exact only for small tables) and, for a
 /// supported single-column primary key, compute the PK-range split boundaries,
 /// concurrently over at most `worker_count` connections. `None` bounds means
-/// single-worker fallback for that table. The counts are reused for both the sampling
-/// stride and the snapshot size gauge. Snapshot size gauge is a metric for the snapshot
-/// size used to report how many rows we need to process. "Sampling stride" refers to
-/// the number of rows we use to page through the table to find roughly evenly spaced
-/// primary keys to use as partition boundaries.
+/// single-worker fallback for that table. The counts are reused for both boundary
+/// discovery and the snapshot size gauge. The snapshot size gauge is a metric
+/// reporting how many rows the snapshot needs to process. Boundary discovery uses
+/// the count to size the partitioner's target buckets.
 async fn sample_pk_bounds(
     config: &RawSourceCreationConfig,
     connection_config: &mz_mysql_util::Config,
@@ -333,6 +343,14 @@ async fn sample_pk_bounds(
         .get(config.config.config_set());
     let exact_count_max_rows = u64::cast_from(
         mz_storage_types::dyncfgs::MYSQL_SOURCE_SNAPSHOT_EXACT_COUNT_MAX_ROWS
+            .get(config.config.config_set()),
+    );
+    let partition_min_rows = u64::cast_from(
+        mz_storage_types::dyncfgs::MYSQL_SOURCE_SNAPSHOT_PARTITION_MIN_ROWS
+            .get(config.config.config_set()),
+    );
+    let partition_requests_per_billion_rows = u64::cast_from(
+        mz_storage_types::dyncfgs::MYSQL_SOURCE_SNAPSHOT_PARTITION_REQUESTS_PER_BILLION_ROWS
             .get(config.config.config_set()),
     );
 
@@ -366,11 +384,11 @@ async fn sample_pk_bounds(
                         conn
                     }
                 };
-                // Row count, reused for the sampling stride and the size gauge. When it
+                // Row count, reused for boundary discovery and the size gauge. When it
                 // is counted exactly it runs on the same `READ ONLY` transaction as the
-                // boundary walk in `compute_sampled_splits`, so both see one consistent
+                // boundary probes in `compute_pk_splits`, so both see one consistent
                 // snapshot. For large tables it is an optimizer estimate instead, which
-                // `compute_sampled_splits` tolerates.
+                // `compute_pk_splits` tolerates.
                 let stats =
                     collect_table_statistics(&mut *conn, table, exact_count_max_rows).await?;
                 metrics.record_table_count_latency(
@@ -385,9 +403,17 @@ async fn sample_pk_bounds(
                     .flatten()
                 {
                     Some((raw_col, scalar_type)) => {
-                        let pk_col = (quote_identifier(&raw_col), scalar_type);
-                        compute_sampled_splits(&mut *conn, table, &pk_col, worker_count, count)
-                            .await?
+                        compute_pk_splits(
+                            &mut *conn,
+                            table,
+                            &raw_col,
+                            &scalar_type,
+                            worker_count,
+                            count,
+                            partition_min_rows,
+                            partition_requests_per_billion_rows,
+                        )
+                        .await?
                     }
                     None => None,
                 };
@@ -617,11 +643,6 @@ where
 /// gate charset/collation names before interpolating them (they can't be parameters).
 fn is_plain_ident(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-}
-
-fn is_decimal_literal(s: &str) -> bool {
-    let digits = s.strip_prefix('-').unwrap_or(s);
-    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
 }
 
 /// Returns the set of full tables/sections of tables to read.
