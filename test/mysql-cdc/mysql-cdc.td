@@ -769,16 +769,12 @@ $ mysql-execute name=mysql
 DROP TABLE pk_uint_test;
 
 #
-# BIT primary key. A BIT column maps to a Materialize uint64, but carries the
-# MySqlColumnMeta::Bit marker. The PK-range sampler renders a boundary from the
-# Materialize scalar type alone (uint64 takes the integer path, CAST(id AS CHAR)),
-# discarding that marker. For a BIT column CAST(.. AS CHAR) returns the value's
-# raw bytes, not a decimal literal, and that text is spliced verbatim into the
-# worker range predicates. The BIT(64) value X'30204F5220313D31' is the eight
-# ASCII bytes "0 OR 1=1", so the sampled boundary turns the two worker reads into
-#   WHERE id <  0 OR 1=1
-#   WHERE id >= 0 OR 1=1
-# both of which match every row. Every key must still be emitted exactly once.
+# BIT primary key. A BIT column maps to a Materialize uint64, so it is not a
+# string key and must not be split into PK ranges. The BIT(64) value
+# X'30204F5220313D31' is the eight ASCII bytes "0 OR 1=1": a splitter that
+# rendered the raw key bytes into a range predicate would turn a worker read
+# into WHERE id >= 0 OR 1=1, matching every row on every worker. Every key
+# must still be emitted exactly once.
 #
 
 $ mysql-execute name=mysql
@@ -793,8 +789,9 @@ INSERT INTO pk_bit_test VALUES (1, 100), (0x30204F5220313D31, 200);
   FROM MYSQL CONNECTION mysql_conn;
 > CREATE TABLE pk_bit_table FROM SOURCE pk_bit_source (REFERENCE public.pk_bit_test);
 
-# Exact count and no duplicate keys. Under the bug both workers read the whole
-# table, so COUNT(*) is 4 while COUNT(DISTINCT id) stays 2.
+# Exact count and no duplicate keys. If the table were wrongly split and both
+# workers read the whole table, COUNT(*) would be 4 while COUNT(DISTINCT id)
+# stays 2.
 > SELECT COUNT(*), COUNT(DISTINCT id) FROM pk_bit_table;
 2 2
 
@@ -812,9 +809,9 @@ DROP TABLE pk_bit_test;
 
 #
 # PK-range splitting disabled via the mysql_source_snapshot_parallelism dyncfg.
-# The same shape as the pk_range_test above, but every table must fall back to a
-# single-worker whole-table read and still produce a complete, duplicate-free
-# snapshot.
+# The same shape as the pk_char_test above, a string PK that would otherwise be
+# split, but every table must fall back to a single-worker whole-table read and
+# still produce a complete, duplicate-free snapshot.
 #
 
 $ postgres-execute connection=mz_system
@@ -822,9 +819,9 @@ ALTER SYSTEM SET mysql_source_snapshot_parallelism = false
 
 $ mysql-execute name=mysql
 DROP TABLE IF EXISTS pk_serial_test;
-CREATE TABLE pk_serial_test (id BIGINT PRIMARY KEY, val BIGINT);
+CREATE TABLE pk_serial_test (id CHAR(26) PRIMARY KEY, val BIGINT);
 SET @i := 0;
-INSERT INTO pk_serial_test SELECT @i := @i + 1, @i * 7 FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 1000;
+INSERT INTO pk_serial_test SELECT LPAD(CONV(@i := @i + 1, 10, 36), 26, '0'), @i * 7 FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 1000;
 
 > CREATE CLUSTER pk_serial_cluster SIZE 'scale=1,workers=4'
 
@@ -837,11 +834,7 @@ INSERT INTO pk_serial_test SELECT @i := @i + 1, @i * 7 FROM mysql.time_zone t1, 
 > SELECT COUNT(*), COUNT(DISTINCT id) FROM pk_serial_table;
 1000 1000
 
-# Full key range present (ids 1..1000)
-> SELECT MIN(id), MAX(id) FROM pk_serial_table;
-1 1000
-
-# Checksum: val = id * 7, so SUM(val) = 7 * SUM(1..1000) = 7 * 500500
+# Checksum: val = row number * 7, so SUM(val) = 7 * SUM(1..1000) = 7 * 500500
 > SELECT SUM(val) FROM pk_serial_table;
 3503500
 

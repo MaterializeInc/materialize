@@ -298,6 +298,11 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "mysql_source_snapshot_parallelism", "true", ["true", "false"]
         ),
+        # Low default so the tiny tables in tests still exercise PK-prefix
+        # range splitting; the production default only splits large tables.
+        VariableSystemParameter(
+            "mysql_source_snapshot_partition_min_rows", "2", ["2", "50000"]
+        ),
         VariableSystemParameter(
             "persist_batch_columnar_format",
             "structured" if version > MzVersion.parse_mz("v0.135.0-dev") else "both_v2",
