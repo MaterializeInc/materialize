@@ -20,6 +20,7 @@ pub struct PostgresClientMetrics {
     pub(crate) connpool_acquires: IntCounter,
     pub(crate) connpool_acquire_seconds: Counter,
     pub(crate) connpool_available: prometheus::Gauge,
+    pub(crate) connpool_waiting: UIntGauge,
     pub(crate) connpool_connections_created: Counter,
     pub(crate) connpool_connection_errors: Counter,
     pub(crate) connpool_ttl_reconnections: Counter,
@@ -44,6 +45,10 @@ impl PostgresClientMetrics {
             connpool_available: registry.register(metric!(
                 name: format!("{}_postgres_connpool_available", prefix),
                 help: "available connections in the pool",
+            )),
+            connpool_waiting: registry.register(metric!(
+                name: format!("{}_postgres_connpool_waiting", prefix),
+                help: "acquires currently queued waiting for a connection",
             )),
             connpool_connections_created: registry.register(metric!(
                 name: format!("{}_postgres_connpool_connections_created", prefix),

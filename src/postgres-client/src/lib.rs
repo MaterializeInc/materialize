@@ -27,8 +27,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use async_trait::async_trait;
-use deadpool::managed::{self, Hook, HookError, HookErrorCause, Object, Pool, RecycleResult};
+use deadpool::managed::{self, Hook, HookError, Metrics, Object, Pool, RecycleResult};
 use deadpool_postgres::tokio_postgres::{self, Config};
 use deadpool_postgres::{
     ClientWrapper as DeadpoolClient, Manager as PgManager, ManagerConfig, PoolError,
@@ -152,7 +151,6 @@ impl std::fmt::Debug for Manager {
     }
 }
 
-#[async_trait]
 impl managed::Manager for Manager {
     type Type = Client;
     type Error = tokio_postgres::Error;
@@ -186,8 +184,12 @@ impl managed::Manager for Manager {
         Ok(Client { inner, isolation })
     }
 
-    async fn recycle(&self, client: &mut Client) -> RecycleResult<tokio_postgres::Error> {
-        self.inner.recycle(&mut client.inner).await
+    async fn recycle(
+        &self,
+        client: &mut Client,
+        metrics: &Metrics,
+    ) -> RecycleResult<tokio_postgres::Error> {
+        self.inner.recycle(&mut client.inner, metrics).await
     }
 
     fn detach(&self, client: &mut Client) {
@@ -238,6 +240,7 @@ impl PostgresClientConfig {
 /// A Postgres client wrapper that uses deadpool as a connection pool.
 pub struct PostgresClient {
     pool: Pool<Manager>,
+    knobs: Arc<dyn PostgresClientKnobs>,
     metrics: PostgresClientMetrics,
 }
 
@@ -285,6 +288,7 @@ impl PostgresClient {
 
         let last_ttl_connection = AtomicU64::new(0);
         let ttl_reconnections = config.metrics.connpool_ttl_reconnections.clone();
+        let knobs = Arc::clone(&config.knobs);
         let builder = Pool::builder(manager);
         let builder = match config.knobs.connection_pool_max_wait() {
             None => builder,
@@ -314,9 +318,9 @@ impl PostgresClient {
                         .is_ok()
                 {
                     ttl_reconnections.inc();
-                    return Err(HookError::Continue(Some(HookErrorCause::Message(
-                        "connection has been TTLed".to_string(),
-                    ))));
+                    // A pre_recycle error discards this connection and the
+                    // acquire proceeds with another (or a fresh) one.
+                    return Err(HookError::message("connection has been TTLed"));
                 }
 
                 Ok(())
@@ -326,6 +330,7 @@ impl PostgresClient {
 
         Ok(PostgresClient {
             pool,
+            knobs,
             metrics: config.metrics,
         })
     }
@@ -334,15 +339,34 @@ impl PostgresClient {
         self.metrics
             .connpool_available
             .set(f64::cast_lossy(status.available));
+        self.metrics
+            .connpool_waiting
+            .set(u64::cast_from(status.waiting));
         self.metrics.connpool_size.set(u64::cast_from(status.size));
         // Don't bother reporting the maximum size of the pool... we know that from config.
+    }
+
+    /// The current [`Status`] of the connection pool.
+    ///
+    /// NOTE: this briefly locks the pool.
+    pub fn status(&self) -> Status {
+        self.pool.status()
     }
 
     /// Gets connection from the pool or waits for one to become available.
     pub async fn get_connection(&self) -> Result<Connection, PoolError> {
         let start = Instant::now();
-        // note that getting the pool size here requires briefly locking the pool
-        self.status_metrics(self.pool.status());
+        // note that getting the pool status here requires briefly locking the pool
+        let status = self.pool.status();
+        // Apply knob changes to the pool cap without a restart, so an operator
+        // can grow (or shrink) the pool during an incident or ahead of planned
+        // CRDB maintenance. Shrinking is graceful: deadpool drops surplus
+        // connections as they are returned.
+        let max_size = self.knobs.connection_pool_max_size();
+        if status.max_size != max_size {
+            self.pool.resize(max_size);
+        }
+        self.status_metrics(status);
         let res = self.pool.get().await;
         if let Err(PoolError::Backend(err)) = &res {
             debug!("error establishing connection: {}", err);
@@ -354,5 +378,93 @@ impl PostgresClient {
         self.metrics.connpool_acquires.inc();
         self.status_metrics(self.pool.status());
         res
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+    use std::sync::atomic::AtomicUsize;
+
+    use mz_ore::metrics::MetricsRegistry;
+
+    use super::*;
+
+    #[derive(Debug)]
+    struct TestKnobs {
+        max_size: AtomicUsize,
+    }
+
+    impl PostgresClientKnobs for TestKnobs {
+        fn connection_pool_max_size(&self) -> usize {
+            self.max_size.load(Ordering::SeqCst)
+        }
+        fn connection_pool_max_wait(&self) -> Option<Duration> {
+            Some(Duration::from_secs(1))
+        }
+        fn connection_pool_ttl(&self) -> Duration {
+            Duration::MAX
+        }
+        fn connection_pool_ttl_stagger(&self) -> Duration {
+            Duration::MAX
+        }
+        fn connect_timeout(&self) -> Duration {
+            Duration::from_secs(5)
+        }
+        fn tcp_user_timeout(&self) -> Duration {
+            Duration::ZERO
+        }
+        fn keepalives_idle(&self) -> Duration {
+            Duration::from_secs(10)
+        }
+        fn keepalives_interval(&self) -> Duration {
+            Duration::from_secs(5)
+        }
+        fn keepalives_retries(&self) -> u32 {
+            5
+        }
+        fn statement_timeout(&self) -> Duration {
+            Duration::ZERO
+        }
+    }
+
+    /// Verifies that a changed `connection_pool_max_size` knob is applied to a
+    /// live pool on the next acquire, without reopening the client.
+    ///
+    /// Requires a running Postgres/CRDB, opted into via the same environment
+    /// variable as the persist external-storage tests. No-op otherwise so
+    /// `cargo test` works on unconfigured environments.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    async fn pool_resize_applies_on_acquire() {
+        let url = match std::env::var("MZ_PERSIST_EXTERNAL_STORAGE_TEST_POSTGRES_URL") {
+            Ok(url) => SensitiveUrl::from_str(&url).expect("valid url"),
+            Err(_) => return,
+        };
+        let knobs = Arc::new(TestKnobs {
+            max_size: AtomicUsize::new(2),
+        });
+        let dyn_knobs: Arc<dyn PostgresClientKnobs> = Arc::<TestKnobs>::clone(&knobs);
+        let config = PostgresClientConfig::new(
+            url,
+            dyn_knobs,
+            PostgresClientMetrics::new(&MetricsRegistry::new(), "mz_postgres_client_test"),
+        );
+        let client = PostgresClient::open(config).expect("open client");
+
+        let conn = client.get_connection().await.expect("connection");
+        assert_eq!(client.status().max_size, 2);
+
+        // Growing applies on the next acquire.
+        knobs.max_size.store(5, Ordering::SeqCst);
+        let conn2 = client.get_connection().await.expect("connection");
+        assert_eq!(client.status().max_size, 5);
+
+        // Shrinking applies too. Surplus connections are dropped as they are
+        // returned to the pool.
+        knobs.max_size.store(1, Ordering::SeqCst);
+        drop(conn);
+        drop(conn2);
+        let _conn3 = client.get_connection().await.expect("connection");
+        assert_eq!(client.status().max_size, 1);
     }
 }

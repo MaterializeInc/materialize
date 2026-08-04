@@ -29,6 +29,10 @@ metrics:
   help: times a connection was recycled due to ttl
   source: src/postgres-client/src/metrics.rs
   visibility: internal
+- name: '*_postgres_connpool_waiting'
+  help: acquires currently queued waiting for a connection
+  source: src/postgres-client/src/metrics.rs
+  visibility: internal
 - name: '*_request_duration_seconds_bucket'
   help: How long it takes for a request to complete in seconds.
   labels:
