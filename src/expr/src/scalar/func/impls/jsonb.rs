@@ -21,7 +21,7 @@ use mz_sql_parser::ast::{
     AstInfo, AvroSchema, ConnectionOption, ConnectionOptionName, CreateConnectionType,
     CreateSubsourceOptionName, Format, FormatSpecifier, KafkaSourceConfigOptionName,
     PgConfigOptionName, ProtobufSchema, RawClusterName, RawItemName, SourceEnvelope,
-    SourceErrorPolicy, Value, WithOptionValue,
+    SourceErrorPolicy, UnresolvedItemName, Value, WithOptionValue,
 };
 use prost::Message as _;
 use serde::{Deserialize, Serialize};
@@ -381,6 +381,27 @@ fn parse_catalog_acl_mode<'a>(a: JsonbRef<'a>) -> Result<String, EvalError> {
         .map_err(|e| EvalError::InvalidCatalogJson(e.into()))
 }
 
+/// Extracts the string form of a `WithOptionValue`, matching how the planner
+/// coerces option values. The blanket `TryFromValue<WithOptionValue<T>>` impl in
+/// `src/sql/src/plan/with_options.rs` accepts a quoted string, a bare identifier,
+/// and a 1-part unresolved item name, all yielding a string. Any other variant
+/// yields None.
+///
+/// `AstDisplay` does not re-quote bare identifiers or 1-part names, so those
+/// forms persist unquoted in `create_sql`. Matching only `Value::String` here
+/// would miss them and silently fall back to a default, so the catalog-raw
+/// parsers below route their string options through this helper.
+fn option_string<T: AstInfo>(value: &WithOptionValue<T>) -> Option<String> {
+    match value {
+        WithOptionValue::Value(Value::String(s)) => Some(s.clone()),
+        WithOptionValue::Ident(ident) => Some(ident.clone().into_string()),
+        WithOptionValue::UnresolvedItemName(UnresolvedItemName(parts)) if parts.len() == 1 => {
+            Some(parts[0].clone().into_string())
+        }
+        _ => None,
+    }
+}
+
 /// Parses a catalog `create_sql` string into a JSONB object.
 ///
 /// The returned JSONB does not fully reflect the parsed SQL and instead contains only fields
@@ -479,14 +500,24 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
                     Some(mz_sql_parser::ast::SourceEnvelope::Debezium)
                 );
 
-                if let Some(envelope) = stmt.envelope {
-                    use mz_sql_parser::ast::SourceEnvelope::*;
-                    let envelope_type = match envelope {
-                        None => "none",
-                        Debezium => "debezium",
-                        Upsert { .. } => "upsert",
-                        CdcV2 => "materialize",
-                    };
+                // Kafka defaults to ENVELOPE NONE when the clause is omitted, and
+                // the pre-MV packer reported 'none' rather than NULL for that case.
+                // Other source types carry no envelope, so theirs stays absent
+                // (SQL NULL). See the `mz_sources.envelope_type` column.
+                let envelope_type = match &stmt.envelope {
+                    Some(envelope) => {
+                        use mz_sql_parser::ast::SourceEnvelope::*;
+                        Some(match envelope {
+                            None => "none",
+                            Debezium => "debezium",
+                            Upsert { .. } => "upsert",
+                            CdcV2 => "materialize",
+                        })
+                    }
+                    None if source_type == "kafka" => Some("none"),
+                    None => None,
+                };
+                if let Some(envelope_type) = envelope_type {
                     info.insert("envelope_type", json!(envelope_type));
                 }
 
@@ -677,10 +708,7 @@ fn parse_kafka_source_details<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
         let mut topic: Option<String> = None;
         let mut group_id_prefix: Option<String> = None;
         for opt in options {
-            let string_value = match opt.value {
-                Some(WithOptionValue::Value(Value::String(s))) => Some(s),
-                _ => None,
-            };
+            let string_value = opt.value.as_ref().and_then(option_string);
             match opt.name {
                 KafkaSourceConfigOptionName::Topic => topic = string_value,
                 KafkaSourceConfigOptionName::GroupIdPrefix => group_id_prefix = string_value,
@@ -964,10 +992,11 @@ fn parse_connection_details<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
         values: &[ConnectionOption<T>],
         name: ConnectionOptionName,
     ) -> Option<String> {
-        values.iter().find_map(|o| match &o.value {
-            Some(WithOptionValue::Value(Value::String(s))) if o.name == name => Some(s.clone()),
-            _ => None,
-        })
+        values
+            .iter()
+            .find(|o| o.name == name)
+            .and_then(|o| o.value.as_ref())
+            .and_then(option_string)
     }
 
     // The catalog id of the secret a `SECRET ...` option references. Resolved
@@ -1018,7 +1047,11 @@ fn parse_connection_details<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
                 };
                 Ok(json!({
                     "auth_kind": auth_kind,
-                    "endpoint": string_option(&stmt.values, ConnectionOptionName::Endpoint),
+                    // Planning coerces an empty ENDPOINT to None (see
+                    // `src/sql/src/plan/statement/ddl/connection.rs`), so the
+                    // removed packer wrote NULL for `ENDPOINT = ''`. Match that.
+                    "endpoint": string_option(&stmt.values, ConnectionOptionName::Endpoint)
+                        .filter(|s| !s.is_empty()),
                     "region": string_option(&stmt.values, ConnectionOptionName::Region),
                     "access_key_id": string_option(&stmt.values, ConnectionOptionName::AccessKeyId),
                     "access_key_id_secret_id":
@@ -1218,6 +1251,21 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn kafka_unquoted_topic_and_prefix() {
+        // Planning accepts a bare identifier for TOPIC / GROUP ID PREFIX, and it
+        // persists unquoted in create_sql. Matching only quoted strings would
+        // drop TOPIC and error the whole mz_kafka_source_tables view.
+        let sql = "CREATE SOURCE \"materialize\".\"public\".\"k_src\" \
+             IN CLUSTER [u42] \
+             FROM KAFKA CONNECTION [u11 AS \"materialize\".\"public\".\"k_conn\"] \
+             (TOPIC = my_topic, GROUP ID PREFIX = my_prefix) FORMAT TEXT";
+        let out = super::parse_kafka_source_details(sql).expect("ok");
+        let out = as_serde(out);
+        assert_eq!(out["topic"], json!("my_topic"));
+        assert_eq!(out["group_id_prefix"], json!("my_prefix"));
+    }
+
+    #[mz_ore::test]
     fn kafka_unresolved_connection_errors() {
         // A bare-name connection reference never happens after purification,
         // but the decoder must reject it explicitly rather than silently
@@ -1275,6 +1323,16 @@ mod tests {
                 "value_format": "text",
             }),
         );
+    }
+
+    #[mz_ore::test]
+    fn export_table_kafka_omitted_envelope_is_null() {
+        // Omitting ENVELOPE persists as absent in create_sql, so this
+        // source-type-agnostic helper reports null. The mz_kafka_source_tables
+        // view is responsible for defaulting kafka's null envelope to 'none'.
+        let sql = table_from_source_sql("\"topic\"", " FORMAT TEXT");
+        let out = super::parse_source_export_details(&sql).expect("ok");
+        assert_eq!(as_serde(out)["envelope_type"], serde_json::Value::Null);
     }
 
     #[mz_ore::test]
@@ -1531,6 +1589,42 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn connection_kafka_unquoted_progress_topic() {
+        // A bare identifier PROGRESS TOPIC persists unquoted in create_sql. The
+        // helper must surface it, else the view substitutes the default topic.
+        let sql = "CREATE CONNECTION \"materialize\".\"public\".\"c\" TO KAFKA \
+             (BROKER = 'localhost:9092', PROGRESS TOPIC = my_topic, \
+              SECURITY PROTOCOL = plaintext)";
+        let out = super::parse_connection_details(sql).expect("ok");
+        assert_eq!(as_serde(out)["progress_topic"], json!("my_topic"));
+    }
+
+    #[mz_ore::test]
+    fn connection_aws_unquoted_option_values() {
+        // Planning accepts bare identifiers for these options and persists them
+        // unquoted. The helper must surface them, not fall back to NULL.
+        let sql = "CREATE CONNECTION \"materialize\".\"public\".\"c\" TO AWS \
+             (ENDPOINT = localhost, REGION = useast1, \
+              ASSUME ROLE ARN 'arn:aws:iam::123:role/mz', \
+              ASSUME ROLE SESSION NAME = mysession)";
+        let out = super::parse_connection_details(sql).expect("ok");
+        let out = as_serde(out);
+        assert_eq!(out["endpoint"], json!("localhost"));
+        assert_eq!(out["region"], json!("useast1"));
+        assert_eq!(out["assume_role_session_name"], json!("mysession"));
+    }
+
+    #[mz_ore::test]
+    fn connection_aws_empty_endpoint_is_null() {
+        // Planning coerces ENDPOINT = '' to None, so the packer wrote NULL. The
+        // view must match, not report an empty string.
+        let sql = "CREATE CONNECTION \"materialize\".\"public\".\"c\" TO AWS \
+             (ENDPOINT = '', ASSUME ROLE ARN 'arn:aws:iam::123:role/mz')";
+        let out = super::parse_connection_details(sql).expect("ok");
+        assert_eq!(as_serde(out)["endpoint"], serde_json::Value::Null);
+    }
+
+    #[mz_ore::test]
     fn connection_other_type_returns_null_jsonb() {
         // A connection type without a detail view (postgres) yields null.
         let sql = "CREATE CONNECTION \"materialize\".\"public\".\"c\" TO POSTGRES \
@@ -1545,5 +1639,39 @@ mod tests {
         let sql = "CREATE VIEW v AS SELECT 1";
         let out = super::parse_connection_details(sql).expect("ok");
         assert_eq!(as_serde(out), serde_json::Value::Null);
+    }
+
+    // --- parse_catalog_create_sql envelope_type ------------------------------
+
+    #[mz_ore::test]
+    fn catalog_kafka_source_omitted_envelope_defaults_none() {
+        // Kafka defaults to ENVELOPE NONE when the clause is omitted, and the
+        // pre-MV path reported 'none', not NULL.
+        let sql = "CREATE SOURCE \"materialize\".\"public\".\"k\" \
+             IN CLUSTER [u42] \
+             FROM KAFKA CONNECTION [u11 AS \"materialize\".\"public\".\"k_conn\"] \
+             (TOPIC 'test') FORMAT TEXT";
+        let out = super::parse_catalog_create_sql(sql).expect("ok");
+        assert_eq!(as_serde(out)["envelope_type"], json!("none"));
+    }
+
+    #[mz_ore::test]
+    fn catalog_kafka_source_explicit_envelope() {
+        let sql = "CREATE SOURCE \"materialize\".\"public\".\"k\" \
+             IN CLUSTER [u42] \
+             FROM KAFKA CONNECTION [u11 AS \"materialize\".\"public\".\"k_conn\"] \
+             (TOPIC 'test') FORMAT BYTES ENVELOPE UPSERT";
+        let out = super::parse_catalog_create_sql(sql).expect("ok");
+        assert_eq!(as_serde(out)["envelope_type"], json!("upsert"));
+    }
+
+    #[mz_ore::test]
+    fn catalog_non_kafka_source_omits_envelope_type() {
+        // Non-kafka sources carry no envelope, so envelope_type stays absent
+        // (SQL NULL), not 'none'.
+        let sql = "CREATE SOURCE \"materialize\".\"public\".\"lg\" \
+             IN CLUSTER [u42] FROM LOAD GENERATOR COUNTER";
+        let out = super::parse_catalog_create_sql(sql).expect("ok");
+        assert_eq!(as_serde(out).get("envelope_type"), None);
     }
 }

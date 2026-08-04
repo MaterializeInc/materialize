@@ -5415,7 +5415,7 @@ mz_internal.mz_kafka_source_tables:
     path %0:
       after %1:
         Project: #2, #1, #3..=#6
-        Map: ((#2{details} -> "external_reference") ->> 0), (#2{details} ->> "envelope_type"), (#2{details} ->> "key_format"), (#2{details} ->> "value_format")
+        Map: ((#2{details} -> "external_reference") ->> 0), coalesce((#2{details} ->> "envelope_type"), "none"), (#2{details} ->> "key_format"), (#2{details} ->> "value_format")
       after %2:
         Project: #2..=#6
         Filter: (#10{type} = "kafka")
@@ -5429,7 +5429,7 @@ mz_internal.mz_kafka_source_tables:
     path %2:
       after %1:
         Project: #1, #3..=#6
-        Map: ((#2{details} -> "external_reference") ->> 0), (#2{details} ->> "envelope_type"), (#2{details} ->> "key_format"), (#2{details} ->> "value_format")
+        Map: ((#2{details} -> "external_reference") ->> 0), coalesce((#2{details} ->> "envelope_type"), "none"), (#2{details} ->> "key_format"), (#2{details} ->> "value_format")
       after %0:
         Project: #5, #1..=#4
         Map: parse_catalog_id(((#0{data} -> "key") -> "gid"))

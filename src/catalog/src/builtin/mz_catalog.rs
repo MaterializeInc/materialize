@@ -324,7 +324,9 @@ FROM
     ) AS d(details)
 WHERE
     r.data->>'kind' = 'Item' AND
-    details IS NOT NULL AND
+    -- The connection_type filter selects the kind. A non-matching row yields a
+    -- NULL connection_type and is dropped here, so no `details IS NOT NULL` is
+    -- needed (parse_connection_details returns jsonb null, which passes it).
     mz_internal.parse_catalog_create_sql(
         r.data->'value'->'definition'->'V1'->>'create_sql')->>'connection_type' = 'kafka'",
         is_retained_metrics_object: false,
@@ -1200,7 +1202,9 @@ FROM
     ) AS d(details)
 WHERE
     r.data->>'kind' = 'Item' AND
-    details IS NOT NULL AND
+    -- The connection_type filter selects the kind. A non-matching row yields a
+    -- NULL connection_type and is dropped here, so no `details IS NOT NULL` is
+    -- needed (parse_connection_details returns jsonb null, which passes it).
     mz_internal.parse_catalog_create_sql(
         r.data->'value'->'definition'->'V1'->>'create_sql')->>'connection_type' = 'ssh-tunnel'",
         is_retained_metrics_object: false,

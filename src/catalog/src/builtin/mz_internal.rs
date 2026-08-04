@@ -321,7 +321,7 @@ pub static MZ_KAFKA_SOURCE_TABLES: LazyLock<BuiltinMaterializedView> = LazyLock:
         desc: RelationDesc::builder()
             .with_column("id", SqlScalarType::String.nullable(false))
             .with_column("topic", SqlScalarType::String.nullable(false))
-            .with_column("envelope_type", SqlScalarType::String.nullable(true))
+            .with_column("envelope_type", SqlScalarType::String.nullable(false))
             .with_column("key_format", SqlScalarType::String.nullable(true))
             .with_column("value_format", SqlScalarType::String.nullable(true))
             .with_key(vec![0])
@@ -334,7 +334,7 @@ pub static MZ_KAFKA_SOURCE_TABLES: LazyLock<BuiltinMaterializedView> = LazyLock:
             ("topic", "The topic being ingested."),
             (
                 "envelope_type",
-                "The envelope type: `none`, `upsert`, or `debezium`. `NULL` for other source types.",
+                "The envelope type: `none`, `upsert`, or `debezium`. Defaults to `none` when the source table omits an explicit envelope.",
             ),
             (
                 "key_format",
@@ -361,7 +361,10 @@ WITH (
 SELECT
     mz_internal.parse_catalog_id(r.data->'key'->'gid') AS id,
     details->'external_reference'->>0 AS topic,
-    details->>'envelope_type' AS envelope_type,
+    -- Kafka defaults to ENVELOPE NONE when the clause is omitted. The parser
+    -- helper is source-type agnostic and reports NULL for that case, so default
+    -- to 'none' here, where the join has already scoped rows to kafka.
+    COALESCE(details->>'envelope_type', 'none') AS envelope_type,
     details->>'key_format' AS key_format,
     details->>'value_format' AS value_format
 FROM
@@ -2723,7 +2726,9 @@ FROM
     ) AS d(details)
 WHERE
     r.data->>'kind' = 'Item' AND
-    details IS NOT NULL AND
+    -- The connection_type filter selects the kind. A non-matching row yields a
+    -- NULL connection_type and is dropped here, so no `details IS NOT NULL` is
+    -- needed (parse_connection_details returns jsonb null, which passes it).
     mz_internal.parse_catalog_create_sql(
         r.data->'value'->'definition'->'V1'->>'create_sql')->>'connection_type' = 'aws' AND
     -- Drop assume-role connections when the AWS context is absent, matching the
