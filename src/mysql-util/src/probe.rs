@@ -251,8 +251,9 @@ where
     Ok(estimate)
 }
 
+/// The live MySQL harness here is shared with [`crate::partition`]'s tests.
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::collections::BTreeSet;
 
     use mz_ore::cast::CastFrom;
@@ -1029,7 +1030,7 @@ mod tests {
     /// Connects to the server named by `MZ_TEST_MYSQL_URL`, or `None` to skip
     /// the test when it is unset. Skipping is a local-only convenience, CI
     /// must always provide the URL.
-    async fn connect() -> Result<Option<mysql_async::Conn>, anyhow::Error> {
+    pub(crate) async fn connect() -> Result<Option<mysql_async::Conn>, anyhow::Error> {
         let Ok(url) = std::env::var("MZ_TEST_MYSQL_URL") else {
             if mz_ore::env::is_var_truthy("CI") {
                 panic!("CI is supposed to run this test but something has gone wrong!");
@@ -1057,7 +1058,7 @@ mod tests {
     /// Recreates scratch database `db` holding one table `t` whose string
     /// primary key `id` is pinned to the given `collation`, containing
     /// `keys`, with fresh statistics. Returns a ref for [`KeyProber::new`].
-    async fn setup_table<'a>(
+    pub(crate) async fn setup_table<'a>(
         conn: &mut mysql_async::Conn,
         db: &'a str,
         collation: &str,
@@ -1073,11 +1074,20 @@ mod tests {
              COLLATE {collation} PRIMARY KEY NOT NULL)"
         ))
         .await?;
-        conn.exec_batch(
-            format!("INSERT INTO {db}.t VALUES (?)"),
-            keys.iter().map(|id| (id.as_ref(),)),
-        )
-        .await?;
+
+        for chunk in keys.chunks(1000) {
+            conn.exec_drop(
+                format!(
+                    "INSERT INTO {db}.t VALUES {}",
+                    vec!["(?)"; chunk.len()].join(",")
+                ),
+                chunk
+                    .iter()
+                    .map(|id| id.as_ref().into())
+                    .collect::<Vec<mysql_async::Value>>(),
+            )
+            .await?;
+        }
         #[allow(clippy::disallowed_methods)]
         conn.query_drop(format!("ANALYZE TABLE {db}.t")).await?;
         Ok(QualifiedTableRef {
@@ -1087,7 +1097,10 @@ mod tests {
     }
 
     /// Drops the scratch database `db`.
-    async fn drop_db(conn: &mut mysql_async::Conn, db: &str) -> Result<(), anyhow::Error> {
+    pub(crate) async fn drop_db(
+        conn: &mut mysql_async::Conn,
+        db: &str,
+    ) -> Result<(), anyhow::Error> {
         #[allow(clippy::disallowed_methods)]
         conn.query_drop(format!("DROP DATABASE {db}")).await?;
         Ok(())
