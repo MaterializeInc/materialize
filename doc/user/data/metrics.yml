@@ -1012,17 +1012,17 @@ metrics:
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_result_sort_seconds_bucket
-  help: Time sorting intermediate results during peek collection.
+  help: Time sorting intermediate peek results down to the rows the finishing can need, summed over the activations an index peek took and reported once it is done. Peeks that are cancelled or dropped before finishing report nothing.
   labels:
   - le
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_result_sort_seconds_count
-  help: Time sorting intermediate results during peek collection.
+  help: Time sorting intermediate peek results down to the rows the finishing can need, summed over the activations an index peek took and reported once it is done. Peeks that are cancelled or dropped before finishing report nothing.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_result_sort_seconds_sum
-  help: Time sorting intermediate results during peek collection.
+  help: Time sorting intermediate peek results down to the rows the finishing can need, summed over the activations an index peek took and reported once it is done. Peeks that are cancelled or dropped before finishing report nothing.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_row_collection_seconds_bucket
@@ -1054,45 +1054,45 @@ metrics:
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_row_iteration_seconds_bucket
-  help: Time iterating rows and evaluating MFP.
+  help: Time iterating rows and evaluating MFP, summed over the activations an index peek took and reported once it is done. Peeks that are cancelled or dropped before finishing report nothing.
   labels:
   - le
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_row_iteration_seconds_count
-  help: Time iterating rows and evaluating MFP.
+  help: Time iterating rows and evaluating MFP, summed over the activations an index peek took and reported once it is done. Peeks that are cancelled or dropped before finishing report nothing.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_row_iteration_seconds_sum
-  help: Time iterating rows and evaluating MFP.
+  help: Time iterating rows and evaluating MFP, summed over the activations an index peek took and reported once it is done. Peeks that are cancelled or dropped before finishing report nothing.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_seek_fulfillment_seconds_bucket
-  help: Time in seek_fulfillment method including frontier checks and data collection.
+  help: Worker time spent in seek_fulfillment for an index peek, including every not-yet-ready frontier check, summed over activations and reported once the peek is done.
   labels:
   - le
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_seek_fulfillment_seconds_count
-  help: Time in seek_fulfillment method including frontier checks and data collection.
+  help: Worker time spent in seek_fulfillment for an index peek, including every not-yet-ready frontier check, summed over activations and reported once the peek is done.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_seek_fulfillment_seconds_sum
-  help: Time in seek_fulfillment method including frontier checks and data collection.
+  help: Worker time spent in seek_fulfillment for an index peek, including every not-yet-ready frontier check, summed over activations and reported once the peek is done.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_total_seconds_bucket
-  help: Total time processing index peeks, from process_peek entry to response. Excluding peeks that use the peek response stash.
+  help: Worker time spent serving an index peek, summed over the activations it took and reported once it is done. Peeks that are cancelled or dropped before finishing report nothing.
   labels:
   - le
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_total_seconds_count
-  help: Total time processing index peeks, from process_peek entry to response. Excluding peeks that use the peek response stash.
+  help: Worker time spent serving an index peek, summed over the activations it took and reported once it is done. Peeks that are cancelled or dropped before finishing report nothing.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_total_seconds_sum
-  help: Total time processing index peeks, from process_peek entry to response. Excluding peeks that use the peek response stash.
+  help: Worker time spent serving an index peek, summed over the activations it took and reported once it is done. Peeks that are cancelled or dropped before finishing report nothing.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_kafka_partition_offset_max
@@ -1533,6 +1533,20 @@ metrics:
 - name: mz_parse_seconds_sum
   help: The time it takes to parse a SQL statement. (Works for both Simple Queries and the Extended Query protocol.)
   source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_peek_processing_seconds_bucket
+  help: Time a worker spent serving pending peeks in one activation, before returning to scheduling dataflows and handling commands. This is the latency the peek yielding budgets exist to bound. Only recorded for activations that had at least one pending peek.
+  labels:
+  - le
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_peek_processing_seconds_count
+  help: Time a worker spent serving pending peeks in one activation, before returning to scheduling dataflows and handling commands. This is the latency the peek yielding budgets exist to bound. Only recorded for activations that had at least one pending peek.
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_peek_processing_seconds_sum
+  help: Time a worker spent serving pending peeks in one activation, before returning to scheduling dataflows and handling commands. This is the latency the peek yielding budgets exist to bound. Only recorded for activations that had at least one pending peek.
+  source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_persist_*_bytes
   help: total encoded size of * batches written

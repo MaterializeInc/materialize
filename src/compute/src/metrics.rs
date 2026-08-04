@@ -61,7 +61,8 @@ pub struct ComputeMetrics {
     stashed_peek_seconds: HistogramVec,
     handle_command_duration_seconds: HistogramVec,
 
-    // Index peek timing phases (per-cluster, no worker label)
+    // Peek timing (per-cluster, no worker label)
+    peek_processing_seconds: Histogram,
     index_peek_total_seconds: Histogram,
     index_peek_seek_fulfillment_seconds: Histogram,
     index_peek_error_scan_seconds: Histogram,
@@ -215,14 +216,19 @@ impl ComputeMetrics {
                 var_labels: ["worker_id", "command_type"],
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             ), role)),
+            peek_processing_seconds: registry.register(with_role(metric!(
+                name: "mz_peek_processing_seconds",
+                help: "Time a worker spent serving pending peeks in one activation, before returning to scheduling dataflows and handling commands. This is the latency the peek yielding budgets exist to bound. Only recorded for activations that had at least one pending peek.",
+                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
+            ), role)),
             index_peek_total_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_total_seconds",
-                help: "Total time processing index peeks, from process_peek entry to response. Excluding peeks that use the peek response stash.",
+                help: "Worker time spent serving an index peek, summed over the activations it took and reported once it is done. Peeks that are cancelled or dropped before finishing report nothing.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             ), role)),
             index_peek_seek_fulfillment_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_seek_fulfillment_seconds",
-                help: "Time in seek_fulfillment method including frontier checks and data collection.",
+                help: "Worker time spent in seek_fulfillment for an index peek, including every not-yet-ready frontier check, summed over activations and reported once the peek is done.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             ), role)),
             index_peek_error_scan_seconds: registry.register(with_role(metric!(
@@ -237,7 +243,7 @@ impl ComputeMetrics {
             ), role)),
             index_peek_row_iteration_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_row_iteration_seconds",
-                help: "Time iterating rows and evaluating MFP.",
+                help: "Time iterating rows and evaluating MFP, summed over the activations an index peek took and reported once it is done. Peeks that are cancelled or dropped before finishing report nothing.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             ), role)),
             index_peek_row_iteration_rows: registry.register(with_role(metric!(
@@ -247,7 +253,7 @@ impl ComputeMetrics {
             ), role)),
             index_peek_result_sort_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_result_sort_seconds",
-                help: "Time sorting intermediate results during peek collection.",
+                help: "Time sorting intermediate peek results down to the rows the finishing can need, summed over the activations an index peek took and reported once it is done. Peeks that are cancelled or dropped before finishing report nothing.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             ), role)),
             index_peek_result_sort_rows: registry.register(with_role(metric!(
@@ -310,6 +316,7 @@ impl ComputeMetrics {
             self.handle_command_duration_seconds
                 .with_label_values(&[worker.as_ref(), typ])
         });
+        let peek_processing_seconds = self.peek_processing_seconds.clone();
         let index_peek_total_seconds = self.index_peek_total_seconds.clone();
         let index_peek_seek_fulfillment_seconds = self.index_peek_seek_fulfillment_seconds.clone();
         let index_peek_error_scan_seconds = self.index_peek_error_scan_seconds.clone();
@@ -339,6 +346,7 @@ impl ComputeMetrics {
             persist_peek_seconds,
             stashed_peek_seconds,
             handle_command_duration_seconds,
+            peek_processing_seconds,
             index_peek_total_seconds,
             index_peek_seek_fulfillment_seconds,
             index_peek_error_scan_seconds,
@@ -378,6 +386,8 @@ pub struct WorkerMetrics {
     pub(crate) stashed_peek_seconds: Histogram,
     /// Histogram of command handling durations.
     pub(crate) handle_command_duration_seconds: CommandMetrics<Histogram>,
+    /// Histogram of how long one pass over the pending peeks took.
+    pub(crate) peek_processing_seconds: Histogram,
     /// Histogram of total index peek durations.
     pub(crate) index_peek_total_seconds: Histogram,
     /// Histogram of index peek seek_fulfillment durations.

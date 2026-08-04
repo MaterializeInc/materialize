@@ -49,7 +49,15 @@ DEFAULT_MZ_VOLUMES = [
 # a new feature causes benchmarks to become flaky, consider that this can also
 # impact customers' experience and try to find a solution other than disabling
 # the feature here!
-ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS = {}
+ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS = {
+    # Benchmarks measure against an older Materialize image that does not know
+    # these parameters and therefore ignores them, so a non-production value
+    # here would only slow down one side of the comparison. Pin both to their
+    # production defaults, so peek-heavy scenarios measure the same thing on
+    # both sides.
+    "peek_yielding": "work:100000,time:10",
+    "peek_yielding_total": "work:1000000,time:100",
+}
 
 
 def sanitizer_enabled() -> bool:
@@ -360,6 +368,27 @@ def get_variable_system_parameters(
         VariableSystemParameter("persist_stats_audit_panic", "true", ["true", "false"]),
         VariableSystemParameter(
             "persist_encoding_enable_dictionary", "true", ["true", "false"]
+        ),
+        # A work budget well below production, so that any index peek over more
+        # than ~1000 rows resumes at least once and CI covers the resumable scan
+        # path rather than only the completes-in-one-slice path. Peeks over tiny
+        # relations, which is most of sqllogictest, still finish in one slice;
+        # that case is covered directly by
+        # test/clusterd-test-driver/scripts/peek_yielding.spec.
+        #
+        # Kept within an order of magnitude of production on purpose. The value
+        # reaches every mzcompose composition, and a very small budget buys
+        # little extra coverage while multiplying the timely steps a large peek
+        # needs. The randomized runs go lower.
+        VariableSystemParameter(
+            "peek_yielding",
+            "work:1024,time:10",
+            ["work:16,time:10", "work:1024,time:10", "work:100000,time:10"],
+        ),
+        VariableSystemParameter(
+            "peek_yielding_total",
+            "work:8192,time:100",
+            ["work:128,time:100", "work:8192,time:100", "work:1000000,time:100"],
         ),
         VariableSystemParameter(
             "persist_fast_path_limit",

@@ -2876,6 +2876,18 @@ class FlipFlagsAction(Action):
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["enable_eager_delta_joins"] = BOOLEAN_FLAG_VALUES
+        # Small work budgets force index peeks to yield and resume, which is
+        # where the interesting state lives.
+        self.flags_with_values["peek_yielding"] = [
+            "'work:16,time:10'",
+            "'work:64,time:10'",
+            "'work:100000,time:10'",
+        ]
+        self.flags_with_values["peek_yielding_total"] = [
+            "'work:128,time:100'",
+            "'work:1024,time:100'",
+            "'work:1000000,time:100'",
+        ]
         self.flags_with_values["enable_public_metrics_endpoint"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["persist_batch_structured_key_lower_len"] = [
             "0",

@@ -441,6 +441,9 @@ impl<'w> Worker<'w> {
         // The last time we did periodic maintenance.
         let mut last_maintenance = Instant::now();
 
+        // Whether a peek yielded with scanning work left to do.
+        let mut peek_work_pending = false;
+
         // Commence normal operation.
         loop {
             // Get the maintenance interval, default to zero if we don't have a compute state.
@@ -472,6 +475,16 @@ impl<'w> Worker<'w> {
                 sleep_duration = Some(next_maintenance.saturating_duration_since(now))
             };
 
+            // A yielded peek is work we owe ourselves, and nothing outside this
+            // loop will activate the worker on its behalf. Parking would stall
+            // it until some unrelated event happens to wake us, so we step
+            // without parking instead.
+            let sleep_duration = if peek_work_pending {
+                Some(Duration::ZERO)
+            } else {
+                sleep_duration
+            };
+
             // Step the timely worker, recording the time taken.
             let timer = self.metrics.timely_step_duration_seconds.start_timer();
             self.timely_worker.step_or_park(sleep_duration);
@@ -479,8 +492,9 @@ impl<'w> Worker<'w> {
 
             self.handle_pending_commands()?;
 
+            peek_work_pending = false;
             if let Some(mut compute_state) = self.activate_compute() {
-                compute_state.process_peeks();
+                peek_work_pending = compute_state.process_peeks();
                 compute_state.process_subscribes();
                 compute_state.process_copy_tos();
             }
