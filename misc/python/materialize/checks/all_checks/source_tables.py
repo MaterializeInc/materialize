@@ -16,21 +16,13 @@ from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.sql_server import SqlServer
 
 
-class TableFromSourceBase(Check):
-    def generic_setup(self) -> str:
-        return dedent("""
-                $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-                ALTER SYSTEM SET enable_create_table_from_source = true
-                """)
-
-
 @externally_idempotent(False)
-class TableFromPgSource(TableFromSourceBase):
+class TableFromPgSource(Check):
     suffix = "tbl_from_pg_source"
 
     def initialize(self) -> Testdrive:
 
-        return Testdrive(self.generic_setup() + dedent(f"""
+        return Testdrive(dedent(f"""
                 > CREATE SECRET pgpass_{self.suffix} AS 'postgres'
 
                 > CREATE CONNECTION pg_conn_{self.suffix} TO POSTGRES (
@@ -119,11 +111,11 @@ class TableFromPgSource(TableFromSourceBase):
 
 
 @externally_idempotent(False)
-class TableFromMySqlSource(TableFromSourceBase):
+class TableFromMySqlSource(Check):
     suffix = "tbl_from_mysql_source"
 
     def initialize(self) -> Testdrive:
-        return Testdrive(self.generic_setup() + dedent(f"""
+        return Testdrive(dedent(f"""
                 $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
 
                 > CREATE SECRET mysqlpass_{self.suffix} AS 'p@ssw0rd';
@@ -212,7 +204,7 @@ class TableFromMySqlSource(TableFromSourceBase):
 
 
 @externally_idempotent(False)
-class TableFromSqlServerSource(TableFromSourceBase):
+class TableFromSqlServerSource(Check):
     suffix = "tbl_from_sql_server_source"
 
     def _can_run(self, e: Executor) -> bool:
@@ -222,7 +214,7 @@ class TableFromSqlServerSource(TableFromSourceBase):
         )
 
     def initialize(self) -> Testdrive:
-        return Testdrive(self.generic_setup() + dedent(f"""
+        return Testdrive(dedent(f"""
                 > CREATE SECRET sql_serverpass_{self.suffix} AS '{SqlServer.DEFAULT_SA_PASSWORD}';
 
                 > CREATE CONNECTION sql_server_conn_{self.suffix} TO SQL SERVER (
@@ -310,11 +302,11 @@ class TableFromSqlServerSource(TableFromSourceBase):
            """))
 
 
-class TableFromLoadGenSource(TableFromSourceBase):
+class TableFromLoadGenSource(Check):
     suffix = "tbl_from_lg_source"
 
     def initialize(self) -> Testdrive:
-        return Testdrive(self.generic_setup() + dedent(f"""
+        return Testdrive(dedent(f"""
                 > CREATE SOURCE auction_house_{self.suffix} FROM LOAD GENERATOR AUCTION (AS OF 300, UP TO 301);
                 """))
 
