@@ -177,9 +177,11 @@ class SourceTableChurn(Action):
             raise
         if outcome != Outcome.COMMITTED:
             return outcome
+        # Also bail on stop: this poll can outlast the executor's join
+        # ladder and would read as a stuck thread.
         deadline = time.monotonic() + 120.0
         validated = False
-        while time.monotonic() < deadline:
+        while time.monotonic() < deadline and not self.scenario.ctx.stop.is_set():
             try:
                 rows = self.client.query(
                     f"SELECT coalesce(sum(balance), 0) FROM {name}", timeout=30
@@ -674,10 +676,13 @@ class MySqlCdcBank(CdcBank):
             "CREATE TABLE transfers (worker int, seq bigint, src int, dst int,"
             " amount bigint)"
         )
-        for account in range(self.accounts):
-            cur.execute(
-                f"INSERT INTO accounts VALUES ({account}, {BALANCE_PER_ACCOUNT})"
+        # Batched so the large complexity does not pay one round trip per row.
+        for start in range(0, self.accounts, 1000):
+            values = ", ".join(
+                f"({account}, {BALANCE_PER_ACCOUNT})"
+                for account in range(start, min(start + 1000, self.accounts))
             )
+            cur.execute(f"INSERT INTO accounts VALUES {values}")
         conn.commit()
         conn.close()
 
@@ -735,9 +740,15 @@ class SqlServerCdcBank(CdcBank):
     def setup_upstream(self) -> None:
         admin = self._connect("master", autocommit=True)
         cur = admin.cursor()
-        initial_accounts = ", ".join(
-            f"({account}, {BALANCE_PER_ACCOUNT})" for account in range(self.accounts)
-        )
+        # SQL Server caps a VALUES constructor at 1000 rows.
+        inserts = [
+            "INSERT INTO accounts VALUES "
+            + ", ".join(
+                f"({account}, {BALANCE_PER_ACCOUNT})"
+                for account in range(start, min(start + 1000, self.accounts))
+            )
+            for start in range(0, self.accounts, 1000)
+        ]
         for sql in [
             "CREATE DATABASE bank",
             "USE bank",
@@ -746,7 +757,7 @@ class SqlServerCdcBank(CdcBank):
             "CREATE TABLE accounts (id int PRIMARY KEY, balance bigint NOT NULL)",
             "CREATE TABLE transfers (worker int NOT NULL, seq bigint NOT NULL,"
             " src int, dst int, amount bigint, PRIMARY KEY (worker, seq))",
-            f"INSERT INTO accounts VALUES {initial_accounts}",
+            *inserts,
             "EXEC sys.sp_cdc_enable_table @source_schema = 'dbo',"
             " @source_name = 'accounts', @role_name = 'SA',"
             " @supports_net_changes = 0",

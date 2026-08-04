@@ -46,6 +46,7 @@ from materialize.invariants.framework import (
     wait_until,
 )
 from materialize.invariants.mz import MzClient, UnexpectedQueryError
+from materialize.invariants.scenarios.sink_roundtrip import BALANCES_DEF
 from materialize.invariants.scenarios.table_bank import LedgerTransfer
 
 TOPIC = "invariants-loopback"
@@ -129,8 +130,7 @@ class AvroLoopback(Scenario):
             # HAVING drops zero balances so accounts also get deleted and
             # re-created, exercising Debezium deletes through the loop.
             "CREATE MATERIALIZED VIEW balances IN CLUSTER compute AS"
-            " SELECT account, sum(amount) AS balance FROM ledger"
-            " GROUP BY account HAVING sum(amount) <> 0",
+            f" {BALANCES_DEF}",
             "CREATE CONNECTION kafka_sink_conn TO KAFKA"
             " (BROKER 'toxiproxy:9192', SECURITY PROTOCOL PLAINTEXT)",
             "CREATE CONNECTION kafka_src_conn TO KAFKA"

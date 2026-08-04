@@ -55,6 +55,14 @@ ROWS_PER_TRANSFER = 2
 # Registry keys per worker, each owned and driven by exactly one thread.
 REGISTRY_KEYS = 8
 
+# The conserved grand total. One shared definition: the checked `total` MV,
+# its in-place replacement, and both blue/green swap MVs must be identical
+# for the checkers to stay exact through every churn.
+TOTAL_DEF = (
+    "SELECT (SELECT coalesce(sum(balance), 0) FROM accounts)"
+    " + (SELECT coalesce(sum(amount), 0) FROM ledger) AS total"
+)
+
 
 class UpdateTransfer(Action):
     """Move money between two accounts in one atomic UPDATE statement."""
@@ -310,15 +318,12 @@ class ReplacementChurn(Action):
 
     name = "replacement"
 
-    # Must match the definition of the `total` MV exactly.
-    TOTAL_DEF = (
-        "SELECT (SELECT coalesce(sum(balance), 0) FROM accounts)"
-        " + (SELECT coalesce(sum(amount), 0) FROM ledger) AS total"
-    )
-
-    def __init__(self, rng: random.Random, client: MzClient) -> None:
+    def __init__(
+        self, rng: random.Random, client: MzClient, ctx: ScenarioContext
+    ) -> None:
         super().__init__(rng)
         self.client = client
+        self.ctx = ctx
         self.next_at = time.monotonic() + 20.0
         self.supported = True
 
@@ -337,8 +342,8 @@ class ReplacementChurn(Action):
         try:
             outcome = self.client.write(
                 "CREATE REPLACEMENT MATERIALIZED VIEW total_repl FOR total"
-                f" IN CLUSTER compute WITH (RETAIN HISTORY = FOR '600s')"
-                f" AS {self.TOTAL_DEF}"
+                " IN CLUSTER compute WITH (RETAIN HISTORY = FOR '600s')"
+                f" AS {TOTAL_DEF}"
             )
         except UnexpectedQueryError as e:
             # Not available on this version, e.g. the pre-upgrade half of an
@@ -349,9 +354,10 @@ class ReplacementChurn(Action):
         if outcome != Outcome.COMMITTED:
             return outcome
         # Apply only once the replacement hydrated on every replica, per the
-        # documented workflow.
+        # documented workflow. Also bail on stop: this poll can outlast the
+        # executor's join ladder and would read as a stuck thread.
         deadline = time.monotonic() + 90.0
-        while time.monotonic() < deadline:
+        while time.monotonic() < deadline and not self.ctx.stop.is_set():
             try:
                 rows = self.client.query(
                     "SELECT bool_and(h.hydrated)"
@@ -363,10 +369,11 @@ class ReplacementChurn(Action):
                 return Outcome.UNKNOWN
             if rows and rows[0][0]:
                 break
-            time.sleep(1.0)
+            self.ctx.stop.wait(1.0)
         else:
-            # Hydration did not finish, e.g. the compute leg is cut. Leave
-            # the replacement for the next cycle's drop.
+            # Hydration did not finish, e.g. the compute leg is cut or the
+            # run is shutting down. Leave the replacement for the next
+            # cycle's drop.
             return Outcome.UNKNOWN
         return self.client.write(
             "ALTER MATERIALIZED VIEW total APPLY REPLACEMENT total_repl"
@@ -408,9 +415,15 @@ class DdlChurn(Action):
             outcome = self.client.write(
                 f"DROP MATERIALIZED VIEW IF EXISTS churn_mv_{self.worker}"
             )
-            for name in self.maybe_alive:
-                self.client.write(f"DROP INDEX IF EXISTS {name}")
-            self.maybe_alive = []
+            # Keep names whose drop outcome is uncertain: an UNKNOWN drop may
+            # not have applied, and untracking such an index would leak its
+            # dataflow for the rest of the run.
+            self.maybe_alive = [
+                name
+                for name in self.maybe_alive
+                if self.client.write(f"DROP INDEX IF EXISTS {name}")
+                != Outcome.COMMITTED
+            ]
             self.present = False
         else:
             outcome = self.client.write(
@@ -550,8 +563,17 @@ class BankTotalPeek(PeekChecker):
                 f"total mismatch via {query!r}: expected {expected_rows}x"
                 f" {self.scenario.total}, got {rows}"
             )
-        mz_now = self.client.query("SELECT mz_now()::text")
-        self.scenario.recent_ts.advance(int(mz_now[0][0]))
+        # Sample the watermark that feeds the history probe. `SELECT mz_now()`
+        # has no inputs, and for such a constant query the coordinator answers
+        # at Timestamp::MAX under serializable and bounded staleness, so only
+        # strict serializable yields a usable time. The watermark never goes
+        # back down, so a single MAX sample would point every later probe at
+        # the end of time.
+        # TODO: Reenable for all isolation levels when CPU-197 is fixed.
+        if isolation == "strict serializable":
+            self.scenario.recent_ts.advance(
+                int(self.client.query("SELECT mz_now()::text")[0][0])
+            )
         self.validations += 1
 
 
@@ -986,13 +1008,6 @@ class TableBank(Scenario):
             for key in range(REGISTRY_KEYS)
         }
 
-    # The same definition in both blue/green schemas: the checked object of
-    # the ALTER SCHEMA SWAP cutover.
-    SWAP_TOTAL_DEF = (
-        "SELECT (SELECT coalesce(sum(balance), 0) FROM accounts)"
-        " + (SELECT coalesce(sum(amount), 0) FROM ledger) AS total"
-    )
-
     def setup(self) -> None:
         client = MzClient(self.ctx, "setup")
         for sql in [
@@ -1007,9 +1022,7 @@ class TableBank(Scenario):
             # RETAIN HISTORY keeps recent timestamps readable so the durable
             # subscribe checker can resume where it left off.
             "CREATE MATERIALIZED VIEW total IN CLUSTER compute"
-            " WITH (RETAIN HISTORY = FOR '600s') AS"
-            " SELECT (SELECT coalesce(sum(balance), 0) FROM accounts)"
-            " + (SELECT coalesce(sum(amount), 0) FROM ledger) AS total",
+            f" WITH (RETAIN HISTORY = FOR '600s') AS {TOTAL_DEF}",
             "CREATE INDEX total_idx IN CLUSTER compute ON total (total)",
             "CREATE MATERIALIZED VIEW ledger_agg IN CLUSTER compute"
             " WITH (RETAIN HISTORY = FOR '600s') AS"
@@ -1029,9 +1042,9 @@ class TableBank(Scenario):
             "CREATE SCHEMA blue",
             "CREATE SCHEMA green",
             "CREATE MATERIALIZED VIEW blue.total_swap IN CLUSTER compute AS"
-            f" {self.SWAP_TOTAL_DEF}",
+            f" {TOTAL_DEF}",
             "CREATE MATERIALIZED VIEW green.total_swap IN CLUSTER compute AS"
-            f" {self.SWAP_TOTAL_DEF}",
+            f" {TOTAL_DEF}",
             # COPY TO S3 exports go to the MinIO container directly (the
             # toxiproxied blob leg is persist's, not this connection's).
             "CREATE SECRET miniopass AS 'minioadmin'",
@@ -1060,7 +1073,10 @@ class TableBank(Scenario):
             # Single-instance churns: concurrent swaps of the same schema
             # pair or replacements of the same MV would only race each other
             # in the catalog, without adding coverage.
-            actions += [SchemaSwap(rng, client), ReplacementChurn(rng, client)]
+            actions += [
+                SchemaSwap(rng, client),
+                ReplacementChurn(rng, client, self.ctx),
+            ]
             weights += [2, 2]
         return WorkerBundle(actions=actions, weights=weights)
 

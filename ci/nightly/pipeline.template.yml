@@ -2116,7 +2116,7 @@ steps:
     key: invariants
     steps:
       - id: invariants-table-bank-large
-        topics: [kafka, mysql, postgres, sql-server]
+        topics: [copy-to-s3, kafka, mysql, postgres, sql-server]
         label: "Invariants (table-bank, large)"
         depends_on: build-aarch64
         artifact_paths: [invariants-events.log]
@@ -2129,7 +2129,7 @@ steps:
               args: [--scenario=table-bank, --complexity=large, --runtime=1200]
 
       - id: invariants-table-bank-upgrade
-        topics: [kafka, mysql, postgres, sql-server]
+        topics: [copy-to-s3, kafka, mysql, postgres, sql-server, upgrade]
         label: "Invariants (table-bank, upgrade under load)"
         depends_on: build-aarch64
         artifact_paths: [invariants-events.log]
@@ -2148,7 +2148,7 @@ steps:
                 ]
 
       - id: invariants-table-bank
-        topics: [kafka, mysql, postgres, sql-server]
+        topics: [copy-to-s3, kafka, mysql, postgres, sql-server]
         label: "Invariants (table-bank)"
         depends_on: build-aarch64
         artifact_paths: [invariants-events.log]
@@ -2229,7 +2229,7 @@ steps:
               args: [--scenario=kafka-upsert, --complexity=high, --runtime=1200]
 
       - id: invariants-sink-roundtrip
-        topics: [kafka, mysql, postgres, sql-server]
+        topics: [kafka, kafka-sink, mysql, postgres, sql-server]
         label: "Invariants (sink-roundtrip)"
         depends_on: build-aarch64
         artifact_paths: [invariants-events.log]
@@ -2255,7 +2255,7 @@ steps:
               args: [--scenario=webhook-set, --complexity=high, --runtime=1200]
 
       - id: invariants-avro-loopback
-        topics: [kafka, mysql, postgres, sql-server]
+        topics: [kafka, kafka-sink, mysql, postgres, sql-server]
         label: "Invariants (avro-loopback)"
         depends_on: build-aarch64
         artifact_paths: [invariants-events.log]

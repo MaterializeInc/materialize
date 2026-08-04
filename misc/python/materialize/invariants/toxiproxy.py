@@ -32,6 +32,19 @@ DISRUPTION_KINDS = ["disable", "latency", "timeout", "limit_data", "bandwidth"]
 FULL_OUTAGE_KINDS = {"disable", "timeout"}
 
 
+class ApiStalled(Exception):
+    """A toxiproxy admin API call did not finish, so its outcome is unknown.
+
+    Toxiproxy answers a request whose handler overruns its deadline with Go's
+    default 503 timeout page and leaves the handler running behind it, so the
+    call may still take effect afterwards. Removing a toxic does this when the
+    toxic's goroutine is blocked writing to a socket whose peer was just
+    SIGKILLed, which is exactly what a leg cut overlapping a process kill sets
+    up. Recovery is the same as for a dropped admin connection: heal
+    everything, then verify.
+    """
+
+
 @dataclass(frozen=True)
 class Proxy:
     name: str
@@ -61,6 +74,10 @@ class ProcessTarget:
     containers with a restart policy it can be a no-op up()). Pauses are
     capped like full outages: a paused clusterd stops renewing its persist
     leases, which expire after 15 minutes.
+
+    None of the four may assume the process is still the one the previous
+    call saw. Anything else in the test can replace it, so all four are free
+    to fail and the disruptor treats that as a lost cycle.
     """
 
     name: str
@@ -76,6 +93,12 @@ class ToxiproxyApi:
         self.base_url = base_url
         self.session = requests.Session()
 
+    @staticmethod
+    def _check(r: requests.Response, ok: tuple[int, ...], what: str) -> None:
+        if r.status_code >= 500:
+            raise ApiStalled(f"{what}: {r} {r.text}")
+        assert r.status_code in ok, f"{what}: {r} {r.text}"
+
     def create(self, proxy: Proxy) -> None:
         r = self.session.post(
             f"{self.base_url}/proxies",
@@ -87,7 +110,7 @@ class ToxiproxyApi:
             },
             timeout=30,
         )
-        assert r.status_code == 201, f"creating proxy {proxy.name}: {r} {r.text}"
+        self._check(r, (201,), f"creating proxy {proxy.name}")
 
     def set_enabled(self, proxy_name: str, enabled: bool) -> None:
         r = self.session.post(
@@ -95,7 +118,7 @@ class ToxiproxyApi:
             json={"enabled": enabled},
             timeout=30,
         )
-        assert r.status_code == 200, f"toggling proxy {proxy_name}: {r} {r.text}"
+        self._check(r, (200,), f"toggling proxy {proxy_name}")
 
     def add_toxic(
         self,
@@ -115,9 +138,7 @@ class ToxiproxyApi:
             },
             timeout=30,
         )
-        assert (
-            r.status_code == 200
-        ), f"adding toxic {name} to {proxy_name}: {r} {r.text}"
+        self._check(r, (200,), f"adding toxic {name} to {proxy_name}")
 
     def delete_toxic(self, proxy_name: str, name: str) -> None:
         r = self.session.delete(
@@ -126,16 +147,16 @@ class ToxiproxyApi:
         # 404 means already deleted: heals must be idempotent, since a
         # disruptor cycle that outlived the join deadline re-heals toxics
         # that stop_and_heal's heal-everything already removed.
-        assert r.status_code in (200, 204, 404), f"deleting toxic {name}: {r} {r.text}"
+        self._check(r, (200, 204, 404), f"deleting toxic {name}")
 
     def reset(self) -> None:
         """Re-enable all proxies and remove all toxics."""
         r = self.session.post(f"{self.base_url}/reset", timeout=30)
-        assert r.status_code == 204, f"toxiproxy reset: {r} {r.text}"
+        self._check(r, (204,), "toxiproxy reset")
 
     def proxies(self) -> dict:
         r = self.session.get(f"{self.base_url}/proxies", timeout=30)
-        assert r.status_code == 200, f"listing proxies: {r} {r.text}"
+        self._check(r, (200,), "listing proxies")
         return r.json()
 
     def assert_healed(self) -> None:
@@ -160,6 +181,7 @@ class Disruptor(threading.Thread):
         concurrent: int,
         on_error: Callable[[Exception], None],
         processes: list[ProcessTarget] | None = None,
+        restore_proxies: list[Proxy] | None = None,
     ) -> None:
         super().__init__(name="disruptor")
         self.api = api
@@ -171,6 +193,15 @@ class Disruptor(threading.Thread):
         self.concurrent = concurrent
         self.on_error = on_error
         self.processes = processes or []
+        # Re-created after a toxiproxy crash-restart. The harness may have
+        # created proxies beyond this scenario's legs (e.g. for a cluster the
+        # scenario does not disrupt), and losing those would strand their
+        # connections for the rest of the run.
+        self.restore_proxies = (
+            restore_proxies
+            if restore_proxies is not None
+            else [proxy for leg in legs for proxy in leg.proxies]
+        )
         self.stop_event = threading.Event()
         self.cycles = 0
         # Set while any disruption is applied, read by the executor to
@@ -186,6 +217,23 @@ class Disruptor(threading.Thread):
         self.history.append(f"{time.strftime('%H:%M:%S')} {message}")
         self.log.log("disrupt", message)
 
+    def _attempt(self, what: str, action: Callable[[], None]) -> None:
+        """Run a process disruption or heal, tolerating a lost race.
+
+        Another part of the test may replace the process underneath the
+        disruptor: the midrun upgrade swap kills and re-creates the very
+        containers this cycle targets. A kill then finds its target already
+        dead, and an unpause a fresh container that was never paused, both
+        of which the orchestrator reports as errors. Neither is a test
+        failure: a disruption that does not land only loses coverage, and
+        whether the process serves again is the converge phase's assertion,
+        not a heal's.
+        """
+        try:
+            action()
+        except Exception as e:
+            self._record(f"{what} failed ({e}), continuing")
+
     def run(self) -> None:
         try:
             # A deterministic first sweep disrupts every leg once, so no leg
@@ -193,7 +241,7 @@ class Disruptor(threading.Thread):
             for leg in self.legs:
                 if self.stop_event.is_set():
                     return
-                self._leg_cycle(duration_scale=0.3, only=leg)
+                self._one_cycle(duration_scale=0.3, only=leg)
                 if self.stop_event.wait(self.rng.uniform(1.0, 5.0)):
                     return
             while not self.stop_event.wait(self.rng.uniform(*self.interval)):
@@ -224,21 +272,26 @@ class Disruptor(threading.Thread):
         finally:
             self._heal_all_with_retries()
 
-    def _one_cycle(self, duration_scale: float = 1.0) -> None:
+    def _one_cycle(self, duration_scale: float = 1.0, only: Leg | None = None) -> None:
         try:
-            roll = self.rng.random()
-            if self.processes and roll < 0.15:
-                # A leg cut overlapping a process kill, the combination that
-                # produced the unbounded-buffering finding.
-                self._leg_cycle(duration_scale, overlap_kill=True)
-            elif self.processes and roll < 0.35:
-                self._process_cycle(duration_scale)
+            # `only` draws no roll, so the rng stream is the one a seed
+            # replays whether or not the first sweep goes through here.
+            if only is not None:
+                self._leg_cycle(duration_scale, only=only)
             else:
-                self._leg_cycle(duration_scale)
-        except requests.RequestException as e:
-            # The toxiproxy admin API can stall while the host is overloaded
-            # (e.g. right after an envd restart). A lost cycle is not a
-            # failure, but nothing may stay disrupted.
+                roll = self.rng.random()
+                if self.processes and roll < 0.15:
+                    # A leg cut overlapping a process kill, the combination
+                    # that produced the unbounded-buffering finding.
+                    self._leg_cycle(duration_scale, overlap_kill=True)
+                elif self.processes and roll < 0.35:
+                    self._process_cycle(duration_scale)
+                else:
+                    self._leg_cycle(duration_scale)
+        except (requests.RequestException, ApiStalled) as e:
+            # The toxiproxy admin API can stall or drop the connection while
+            # the host is overloaded (e.g. right after an envd restart). A lost
+            # cycle is not a failure, but nothing may stay disrupted.
             self._record(f"cycle failed ({e}), healing everything")
             self._heal_all_with_retries()
 
@@ -273,7 +326,7 @@ class Disruptor(threading.Thread):
         )
         if victim is not None:
             self.stop_event.wait(duration / 2)
-            victim.kill()
+            self._attempt(f"kill of {victim.name}", victim.kill)
             key = (f"process:{victim.name}", "kill")
             self.coverage[key] = self.coverage.get(key, 0) + 1
             self.stop_event.wait(duration / 2)
@@ -288,10 +341,7 @@ class Disruptor(threading.Thread):
             # happen while e.g. its metadata leg is still cut, and a
             # disruptor stuck here would leave the toxics applied through
             # the converge phase (nightly 17376).
-            try:
-                victim.heal()
-            except Exception as e:
-                self._record(f"heal of {victim.name} failed ({e}), continuing")
+            self._attempt(f"heal of {victim.name}", victim.heal)
         self.cycles += 1
         self._record(
             "healed " + ", ".join(f"{kind} on {leg.name}" for leg, kind in applied)
@@ -308,19 +358,15 @@ class Disruptor(threading.Thread):
         self.active.set()
         self._record(f"applied {kind} on process {target.name} for {duration:.1f}s")
         if kind == "kill":
-            target.kill()
+            self._attempt(f"kill of {target.name}", target.kill)
             self.stop_event.wait(duration)
-            try:
-                target.heal()
-            except Exception as e:
-                # The up can race a crash-looping restart policy and observe
-                # an unhealthy moment. Whether the process actually serves
-                # again is the converge phase's assertion, not the heal's.
-                self._record(f"heal of {target.name} failed ({e}), continuing")
+            # The up can also race a crash-looping restart policy and observe
+            # an unhealthy moment.
+            self._attempt(f"heal of {target.name}", target.heal)
         else:
-            target.pause()
+            self._attempt(f"pause of {target.name}", target.pause)
             self.stop_event.wait(duration)
-            target.unpause()
+            self._attempt(f"unpause of {target.name}", target.unpause)
         self.active.clear()
         self.cycles += 1
         self._record(f"healed {kind} on process {target.name}")
@@ -375,27 +421,35 @@ class Disruptor(threading.Thread):
                 self.api.delete_toxic(proxy.name, kind)
 
     def _heal_all_with_retries(self) -> None:
+        # Unpausing is instant, but a process heal blocks until the process
+        # serves again, which can never happen while one of its legs is still
+        # cut (see _leg_cycle), and this runs after cycles that were abandoned
+        # mid-flight, with toxics still applied. So the network is healed in
+        # between the two.
         for target in self.processes:
             try:
                 target.unpause()
             except Exception:
                 pass
+        self._heal_network_with_retries()
+        for target in self.processes:
             try:
                 target.heal()
             except Exception as e:
                 self._record(f"heal of {target.name} failed ({e}), continuing")
+
+    def _heal_network_with_retries(self) -> None:
         deadline = time.monotonic() + 60
         while True:
             try:
                 self.api.reset()
                 # A crashed and restarted toxiproxy comes back empty. The
-                # legs' proxies must exist again before anything reconnects.
+                # proxies must exist again before anything reconnects.
                 existing = self.api.proxies()
-                for leg in self.legs:
-                    for proxy in leg.proxies:
-                        if proxy.name not in existing:
-                            self._record(f"re-creating lost proxy {proxy.name}")
-                            self.api.create(proxy)
+                for proxy in self.restore_proxies:
+                    if proxy.name not in existing:
+                        self._record(f"re-creating lost proxy {proxy.name}")
+                        self.api.create(proxy)
                 self.api.assert_healed()
                 self._record("all legs healed")
                 return

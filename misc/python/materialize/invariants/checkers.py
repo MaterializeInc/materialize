@@ -134,6 +134,7 @@ class SubscribeChecker(Checker):
             self._pending = []
             self._last_ts = None
             self._as_of = None
+            self._last_order_key = None
             self._resumed = True
             try:
                 self.client.query(f"SET cluster = {self.cluster}")
@@ -211,6 +212,7 @@ class SubscribeChecker(Checker):
         # (the history audit) advances its frontier in giant steps, and the
         # per-timestamp states in between must be consistent too.
         index = 0
+        validated_ready = False
         while index < len(ready):
             ts = ready[index][0]
             while index < len(ready) and ready[index][0] == ts:
@@ -221,9 +223,13 @@ class SubscribeChecker(Checker):
                 index += 1
             if gate_open:
                 self._validate_snapshot(ts)
+                validated_ready = True
         if not gate_open:
             return
-        self._validate_snapshot(progress_ts)
+        # The state at progress_ts equals the state after the last folded
+        # timestamp, so only progress rows that folded nothing validate here.
+        if not validated_ready:
+            self._validate_snapshot(progress_ts)
         self.last_validated_ts = progress_ts
 
     def _validate_snapshot(self, ts: int) -> None:

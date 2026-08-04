@@ -55,6 +55,15 @@ TOPIC = "invariants-balances"
 UPSERT_TOPIC = "invariants-balances-upsert"
 UPSERT_PARTITIONS = 2
 
+# HAVING drops zero balances, so accounts also leave the relation and the
+# sinks exercise their delete paths (Debezium after: null, upsert
+# tombstones). Dropping zero terms does not change the conserved sum. Shared
+# with avro-loopback, which loops the same relation through Avro/CSR.
+BALANCES_DEF = (
+    "SELECT account, sum(amount) AS balance FROM ledger"
+    " GROUP BY account HAVING sum(amount) <> 0"
+)
+
 
 class SinkConsumerChecker(Checker):
     """Tails the sink topic and replays it against a reconstructed state."""
@@ -303,14 +312,6 @@ class SinkRoundtrip(Scenario):
         assert ctx.endpoints.kafka_bootstrap is not None
         self.bootstrap = ctx.endpoints.kafka_bootstrap
 
-    # HAVING drops zero balances, so accounts also leave the relation and
-    # both sinks exercise their delete paths (Debezium after: null, upsert
-    # tombstones). Dropping zero terms does not change the conserved sum.
-    BALANCES_DEF = (
-        "SELECT account, sum(amount) AS balance FROM ledger"
-        " GROUP BY account HAVING sum(amount) <> 0"
-    )
-
     def setup(self) -> None:
         from confluent_kafka.admin import AdminClient
 
@@ -318,11 +319,11 @@ class SinkRoundtrip(Scenario):
         for sql in [
             "CREATE TABLE ledger (worker int, seq bigint, account int,"
             " amount bigint, at timestamptz)",
-            f"CREATE MATERIALIZED VIEW balances IN CLUSTER compute AS"
-            f" {self.BALANCES_DEF}",
+            "CREATE MATERIALIZED VIEW balances IN CLUSTER compute AS"
+            f" {BALANCES_DEF}",
             # The identical relation the ALTER SINK churn cuts over to.
-            f"CREATE MATERIALIZED VIEW balances_alt IN CLUSTER compute AS"
-            f" {self.BALANCES_DEF}",
+            "CREATE MATERIALIZED VIEW balances_alt IN CLUSTER compute AS"
+            f" {BALANCES_DEF}",
             "CREATE CONNECTION kafka_sink_conn TO KAFKA"
             " (BROKER 'toxiproxy:9192', SECURITY PROTOCOL PLAINTEXT)",
             "CREATE SINK bank_sink IN CLUSTER storage FROM balances"

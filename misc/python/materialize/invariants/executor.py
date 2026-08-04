@@ -39,6 +39,7 @@ from materialize.invariants.toxiproxy import (
     Disruptor,
     Leg,
     ProcessTarget,
+    Proxy,
     ToxiproxyApi,
 )
 
@@ -166,6 +167,7 @@ class Runner:
         legs: list[Leg],
         processes: list[ProcessTarget] | None = None,
         midrun_event=None,
+        restore_proxies: list[Proxy] | None = None,
     ) -> None:
         self.scenario = scenario
         self.ctx = scenario.ctx
@@ -174,6 +176,7 @@ class Runner:
         self.legs = legs
         self.processes = processes or []
         self.midrun_event = midrun_event
+        self.restore_proxies = restore_proxies
         self.failure: BaseException | None = None
         self._failure_lock = threading.Lock()
         self.worker_stats: list[Counter[tuple[str, str]]] = []
@@ -235,6 +238,7 @@ class Runner:
                 concurrent=ctx.complexity.concurrent_disruptions,
                 on_error=self.fail,
                 processes=self.processes,
+                restore_proxies=self.restore_proxies,
             )
             if ctx.complexity.agitation_interval is not None:
                 self.agitator = Agitator(ctx, agitator_rng, self.fail)

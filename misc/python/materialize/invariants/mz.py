@@ -34,11 +34,13 @@ from materialize.invariants.framework import (
     TransientError,
 )
 
-# Reads racing concurrent DDL legitimately error, e.g. when a peek planned
-# against an index that the DDL churn dropped mid-flight, or when the second
+# Statements racing concurrent DDL legitimately error, e.g. when a peek planned
+# against an index that the DDL churn dropped mid-flight, when the second
 # statement of a read-only transaction plans against an index created after
-# the transaction pinned its timedomain. The data is never wrong, the
-# checker round is just skipped.
+# the transaction pinned its timedomain, or when a DDL resolved a name to an
+# item that another DDL retired before the plan was installed. The data is
+# never wrong, the checker round is just skipped and the write counts as
+# rejected.
 CONCURRENT_DDL_ERROR_SNIPPETS = [
     "was dropped",
     "unknown catalog item",
@@ -286,9 +288,18 @@ class MzClient:
                 return Outcome.UNKNOWN
             if _is_connection_error(e):
                 return Outcome.UNKNOWN
+            if any(snippet in str(e) for snippet in CONCURRENT_DDL_ERROR_SNIPPETS):
+                # DDL racing DDL: a name resolved to an item that another
+                # action retired before this plan was installed, e.g. an index
+                # on the total MV while a replacement is applied to it. The
+                # coordinator rejects such a plan before its catalog
+                # transaction, so the statement definitely did not apply.
+                # Data writes cannot reach here, their tables are never
+                # dropped.
+                return Outcome.FAILED
             # A definite server error reply: the statement was not applied.
-            # We still surface it, since none of our fixed-shape writes have
-            # a legitimate reason to be rejected.
+            # We still surface it, since none of our other fixed-shape writes
+            # have a legitimate reason to be rejected.
             raise UnexpectedQueryError(f"write rejected: {sql[:200]}: {e}") from e
 
     def write_txn(

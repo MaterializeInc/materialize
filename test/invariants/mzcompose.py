@@ -20,14 +20,18 @@ import random
 import subprocess
 import threading
 import time
+from contextlib import ExitStack
 
 from materialize.invariants.executor import Runner
 from materialize.invariants.framework import (
     COMPLEXITIES,
     Endpoints,
     EventLog,
+    InvariantViolation,
     ScenarioContext,
+    wait_until,
 )
+from materialize.invariants.mz import MzClient
 from materialize.invariants.scenarios import SCENARIOS
 from materialize.invariants.toxiproxy import Leg, ProcessTarget, Proxy, ToxiproxyApi
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
@@ -109,10 +113,10 @@ SERVICES = [
     # Materialize by container name and for the harness via the host port.
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
     materialized_service(),
+    # clusterd-compute2 is the compute cluster's second replica, behind its
+    # own leg: peeks keep being served (and verified) while one replica is
+    # disrupted, and a diverging replica shows up as wrong answers.
     *(clusterd_service(name) for name in CLUSTERD_NAMES),
-    # Second replica of the compute cluster, behind its own leg: peeks keep
-    # being served (and verified) while one replica is disrupted, and a
-    # diverging replica shows up as wrong answers.
     Postgres(),
     MySql(),
     SqlServer(),
@@ -287,18 +291,28 @@ def run_scenario(c: Composition, name: str, args, log: EventLog) -> None:
     )
     c.down(destroy_volumes=True)
 
-    # restart on-failure: proxies live in toxiproxy's memory, so after a
-    # crash the disruptor's heal re-creates them (it cannot resurrect the
-    # container itself).
-    version_services = []
-    if args.upgrade_from:
-        version_services = [materialized_service(image=args.upgrade_from)] + [
-            clusterd_service(name, image=args.upgrade_from) for name in CLUSTERD_NAMES
-        ]
-    with c.override(
-        Toxiproxy(seed=rng.randrange(2**63), restart="on-failure"),
-        *version_services,
-    ):
+    with ExitStack() as stack:
+        # restart on-failure: proxies live in toxiproxy's memory, so after a
+        # crash the disruptor's heal re-creates them (it cannot resurrect the
+        # container itself).
+        stack.enter_context(
+            c.override(Toxiproxy(seed=rng.randrange(2**63), restart="on-failure"))
+        )
+        # The old-version services of an --upgrade-from run live in their own
+        # stack: up() renders the current composition, so the mid-run upgrade
+        # swap must be able to close this override (restoring the
+        # current-build definitions) without disturbing the toxiproxy one.
+        version_override = stack.enter_context(ExitStack())
+        if args.upgrade_from:
+            version_override.enter_context(
+                c.override(
+                    materialized_service(image=args.upgrade_from),
+                    *(
+                        clusterd_service(name, image=args.upgrade_from)
+                        for name in CLUSTERD_NAMES
+                    ),
+                )
+            )
         # The proxies must exist before materialized boots: its consensus and
         # timestamp-oracle URLs point at toxiproxy.
         c.up("toxiproxy")
@@ -352,7 +366,9 @@ def run_scenario(c: Composition, name: str, args, log: EventLog) -> None:
         scenario = scenario_class(ctx)
         scenario.setup()
         legs = [] if args.no_disruptions else [LEGS[n] for n in scenario_class.legs]
-        midrun = make_upgrade_swap(c) if args.upgrade_from else None
+        midrun = (
+            make_upgrade_swap(c, ctx, version_override) if args.upgrade_from else None
+        )
         try:
             Runner(
                 scenario,
@@ -361,12 +377,24 @@ def run_scenario(c: Composition, name: str, args, log: EventLog) -> None:
                 legs,
                 process_targets(c),
                 midrun_event=midrun,
+                restore_proxies=[
+                    proxy for leg in LEGS.values() for proxy in leg.proxies
+                ],
             ).run()
         finally:
             scenario.teardown()
 
 
-def make_upgrade_swap(c: Composition):
+def make_upgrade_swap(
+    c: Composition, ctx: ScenarioContext, version_override: ExitStack
+):
+    # Captured now, while the old version is still healthy: mid-chaos it may
+    # not answer, and the post-swap probe needs it to prove the version
+    # actually changed.
+    client = MzClient(ctx, "upgrade-swap")
+    old_version = str(client.query("SELECT mz_version()")[0][0])
+    client.reset()
+
     def swap() -> None:
         # Kill the old-version processes and bring everything back on the
         # current build: an upgrade in the middle of load and disruptions,
@@ -378,7 +406,23 @@ def make_upgrade_swap(c: Composition):
             "clusterd-storage",
         ]
         c.kill(*names)
+        # up() renders the composition, which the version override pins to
+        # the old image, so the override must be closed first.
+        version_override.close()
         c.up(*names, detach=True, max_tries=3)
+
+        def upgraded() -> bool:
+            version = str(client.query("SELECT mz_version()", timeout=30)[0][0])
+            if version == old_version:
+                raise InvariantViolation(
+                    f"upgrade swap brought back the old version {version}"
+                )
+            return True
+
+        # Bounded probe rather than one-shot: legs may still be disrupted
+        # when the swap fires, but a full metadata cut is capped at 45s and
+        # the new build must serve after healing.
+        wait_until(upgraded, 180, "swapped-in build serving its new version")
 
     return swap
 
@@ -419,11 +463,13 @@ def process_targets(c: Composition) -> list[ProcessTarget]:
 # --scenario=repro-*. blob-memory and postheal-stall are deterministic
 # sequences, per10 and durable-resume are fixed-sequence loops over races.
 REPROS = {
-    "repro-blob-memory": "unbounded clusterd memory while the blob store is cut",
-    "repro-postheal-stall": "writes stalled long after a metadata cut healed",
-    "repro-per10": "persist GC panic: earliest state without rollup",
+    "repro-blob-memory": "PER-31: unbounded clusterd memory while the blob"
+    " store is cut",
+    "repro-postheal-stall": "PER-32: writes stalled long after a metadata cut"
+    " healed",
+    "repro-per10": "PER-10: persist GC panic, earliest state without rollup",
     "repro-durable-resume": "resumed SUBSCRIBE cancels its carried state",
-    "repro-compute-asof": "compute halts hydrating a dataflow past its as_of",
+    "repro-compute-asof": "CLU-34: compute halts hydrating a dataflow past its as_of",
 }
 
 
@@ -462,13 +508,18 @@ def run_repro(c: Composition, name: str, args, log: EventLog) -> None:
         stop = threading.Event()
 
         def drive(bundle) -> None:
+            actions = {action.name: action for action in bundle.actions}
             ticks = 0
             while not stop.is_set():
                 ticks += 1
                 # LedgerTransfer for steady writes (consensus churn), plus
                 # DdlChurn: created and dropped MVs mean shard finalization,
                 # which is what keeps persist GC busy.
-                action = bundle.actions[3] if ticks % 40 == 0 else bundle.actions[1]
+                action = (
+                    actions["ddl-churn"]
+                    if ticks % 40 == 0
+                    else actions["ledger-transfer"]
+                )
                 try:
                     action.run()
                 except Exception:
@@ -748,6 +799,9 @@ def repro_durable_resume(c, toxiproxy, ctx, log) -> None:
         while time.monotonic() < deadline:
             try:
                 checker.check_once()
+            except InvariantViolation:
+                # No disruption is active yet, a violation here is real.
+                raise
             except Exception:
                 pass
         assert checker.last_validated_ts is not None
