@@ -427,17 +427,37 @@ def run(
             print(
                 f"{thread.name} still running ({worker.exe.mz_service}): {worker.exe.last_log} ({worker.exe.last_status})"
             )
+
         # Workers are daemon threads, so a wedged one cannot keep the process
         # alive and has to be caught here or it silently costs the run its
         # remaining workload. A worker waiting on the server is a server-side
-        # hang (DB-118) and is tolerated. One that is not waiting on the server
-        # is stuck in the workload's own code, e.g. deadlocked on two object
-        # locks taken in opposite orders, which no timeout ever clears. Nothing
-        # legitimate pauses without a round trip for the 300s above, the longest
-        # such pause is BackupRestoreAction's 240s sleep.
-        wedged = [t.name for w, t in alive if w.exe.last_status != "running"]
+        # hang (DB-118) and is tolerated, as is one still in its connect retry
+        # loop (exe is None), which can only be hanging inside a connect call
+        # to the server. One that never waits on the server is stuck in the
+        # workload's own code, e.g. deadlocked on two object locks taken in
+        # opposite orders, which no timeout ever clears. Nothing legitimate
+        # pauses without a round trip for the 300s above (the longest such
+        # pause is BackupRestoreAction's 240s sleep), but a single sample can
+        # catch a worker between round trips or queued on another worker's
+        # object lock (ReconfigureClusterAction holds a cluster lock across
+        # its poll). So only call a worker wedged if it stays off the server
+        # for a whole confirmation window: a lock waiter eventually gets the
+        # lock and makes a round trip or exits, a deadlocked worker never
+        # does either.
+        def not_on_server() -> set[str]:
+            return {
+                t.name
+                for w, t in alive
+                if t.is_alive() and w.exe is not None and w.exe.last_status != "running"
+            }
+
+        wedged = not_on_server()
+        confirm_until = time.time() + 60
+        while wedged and time.time() < confirm_until:
+            time.sleep(1)
+            wedged &= not_on_server()
         merge_num_queries(num_queries, workers)
-        print_stats(num_queries, workers, num_threads, scenario)
+        print_stats(num_queries, workers, num_threads, complexity, scenario)
 
         # A wedged worker must not mask damage, so run the final oracle pass
         # on a fresh connection before exiting. Skipped for 0dt deploys,
@@ -467,7 +487,7 @@ def run(
             faulthandler.dump_traceback()
             print(
                 "^^^ +++ Threads have not stopped within 5 minutes and are not"
-                f" waiting on the server, exiting hard: {', '.join(wedged)}"
+                f" waiting on the server, exiting hard: {', '.join(sorted(wedged))}"
             )
             os._exit(1)
         os._exit(0)
@@ -520,7 +540,7 @@ def run(
     conn.close()
 
     merge_num_queries(num_queries, workers)
-    print_stats(num_queries, workers, num_threads, scenario)
+    print_stats(num_queries, workers, num_threads, complexity, scenario)
 
 
 def merge_num_queries(
@@ -548,6 +568,7 @@ def print_stats(
     num_queries: defaultdict[ActionList, Counter[type[Action]]],
     workers: list[Worker],
     num_threads: int,
+    complexity: Complexity,
     scenario: Scenario,
 ) -> None:
     ignored_errors: defaultdict[str, Counter[type[Action]]] = defaultdict(Counter)
@@ -617,13 +638,24 @@ def print_stats(
         "unknown cluster 'dont_exist'",
         "cannot be dropped because some objects depend on it",
     }
+    if complexity in (Complexity.DDL, Complexity.DDLOnly):
+        # CreateTableAction and CreateViewAction make half their objects TEMP,
+        # and those land in the shared table and view lists every worker samples
+        # from. A temporary schema belongs to the session that created it, so
+        # any other worker resolving "db"."mz_temp"."name" fails with "unknown
+        # schema 'mz_temp'". That is roughly half the attempts of an action
+        # picking a random table or view, which an action as low-weight as
+        # RevokePrivilegesAction can spend a whole run on. Concurrent schema
+        # drops and renames land here too. Only DDL complexity creates temp
+        # objects or touches schemas, so elsewhere this stays a genuine signal.
+        noise.add("unknown schema")
     if scenario == Scenario.Rename:
         # Concurrent renames invalidate the qualified names an action captured
         # earlier (a stored SELECT it re-renders, a target it resolved before
         # the rename), so a rare action can fail on every attempt with a
         # name-resolution race. Expected only in this scenario. In Regression,
         # where nothing renames, these would be a genuine signal.
-        noise |= {"does not exist", "unknown schema", "unknown catalog item"}
+        noise |= {"does not exist", "unknown catalog item"}
     num_errored_real: Counter[type[Action]] = Counter()
     for worker in workers:
         num_successes.update(worker.num_successes)

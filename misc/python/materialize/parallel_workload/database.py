@@ -295,8 +295,9 @@ class View(DBObject):
             rng.choice(
                 [
                     "ON COMMIT",
-                    f"EVERY '{rng.randint(1, 60)} seconds {rng.randint(0, 60)} minutes'",
-                    f"EVERY '{rng.randint(1, 60)} seconds {rng.randint(0, 60)} minutes' ALIGNED TO (mz_now())",
+                    # TODO: Restore minute-scale intervals when CPU-196 is fixed
+                    f"EVERY '{rng.randint(1, 15)} seconds'",
+                    f"EVERY '{rng.randint(1, 15)} seconds' ALIGNED TO (mz_now())",
                     # Always in the future of all refreshes of previously generated MVs
                     "AT mz_now()::string::int8 + 1000",
                 ]

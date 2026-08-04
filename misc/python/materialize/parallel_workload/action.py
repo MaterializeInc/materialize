@@ -303,9 +303,10 @@ class Action:
                     # matching "unknown cluster replica size" errors.
                     "unknown cluster '",
                     "unknown schema",  # schema was dropped
-                    # database was dropped by DropDatabaseCascadeAction. Before
-                    # that action, DROP DATABASE used RESTRICT and never
-                    # removed a non-empty database, so this could not arise.
+                    # The database was dropped concurrently: DropDatabaseAction
+                    # can land on an emptied database, and
+                    # DropDatabaseCascadeAction (disabled until SQL-518 is
+                    # fixed) drops non-empty ones.
                     "unknown database",
                     "invalid database",  # CREATE SCHEMA wording for a vanished database
                     "the transaction's active cluster has been dropped",  # cluster was dropped
@@ -1700,7 +1701,7 @@ class DropTableAction(Action):
             query = f"DROP TABLE {table}"
             exe.execute(query, http=Http.RANDOM)
             # A concurrent CASCADE drop's untrack_objects_in_schemas may have
-            # already filtered this table out of the list; tolerate that.
+            # already filtered this table out of the list, tolerate that.
             try:
                 exe.db.tables.remove(table)
             except ValueError:
@@ -2153,8 +2154,10 @@ class SealedCollectionCheckAction(Action):
         # once that input seals, even though its own refresh strategy is not
         # 'at', and likewise for anything reading a bounded load generator's
         # table. Walk the dependency graph up from every REFRESH AT view and
-        # every load generator source (all of PW's are UP TO bounded) and
-        # exclude everything that transitively depends on one. repeat_row
+        # every load generator source and exclude everything that transitively
+        # depends on one. The COUNTER sources are UP TO bounded and seal when
+        # they finish. The multi-subsource generators never seal, so sweeping
+        # them in only widens the exclusion, erring toward tolerating. repeat_row
         # constant views also seal transitively but are not marked in the
         # catalog, which is why this oracle is disabled in the RepeatRow
         # scenario, see applicable. Plain user tables never seal and need no
@@ -2590,7 +2593,9 @@ class ParameterizedQueryAction(Action):
         # Run sequentially, not in a try/finally: if EXECUTE fails it aborts
         # the transaction, and a DEALLOCATE in a finally would then fail with
         # "current transaction is aborted", masking the real error. On failure
-        # the worker rolls back, which discards the prepared statement anyway.
+        # the statement leaks on the session, which is harmless: statement
+        # names are never reused, and the session's prepared statements die
+        # with it.
         exe.execute(f"PREPARE {name} AS {query}", http=Http.NO)
         exe.execute(f"EXECUTE {name} ({values})", http=Http.NO, fetch=True)
         exe.execute(f"DEALLOCATE {name}", http=Http.NO)
@@ -3429,7 +3434,7 @@ class DropViewAction(Action):
                 query = f"DROP VIEW {view}"
             exe.execute(query, http=Http.RANDOM)
             # A concurrent CASCADE drop's untrack_objects_in_schemas may have
-            # already filtered this view out of the list; tolerate that.
+            # already filtered this view out of the list, tolerate that.
             try:
                 exe.db.views.remove(view)
             except ValueError:
@@ -3765,8 +3770,10 @@ class DropClusterReplicaAction(Action):
 
 
 class ReconfigureClusterAction(Action):
-    """Gracefully resize a random managed cluster and assert convergence.
+    """Gracefully resize a random managed cluster and watch its record settle.
 
+    The asserted invariant is that a reconfiguration record never sits
+    in-progress past its own deadline, whether it cuts over or rolls back.
     Regression coverage for SQL-530: readiness must not wait for
     single-replica sources (Postgres, MySQL, SQL Server) hosted on the
     cluster, which never hydrate on the reconfiguration's target replicas
@@ -3817,48 +3824,71 @@ class ReconfigureClusterAction(Action):
             # e.g. when another worker put a REFRESH EVERY materialized view
             # with a far-future refresh on the cluster, which cannot hydrate
             # on the target replicas before its refresh time. What must never
-            # happen is the record staying "in-progress" past its deadline,
-            # which is how a wedged readiness check (SQL-530) manifests. Only
-            # trust a terminal status once the ALTER's own deadline has
-            # passed: builtin table reads can lag the catalog, so before that
-            # a terminal status can only be a stale record from an earlier
-            # reconfiguration of this cluster.
+            # happen is a record staying "in-progress" past its own deadline,
+            # which is how a wedged readiness check (SQL-530) manifests.
+            #
+            # `mz_now()` is the timestamp the read itself ran at, and comparing
+            # it against the record's `deadline` is what makes that assertion
+            # sound. `mz_clusters` is a builtin table and
+            # `mz_cluster_reconfigurations` a builtin materialized view
+            # maintained by mz_catalog_server, and a SERIALIZABLE read of either
+            # takes the freshest timestamp that does not block, so under load it
+            # can lag wall clock by minutes. Judging the deadline against the
+            # test's wall clock therefore calls a correctly rolled-back record
+            # wedged as soon as the read lags. Both sides coming from the same
+            # read keeps them in the same frame, stale or not.
             name_literal = cluster.name().replace("'", "''")
             query = (
-                "SELECT c.size, r.status FROM mz_clusters c "
+                "SELECT c.size, r.status, r.deadline::text, mz_now()::text "
+                "FROM mz_clusters c "
                 "LEFT JOIN mz_internal.mz_cluster_reconfigurations r ON r.cluster_id = c.id "
                 f"WHERE c.name = '{name_literal}'"
             )
-            status = None
+            # The deadline our own ALTER wrote is `now() + 120s` in the same
+            # millisecond epoch `mz_now()` reports, so a read past this is
+            # guaranteed to show our record or a later one, never a stale
+            # terminal record from an earlier reconfiguration of this cluster.
+            our_deadline_ms = int((alter_started + 120) * 1000)
             seen = False
-            # Slack over the ALTER's own 120s deadline. Rolling back tears down
-            # the target replicas and the builtin table read then has to catch
-            # up, both under whatever load the other workers put on the
-            # cluster, so a terminal status can take a while to become visible.
-            # Only a record still in-progress well past that is the wedge this
-            # asserts on.
-            #
             # Must stay comfortably under the 300s the run gives all workers to
             # join after `end_time` (`parallel_workload.run`). A poll that
             # outlives that budget makes a worker doing its job look wedged, and
             # the run then hard-exits 0 without its final checks.
-            deadline = time.time() + 240
-            while time.time() < deadline:
+            poll_until = time.time() + 240
+            while time.time() < poll_until:
                 exe.execute(query)
                 rows = exe.cur.fetchall()
                 if not rows:
                     # `mz_clusters` is a builtin table, so the read can lag a
                     # concurrent rename or swap of this cluster and not show
-                    # the polled name yet. Keep polling and let the deadline
+                    # the polled name yet. Keep polling and let the check
                     # below decide, rather than indexing an empty result.
                     time.sleep(1)
                     continue
                 seen = True
-                size, status = rows[0]
+                size, status, record_deadline, read_ts = rows[0]
+                read_ts_ms = int(read_ts)
                 if size == new_size:
                     cluster.size = new_size
                     return True
-                # Any settled record is a legitimate end state, so accept every
+                # 60s of slack over the controller's 5s tick, which is what
+                # turns a reached deadline into the terminal status.
+                if (
+                    status == "in-progress"
+                    and read_ts_ms > int(record_deadline) + 60_000
+                ):
+                    raise ValueError(
+                        f"Graceful reconfiguration of cluster {cluster} to size "
+                        f"{new_size} sat in-progress {read_ts_ms - int(record_deadline)}ms "
+                        f"past its deadline {record_deadline}"
+                    )
+                if read_ts_ms > our_deadline_ms and status is None:
+                    raise ValueError(
+                        f"Reconfiguration record of cluster {cluster} is gone as of "
+                        f"{read_ts_ms}, past the deadline {our_deadline_ms} of the "
+                        f"reconfiguration to size {new_size} that wrote it"
+                    )
+                # Any settled record is a legitimate end state, so stop on every
                 # status but "in-progress". A rollback at the deadline
                 # ("timed-out"), a controller that could not get the replicas
                 # ("resource-exhausted"), a concurrent shape-touching ALTER
@@ -3868,12 +3898,11 @@ class ReconfigureClusterAction(Action):
                 # FlipFlagsAction alters EXPERIMENTAL ARRANGEMENT COMPRESSION
                 # without holding the cluster lock, and that is a shape
                 # dimension (`alter_changes_replica_shape`), so it reaches the
-                # record this poll is watching. A record with no status at all
-                # stays a failure: the ALTER succeeded, so a record must exist.
-                if time.time() > alter_started + 120 and status not in (
-                    None,
-                    "in-progress",
-                ):
+                # record this poll is watching. Once ours settles, such an ALTER
+                # even starts a fresh record, in-progress with the 24h default
+                # deadline, which is why running out of the budget below on an
+                # in-progress record is not by itself a failure.
+                if read_ts_ms > our_deadline_ms and status != "in-progress":
                     return True
                 time.sleep(1)
             if not seen:
@@ -3882,10 +3911,7 @@ class ReconfigureClusterAction(Action):
                     f"name the reconfiguration to size {new_size} polled for, so the "
                     f"name the workload holds does not match the catalog"
                 )
-            raise ValueError(
-                f"Graceful reconfiguration of cluster {cluster} to size {new_size} "
-                f"did not complete (reconfiguration status: {status})"
-            )
+            return True
 
 
 class GrantPrivilegesAction(Action):
@@ -4064,7 +4090,7 @@ class AlterOwnerAction(Action):
         candidates.append(("SECRET", "materialize.public.pgpass"))
         # NOTE: No CONNECTION target. Changing a connection's owner emits a
         # Connection(Altered) implication, which re-alters every dependent
-        # sink's export connection; that re-alter can fail with InvalidAlter
+        # sink's export connection. That re-alter can fail with InvalidAlter
         # and panic the coordinator.
         # See https://linear.app/materializeinc/issue/SQL-517
         kind, name = self.rng.choice(candidates)
@@ -4156,7 +4182,7 @@ class BroadPrivilegesAction(Action):
                 ("SECRET materialize.public.pgpass", ["USAGE", "ALL"]),
                 # NOTE: No CONNECTION target. GRANT/REVOKE on a connection emits
                 # a Connection(Altered) implication, which re-alters every
-                # dependent sink's export connection; that re-alter can fail
+                # dependent sink's export connection. That re-alter can fail
                 # with InvalidAlter and panic the coordinator.
                 # See https://linear.app/materializeinc/issue/SQL-517
             ]
@@ -4279,7 +4305,7 @@ class ShowAction(Action):
                         str(view),
                     )
                 )
-            # Kafka and webhook sources are readable directly; the others
+            # Kafka and webhook sources are readable directly. The others
             # follow the source-table model where str() is the table and
             # the ingestion source is a separate catalog item.
             for source in direct_sources:
@@ -4406,11 +4432,14 @@ class ValidateConnectionAction(Action):
             "timeout: error trying to connect",
             # A concurrent ALTER SECRET rotation (the workload only rotates a
             # secret to its own value) can transiently expose an empty secret,
-            # so VALIDATE CONNECTION sends an empty password and Postgres
-            # rejects it (secret-rotation atomicity).
+            # so VALIDATE CONNECTION sends an empty password and the upstream
+            # system rejects it (secret-rotation atomicity). The same race
+            # surfaces with each upstream's own wording.
             # TODO: Remove when https://linear.app/materializeinc/issue/SS-347
             # is fixed.
-            "empty password returned by client",
+            "empty password returned by client",  # Postgres
+            "Access denied for user",  # MySQL
+            "Login failed for user",  # SQL Server
         ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> bool:
@@ -4987,8 +5016,12 @@ class CreateMultiLoadGeneratorSourceAction(Action):
                 source_id, cluster, schema, generator, self.rng
             )
             source.create(exe)
-            with exe.db.lock:
-                exe.db.multi_loadgen_sources.append(source)
+            # NOTE: No db.lock around the append. Taking it here would nest it
+            # inside the schema and cluster locks, inverting the db.lock-first
+            # order every other action uses. list.append is atomic, and a
+            # concurrent same-generator create is caught server-side ("already
+            # exists", tolerated above).
+            exe.db.multi_loadgen_sources.append(source)
         return True
 
 
@@ -5812,7 +5845,7 @@ class DropNetworkPolicyAction(Action):
             "cannot be dropped",
             # Another worker dropped the same policy first. The error carries
             # the raw name ('netpol-N', not the quoted form), so DROP resolves
-            # the name correctly; this is a concurrency race, not the ALTER
+            # the name correctly. This is a concurrency race, not the ALTER
             # NETWORK POLICY quoted-name bug.
             "unknown network policy",
         ] + super().errors_to_ignore(exe)
