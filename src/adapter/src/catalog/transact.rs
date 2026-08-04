@@ -752,6 +752,14 @@ impl Catalog {
             .collect();
 
         let temporary_ids = self.temporary_ids(&ops, temporary_drops)?;
+        let system_config_modified = ops.iter().any(|op| {
+            matches!(
+                op,
+                Op::UpdateSystemConfiguration { .. }
+                    | Op::ResetSystemConfiguration { .. }
+                    | Op::ResetAllSystemConfiguration
+            )
+        });
         let mut builtin_table_updates = vec![];
         let mut catalog_updates = vec![];
         let mut audit_events = vec![];
@@ -799,6 +807,17 @@ impl Catalog {
             self.shared_transient_revision
                 .store(self.transient_revision, atomic::Ordering::SeqCst);
             self.state = new_state;
+
+            // Now that the new state is committed and swapped in, let the
+            // system-var callbacks mirror the fresh values into out-of-band
+            // state (e.g. connection limits). We do this here rather than back
+            // in `transact_inner` so that aborted or dry-run transactions
+            // never notify on values they only speculated on. The callbacks
+            // are cheap idempotent reads, so we just fire all of them instead
+            // of tracking which vars actually changed.
+            if system_config_modified {
+                self.state.system_config().notify_all_callbacks();
+            }
         }
 
         Ok(TransactionResult {
@@ -3637,6 +3656,8 @@ impl ObjectsToDrop {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use mz_catalog::SYSTEM_CONN_ID;
     use mz_catalog::memory::objects::{CatalogItem, Table, TableDataSource};
     use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
@@ -3648,6 +3669,7 @@ mod tests {
         ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
     };
     use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
+    use mz_sql::session::vars::{MAX_CONNECTIONS, OwnedVarInput, SystemVars};
 
     use crate::catalog::{Catalog, Op};
     use crate::session::DEFAULT_DATABASE_NAME;
@@ -4562,6 +4584,138 @@ mod tests {
                     .iter()
                     .any(|(id, _, _)| *id == cluster_a),
                 "orphan row for a dropped cluster must be removed even when absent from prune_scope"
+            );
+
+            catalog.expire().await;
+        })
+        .await
+    }
+
+    /// Registers a `MAX_CONNECTIONS` callback that records every value it sees.
+    /// The initial fire from `register_callback` is cleared out, so callers
+    /// only observe notifications that happen afterwards.
+    fn record_max_connections(catalog: &mut Catalog) -> Arc<Mutex<Vec<u32>>> {
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&observed);
+        catalog.system_config_mut().register_callback(
+            &MAX_CONNECTIONS,
+            Arc::new(move |vars: &SystemVars| {
+                recorder
+                    .lock()
+                    .expect("recorder lock")
+                    .push(vars.max_connections())
+            }),
+        );
+        observed.lock().expect("recorder lock").clear();
+        observed
+    }
+
+    fn set_max_connections_op(value: u32) -> Op {
+        Op::UpdateSystemConfiguration {
+            name: MAX_CONNECTIONS.name.to_string(),
+            value: OwnedVarInput::Flat(value.to_string()),
+        }
+    }
+
+    /// A committed system-config transaction notifies registered callbacks with
+    /// the committed value.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn test_system_config_callback_fires_at_commit() {
+        Catalog::with_debug(|mut catalog| async move {
+            let observed = record_max_connections(&mut catalog);
+
+            let oracle_write_ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![set_max_connections_op(42)],
+                )
+                .await
+                .expect("set max_connections");
+
+            assert_eq!(catalog.system_config().max_connections(), 42);
+            assert_eq!(
+                observed.lock().expect("recorder lock").last().copied(),
+                Some(catalog.system_config().max_connections()),
+                "callback must observe the committed value"
+            );
+
+            catalog.expire().await;
+        })
+        .await
+    }
+
+    /// A dry-run transaction is never committed, so it must not notify.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn test_system_config_callback_not_fired_on_dry_run() {
+        Catalog::with_debug(|mut catalog| async move {
+            let observed = record_max_connections(&mut catalog);
+            let before = catalog.system_config().max_connections();
+
+            // The clone carries the registered callbacks, so the dry run
+            // genuinely *could* fire them. That's what makes this test worth
+            // anything.
+            let base_state = catalog.state().clone();
+            let oracle_write_ts = catalog.current_upper().await;
+            let (dry_run_state, _snapshot) = catalog
+                .transact_incremental_dry_run(
+                    &base_state,
+                    vec![set_max_connections_op(before + 1)],
+                    None,
+                    None,
+                    oracle_write_ts,
+                )
+                .await
+                .expect("dry run");
+
+            assert_eq!(dry_run_state.system_config().max_connections(), before + 1);
+            assert_eq!(catalog.system_config().max_connections(), before);
+            assert!(
+                observed.lock().expect("recorder lock").is_empty(),
+                "a dry run must not notify callbacks"
+            );
+
+            catalog.expire().await;
+        })
+        .await
+    }
+
+    /// A transaction that fails after applying a system-config op to the
+    /// candidate state must not notify, since nothing ever gets committed.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn test_system_config_callback_not_fired_on_rollback() {
+        Catalog::with_debug(|mut catalog| async move {
+            let observed = record_max_connections(&mut catalog);
+            let before = catalog.system_config().max_connections();
+
+            let oracle_write_ts = catalog.current_upper().await;
+            let result = catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![
+                        set_max_connections_op(before + 1),
+                        // `transact_op` rejects this while parsing, after the
+                        // first op already applied to the candidate state.
+                        Op::UpdateSystemConfiguration {
+                            name: MAX_CONNECTIONS.name.to_string(),
+                            value: OwnedVarInput::Flat("not a number".to_string()),
+                        },
+                    ],
+                )
+                .await;
+
+            assert!(result.is_err(), "the second op must abort the transaction");
+            assert_eq!(catalog.system_config().max_connections(), before);
+            assert!(
+                observed.lock().expect("recorder lock").is_empty(),
+                "an aborted transaction must not notify callbacks"
             );
 
             catalog.expire().await;
