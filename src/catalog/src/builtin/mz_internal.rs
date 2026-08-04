@@ -9,16 +9,19 @@
 
 //! Built-in catalog items for the `mz_internal` schema.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
+use itertools::Itertools;
+use mz_ore::collections::CollectionExt;
 use mz_pgrepr::oid;
 use mz_repr::adt::mz_acl_item::MzAclItem;
 use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
 use mz_repr::{RelationDesc, SemanticType, SqlScalarType};
-use mz_sql::catalog::{ObjectType, SystemObjectType};
+use mz_sql::catalog::{CatalogType, NameReference, ObjectType, SystemObjectType};
 use mz_sql::rbac;
 use mz_sql::session::user::{MZ_ANALYTICS_ROLE_ID, MZ_SYSTEM_ROLE_ID};
+use mz_sql_parser::ast::item_refs::collect_item_references;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_client::healthcheck::{
     MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC, MZ_PREPARED_STATEMENT_HISTORY_DESC,
@@ -32,9 +35,10 @@ use mz_storage_client::statistics::{MZ_SINK_STATISTICS_RAW_DESC, MZ_SOURCE_STATI
 use crate::memory::objects::DataSourceDesc;
 
 use super::{
-    ANALYTICS_SELECT, BuiltinConnection, BuiltinIndex, BuiltinMaterializedView, BuiltinSource,
-    BuiltinTable, BuiltinView, Cardinality, LinkProperties, MONITOR_REDACTED_SELECT,
+    ANALYTICS_SELECT, Builtin, BuiltinConnection, BuiltinIndex, BuiltinMaterializedView,
+    BuiltinSource, BuiltinTable, BuiltinView, Cardinality, LinkProperties, MONITOR_REDACTED_SELECT,
     MONITOR_SELECT, Ontology, OntologyLink, PUBLIC_SELECT, SUPPORT_SELECT,
+    assert_safe_builtin_name,
 };
 
 pub static MZ_CATALOG_RAW: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
@@ -394,64 +398,321 @@ WHERE
         }),
     }
 });
-pub static MZ_OBJECT_DEPENDENCIES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_object_dependencies",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::TABLE_MZ_OBJECT_DEPENDENCIES_OID,
-    desc: RelationDesc::builder()
-        .with_column("object_id", SqlScalarType::String.nullable(false))
-        .with_column(
-            "referenced_object_id",
-            SqlScalarType::String.nullable(false),
+// mz_object_dependencies is generated dynamically in BUILTINS_STATIC via
+// mz_internal::make_mz_object_dependencies().
+
+/// Generate the `mz_internal.mz_object_dependencies` builtin materialized view
+/// with builtin dependency edges inlined as VALUES clauses.
+///
+/// Inlining the values means the MV's SQL fingerprint changes whenever any
+/// builtin's references change, which forces a `MigrationStep::replacement` for
+/// `mz_object_dependencies` and guarantees stale edges are never silently
+/// served.
+///
+/// The view unions four edge sources:
+///
+/// - User items: references extracted from stored `create_sql` via
+///   `parse_catalog_item_references`. Id references are used directly.
+///   Function references print as plain qualified names in stored SQL, so
+///   they are recovered by joining `(schema, name)` against `GidMapping`
+///   rows. Temporary items are excluded, matching the behavior of the
+///   coordinator-packed table this view replaced.
+/// - Builtin items: name references extracted at generation time from every
+///   SQL-bearing builtin (views, materialized views, indexes, connections)
+///   and inlined as VALUES, joined to `GidMapping` at query time. Only
+///   SQL-bearing builtins produce edges: builtin tables, sources, types,
+///   funcs, and logs are constructed with no references.
+/// - Introspection source indexes: `si<id> -> s<log id>` edges from
+///   `ClusterIntrospectionSourceIndex` entries.
+/// - This view itself has no outgoing edges. Inlining its own edge rows would
+///   require a fixpoint, and the table it replaced had none either.
+///
+/// NOTE: array types' element-type ids are injected during name resolution
+/// without being printed in stored SQL, so user items are missing edges to
+/// the element type of an array type they use (the edge to the array type
+/// itself survives as an id reference). Builtin edges reconstruct the
+/// injection from the builtin type definitions, since builtin SQL is
+/// name-based.
+pub(super) fn make_mz_object_dependencies(
+    builtins: &[Builtin<NameReference>],
+) -> BuiltinMaterializedView {
+    // name -> schema for resolving unqualified references. Sound because
+    // `test_builtins_static_dependency_order` asserts builtin names are
+    // globally unique across schemas.
+    let mut schema_by_name: BTreeMap<&str, &str> = BTreeMap::new();
+    for b in builtins {
+        if let Some(prev) = schema_by_name.insert(b.name(), b.schema()) {
+            assert_eq!(
+                prev,
+                b.schema(),
+                "builtin name {} appears in multiple schemas; unqualified references are ambiguous",
+                b.name()
+            );
+        }
+    }
+
+    // `T[]` resolves to the array type paired with `T`, so the generator needs
+    // the same element-to-array mapping name resolution uses.
+    let mut array_type_by_elem: BTreeMap<&str, (&str, &str)> = BTreeMap::new();
+    for b in builtins {
+        if let Builtin::Type(t) = b {
+            if let CatalogType::Array { element_reference } = &t.details.typ {
+                array_type_by_elem.insert(element_reference, (t.schema, t.name));
+            }
+        }
+    }
+
+    let resolve = |object: &str, parts: &[String]| -> (String, String) {
+        match parts {
+            [.., schema, name] => (schema.clone(), name.clone()),
+            [name] => {
+                let schema = schema_by_name.get(name.as_str()).unwrap_or_else(|| {
+                    panic!(
+                        "cannot resolve unqualified reference {name:?} in builtin {object}; \
+                         qualify the reference or check that the referenced builtin exists"
+                    )
+                });
+                (schema.to_string(), name.clone())
+            }
+            [] => panic!("empty item reference in builtin {object}"),
+        }
+    };
+
+    // (object_schema, object_name, object_type, ref_schema, ref_name, ref_kind)
+    let mut rows: BTreeSet<(String, String, &str, String, String, &str)> = BTreeSet::new();
+    for b in builtins {
+        let (object_type, create_sql) = match b {
+            Builtin::View(v) => ("4", v.create_sql()),
+            Builtin::MaterializedView(mv) => ("5", mv.create_sql()),
+            Builtin::Index(i) => ("6", i.create_sql()),
+            Builtin::Connection(c) => ("10", c.sql.to_string()),
+            _ => continue,
+        };
+        let stmt = mz_sql::parse::parse(&create_sql)
+            .unwrap_or_else(|e| panic!("invalid sql for builtin {}: {e}", b.name()))
+            .into_element()
+            .ast;
+        let refs = collect_item_references(&stmt);
+
+        // Builtin SQL is name-based. An id reference here means somebody
+        // hardcoded a system id, which is not stable across versions.
+        assert!(
+            refs.ids.is_empty(),
+            "builtin {} references items by id: {:?}",
+            b.name(),
+            refs.ids
+        );
+        let mut push = |ref_schema: &str, ref_name: &str, ref_kind: &'static str| {
+            assert_safe_builtin_name(ref_schema, "referenced schema");
+            assert_safe_builtin_name(ref_name, "referenced object");
+            assert!(
+                !(b.schema() == ref_schema && b.name() == ref_name),
+                "builtin {}.{} references itself",
+                b.schema(),
+                b.name()
+            );
+            rows.insert((
+                b.schema().to_string(),
+                b.name().to_string(),
+                object_type,
+                ref_schema.to_string(),
+                ref_name.to_string(),
+                ref_kind,
+            ));
+        };
+
+        for parts in &refs.relation_names {
+            let (schema, name) = resolve(b.name(), parts);
+            push(&schema, &name, "rel");
+        }
+        for parts in &refs.func_names {
+            let (schema, name) = resolve(b.name(), parts);
+            push(&schema, &name, "func");
+        }
+        for parts in &refs.type_names {
+            let (schema, name) = resolve(b.name(), parts);
+            push(&schema, &name, "type");
+        }
+        for parts in &refs.array_element_names {
+            // `T[]` references the array type paired with `T`, not `T` itself.
+            let (_, name) = resolve(b.name(), parts);
+            let (array_schema, array_name) =
+                array_type_by_elem.get(name.as_str()).unwrap_or_else(|| {
+                    panic!(
+                        "builtin {} uses {name}[], but no builtin array type has element {name}",
+                        b.name()
+                    )
+                });
+            push(array_schema, array_name, "type");
+        }
+        assert_safe_builtin_name(b.schema(), "object schema");
+        assert_safe_builtin_name(b.name(), "object");
+    }
+
+    let builtin_ref_values = rows
+        .iter()
+        .map(
+            |(object_schema, object_name, object_type, ref_schema, ref_name, ref_kind)| {
+                format!(
+                    "('{object_schema}', '{object_name}', '{object_type}', \
+                     '{ref_schema}', '{ref_name}', '{ref_kind}')"
+                )
+            },
         )
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "object_id",
-            "The ID of the dependent object. Corresponds to `mz_objects.id`.",
-        ),
-        (
-            "referenced_object_id",
-            "The ID of the referenced object. Corresponds to `mz_objects.id`.",
-        ),
-    ]),
-    is_retained_metrics_object: true,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "object_dependency",
-        description: "A dependency edge: one object depends on another",
-        links: &const {
-            [
-                OntologyLink {
-                    name: "depends_on",
-                    target: "object",
-                    properties: LinkProperties::DependsOn {
-                        source_column: "object_id",
-                        target_column: "id",
-                        source_id_type: Some(mz_repr::SemanticType::CatalogItemId),
-                        requires_mapping: None,
+        .join(",");
+
+    let sql = format!(
+        "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL object_id,
+    ASSERT NOT NULL referenced_object_id
+) AS
+WITH
+    user_items AS (
+        SELECT
+            mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+            mz_internal.parse_catalog_item_references(data->'value'->'definition'->'V1'->>'create_sql') AS refs
+        FROM mz_internal.mz_catalog_raw
+        WHERE
+            data->>'kind' = 'Item' AND
+            data->'value'->>'ephemeral_owner_session' IS NULL
+    ),
+    gid_mappings AS (
+        SELECT
+            's' || (data->'value'->>'catalog_id') AS id,
+            data->'key'->>'schema_name' AS schema_name,
+            data->'key'->>'object_name' AS object_name,
+            data->'key'->>'object_type' AS object_type
+        FROM mz_internal.mz_catalog_raw
+        WHERE data->>'kind' = 'GidMapping'
+    ),
+    user_id_edges AS (
+        SELECT u.id AS object_id, r.ref AS referenced_object_id
+        FROM user_items u, jsonb_array_elements_text(u.refs->'ids') AS r(ref)
+    ),
+    user_func_edges AS (
+        SELECT u.id AS object_id, gm.id AS referenced_object_id
+        FROM
+            user_items u,
+            jsonb_array_elements(u.refs->'funcs') AS f(func)
+            JOIN gid_mappings gm ON
+                gm.object_type = '8' AND
+                gm.schema_name = f.func->>'schema' AND
+                gm.object_name = f.func->>'name'
+    ),
+    user_type_edges AS (
+        SELECT u.id AS object_id, gm.id AS referenced_object_id
+        FROM
+            user_items u,
+            jsonb_array_elements(u.refs->'types') AS t(typ)
+            JOIN gid_mappings gm ON
+                gm.object_type = '7' AND
+                gm.schema_name = t.typ->>'schema' AND
+                gm.object_name = t.typ->>'name'
+    ),
+    builtin_edges AS (
+        SELECT obj.id AS object_id, ref.id AS referenced_object_id
+        FROM
+            (VALUES {builtin_ref_values})
+                AS bv(object_schema, object_name, object_type, ref_schema, ref_name, ref_kind)
+            JOIN gid_mappings obj ON
+                obj.schema_name = bv.object_schema AND
+                obj.object_name = bv.object_name AND
+                obj.object_type = bv.object_type
+            JOIN gid_mappings ref ON
+                ref.schema_name = bv.ref_schema AND
+                ref.object_name = bv.ref_name AND
+                CASE bv.ref_kind
+                    WHEN 'func' THEN ref.object_type = '8'
+                    WHEN 'type' THEN ref.object_type = '7'
+                    ELSE ref.object_type IN ('1', '2', '4', '5')
+                END
+    ),
+    introspection_source_index_edges AS (
+        SELECT
+            'si' || (isi.data->'value'->>'catalog_id') AS object_id,
+            's' || (gm.data->'value'->>'catalog_id') AS referenced_object_id
+        FROM mz_internal.mz_catalog_raw AS isi
+        JOIN mz_internal.mz_catalog_raw AS gm ON
+            gm.data->>'kind' = 'GidMapping' AND
+            gm.data->'key'->>'object_type' = '2' AND
+            gm.data->'key'->>'schema_name' = 'mz_introspection' AND
+            gm.data->'key'->>'object_name' = isi.data->'key'->>'name'
+        WHERE isi.data->>'kind' = 'ClusterIntrospectionSourceIndex'
+    )
+SELECT object_id, referenced_object_id FROM user_id_edges
+UNION ALL
+SELECT object_id, referenced_object_id FROM user_func_edges
+UNION ALL
+SELECT object_id, referenced_object_id FROM user_type_edges
+UNION ALL
+SELECT object_id, referenced_object_id FROM builtin_edges
+UNION ALL
+SELECT object_id, referenced_object_id FROM introspection_source_index_edges
+"
+    );
+
+    BuiltinMaterializedView {
+        name: "mz_object_dependencies",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_OBJECT_DEPENDENCIES_OID,
+        desc: RelationDesc::builder()
+            .with_column("object_id", SqlScalarType::String.nullable(false))
+            .with_column(
+                "referenced_object_id",
+                SqlScalarType::String.nullable(false),
+            )
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "object_id",
+                "The ID of the dependent object. Corresponds to `mz_objects.id`.",
+            ),
+            (
+                "referenced_object_id",
+                "The ID of the referenced object. Corresponds to `mz_objects.id`.",
+            ),
+        ]),
+        sql: Box::leak(sql.into_boxed_str()),
+        is_retained_metrics_object: true,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "object_dependency",
+            description: "A dependency edge: one object depends on another",
+            links: &const {
+                [
+                    OntologyLink {
+                        name: "depends_on",
+                        target: "object",
+                        properties: LinkProperties::DependsOn {
+                            source_column: "object_id",
+                            target_column: "id",
+                            source_id_type: Some(mz_repr::SemanticType::CatalogItemId),
+                            requires_mapping: None,
+                        },
                     },
-                },
-                OntologyLink {
-                    name: "dependency_is",
-                    target: "object",
-                    properties: LinkProperties::DependsOn {
-                        source_column: "referenced_object_id",
-                        target_column: "id",
-                        source_id_type: Some(mz_repr::SemanticType::CatalogItemId),
-                        requires_mapping: None,
+                    OntologyLink {
+                        name: "dependency_is",
+                        target: "object",
+                        properties: LinkProperties::DependsOn {
+                            source_column: "referenced_object_id",
+                            target_column: "id",
+                            source_id_type: Some(mz_repr::SemanticType::CatalogItemId),
+                            requires_mapping: None,
+                        },
                     },
-                },
-            ]
-        },
-        column_semantic_types: &const {
-            [
-                ("object_id", SemanticType::CatalogItemId),
-                ("referenced_object_id", SemanticType::CatalogItemId),
-            ]
-        },
-    }),
-});
+                ]
+            },
+            column_semantic_types: &const {
+                [
+                    ("object_id", SemanticType::CatalogItemId),
+                    ("referenced_object_id", SemanticType::CatalogItemId),
+                ]
+            },
+        }),
+    }
+}
 pub static MZ_COMPUTE_DEPENDENCIES: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
     name: "mz_compute_dependencies",
     schema: MZ_INTERNAL_SCHEMA,

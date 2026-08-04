@@ -637,8 +637,8 @@ has no replicas — needs operator action."
 
 ## `mz_object_dependencies`
 
-The `mz_object_dependencies` table describes the dependency structure between
-all database objects in the system.
+The `mz_object_dependencies` materialized view describes the dependency
+structure between all database objects in the system.
 
 <!-- RELATION_SPEC mz_internal.mz_object_dependencies -->
 | Field                   | Type         | Meaning                                                                                       |
