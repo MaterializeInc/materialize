@@ -16,6 +16,7 @@ import {
   SinkStatisticsDataPoint,
 } from "~/api/materialize/sink/sinkStatistics";
 import { SubscribeRow } from "~/api/materialize/SubscribeManager";
+import Alert from "~/components/Alert";
 import { AppErrorBoundary } from "~/components/AppErrorBoundary";
 import { ConnectorStatisticsGraph } from "~/platform/connectors/ConnectorStatisticsGraph";
 import {
@@ -62,6 +63,7 @@ export const SinkStatisticsInner = (props: SinkStatisticsProps) => {
   const { colors } = useTheme<MaterializeTheme>();
   const {
     data: rawData,
+    isError,
     currentStartTime,
     currentEndTime,
     paddedStartTime,
@@ -137,6 +139,18 @@ export const SinkStatisticsInner = (props: SinkStatisticsProps) => {
     ],
     [colors.accent.purple, colors.foreground.tertiary],
   );
+
+  // A failed subscribe would otherwise render as an empty graph, which is
+  // indistinguishable from a healthy sink with no traffic.
+  if (isError) {
+    return (
+      <Alert
+        variant="error"
+        width="100%"
+        message="Sink statistics are currently unavailable."
+      />
+    );
+  }
 
   return (
     <VStack alignItems="flex-start" width="100%" spacing="64px" mb="64px">
