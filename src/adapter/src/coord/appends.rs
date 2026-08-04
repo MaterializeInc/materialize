@@ -66,7 +66,7 @@ use tracing::{Instrument, Span, info, warn};
 use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogUpperHandle};
 use crate::coord::{Coordinator, Message, PendingTxn, PlanValidity};
 use crate::metrics::Metrics;
-use crate::session::{GroupCommitWriteLocks, Session, WriteLocks};
+use crate::session::{EndTransactionAction, GroupCommitWriteLocks, Session, WriteLocks};
 use crate::statement_logging::StatementLoggingId;
 use crate::util::{CompletedClientTransmitter, ResultExt};
 use crate::{AdapterError, ExecuteContext};
@@ -759,6 +759,26 @@ impl Coordinator {
                         }),
                 } => {
                     assert_none!(write_locks, "should have merged together all locks above");
+
+                    // These rows were packed against the table's RelationDesc as of whenever the
+                    // statement ran, but the append below picks up whatever version is latest
+                    // now. If an ALTER TABLE ... ADD COLUMN snuck in, that descriptor is wider
+                    // than the rows are, and the persist encoder panics on the mismatch rather
+                    // than erroring. Fail the transaction and let the client retry.
+                    if let Some(id) = Self::stale_write_target(self.catalog(), &writes) {
+                        let err = AdapterError::ConcurrentDependencyMutation {
+                            dependency_id: id.to_string(),
+                        };
+                        let (ctx, result) = CompletedClientTransmitter::new(
+                            ctx,
+                            Err(err),
+                            EndTransactionAction::Rollback,
+                        )
+                        .finalize();
+                        ctx.retire(result);
+                        continue;
+                    }
+
                     for (id, table_data) in writes {
                         // If the table that some write was targeting has been deleted while the
                         // write was waiting, then the write will be ignored and we respond to the
@@ -834,6 +854,36 @@ impl Coordinator {
             // Dropping the request retires its clients and notifies its waiters.
             warn!("group committer task gone, dropping staged group commit");
         }
+    }
+
+    /// Returns a table whose staged rows no longer match its latest `RelationDesc`, if any.
+    ///
+    /// Only `TableData::Rows` can go stale, because it gets encoded during the commit itself.
+    /// `TableData::Batches` is already encoded and records its own schema with Persist, which
+    /// migrates older parts on read.
+    ///
+    /// NOTE: We only look at the first row of each `TableData::Rows`. All of its rows come from
+    /// one statement and so share an arity, and checking every row would mean decoding every row
+    /// on the coordinator thread, since a `Row` doesn't carry its arity.
+    fn stale_write_target(
+        catalog: &Catalog,
+        writes: &BTreeMap<CatalogItemId, SmallVec<[TableData; 1]>>,
+    ) -> Option<CatalogItemId> {
+        writes.iter().find_map(|(id, table_data)| {
+            // A write to a dropped table isn't stale, it's dropped. The caller deals with it.
+            let entry = catalog.try_get_entry(id)?;
+            let arity = entry
+                .relation_desc_latest()
+                .expect("write target is a table")
+                .arity();
+            let stale = table_data.iter().any(|data| match data {
+                TableData::Rows(rows) => rows
+                    .first()
+                    .is_some_and(|(row, _)| row.iter().count() != arity),
+                TableData::Batches(_) => false,
+            });
+            stale.then_some(*id)
+        })
     }
 
     /// Registers `tables` in FIFO order and returns the applied timestamp.
