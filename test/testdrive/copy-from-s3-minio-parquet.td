@@ -23,7 +23,7 @@ $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.mater
     REGION = 'us-east-1'
   );
 
-$ s3-upload-parquet-types bucket=copyfroms3 key-prefix=parquet/types.parquet
+$ s3-upload-parquet-types bucket=copyfroms3 key-prefix=parquet-types/types.parquet
 
 # Create a custom type for a composite type
 > CREATE TYPE record_type AS (name text, age int, avg double precision);
@@ -59,7 +59,7 @@ $ s3-upload-parquet-types bucket=copyfroms3 key-prefix=parquet/types.parquet
   map_col map[text => text]
   );
 
-$ s3-set-presigned-url bucket=copyfroms3 key=parquet/types.parquet var-name=types_url
+$ s3-set-presigned-url bucket=copyfroms3 key=parquet-types/types.parquet var-name=types_url
 
 > COPY INTO types FROM '${types_url}' (FORMAT PARQUET);
 
@@ -94,7 +94,7 @@ Taco
 
 
 # gzip Compression.
-$ s3-set-presigned-url bucket=copyfroms3 key=parquet/types.parquet.gzip var-name=gzip_types_url
+$ s3-set-presigned-url bucket=copyfroms3 key=parquet-types/types.parquet.gzip var-name=gzip_types_url
 
 > COPY INTO types FROM '${gzip_types_url}' (FORMAT PARQUET);
 
@@ -128,7 +128,7 @@ Taco
 0
 
 # snappy Compression.
-$ s3-set-presigned-url bucket=copyfroms3 key=parquet/types.parquet.snappy var-name=snappy_types_url
+$ s3-set-presigned-url bucket=copyfroms3 key=parquet-types/types.parquet.snappy var-name=snappy_types_url
 
 > COPY INTO types FROM '${snappy_types_url}' (FORMAT PARQUET);
 
@@ -162,7 +162,7 @@ Taco
 0
 
 # brotli Compression.
-$ s3-set-presigned-url bucket=copyfroms3 key=parquet/types.parquet.brotli var-name=brotli_types_url
+$ s3-set-presigned-url bucket=copyfroms3 key=parquet-types/types.parquet.brotli var-name=brotli_types_url
 
 > COPY INTO types FROM '${brotli_types_url}' (FORMAT PARQUET);
 
@@ -196,7 +196,7 @@ Taco
 0
 
 # zstd Compression.
-$ s3-set-presigned-url bucket=copyfroms3 key=parquet/types.parquet.zstd var-name=zstd_types_url
+$ s3-set-presigned-url bucket=copyfroms3 key=parquet-types/types.parquet.zstd var-name=zstd_types_url
 
 > COPY INTO types FROM '${zstd_types_url}' (FORMAT PARQUET);
 
@@ -230,7 +230,7 @@ Taco
 0
 
 # lz4 Compression.
-$ s3-set-presigned-url bucket=copyfroms3 key=parquet/types.parquet.lz4 var-name=lz4_types_url
+$ s3-set-presigned-url bucket=copyfroms3 key=parquet-types/types.parquet.lz4 var-name=lz4_types_url
 
 > COPY INTO types FROM '${lz4_types_url}' (FORMAT PARQUET);
 
@@ -268,8 +268,12 @@ Taco
 # Test the AWS Source.
 
 
-# Test glob patterns.
-> COPY INTO types FROM 's3://copyfroms3/parquet' (FORMAT PARQUET, AWS CONNECTION = aws_conn);
+# Test glob patterns. This matches every key under the `parquet-types/` prefix,
+# so that prefix must stay exclusive to this file. The `copyfroms3` bucket is
+# shared by every testdrive file in the run, and an unrelated file's parquet
+# object landing under this prefix would be copied into `types` too and fail on
+# the column count.
+> COPY INTO types FROM 's3://copyfroms3/parquet-types' (FORMAT PARQUET, AWS CONNECTION = aws_conn);
 
 > SELECT COUNT(*) FROM types;
 18
