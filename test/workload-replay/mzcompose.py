@@ -108,6 +108,19 @@ SERVICES = [
             "ipc": "host",
         },
     ),
+    # Replays the console's captured /api/sql traffic against the SQL HTTP
+    # endpoint at increasing virtual-user counts. Reads the queries.json
+    # that dump-queries produces during the Playwright suite.
+    ServiceDefinition(
+        name="console-k6",
+        config={
+            "image": "grafana/k6:1.6.0",
+            "volumes": [f"{MZ_ROOT}:/workdir"],
+            "working_dir": "/workdir/console/e2e-tests/k6",
+            # The summary export is written into the bind mount.
+            "propagate_uid_gid": True,
+        },
+    ),
 ]
 
 # UID/GID of the host user, used to run yarn commands so they don't create
@@ -454,6 +467,11 @@ def workflow_console_scalability(
     # image tag. Runs as root because it writes to /ms-playwright.
     _console_runner_sh(c, "node_modules/.bin/playwright install chromium")
 
+    # k6 must only ever replay queries captured from this run's console
+    # build, so remove a stale dump from a previous local run.
+    queries_json = MZ_ROOT / "console" / "e2e-tests" / "k6" / "queries.json"
+    queries_json.unlink(missing_ok=True)
+
     def run_suite() -> None:
         print("+++ Running console scalability suite")
         try:
@@ -467,6 +485,27 @@ def workflow_console_scalability(
             print(
                 "Console scalability suite failed. Not failing the workflow, "
                 f"the suite only collects timing data: {e}"
+            )
+        # k6 replays the query set that dump-queries captured above (it runs
+        # first in the suite), isolating server-side concurrency from browser
+        # behavior.
+        if not queries_json.exists():
+            print("dump-queries produced no queries.json, skipping the k6 load test")
+            return
+        print("+++ Running console k6 load test")
+        try:
+            c.run(
+                "console-k6",
+                "run",
+                "--summary-export=summary.json",
+                "cluster-detail.ts",
+                rm=True,
+                env_extra={"MZ_HTTP_URL": "http://materialized:6876"},
+            )
+        except Exception as e:
+            print(
+                "Console k6 load test failed. Not failing the workflow, "
+                f"it only collects timing data: {e}"
             )
 
     test(

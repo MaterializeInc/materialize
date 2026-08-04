@@ -320,6 +320,7 @@ steps:
         artifact_paths:
           - console/test-results/**/*
           - console/e2e-tests/k6/queries.json
+          - console/e2e-tests/k6/summary.json
         plugins:
           - ./ci/plugins/mzcompose:
               composition: workload-replay
