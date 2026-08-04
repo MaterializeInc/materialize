@@ -160,7 +160,7 @@ impl PeekScan {
             .row_iteration_seconds
             .observe(self.row_iteration_time.as_secs_f64());
         metrics
-            .result_sort_seconds
+            .result_thinning_seconds
             .observe(self.thinning_time.as_secs_f64());
 
         match stop {
@@ -262,17 +262,39 @@ impl PeekScan {
             return Some(Stop::Complete);
         }
 
-        // Sorting and truncating has an effect similar to a priority queue,
-        // without its interactive dequeueing properties.
+        // Partition rather than sort: we only need to know which rows fall
+        // outside the first `max_results`, not the order among those that stay.
+        // The final ordering is established once, when the results are
+        // collected. Sorting here would cost a log factor per row for an order
+        // we then throw away.
+        //
+        // Partitioning is not stable, so when rows tie across the cut it is
+        // unspecified which of them survives, and since entries carry a count
+        // the retained multiset genuinely differs between choices. What the
+        // client sees does not, for three reasons together:
+        //
+        //  - A tie under this comparator means the rows are byte-identical,
+        //    because the tiebreaker compares the whole encoded row.
+        //  - We keep exactly `max_results` entries, each with a count of at
+        //    least one, so the retained run expands to at least `max_results`
+        //    rows and its first `max_results` are the same either way.
+        //  - `max_results` is `limit + offset`, and the finishing reads exactly
+        //    `offset..offset + limit` of the merged result, whose prefix
+        //    depends only on the runs' prefixes.
+        //
+        // NOTE: The second and third points are why a peek result must not be
+        // consumed without applying the finishing's limit.
+        //
         // TODO: Had we left these as `Vec<Datum>` we would avoid the unpacking.
         // We should consider doing that, although it will require a re-pivot of
         // the code to branch on this inner test (as we prefer not to maintain
         // `Vec<Datum>` in the other case).
         let sort_start = Instant::now();
         let comparator = &self.comparator;
-        self.results.sort_by(|left, right| {
-            comparator.compare_rows(&left.0, &right.0, || left.0.cmp(&right.0))
-        });
+        self.results
+            .select_nth_unstable_by(max_results, |left, right| {
+                comparator.compare_rows(&left.0, &right.0, || left.0.cmp(&right.0))
+            });
         self.thinning_time += sort_start.elapsed();
 
         let dropped_size = self
