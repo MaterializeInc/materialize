@@ -26,11 +26,9 @@ use mz_ore::cast::CastLossy;
 
 use crate::{KeyProber, MySqlError, QualifiedTableRef};
 
-/// Longest key prefix to split on, bounds the refinement loop.
-const MAX_DEPTH: usize = 16;
-/// Hard cap on children from a single split, bounds the walk even if the
-/// server's ordering misbehaves.
-const MAX_CHILDREN_PER_SPLIT: usize = 4096;
+/// When partitioning the data, how many buckets per worker to target to
+/// try to get more even splits.
+const BUCKETS_PER_WORKER: f64 = 8.0;
 
 /// Computes up to `workers - 1` exclusive upper bounds, in key order, that
 /// split `table` into per-worker key ranges of roughly equal estimated row
@@ -63,45 +61,6 @@ pub async fn partition_table_by_pk_prefix(
     Ok(boundaries)
 }
 
-/// What the partitioner needs from the database. Keys are treated as strings
-/// and split by prefix, so implementations must order prefixes consistently
-/// with the full keys they abbreviate.
-///
-/// Bounds are exclusive on both sides and optional: a `start` of `None`
-/// means the beginning of the key space, an `end` of `None` means unbounded.
-/// A key exactly equal to a bound or prefix argument is skipped, its
-/// extensions still surface through the exclusive bound.
-trait PartitionDb {
-    /// Row count estimate for keys in `(start, end)`. May be arbitrarily
-    /// inaccurate.
-    async fn estimate_range_rows(
-        &mut self,
-        start: Option<&str>,
-        end: Option<&str>,
-    ) -> Result<u64, MySqlError>;
-
-    /// The prefix of up to `len` characters of the first key in
-    /// `(start, end)`, or `None` if the range holds no rows.
-    async fn first_prefix(
-        &mut self,
-        start: Option<&str>,
-        end: Option<&str>,
-        len: usize,
-    ) -> Result<Option<String>, MySqlError>;
-
-    /// The prefix of up to `len` characters of the first key past the last
-    /// key matching `cur`, taken from keys below `end`. `None` if no such
-    /// key exists. Every key extending `cur` is covered by the match,
-    /// including `cur` itself as an exact key.
-    async fn next_prefix(
-        &mut self,
-        cur: &str,
-        end: Option<&str>,
-        len: usize,
-    ) -> Result<Option<String>, MySqlError>;
-}
-
-/// A half open key range `[start, end)` tracked by the splitting loop.
 #[derive(Debug)]
 struct Range {
     /// Exclusive start, `None` at the beginning of the key space.
@@ -129,19 +88,16 @@ async fn partition<D: PartitionDb>(
     // Aim for more buckets than workers. With exactly one bucket per worker
     // an under-estimated table size could make the whole table look too small
     // to split. Small buckets are recombined when boundaries are assigned.
-    let mut buckets = workers;
-    while buckets < 8 {
-        buckets *= 2;
-    }
-    let target_bucket_rows = (estimated_row_count / f64::cast_lossy(buckets)).max(min_bucket_rows);
-    // Split ranges down to well below the bucket size so that accumulated
-    // bucket boundaries can land close to their targets.
-    let target_split_rows = (target_bucket_rows / 8.0).max(min_bucket_rows);
+    let estimated_rows_per_worker =
+        (estimated_row_count / f64::cast_lossy(workers)).max(min_bucket_rows);
+    let target_rows_per_bucket =
+        (estimated_rows_per_worker / BUCKETS_PER_WORKER).max(min_bucket_rows);
+
     tracing::debug!(
         estimated_row_count,
-        buckets,
-        target_bucket_rows,
-        target_split_rows,
+        workers,
+        estimated_rows_per_worker,
+        target_rows_per_bucket,
         "partitioning key space by prefix"
     );
 
@@ -155,14 +111,11 @@ async fn partition<D: PartitionDb>(
         let mut split_any = false;
         let mut next: Vec<Range> = Vec::with_capacity(ranges.len());
         for range in ranges {
-            if range.estimated_rows > target_split_rows && range.depth < MAX_DEPTH {
+            if range.estimated_rows > target_rows_per_bucket {
                 split_any = true;
                 // An empty child list means the range holds no rows (a
-                // phantom estimate) and is dropped. A single child spanning
-                // the whole parent comes back with a greater depth, so
-                // retrying it splits on a longer prefix and MAX_DEPTH bounds
-                // the loop.
-                next.extend(split_range(db, &range, target_split_rows).await?);
+                // phantom estimate) and is dropped.
+                next.extend(split_range(db, &range, target_rows_per_bucket).await?);
             } else {
                 next.push(range);
             }
@@ -206,18 +159,18 @@ async fn partition<D: PartitionDb>(
 }
 
 /// Splits `parent` at every distinct key prefix one character longer than the
-/// prefix `parent` was split at, except that a tail whose estimate already
-/// fits `target_rows` stays a single child.
+/// prefix `parent`, i.e. "a" depth: 1 for a table with keys "a", "aa", "aaa", "ab" would be split to
+/// "a" depth: 2 estimate 1, "aa" depth: 2 estimate 2, "ab" depth 2, estimate 1.
 async fn split_range<D: PartitionDb>(
     db: &mut D,
     parent: &Range,
     target_rows: f64,
 ) -> Result<Vec<Range>, MySqlError> {
-    let len = parent.depth + 1;
+    let depth = parent.depth + 1;
     let mut children = Vec::new();
 
     let Some(mut cur) = db
-        .first_prefix(parent.start.as_deref(), parent.end.as_deref(), len)
+        .first_prefix(parent.start.as_deref(), parent.end.as_deref(), depth)
         .await?
     else {
         return Ok(children);
@@ -226,31 +179,30 @@ async fn split_range<D: PartitionDb>(
     let mut start = parent.start.clone();
 
     loop {
-        // If the remaining rows fit the target, emit them as one child and
-        // stop. The children cap likewise closes out the split with whatever
-        // remains.
+        // Small optimization to return early if the remaining rows past the current start prefix
+        // fits within the threshold we're looking for.
         let remaining = db
             .estimate_range_rows(start.as_deref(), parent.end.as_deref())
             .await?;
         let remaining = f64::cast_lossy(remaining).max(1.0);
-        if remaining <= target_rows || children.len() + 1 >= MAX_CHILDREN_PER_SPLIT {
+        if remaining <= target_rows {
             children.push(Range {
                 start,
                 end: parent.end.clone(),
                 estimated_rows: remaining,
-                depth: len,
+                depth,
             });
             return Ok(children);
         }
-        // When `cur` is an exact key shorter than `len`, every key extending
+        // When `cur` is an exact key shorter than `depth`, every key extending
         // it matches `cur`, so next_prefix exhausts even though those
         // extensions still need visiting. The first key past `cur` exposes
         // them, so the walk can keep splitting instead of retrying the whole
         // range at greater depths forever.
-        let next = match db.next_prefix(&cur, parent.end.as_deref(), len).await? {
+        let next = match db.next_prefix(&cur, parent.end.as_deref(), depth).await? {
             Some(next) => Some(next),
             None => {
-                db.first_prefix(Some(&cur), parent.end.as_deref(), len)
+                db.first_prefix(Some(&cur), parent.end.as_deref(), depth)
                     .await?
             }
         };
@@ -265,7 +217,7 @@ async fn split_range<D: PartitionDb>(
                     start: start.clone(),
                     end: Some(next.clone()),
                     estimated_rows: f64::cast_lossy(estimated_rows).max(1.0),
-                    depth: len,
+                    depth,
                 });
                 start = Some(next.clone());
                 cur = next;
@@ -275,12 +227,38 @@ async fn split_range<D: PartitionDb>(
                     start,
                     end: parent.end.clone(),
                     estimated_rows: remaining,
-                    depth: len,
+                    depth,
                 });
                 return Ok(children);
             }
         }
     }
+}
+
+/// Wrapper around KeyProber for testing purposes.
+trait PartitionDb {
+    async fn estimate_range_rows(
+        &mut self,
+        start: Option<&str>,
+        end: Option<&str>,
+    ) -> Result<u64, MySqlError>;
+
+    /// A `start` of `None` means the beginning of the key space.
+    async fn first_prefix(
+        &mut self,
+        start: Option<&str>,
+        end: Option<&str>,
+        len: usize,
+    ) -> Result<Option<String>, MySqlError>;
+
+    /// Every key extending `cur` is covered by the match, including `cur`
+    /// itself as an exact key.
+    async fn next_prefix(
+        &mut self,
+        cur: &str,
+        end: Option<&str>,
+        len: usize,
+    ) -> Result<Option<String>, MySqlError>;
 }
 
 impl<'a> PartitionDb for KeyProber<'a> {
