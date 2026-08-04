@@ -19,9 +19,9 @@ use mz_catalog::builtin::{
     MZ_CLUSTER_REPLICA_SIZES, MZ_COLUMNS, MZ_EGRESS_IPS, MZ_FUNCTIONS,
     MZ_HISTORY_RETENTION_STRATEGIES, MZ_ICEBERG_SINKS, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS,
     MZ_LICENSE_KEYS, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES,
-    MZ_OBJECT_DEPENDENCIES, MZ_OBJECT_GLOBAL_IDS, MZ_OPERATORS, MZ_PSEUDO_TYPES, MZ_REPLACEMENTS,
-    MZ_ROLE_AUTH, MZ_SESSIONS, MZ_SINKS, MZ_SOURCE_REFERENCES, MZ_STORAGE_USAGE_BY_SHARD,
-    MZ_SUBSCRIPTIONS, MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
+    MZ_OBJECT_GLOBAL_IDS, MZ_OPERATORS, MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH,
+    MZ_SESSIONS, MZ_SINKS, MZ_SOURCE_REFERENCES, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS,
+    MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::durable::SourceReferences;
 use mz_catalog::memory::error::Error;
@@ -101,19 +101,6 @@ impl CatalogState {
     ) -> BuiltinTableUpdate<CatalogItemId> {
         let id = self.resolve_builtin_table(id);
         BuiltinTableUpdate { id, data }
-    }
-
-    pub fn pack_depends_update(
-        &self,
-        depender: CatalogItemId,
-        dependee: CatalogItemId,
-        diff: Diff,
-    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
-        let row = Row::pack_slice(&[
-            Datum::String(&depender.to_string()),
-            Datum::String(&dependee.to_string()),
-        ]);
-        BuiltinTableUpdate::row(&*MZ_OBJECT_DEPENDENCIES, row, diff)
     }
 
     pub(super) fn pack_role_auth_update(
@@ -209,13 +196,8 @@ impl CatalogState {
             CatalogItem::Connection(_) => vec![],
         };
 
-        if !entry.item().is_temporary() {
-            // Populate or clean up the `mz_object_dependencies` table.
-            // TODO(jkosh44) Unclear if this table wants to include all uses or only references.
-            for dependee in entry.item().references().items() {
-                updates.push(self.pack_depends_update(id, *dependee, diff))
-            }
-        }
+        // mz_object_dependencies is a MaterializedView backed by
+        // mz_internal.mz_catalog_raw, so dependency edges need no packing.
 
         // Always report the latest for an objects columns.
         if let Some(desc) = entry.relation_desc_latest() {

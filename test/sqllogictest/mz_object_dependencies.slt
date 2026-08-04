@@ -1,0 +1,197 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Behavioural tests for mz_internal.mz_object_dependencies. It is a
+# BuiltinMaterializedView over mz_internal.mz_catalog_raw (see
+# make_mz_object_dependencies in src/catalog/src/builtin/mz_internal.rs)
+# unioning user-item edges extracted from stored create_sql via
+# parse_catalog_item_references (src/expr/src/scalar/func/impls/jsonb.rs),
+# builtin edges inlined as VALUES at generation time, and introspection
+# source index edges.
+#
+# Before that it was a BuiltinTable populated by pack_depends_update in the
+# adapter from each item's ResolvedIds, so the edges pinned here are a
+# compatibility surface.
+#
+# Assertions filter by object name rather than counting user rows, so the file
+# also holds under --auto-index-selects, which creates extra views.
+
+mode cockroach
+
+reset-server
+
+statement ok
+CREATE TABLE t (a int, b text NOT NULL)
+
+statement ok
+CREATE VIEW v AS SELECT pg_catalog.abs(a), b::text FROM t WHERE a > 42
+
+# --- relation and function edges from user items ------------------------------
+
+# v depends on t (relation reference, stored as an id in create_sql).
+query T
+SELECT count(*)
+FROM mz_internal.mz_object_dependencies
+WHERE object_id = (SELECT id FROM mz_views WHERE name = 'v')
+  AND referenced_object_id = (SELECT id FROM mz_tables WHERE name = 't')
+----
+1
+
+# v depends on pg_catalog.abs. Function references print as plain names in
+# stored SQL and are recovered by name from the GidMapping rows, so this edge
+# pins the name-join path.
+query T
+SELECT count(*)
+FROM mz_internal.mz_object_dependencies
+WHERE object_id = (SELECT id FROM mz_views WHERE name = 'v')
+  AND referenced_object_id IN (SELECT id FROM mz_functions WHERE name = 'abs')
+----
+1
+
+# v depends on the type named in its definition (text from the cast), which
+# prints as an id reference in stored SQL.
+query T rowsort
+SELECT ty.name
+FROM mz_internal.mz_object_dependencies dep
+JOIN mz_types ty ON ty.id = dep.referenced_object_id
+WHERE dep.object_id = (SELECT id FROM mz_views WHERE name = 'v')
+----
+text
+
+# t depends on its column types.
+query T rowsort
+SELECT ty.name
+FROM mz_internal.mz_object_dependencies dep
+JOIN mz_types ty ON ty.id = dep.referenced_object_id
+WHERE dep.object_id = (SELECT id FROM mz_tables WHERE name = 't')
+----
+int4
+text
+
+# --- array types ---------------------------------------------------------------
+
+statement ok
+CREATE TABLE arr (a int4[])
+
+# Using int4[] yields an edge to the array type _int4. The edge to the element
+# type int4 that name resolution additionally records is NOT reproduced: the
+# element-type id is injected during resolution without being printed in
+# create_sql. This is an accepted semantic change of the materialized-view
+# conversion.
+query T rowsort
+SELECT ty.name
+FROM mz_internal.mz_object_dependencies dep
+JOIN mz_types ty ON ty.id = dep.referenced_object_id
+WHERE dep.object_id = (SELECT id FROM mz_tables WHERE name = 'arr')
+----
+_int4
+
+# --- connection and secret edges ------------------------------------------------
+
+statement ok
+CREATE SECRET pw AS 'hunter2'
+
+statement ok
+CREATE CONNECTION kc TO KAFKA (BROKER 'kafka:9092', SASL MECHANISMS 'PLAIN', SASL USERNAME 'u', SASL PASSWORD = SECRET pw) WITH (VALIDATE = false)
+
+query T
+SELECT count(*)
+FROM mz_internal.mz_object_dependencies
+WHERE object_id = (SELECT id FROM mz_connections WHERE name = 'kc')
+  AND referenced_object_id = (SELECT id FROM mz_secrets WHERE name = 'pw')
+----
+1
+
+# --- temporary items are excluded ----------------------------------------------
+
+statement ok
+CREATE TEMPORARY VIEW tv AS SELECT * FROM t
+
+query T
+SELECT count(*)
+FROM mz_internal.mz_object_dependencies
+WHERE object_id = (SELECT id FROM mz_views WHERE name = 'tv')
+----
+0
+
+# --- builtin edges ---------------------------------------------------------------
+
+# mz_catalog.mz_indexes is itself a materialized view over mz_catalog_raw.
+# Its edge comes from the VALUES inlined at generation time, joined to
+# GidMapping rows at query time.
+query T
+SELECT count(*)
+FROM mz_internal.mz_object_dependencies dep
+JOIN mz_objects o ON o.id = dep.object_id
+JOIN mz_schemas os ON os.id = o.schema_id
+JOIN mz_objects r ON r.id = dep.referenced_object_id
+JOIN mz_schemas rs ON rs.id = r.schema_id
+WHERE os.name = 'mz_catalog' AND o.name = 'mz_indexes'
+  AND rs.name = 'mz_internal' AND r.name = 'mz_catalog_raw'
+----
+1
+
+# Builtin views also depend on the functions they call, recorded by name at
+# generation time. mz_catalog.mz_indexes calls mz_internal.parse_catalog_id.
+query T
+SELECT count(*) > 0
+FROM mz_internal.mz_object_dependencies dep
+JOIN mz_objects o ON o.id = dep.object_id
+JOIN mz_schemas os ON os.id = o.schema_id
+WHERE os.name = 'mz_catalog' AND o.name = 'mz_indexes'
+  AND dep.referenced_object_id IN (SELECT id FROM mz_functions WHERE name = 'parse_catalog_id')
+----
+true
+
+# A healthy population of system-object edges exists (same bar as
+# test/testdrive/mz-depends.td).
+query T
+SELECT count(*) > 200 FROM mz_internal.mz_object_dependencies WHERE object_id LIKE 's%'
+----
+true
+
+# Introspection source indexes depend on their log.
+query T
+SELECT count(*) > 0 FROM mz_internal.mz_object_dependencies WHERE object_id LIKE 'si%'
+----
+true
+
+# The relation itself must be reported as a materialized view. It is
+# generated and inserted into the builtin list before the mz_builtin_*
+# reporter views and the ontology views are generated, so those views see
+# it. A miss here means the generation order in BUILTINS_STATIC regressed.
+query T
+SELECT count(*) FROM mz_materialized_views WHERE name = 'mz_object_dependencies'
+----
+1
+
+query T
+SELECT count(*) FROM mz_internal.mz_ontology_entity_types WHERE name = 'object_dependency'
+----
+1
+
+# --- structural invariants -------------------------------------------------------
+
+# No duplicate edges: ResolvedIds was a map, so the packed table never
+# produced duplicates, and consumers (e.g. transitive closures) assume this.
+query T
+SELECT count(*) FROM (
+    SELECT object_id, referenced_object_id
+    FROM mz_internal.mz_object_dependencies
+    GROUP BY object_id, referenced_object_id
+    HAVING count(*) > 1
+)
+----
+0
+
+# No self-edges.
+query T
+SELECT count(*) FROM mz_internal.mz_object_dependencies WHERE object_id = referenced_object_id
+----
+0

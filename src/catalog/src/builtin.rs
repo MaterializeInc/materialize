@@ -783,6 +783,20 @@ impl Fingerprint for SqlRelationType {
     }
 }
 
+/// Asserts that `name` is safe to embed unquoted inside a `'...'`-quoted SQL literal
+/// or inside a `"..."`-quoted SQL identifier. Generated builtin materialized views
+/// (`make_mz_indexes`, `make_mz_object_dependencies`, ...) concatenate builtin names
+/// into SQL fragments, so a quote or backslash would produce malformed SQL. Builtin
+/// names should always be plain ASCII identifiers.
+pub(super) fn assert_safe_builtin_name(name: &str, kind: &str) {
+    assert!(
+        !name.contains('\'') && !name.contains('"') && !name.contains('\\'),
+        "builtin {kind} name {name:?} contains an unsupported character; \
+         generated builtin materialized views reconstruct SQL via string \
+         concatenation and assume names contain no quotes or backslashes"
+    );
+}
+
 pub(super) const PUBLIC_SELECT: MzAclItem = MzAclItem {
     grantee: RoleId::Public,
     grantor: MZ_SYSTEM_ROLE_ID,
@@ -1110,7 +1124,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_KAFKA_SINKS),
         Builtin::MaterializedView(&MZ_KAFKA_CONNECTIONS),
         Builtin::MaterializedView(&MZ_KAFKA_SOURCES),
-        Builtin::Table(&MZ_OBJECT_DEPENDENCIES),
+        // mz_object_dependencies is generated dynamically below with inlined builtin VALUES.
         Builtin::Table(&MZ_ICEBERG_SINKS),
         Builtin::MaterializedView(&MZ_DATABASES),
         Builtin::MaterializedView(&MZ_SCHEMAS),
@@ -1520,6 +1534,51 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
             .position(|b| matches!(b, Builtin::Table(t) if t.name == "mz_index_columns"))
             .expect("mz_index_columns must be present in builtin_items");
         builtin_items.insert(insert_pos, Builtin::MaterializedView(mz_indexes_ref));
+    }
+
+    // Generate mz_object_dependencies with every builtin's dependency edges
+    // inlined as VALUES so that its SQL fingerprint changes whenever any
+    // builtin's references change, forcing an explicit
+    // MigrationStep::replacement.
+    //
+    // Must happen AFTER the make_mz_sources/make_mz_indexes blocks above, so
+    // the generator sees those materialized views' references. Must happen
+    // BEFORE ontology::generate_views and builtin::builtins below, so that
+    // the ontology views carry mz_object_dependencies' entity metadata and
+    // the mz_builtin_* reporter views list it. Those generated views carry
+    // dependency edges of their own (type casts, make_mz_aclitem calls,
+    // mz_ontology_properties reads catalog relations), so the generator
+    // previews them here to collect those edges. The preview runs without
+    // mz_object_dependencies present, which only affects the views' VALUES
+    // contents, not their reference sets, so the collected edges match the
+    // final views. The mz_object_dependencies fingerprint stability test
+    // asserts that equivalence.
+    //
+    // Inserted at the original position of the old static
+    // MZ_OBJECT_DEPENDENCIES table (right before mz_iceberg_sinks) to
+    // preserve stable IDs for all items that follow it in the list.
+    {
+        let ontology_preview = ontology::generate_views(&builtin_items);
+        let reporter_preview: Vec<_> = builtin::builtins(&builtin_items).collect();
+        let generator_input: Vec<_> = builtin_types
+            .iter()
+            .chain(builtin_funcs.iter())
+            .chain(reporter_preview.iter())
+            .chain(builtin_items.iter())
+            .chain(ontology_preview.iter())
+            .cloned()
+            .collect();
+        let mz_object_dependencies = mz_internal::make_mz_object_dependencies(&generator_input);
+        let mz_object_dependencies_ref: &'static BuiltinMaterializedView =
+            Box::leak(Box::new(mz_object_dependencies));
+        let insert_pos = builtin_items
+            .iter()
+            .position(|b| matches!(b, Builtin::Table(t) if t.name == "mz_iceberg_sinks"))
+            .expect("mz_iceberg_sinks must be present in builtin_items");
+        builtin_items.insert(
+            insert_pos,
+            Builtin::MaterializedView(mz_object_dependencies_ref),
+        );
     }
 
     // Generate ontology views by enumerating existing builtins.
@@ -2288,6 +2347,72 @@ mod tests {
             fp_base,
             Fingerprint::fingerprint(&&mv_extra_log),
             "mz_indexes fingerprint must change when a builtin log is added"
+        );
+    }
+
+    /// Verifies that the `mz_object_dependencies` materialized view
+    /// fingerprint changes whenever any builtin's references change.
+    ///
+    /// This is the correctness property that `make_mz_object_dependencies`
+    /// provides: by inlining every builtin's dependency edges as VALUES in
+    /// its SQL, any change to those edges is reflected in `fingerprint()`. A
+    /// stale fingerprint would prevent the catalog migration from replacing
+    /// `mz_object_dependencies`, silently serving stale builtin edges.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_mz_object_dependencies_fingerprint_tracks_builtin_references() {
+        // The generator input is the full builtin list minus the generated
+        // MV itself. This is a superset of the static-init input (which runs
+        // before the ontology and mz_builtin_* reporter views are
+        // generated), but those views are VALUES constants with no item
+        // references, so they contribute no edge rows and the generated SQL
+        // is identical. The stability assertion below proves that.
+        let without_self: Vec<Builtin<NameReference>> = BUILTINS_STATIC
+            .iter()
+            .filter(|b| {
+                !matches!(b, Builtin::MaterializedView(mv) if mv.name == "mz_object_dependencies")
+            })
+            .cloned()
+            .collect();
+
+        let mv_base = mz_internal::make_mz_object_dependencies(&without_self);
+        let fp_base = Fingerprint::fingerprint(&&mv_base);
+
+        let mz_object_dependencies_static = BUILTINS_STATIC
+            .iter()
+            .find_map(|b| match b {
+                Builtin::MaterializedView(mv) if mv.name == "mz_object_dependencies" => Some(*mv),
+                _ => None,
+            })
+            .expect("mz_object_dependencies must be present in BUILTINS_STATIC");
+        assert_eq!(
+            fp_base,
+            Fingerprint::fingerprint(&mz_object_dependencies_static),
+            "make_mz_object_dependencies fingerprint must match the \
+             BUILTINS_STATIC mz_object_dependencies fingerprint"
+        );
+
+        // Adding a view with a new reference must change the fingerprint,
+        // proving that make_mz_object_dependencies inlines the builtin edge
+        // set into its SQL.
+        let extra_view: &'static BuiltinView = Box::leak(Box::new(BuiltinView {
+            name: "mz_object_dependencies_fingerprint_probe",
+            schema: MZ_INTERNAL_SCHEMA,
+            oid: 0,
+            desc: RelationDesc::builder().finish(),
+            column_comments: BTreeMap::new(),
+            sql: "SELECT * FROM mz_internal.mz_catalog_raw",
+            access: vec![],
+            ontology: None,
+        }));
+        let mut with_extra = without_self.clone();
+        with_extra.push(Builtin::View(extra_view));
+        let mv_extra = mz_internal::make_mz_object_dependencies(&with_extra);
+        assert_ne!(
+            fp_base,
+            Fingerprint::fingerprint(&&mv_extra),
+            "mz_object_dependencies fingerprint must change when a builtin \
+             view with a new reference is added"
         );
     }
 }
