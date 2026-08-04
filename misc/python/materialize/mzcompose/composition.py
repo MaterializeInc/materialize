@@ -369,7 +369,6 @@ class Composition:
         max_tries: int = 1,
         silent: bool = False,
         environment: dict[str, str] | None = None,
-        build: str | None = None,
         print_prefix: str | None = None,
     ) -> subprocess.CompletedProcess:
         """Invoke `docker compose` on the rendered composition.
@@ -547,35 +546,16 @@ class Composition:
 
                 if retry < max_tries:
                     print("Retrying ...")
-                    if build:
-                        for retry in range(max_tries):
-                            try:
-                                build_status = buildkite.get_build_status(build)
-                            except subprocess.CalledProcessError:
-                                time.sleep(3)
-                                break
-                            if build_status == "failed":
-                                print(
-                                    f"Build {build} has been marked as failed, exiting hard"
-                                )
-                                sys.exit(1)
-                            elif build_status == "success":
-                                break
-                            assert (
-                                build_status == "pending"
-                            ), f"Unknown build status {build_status}"
-                            time.sleep(1)
-                    else:
-                        # Back off exponentially rather than sleeping a flat
-                        # 3s each time. The only `invoke` callers that retry
-                        # (max_tries > 1) are image pulls (`up`, `pull`), and a
-                        # freshly-built mzbuild image can briefly fail to
-                        # resolve in the registry ("failed to resolve reference
-                        # ... not found") before it has propagated. With a flat
-                        # 3s sleep, `up`'s tries exhausted in seconds, which was
-                        # too short to ride out the propagation delay; the cap
-                        # plus `up`'s try count govern the total wait (see there).
-                        time.sleep(min(3 * 2 ** (retry - 1), 30))
+                    # Back off exponentially rather than sleeping a flat
+                    # 3s each time. The only `invoke` callers that retry
+                    # (max_tries > 1) are image pulls (`up`, `pull`), and a
+                    # freshly-built mzbuild image can briefly fail to
+                    # resolve in the registry ("failed to resolve reference
+                    # ... not found") before it has propagated. With a flat
+                    # 3s sleep, `up`'s tries exhausted in seconds, which was
+                    # too short to ride out the propagation delay; the cap
+                    # plus `up`'s try count govern the total wait (see there).
+                    time.sleep(min(3 * 2 ** (retry - 1), 30))
                     continue
                 else:
                     raise CommandFailureCausedUIError(
@@ -1270,8 +1250,7 @@ class Composition:
                 *(["--wait"] if wait else []),
                 *(["--quiet-pull"] if ui.env_is_truthy("CI") else []),
                 *service_names,
-                max_tries=300 if os.getenv("CI_WAITING_FOR_BUILD") else max_tries,
-                build=os.getenv("CI_WAITING_FOR_BUILD"),
+                max_tries=max_tries,
             )
         finally:
             # Restore even on failure: otherwise the next test in the same

@@ -46,7 +46,7 @@ import requests
 import yaml
 from requests.auth import HTTPBasicAuth
 
-from materialize import MZ_ROOT, buildkite, cargo, git, rustc_flags, spawn, ui, xcompile
+from materialize import MZ_ROOT, cargo, git, rustc_flags, spawn, ui, xcompile
 from materialize.docker import image_registry
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch, target
@@ -1199,30 +1199,9 @@ class ResolvedImage:
                         # happened based on error code
                         # (https://github.com/docker/cli/issues/538) and we
                         # want to print output directly to terminal.
-                        if build := os.getenv("CI_WAITING_FOR_BUILD"):
-                            for retry in range(max_retries):
-                                try:
-                                    build_status = buildkite.get_build_status(build)
-                                except subprocess.CalledProcessError:
-                                    time.sleep(sleep_time)
-                                    sleep_time = min(sleep_time * 2, 10)
-                                    break
-                                print(f"Build {build} status: {build_status}")
-                                if build_status == "failed":
-                                    print(
-                                        f"Build {build} has been marked as failed, exiting hard"
-                                    )
-                                    sys.exit(1)
-                                elif build_status == "success":
-                                    break
-                                assert (
-                                    build_status == "pending"
-                                ), f"Unknown build status {build_status}"
-                                time.sleep(1)
-                        else:
-                            print(f"Retrying in {sleep_time}s ...")
-                            time.sleep(sleep_time)
-                            sleep_time = min(sleep_time * 2, 10)
+                        print(f"Retrying in {sleep_time}s ...")
+                        time.sleep(sleep_time)
+                        sleep_time = min(sleep_time * 2, 10)
                         continue
                     else:
                         break
@@ -1427,14 +1406,10 @@ class DependencySet:
         # Only retry in CI runs since we struggle with flaky docker pulls there
         if not max_retries:
             max_retries = (
-                90
-                if os.getenv("CI_WAITING_FOR_BUILD")
-                else (
-                    5
-                    if ui.env_is_truthy("CI")
-                    and not ui.env_is_truthy("CI_ALLOW_LOCAL_BUILD")
-                    else 1
-                )
+                5
+                if ui.env_is_truthy("CI")
+                and not ui.env_is_truthy("CI_ALLOW_LOCAL_BUILD")
+                else 1
             )
         assert max_retries > 0
 

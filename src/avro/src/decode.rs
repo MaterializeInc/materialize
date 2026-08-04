@@ -1048,6 +1048,54 @@ fn min_encoded_len_piece(
     }
 }
 
+/// Bounds the object count an object-container-file block declares against the
+/// payload that is supposed to hold those objects.
+///
+/// The count comes straight off the wire, and `util::safe_len` alone caps it at
+/// `MAX_ALLOCATION_BYTES` — a sensible ceiling for a byte length, an enormous one
+/// for a count, and in no way related to the block it describes. `payload_len` is
+/// the block's *decompressed* length.
+///
+/// Which bound applies is decided the same way as for an array block, and for the
+/// same reason (see [`min_encoded_len`]): the byte floor when the object schema has
+/// a proven positive one, otherwise the node-weighted cap, because a zero-width
+/// object — an empty record, or a record of only `null`/empty-record fields —
+/// encodes to no bytes at all, so no payload length can constrain how many of them
+/// a block may claim.
+///
+/// Unlike an array block, the two bounds are *alternatives* rather than both being
+/// applied. An array materializes all of its elements at once, so its cap is about
+/// retained memory; a block's objects are yielded and dropped one at a time, so the
+/// cap here is about work amplified out of a few bytes. Once the byte floor holds,
+/// the work is linear in the file and needs no further ceiling — and capping nodes
+/// as well would reject a legitimate large block of small records.
+///
+/// Not charged against [`DECODE_NODES`]: that budget is per top-level datum and
+/// each object in a block is its own datum. This is a standalone check on the
+/// block header.
+pub(crate) fn bound_block_object_count(
+    schema: SchemaNode,
+    count: usize,
+    payload_len: usize,
+) -> Result<(), AvroError> {
+    let min_bytes = min_encoded_len(schema);
+    if min_bytes > 0 {
+        if count.saturating_mul(min_bytes) > payload_len {
+            return Err(AvroError::Decode(DecodeError::Custom(format!(
+                "Avro block object count {count} exceeds block payload ({payload_len} bytes)"
+            ))));
+        }
+        return Ok(());
+    }
+    let nodes = count.saturating_mul(min_value_nodes(schema));
+    if nodes > MAX_VALUE_NODES {
+        return Err(AvroError::Decode(DecodeError::Custom(format!(
+            "Avro block object count {count} exceeds limit {MAX_VALUE_NODES} decoded values"
+        ))));
+    }
+    Ok(())
+}
+
 /// A *lower* bound on the number of `Value` nodes a single value of `schema`
 /// materializes into when decoded.
 ///

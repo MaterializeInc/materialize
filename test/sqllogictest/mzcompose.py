@@ -647,6 +647,10 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/jsonb.slt",
         "test/sqllogictest/keys.slt",
         "test/sqllogictest/like.slt",
+        # Asserts that a LIMIT at the top level of a SELECT must be constant,
+        # which no longer holds once --auto-index-selects wraps the SELECT in a
+        # view, where a non-constant LIMIT is allowed.
+        "test/sqllogictest/limit_expr.slt",
         "test/sqllogictest/list.slt",
         "test/sqllogictest/list_subquery.slt",
         "test/sqllogictest/managed_cluster.slt",
@@ -1084,6 +1088,10 @@ def compileSlowSltConfig() -> SltRunConfig:
         "test/sqllogictest/typeof.slt",
         # https://github.com/MaterializeInc/database-issues/issues/9513#issuecomment-3128051157
         "test/sqllogictest/temporal.slt",
+        # Asserts that a LIMIT at the top level of a SELECT must be constant,
+        # which no longer holds once --auto-index-selects wraps the SELECT in a
+        # view, where a non-constant LIMIT is allowed.
+        "test/sqllogictest/limit_expr.slt",
         # The extra statements make it more flaky from timing issues, when expecting a refresh to not yet have happened.
         "test/sqllogictest/materialized_views.slt",
         # Asserts on exact allocated ids to force a replica/item id collision,

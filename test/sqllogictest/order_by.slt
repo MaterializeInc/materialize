@@ -1659,7 +1659,35 @@ EXECUTE fizz_paginated(4::bigint, 2*4);
 ----
 25040  two
 
-# TODO: LIMIT currently just tries to match a literal after parameter binding. It should also do constant folding,
-# similarly to OFFSET.
-query error Top\-level LIMIT must be a constant expression, got integer_to_bigint\(4\)
+# Parameter binding wraps the int parameter in a cast to bigint, which constant folding
+# must see through (SQL-476).
+query IT
 EXECUTE fizz_paginated(4, 2*4);
+----
+25040  two
+
+# NULL LIMIT means no limit.
+query IT
+EXECUTE fizz_paginated(NULL::int, 2*4);
+----
+25040  two
+
+query error LIMIT must not be negative
+EXECUTE fizz_paginated(-1, 0);
+
+# Parameterized LIMIT, exact repro from SQL-476.
+statement ok
+CREATE TABLE r9 (a int);
+
+statement ok
+INSERT INTO r9 VALUES (1), (2), (3), (4), (5);
+
+statement ok
+PREPARE p15 AS SELECT a FROM r9 ORDER BY a LIMIT $1;
+
+query I
+EXECUTE p15(3);
+----
+1
+2
+3
