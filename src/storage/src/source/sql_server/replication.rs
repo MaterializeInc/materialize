@@ -209,8 +209,8 @@ pub(crate) fn render<'scope>(
             // that we get exactly this many rows later.
             for table in &snapshot_tables {
                 let qualified_table_name = format!("{schema_name}.{table_name}",
-                    schema_name = &table.schema_name,
-                    table_name = &table.name);
+                    schema_name = table.schema_name,
+                    table_name = table.name);
                 let size_calc_start = Instant::now();
                 let table_total =
                     mz_sql_server_util::inspect::snapshot_size(

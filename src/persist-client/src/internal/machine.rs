@@ -586,8 +586,8 @@ where
                     assert!(
                         PartialOrder::less_equal(&writer_upper, &shard_upper),
                         "{:?} vs {:?}",
-                        &writer_upper,
-                        &shard_upper
+                        writer_upper,
+                        shard_upper
                     );
                     if PartialOrder::less_than(&writer_upper, batch.desc.upper()) {
                         // No way this could have committed in some previous

@@ -1311,7 +1311,7 @@ mod tests {
         assert_eq!(
             format!(
                 "SELECT `c1`, `c2`, `c3` FROM `{}`.`{}`",
-                &schema_name, &table_name
+                schema_name, table_name
             ),
             query
         );
@@ -1358,7 +1358,7 @@ mod tests {
         assert_eq!(
             format!(
                 "SELECT `id`, `name` FROM `{}`.`{}` WHERE `id` >= 100 AND `id` < 200",
-                &schema_name, &table_name
+                schema_name, table_name
             ),
             query
         );
@@ -1373,7 +1373,7 @@ mod tests {
         assert_eq!(
             format!(
                 "SELECT `id`, `name` FROM `{}`.`{}` WHERE `id` < 200",
-                &schema_name, &table_name
+                schema_name, table_name
             ),
             query
         );
@@ -1388,7 +1388,7 @@ mod tests {
         assert_eq!(
             format!(
                 "SELECT `id`, `name` FROM `{}`.`{}` WHERE `id` >= 200",
-                &schema_name, &table_name
+                schema_name, table_name
             ),
             query
         );

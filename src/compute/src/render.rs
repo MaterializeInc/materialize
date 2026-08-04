@@ -232,9 +232,9 @@ pub fn build_compute_dataflow(
     let subscribe_snapshot_optimization =
         SUBSCRIBE_SNAPSHOT_OPTIMIZATION.get(&compute_state.worker_config);
 
-    let name = format!("Dataflow: {}", &dataflow.debug_name);
-    let input_name = format!("InputRegion: {}", &dataflow.debug_name);
-    let build_name = format!("BuildRegion: {}", &dataflow.debug_name);
+    let name = format!("Dataflow: {}", dataflow.debug_name);
+    let input_name = format!("InputRegion: {}", dataflow.debug_name);
+    let build_name = format!("BuildRegion: {}", dataflow.debug_name);
 
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
         let scope = scope.with_label();
@@ -751,7 +751,7 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
                 panic!(
                     "Arrangement alarmingly absent! id: {:?}, keys: {:?}",
                     Id::Global(idx_id),
-                    &key
+                    key
                 );
             }
         };
@@ -853,7 +853,7 @@ where
                 panic!(
                     "Arrangement alarmingly absent! id: {:?}, keys: {:?}",
                     Id::Global(idx_id),
-                    &key,
+                    key,
                 );
             }
         };

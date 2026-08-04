@@ -2020,7 +2020,7 @@ impl CatalogState {
                 Some(metadata) => metadata.referenced_by.push(entry.id()),
                 None => panic!(
                     "Catalog: missing dependent catalog item {} while installing {}",
-                    &u,
+                    u,
                     self.resolve_full_name(entry.name(), entry.conn_id())
                 ),
             }
@@ -2035,7 +2035,7 @@ impl CatalogState {
                 Some(metadata) => metadata.used_by.push(entry.id()),
                 None => panic!(
                     "Catalog: missing dependent catalog item {} while installing {}",
-                    &u,
+                    u,
                     self.resolve_full_name(entry.name(), entry.conn_id())
                 ),
             }

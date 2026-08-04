@@ -7,6 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// The doc comments here become the descriptions in the generated CRD, which the
+// docs site renders through Hugo, so they contain shortcodes like
+// `{{<warning>}}`. Rustdoc reads the inner `<warning>` as an HTML tag and
+// reports it unclosed whenever a shortcode spans more than one Markdown
+// paragraph.
+#![allow(rustdoc::invalid_html_tags)]
+
 use std::collections::BTreeMap;
 use std::time::Duration;
 

@@ -107,7 +107,7 @@ fn test_persistence() {
         client
             .batch_execute(&format!(
                 "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}', SECURITY PROTOCOL PLAINTEXT)",
-                &*KAFKA_ADDRS,
+                *KAFKA_ADDRS,
             ))
             .unwrap();
         client
@@ -1186,30 +1186,30 @@ fn test_http_sql() {
                 .connect(postgres::NoTls)
                 .unwrap();
             super_user
-                .batch_execute(&format!("CREATE ROLE {}", &HTTP_DEFAULT_USER.name))
+                .batch_execute(&format!("CREATE ROLE {}", HTTP_DEFAULT_USER.name))
                 .unwrap();
             super_user
                 .batch_execute(&format!(
                     "GRANT ALL PRIVILEGES ON SYSTEM TO {}",
-                    &HTTP_DEFAULT_USER.name
+                    HTTP_DEFAULT_USER.name
                 ))
                 .unwrap();
             super_user
                 .batch_execute(&format!(
                     "GRANT ALL PRIVILEGES ON CLUSTER quickstart TO {}",
-                    &HTTP_DEFAULT_USER.name
+                    HTTP_DEFAULT_USER.name
                 ))
                 .unwrap();
             super_user
                 .batch_execute(&format!(
                     "GRANT ALL PRIVILEGES ON DATABASE materialize TO {}",
-                    &HTTP_DEFAULT_USER.name
+                    HTTP_DEFAULT_USER.name
                 ))
                 .unwrap();
             super_user
                 .batch_execute(&format!(
                     "GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO {}",
-                    &HTTP_DEFAULT_USER.name
+                    HTTP_DEFAULT_USER.name
                 ))
                 .unwrap();
         }
@@ -5421,30 +5421,30 @@ fn run_mcp_datadriven_inner(
                 .connect(postgres::NoTls)
                 .unwrap();
             super_user
-                .batch_execute(&format!("CREATE ROLE {}", &HTTP_DEFAULT_USER.name))
+                .batch_execute(&format!("CREATE ROLE {}", HTTP_DEFAULT_USER.name))
                 .unwrap();
             super_user
                 .batch_execute(&format!(
                     "GRANT ALL PRIVILEGES ON SYSTEM TO {}",
-                    &HTTP_DEFAULT_USER.name
+                    HTTP_DEFAULT_USER.name
                 ))
                 .unwrap();
             super_user
                 .batch_execute(&format!(
                     "GRANT ALL PRIVILEGES ON CLUSTER quickstart TO {}",
-                    &HTTP_DEFAULT_USER.name
+                    HTTP_DEFAULT_USER.name
                 ))
                 .unwrap();
             super_user
                 .batch_execute(&format!(
                     "GRANT ALL PRIVILEGES ON DATABASE materialize TO {}",
-                    &HTTP_DEFAULT_USER.name
+                    HTTP_DEFAULT_USER.name
                 ))
                 .unwrap();
             super_user
                 .batch_execute(&format!(
                     "GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO {}",
-                    &HTTP_DEFAULT_USER.name
+                    HTTP_DEFAULT_USER.name
                 ))
                 .unwrap();
 
@@ -5458,7 +5458,7 @@ fn run_mcp_datadriven_inner(
                 super_user
                     .batch_execute(&format!(
                         "ALTER ROLE {} SET restrict_to_user_objects = true",
-                        &HTTP_DEFAULT_USER.name
+                        HTTP_DEFAULT_USER.name
                     ))
                     .unwrap();
             }
@@ -5715,24 +5715,24 @@ fn test_mcp_developer_search_path_defense() {
             .unwrap();
 
         super_user
-            .batch_execute(&format!("CREATE ROLE {}", &HTTP_DEFAULT_USER.name))
+            .batch_execute(&format!("CREATE ROLE {}", HTTP_DEFAULT_USER.name))
             .unwrap();
         super_user
             .batch_execute(&format!(
                 "GRANT ALL PRIVILEGES ON SYSTEM TO {}",
-                &HTTP_DEFAULT_USER.name
+                HTTP_DEFAULT_USER.name
             ))
             .unwrap();
         super_user
             .batch_execute(&format!(
                 "GRANT ALL PRIVILEGES ON DATABASE materialize TO {}",
-                &HTTP_DEFAULT_USER.name
+                HTTP_DEFAULT_USER.name
             ))
             .unwrap();
         super_user
             .batch_execute(&format!(
                 "GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO {}",
-                &HTTP_DEFAULT_USER.name
+                HTTP_DEFAULT_USER.name
             ))
             .unwrap();
 
@@ -5749,13 +5749,13 @@ fn test_mcp_developer_search_path_defense() {
         super_user
             .batch_execute(&format!(
                 "GRANT SELECT ON public.mz_leak, public.pg_leak TO {}",
-                &HTTP_DEFAULT_USER.name
+                HTTP_DEFAULT_USER.name
             ))
             .unwrap();
         super_user
             .batch_execute(&format!(
                 "ALTER ROLE {} SET search_path TO public",
-                &HTTP_DEFAULT_USER.name
+                HTTP_DEFAULT_USER.name
             ))
             .unwrap();
     }
@@ -5915,30 +5915,30 @@ fn test_mcp_developer_rbac_passthrough() {
             .batch_execute("ALTER SYSTEM SET enable_rbac_checks TO true")
             .unwrap();
         super_user
-            .batch_execute(&format!("CREATE ROLE {}", &HTTP_DEFAULT_USER.name))
+            .batch_execute(&format!("CREATE ROLE {}", HTTP_DEFAULT_USER.name))
             .unwrap();
         super_user
             .batch_execute(&format!(
                 "GRANT ALL PRIVILEGES ON SYSTEM TO {}",
-                &HTTP_DEFAULT_USER.name
+                HTTP_DEFAULT_USER.name
             ))
             .unwrap();
         super_user
             .batch_execute(&format!(
                 "GRANT ALL PRIVILEGES ON DATABASE materialize TO {}",
-                &HTTP_DEFAULT_USER.name
+                HTTP_DEFAULT_USER.name
             ))
             .unwrap();
         super_user
             .batch_execute(&format!(
                 "GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO {}",
-                &HTTP_DEFAULT_USER.name
+                HTTP_DEFAULT_USER.name
             ))
             .unwrap();
         super_user
             .batch_execute(&format!(
                 "GRANT ALL PRIVILEGES ON CLUSTER quickstart TO {}",
-                &HTTP_DEFAULT_USER.name
+                HTTP_DEFAULT_USER.name
             ))
             .unwrap();
 
@@ -6061,7 +6061,7 @@ fn test_mcp_developer_rbac_passthrough() {
         super_user
             .batch_execute(&format!(
                 "GRANT USAGE ON SCHEMA restricted_schema TO {}",
-                &HTTP_DEFAULT_USER.name
+                HTTP_DEFAULT_USER.name
             ))
             .unwrap();
     }
@@ -6094,7 +6094,7 @@ fn test_mcp_developer_rbac_passthrough() {
         super_user
             .batch_execute(&format!(
                 "GRANT SELECT ON restricted_schema.v TO {}",
-                &HTTP_DEFAULT_USER.name
+                HTTP_DEFAULT_USER.name
             ))
             .unwrap();
     }
@@ -6112,7 +6112,7 @@ fn test_mcp_developer_rbac_passthrough() {
         super_user
             .batch_execute(&format!(
                 "REVOKE USAGE ON SCHEMA restricted_schema FROM {}",
-                &HTTP_DEFAULT_USER.name
+                HTTP_DEFAULT_USER.name
             ))
             .unwrap();
     }
@@ -6212,30 +6212,30 @@ fn test_mcp_agent_with_data_product() {
 
         // Create the HTTP user and grant privileges.
         super_user
-            .batch_execute(&format!("CREATE ROLE {}", &HTTP_DEFAULT_USER.name))
+            .batch_execute(&format!("CREATE ROLE {}", HTTP_DEFAULT_USER.name))
             .unwrap();
         super_user
             .batch_execute(&format!(
                 "GRANT ALL PRIVILEGES ON SYSTEM TO {}",
-                &HTTP_DEFAULT_USER.name
+                HTTP_DEFAULT_USER.name
             ))
             .unwrap();
         super_user
             .batch_execute(&format!(
                 "GRANT ALL PRIVILEGES ON CLUSTER quickstart TO {}",
-                &HTTP_DEFAULT_USER.name
+                HTTP_DEFAULT_USER.name
             ))
             .unwrap();
         super_user
             .batch_execute(&format!(
                 "GRANT ALL PRIVILEGES ON DATABASE materialize TO {}",
-                &HTTP_DEFAULT_USER.name
+                HTTP_DEFAULT_USER.name
             ))
             .unwrap();
         super_user
             .batch_execute(&format!(
                 "GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO {}",
-                &HTTP_DEFAULT_USER.name
+                HTTP_DEFAULT_USER.name
             ))
             .unwrap();
 
@@ -6258,14 +6258,14 @@ fn test_mcp_agent_with_data_product() {
         super_user
             .batch_execute(&format!(
                 "GRANT SELECT ON test_products TO {}",
-                &HTTP_DEFAULT_USER.name
+                HTTP_DEFAULT_USER.name
             ))
             .unwrap();
         // Grant USAGE on the cluster so it appears in mz_show_my_cluster_privileges.
         super_user
             .batch_execute(&format!(
                 "GRANT USAGE ON CLUSTER quickstart TO {}",
-                &HTTP_DEFAULT_USER.name
+                HTTP_DEFAULT_USER.name
             ))
             .unwrap();
 
@@ -6288,7 +6288,7 @@ fn test_mcp_agent_with_data_product() {
         super_user
             .batch_execute(&format!(
                 "GRANT SELECT ON test_indexed_view TO {}",
-                &HTTP_DEFAULT_USER.name
+                HTTP_DEFAULT_USER.name
             ))
             .unwrap();
 
@@ -6302,7 +6302,7 @@ fn test_mcp_agent_with_data_product() {
         super_user
             .batch_execute(&format!(
                 "GRANT SELECT ON test_unindexed_view TO {}",
-                &HTTP_DEFAULT_USER.name
+                HTTP_DEFAULT_USER.name
             ))
             .unwrap();
 
@@ -6322,7 +6322,7 @@ fn test_mcp_agent_with_data_product() {
         super_user
             .batch_execute(&format!(
                 "GRANT SELECT ON test_unindexed_mv TO {}",
-                &HTTP_DEFAULT_USER.name
+                HTTP_DEFAULT_USER.name
             ))
             .unwrap();
     }
@@ -6589,13 +6589,13 @@ fn test_mcp_agent_with_data_product() {
         super_user
             .batch_execute(&format!(
                 "GRANT SELECT ON test_off_default TO {}",
-                &HTTP_DEFAULT_USER.name
+                HTTP_DEFAULT_USER.name
             ))
             .unwrap();
         super_user
             .batch_execute(&format!(
                 "GRANT USAGE ON CLUSTER dex27_other_cluster TO {}",
-                &HTTP_DEFAULT_USER.name
+                HTTP_DEFAULT_USER.name
             ))
             .unwrap();
     }
@@ -7455,24 +7455,24 @@ fn test_mcp_agent_rbac() {
     // Create the HTTP default user with basic system/database/schema privileges
     // but NO object-level grants yet.
     super_user
-        .batch_execute(&format!("CREATE ROLE {}", &HTTP_DEFAULT_USER.name))
+        .batch_execute(&format!("CREATE ROLE {}", HTTP_DEFAULT_USER.name))
         .unwrap();
     super_user
         .batch_execute(&format!(
             "GRANT ALL PRIVILEGES ON SYSTEM TO {}",
-            &HTTP_DEFAULT_USER.name
+            HTTP_DEFAULT_USER.name
         ))
         .unwrap();
     super_user
         .batch_execute(&format!(
             "GRANT ALL PRIVILEGES ON DATABASE materialize TO {}",
-            &HTTP_DEFAULT_USER.name
+            HTTP_DEFAULT_USER.name
         ))
         .unwrap();
     super_user
         .batch_execute(&format!(
             "GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO {}",
-            &HTTP_DEFAULT_USER.name
+            HTTP_DEFAULT_USER.name
         ))
         .unwrap();
 
@@ -7518,7 +7518,7 @@ fn test_mcp_agent_rbac() {
     super_user
         .batch_execute(&format!(
             "GRANT SELECT ON rbac_product TO {}",
-            &HTTP_DEFAULT_USER.name
+            HTTP_DEFAULT_USER.name
         ))
         .unwrap();
     let (status, body) = mcp_post(&agents_url, get_products.clone());
@@ -7551,7 +7551,7 @@ fn test_mcp_agent_rbac() {
     super_user
         .batch_execute(&format!(
             "REVOKE SELECT ON rbac_product FROM {}",
-            &HTTP_DEFAULT_USER.name
+            HTTP_DEFAULT_USER.name
         ))
         .unwrap();
     let (status, body) = mcp_post(&agents_url, get_products.clone());
@@ -7584,7 +7584,7 @@ fn test_mcp_agent_rbac() {
     super_user
         .batch_execute(&format!(
             "GRANT SELECT ON rbac_product TO {}",
-            &HTTP_DEFAULT_USER.name
+            HTTP_DEFAULT_USER.name
         ))
         .unwrap();
     let (status, body) = mcp_post(&agents_url, get_products.clone());

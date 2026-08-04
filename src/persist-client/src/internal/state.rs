@@ -1161,7 +1161,7 @@ impl<T: Timestamp + TotalOrder> HollowBatch<T> {
             return Err(format!(
                 "batch since {:?} != minimum antichain {:?}",
                 self.desc.since().elements(),
-                &[T::minimum()],
+                [T::minimum()],
             ));
         }
         for part in self.parts.iter() {
@@ -1853,7 +1853,7 @@ where
         assert!(
             PartialOrder::less_equal(&writer_state.most_recent_write_upper, batch.desc.upper()),
             "{:?} vs {:?}",
-            &writer_state.most_recent_write_upper,
+            writer_state.most_recent_write_upper,
             batch.desc.upper()
         );
         writer_state

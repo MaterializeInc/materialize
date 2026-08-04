@@ -763,7 +763,7 @@ fn create_environmentd_statefulset_object(
         "--orchestrator=kubernetes".into(),
         format!(
             "--orchestrator-kubernetes-service-account={}",
-            &mz.service_account_name()
+            mz.service_account_name()
         ),
         format!(
             "--orchestrator-kubernetes-image-pull-policy={}",
@@ -942,7 +942,7 @@ fn create_environmentd_statefulset_object(
     // Add URL for internal user impersonation endpoint
     args.push(format!(
         "--internal-console-redirect-url={}",
-        &config.internal_console_proxy_url,
+        config.internal_console_proxy_url,
     ));
 
     if !config.collect_pod_metrics {
