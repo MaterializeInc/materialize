@@ -173,6 +173,17 @@ disables it and keeps today's per-timestamp builders):
   data, so boundaries can land among these near-maximum times. A builder
   cannot be split at a boundary, which is why fresh uncovered updates must
   not enter a shared builder yet.
+- Updates below the lower of the first received description are dropped.
+  The sink's ingress gate uses the shard upper cached when its write
+  handle was opened, while the description minter starts at a freshly
+  fetched upper, so updates in that gap can pass the gate even though they
+  are already durable and no description will ever cover them. Staging
+  them would finish a batch whose parts carry data below the registered
+  append bounds. Persist truncates such data when the parts are read back,
+  and compaction then produces fewer updates than the spine recorded for
+  the batch, which fails a persist-internal invariant. Until the first
+  description arrives the sink cannot tell these updates apart from
+  stageable ones, so aged updates wait in the raw stash until it does.
 - Updates covered by a received description, updates that age past `H`,
   and raw-stashed rows whose time ages past `H` all move into coalesced
   builders: one per received batch description, plus one open builder for
@@ -211,11 +222,15 @@ only progress.
 
 A retained subtlety on the append side: `append_batches` trims batches
 when another writer advanced the shard upper past a batch description's
-lower. A batch carries its largest update timestamp, is deleted when that
-falls below the new lower, and is otherwise kept whole:
-`compare_and_append_batch` truncates updates outside the append bounds,
-and the truncated data is already in the shard, written by whoever
-advanced the upper.
+lower. Each batch carries inclusive bounds on its update timestamps. A
+batch entirely below the new lower is deleted, since that data is already
+in the shard, written by whoever advanced the upper. A batch entirely at
+or beyond the new lower is kept whole. A batch that straddles the new
+lower can be neither appended nor split: appending it would register parts
+with data below the append bounds, which persist truncates at read,
+desyncing the spine's recorded update counts from what compaction
+reproduces. The sink deletes its batches and restarts the dataflow
+instead.
 
 Resident memory is then bounded on both tiers. Each coalesced builder
 holds at most `blob_target_size` plus one part upload in flight, and there

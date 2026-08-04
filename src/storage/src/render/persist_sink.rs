@@ -209,6 +209,7 @@ where
         HollowBatchAndMetadata {
             lower,
             upper,
+            data_min_ts: self.data_min_ts,
             data_max_ts: self.data_max_ts,
             batch: batch.into_transmittable_batch(),
             metrics: self.metrics,
@@ -265,8 +266,9 @@ async fn stage_update(
 struct HollowBatchAndMetadata<T> {
     lower: Antichain<T>,
     upper: Antichain<T>,
-    /// The largest update timestamp in the batch, used to decide whether the batch still
-    /// holds relevant data when an append's lower advances past the batch description's.
+    /// Inclusive bounds on the timestamps of the updates in the batch, used to decide how
+    /// to handle the batch when an append's lower advances past the batch description's.
+    data_min_ts: T,
     data_max_ts: T,
     batch: ProtoBatch,
     metrics: BatchMetrics,
@@ -282,6 +284,7 @@ struct BatchSet {
 #[derive(Debug)]
 struct FinishedBatch {
     batch: Batch<SourceData, (), mz_repr::Timestamp, StorageDiff>,
+    data_min_ts: mz_repr::Timestamp,
     data_max_ts: mz_repr::Timestamp,
 }
 
@@ -641,6 +644,15 @@ fn write_batches<'scope>(
         // observed update timestamp minus the configured lag, and never retreats.
         let mut coalesce_horizon: Option<mz_repr::Timestamp> = None;
 
+        // The lower of the first received batch description. Descriptions arrive in
+        // ascending order, so this is the least time this sink will ever append at. Updates
+        // below it are already durable in the shard and must be dropped rather than staged
+        // into a coalesced builder: no description will ever cover them, and a finished
+        // batch whose parts carry data below the registered append bounds has that data
+        // truncated when the parts are read back, which desyncs persist's spine bookkeeping
+        // from the actual update counts and panics compaction.
+        let mut first_description_lower: Option<Antichain<mz_repr::Timestamp>> = None;
+
         // Contains descriptions of batches for which we know that we can
         // write data, along with an optional coalesced builder holding updates that fall
         // within the description's bounds. We got the descriptions from the "centralized"
@@ -710,6 +722,11 @@ fn write_batches<'scope>(
                                     description, desired_frontier, batch_descriptions_frontier,
                                 );
                             }
+                            // Descriptions arrive in ascending order, so the first one
+                            // carries the least lower this sink will ever append at.
+                            if first_description_lower.is_none() {
+                                first_description_lower = Some(description.0.clone());
+                            }
                             // If the open coalesced builder's contents fall within this
                             // description, move it into the description's slot so it is
                             // finished with the description's bounds. Contents entirely
@@ -718,6 +735,17 @@ fn write_batches<'scope>(
                                 Some(builder)
                                     if !description.1.less_equal(&builder.data_max_ts) =>
                                 {
+                                    assert!(
+                                        description.0.less_equal(&builder.data_min_ts),
+                                        "write_batches: sink {}: the open coalesced stash \
+                                            (times [{:?}, {:?}]) starts below batch \
+                                            description {:?}, which would append data below \
+                                            the registered batch bounds",
+                                        collection_id,
+                                        builder.data_min_ts,
+                                        builder.data_max_ts,
+                                        description,
+                                    );
                                     Some(builder)
                                 }
                                 Some(builder) if description.1.less_equal(&builder.data_min_ts) => {
@@ -808,6 +836,19 @@ fn write_batches<'scope>(
                                     continue;
                                 };
 
+                                // The upper gate above uses the shard upper cached when the
+                                // write handle was opened, while the description minter
+                                // starts at a freshly fetched upper. Updates in that gap are
+                                // already durable in the shard and no description will ever
+                                // cover them, so they are dropped (see
+                                // `first_description_lower`).
+                                if first_description_lower
+                                    .as_ref()
+                                    .is_some_and(|lower| !lower.less_equal(&ts))
+                                {
+                                    continue;
+                                }
+
                                 let candidate =
                                     mz_repr::Timestamp::from(u64::from(ts).saturating_sub(lag));
                                 if coalesce_horizon.is_none_or(|h| h < candidate) {
@@ -835,7 +876,13 @@ fn write_batches<'scope>(
                                         });
                                         stage_update(builder, row, ts, diff).await;
                                     }
-                                    None if coalesce_horizon.is_some_and(|h| ts < h) => {
+                                    // Until the first description arrives we cannot tell
+                                    // already-durable updates from stageable ones, so aged
+                                    // updates wait in the raw stash rather than entering
+                                    // the open builder.
+                                    None if first_description_lower.is_some()
+                                        && coalesce_horizon.is_some_and(|h| ts < h) =>
+                                    {
                                         let builder = open_coalesced.get_or_insert_with(|| {
                                             BatchBuilderAndMetadata::new(
                                                 write.builder(operator_batch_lower.clone()),
@@ -858,8 +905,12 @@ fn write_batches<'scope>(
             }
 
             // Move raw-stashed updates that aged past the horizon into the coalesced tier,
-            // so the raw stash only ever spans the trailing lag window.
-            if let Some(horizon) = coalesce_horizon {
+            // so the raw stash only ever spans the trailing lag window. This waits for the
+            // first description because rows stashed before it arrived may lie below its
+            // lower and must not enter a builder.
+            if let (Some(horizon), Some(first_lower)) =
+                (coalesce_horizon, first_description_lower.as_ref())
+            {
                 let aged: Vec<_> = raw_stash
                     .keys()
                     .take_while(|ts| **ts < horizon)
@@ -867,6 +918,11 @@ fn write_batches<'scope>(
                     .collect();
                 for ts in aged {
                     let updates = raw_stash.remove(&ts).unwrap();
+                    // Rows below the first description's lower are already durable in the
+                    // shard, they are dropped rather than poured.
+                    if !first_lower.less_equal(&ts) {
+                        continue;
+                    }
                     let covering = in_flight_batches
                         .iter_mut()
                         .find(|((lower, upper), _)| lower.less_equal(&ts) && !upper.less_equal(&ts))
@@ -917,7 +973,7 @@ fn write_batches<'scope>(
                 // a) the batch is not beyond `batch_descriptions_frontier`,
                 // and b) we know that we have seen all updates that would
                 // fall into the batch, from `desired_frontier`.
-                let ready_batches = in_flight_batches
+                let mut ready_batches = in_flight_batches
                     .keys()
                     .filter(|(lower, upper)| {
                         !PartialOrder::less_equal(&batch_descriptions_frontier, lower)
@@ -925,6 +981,20 @@ fn write_batches<'scope>(
                     })
                     .cloned()
                     .collect::<Vec<_>>();
+
+                // Process ready descriptions in ascending order. Draining a description
+                // advances `operator_batch_lower` to its upper, and a builder created while
+                // draining a later description must not receive a lower above the rows of
+                // an earlier one.
+                ready_batches.sort_by(|a, b| {
+                    if PartialOrder::less_than(a, b) {
+                        Ordering::Less
+                    } else if PartialOrder::less_than(b, a) {
+                        Ordering::Greater
+                    } else {
+                        Ordering::Equal
+                    }
+                });
 
                 trace!(
                     "persist_sink {collection_id}/{shard_id}: \
@@ -1266,6 +1336,7 @@ fn append_batches<'scope>(
 
                                 batches.finished.push(FinishedBatch {
                                     batch: write.batch_from_transmittable_batch(batch.batch),
+                                    data_min_ts: batch.data_min_ts,
                                     data_max_ts: batch.data_max_ts,
                                 });
                                 batches.batch_metrics += &batch.metrics;
@@ -1566,16 +1637,43 @@ fn append_batches<'scope>(
                             let new_done_batch_metadata =
                                 (new_batch_lower.clone(), batch_upper.clone());
 
-                            // Retain any batches that still hold data at or beyond the new
-                            // lower, and delete any batches that do not. A retained batch may
-                            // also hold data below the new lower, which is fine:
-                            // `compare_and_append_batch` truncates updates outside the append
-                            // bounds, and that data is already in the shard, appended by
-                            // whoever advanced the upper past our batch description's lower.
+                            // A batch that straddles the new lower cannot be appended: its
+                            // parts would carry data below the registered append bounds.
+                            // Persist truncates such data when the parts are read back, and
+                            // compaction then reproduces fewer updates than the spine
+                            // recorded for the batch, which fails a persist-internal
+                            // invariant. The batch cannot be split either, so restart the
+                            // dataflow and rebuild the batches from scratch.
+                            let straddles_new_lower = batches.iter().any(|batch| {
+                                !new_batch_lower.less_equal(&batch.data_min_ts)
+                                    && new_batch_lower.less_equal(&batch.data_max_ts)
+                            });
+                            if straddles_new_lower {
+                                future::join_all(batches.into_iter().map(|b| b.batch.delete()))
+                                    .await;
+                                tracing::warn!(
+                                    "persist_sink({}): invalid upper! \
+                                        Tried to append batch ({:?} -> {:?}) but upper \
+                                        is {:?}, and a staged batch straddles that upper. \
+                                        Someone else was faster than us, and we cannot cut \
+                                        our batches down to the remaining time range, so \
+                                        we'll restart the dataflow.",
+                                    collection_id, batch_lower, batch_upper, mismatch.current,
+                                );
+                                anyhow::bail!(
+                                    "collection concurrently modified. Ingestion dataflow will be restarted"
+                                );
+                            }
+
+                            // Retain any batches whose data lies entirely at or beyond the
+                            // new lower, and delete any batches whose data lies entirely
+                            // below it, since that data is already in the shard, appended
+                            // by whoever advanced the upper past our batch description's
+                            // lower.
                             let mut batch_delete_futures = vec![];
                             let mut new_batch_set = BatchSet::default();
                             for batch in batches {
-                                if new_batch_lower.less_equal(&batch.data_max_ts) {
+                                if new_batch_lower.less_equal(&batch.data_min_ts) {
                                     new_batch_set.finished.push(batch);
                                 } else {
                                     batch_delete_futures.push(batch.batch.delete());
