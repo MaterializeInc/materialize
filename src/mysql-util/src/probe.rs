@@ -15,6 +15,9 @@ use crate::{MySqlError, QualifiedTableRef, quote_identifier};
 /// The escape character for `LIKE` patterns built by [`like_prefix_pattern`].
 const LIKE_ESCAPE: char = '|';
 
+/// Probes a string primary key column. Confirmed to support `utf8mb4_bin`,
+/// but should support `*_general_ci` and `*_bin` without changes in the
+/// future.
 pub struct KeyProber<'a> {
     conn: &'a mut mysql_async::Conn,
     /// Quoted `` `schema`.`table` `` for SQL interpolation.
@@ -57,12 +60,16 @@ impl<'a> KeyProber<'a> {
     /// after traversing the index (assuming this is a primary key being filtered on), so extrapolated
     /// row counts can be inaccurate but appear to eventually converge towards more accurate estimates
     /// as the sampled range shrinks on a static table.
-    pub async fn estimate_range_rows(
+    pub async fn estimate_prefix_range_rows(
         &mut self,
-        lower_bound_exclusive: Option<&str>,
-        upper_bound_exclusive: Option<&str>,
+        lower_bound_prefix_exclusive: Option<&str>,
+        upper_bound_prefix_exclusive: Option<&str>,
     ) -> Result<Option<u64>, MySqlError> {
-        let (clause, params) = self.range_filter(lower_bound_exclusive, upper_bound_exclusive);
+        let (clause, params) = self.range_filter(
+            lower_bound_prefix_exclusive.map(null_pad),
+            upper_bound_prefix_exclusive.map(null_pad),
+            None,
+        );
         let select = format!(
             "SELECT {col} FROM {table} WHERE {clause}",
             col = self.col,
@@ -71,52 +78,84 @@ impl<'a> KeyProber<'a> {
         explain_row_estimate(&mut *self.conn, &select, Params::Positional(params)).await
     }
 
-    /// Grabs a prefix of up to `max_prefix_length` characters for the first
-    /// key in the given range. If the key is shorter than `max_prefix_length`,
-    /// it returns that shorter value.
+    /// Grabs a prefix of up to `max_prefix_length` characters for the first key past the provided
+    /// prefix that doesn't exactly match that prefix. The boundaries provided are in terms of prefixes
+    /// which will be null-padded so that the prefix is ordered before all keys matching that prefix.
     ///
     /// The query will generally look something like:
     ///
     /// ```sql
     /// SELECT LEFT(pk_col, 3) FROM table
-    /// WHERE pk_col > 'ab' AND pk_col < 'ac'
+    /// WHERE pk_col > RPAD('ab', 768, CHAR(0)) AND pk_col <> 'ab'
+    ///   AND pk_col < RPAD('ac', 768, CHAR(0))
     /// ORDER BY pk_col
     /// LIMIT 1
     /// ```
-    pub async fn prefix_of_first_key_in_range(
+    pub async fn prefix_of_first_key_in_prefix_range(
         &mut self,
-        lower_bound_exclusive: Option<&str>,
-        upper_bound_exclusive: Option<&str>,
+        lower_bound_prefix_exclusive: Option<&str>,
+        upper_bound_prefix_exclusive: Option<&str>,
         max_prefix_length: usize,
     ) -> Result<Option<String>, MySqlError> {
-        let (clause, params) = self.range_filter(lower_bound_exclusive, upper_bound_exclusive);
-        let sql = format!(
-            "SELECT LEFT({col}, {max_prefix_length}) FROM {table} WHERE {clause} ORDER BY {col} LIMIT 1",
-            col = self.col,
-            table = self.table,
+        let (clause, params) = self.range_filter(
+            lower_bound_prefix_exclusive.map(null_pad),
+            upper_bound_prefix_exclusive.map(null_pad),
+            lower_bound_prefix_exclusive,
         );
-        self.query_string(sql, params).await
+        self.first_key_prefix(&clause, params, max_prefix_length)
+            .await
     }
 
     /// Returns the prefix of up to `max_prefix_length` characters of the first key after `prefix`,
-    /// but below `upper_bound_exclusive`. Returns None if no key matching these conditions exists.
+    /// but below `upper_bound_prefix_exclusive`. Returns None if no key matching these
+    /// conditions exists.
+    ///
+    /// The key exactly equal to `parent_prefix` is excluded. Under PAD SPACE
+    /// collations it sorts after any of its extensions with below-space
+    /// characters, so without the exclusion it could come back as a next
+    /// prefix shorter than the walk depth.
     ///
     /// Note: this should be run inside a REPEATABLE READ transaction because
     /// it issues two queries sequentially.
     pub async fn prefix_of_first_row_not_matching_prefix(
         &mut self,
         prefix: &str,
-        upper_bound_exclusive: Option<&str>,
+        parent_prefix: Option<&str>,
+        upper_bound_prefix_exclusive: Option<&str>,
         max_prefix_length: usize,
     ) -> Result<Option<String>, MySqlError> {
         let Some(max_key) = self
-            .max_key_with_prefix(prefix, upper_bound_exclusive)
+            .max_key_with_prefix(prefix, upper_bound_prefix_exclusive)
             .await?
         else {
             return Ok(None);
         };
-        self.prefix_of_first_key_in_range(Some(&max_key), upper_bound_exclusive, max_prefix_length)
+        // The advance past `max_key` bounds by the full key and stays
+        // unpadded: a padded bound would re-admit the key's own below-space
+        // extensions and return the current prefix again.
+        let (clause, params) = self.range_filter(
+            Some(exact(&max_key)),
+            upper_bound_prefix_exclusive.map(null_pad),
+            parent_prefix,
+        );
+        self.first_key_prefix(&clause, params, max_prefix_length)
             .await
+    }
+
+    /// Selects the prefix of up to `max_prefix_length` characters of the
+    /// first key matching `clause`.
+    async fn first_key_prefix(
+        &mut self,
+        clause: &str,
+        params: Vec<Value>,
+        max_prefix_length: usize,
+    ) -> Result<Option<String>, MySqlError> {
+        let sql = format!(
+            "SELECT LEFT({col}, {max_prefix_length}) FROM {table} WHERE {clause} ORDER BY {col} LIMIT 1",
+            col = self.col,
+            table = self.table,
+        );
+        self.query_string(sql, params).await
     }
 
     /// Quick way to grab the maximum key matching the prefix below the
@@ -126,16 +165,17 @@ impl<'a> KeyProber<'a> {
     ///
     /// ```sql
     ///     SELECT pk_col FROM table
-    ///     WHERE pk_col LIKE /* prefix% */ 'abc%'  AND pk_col < /* upper_bound_exclusive */ 'ac'
+    ///     WHERE pk_col LIKE /* prefix% */ 'abc%' AND pk_col < /* upper_bound_exclusive */ RPAD('ac', 768, CHAR(0))
     ///     ORDER BY pk_col DESC
     ///     LIMIT 1
     /// ```
     async fn max_key_with_prefix(
         &mut self,
         prefix: &str,
-        upper_bound_exclusive: Option<&str>,
+        upper_bound_prefix_exclusive: Option<&str>,
     ) -> Result<Option<String>, MySqlError> {
-        let (range_clause, range_params) = self.range_filter(None, upper_bound_exclusive);
+        let (range_clause, range_params) =
+            self.range_filter(None, upper_bound_prefix_exclusive.map(null_pad), None);
         let sql = format!(
             "SELECT {col} FROM {table} WHERE {col} LIKE ? ESCAPE '{LIKE_ESCAPE}' \
              AND {range_clause} ORDER BY {col} DESC LIMIT 1",
@@ -147,24 +187,29 @@ impl<'a> KeyProber<'a> {
         self.query_string(sql, params).await
     }
 
-    /// Returns clause with upper and lower bounds enforced if present.
-    /// If both are None returns TRUE so this can plug in cleanly after a
+    /// Returns clause with the given bounds and exclusion enforced.
+    /// If all are None returns TRUE so this can plug in cleanly after a
     /// leading "WHERE" or "AND".
     fn range_filter(
         &self,
-        lower_bound_exclusive: Option<&str>,
-        upper_bound_exclusive: Option<&str>,
+        lower_bound_exclusive: Option<Bound>,
+        upper_bound_exclusive: Option<Bound>,
+        not_equal: Option<&str>,
     ) -> (String, Vec<Value>) {
         let col = &self.col;
         let mut conditions = Vec::new();
         let mut params: Vec<Value> = Vec::new();
         if let Some(lower) = lower_bound_exclusive {
-            conditions.push(format!("{col} > ?"));
-            params.push(lower.into());
+            conditions.push(format!("{col} > {expr}", expr = lower.expr));
+            params.push(lower.value.into());
+        }
+        if let Some(not_equal) = not_equal {
+            conditions.push(format!("{col} <> ?"));
+            params.push(not_equal.into());
         }
         if let Some(upper) = upper_bound_exclusive {
-            conditions.push(format!("{col} < ?"));
-            params.push(upper.into());
+            conditions.push(format!("{col} < {expr}", expr = upper.expr));
+            params.push(upper.value.into());
         }
         if conditions.is_empty() {
             ("TRUE".to_string(), params)
@@ -192,6 +237,30 @@ impl<'a> KeyProber<'a> {
             }),
         }
     }
+}
+
+struct Bound<'a> {
+    expr: &'static str,
+    value: &'a str,
+}
+
+/// Pads the provided value with NUL characters. For PAD SPACE collations like
+/// `utf8mb4_bin` "ab\0" sorts before "ab" which is actually treated as "ab ".
+/// The null-padded string serves as a lower bound for the provided prefix.
+/// <https://dev.mysql.com/doc/refman/8.4/en/innodb-limits.html> states the cap
+/// for an index key is 3072 bytes, or 768 utf8mb4 characters, so padding to 768
+/// bounds every key an utf8mb4 primary key column can hold. Longer keys
+/// (possible through prefix indexes or narrower charsets) are not supported.
+fn null_pad(value: &str) -> Bound<'_> {
+    Bound {
+        expr: "RPAD(?, 768, CHAR(0 USING utf8mb4))",
+        value,
+    }
+}
+
+/// The bound value as-is, for full-key bounds.
+fn exact(value: &str) -> Bound<'_> {
+    Bound { expr: "?", value }
 }
 
 /// LIKE uses % and _ as wildcard characters. By default MySQL uses a backslash as an escape character
@@ -257,51 +326,51 @@ mod tests {
         };
         const DB: &str = "mz_probe_basic";
         let keys = ["aa", "ab", "b", "bb", "bbb", "c"];
-        let table = setup_table(&mut conn, DB, "utf8mb4_0900_ai_ci", &keys).await?;
+        let table = setup_table(&mut conn, DB, "utf8mb4_bin", &keys).await?;
 
         let p = &mut KeyProber::new(&mut conn, table, "id");
         assert_eq!(
-            prefix_of_first_key_in_range(p, None, None, 1).await,
+            prefix_of_first_key_in_prefix_range(p, None, None, 1).await,
             some("a")
         );
         assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "a", None, 1).await,
+            prefix_of_first_row_not_matching_prefix(p, "a", None, None, 1).await,
             some("b")
         );
         assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "b", None, 1).await,
+            prefix_of_first_row_not_matching_prefix(p, "b", None, None, 1).await,
             some("c")
         );
         assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "c", None, 1).await,
+            prefix_of_first_row_not_matching_prefix(p, "c", None, None, 1).await,
             None
         );
 
         assert_eq!(
-            prefix_of_first_key_in_range(p, Some("a"), Some("b"), 2).await,
+            prefix_of_first_key_in_prefix_range(p, Some("a"), Some("b"), 2).await,
             some("aa")
         );
         assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "aa", Some("b"), 2).await,
+            prefix_of_first_row_not_matching_prefix(p, "aa", None, Some("b"), 2).await,
             some("ab")
         );
         assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "ab", Some("b"), 2).await,
+            prefix_of_first_row_not_matching_prefix(p, "ab", None, Some("b"), 2).await,
             None
         );
 
         // Bounds are exclusive: the exact key "b" is skipped as a split
         // point, and its extensions surface as their own prefixes.
         assert_eq!(
-            prefix_of_first_key_in_range(p, Some("b"), Some("c"), 2).await,
+            prefix_of_first_key_in_prefix_range(p, Some("b"), Some("c"), 2).await,
             some("bb")
         );
         assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "bb", Some("c"), 2).await,
+            prefix_of_first_row_not_matching_prefix(p, "bb", None, Some("c"), 2).await,
             None
         );
         assert_eq!(
-            prefix_of_first_key_in_range(p, Some("c"), None, 2).await,
+            prefix_of_first_key_in_prefix_range(p, Some("c"), None, 2).await,
             None
         );
 
@@ -318,20 +387,23 @@ mod tests {
         };
         const DB: &str = "mz_probe_explain_test";
         let ids: Vec<String> = (0..1000).map(|i| format!("a{i:05}")).collect();
-        let table = setup_table(&mut conn, DB, "utf8mb4_0900_ai_ci", &ids).await?;
+        let table = setup_table(&mut conn, DB, "utf8mb4_bin", &ids).await?;
         let mut p = KeyProber::new(&mut conn, table, "id");
 
         // Estimates are index dives, near reality but never exact by
         // contract, so the bounds are deliberately loose.
-        let all = p.estimate_range_rows(None, None).await?.expect("estimate");
+        let all = p
+            .estimate_prefix_range_rows(None, None)
+            .await?
+            .expect("estimate");
         assert!((500..=2000).contains(&all), "all={all}");
         let half = p
-            .estimate_range_rows(Some("a00500"), None)
+            .estimate_prefix_range_rows(Some("a00500"), None)
             .await?
             .expect("estimate");
         assert!((250..=1000).contains(&half), "half={half}");
         let none = p
-            .estimate_range_rows(Some("zzz"), None)
+            .estimate_prefix_range_rows(Some("zzz"), None)
             .await?
             .expect("estimate");
         assert!(none <= 5, "none={none}");
@@ -349,38 +421,41 @@ mod tests {
         };
         const DB: &str = "mz_probe_case_insensitive";
         let keys = ["Aa", "ab", "b", "Bb", "bbb", "C"];
-        let table = setup_table(&mut conn, DB, "utf8mb4_0900_ai_ci", &keys).await?;
+        let table = setup_table(&mut conn, DB, "utf8mb4_general_ci", &keys).await?;
 
         let p = &mut KeyProber::new(&mut conn, table, "id");
-        // Although the sorting is case-insensitive the values returned by mysql are not normalized, so
-        // we need to use the correct character representation here to get the tests to pass.
+        // Sorting is case-insensitive but returned prefixes are the stored
+        // bytes: "A", "b", "C".
+        // Grab the initial prefix.
         assert_eq!(
-            prefix_of_first_key_in_range(p, None, None, 1).await,
+            prefix_of_first_key_in_prefix_range(p, None, None, 1).await,
             some("A")
         );
+        // Traverse through sibling prefixes at depth 1.
         assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "A", None, 1).await,
+            prefix_of_first_row_not_matching_prefix(p, "A", None, None, 1).await,
             some("b")
         );
         assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "b", None, 1).await,
+            prefix_of_first_row_not_matching_prefix(p, "b", None, None, 1).await,
             some("C")
         );
         assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "C", None, 1).await,
+            prefix_of_first_row_not_matching_prefix(p, "C", None, None, 1).await,
             None
         );
 
+        // Same traversal at depth 2, bounded by the depth-1 prefixes.
         assert_eq!(
-            prefix_of_first_key_in_range(p, Some("A"), Some("b"), 2).await,
+            prefix_of_first_key_in_prefix_range(p, Some("A"), Some("b"), 2).await,
             some("Aa")
         );
         assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "Aa", Some("b"), 2).await,
+            prefix_of_first_row_not_matching_prefix(p, "Aa", None, Some("b"), 2).await,
             some("ab")
         );
         assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "ab", Some("b"), 2).await,
+            prefix_of_first_row_not_matching_prefix(p, "ab", None, Some("b"), 2).await,
             None
         );
 
@@ -388,21 +463,21 @@ mod tests {
         // surface as their own prefixes under this case-insensitive
         // collation.
         assert_eq!(
-            prefix_of_first_key_in_range(p, Some("b"), Some("C"), 2).await,
+            prefix_of_first_key_in_prefix_range(p, Some("b"), Some("C"), 2).await,
             some("Bb")
         );
         assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "Bb", Some("C"), 2).await,
+            prefix_of_first_row_not_matching_prefix(p, "Bb", None, Some("C"), 2).await,
             None
         );
         // Every key matching 'b%' is covered by the prefix match.
         assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "b", Some("C"), 2).await,
+            prefix_of_first_row_not_matching_prefix(p, "b", None, Some("C"), 2).await,
             None
         );
 
         assert_eq!(
-            prefix_of_first_key_in_range(p, Some("C"), None, 2).await,
+            prefix_of_first_key_in_prefix_range(p, Some("C"), None, 2).await,
             None
         );
 
@@ -413,82 +488,82 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)]
-    async fn test_wild_card_char_in_data() -> Result<(), anyhow::Error> {
+    async fn test_wildcard_char_in_data() -> Result<(), anyhow::Error> {
         let Some(mut conn) = connect().await? else {
             return Ok(());
         };
         const DB: &str = "mz_probe_wildcard_test";
         // Keys are a_1, a\2, a\3, a%4, a|5, covering the LIKE wildcards
-        // and the escape character itself. The utf8mb4_0900_ai_ci collation
-        // orders them a_1 < a\2 < a\3 < a%4 < a|5.
+        // and the escape character itself. utf8mb4_bin orders them by byte:
+        // a%4 < a\2 < a\3 < a_1 < a|5.
         let keys = ["a_1", "a\\2", "a\\3", "a%4", "a|5"];
-        let table = setup_table(&mut conn, DB, "utf8mb4_0900_ai_ci", &keys).await?;
+        let table = setup_table(&mut conn, DB, "utf8mb4_bin", &keys).await?;
 
         let p = &mut KeyProber::new(&mut conn, table, "id");
         assert_eq!(
-            prefix_of_first_key_in_range(p, None, None, 1).await,
+            prefix_of_first_key_in_prefix_range(p, None, None, 1).await,
             some("a")
         );
         assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "a", None, 1).await,
+            prefix_of_first_row_not_matching_prefix(p, "a", None, None, 1).await,
             None
         );
         assert_eq!(
-            prefix_of_first_key_in_range(p, Some("a"), None, 2).await,
-            some("a_")
-        );
-        assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "a_", None, 2).await,
-            some("a\\")
-        );
-        assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "a\\", None, 2).await,
+            prefix_of_first_key_in_prefix_range(p, Some("a"), None, 2).await,
             some("a%")
         );
         assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "a%", None, 2).await,
+            prefix_of_first_row_not_matching_prefix(p, "a%", None, None, 2).await,
+            some("a\\")
+        );
+        assert_eq!(
+            prefix_of_first_row_not_matching_prefix(p, "a\\", None, None, 2).await,
+            some("a_")
+        );
+        assert_eq!(
+            prefix_of_first_row_not_matching_prefix(p, "a_", None, None, 2).await,
             some("a|")
         );
         assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "a|", None, 2).await,
+            prefix_of_first_row_not_matching_prefix(p, "a|", None, None, 2).await,
             None
         );
 
         // Range bounds that are themselves wildcard characters.
         assert_eq!(
-            prefix_of_first_key_in_range(p, Some("a_"), Some("a\\"), 3).await,
-            some("a_1")
-        );
-        assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "a_1", Some("a\\"), 3).await,
-            None
-        );
-        assert_eq!(
-            prefix_of_first_key_in_range(p, Some("a\\"), Some("a%"), 3).await,
-            some("a\\2")
-        );
-        assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "a\\2", Some("a%"), 3).await,
-            some("a\\3")
-        );
-        assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "a\\3", Some("a%"), 3).await,
-            None
-        );
-        assert_eq!(
-            prefix_of_first_key_in_range(p, Some("a%"), Some("a|"), 3).await,
+            prefix_of_first_key_in_prefix_range(p, Some("a%"), Some("a\\"), 3).await,
             some("a%4")
         );
         assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "a%4", None, 3).await,
+            prefix_of_first_row_not_matching_prefix(p, "a%4", None, Some("a\\"), 3).await,
+            None
+        );
+        assert_eq!(
+            prefix_of_first_key_in_prefix_range(p, Some("a\\"), Some("a_"), 3).await,
+            some("a\\2")
+        );
+        assert_eq!(
+            prefix_of_first_row_not_matching_prefix(p, "a\\2", None, Some("a_"), 3).await,
+            some("a\\3")
+        );
+        assert_eq!(
+            prefix_of_first_row_not_matching_prefix(p, "a\\3", None, Some("a_"), 3).await,
+            None
+        );
+        assert_eq!(
+            prefix_of_first_key_in_prefix_range(p, Some("a_"), Some("a|"), 3).await,
+            some("a_1")
+        );
+        assert_eq!(
+            prefix_of_first_row_not_matching_prefix(p, "a_1", None, None, 3).await,
             some("a|5")
         );
         assert_eq!(
-            prefix_of_first_key_in_range(p, Some("a|"), None, 3).await,
+            prefix_of_first_key_in_prefix_range(p, Some("a|"), None, 3).await,
             some("a|5")
         );
         assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "a|5", None, 3).await,
+            prefix_of_first_row_not_matching_prefix(p, "a|5", None, None, 3).await,
             None
         );
 
@@ -504,44 +579,45 @@ mod tests {
             return Ok(());
         };
         const DB: &str = "mz_probe_multibyte_test";
-        // utf8mb4_0900_ai_ci orders symbols before letters and Han after
-        // Latin: 😀 < 😀😀 < 😀a < a < a😀 < 日本 < 日本語.
+        // utf8mb4_general_ci gives every supplementary character one shared
+        // weight, so emoji sort last: a < a😀 < 日本 < 日本語 < 😀 < 😀a < 😀😀.
         let keys = ["a", "a😀", "😀", "😀a", "😀😀", "日本", "日本語"];
-        let table = setup_table(&mut conn, DB, "utf8mb4_0900_ai_ci", &keys).await?;
+        let table = setup_table(&mut conn, DB, "utf8mb4_general_ci", &keys).await?;
 
         let p = &mut KeyProber::new(&mut conn, table, "id");
         // Prefix lengths count characters, not bytes: a one-char prefix of a
         // four-byte emoji is the whole emoji, never a broken fragment.
         assert_eq!(
-            prefix_of_first_key_in_range(p, None, None, 1).await,
-            some("😀")
-        );
-        assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "😀", None, 1).await,
+            prefix_of_first_key_in_prefix_range(p, None, None, 1).await,
             some("a")
         );
         assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "a", None, 1).await,
+            prefix_of_first_row_not_matching_prefix(p, "a", None, None, 1).await,
             some("日")
         );
         assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "日", None, 1).await,
+            prefix_of_first_row_not_matching_prefix(p, "日", None, None, 1).await,
+            some("😀")
+        );
+        assert_eq!(
+            prefix_of_first_row_not_matching_prefix(p, "😀", None, None, 1).await,
             None
         );
 
         // Prefix matching works mid-multibyte: every key sharing 😀 is
-        // covered (including its extensions), and 😀😀 advances to 😀a.
+        // covered (including its extensions), and 日本 advances into the
+        // emoji block.
         assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "😀", None, 2).await,
-            some("a")
-        );
-        assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "😀😀", None, 2).await,
-            some("😀a")
-        );
-        assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "日本", None, 3).await,
+            prefix_of_first_row_not_matching_prefix(p, "😀", None, None, 2).await,
             None
+        );
+        assert_eq!(
+            prefix_of_first_row_not_matching_prefix(p, "😀😀", None, None, 2).await,
+            None
+        );
+        assert_eq!(
+            prefix_of_first_row_not_matching_prefix(p, "日本", None, None, 3).await,
+            some("😀")
         );
 
         drop_db(&mut conn, DB).await?;
@@ -568,21 +644,22 @@ mod tests {
                 )
             })
             .collect();
-        let table = setup_table(&mut conn, DB, "utf8mb4_0900_ai_ci", &ids).await?;
+        let table = setup_table(&mut conn, DB, "utf8mb4_bin", &ids).await?;
         let mut prober = KeyProber::new(&mut conn, table, "id");
 
         // Every key shares the timestamp prefix, so short prefixes cannot
         // split the key space at all.
         assert_eq!(
-            prefix_of_first_key_in_range(&mut prober, None, None, 1).await,
+            prefix_of_first_key_in_prefix_range(&mut prober, None, None, 1).await,
             some("0")
         );
         assert_eq!(
-            prefix_of_first_row_not_matching_prefix(&mut prober, "0", None, 1).await,
+            prefix_of_first_row_not_matching_prefix(&mut prober, "0", None, None, 1).await,
             None
         );
         assert_eq!(
-            prefix_of_first_row_not_matching_prefix(&mut prober, "01J8ZXABCD", None, 10).await,
+            prefix_of_first_row_not_matching_prefix(&mut prober, "01J8ZXABCD", None, None, 10)
+                .await,
             None
         );
 
@@ -592,9 +669,6 @@ mod tests {
             .map(|i| format!("01J8ZXABCD{}", char::from(CROCKFORD[i])))
             .collect();
         assert_eq!(walked, expected);
-
-        let all = prober.estimate_range_rows(None, None).await?;
-        assert!(all.unwrap_or(0) > 0, "all={all:?}");
 
         drop_db(&mut conn, DB).await?;
         conn.disconnect().await?;
@@ -616,21 +690,18 @@ mod tests {
                 format!("{h:08x}-0000-4000-8000-{i:012x}")
             })
             .collect();
-        let table = setup_table(&mut conn, DB, "utf8mb4_0900_ai_ci", &ids).await?;
+        let table = setup_table(&mut conn, DB, "utf8mb4_bin", &ids).await?;
         let mut p = KeyProber::new(&mut conn, table, "id");
 
         // Lowercase hex order matches byte order under this collation.
         assert_eq!(
-            prefix_of_first_key_in_range(&mut p, None, None, 36).await,
+            prefix_of_first_key_in_prefix_range(&mut p, None, None, 36).await,
             ids.iter().min().cloned()
         );
 
         let walked = walk_prefixes(&mut p, 1).await?;
         let expected: BTreeSet<String> = ids.iter().map(|id| id[..1].to_string()).collect();
         assert_eq!(walked.iter().cloned().collect::<BTreeSet<_>>(), expected);
-
-        let all = p.estimate_range_rows(None, None).await?;
-        assert!(all.unwrap_or(0) > 0, "all={all:?}");
 
         drop_db(&mut conn, DB).await?;
         conn.disconnect().await?;
@@ -647,11 +718,11 @@ mod tests {
         // Every walk step matches on `LIKE '<prefix>%'`, so keys whose
         // prefixes are LIKE metacharacters exercise the escaping.
         let ids = [
-            "%",
+            "%a",
             "%%",
-            "_",
+            "_a",
             "__",
-            "\\",
+            "\\a",
             "\\\\",
             "a%",
             "a%b",
@@ -661,7 +732,7 @@ mod tests {
             "a\\b",
             "ab",
             "a b",
-            "|",
+            "|a",
             "||",
             "a|",
             "a|b",
@@ -670,20 +741,25 @@ mod tests {
             "under_score",
             "back\\slash",
         ];
-        let table = setup_table(&mut conn, DB, "utf8mb4_0900_ai_ci", &ids).await?;
+        let table = setup_table(&mut conn, DB, "utf8mb4_bin", &ids).await?;
 
-        // The collation dictates both the visit order and how short keys
-        // interleave with their extensions, so assert the property that
-        // matters instead of exact prefixes: the walked prefixes are range
-        // boundaries that partition the table, every key falls in exactly
-        // one interval. The server does the interval counting, under the
-        // column's own collation.
+        // Assert that walking the prefixes gives range boundaries that
+        // partition the table and every key falls into exactly one range.
         for len in [1, 2] {
             let walked =
                 walk_prefixes(&mut KeyProber::new(&mut conn, table.clone(), "id"), len).await?;
             let mut total = 0;
             for (i, lo) in walked.iter().enumerate() {
-                total += count_range(&mut conn, DB, lo, walked.get(i + 1)).await?;
+                let (n, prefixed) = count_range(&mut conn, DB, lo, walked.get(i + 1)).await?;
+                assert!(
+                    n > 0,
+                    "empty interval: len={len} lo={lo:?} walked={walked:?}"
+                );
+                assert_eq!(
+                    prefixed, n,
+                    "keys outside prefix: len={len} lo={lo:?} walked={walked:?}"
+                );
+                total += n;
             }
             assert_eq!(
                 total,
@@ -709,12 +785,11 @@ mod tests {
         // Case-insensitive collation: case variants of one key collide, so
         // keys differ by letter, in mixed case.
         let ci_keys = ["Apple", "apricot", "banana", "Cherry"];
-        let t_ci = setup_table(&mut conn, CI_DB, "utf8mb4_0900_ai_ci", &ci_keys).await?;
+        let t_ci = setup_table(&mut conn, CI_DB, "utf8mb4_general_ci", &ci_keys).await?;
         let mut prober = KeyProber::new(&mut conn, t_ci, "id");
         // 'A' covers 'apricot' too: LIKE is case-insensitive here, so a
         // returned prefix covers every case variant of it.
         assert_eq!(walk_prefixes(&mut prober, 1).await?, ["A", "b", "C"]);
-        assert_eq!(walk_prefixes(&mut prober, 32).await?, ci_keys);
 
         // Binary collation: case variants coexist and order by byte value.
         let bin_keys = ["ABC", "ABD", "abc", "abd"];
@@ -723,10 +798,66 @@ mod tests {
         // Uppercase sorts before lowercase in byte order, and case variants
         // are distinct prefixes.
         assert_eq!(walk_prefixes(&mut prober, 1).await?, ["A", "a"]);
-        assert_eq!(walk_prefixes(&mut prober, 32).await?, bin_keys);
+        assert_eq!(walk_prefixes(&mut prober, 3).await?, bin_keys);
 
         drop_db(&mut conn, CI_DB).await?;
         drop_db(&mut conn, BIN_DB).await?;
+        conn.disconnect().await?;
+        Ok(())
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_live_mysql_invalid_utf8_keys() -> Result<(), anyhow::Error> {
+        let Some(mut conn) = connect().await? else {
+            return Ok(());
+        };
+        const DB: &str = "mz_probe_binary_test";
+        recreate_db(&mut conn, DB).await?;
+        // A binary key column passes bytes through unconverted, so this is
+        // the one way invalid UTF-8 can reach the client. The snapshot
+        // operator will only support char and varchar columns, so this
+        // shouldn't happen in practice.
+        #[allow(clippy::disallowed_methods)]
+        conn.query_drop(format!(
+            "CREATE TABLE {DB}.t (id VARBINARY(36) PRIMARY KEY NOT NULL)"
+        ))
+        .await?;
+        let keys: Vec<Vec<u8>> = vec![b"a1".to_vec(), b"a2".to_vec(), vec![0xff, 0xfe, 0x31]];
+        conn.exec_batch(
+            format!("INSERT INTO {DB}.t VALUES (?)"),
+            keys.iter().map(|k| (Value::Bytes(k.clone()),)),
+        )
+        .await?;
+        #[allow(clippy::disallowed_methods)]
+        conn.query_drop(format!("ANALYZE TABLE {DB}.t")).await?;
+        let table = QualifiedTableRef {
+            schema_name: DB,
+            table_name: "t",
+        };
+        let mut p = KeyProber::new(&mut conn, table, "id");
+
+        // Estimates never decode key values, they keep working.
+        assert!(p.estimate_prefix_range_rows(None, None).await.is_ok());
+
+        // ASCII keys order before the 0xff key and decode fine.
+        assert_eq!(
+            prefix_of_first_key_in_prefix_range(&mut p, None, None, 2).await,
+            some("a1")
+        );
+        assert_eq!(
+            prefix_of_first_row_not_matching_prefix(&mut p, "a1", None, None, 2).await,
+            some("a2")
+        );
+        // The next key is invalid UTF-8. The probe reports it as a named
+        // error so callers can log it and fall back.
+        let err = p
+            .prefix_of_first_row_not_matching_prefix("a2", None, None, 2)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, MySqlError::NonUtf8KeyValue { .. }), "{err:?}");
+
+        drop_db(&mut conn, DB).await?;
         conn.disconnect().await?;
         Ok(())
     }
@@ -746,7 +877,7 @@ mod tests {
         {
             conn.query_drop(format!(
                 "CREATE TABLE {DB}.t (id VARCHAR(36) CHARACTER SET utf8mb4 \
-                 COLLATE utf8mb4_0900_ai_ci PRIMARY KEY NOT NULL) \
+                 COLLATE utf8mb4_bin PRIMARY KEY NOT NULL) \
                  STATS_AUTO_RECALC=0, STATS_PERSISTENT=1"
             ))
             .await?;
@@ -778,12 +909,12 @@ mod tests {
         // Range estimates come from index dives on the real B-tree, not the
         // stale table statistics, so they still reflect the actual data.
         let all = prober
-            .estimate_range_rows(None, None)
+            .estimate_prefix_range_rows(None, None)
             .await?
             .expect("estimate");
         assert!((500..=2000).contains(&all), "all={all}");
         let range = prober
-            .estimate_range_rows(Some("a00100"), Some("a00200"))
+            .estimate_prefix_range_rows(Some("a00100"), Some("a00200"))
             .await?
             .expect("estimate");
         assert!((50..=200).contains(&range), "range={range}");
@@ -801,7 +932,7 @@ mod tests {
         };
         const DB: &str = "mz_probe_sargable_test";
         let ids: Vec<String> = (0..1000).map(|i| format!("a{i:05}")).collect();
-        let table = setup_table(&mut conn, DB, "utf8mb4_0900_ai_ci", &ids).await?;
+        let table = setup_table(&mut conn, DB, "utf8mb4_bin", &ids).await?;
 
         // Prove the methodology first: a deliberately non-sargable predicate
         // reads every row, and the session handler counters see it.
@@ -818,7 +949,7 @@ mod tests {
         // Every probe must stay a handful of index operations. A regression
         // to a scan costs >= 1000 reads, far past the generous bound.
         let before = handler_reads(&mut conn).await?;
-        let got = prefix_of_first_key_in_range(
+        let got = prefix_of_first_key_in_prefix_range(
             &mut KeyProber::new(&mut conn, table.clone(), "id"),
             Some("a00500"),
             None,
@@ -828,12 +959,16 @@ mod tests {
         let reads = handler_reads(&mut conn).await? - before;
         // The exclusive bound skips the exact key a00500.
         assert_eq!(got, some("a00501"));
-        assert!(reads < 50, "prefix_of_first_key_in_range reads={reads}");
+        assert!(
+            reads < 50,
+            "prefix_of_first_key_in_prefix_range reads={reads}"
+        );
 
         let before = handler_reads(&mut conn).await?;
         let got = prefix_of_first_row_not_matching_prefix(
             &mut KeyProber::new(&mut conn, table.clone(), "id"),
             "a00500",
+            None,
             None,
             6,
         )
@@ -847,6 +982,7 @@ mod tests {
             &mut KeyProber::new(&mut conn, table.clone(), "id"),
             "a0",
             None,
+            None,
             6,
         )
         .await;
@@ -856,6 +992,160 @@ mod tests {
         // scan.
         assert_eq!(got, None);
         assert!(reads < 50, "whole-table match reads={reads}");
+
+        drop_db(&mut conn, DB).await?;
+        conn.disconnect().await?;
+        Ok(())
+    }
+
+    /// Czech `ch` collates as one letter between `h` and `i` while LIKE
+    /// stays character-based, so the walk drops the prefixes LIKE 'c%'
+    /// spans past.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_live_mysql_ch_contraction() -> Result<(), anyhow::Error> {
+        let Some(mut conn) = connect().await? else {
+            return Ok(());
+        };
+        const DB: &str = "mz_probe_ch_contraction";
+        let keys = ["cesta", "duha", "hora", "chleba", "ibis"];
+        let table = setup_table(&mut conn, DB, "utf8mb4_cs_0900_ai_ci", &keys).await?;
+
+        let p = &mut KeyProber::new(&mut conn, table, "id");
+        assert_eq!(
+            prefix_of_first_key_in_prefix_range(p, None, None, 1).await,
+            some("c")
+        );
+        // The max key LIKE 'c%' is chleba, which collates past duha and
+        // hora, so the walk steps straight to "i" and drops "d" and "h".
+        assert_eq!(
+            prefix_of_first_row_not_matching_prefix(p, "c", None, None, 1).await,
+            some("i")
+        );
+        assert_eq!(
+            prefix_of_first_row_not_matching_prefix(p, "i", None, None, 1).await,
+            None
+        );
+
+        drop_db(&mut conn, DB).await?;
+        conn.disconnect().await?;
+        Ok(())
+    }
+
+    /// U+0000 carries no collation weight under the default collation, so a
+    /// leading-NUL key sorts by its suffix while truncating to the bare NUL,
+    /// which sorts below everything.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_live_mysql_nul_ordering() -> Result<(), anyhow::Error> {
+        let Some(mut conn) = connect().await? else {
+            return Ok(());
+        };
+        const DB: &str = "mz_probe_nul_ordering";
+        let keys = ["aa", "mm", "\0zz"];
+        let table = setup_table(&mut conn, DB, "utf8mb4_0900_ai_ci", &keys).await?;
+
+        let p = &mut KeyProber::new(&mut conn, table, "id");
+        assert_eq!(
+            prefix_of_first_key_in_prefix_range(p, None, None, 1).await,
+            some("a")
+        );
+        assert_eq!(
+            prefix_of_first_row_not_matching_prefix(p, "a", None, None, 1).await,
+            some("m")
+        );
+        // "\0zz" sorts above "mm" but truncates to the zero-weight NUL,
+        // which sorts below everything.
+        assert_eq!(
+            prefix_of_first_row_not_matching_prefix(p, "m", None, None, 1).await,
+            some("\0")
+        );
+        // The inverted range has no optimizer estimate.
+        assert_eq!(
+            p.estimate_prefix_range_rows(Some("m"), Some("\0")).await?,
+            None
+        );
+
+        drop_db(&mut conn, DB).await?;
+        conn.disconnect().await?;
+        Ok(())
+    }
+
+    /// `ß` expands to two collation elements (`ß` = `ss`) under the default
+    /// collation utf8mb4_0900_ai_ci", so truncations of `aß...` and `asz...` keys sort opposite
+    /// to the keys themselves.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_live_mysql_eszett_expansion() -> Result<(), anyhow::Error> {
+        let Some(mut conn) = connect().await? else {
+            return Ok(());
+        };
+        const DB: &str = "mz_probe_eszett";
+        let keys = ["aaa", "aßx", "asz"];
+        let table = setup_table(&mut conn, DB, "utf8mb4_0900_ai_ci", &keys).await?;
+
+        let p = &mut KeyProber::new(&mut conn, table, "id");
+        assert_eq!(
+            prefix_of_first_key_in_prefix_range(p, None, None, 2).await,
+            some("aa")
+        );
+        assert_eq!(
+            prefix_of_first_row_not_matching_prefix(p, "aa", None, None, 2).await,
+            some("aß")
+        );
+        // "asz" sorts above "aßx" but its truncation "as" sorts below "aß".
+        assert_eq!(
+            prefix_of_first_row_not_matching_prefix(p, "aß", None, None, 2).await,
+            some("as")
+        );
+        // The inverted range has no optimizer estimate.
+        assert_eq!(
+            p.estimate_prefix_range_rows(Some("aß"), Some("as")).await?,
+            None
+        );
+
+        drop_db(&mut conn, DB).await?;
+        conn.disconnect().await?;
+        Ok(())
+    }
+
+    /// `utf8mb4_bin` compares character by character but is PAD SPACE, so
+    /// against a bare prefix bound every key continuing below space would
+    /// sort below the bound and vanish from the walk. NUL-padded bounds
+    /// keep them visible.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_live_mysql_keys_below_empty_string() -> Result<(), anyhow::Error> {
+        let Some(mut conn) = connect().await? else {
+            return Ok(());
+        };
+        const DB: &str = "mz_probe_below_empty_test";
+        let keys = ["\u{1}a", "\u{9}b", "a1", "a1\u{1}x", "b1"];
+        let table = setup_table(&mut conn, DB, "utf8mb4_bin", &keys).await?;
+
+        let p = &mut KeyProber::new(&mut conn, table, "id");
+        assert_eq!(
+            prefix_of_first_key_in_prefix_range(p, None, None, 1).await,
+            some("\u{1}")
+        );
+        // A key continuing below space sorts below its own prefix, the
+        // padded bound still finds it.
+        assert_eq!(
+            prefix_of_first_key_in_prefix_range(p, Some("a1"), None, 3).await,
+            some("a1\u{1}")
+        );
+        assert_eq!(walk_prefixes(p, 2).await?, ["\u{1}a", "\u{9}b", "a1", "b1"]);
+        // Advancing past "a1\u{1}" lands on the bare parent key "a1", a
+        // prefix shorter than the walk depth. Excluding the parent key
+        // moves on to the next full-depth prefix.
+        assert_eq!(
+            prefix_of_first_row_not_matching_prefix(p, "a1\u{1}", None, None, 3).await,
+            some("a1")
+        );
+        assert_eq!(
+            prefix_of_first_row_not_matching_prefix(p, "a1\u{1}", Some("a1"), None, 3).await,
+            some("b1")
+        );
 
         drop_db(&mut conn, DB).await?;
         conn.disconnect().await?;
@@ -893,7 +1183,7 @@ mod tests {
     }
 
     /// Recreates scratch database `db` holding one table `t` whose string
-    /// primary key `id` is pinned to the given utf8mb4 `collation`, containing
+    /// primary key `id` is pinned to the given `collation`, containing
     /// `keys`, with fresh statistics. Returns a ref for [`KeyProber::new`].
     async fn setup_table<'a>(
         conn: &mut mysql_async::Conn,
@@ -902,9 +1192,12 @@ mod tests {
         keys: &[impl AsRef<str> + Sync],
     ) -> Result<QualifiedTableRef<'a>, anyhow::Error> {
         recreate_db(conn, db).await?;
+        // MySQL collation names start with their character set's name, so
+        // the charset is pinned explicitly without a second parameter.
+        let charset = collation.split('_').next().expect("nonempty collation");
         #[allow(clippy::disallowed_methods)]
         conn.query_drop(format!(
-            "CREATE TABLE {db}.t (id VARCHAR(36) CHARACTER SET utf8mb4 \
+            "CREATE TABLE {db}.t (id VARCHAR(36) CHARACTER SET {charset} \
              COLLATE {collation} PRIMARY KEY NOT NULL)"
         ))
         .await?;
@@ -928,27 +1221,31 @@ mod tests {
         Ok(())
     }
 
-    /// Number of keys in `[lo, hi)` of `db`'s table, counted by the server so
-    /// the comparison happens under the column's collation.
+    /// Keys in `[lo, hi)` of `db`'s table: the total, and how many have `lo`
+    /// as a prefix, counted by the server so the comparisons happen under the
+    /// column's collation.
     async fn count_range(
         conn: &mut mysql_async::Conn,
         db: &str,
         lo: &str,
         hi: Option<&String>,
-    ) -> Result<u64, anyhow::Error> {
+    ) -> Result<(u64, u64), anyhow::Error> {
         let mut clause = "id >= ?".to_string();
-        let mut params: Vec<Value> = vec![lo.into()];
+        let mut params: Vec<Value> = vec![lo.into(), lo.into(), lo.into()];
         if let Some(hi) = hi {
             clause.push_str(" AND id < ?");
             params.push(hi.as_str().into());
         }
-        let count: Option<u64> = conn
+        let row: Option<(u64, Option<u64>)> = conn
             .exec_first(
-                format!("SELECT COUNT(*) FROM {db}.t WHERE {clause}"),
+                format!(
+                    "SELECT COUNT(*), SUM(LEFT(id, CHAR_LENGTH(?)) = ?) FROM {db}.t WHERE {clause}"
+                ),
                 Params::Positional(params),
             )
             .await?;
-        Ok(count.expect("COUNT returns a row"))
+        let (total, prefixed) = row.expect("COUNT returns a row");
+        Ok((total, prefixed.unwrap_or(0)))
     }
 
     /// Sum of this session's `Handler_read_*` counters: how many index or row
@@ -961,32 +1258,34 @@ mod tests {
     }
 
     // Wrapped to limit boilerplate
-    async fn prefix_of_first_key_in_range(
+    async fn prefix_of_first_key_in_prefix_range(
         prober: &mut KeyProber<'_>,
-        lower_bound_exclusive: Option<&str>,
-        upper_bound_exclusive: Option<&str>,
+        lower_bound_prefix_exclusive: Option<&str>,
+        upper_bound_prefix_exclusive: Option<&str>,
         max_prefix_length: usize,
     ) -> Option<String> {
         prober
-            .prefix_of_first_key_in_range(
-                lower_bound_exclusive,
-                upper_bound_exclusive,
+            .prefix_of_first_key_in_prefix_range(
+                lower_bound_prefix_exclusive,
+                upper_bound_prefix_exclusive,
                 max_prefix_length,
             )
             .await
-            .expect("prefix_of_first_key_in_range failed")
+            .expect("prefix_of_first_key_in_prefix_range failed")
     }
 
     // Wrapped to limit boilerplate
     async fn prefix_of_first_row_not_matching_prefix(
         prober: &mut KeyProber<'_>,
         prefix: &str,
+        parent_prefix: Option<&str>,
         upper_bound_exclusive: Option<&str>,
         max_prefix_length: usize,
     ) -> Option<String> {
         prober
             .prefix_of_first_row_not_matching_prefix(
                 prefix,
+                parent_prefix,
                 upper_bound_exclusive,
                 max_prefix_length,
             )
@@ -994,21 +1293,26 @@ mod tests {
             .expect("prefix_of_first_row_not_matching_prefix failed")
     }
 
-    /// `Some` for comparing against [`prefix_of_first_key_in_range`] and
+    /// `Some` for comparing against [`prefix_of_first_key_in_prefix_range`] and
     /// [`prefix_of_first_row_not_matching_prefix`] results without `as_deref` noise at
     /// every assertion.
     fn some(s: &str) -> Option<String> {
         Some(s.into())
     }
 
-    /// Walks the whole key space at prefix length `len`, panicking if the
-    /// walk revisits a prefix.
+    /// Test helper to walk prefixes at a consistent depth. Only works when
+    /// all keys have length >= len. Other tests
+    /// demonstrate the short key behavior and the final algorithm will
+    /// handle short keys by dropping them.
     async fn walk_prefixes(
         prober: &mut KeyProber<'_>,
         len: usize,
     ) -> Result<Vec<String>, anyhow::Error> {
         let mut walked = Vec::new();
-        let Some(mut cur) = prober.prefix_of_first_key_in_range(None, None, len).await? else {
+        let Some(mut cur) = prober
+            .prefix_of_first_key_in_prefix_range(None, None, len)
+            .await?
+        else {
             return Ok(walked);
         };
         loop {
@@ -1018,7 +1322,7 @@ mod tests {
             );
             walked.push(cur.clone());
             match prober
-                .prefix_of_first_row_not_matching_prefix(&cur, None, len)
+                .prefix_of_first_row_not_matching_prefix(&cur, None, None, len)
                 .await?
             {
                 Some(next) => cur = next,
