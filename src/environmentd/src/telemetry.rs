@@ -107,6 +107,9 @@ pub struct Config {
     /// analytics can tell which entitlements are active and whether the key has
     /// expired.
     pub license_key: ValidatedLicenseKey,
+    /// The version of the helm chart that deployed this environment, if
+    /// self-managed. Folded into the reported `mz_version` trait.
+    pub helm_chart_version: Option<String>,
     /// How frequently to send a summary to Segment.
     pub report_interval: Duration,
 }
@@ -122,6 +125,7 @@ async fn report_loop(
         adapter_client,
         environment_id,
         license_key,
+        helm_chart_version,
         report_interval,
     }: Config,
 ) {
@@ -216,7 +220,12 @@ async fn report_loop(
             }
         };
 
-        build_segment_traits(&mut traits, &license_key, &BUILD_INFO);
+        build_segment_traits(
+            &mut traits,
+            &license_key,
+            &BUILD_INFO,
+            helm_chart_version.clone(),
+        );
 
         tracing::info!(?traits, "telemetry traits");
 
@@ -280,6 +289,7 @@ fn build_segment_traits(
     traits: &mut serde_json::Value,
     license_key: &ValidatedLicenseKey,
     build_info: &BuildInfo,
+    helm_chart_version: Option<String>,
 ) {
     let now_secs = u64::try_from(Utc::now().timestamp()).unwrap_or(0);
     let license_expired =
@@ -297,7 +307,10 @@ fn build_segment_traits(
             "license_expiration_behavior".into(),
             json!(license_key.expiration_behavior),
         );
-        traits.insert("mz_version".into(), json!(build_info.version));
+        traits.insert(
+            "mz_version".into(),
+            json!(build_info.human_version(helm_chart_version)),
+        );
     }
 }
 
@@ -331,6 +344,7 @@ mod tests {
             &mut traits,
             &license_key(u64::MAX, false),
             &DUMMY_BUILD_INFO,
+            Some("25.1.0".into()),
         );
         assert_eq!(
             traits,
@@ -342,7 +356,7 @@ mod tests {
                 "license_expiration_timestamp": u64::MAX,
                 "license_expired": false,
                 "license_expiration_behavior": "Warn",
-                "mz_version": DUMMY_BUILD_INFO.version,
+                "mz_version": DUMMY_BUILD_INFO.human_version(Some("25.1.0".into()))
             })
         );
     }
@@ -352,7 +366,7 @@ mod tests {
         // The key was valid at startup (`expired: false`) but the clock has
         // since passed its expiration.
         let mut traits = json!({});
-        build_segment_traits(&mut traits, &license_key(1, false), &DUMMY_BUILD_INFO);
+        build_segment_traits(&mut traits, &license_key(1, false), &DUMMY_BUILD_INFO, None);
         assert_eq!(&traits["license_expired"], &json!(true));
     }
 
@@ -361,21 +375,26 @@ mod tests {
         // A key marked expired at startup stays expired even if the clock
         // reads before its expiration.
         let mut traits = json!({});
-        build_segment_traits(&mut traits, &license_key(u64::MAX, true), &DUMMY_BUILD_INFO);
+        build_segment_traits(
+            &mut traits,
+            &license_key(u64::MAX, true),
+            &DUMMY_BUILD_INFO,
+            None,
+        );
         assert_eq!(&traits["license_expired"], &json!(true));
     }
 
     #[mz_ore::test]
     fn zero_expiration_sentinel_never_expires() {
         let mut traits = json!({});
-        build_segment_traits(&mut traits, &license_key(0, false), &DUMMY_BUILD_INFO);
+        build_segment_traits(&mut traits, &license_key(0, false), &DUMMY_BUILD_INFO, None);
         assert_eq!(&traits["license_expired"], &json!(false));
     }
 
     #[mz_ore::test]
     fn non_object_traits_are_left_untouched() {
         let mut traits = json!("not an object");
-        build_segment_traits(&mut traits, &license_key(1, false), &DUMMY_BUILD_INFO);
+        build_segment_traits(&mut traits, &license_key(1, false), &DUMMY_BUILD_INFO, None);
         assert_eq!(traits, json!("not an object"));
     }
 }
