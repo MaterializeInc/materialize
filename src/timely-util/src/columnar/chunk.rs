@@ -28,6 +28,12 @@
 //! Spilling happens in [`Chunk::settle`], the trait's designated commit point:
 //! chunks moved to settled output are handed to the pool when spilling is
 //! enabled (see [`set_compute_spill_enabled`] and [`set_storage_spill_enabled`]).
+//! The spill destination resolves per commit from three pieces of mutable
+//! state. A thread-local pool override, for tests and benches, wins outright.
+//! Otherwise the compute and storage gates, composed as an OR, route commits
+//! to the process pool installed by [`crate::pool_config`], and with no pool
+//! installed chunks stay resident. A second thread-local holds the reusable
+//! scratch that call-scoped reads of spilled bodies copy into.
 //! Grading is by serialized bytes, the ship size
 //! [`Column`] already targets, rather than by the record-count `TARGET`,
 //! since record count does not bound bytes for variable-width data.
@@ -100,8 +106,9 @@ pub fn set_storage_spill_enabled(enabled: bool) {
     STORAGE_SPILL_ENABLED.store(enabled, Ordering::Relaxed);
 }
 
-/// Route this thread's chunk spills through `pool` (or back to the global
-/// resolution with `None`).
+/// Set or unset the pool through which this thread's chunk spills are
+/// routed, taking precedence over the gates and the process pool. `None`
+/// restores the global resolution.
 pub fn set_spill_override(pool: Option<Pool>) {
     SPILL_OVERRIDE.with(|cell| *cell.borrow_mut() = pool);
 }
@@ -125,7 +132,7 @@ fn spill_pool() -> Option<Pool> {
 /// the largest body it ever carried (heap no pool gauge can see).
 const SCRATCH_RETAIN_WORDS: usize = 1 << 18;
 
-/// Run `f` over this thread's read scratch, cleared of any previous use.
+/// Run `f` with this thread's read scratch, cleared of any previous use.
 fn with_scratch<Out>(f: impl FnOnce(&mut Vec<u64>) -> Out) -> Out {
     READ_SCRATCH.with(|cell| {
         let mut scratch = cell.take();
@@ -176,15 +183,15 @@ fn rr<'b, 'a: 'b, C: Columnar>(item: columnar::Ref<'a, C>) -> columnar::Ref<'b, 
 
 /// A spilled chunk body: the serialized column in the pool, plus the resident
 /// metadata every [`Chunk`] must answer without fetching. That metadata is
-/// the record count and the first and last data items as singleton containers
-/// (the fence entries [`UnloadChunk::locate`] consults).
+/// the record count and the first and last data items (the fence entries
+/// [`UnloadChunk::locate`] consults).
 pub struct SpilledBody<D: Columnar> {
     /// Number of updates in the body.
     records: usize,
-    /// The first data item, as a one-element container.
-    first: D::Container,
-    /// The last data item, as a one-element container.
-    last: D::Container,
+    /// The first and last data items, as a two-element container. One
+    /// container rather than two singletons, so the leaf allocations are not
+    /// duplicated per fence.
+    fences: D::Container,
     /// The chunk's generational depth, mirrored into the pool's
     /// [`ChunkHints`] at spill time.
     depth: u8,
@@ -195,7 +202,8 @@ pub struct SpilledBody<D: Columnar> {
 /// A sorted, consolidated run of `(D, T, R)` updates, resident or spilled.
 ///
 /// Every chunk carries a generational depth, fixed at creation: fresh chunks
-/// are depth 0, a merge output is one generation past its deepest input, and
+/// are depth 0, a merge output is one generation past its deepest input
+/// (saturating at `u8::MAX`, where remerged long-lived chunks stay), and
 /// rewrites within a generation (extract, advance, settle coalescing)
 /// preserve depth. At spill time the depth becomes the pool's [`ChunkHints`],
 /// so repeatedly merged (older, colder) data lands in deeper eviction bands.
@@ -278,7 +286,10 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
                 let data = col.borrow().0;
                 (data.get(0), data.get(data.len() - 1))
             }
-            ColumnChunk::Spilled(body) => (body.first.borrow().get(0), body.last.borrow().get(0)),
+            ColumnChunk::Spilled(body) => {
+                let fences = body.fences.borrow();
+                (fences.get(0), fences.get(1))
+            }
         }
     }
 
@@ -301,15 +312,13 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
         let len_bytes = column.length_in_bytes();
         let view = column.borrow();
         let records = view.len();
-        let mut first = D::Container::default();
-        let mut last = D::Container::default();
-        first.push(view.0.get(0));
-        last.push(view.0.get(records - 1));
+        let mut fences = D::Container::default();
+        fences.push(view.0.get(0));
+        fences.push(view.0.get(records - 1));
         let handle = spill_column(column, pool, len_bytes, ChunkHints { depth });
         ColumnChunk::Spilled(Rc::new(SpilledBody {
             records,
-            first,
-            last,
+            fences,
             depth,
             handle,
         }))
@@ -408,22 +417,22 @@ where
 {
     type Time = T;
 
-    /// A record-count ceiling for harness bookkeeping. Actual chunk sizing is
-    /// by serialized bytes: `merge` and `extract` cut output at the [`Column`]
-    /// ship threshold, and `settle` grades by `at_commit_size`, so nothing
-    /// here consults this bound.
+    /// A nominal record count for the harness's fuel and ladder accounting,
+    /// not a bound. Actual chunk sizing is by serialized bytes: `merge` and
+    /// `extract` cut output at the [`Column`] ship threshold, and `settle`
+    /// grades by `at_commit_size`, so a chunk of narrow records can hold more
+    /// records than this and nothing here consults it.
     const TARGET: usize = 65536;
 
     fn len(&self) -> usize {
         self.records()
     }
 
-    /// Merge the two fronts through their shared horizon with
-    /// [`Column::merge_from`]: gallop bulk-copies for disjoint runs, semigroup
-    /// consolidation on equal `(data, time)`, output cut at the ship
-    /// threshold. The exhausted front retires. A survivor consumed partway is
-    /// rewritten and pushed back. A survivor not consumed at all goes back as
-    /// it was, in particular a spilled body is neither rebuilt nor re-spilled.
+    /// [`Column::merge_from`] does the work: gallop bulk-copies for disjoint
+    /// runs, semigroup consolidation on equal `(data, time)`, output cut at
+    /// the ship threshold. A survivor pushed back untouched keeps its
+    /// original form, in particular a spilled body is neither rebuilt nor
+    /// re-spilled.
     ///
     /// Fronts whose data ranges are disjoint never load at all: the resident
     /// fence entries decide, and the lower front moves to the output verbatim.
