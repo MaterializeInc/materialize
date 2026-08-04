@@ -45,7 +45,7 @@ const ClusterDetailBreadcrumbs = (props: { crumbs: Breadcrumb[] }) => {
   const [showSystemObjects] = useShowSystemObjects();
   const { clusterId, clusterName } = useParams<ClusterParams>();
   const { data: clusters, getClusterById } = useAllClusters();
-  const { data: ownersById, isPending: isOwnersPending } = useOwners();
+  const { isOwner } = useOwners();
   const { pathname, search } = useLocation();
   assert(clusterId);
   assert(clusterName);
@@ -85,13 +85,7 @@ const ClusterDetailBreadcrumbs = (props: { crumbs: Breadcrumb[] }) => {
       rightSideChildren={
         cluster && (
           <OverflowMenuContainer
-            cluster={{
-              ...cluster,
-              // Treat an in-flight owners query as non-owner so owner-only menu
-              // items stay hidden until ownership is known.
-              isOwner:
-                !isOwnersPending && (ownersById?.get(cluster.ownerId) ?? false),
-            }}
+            cluster={{ ...cluster, isOwner: isOwner(cluster.ownerId) }}
           />
         )
       }
