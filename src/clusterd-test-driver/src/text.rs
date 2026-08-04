@@ -279,6 +279,24 @@ fn opt_string(args: &BTreeMap<String, String>, key: &str) -> Option<String> {
 }
 
 /// Parse a `[a,b,c]` list of `usize`s (`[]` is empty).
+fn parse_i64_list(s: &str) -> anyhow::Result<Vec<i64>> {
+    let inner = s
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .ok_or_else(|| anyhow!("expected a list like `[0,1]`, got `{s}`"))?;
+    if inner.trim().is_empty() {
+        return Ok(vec![]);
+    }
+    inner
+        .split(',')
+        .map(|part| {
+            part.trim()
+                .parse()
+                .with_context(|| format!("bad list element `{part}`"))
+        })
+        .collect()
+}
+
 fn parse_usize_list(s: &str) -> anyhow::Result<Vec<usize>> {
     let inner = s
         .strip_prefix('[')
@@ -489,6 +507,14 @@ fn parse_command(input: &str) -> anyhow::Result<Command> {
             id: req_u64(&args, "id")?,
             schema: opt_string(&args, "schema"),
             ts: req_u64(&args, "ts")?,
+        },
+        "peek-count" => Command::PeekCount {
+            id: req_u64(&args, "id")?,
+            ts: req_u64(&args, "ts")?,
+            literals: opt_string(&args, "literals")
+                .as_deref()
+                .map(parse_i64_list)
+                .transpose()?,
         },
         "await-subscribe" => Command::AwaitSubscribe {
             id: req_u64(&args, "id")?,

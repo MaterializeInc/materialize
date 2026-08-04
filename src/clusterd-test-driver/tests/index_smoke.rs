@@ -94,7 +94,12 @@ async fn index_over_small_shard() {
         .await
         .expect("frontier");
     let n = driver
-        .peek_count(PeekTarget::Index { id: index_id }, desc, Timestamp::from(0))
+        .peek_count(
+            PeekTarget::Index { id: index_id },
+            desc,
+            Timestamp::from(0),
+            None,
+        )
         .await
         .expect("peek");
     assert_eq!(n, 10_000);
