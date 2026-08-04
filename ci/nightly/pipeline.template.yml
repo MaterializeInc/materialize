@@ -2865,6 +2865,124 @@ steps:
     agents:
       queue: hetzner-x86-64-4cpu-8gb
 
+  - id: clusterd-test-driver
+    label: Clusterd test driver
+    depends_on: build-aarch64
+    timeout_in_minutes: 20
+    inputs: [test/clusterd-test-driver]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: clusterd-test-driver
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
+  - id: dbt-materialize
+    topics: [kafka]
+    label: dbt-materialize
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    parallelism: 2
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: dbt-materialize
+    agents:
+      queue: hetzner-aarch64-8cpu-16gb
+
+  - id: storage-usage
+    topics: [kafka, postgres]
+    label: Storage usage table
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: storage-usage
+
+  - id: tracing
+    label: Tracing fast path
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    inputs: [test/tracing]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: tracing
+    agents:
+      # Requires BUILDKITE_SENTRY_DSN
+      queue: linux-aarch64-small
+
+  - id: rtr-combined
+    topics: [kafka, mysql, postgres]
+    label: RTR with all sources
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    inputs: [test/rtr-combined]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: rtr-combined
+    agents:
+      queue: hetzner-aarch64-16cpu-32gb
+
+  - id: dyncfg
+    label: "Dyncfg"
+    depends_on: build-aarch64
+    timeout_in_minutes: 45
+    inputs: [test/dyncfg]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: dyncfg
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
+  - id: secrets-logging
+    topics: [kafka, mysql, postgres]
+    label: "Secrets Logging"
+    depends_on: build-aarch64
+    timeout_in_minutes: 45
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: secrets-logging
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
+  - id: chbench-demo
+    topics: [debezium, kafka, mysql]
+    label: chbench smoke
+    depends_on: build-aarch64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: chbench
+          run: no-load
+          args: [--run-seconds=10, --wait]
+    timeout_in_minutes: 30
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
+  - id: metabase-demo
+    label: Metabase
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: metabase
+    agents:
+      # too slow to run emulated on aarch64, Metabase'ss docker image is not yet available for aarch64 natively yet: https://github.com/metabase/metabase/issues/13119
+      queue: hetzner-x86-64-4cpu-8gb
+
+  - id: fdb
+    topics: [cockroach]
+    label: "FoundationDB"
+    depends_on: build-aarch64
+    timeout_in_minutes: 40
+    inputs: [test/foundationdb]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: foundationdb
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
+
+
   - group: Language
     key: language-tests
     steps:
