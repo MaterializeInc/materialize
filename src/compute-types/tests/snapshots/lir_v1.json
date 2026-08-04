@@ -3067,6 +3067,7 @@
   "ParseCatalogAuditLogDetails": "UNITSTRUCT",
   "ParseCatalogCreateSql": "UNITSTRUCT",
   "ParseCatalogId": "UNITSTRUCT",
+  "ParseCatalogItemReferences": "UNITSTRUCT",
   "ParseCatalogPrivileges": "UNITSTRUCT",
   "ParseConnectionDetails": "UNITSTRUCT",
   "ParseIdent": "UNITSTRUCT",
@@ -5084,6 +5085,11 @@
       "ParseCatalogId": {
         "NEWTYPE": {
           "TYPENAME": "ParseCatalogId"
+        }
+      },
+      "ParseCatalogItemReferences": {
+        "NEWTYPE": {
+          "TYPENAME": "ParseCatalogItemReferences"
         }
       },
       "ParseCatalogPrivileges": {
