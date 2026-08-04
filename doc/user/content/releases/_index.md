@@ -1689,23 +1689,9 @@ swap reduces the memory required to operate Materialize and improves cost
 efficiency.
 
 To facilitate upgrades from v25.2, Self-Managed Materialize added new labels to
-the node selectors for `clusterd` pods:
-
-- To upgrade using Materialize-provided Terraforms, upgrade your Terraform
-  version to `v0.6.1`:
-  - {{< include-md
-file="content/headless/self-managed-deployments/aws-terraform-v0.6.1-upgrade-notes.md" >}}.
-  - {{< include-md
-file="content/headless/self-managed-deployments/gcp-terraform-v0.6.1-upgrade-notes.md" >}}.
-  - {{< include-md
-  file="content/headless/self-managed-deployments/azure-terraform-v0.6.1-upgrade-notes.md"
-  >}}.
-
-- To upgrade if <red>**not**</red> using a Materialize-provided Terraforms,  you
-must prepare your nodes by adding the required labels. For detailed
-instructions, see [Prepare for swap and upgrade to
-v26.0](/self-managed-deployments/appendix/upgrade-to-swap/).
-
+the node selectors for `clusterd` pods. To upgrade, you must prepare your nodes
+by adding the required labels. For detailed instructions, see [Prepare for swap
+and upgrade to v26.0](/self-managed-deployments/appendix/upgrade-to-swap/).
 
 ### SASL/SCRAM-SHA-256 support
 
@@ -1777,46 +1763,9 @@ For more information, see [`rolloutStrategy`](/self-managed-deployments/upgradin
 
 ### Terraform helpers
 
-Corresponding to the v26.0.0 release, the following versions of the sample
-Terraform modules have been released:
+The following sample Terraform modules are available for deploying Materialize:
 
 {{< yaml-table data="self_managed/terraform_list" >}}
-
-{{< tabs >}} {{< tab "Materialize on AWS" >}}
-
-{{< yaml-table data="self_managed/aws_terraform_versions" >}}
-
-{{% self-managed/aws-terraform-upgrade-notes %}}
-
-Click on the Terraform version link to go to the release-specific Upgrade Notes.
-
-{{</ tab >}}
-
-{{< tab "Materialize on Azure" >}}
-
-{{< yaml-table data="self_managed/azure_terraform_versions" >}}
-
-{{% self-managed/azure-terraform-upgrade-notes %}}
-
-See also Upgrade Notes for release specific notes.
-
-{{</ tab >}}
-
-{{< tab "Materialize on GCP" >}}
-
-{{< yaml-table data="self_managed/gcp_terraform_versions" >}}
-
-{{% self-managed/gcp-terraform-upgrade-notes %}}
-
-See also Upgrade Notes for release specific notes.
-
-{{</ tab >}}
-
-{{< tab "terraform-helm-materialize" >}}
-
-{{< yaml-table data="self_managed/terraform_helm_compatibility" >}}
-
-{{</ tab >}} {{</ tabs >}}
 
 #### Upgrade notes for v26.0.0
 

@@ -48,7 +48,7 @@
 
 - name: upgrade-landing-guides-unified
   content: |
-    #### Upgrade using the new Terraform Modules
+    #### Upgrade using Terraform Modules
 
     {{< tip >}}
     The Terraform modules are provided as examples. They are not required for
@@ -57,25 +57,9 @@
 
     |  Guide         | Description  |
     | -------------  | ----------- |
-    | [Upgrade on AWS (Terraform)](/self-managed-deployments/upgrading/upgrade-on-aws/) | Uses the new Terraform module to deploy Materialize to AWS Elastic Kubernetes Service (EKS).
-    | [Upgrade on Azure (Terraform)](/self-managed-deployments/upgrading/upgrade-on-azure/) | Uses the new Terraform module to deploy Materialize to Azure Kubernetes Service (AKS).
-    | [Upgrade on GCP (Terraform)](/self-managed-deployments/upgrading/upgrade-on-gcp/) | Uses the new Terraform module to deploy Materialize to Google Kubernetes Engine (GKE).
-
-- name: upgrade-landing-guides-legacy
-  content: |
-
-    #### Upgrade using Legacy Terraform Modules
-
-    {{< tip >}}
-    The Terraform modules are provided as examples. They are not required for
-    upgrading Materialize.
-    {{< /tip >}}
-
-    |  Guide         | Description  |
-    | -------------  | ----------- |
-    | [Upgrade on AWS (Legacy Terraform)](/self-managed-deployments/upgrading/legacy/upgrade-on-aws-legacy/) | Uses legacy Terraform module to deploy Materialize to AWS Elastic Kubernetes Service (EKS).
-    | [Upgrade on Azure (Legacy Terraform)](/self-managed-deployments/upgrading/legacy/upgrade-on-azure-legacy/) | Uses legacy Terraform module to deploy Materialize to Azure Kubernetes Service (AKS).
-    | [Upgrade on GCP (Legacy Terraform)](/self-managed-deployments/upgrading/legacy/upgrade-on-gcp-legacy/) | Uses legacy Terraform module to deploy Materialize to Google Kubernetes Engine (GKE).
+    | [Upgrade on AWS (Terraform)](/self-managed-deployments/upgrading/upgrade-on-aws/) | Uses Terraform module to deploy Materialize to AWS Elastic Kubernetes Service (EKS).
+    | [Upgrade on Azure (Terraform)](/self-managed-deployments/upgrading/upgrade-on-azure/) | Uses Terraform module to deploy Materialize to Azure Kubernetes Service (AKS).
+    | [Upgrade on GCP (Terraform)](/self-managed-deployments/upgrading/upgrade-on-gcp/) | Uses Terraform module to deploy Materialize to Google Kubernetes Engine (GKE).
 
 - name: downgrade-restriction
   content: |
