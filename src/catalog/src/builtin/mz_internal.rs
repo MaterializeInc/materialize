@@ -394,64 +394,7 @@ WHERE
         }),
     }
 });
-pub static MZ_OBJECT_DEPENDENCIES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_object_dependencies",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::TABLE_MZ_OBJECT_DEPENDENCIES_OID,
-    desc: RelationDesc::builder()
-        .with_column("object_id", SqlScalarType::String.nullable(false))
-        .with_column(
-            "referenced_object_id",
-            SqlScalarType::String.nullable(false),
-        )
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "object_id",
-            "The ID of the dependent object. Corresponds to `mz_objects.id`.",
-        ),
-        (
-            "referenced_object_id",
-            "The ID of the referenced object. Corresponds to `mz_objects.id`.",
-        ),
-    ]),
-    is_retained_metrics_object: true,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "object_dependency",
-        description: "A dependency edge: one object depends on another",
-        links: &const {
-            [
-                OntologyLink {
-                    name: "depends_on",
-                    target: "object",
-                    properties: LinkProperties::DependsOn {
-                        source_column: "object_id",
-                        target_column: "id",
-                        source_id_type: Some(mz_repr::SemanticType::CatalogItemId),
-                        requires_mapping: None,
-                    },
-                },
-                OntologyLink {
-                    name: "dependency_is",
-                    target: "object",
-                    properties: LinkProperties::DependsOn {
-                        source_column: "referenced_object_id",
-                        target_column: "id",
-                        source_id_type: Some(mz_repr::SemanticType::CatalogItemId),
-                        requires_mapping: None,
-                    },
-                },
-            ]
-        },
-        column_semantic_types: &const {
-            [
-                ("object_id", SemanticType::CatalogItemId),
-                ("referenced_object_id", SemanticType::CatalogItemId),
-            ]
-        },
-    }),
-});
+
 pub static MZ_COMPUTE_DEPENDENCIES: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
     name: "mz_compute_dependencies",
     schema: MZ_INTERNAL_SCHEMA,
@@ -4979,9 +4922,10 @@ ON mz_internal.pg_attrdef_all_databases (oid, adrelid, adnum, adbin, adsrc)",
 
 pub static MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED: LazyLock<BuiltinSource> =
     LazyLock::new(|| BuiltinSource {
-        // TODO(database-issues#8173): Rename this source to `mz_compute_error_counts_raw`. Currently this causes a
-        // naming conflict because the resolver stumbles over the source with the same name in
-        // `mz_introspection` due to the automatic schema translation.
+        // TODO(database-issues#8173): Rename this source to `mz_compute_error_counts_raw`.
+        // Currently this causes a naming conflict because the resolver stumbles over the
+        // source with the same name in `mz_introspection` due to the automatic schema
+        // translation.
         name: "mz_compute_error_counts_raw_unified",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::SOURCE_MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED_OID,
@@ -7892,12 +7836,11 @@ fn console_cluster_utilization_overview_desc() -> RelationDesc {
 /// `console/src/api/materialize/cluster/replicaUtilizationHistory.ts`).
 ///
 /// * `bin`: the `date_bin` bucket width, e.g. `1 MINUTE`.
-/// * `retention`: how much history the view retains, e.g. `3 HOURS`, enforced
-///   with a temporal `mz_now()` filter so the maintained arrangement stays
-///   bounded.
-/// * `group_size`: the expected number of metric samples per (replica, bucket),
-///   used for the `DISTINCT ON INPUT GROUP SIZE` top-k hint. Replica metrics are
-///   scraped roughly once per minute, so this is the bucket width in minutes.
+/// * `retention`: how much history the view retains, e.g. `3 HOURS`, enforced with a temporal
+///   `mz_now()` filter so the maintained arrangement stays bounded.
+/// * `group_size`: the expected number of metric samples per (replica, bucket), used for the
+///   `DISTINCT ON INPUT GROUP SIZE` top-k hint. Replica metrics are scraped roughly once per
+///   minute, so this is the bucket width in minutes.
 fn console_cluster_utilization_overview_sql(bin: &str, retention: &str, group_size: u32) -> String {
     format!(
         r#"WITH replica_history AS (
@@ -8251,12 +8194,11 @@ pub static MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_24H: LazyLock<BuiltinView> =
  * cluster_name: The name of the cluster.
  * The approach taken is as follows. First, find all extant clusters and add them
  * to the result set. Per cluster, we do the following:
- * 1. Find the most recent create or rename event. This moment represents when the
- *    cluster took on its final logical identity.
- * 2. Look for a cluster that had the same name (or the same name with `_dbt_deploy`
- *    appended) that was dropped within one minute of that moment. That cluster is
- *    almost certainly the logical predecessor of the current cluster. Add the cluster
- *    to the result set.
+ * 1. Find the most recent create or rename event. This moment represents when the cluster took
+ *    on its final logical identity.
+ * 2. Look for a cluster that had the same name (or the same name with `_dbt_deploy` appended)
+ *    that was dropped within one minute of that moment. That cluster is almost certainly the
+ *    logical predecessor of the current cluster. Add the cluster to the result set.
  * 3. Repeat the procedure until a cluster with no logical predecessor is discovered.
  * Limiting the search for a dropped cluster to a window of one minute is a heuristic,
  * but one that's likely to be pretty good one. If a name is reused after more
@@ -8620,8 +8562,9 @@ ON mz_internal.mz_sink_status_history (sink_id)",
 // underlying relation.
 //
 // We append WITH_HISTORY because we want to build a separate view + index that doesn't
-// retain history. This is because retaining its history causes MZ_SOURCE_STATISTICS_WITH_HISTORY_IND
-// to hold all records/updates, which causes CPU and latency of querying it to spike.
+// retain history. This is because retaining its history causes
+// MZ_SOURCE_STATISTICS_WITH_HISTORY_IND to hold all records/updates, which causes CPU and latency
+// of querying it to spike.
 pub static MZ_SOURCE_STATISTICS_WITH_HISTORY: LazyLock<BuiltinView> =
     LazyLock::new(|| BuiltinView {
         name: "mz_source_statistics_with_history",

@@ -608,7 +608,6 @@ mz_history_retention_strategies          ""
 mz_license_keys                          ""
 mz_materialized_view_refresh_strategies  ""
 mz_object_arrangement_size_history       ""
-mz_object_dependencies                   ""
 mz_object_global_ids                     ""
 mz_object_hydration_history              ""
 mz_optimizer_notices                     ""
@@ -648,6 +647,7 @@ mz_mcp_data_product_details              ""
 mz_mcp_data_products                     ""
 mz_notices                               ""
 mz_notices_redacted                      ""
+mz_object_dependencies_raw               ""
 mz_object_fully_qualified_names          ""
 mz_object_graph_edges                    ""
 mz_object_history                        ""
@@ -733,6 +733,7 @@ mz_metric_sinks                mz_catalog_server   ""
 mz_mysql_source_tables         mz_catalog_server   ""
 mz_network_policies            mz_catalog_server   ""
 mz_network_policy_rules        mz_catalog_server   ""
+mz_object_dependencies         mz_catalog_server   ""
 mz_overridden_system_parameters mz_catalog_server   ""
 mz_pending_cluster_replicas    mz_catalog_server   ""
 mz_postgres_source_tables      mz_catalog_server   ""
@@ -836,7 +837,7 @@ test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-30
+29
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
