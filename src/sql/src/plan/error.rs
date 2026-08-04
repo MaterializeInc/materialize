@@ -310,6 +310,7 @@ pub enum PlanError {
     NetworkPolicyInUse,
     /// Expected a constant expression that evaluates without an error to a non-null value.
     ConstantExpressionSimplificationFailed(String),
+    InvalidLimit(String),
     InvalidOffset(String),
     /// The named cursor does not exist.
     UnknownCursor(String),
@@ -876,6 +877,7 @@ impl fmt::Display for PlanError {
                 write!(f, "TIMEOUT=<duration> option is required for ALTER CLUSTER ... WITH (WAIT UNTIL READY ( ... ))")
             },
             Self::ConstantExpressionSimplificationFailed(e) => write!(f, "{}", e),
+            Self::InvalidLimit(e) => write!(f, "Invalid LIMIT clause: {}", e),
             Self::InvalidOffset(e) => write!(f, "Invalid OFFSET clause: {}", e),
             Self::UnknownCursor(name) => {
                 write!(f, "cursor {} does not exist", name.quoted())
