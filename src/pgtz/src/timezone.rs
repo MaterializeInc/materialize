@@ -13,7 +13,6 @@ use std::fmt;
 use chrono::FixedOffset;
 use chrono_tz::Tz;
 use itertools::Itertools;
-use mz_lowertest::MzReflect;
 use serde::{Deserialize, Serialize};
 use uncased::UncasedStr;
 
@@ -24,17 +23,7 @@ pub const MZ_CATALOG_TIMEZONE_NAMES_SQL: &str =
     include_str!(concat!(env!("OUT_DIR"), "/timezone.gen.sql"));
 
 /// Parsed timezone.
-#[derive(
-    Debug,
-    Copy,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Serialize,
-    Deserialize,
-    MzReflect
-)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Timezone {
     #[serde(with = "fixed_offset_serde")]
     FixedOffset(FixedOffset),

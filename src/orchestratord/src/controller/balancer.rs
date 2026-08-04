@@ -46,6 +46,7 @@ use mz_cloud_resources::crd::{
 use mz_orchestrator_kubernetes::KubernetesImagePullPolicy;
 use mz_ore::{cli::KeyValueArg, instrument};
 
+#[derive(Clone)]
 pub struct Config {
     pub enable_security_context: bool,
     pub enable_prometheus_scrape_annotations: bool,

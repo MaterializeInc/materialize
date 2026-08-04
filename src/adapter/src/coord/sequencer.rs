@@ -551,7 +551,12 @@ impl Coordinator {
                     ctx.retire(Ok(ExecuteResponse::DiscardedTemp));
                 }
                 Plan::DiscardAll => {
-                    let ret = if let TransactionStatus::Started(_) = ctx.session().transaction() {
+                    // Clearing the transaction would silently discard writes staged by an
+                    // earlier statement of the same pipeline.
+                    let txn = ctx.session().transaction();
+                    let discardable =
+                        matches!(txn, TransactionStatus::Started(_)) && !txn.contains_ops();
+                    let ret = if discardable {
                         let (_, retire_notify) = self.clear_transaction(ctx.session_mut()).await;
                         ctx.delay_response_until(retire_notify);
                         self.drop_temp_items(ctx.session().conn_id()).await;

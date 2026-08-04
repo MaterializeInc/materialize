@@ -124,8 +124,7 @@ Currently, the optimization team is mostly concerned with the `HIR ⇒ MIR` and 
     * [Unit tests in the mz-expr](https://github.com/MaterializeInc/materialize/tree/main/src/expr/tests) crate currently allow:
         * Testing the simplifying MirScalarExpr, predicates, join equivalences.
         * Testing MapFilterProject.
-    * [There is a DSL to specifying arbitrary MIRs.](https://github.com/MaterializeInc/materialize/tree/main/src/expr-test-util)
-    * [DSL to specify arbitrary enums and structs.](https://github.com/MaterializeInc/materialize/tree/main/src/lowertest)
+    * [There is a parser and printer for specifying arbitrary MIRs.](https://github.com/MaterializeInc/materialize/tree/main/src/expr-parser)
 
 ### Performance tests
 

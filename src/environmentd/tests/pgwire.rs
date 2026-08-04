@@ -978,6 +978,14 @@ fn test_pgtest_mz_notice() {
 }
 
 #[mz_ore::test]
+fn test_pgtest_mz_numeric_binary_infinity() {
+    pg_test_inner(
+        Path::new("../../test/pgtest-mz/numeric-binary-infinity.pt"),
+        true,
+    );
+}
+
+#[mz_ore::test]
 fn test_pgtest_mz_numeric_binary_overflow() {
     pg_test_inner(
         Path::new("../../test/pgtest-mz/numeric-binary-overflow.pt"),
@@ -1024,6 +1032,11 @@ fn test_pgtest_mz_startup() {
 #[mz_ore::test]
 fn test_pgtest_mz_stray_copy() {
     pg_test_inner(Path::new("../../test/pgtest-mz/stray-copy.pt"), true);
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_set_local() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/set-local.pt"), true);
 }
 
 #[mz_ore::test]

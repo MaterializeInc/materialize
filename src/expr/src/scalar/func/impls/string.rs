@@ -13,7 +13,6 @@ use std::sync::LazyLock;
 
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use mz_expr_derive::sqlfunc;
-use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
 use mz_ore::str::StrExt;
@@ -172,8 +171,7 @@ fn reverse<'a>(a: &'a str) -> String {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct CastStringToNumeric(pub Option<NumericMaxScale>);
 
@@ -233,8 +231,7 @@ fn cast_string_to_time<'a>(a: &'a str) -> Result<NaiveTime, EvalError> {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct CastStringToTimestamp(pub Option<TimestampPrecision>);
 
@@ -287,8 +284,7 @@ fn try_parse_monotonic_iso8601_timestamp<'a>(
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct CastStringToTimestampTz(pub Option<TimestampPrecision>);
 
@@ -344,8 +340,7 @@ fn cast_string_to_uuid<'a>(a: &'a str) -> Result<Uuid, EvalError> {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct CastStringToArray {
     // Target array's type.
@@ -432,8 +427,7 @@ impl fmt::Display for CastStringToArray {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct CastStringToList {
     // Target list's type
@@ -526,8 +520,7 @@ impl fmt::Display for CastStringToList {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct CastStringToMap {
     // Target map's value type
@@ -626,8 +619,7 @@ impl fmt::Display for CastStringToMap {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct CastStringToChar {
     pub length: Option<mz_repr::adt::char::CharLength>,
@@ -696,8 +688,7 @@ impl fmt::Display for CastStringToChar {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct CastStringToRange {
     // Target range's type
@@ -788,8 +779,7 @@ impl fmt::Display for CastStringToRange {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct CastStringToVarChar {
     pub length: Option<VarCharMaxLength>,
@@ -869,8 +859,7 @@ static INT2VECTOR_CAST_EXPR: LazyLock<MirScalarExpr> = LazyLock::new(|| MirScala
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct CastStringToInt2Vector;
 
@@ -1035,8 +1024,7 @@ fn normalize(text: &str, form_str: &str) -> Result<String, EvalError> {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct IsLikeMatch(pub like_pattern::Matcher);
 
@@ -1073,8 +1061,7 @@ impl fmt::Display for IsLikeMatch {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct IsRegexpMatch(pub Regex);
 
@@ -1111,8 +1098,7 @@ impl fmt::Display for IsRegexpMatch {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct RegexpMatch(pub Regex);
 
@@ -1184,8 +1170,7 @@ impl fmt::Display for RegexpMatch {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct RegexpSplitToArray(pub Regex);
 
@@ -1271,8 +1256,7 @@ fn quote_ident<'a>(a: &'a str) -> Result<String, EvalError> {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct RegexpReplace {
     pub regex: Regex,

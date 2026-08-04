@@ -1,6 +1,6 @@
 ---
 source: src/sql-server-util/src/desc.rs
-revision: c0559e3dbe
+revision: 39dbbc5a64
 ---
 
 # mz-sql-server-util::desc

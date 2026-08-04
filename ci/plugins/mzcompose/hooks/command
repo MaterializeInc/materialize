@@ -378,6 +378,21 @@ cleanup() {
   sudo systemctl restart docker; docker ps --all --quiet | xargs --no-run-if-empty docker rm --force --volumes
   killall -9 -q clusterd || true # There might be remaining processes from a cargo-test run
 
+  # Runs before the services.log guard below: an infra failure that keeps every
+  # container from starting also leaves services.log empty, so the guard must
+  # not be the thing that decides the exit code.
+  if [[ $CI_ANNOTATE_ERRORS_RESULT -ne 0 ]]; then
+    # Exits 199 for build failures that a retry recovers from. This cleanup runs
+    # with `set +e`, so the code has to be captured and re-raised explicitly.
+    # Falling through to the annotation result instead would leave the job at
+    # exit 1, and Buildkite's automatic retry rule for 199 would never fire.
+    CLEAR_RESULT=0
+    bin/clear-corrupted-cargo-target-dir run.log || CLEAR_RESULT=$?
+    if [[ $CLEAR_RESULT -eq 199 ]]; then
+      CI_ANNOTATE_ERRORS_RESULT=199
+    fi
+  fi
+
   if [ ! -s services.log ] \
     && [ "$BUILDKITE_LABEL" != ":rust: cargo-fuzz" ] \
     && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of persist" ] \
@@ -393,11 +408,14 @@ cleanup() {
     && [[ ! "$BUILDKITE_LABEL" =~ Orchestratord\ .* ]] \
     && [[ ! "$BUILDKITE_LABEL" =~ Cluster\ spec\ sheet.* ]]; then
       echo "+++ services.log is empty, failing"
+      if [[ $CI_ANNOTATE_ERRORS_RESULT -ne 0 ]]; then
+        # Keep the retryable code (128 for GHCR/DockerHub trouble, 199 for a
+        # corrupted cargo target dir) that Buildkite's automatic retry rules
+        # match on. Overwriting it with 1 turns a self-healing infra failure
+        # into a job that stays red until someone retries it by hand.
+        exit "$CI_ANNOTATE_ERRORS_RESULT"
+      fi
       exit 1
-  fi
-
-  if [[ $CI_ANNOTATE_ERRORS_RESULT -ne 0 ]]; then
-    bin/clear-corrupted-cargo-target-dir run.log
   fi
 
   exit "$CI_ANNOTATE_ERRORS_RESULT"

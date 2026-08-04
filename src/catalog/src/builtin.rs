@@ -66,7 +66,6 @@ use crate::durable::objects::SystemObjectDescription;
 use crate::memory::objects::DataSourceDesc;
 
 pub const BUILTIN_PREFIXES: &[&str] = &["mz_", "pg_", "external_"];
-const BUILTIN_CLUSTER_REPLICA_NAME: &str = "r1";
 
 /// A sentinel used in place of a fingerprint that indicates that a builtin
 /// object is runtime alterable. Runtime alterable objects don't have meaningful
@@ -696,14 +695,6 @@ pub struct BuiltinCluster {
     pub owner_id: &'static RoleId,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BuiltinClusterReplica {
-    /// Name of the compute replica.
-    pub name: &'static str,
-    /// Name of the cluster that this replica belongs to.
-    pub cluster_name: &'static str,
-}
-
 /// Uniquely identifies the definition of a builtin object.
 pub trait Fingerprint {
     fn fingerprint(&self) -> String;
@@ -906,11 +897,6 @@ pub const MZ_SYSTEM_CLUSTER: BuiltinCluster = BuiltinCluster {
     ],
 };
 
-pub const MZ_SYSTEM_CLUSTER_REPLICA: BuiltinClusterReplica = BuiltinClusterReplica {
-    name: BUILTIN_CLUSTER_REPLICA_NAME,
-    cluster_name: MZ_SYSTEM_CLUSTER.name,
-};
-
 pub const MZ_CATALOG_SERVER_CLUSTER: BuiltinCluster = BuiltinCluster {
     name: "mz_catalog_server",
     owner_id: &MZ_SYSTEM_ROLE_ID,
@@ -929,11 +915,6 @@ pub const MZ_CATALOG_SERVER_CLUSTER: BuiltinCluster = BuiltinCluster {
     ],
 };
 
-pub const MZ_CATALOG_SERVER_CLUSTER_REPLICA: BuiltinClusterReplica = BuiltinClusterReplica {
-    name: BUILTIN_CLUSTER_REPLICA_NAME,
-    cluster_name: MZ_CATALOG_SERVER_CLUSTER.name,
-};
-
 pub const MZ_PROBE_CLUSTER: BuiltinCluster = BuiltinCluster {
     name: "mz_probe",
     owner_id: &MZ_SYSTEM_ROLE_ID,
@@ -950,10 +931,6 @@ pub const MZ_PROBE_CLUSTER: BuiltinCluster = BuiltinCluster {
         },
         rbac::owner_privilege(ObjectType::Cluster, MZ_SYSTEM_ROLE_ID),
     ],
-};
-pub const MZ_PROBE_CLUSTER_REPLICA: BuiltinClusterReplica = BuiltinClusterReplica {
-    name: BUILTIN_CLUSTER_REPLICA_NAME,
-    cluster_name: MZ_PROBE_CLUSTER.name,
 };
 
 pub const MZ_SUPPORT_CLUSTER: BuiltinCluster = BuiltinCluster {
@@ -1144,10 +1121,10 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         // mz_sources is generated dynamically below with inlined builtin VALUES.
         Builtin::Table(&MZ_SOURCE_REFERENCES),
         Builtin::MaterializedView(&MZ_POSTGRES_SOURCES),
-        Builtin::Table(&MZ_POSTGRES_SOURCE_TABLES),
-        Builtin::Table(&MZ_MYSQL_SOURCE_TABLES),
-        Builtin::Table(&MZ_SQL_SERVER_SOURCE_TABLES),
-        Builtin::Table(&MZ_KAFKA_SOURCE_TABLES),
+        Builtin::MaterializedView(&MZ_POSTGRES_SOURCE_TABLES),
+        Builtin::MaterializedView(&MZ_MYSQL_SOURCE_TABLES),
+        Builtin::MaterializedView(&MZ_SQL_SERVER_SOURCE_TABLES),
+        Builtin::MaterializedView(&MZ_KAFKA_SOURCE_TABLES),
         Builtin::Table(&MZ_SINKS),
         Builtin::Table(&MZ_VIEWS),
         Builtin::Table(&MZ_TYPES),
@@ -1575,11 +1552,6 @@ pub const BUILTIN_CLUSTERS: &[&BuiltinCluster] = &[
     &MZ_PROBE_CLUSTER,
     &MZ_SUPPORT_CLUSTER,
     &MZ_ANALYTICS_CLUSTER,
-];
-pub const BUILTIN_CLUSTER_REPLICAS: &[&BuiltinClusterReplica] = &[
-    &MZ_SYSTEM_CLUSTER_REPLICA,
-    &MZ_CATALOG_SERVER_CLUSTER_REPLICA,
-    &MZ_PROBE_CLUSTER_REPLICA,
 ];
 
 #[allow(non_snake_case)]

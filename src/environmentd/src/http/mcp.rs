@@ -19,7 +19,9 @@
 //! ## Tools
 //!
 //! **Agent:** `get_data_products`, `get_data_product_details`, `read_data_product`, `query`
-//! **Developer:** `query_system_catalog`
+//! **Developer:** `query_system_catalog`, `query`
+//!
+//! `read_data_product` and both `query` tools are dyncfg-gated.
 //!
 //! Data products are discovered via `mz_internal.mz_mcp_data_products` system view.
 
@@ -72,7 +74,6 @@ enum McpRequestError {
     #[error("Invalid JSON-RPC version: expected 2.0")]
     InvalidJsonRpcVersion,
     #[error("Method not found: {0}")]
-    #[allow(dead_code)] // Handled by serde deserialization, kept for error mapping
     MethodNotFound(String),
     #[error("Tool not found: {0}")]
     ToolNotFound(String),
@@ -338,6 +339,7 @@ const READ_ONLY_ANNOTATIONS: ToolAnnotations = ToolAnnotations {
 #[derive(Debug, Serialize)]
 struct ToolContentResult {
     content: Vec<ContentBlock>,
+    /// Always `false`: tool failures surface as JSON-RPC errors instead.
     #[serde(rename = "isError")]
     is_error: bool,
 }
@@ -473,7 +475,22 @@ async fn handle_mcp_request(
         |status: McpCallStatus| metrics.record_request(endpoint_label, &method_label, status);
 
     // Check the per-endpoint feature flag via a catalog snapshot, similar to frontend_peek.rs.
-    let catalog = client.client.catalog_snapshot("mcp").await;
+    // The configured `MCP_REQUEST_TIMEOUT` lives in the snapshot we are about
+    // to fetch, so bound this phase with the compiled-in default. Without it a
+    // stalled snapshot would hang the request past any configured timeout.
+    let catalog = match tokio::time::timeout(
+        *MCP_REQUEST_TIMEOUT.default(),
+        client.client.catalog_snapshot("mcp"),
+    )
+    .await
+    {
+        Ok(catalog) => catalog,
+        Err(_elapsed) => {
+            warn!(endpoint = %endpoint_type, "MCP catalog snapshot timed out");
+            record_request(McpCallStatus::Timeout);
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
+    };
     let dyncfgs = catalog.system_config().dyncfgs();
     let enabled = match endpoint_type {
         McpEndpointType::Agent => ENABLE_MCP_AGENT.get(dyncfgs),
@@ -646,7 +663,6 @@ async fn handle_mcp_method(
                 query_tool_enabled,
                 read_data_product_tool_enabled,
             )
-            .await
         }
         McpMethod::ToolsList => {
             debug!(endpoint = %endpoint_type, "Processing tools/list");
@@ -656,7 +672,6 @@ async fn handle_mcp_method(
                 read_data_product_tool_enabled,
                 max_response_size,
             )
-            .await
         }
         McpMethod::ToolsCall(params) => {
             debug!(tool = %params, endpoint = %endpoint_type, "Processing tools/call");
@@ -757,7 +772,7 @@ fn endpoint_instructions(
     }
 }
 
-async fn handle_initialize(
+fn handle_initialize(
     endpoint_type: McpEndpointType,
     query_tool_enabled: bool,
     read_data_product_tool_enabled: bool,
@@ -777,7 +792,7 @@ async fn handle_initialize(
     }))
 }
 
-async fn handle_tools_list(
+fn handle_tools_list(
     endpoint_type: McpEndpointType,
     query_tool_enabled: bool,
     read_data_product_tool_enabled: bool,
@@ -2081,9 +2096,7 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     async fn test_tools_list_agent_query_tool_disabled() {
-        let result = handle_tools_list(McpEndpointType::Agent, false, true, 1_000_000)
-            .await
-            .unwrap();
+        let result = handle_tools_list(McpEndpointType::Agent, false, true, 1_000_000).unwrap();
         let McpResult::ToolsList(list) = result else {
             panic!("Expected ToolsList result");
         };
@@ -2108,9 +2121,7 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     async fn test_tools_list_agent_query_tool_enabled() {
-        let result = handle_tools_list(McpEndpointType::Agent, true, true, 1_000_000)
-            .await
-            .unwrap();
+        let result = handle_tools_list(McpEndpointType::Agent, true, true, 1_000_000).unwrap();
         let McpResult::ToolsList(list) = result else {
             panic!("Expected ToolsList result");
         };
@@ -2135,9 +2146,7 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     async fn test_tools_list_agent_read_data_product_tool_disabled() {
-        let result = handle_tools_list(McpEndpointType::Agent, true, false, 1_000_000)
-            .await
-            .unwrap();
+        let result = handle_tools_list(McpEndpointType::Agent, true, false, 1_000_000).unwrap();
         let McpResult::ToolsList(list) = result else {
             panic!("Expected ToolsList result");
         };
@@ -2166,9 +2175,7 @@ mod tests {
     /// instructions do not tell the agent to use a tool that isn't listed.
     #[mz_ore::test(tokio::test)]
     async fn test_tools_list_agent_both_read_tools_disabled() {
-        let result = handle_tools_list(McpEndpointType::Agent, false, false, 1_000_000)
-            .await
-            .unwrap();
+        let result = handle_tools_list(McpEndpointType::Agent, false, false, 1_000_000).unwrap();
         let McpResult::ToolsList(list) = result else {
             panic!("Expected ToolsList result");
         };
@@ -2204,9 +2211,7 @@ mod tests {
     async fn test_tools_list_developer_query_tool_disabled() {
         // Developer endpoint doesn't expose read_data_product; the flag is
         // orthogonal, so pass whichever value.
-        let result = handle_tools_list(McpEndpointType::Developer, false, true, 1_000_000)
-            .await
-            .unwrap();
+        let result = handle_tools_list(McpEndpointType::Developer, false, true, 1_000_000).unwrap();
         let McpResult::ToolsList(list) = result else {
             panic!("Expected ToolsList result");
         };
@@ -2223,9 +2228,7 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     async fn test_tools_list_developer_query_tool_enabled() {
-        let result = handle_tools_list(McpEndpointType::Developer, true, true, 1_000_000)
-            .await
-            .unwrap();
+        let result = handle_tools_list(McpEndpointType::Developer, true, true, 1_000_000).unwrap();
         let McpResult::ToolsList(list) = result else {
             panic!("Expected ToolsList result");
         };

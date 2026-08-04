@@ -1,0 +1,78 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Define a source with a set of columns.
+define
+DefSource name=x
+  - c0: integer?
+  - c1: bigint?
+----
+Source defined as t0
+
+# various pipeline= parameters run different transformation pipelines
+
+# pipeline=Identity leaves expressions as-is
+apply pipeline=Identity
+Get x
+----
+Get x
+
+# Can build nested expressions.
+apply pipeline=Identity
+Filter #0
+  Get x
+----
+Filter #0
+  Get x
+
+apply pipeline=Identity
+Filter #0 AND #1
+  Map (true)
+    Get x
+----
+Filter #0 AND #1
+  Map (true)
+    Get x
+
+# pipeline=PredicatePushdown runs predicate pushdown
+apply pipeline=PredicatePushdown
+Filter #0 AND #1
+  Map (true)
+    Get x
+----
+Map (true)
+  Filter #0 AND #1
+    Get x
+
+# pipeline=optimize runs a full optimization pipeline
+apply pipeline=optimize
+Project (#3)
+  Map (#0, #1)
+    Get x
+----
+Project (#1)
+  Get x
+
+apply pipeline=Identity
+Join on=(#0 = #2 AND #1 = #3)
+  Get x
+  Get x
+----
+Join on=(#0 = #2 AND #1 = #3)
+  Get x
+  Get x
+
+apply pipeline=Identity
+Negate
+  Constant // { types: "(bigint?)" }
+    - (1)
+----
+Negate
+  Constant
+    - (1)

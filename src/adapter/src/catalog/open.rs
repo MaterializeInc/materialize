@@ -27,14 +27,17 @@ use mz_audit_log::{
 use mz_auth::hash::scram256_hash;
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
-    BUILTIN_CLUSTER_REPLICAS, BUILTIN_CLUSTERS, BUILTIN_PREFIXES, BUILTIN_ROLES, BUILTINS, Builtin,
-    Fingerprint, MZ_CATALOG_RAW, RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
+    BUILTIN_CLUSTERS, BUILTIN_PREFIXES, BUILTIN_ROLES, BUILTINS, Builtin, Fingerprint,
+    MZ_CATALOG_RAW, RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
 };
 use mz_catalog::config::StateConfig;
 use mz_catalog::durable::objects::{
     SystemObjectDescription, SystemObjectMapping, SystemObjectUniqueIdentifier,
 };
-use mz_catalog::durable::{ClusterReplica, ClusterVariant, ClusterVariantManaged, Transaction};
+use mz_catalog::durable::{
+    ClusterReplica, ClusterVariant, ClusterVariantManaged, ReplicaConfig, ReplicaLocation,
+    Transaction, managed_cluster_replica_name,
+};
 use mz_catalog::expr_cache::{
     ExpressionCacheConfig, ExpressionCacheHandle, GlobalExpressions, LocalExpressions,
 };
@@ -210,7 +213,7 @@ impl Catalog {
                 config.boot_ts,
             )?;
             add_new_remove_old_builtin_introspection_source_migration(&mut txn)?;
-            add_new_remove_old_builtin_cluster_replicas_migration(
+            reconcile_builtin_cluster_replicas(
                 &mut txn,
                 &builtin_bootstrap_cluster_config_map,
                 config.boot_ts,
@@ -1114,67 +1117,135 @@ fn add_new_remove_old_builtin_roles_migration(
     Ok(())
 }
 
-fn add_new_remove_old_builtin_cluster_replicas_migration(
+/// Converges each builtin cluster's replica set on the cluster's own managed
+/// config.
+///
+/// A builtin cluster is normally managed, and a managed cluster's replicas are
+/// derived state: exactly `replication_factor` replicas, named by
+/// [`managed_cluster_replica_name`]. One can be altered to unmanaged, which leaves
+/// no factor to derive from, and then its replica set is the operator's.
+///
+/// Replicas this creates are shaped from the cluster's config. An existing replica
+/// is matched by name alone and left untouched, so this converges cardinality and
+/// names rather than shape. An internal replica is never derived state and is left
+/// alone entirely.
+///
+/// The bootstrap flags seed `replication_factor` and `size` when a cluster is
+/// first created (see [`add_new_remove_old_builtin_clusters_migration`]) and are
+/// deliberately not consulted here, so an `ALTER CLUSTER` against a builtin
+/// cluster survives a restart.
+///
+/// This runs at catalog open so the replicas a cluster's config calls for exist as
+/// early as possible. The coordinator's bootstrap brings up only replicas already
+/// recorded durably and runs before the cluster controller is spawned, and the
+/// controller does not run at all while a deployment is read-only.
+///
+/// The controller derives its target from the same cluster config, so it converges
+/// on the same replica set rather than competing for it. It excludes system
+/// clusters today, but nothing here depends on that staying true.
+fn reconcile_builtin_cluster_replicas(
     txn: &mut Transaction<'_>,
     builtin_cluster_config_map: &BuiltinBootstrapClusterConfigMap,
     boot_ts: Timestamp,
 ) -> Result<(), AdapterError> {
-    let cluster_lookup: BTreeMap<_, _> = txn
+    let builtin_cluster_names: BTreeSet<&str> = BUILTIN_CLUSTERS
+        .iter()
+        .map(|cluster| cluster.name)
+        .collect();
+
+    // Replicas of a cluster that is no longer a builtin need no handling here:
+    // `Transaction::remove_clusters` cascades to a cluster's replicas, and the
+    // clusters migration has already run against this transaction.
+    let clusters: Vec<_> = txn
         .get_clusters()
-        .map(|cluster| (cluster.name.clone(), cluster.clone()))
+        .filter(|cluster| {
+            cluster.id.is_system() && builtin_cluster_names.contains(cluster.name.as_str())
+        })
         .collect();
 
-    let cluster_id_to_name: BTreeMap<ClusterId, String> = cluster_lookup
-        .values()
-        .map(|cluster| (cluster.id, cluster.name.clone()))
-        .collect();
+    let builtin_cluster_ids: BTreeSet<ClusterId> =
+        clusters.iter().map(|cluster| cluster.id).collect();
 
-    let mut durable_replicas: BTreeMap<ClusterId, BTreeMap<String, ClusterReplica>> = txn
-        .get_cluster_replicas()
-        .filter(|replica| replica.replica_id.is_system())
-        .fold(BTreeMap::new(), |mut acc, replica| {
-            acc.entry(replica.cluster_id)
-                .or_insert_with(BTreeMap::new)
-                .insert(replica.name.to_string(), replica);
-            acc
-        });
+    // Only the builtin clusters' replicas. An environment can have thousands of
+    // user replicas and none of them are in scope here.
+    //
+    // An internal replica is deliberately out of scope. `CREATE CLUSTER REPLICA ...
+    // INTERNAL` is allowed on a managed cluster, and its name is barred from
+    // matching the derived `r1..rN` pattern so it cannot collide with one. It is a
+    // break-glass replica an operator added rather than derived state, so reaping it
+    // would undo that. The `ALTER CLUSTER` path skips it for the same reason.
+    let mut replicas_by_cluster: BTreeMap<ClusterId, BTreeMap<String, ClusterReplica>> =
+        BTreeMap::new();
+    for replica in txn.get_cluster_replicas().filter(|replica| {
+        builtin_cluster_ids.contains(&replica.cluster_id)
+            && !matches!(
+                replica.config.location,
+                ReplicaLocation::Managed { internal: true, .. }
+            )
+    }) {
+        replicas_by_cluster
+            .entry(replica.cluster_id)
+            .or_default()
+            .insert(replica.name.clone(), replica);
+    }
 
-    // Add new replicas.
-    for builtin_replica in BUILTIN_CLUSTER_REPLICAS {
-        let cluster = cluster_lookup
-            .get(builtin_replica.cluster_name)
-            .expect("builtin cluster replica references non-existent cluster");
-        // `empty_map` is a hack to simplify the if statement below.
-        let mut empty_map: BTreeMap<String, ClusterReplica> = BTreeMap::new();
-        let replica_names = durable_replicas
-            .get_mut(&cluster.id)
-            .unwrap_or(&mut empty_map);
+    let mut to_drop: Vec<(String, ClusterReplica)> = Vec::new();
 
-        let builtin_cluster_bootstrap_config =
-            builtin_cluster_config_map.get_config(builtin_replica.cluster_name)?;
-        if replica_names.remove(builtin_replica.name).is_none()
-            // NOTE(SangJunBak): We need to explicitly check the replication factor because
-            // BUILT_IN_CLUSTER_REPLICAS is constant throughout all deployments but the replication
-            // factor is configurable on bootstrap.
-            && builtin_cluster_bootstrap_config.replication_factor > 0
-        {
-            let replica_size = match cluster.config.variant {
-                ClusterVariant::Managed(ClusterVariantManaged { ref size, .. }) => size.clone(),
-                ClusterVariant::Unmanaged => builtin_cluster_bootstrap_config.size.clone(),
-            };
+    for cluster in clusters {
+        // An unmanaged cluster has no replication factor, so there is no target to
+        // converge on. Its replica set is whatever an operator made it, and it is
+        // not ours to reshape.
+        let ClusterVariant::Managed(managed) = &cluster.config.variant else {
+            continue;
+        };
 
-            let config = builtin_cluster_replica_config(replica_size.clone());
+        // The bootstrap flags seed a cluster at creation and are never re-applied,
+        // which is what keeps an `ALTER CLUSTER` from being reverted on every
+        // restart. That leaves an operator who changed a flag on an existing
+        // deployment with no feedback, so say so.
+        let bootstrap_config = builtin_cluster_config_map.get_config(&cluster.name)?;
+        if bootstrap_config.replication_factor != managed.replication_factor {
+            warn!(
+                cluster = %cluster.name,
+                configured_replication_factor = managed.replication_factor,
+                bootstrap_replication_factor = bootstrap_config.replication_factor,
+                "bootstrap replication factor is not applied to an already-existing \
+                 builtin cluster. Use ALTER CLUSTER ... SET (REPLICATION FACTOR ...) \
+                 to change it",
+            );
+        }
+
+        // Reading the cluster's factor is what makes this compose with the other
+        // writers of a replica set. The refresh scheduler parks a scheduled cluster
+        // by writing its factor to 0, so converging on the factor honors that
+        // instead of resurrecting a replica the scheduler just dropped.
+        let mut surplus = replicas_by_cluster.remove(&cluster.id).unwrap_or_default();
+        for index in 0..managed.replication_factor {
+            let replica_name = managed_cluster_replica_name(index);
+            if surplus.remove(&replica_name).is_some() {
+                continue;
+            }
+
             // Builtin replicas live on system clusters. This runs inside the
-            // catalog-open transaction with no coordinator, so allocating from
-            // the same transaction is single-source and safe.
+            // catalog-open transaction with no coordinator, so allocating from the
+            // same transaction is single-source and safe.
             let replica_id = txn.allocate_system_replica_id()?;
             txn.insert_cluster_replica_with_id(
                 cluster.id,
                 replica_id,
-                builtin_replica.name,
-                config,
-                MZ_SYSTEM_ROLE_ID,
+                &replica_name,
+                managed_replica_config(managed),
+                // The cluster's owner, not `mz_system`. `mz_support` and
+                // `mz_analytics` are owned by their own roles, and replica
+                // ownership is checked against the replica's own `owner_id`, so
+                // stamping `mz_system` here would stop those roles from altering
+                // a replica of a cluster they own.
+                cluster.owner_id,
             )?;
+            info!(
+                cluster = %cluster.name, replica = %replica_name, %replica_id,
+                "creating builtin cluster replica to match the cluster's replication factor"
+            );
 
             let audit_id = txn.allocate_audit_log_id()?;
             txn.insert_audit_log_event(VersionedEvent::new(
@@ -1185,8 +1256,8 @@ fn add_new_remove_old_builtin_cluster_replicas_migration(
                     cluster_id: cluster.id.to_string(),
                     cluster_name: cluster.name.clone(),
                     replica_id: Some(replica_id.to_string()),
-                    replica_name: builtin_replica.name.to_string(),
-                    logical_size: replica_size,
+                    replica_name,
+                    logical_size: managed.size.clone(),
                     billed_as: None,
                     internal: false,
                     reason: CreateOrDropClusterReplicaReasonV1::System,
@@ -1196,21 +1267,32 @@ fn add_new_remove_old_builtin_cluster_replicas_migration(
                 boot_ts.into(),
             ));
         }
+
+        // Whatever the config does not call for is surplus: a replica left over from
+        // a higher replication factor, or a `-pending` replica belonging to a
+        // graceful reconfiguration that a restart interrupted. Dropping the latter
+        // here means `remove_pending_cluster_replicas_migration` never sees it,
+        // which matches the abort semantics it would have applied anyway.
+        to_drop.extend(
+            surplus
+                .into_values()
+                .map(|replica| (cluster.name.clone(), replica)),
+        );
     }
 
-    // Remove old replicas.
-    let old_replicas: Vec<_> = durable_replicas
-        .values()
-        .flat_map(|replicas| replicas.values())
+    // Batched: `Transaction::remove_cluster_replica` is linear in the total replica
+    // count, so it must not be called in a loop.
+    let drop_ids = to_drop
+        .iter()
+        .map(|(_cluster_name, replica)| replica.replica_id)
         .collect();
-    let old_replica_ids = old_replicas.iter().map(|r| r.replica_id).collect();
-    txn.remove_cluster_replicas(&old_replica_ids)?;
+    txn.remove_cluster_replicas(&drop_ids)?;
 
-    for replica in &old_replicas {
-        let cluster_name = cluster_id_to_name
-            .get(&replica.cluster_id)
-            .cloned()
-            .unwrap_or_else(|| "<unknown>".to_string());
+    for (cluster_name, replica) in to_drop {
+        info!(
+            cluster = %cluster_name, replica = %replica.name, replica_id = %replica.replica_id,
+            "dropping builtin cluster replica not called for by the cluster's replication factor"
+        );
 
         let audit_id = txn.allocate_audit_log_id()?;
         txn.insert_audit_log_event(VersionedEvent::new(
@@ -1221,7 +1303,7 @@ fn add_new_remove_old_builtin_cluster_replicas_migration(
                 cluster_id: replica.cluster_id.to_string(),
                 cluster_name,
                 replica_id: Some(replica.replica_id.to_string()),
-                replica_name: replica.name.clone(),
+                replica_name: replica.name,
                 reason: CreateOrDropClusterReplicaReasonV1::System,
                 scheduling_policies: None,
             }),
@@ -1231,6 +1313,47 @@ fn add_new_remove_old_builtin_cluster_replicas_migration(
     }
 
     Ok(())
+}
+
+/// The replica config implied by a managed cluster's config.
+///
+/// Every field a replica shares with its cluster is taken from the cluster.
+/// `availability_zones` is the cluster's pool, which is what the provisioning
+/// paths stamp onto a managed replica.
+///
+/// Two things the `ALTER CLUSTER` path does that this does not. It normalizes
+/// logging through the plan, which discards `log_logging` when no interval is
+/// set, so for the odd cluster config that has debugging on and logging off the
+/// two produce different records. And it validates the size against the replica
+/// size map and the role's allowed sizes, which cannot be done from here because
+/// the size map is not part of the durable catalog. A builtin cluster's size only
+/// ever comes from a bootstrap flag or an `ALTER` that already validated it.
+fn managed_replica_config(managed: &ClusterVariantManaged) -> ReplicaConfig {
+    // Exhaustive destructure (no `..`): a field added to the managed config is a
+    // compile error here until we decide whether a replica has to carry it.
+    let ClusterVariantManaged {
+        size,
+        availability_zones,
+        logging,
+        arrangement_compression,
+        replication_factor: _,
+        optimizer_feature_overrides: _,
+        schedule: _,
+        auto_scaling_strategy: _,
+        reconfiguration: _,
+        burst: _,
+    } = managed;
+    ReplicaConfig {
+        location: ReplicaLocation::Managed {
+            size: size.clone(),
+            availability_zones: availability_zones.clone(),
+            billed_as: None,
+            internal: false,
+            pending: false,
+        },
+        logging: logging.clone(),
+        arrangement_compression: *arrangement_compression,
+    }
 }
 
 /// Roles can have default values for configuration parameters, e.g. you can set a Role default for
@@ -1338,22 +1461,6 @@ fn remove_pending_cluster_replicas_migration(
     Ok(())
 }
 
-pub(crate) fn builtin_cluster_replica_config(
-    replica_size: String,
-) -> mz_catalog::durable::ReplicaConfig {
-    mz_catalog::durable::ReplicaConfig {
-        location: mz_catalog::durable::ReplicaLocation::Managed {
-            availability_zones: Vec::new(),
-            billed_as: None,
-            pending: false,
-            internal: false,
-            size: replica_size,
-        },
-        logging: default_logging_config(),
-        arrangement_compression: false,
-    }
-}
-
 fn default_logging_config() -> ReplicaLogging {
     ReplicaLogging {
         log_logging: false,
@@ -1429,4 +1536,65 @@ pub(crate) fn into_consolidatable_updates_startup(
             (kind, ts, Diff::from(diff))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_catalog::durable::ClusterVariantManaged;
+
+    use super::*;
+
+    /// A replica the reconciler creates takes every shared field from its
+    /// cluster. Nothing here may fall back to a default, or a builtin cluster
+    /// ends up running a replica that disagrees with its own config.
+    #[mz_ore::test]
+    fn test_managed_replica_config_derives_every_shared_field() {
+        let managed = ClusterVariantManaged {
+            size: "somesize".into(),
+            availability_zones: vec!["az1".into(), "az2".into()],
+            logging: ReplicaLogging {
+                log_logging: true,
+                interval: Some(Duration::from_millis(10)),
+            },
+            arrangement_compression: true,
+            replication_factor: 3,
+            optimizer_feature_overrides: Default::default(),
+            schedule: Default::default(),
+            auto_scaling_strategy: None,
+            reconfiguration: None,
+            burst: None,
+        };
+
+        let config = managed_replica_config(&managed);
+
+        // Exhaustive destructures throughout, so a field added to either type is a
+        // compile error here rather than a silently unasserted one.
+        let ReplicaConfig {
+            location,
+            logging,
+            arrangement_compression,
+        } = config;
+
+        assert_eq!(logging, managed.logging);
+        assert_eq!(arrangement_compression, managed.arrangement_compression);
+        match location {
+            ReplicaLocation::Managed {
+                size,
+                availability_zones,
+                billed_as,
+                internal,
+                pending,
+            } => {
+                assert_eq!(size, managed.size);
+                assert_eq!(availability_zones, managed.availability_zones);
+                // A builtin replica is neither manually managed nor part of an
+                // in-flight reconfiguration, and those three traits are what
+                // exclude a replica from controller ownership.
+                assert_eq!(billed_as, None);
+                assert!(!internal);
+                assert!(!pending);
+            }
+            ReplicaLocation::Unmanaged { .. } => panic!("expected a managed location"),
+        }
+    }
 }

@@ -943,7 +943,7 @@ impl fmt::Display for TimestampExplanation {
             "        can respond immediately: {}",
             self.respond_immediately
         )?;
-        writeln!(f, "                       timeline: {:?}", &timeline)?;
+        writeln!(f, "                       timeline: {:?}", timeline)?;
         writeln!(
             f,
             "              session wall time: {:13} ({})",

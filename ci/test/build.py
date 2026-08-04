@@ -22,6 +22,7 @@ from materialize.ci_util.upload_debug_symbols_to_s3 import (
 )
 from materialize.mzbuild import (
     CargoBuild,
+    CargoRegistryFetchFailure,
     Repository,
     ResolvedImage,
     RustIncrementalBuildFailure,
@@ -36,7 +37,6 @@ class ImagesNotPublicError(Exception):
 
 def main() -> None:
     try:
-        set_build_status("pending")
         coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
         sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
 
@@ -67,12 +67,8 @@ def main() -> None:
             deps.ensure(pre_build=lambda images: upload_debuginfo(repo, images))
             if public_check is not None:
                 public_check.result()
-        set_build_status("success")
         annotate_buildkite_with_tags(repo.rd.arch, deps)
     except RustIncrementalBuildFailure:
-        # We retry twice automatically, see mkpipeline.py
-        if int(os.getenv("BUILDKITE_RETRY_COUNT", "0")) >= 2:
-            set_build_status("failed")
         print(
             "--- Detected incremental build failure, clearing cargo target directories"
         )
@@ -80,22 +76,9 @@ def main() -> None:
             if os.path.exists(dir):
                 shutil.rmtree(dir, ignore_errors=True)
         sys.exit(199)
-    except:
-        set_build_status("failed")
-        raise
-
-
-def set_build_status(status: str) -> None:
-    if step_key := os.getenv("BUILDKITE_STEP_KEY"):
-        spawn.runv(
-            [
-                "buildkite-agent",
-                "meta-data",
-                "set",
-                step_key,
-                status,
-            ]
-        )
+    except CargoRegistryFetchFailure:
+        print("--- Detected transient cargo registry failure, retrying")
+        sys.exit(199)
 
 
 def check_images_public(deps: mzbuild.DependencySet) -> None:

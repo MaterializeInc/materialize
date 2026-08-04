@@ -33,7 +33,7 @@ pub async fn run_verify_slot(
         .initial_backoff(Duration::from_millis(50))
         .max_duration(cmp::max(state.default_timeout, Duration::from_secs(60)))
         .retry_async_canceling(|_| async {
-            println!(">> checking for postgres replication slot {}", &slot);
+            println!(">> checking for postgres replication slot {}", slot);
             let rows = query(
                 &client,
                 sql!("SELECT active_pid FROM pg_replication_slots WHERE slot_name LIKE $1::TEXT"),
@@ -45,7 +45,7 @@ pub async fn run_verify_slot(
             if rows.len() != 1 {
                 bail!(
                     "expected entry for slot {} in pg_replication slots, found {}",
-                    &slot,
+                    slot,
                     rows.len()
                 );
             }

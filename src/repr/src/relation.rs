@@ -14,7 +14,6 @@ use std::{fmt, vec};
 
 use anyhow::bail;
 use itertools::Itertools;
-use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_ore::soft_panic_or_log;
 use mz_ore::str::StrExt;
@@ -56,8 +55,7 @@ use crate::{Datum, ReprScalarType, SqlScalarType};
     PartialOrd,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct SqlColumnType {
@@ -111,82 +109,17 @@ impl SqlColumnType {
 
     /// Compute the least upper bound of two column types at the SQL level.
     ///
-    /// Two types are compatible when they are equal, share the same base type
-    /// (differing only in modifiers), or are records with pairwise-compatible
-    /// fields.
-    /// The resulting nullability is the disjunction of the two input
-    /// nullabilities.
+    /// Nullability is the disjunction of the two inputs, at every nesting depth.
+    /// See [`SqlScalarType::sql_union`] for which types are compatible.
     ///
     /// Returns an error for incompatible types, e.g. `Text` and `Int32`, or
-    /// `Text` and `VarChar` (different base types at the SQL level).
-    /// See [`SqlColumnType::try_union`] for a fallback that handles the latter
-    /// case via repr-level union.
+    /// `Text` and `VarChar`. See [`SqlColumnType::try_union`] for a fallback
+    /// that handles the latter via repr-level union.
     pub fn sql_union(&self, other: &Self) -> Result<Self, anyhow::Error> {
-        match (&self.scalar_type, &other.scalar_type) {
-            (scalar_type, other_scalar_type) if scalar_type == other_scalar_type => {
-                Ok(SqlColumnType {
-                    scalar_type: scalar_type.clone(),
-                    nullable: self.nullable || other.nullable,
-                })
-            }
-            (scalar_type, other_scalar_type) if scalar_type.base_eq(other_scalar_type) => {
-                Ok(SqlColumnType {
-                    scalar_type: scalar_type.without_modifiers(),
-                    nullable: self.nullable || other.nullable,
-                })
-            }
-            (
-                SqlScalarType::Record { fields, custom_id },
-                SqlScalarType::Record {
-                    fields: other_fields,
-                    custom_id: other_custom_id,
-                },
-            ) => {
-                if custom_id != other_custom_id {
-                    bail!(
-                        "Can't union types: {:?} and {:?}",
-                        self.scalar_type,
-                        other.scalar_type
-                    );
-                };
-
-                if fields.len() != other_fields.len() {
-                    bail!(
-                        "Can't union types: {:?} and {:?}",
-                        self.scalar_type,
-                        other.scalar_type
-                    );
-                }
-                let mut union_fields = Vec::with_capacity(fields.len());
-                for ((name, typ), (other_name, other_typ)) in
-                    fields.iter().zip_eq(other_fields.iter())
-                {
-                    if name != other_name {
-                        bail!(
-                            "Can't union types: {:?} and {:?}",
-                            self.scalar_type,
-                            other.scalar_type
-                        );
-                    } else {
-                        let union_column_type = typ.sql_union(other_typ)?;
-                        union_fields.push((name.clone(), union_column_type));
-                    };
-                }
-
-                Ok(SqlColumnType {
-                    scalar_type: SqlScalarType::Record {
-                        fields: union_fields.into(),
-                        custom_id: *custom_id,
-                    },
-                    nullable: self.nullable || other.nullable,
-                })
-            }
-            _ => bail!(
-                "Can't union types: {:?} and {:?}",
-                self.scalar_type,
-                other.scalar_type
-            ),
-        }
+        Ok(SqlColumnType {
+            scalar_type: self.scalar_type.sql_union(&other.scalar_type)?,
+            nullable: self.nullable || other.nullable,
+        })
     }
 
     /// Compute the least upper bound of two column types.
@@ -271,8 +204,7 @@ impl fmt::Display for SqlColumnType {
     PartialOrd,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct SqlRelationType {
@@ -420,8 +352,7 @@ impl RustType<ProtoKey> for Vec<usize> {
     PartialOrd,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct ReprRelationType {
     /// The type for each column, in order.
@@ -518,8 +449,7 @@ impl From<&SqlRelationType> for ReprRelationType {
     PartialOrd,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct ReprColumnType {
     /// The underlying representation scalar type (e.g., Int32 or String) of this column.
@@ -596,8 +526,7 @@ impl SqlColumnType {
     PartialOrd,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct ColumnName(Box<str>);
 
@@ -728,8 +657,7 @@ pub const UNKNOWN_COLUMN_NAME: &str = "?column?";
     Ord,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct ColumnIndex(usize);
 
@@ -762,8 +690,7 @@ impl ColumnIndex {
     Ord,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct RelationVersion(u64);
@@ -901,7 +828,7 @@ impl fmt::Display for SemanticType {
 }
 
 /// Metadata (other than type) for a column in a [`RelationDesc`].
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 struct ColumnMetadata {
     /// Name of the column.
     name: ColumnName,
@@ -980,7 +907,7 @@ struct ColumnMetadata {
 /// the index in [`SqlRelationType`] that corresponds to a given column, and the
 /// version at which this column was added or dropped.
 ///
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, MzReflect)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RelationDesc {
     typ: SqlRelationType,
     metadata: BTreeMap<ColumnIndex, ColumnMetadata>,

@@ -1,6 +1,6 @@
 ---
 source: src/pgwire/src/protocol.rs
-revision: e4df9977da
+revision: 5d15af5cd7
 ---
 
 # pgwire::protocol
@@ -13,6 +13,8 @@ The private `FetchResult` enum used in streaming row fetch carries an `ErrorResp
 During startup, parameters that are successfully applied via `set()` are collected in `applied_params` and subsequently registered as session defaults via `set_default()`, after role defaults have been applied. This means `RESET` and `DISCARD ALL` restore to the startup parameter values rather than server defaults, matching PostgreSQL behavior and allowing connection poolers (e.g., pgbouncer) to rely on `DISCARD ALL` for session reset.
 
 In the ready state, stray `CopyData`, `CopyDone`, and `CopyFail` messages are accepted and ignored (returning `State::Ready`) rather than triggering drain. Clients stream COPY data optimistically, so these messages can arrive after a COPY statement fails before COPY mode is entered; draining would discard unrelated messages until the next Sync.
+
+`COPY TO STDOUT` and query result encoding both read the session's `text_encode_settings()` (which packages `extra_float_digits` and similar session variables into a `TextEncodeSettings`) and forward it to the codec and to `encode_copy_format`. This ensures session-configured text encoding (e.g. float digit count) is honored for session-bound output, while dataflow-layer encoding (e.g. `COPY TO <external destination>`) always uses `TextEncodeSettings::STABLE`.
 
 When decoding bind parameters, NUL characters in a decoded string value produce an error with `SqlState::CHARACTER_NOT_IN_REPERTOIRE`, matching PostgreSQL's SQLSTATE for this condition.
 

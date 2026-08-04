@@ -45,7 +45,7 @@ Source defined as t3
 
 
 # Inline literals in TopK::limit
-apply pipeline=literal_lifting
+apply pipeline=LiteralLifting
 TopK group_by=[#0] order_by=[#1 asc nulls_first] limit=(#2 + 2) offset=1
   Map (1)
     Get t0
@@ -57,7 +57,7 @@ Map (1)
 # Lift literals from constant collections.
 # A suffix of common literals is lifted as a map.
 # Everything else is rewritten as a Map + Project.
-apply pipeline=literal_lifting
+apply pipeline=LiteralLifting
 Constant // { types: "(text, bigint, bigint, bigint, text)" }
   - (1, "my", 2, 3, "foo")
   - (1, "oh", 2, 5, "foo")
@@ -74,7 +74,7 @@ Map ("foo")
 
 # Lift prefix and suffix from constant collections.
 # Pull shared suffix through union.
-apply pipeline=literal_lifting
+apply pipeline=LiteralLifting
 Union
   Constant // { types: "(bigint, bigint, bigint)" }
     - (1, 2, 3)
@@ -98,7 +98,7 @@ Map (3)
 
 # Illustrates a limitation of the current implementation.
 # Scalar expressions are not reduced after substituting the lifted literals.
-apply pipeline=literal_lifting
+apply pipeline=LiteralLifting
 Union
   Map (#2 + 5)
     Map (1)
@@ -119,7 +119,7 @@ Union
 
 
 # Single binding, value knowledge
-apply pipeline=literal_lifting
+apply pipeline=LiteralLifting
 Return
   Map ((#0 + #1))
     Get l0
@@ -152,7 +152,7 @@ Return
 # Multiple bindings, value knowledge
 # Lifts the 17 from the end of l0 up through the top
 # of the l1 value, but not further.
-apply pipeline=literal_lifting
+apply pipeline=LiteralLifting
 Return
   Get l1
 With Mutually Recursive

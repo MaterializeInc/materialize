@@ -7,6 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// The doc comments here become the descriptions in the generated CRD, which the
+// docs site renders through Hugo, so they contain shortcodes like
+// `{{<warning>}}`. Rustdoc reads the inner `<warning>` as an HTML tag and
+// reports it unclosed whenever a shortcode spans more than one Markdown
+// paragraph.
+#![allow(rustdoc::invalid_html_tags)]
+
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -2788,6 +2795,7 @@ mod tests {
     use super::{DEFAULT_ROLLOUT_REQUEST_TIMEOUT, FORCE_ROLLOUT_ANNOTATION, RolloutRequestTimeout};
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `sha256_compress` on OS `linux`
     fn force_rollout_annotation_forces_new_generation() {
         // The force-rollout annotation must feed into both the v1 rollout
         // hash (so that a rollout is requested) and the v1alpha1 force

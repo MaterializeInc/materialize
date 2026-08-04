@@ -102,6 +102,15 @@ SELECT a, b, _mz_diff FROM polaris.default_namespace.append_demo_table ORDER BY 
 1 ONE 1
 1 one -1
 
+# Once the sink has committed everything, staged and committed counts must
+# agree. Staged is counted once per input row, so a mismatch here means rows
+# are being double-counted somewhere in the write path.
+> SELECT ss.messages_staged, ss.messages_committed
+  FROM mz_internal.mz_sink_statistics ss
+  JOIN mz_catalog.mz_sinks s ON s.id = ss.id
+  WHERE s.name = 'append_demo'
+6 6
+
 # Test: table with columns named "_mz_diff" and "_mz_timestamp" — these clash with
 # the columns that MODE APPEND automatically appends to the Iceberg schema.
 

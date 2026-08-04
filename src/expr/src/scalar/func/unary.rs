@@ -470,6 +470,7 @@ derive_unary!(
     ParseCatalogPrivileges,
     ParseKafkaSourceDetails,
     ParsePostgresSourceDetails,
+    ParseSourceExportDetails,
     RedactSql,
     RoundFloat32,
     RoundFloat64,

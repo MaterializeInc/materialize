@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/record.rs
-revision: 40e5dd1af8
+revision: 94ee2d5448
 ---
 
 # mz-expr::scalar::func::impls::record

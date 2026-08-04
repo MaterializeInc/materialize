@@ -62,12 +62,19 @@ const QUERIES: CapturedQueries = loadQueries();
  * `src/platform/clusters/queries.ts`. `Infinity` = fire once on cold load.
  */
 const POLL_INTERVAL_MS: Record<string, number> = {
+  // usePollEnvironmentHealth polls SELECT mz_version() every 30s
+  // (AppInitializer.tsx), not the 5s default.
+  healthCheck: 30_000,
   "clusters.largestClusterReplica": 60_000,
   "clusters.largestMaintainedQueries": 60_000,
   // Cached name lookup, refetched only when the largest-queries set changes.
   "clusters.maintainedObjectNames": Infinity,
   "clusters.replicaOfflineEvents": 20_000,
   "roles.owners": 300_000,
+  // No refetchInterval in the console: fetched on mount and window refocus
+  // only, so replay them once per VU rather than at the 5s default.
+  "clusters.clusterFreshness": Infinity,
+  "clusters.materializationLag": Infinity,
   canCreateCluster: Infinity,
   canCreateObjects: Infinity,
   currentUser: Infinity,

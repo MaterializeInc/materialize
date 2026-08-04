@@ -18,7 +18,6 @@ use std::{fmt, iter};
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use dec::OrderedDecimal;
 use itertools::{Either, Itertools};
-use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 
 use mz_ore::str::separated;
@@ -1855,8 +1854,7 @@ impl OneByOneAggr for NaiveOneByOneAggr {
     PartialOrd,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub enum LagLeadType {
     Lag,
@@ -1872,8 +1870,7 @@ pub enum LagLeadType {
     PartialOrd,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub enum AggregateFunc {
     MaxNumeric,
@@ -3355,8 +3352,7 @@ where
     PartialOrd,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct CaptureGroupDesc {
     pub index: u32,
@@ -3375,7 +3371,6 @@ pub struct CaptureGroupDesc {
     Serialize,
     Deserialize,
     Hash,
-    MzReflect,
     Default
 )]
 pub struct AnalyzedRegexOpts {
@@ -3408,8 +3403,7 @@ impl FromStr for AnalyzedRegexOpts {
     PartialOrd,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct AnalyzedRegex(ReprRegex, Vec<CaptureGroupDesc>, AnalyzedRegexOpts);
 
@@ -3557,8 +3551,7 @@ fn mz_acl_explode<'a>(
     PartialOrd,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub enum TableFunc {
     AclExplode,
@@ -3668,8 +3661,7 @@ pub enum TableFunc {
     PartialOrd,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 struct WithOrdinality {
     inner: Box<TableFunc>,

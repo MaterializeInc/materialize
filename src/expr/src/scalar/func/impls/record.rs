@@ -10,7 +10,6 @@
 use std::fmt;
 
 use itertools::Itertools;
-use mz_lowertest::MzReflect;
 use mz_repr::{Datum, RowArena, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
 
@@ -26,8 +25,7 @@ use crate::{Eval, EvalError, MirScalarExpr};
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct CastRecordToString {
     pub ty: SqlScalarType,
@@ -96,8 +94,7 @@ impl fmt::Display for CastRecordToString {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct CastRecord1ToRecord2 {
     pub return_ty: SqlScalarType,
@@ -172,8 +169,7 @@ impl fmt::Display for CastRecord1ToRecord2 {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct RecordGet(pub usize);
 

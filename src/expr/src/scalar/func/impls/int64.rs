@@ -10,7 +10,6 @@
 use std::fmt;
 
 use mz_expr_derive::sqlfunc;
-use mz_lowertest::MzReflect;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::adt::system::Oid;
 use mz_repr::{SqlColumnType, SqlScalarType, strconv};
@@ -126,8 +125,7 @@ fn cast_int64_to_uint64(a: i64) -> Result<u64, EvalError> {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct CastInt64ToNumeric(pub Option<NumericMaxScale>);
 

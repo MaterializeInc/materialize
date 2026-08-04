@@ -1,0 +1,71 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Behavioural tests for mz_internal.mz_postgres_source_tables. The view is a
+# BuiltinMaterializedView backed by SQL over mz_internal.mz_catalog_raw: see
+# MZ_POSTGRES_SOURCE_TABLES in src/catalog/src/builtin/mz_internal.rs and the
+# parse_source_export_details helper in
+# src/expr/src/scalar/func/impls/jsonb.rs. Rows with real upstream data are
+# exercised by test/pg-cdc; this file pins the column shape and the
+# parent-type filtering that need no live Postgres.
+
+mode cockroach
+
+reset-server
+
+# --- Schema -------------------------------------------------------------------
+
+# Lock down: 3 columns, canonical order, types, and nullability.
+query TTT
+SELECT c.name, c.type, c.nullable::text
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_objects o ON c.id = o.id
+JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
+WHERE o.name = 'mz_postgres_source_tables' AND s.name = 'mz_internal'
+ORDER BY c.position
+----
+id  text  false
+schema_name  text  false
+table_name  text  false
+
+# --- Empty on a fresh env -----------------------------------------------------
+
+# Fresh envs have no upstream Postgres, so this view must be empty.
+query I
+SELECT count(*) FROM mz_internal.mz_postgres_source_tables
+----
+0
+
+# --- Non-postgres exports are excluded ----------------------------------------
+
+# A LOAD GENERATOR ... FOR ALL TABLES source creates subsources whose
+# create_sql parse_source_export_details does read, but the parent-type filter
+# must keep them out of the postgres view.
+statement ok
+CREATE SOURCE lg_src IN CLUSTER quickstart FROM LOAD GENERATOR AUCTION FOR ALL TABLES
+
+query I
+SELECT count(*) FROM mz_internal.mz_postgres_source_tables
+----
+0
+
+# --- FK-like invariant --------------------------------------------------------
+
+# Every row must join back to a source or table. With no rows this is trivially
+# satisfied, but the query also guards the join columns' types.
+query I
+SELECT count(*) FROM mz_internal.mz_postgres_source_tables pst
+LEFT JOIN mz_sources s ON pst.id = s.id
+LEFT JOIN mz_tables t ON pst.id = t.id
+WHERE s.id IS NULL AND t.id IS NULL
+----
+0
+
+statement ok
+DROP SOURCE lg_src CASCADE

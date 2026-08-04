@@ -56,6 +56,12 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
         default=MAX_AGE_DAYS,
         help="Maximum age for scratch instance in days. Defaults to 1.5",
     )
+    parser.add_argument(
+        "--team",
+        type=str,
+        default="engineering",
+        help="Value for the `team` tag required by the scratch account. Defaults to `engineering`.",
+    )
 
 
 def run(args: argparse.Namespace) -> None:
@@ -89,7 +95,7 @@ def run(args: argparse.Namespace) -> None:
     say(f"No existing instance found, creating from {label}...")
 
     max_age = datetime.timedelta(days=args.max_age_days)
-    extra_tags = {"LaunchedBy": whoami()}
+    extra_tags = {"LaunchedBy": whoami(), "team": args.team}
     instances = launch_cluster(
         descs,
         extra_tags=extra_tags,

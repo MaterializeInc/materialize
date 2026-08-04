@@ -171,8 +171,8 @@ impl<'a, M: SqlServerCdcMetrics> CdcStream<'a, M> {
         let mut fence_txn = fencing_client.transaction().await?;
         let qualified_table_name = format!(
             "{schema_name}.{table_name}",
-            schema_name = &table.schema_name,
-            table_name = &table.name
+            schema_name = table.schema_name,
+            table_name = table.name
         );
         self.metrics
             .snapshot_table_lock_start(&qualified_table_name);

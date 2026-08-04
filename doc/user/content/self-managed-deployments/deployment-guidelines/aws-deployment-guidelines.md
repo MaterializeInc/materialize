@@ -33,31 +33,24 @@ significantly degrade performance and is not supported.
 
 ### Swap support
 
-{{< tabs >}}
-{{< tab "New Terraform" >}}
+The Materialize [Terraform module](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/aws/examples/simple) supports configuring swap out of the box.
 
-#### New Terraform
+## Recommended metadata database sizing
 
-The new Materialize [Terraform module](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/aws/examples/simple) supports configuring swap out of the box.
+{{< include-md file="content/headless/self-managed-deployments/metadata-database-sizing.md" >}}
 
-{{< /tab >}}
-{{< tab "Legacy Terraform" >}}
-#### Legacy Terraform
+### RDS instance types
 
-The Legacy Terraform provider adds preliminary swap support in v0.6.1, via the [`swap_enabled`](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#input_swap_enabled) variable.
-With this change, the Terraform:
-  - Creates a node group for Materialize.
-  - Configures NVMe instance store volumes as swap using a daemonset.
-  - Enables swap at the Kubelet.
+For the RDS PostgreSQL metadata database, we recommend:
 
-See [Upgrade Notes](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#v061).
+- **Graviton (ARM)** memory-optimized instances (the `r6g` / `r7g` families).
+- **Multi-AZ** for production.
+- **gp3** storage.
 
-{{< note >}}
-If deploying `v25.2`, Materialize clusters will not automatically use swap unless they are configured with a `memory_request` less than their `memory_limit`. In `v26`, this will be handled automatically.
-{{< /note >}}
-
-{{< /tab >}}
-{{< /tabs >}}
+| Deployment size | Instance | vCPU / memory | Continuously-active objects (~60% CPU) |
+|---|---|---|---|
+| Entry / small production | `db.r6g.large` | 2 / 16 GiB | ~4,500 |
+| Recommended default | `db.r6g.2xlarge` | 8 / 64 GiB | ~18,000 |
 
 ## TLS
 

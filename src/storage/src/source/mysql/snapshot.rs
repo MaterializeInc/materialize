@@ -220,12 +220,15 @@ fn worker_pk_range(
     })
 }
 
-/// Walks the primary key index in steps of about `total / worker_count`, taking the key
+/// Walks the primary key index in steps of about `row_count / worker_count`, taking the key
 /// at each step's `OFFSET`. The per-step OFFSET scans sum to a full index pass, so this
-/// is O(total). Worker count is small, so the OFFSET scans dominate. `total` is the exact
-/// row count supplied by the caller, read on the same `READ ONLY` transaction as this
-/// walk, so the partitions are exact. Returns None if the primary key column type is not
-/// supported or the table is too small to split.
+/// function has a time complexity of O(row_count). Worker count is small, so the OFFSET
+/// scans dominate the runtime. `row_count` can be an optimizer estimate for large tables,
+/// so the partitions are approximate. An overestimate walks off the end of the index and stops
+/// with fewer boundaries, resulting in some workers receiving less or no work. An underestimate
+/// leaves a larger final partition for the last worker, however both still correctly partition
+/// the table. Returns None if the primary key column type is not supported or the table is too
+/// small to split.
 async fn compute_sampled_splits<Q>(
     conn: &mut Q,
     table: &MySqlTableName,
@@ -295,10 +298,14 @@ where
     }))
 }
 
-/// For every table, read the exact row count and, for a supported single-column primary
-/// key, compute the PK-range split boundaries, concurrently over at most `worker_count`
-/// connections. `None` bounds means single-worker fallback for that table. The counts are
-/// reused for both the sampling stride and the snapshot size gauge.
+/// For every table, read the row count (exact only for small tables) and, for a
+/// supported single-column primary key, compute the PK-range split boundaries,
+/// concurrently over at most `worker_count` connections. `None` bounds means
+/// single-worker fallback for that table. The counts are reused for both the sampling
+/// stride and the snapshot size gauge. Snapshot size gauge is a metric for the snapshot
+/// size used to report how many rows we need to process. "Sampling stride" refers to
+/// the number of rows we use to page through the table to find roughly evenly spaced
+/// primary keys to use as partition boundaries.
 async fn sample_pk_bounds(
     config: &RawSourceCreationConfig,
     connection_config: &mz_mysql_util::Config,
@@ -324,6 +331,10 @@ async fn sample_pk_bounds(
     // they feed the snapshot size gauge.
     let parallelism_enabled = mz_storage_types::dyncfgs::MYSQL_SOURCE_SNAPSHOT_PARALLELISM
         .get(config.config.config_set());
+    let exact_count_max_rows = u64::cast_from(
+        mz_storage_types::dyncfgs::MYSQL_SOURCE_SNAPSHOT_EXACT_COUNT_MAX_ROWS
+            .get(config.config.config_set()),
+    );
 
     let pooled_conns: Rc<RefCell<Vec<MySqlConn>>> = Rc::new(RefCell::new(Vec::new()));
     // Counting and boundary-sampling each walk a table's index (O(rows)), so run tables
@@ -355,10 +366,13 @@ async fn sample_pk_bounds(
                         conn
                     }
                 };
-                // Exact row count, reused for the sampling stride and the size gauge.
-                // It runs on the same `READ ONLY` transaction as the boundary walk in
-                // `compute_sampled_splits`, so both see one consistent snapshot.
-                let stats = collect_table_statistics(&mut *conn, table).await?;
+                // Row count, reused for the sampling stride and the size gauge. When it
+                // is counted exactly it runs on the same `READ ONLY` transaction as the
+                // boundary walk in `compute_sampled_splits`, so both see one consistent
+                // snapshot. For large tables it is an optimizer estimate instead, which
+                // `compute_sampled_splits` tolerates.
+                let stats =
+                    collect_table_statistics(&mut *conn, table, exact_count_max_rows).await?;
                 metrics.record_table_count_latency(
                     table.1.clone(),
                     table.0.clone(),
@@ -751,7 +765,7 @@ pub(crate) fn render<'scope>(
                     .await?;
                 let task_name = format!("timely-{worker_id} MySQL snapshotter");
 
-                // Exact per-table row counts, computed once during PK sampling and reused
+                // Per-table row counts, computed once during PK sampling and reused
                 // by the leader to publish the snapshot size gauge.
                 let mut snapshot_counts: BTreeMap<MySqlTableName, u64> = BTreeMap::new();
 
@@ -1094,7 +1108,7 @@ pub(crate) fn render<'scope>(
     )
 }
 
-/// Publish the exact snapshot size to each table's statistics gauges, using the counts
+/// Publish the snapshot size to each table's statistics gauges, using the counts
 /// computed once during PK sampling. Called leader-only so the summed worker-local gauges
 /// reflect the upstream total without double-counting.
 fn publish_snapshot_size(
@@ -1207,26 +1221,52 @@ struct TableStatistics {
     count: u64,
 }
 
+/// Row count for the snapshot size gauge. Tables whose optimizer row estimate exceeds
+/// `exact_count_max_rows` report the estimate directly, everything else is counted
+/// exactly with `COUNT(*)`. The gauge only drives progress reporting, and an estimate is
+/// a fair trade for skipping an O(rows) index walk on a large table.
 async fn collect_table_statistics<Q>(
     conn: &mut Q,
     table: &MySqlTableName,
+    exact_count_max_rows: u64,
 ) -> Result<TableStatistics, TransientError>
 where
     Q: Queryable,
 {
     let mut stats = TableStatistics::default();
 
-    // `MySqlTableName::Display` escapes both identifier components via
-    // `quote_identifier`, so this interpolation is safe; not parameterizable.
-    #[allow(clippy::disallowed_methods)]
-    let count_row: Option<u64> = conn
-        .query_first(format!("SELECT COUNT(*) FROM {}", table))
+    // The optimizer's row estimate for the table. InnoDB keeps it roughly current
+    // (within the churn since the last stats recalculation), but it can be
+    // stale-at-zero, in which case we fall through to the exact count. We don't expect
+    // it to be null, but also fall back to count(*) in that case.
+    let estimate: Option<Option<u64>> = conn
+        .exec_first(
+            "SELECT table_rows FROM information_schema.tables \
+             WHERE table_schema = ? AND table_name = ?",
+            (&table.0, &table.1),
+        )
         .wall_time()
         .set_at(&mut stats.count_latency)
         .await?;
-    // `COUNT(*)` returns exactly one row, so `None` should be impossible. Default to 0
-    // defensively rather than failing the snapshot on a protocol quirk.
-    stats.count = count_row.unwrap_or(0);
+    match estimate.flatten() {
+        Some(estimate) if estimate > exact_count_max_rows => {
+            stats.count = estimate;
+        }
+        _ => {
+            // `MySqlTableName::Display` escapes both identifier components via
+            // `quote_identifier`, so this interpolation is safe; not parameterizable.
+            #[allow(clippy::disallowed_methods)]
+            let count_row: Option<u64> = conn
+                .query_first(format!("SELECT COUNT(*) FROM {}", table))
+                .wall_time()
+                .set_at(&mut stats.count_latency)
+                .await?;
+            // `COUNT(*)` returns exactly one row, so `None` should be impossible.
+            // Default to 0 defensively rather than failing the snapshot on a protocol
+            // quirk.
+            stats.count = count_row.unwrap_or(0);
+        }
+    }
 
     Ok(stats)
 }
@@ -1271,7 +1311,7 @@ mod tests {
         assert_eq!(
             format!(
                 "SELECT `c1`, `c2`, `c3` FROM `{}`.`{}`",
-                &schema_name, &table_name
+                schema_name, table_name
             ),
             query
         );
@@ -1318,7 +1358,7 @@ mod tests {
         assert_eq!(
             format!(
                 "SELECT `id`, `name` FROM `{}`.`{}` WHERE `id` >= 100 AND `id` < 200",
-                &schema_name, &table_name
+                schema_name, table_name
             ),
             query
         );
@@ -1333,7 +1373,7 @@ mod tests {
         assert_eq!(
             format!(
                 "SELECT `id`, `name` FROM `{}`.`{}` WHERE `id` < 200",
-                &schema_name, &table_name
+                schema_name, table_name
             ),
             query
         );
@@ -1348,7 +1388,7 @@ mod tests {
         assert_eq!(
             format!(
                 "SELECT `id`, `name` FROM `{}`.`{}` WHERE `id` >= 200",
-                &schema_name, &table_name
+                schema_name, table_name
             ),
             query
         );

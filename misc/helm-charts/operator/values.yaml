@@ -13,10 +13,25 @@ operator:
     # -- The Docker repository for the operator image
     repository: materialize/orchestratord
     # -- The tag/version of the operator image to be used
-    tag: v26.34.1
+    tag: v26.35.0
     # -- Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images
     pullPolicy: IfNotPresent
 
+  # -- Number of operator replicas. The operator uses leader election so that
+  # only one replica reconciles at a time. Running more than one replica
+  # avoids downtime of the CRD conversion webhook during rollouts and node
+  # drains.
+  replicas: 2
+
+  podDisruptionBudget:
+    # -- Whether to create a PodDisruptionBudget for the operator. Only created
+    # when `replicas` is greater than 1, since a budget over a single replica
+    # either blocks node drains or protects nothing.
+    enabled: true
+    # -- Maximum number of operator pods that may be unavailable at once during
+    # voluntary disruptions. Expressed as a maximum rather than a minimum so
+    # that node drains are never blocked outright, they are only serialized.
+    maxUnavailable: 1
 
   args:
     # -- Log filtering settings for startup logs

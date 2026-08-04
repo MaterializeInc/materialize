@@ -159,7 +159,7 @@ where
                 let start = Instant::now();
                 machine.applier.metrics.gc.started.inc();
                 let (mut maintenance, _stats) = {
-                    let name = format!("gc_and_truncate ({})", &consolidated_req.shard_id);
+                    let name = format!("gc_and_truncate ({})", consolidated_req.shard_id);
                     let machine = machine.clone();
                     isolated_runtime
                         .spawn_named(|| name, async move {

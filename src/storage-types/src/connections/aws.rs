@@ -249,7 +249,7 @@ impl AwsAssumeRole {
         // The default session name identifies the environment and the
         // connection.
         let default_session_name =
-            format!("{}-{}", &connection_context.environment_id, connection_id);
+            format!("{}-{}", connection_context.environment_id, connection_id);
 
         // First we create a credentials provider that will assume the "jump
         // role" provided to this Materialize environment. This is the role that

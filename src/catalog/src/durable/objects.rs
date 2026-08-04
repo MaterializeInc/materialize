@@ -363,6 +363,22 @@ pub struct ClusterVariantManaged {
     pub burst: Option<BurstState>,
 }
 
+/// The canonical name of the `index`-th (zero-based) replica of a managed
+/// cluster.
+///
+/// A managed cluster's replicas are derived from its `replication_factor`: for a
+/// factor of N they are named `r1` through `rN`.
+///
+/// `ALTER CLUSTER` computes the replicas it creates and drops by this rule, and
+/// so does the catalog-open reconciler that materializes builtin replicas. The
+/// two have to share it, or `ALTER` cannot find the replicas it means to change.
+/// The cluster controller deliberately does not: its `ReplicaNameGen` picks names
+/// that avoid the observed set, which is why `ALTER` against a controller-owned
+/// cluster drops by observed id rather than by derived name.
+pub fn managed_cluster_replica_name(index: u32) -> String {
+    format!("r{}", index + 1)
+}
+
 /// The latest graceful reconfiguration: the config shape the cluster is moving
 /// to or most recently moved toward, plus its deadline and terminal state.
 ///

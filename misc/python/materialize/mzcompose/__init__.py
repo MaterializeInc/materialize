@@ -696,6 +696,11 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "kafka_buffered_event_resize_threshold_elements",
     "kafka_low_watermark_check",
     "mysql_replication_heartbeat_interval",
+    # Not varied here because statistics tests assert exact
+    # snapshot_records_known values, which only hold on the exact-count path.
+    # The estimated path is covered explicitly in mysql-cdc/statistics.td and
+    # by parallel-workload.
+    "mysql_source_snapshot_exact_count_max_rows",
     "postgres_fetch_slot_resume_lsn_interval",
     "pg_schema_validation_interval",
     "pg_source_validate_timeline",

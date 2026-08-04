@@ -14,6 +14,7 @@ use itertools::Itertools;
 use maplit::btreeset;
 use mz_adapter_types::cluster_state::ReconfigurationAudit;
 use mz_catalog::builtin::BUILTINS;
+use mz_catalog::durable::managed_cluster_replica_name;
 use mz_catalog::memory::objects::{
     ClusterConfig, ClusterReplica, ClusterVariant, ClusterVariantManaged,
     ManagedReplicaConfigShape, ReconfigurationState, ReconfigurationStatus, ReconfigurationTarget,
@@ -2564,10 +2565,6 @@ impl Coordinator {
             }
         }
     }
-}
-
-fn managed_cluster_replica_name(index: u32) -> String {
-    format!("r{}", index + 1)
 }
 
 /// Which reconfiguration-target dimensions an `ALTER` left unset (`Unchanged`).

@@ -130,8 +130,11 @@ impl Coordinator {
                     application_name,
                     notice_tx,
                 } => {
-                    // Note: We purposefully do not use a ClientTransmitter here because startup
-                    // handles errors and cleanup of sessions itself.
+                    // Note: A ClientTransmitter is not applicable here. Its purpose is to
+                    // rescue the Session from an undeliverable Response, and startup
+                    // responses carry no Session, the Session stays with the client. An
+                    // undeliverable startup response is instead handled by handle_startup's
+                    // failed-send path together with the cleanup guard in Client::startup.
                     self.handle_startup(
                         tx,
                         user,
@@ -910,19 +913,29 @@ impl Coordinator {
                 }
             }
             Err(e) => {
-                // Error during startup or sending to adapter. A user may have been created and
-                // it can stay; no need to delete it.
-                // Note: Temporary schemas are created lazily, so there's nothing to clean up here.
-
-                // Communicate the error back to the client. No need to
-                // handle failures to send the error back; we've already
-                // cleaned up all necessary state.
+                // Nothing to clean up and `handle_terminate` must not be called. Per the
+                // `handle_startup_inner` invariant, no per-connection state exists and the
+                // connection was never registered in `active_conns`. An auto-provisioned role
+                // stays, it is role-scoped rather than tied to this connection. Temporary
+                // schemas are created lazily, so none exists yet. For the same reason, a
+                // failure to send the error back to the client needs no handling.
                 let _ = tx.send(Err(e));
             }
         }
     }
 
-    // Failible startup work that needs to be cleaned up on error.
+    /// Fallible startup work.
+    ///
+    /// Invariant: when this returns an error, no per-connection coordinator
+    /// state exists. Per-connection state is registered only in
+    /// `handle_startup`'s Ok arm, after this function has succeeded. The
+    /// cleanup guard in `Client::startup` relies on this invariant by not
+    /// sending `Terminate` when startup fails, and `handle_terminate` panics
+    /// on connections it does not know about.
+    ///
+    /// Durable catalog changes made before an error (an auto-provisioned
+    /// role, synced role memberships) are role-scoped rather than
+    /// connection-scoped and are intentionally kept.
     async fn handle_startup_inner(
         &mut self,
         user: &User,
@@ -1253,6 +1266,10 @@ impl Coordinator {
         //    DDL. If the lock could not be acquired, the DDL is put into the VecDeque where it
         //    awaits dequeuing caused by the lock being released.
 
+        // For `Started`, this separates the first statement of an extended-protocol
+        // pipeline from a later one that joins the ops staged before it.
+        let txn_contains_ops = ctx.session().transaction().contains_ops();
+
         // Verify that this statement type can be executed in the current
         // transaction state.
         match ctx.session().transaction() {
@@ -1270,7 +1287,7 @@ impl Coordinator {
             // being executed, but there might be others after it before the Sync (commit)
             // message. Postgres handles this by teaching Started to eagerly commit certain
             // statements that can't be run in a transaction block.
-            TransactionStatus::Started(_) => {
+            TransactionStatus::Started(_) if !txn_contains_ops => {
                 if let Statement::Declare(_) = &*stmt {
                     // Declare is an exception. Although it's not against any spec to execute
                     // it, it will always result in nothing happening, since all portals will be
@@ -1291,7 +1308,13 @@ impl Coordinator {
             // transactions can do unless there's some additional checking to make sure
             // something disallowed in explicit transactions did not previously take place
             // in the implicit portion.
-            TransactionStatus::InTransactionImplicit(_) | TransactionStatus::InTransaction(_) => {
+            //
+            // A `Started` transaction with staged ops belongs here too: this statement
+            // runs alongside them, so a DDL or read-then-write that cannot see them must
+            // be rejected rather than run against a state that lacks them.
+            TransactionStatus::Started(_)
+            | TransactionStatus::InTransactionImplicit(_)
+            | TransactionStatus::InTransaction(_) => {
                 match &*stmt {
                     // Statements that are safe in a transaction. We still need to verify that we
                     // don't interleave reads and writes since we can't perform those serializably.
@@ -1965,6 +1988,11 @@ impl Coordinator {
     /// Handle termination of a client session.
     ///
     /// This cleans up any state in the coordinator associated with the session.
+    ///
+    /// Must only be called for connections that completed a successful
+    /// startup, i.e. that are present in `active_conns`. A failed startup
+    /// leaves no state behind (see `handle_startup_inner`), so no Terminate
+    /// may be sent for it.
     #[mz_ore::instrument(level = "debug")]
     async fn handle_terminate(&mut self, conn_id: ConnectionId) {
         // If the session doesn't exist in `active_conns`, then this method will panic later on.

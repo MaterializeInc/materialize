@@ -13,7 +13,6 @@ use std::sync::Arc;
 use std::{fmt, mem};
 
 use itertools::Itertools;
-use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_ore::iter::IteratorExt;
 use mz_ore::soft_assert_or_log;
@@ -55,17 +54,7 @@ mod reduce;
 
 include!(concat!(env!("OUT_DIR"), "/mz_expr.scalar.rs"));
 
-#[derive(
-    Clone,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    Serialize,
-    Deserialize,
-    MzReflect
-)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum MirScalarExpr {
     /// A column of the input row
     Column(usize, TreatAsEqual<Option<Arc<str>>>),
@@ -1501,8 +1490,7 @@ impl MirScalarExpr {
     Clone,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct FilterCharacteristics {
     // `<expr> = <literal>` appears in the filter.
@@ -1682,8 +1670,7 @@ impl FilterCharacteristics {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum DomainLimit {
@@ -1726,8 +1713,7 @@ impl RustType<ProtoDomainLimit> for DomainLimit {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum EvalError {

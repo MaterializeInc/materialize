@@ -187,8 +187,10 @@ class SessionState(Check):
             > SHOW extra_float_digits
             0
             > RESET extra_float_digits
-            > SHOW extra_float_digits
+            >[version>=2603600] SHOW extra_float_digits
             1
+            >[version<2603600] SHOW extra_float_digits
+            3
 
             > CREATE TEMPORARY VIEW session_state_temp_view AS SELECT max(f1) AS m FROM session_state_table
             > SELECT * FROM session_state_temp_view
@@ -213,8 +215,10 @@ class SessionState(Check):
             ! SELECT * FROM session_state_temp_view2
             contains: unknown catalog item 'session_state_temp_view2'
             > RESET extra_float_digits
-            > SHOW extra_float_digits
+            >[version>=2603600] SHOW extra_float_digits
             1
+            >[version<2603600] SHOW extra_float_digits
+            3
             """))
 
 

@@ -319,7 +319,7 @@ impl Listener<SqlListenerConfig> {
 impl Listener<HttpListenerConfig> {
     #[instrument(name = "environmentd::serve_http")]
     pub async fn serve_http(self, config: HttpConfig) -> ListenerHandle {
-        let task_name = format!("{}_http_server", &config.source);
+        let task_name = format!("{}_http_server", config.source);
         task::spawn(|| task_name, {
             let http_server = HttpServer::new(config);
             mz_server_core::serve(ServeConfig {
@@ -889,6 +889,8 @@ impl Listeners {
         Ok(Server {
             sql_listener_handles,
             http_listener_handles,
+            #[cfg(feature = "test")]
+            adapter_client,
             _adapter_handle: adapter_handle,
         })
     }
@@ -913,5 +915,15 @@ pub struct Server {
     // Drop order matters for these fields.
     pub sql_listener_handles: BTreeMap<String, ListenerHandle>,
     pub http_listener_handles: BTreeMap<String, ListenerHandle>,
+    #[cfg(feature = "test")]
+    adapter_client: AdapterClient,
     _adapter_handle: mz_adapter::Handle,
+}
+
+impl Server {
+    /// A client for the adapter, letting tests drive the adapter API directly.
+    #[cfg(feature = "test")]
+    pub fn adapter_client(&self) -> &AdapterClient {
+        &self.adapter_client
+    }
 }
